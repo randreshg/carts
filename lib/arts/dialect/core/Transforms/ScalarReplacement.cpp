@@ -307,19 +307,19 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
   Value initValue;
   if (auto load = dyn_cast<memref::LoadOp>(pattern.loadOp)) {
     initValue = memref::LoadOp::create(rewriter, loc, load.getMemRef(),
-                                      load.getIndices());
+                                       load.getIndices());
   } else if (auto dynLoad = dyn_cast<polygeist::DynLoadOp>(pattern.loadOp)) {
     /// For polygeist.load (DynLoadOp), create new load before the loop
-    initValue = polygeist::DynLoadOp::create(rewriter,
-        loc, dynLoad.getResult().getType(), dynLoad.getMemref(),
+    initValue = polygeist::DynLoadOp::create(
+        rewriter, loc, dynLoad.getResult().getType(), dynLoad.getMemref(),
         dynLoad.getIndices(), dynLoad.getSizes());
   }
 
   /// Create new ForOp with iter_args
   SmallVector<Value> iterArgs = {initValue};
-  auto newForOp = scf::ForOp::create(rewriter, loc, forOp.getLowerBound(),
-                                    forOp.getUpperBound(),
-                                    forOp.getStep(), iterArgs);
+  auto newForOp =
+      scf::ForOp::create(rewriter, loc, forOp.getLowerBound(),
+                         forOp.getUpperBound(), forOp.getStep(), iterArgs);
 
   /// Copy attributes (like arts.loop metadata)
   newForOp->setAttrs(forOp->getAttrs());
@@ -378,9 +378,9 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
                             store.getIndices());
   } else if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(pattern.storeOp)) {
     /// For polygeist.store (DynStoreOp), create new store with updated value
-    polygeist::DynStoreOp::create(rewriter,
-        loc, finalValue, dynStore.getMemref(), dynStore.getIndices(),
-        dynStore.getSizes());
+    polygeist::DynStoreOp::create(rewriter, loc, finalValue,
+                                  dynStore.getMemref(), dynStore.getIndices(),
+                                  dynStore.getSizes());
   }
 
   /// Erase the old loop

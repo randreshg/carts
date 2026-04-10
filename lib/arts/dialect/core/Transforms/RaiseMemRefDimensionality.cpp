@@ -14,12 +14,12 @@
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Dialect.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
@@ -516,8 +516,8 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
                   arts::createZeroIndex(cleanupBuilder, loadOp.getLoc()));
             }
           }
-          Value repl = memref::AllocOp::create(cleanupBuilder,
-              loadOp.getLoc(), memType, dynSizes);
+          Value repl = memref::AllocOp::create(cleanupBuilder, loadOp.getLoc(),
+                                               memType, dynSizes);
           loadOp.replaceAllUsesWith(repl);
           cleanup.insert(loadOp);
         } else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(user)) {
@@ -530,8 +530,8 @@ RaiseMemRefDimensionalityPass::detectPattern(Value alloc) {
                   arts::createZeroIndex(cleanupBuilder, affineLoad.getLoc()));
             }
           }
-          Value repl = memref::AllocOp::create(cleanupBuilder,
-              affineLoad.getLoc(), memType, dynSizes);
+          Value repl = memref::AllocOp::create(
+              cleanupBuilder, affineLoad.getLoc(), memType, dynSizes);
           affineLoad.replaceAllUsesWith(repl);
           cleanup.insert(affineLoad);
         } else if (isa<memref::DeallocOp>(user)) {
@@ -1371,7 +1371,7 @@ RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &pattern,
       auto loadOp = cast<memref::LoadOp>(access.terminalOp);
       builder.setInsertionPoint(loadOp);
       auto newLoad = memref::LoadOp::create(builder, loadOp.getLoc(), ndAlloc,
-                                                    access.indices);
+                                            access.indices);
       loadOp.replaceAllUsesWith(newLoad.getResult());
       toRemove.insert(loadOp);
       break;
@@ -1380,7 +1380,7 @@ RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &pattern,
       auto storeOp = cast<memref::StoreOp>(access.terminalOp);
       builder.setInsertionPoint(storeOp);
       memref::StoreOp::create(builder, storeOp.getLoc(), storeOp.getValue(),
-                                      ndAlloc, access.indices);
+                              ndAlloc, access.indices);
       toRemove.insert(storeOp);
       break;
     }
@@ -1394,9 +1394,9 @@ RaiseMemRefDimensionalityPass::transformPattern(AllocPattern &pattern,
     builder.setInsertionPoint(dep.taskOp);
 
     /// Create arts.omp_dep with proper indices and sizes
-    auto ompDepOp = arts::OmpDepOp::create(builder,
-        dep.taskOp.getLoc(), ndAlloc.getType(), dep.mode, ndAlloc, dep.indices,
-        dep.sizes);
+    auto ompDepOp =
+        arts::OmpDepOp::create(builder, dep.taskOp.getLoc(), ndAlloc.getType(),
+                               dep.mode, ndAlloc, dep.indices, dep.sizes);
 
     /// Update the task's depend_vars
     dep.taskOp.getDependVarsMutable()[dep.depVarIndex].set(
@@ -1505,8 +1505,8 @@ void RaiseMemRefDimensionalityPass::rewriteTracedMemref2PointerUses(
     }
 
     builder.setInsertionPoint(m2p);
-    auto newM2P = polygeist::Memref2PointerOp::create(builder,
-        m2p.getLoc(), m2p.getType(), ndAlloc);
+    auto newM2P = polygeist::Memref2PointerOp::create(builder, m2p.getLoc(),
+                                                      m2p.getType(), ndAlloc);
     m2p.replaceAllUsesWith(newM2P.getResult());
     toRemove.insert(m2p);
     ARTS_DEBUG("  Replaced traced memref2pointer through alias chain");
@@ -1588,9 +1588,9 @@ RaiseMemRefDimensionalityPass::transformSimpleWrapper(AllocPattern &pattern,
   for (auto &dep : pattern.dependencies) {
     builder.setInsertionPoint(dep.taskOp);
 
-    auto ompDepOp = arts::OmpDepOp::create(builder,
-        dep.taskOp.getLoc(), actualAlloc.getType(), dep.mode, actualAlloc,
-        dep.indices, dep.sizes);
+    auto ompDepOp = arts::OmpDepOp::create(builder, dep.taskOp.getLoc(),
+                                           actualAlloc.getType(), dep.mode,
+                                           actualAlloc, dep.indices, dep.sizes);
 
     dep.taskOp.getDependVarsMutable()[dep.depVarIndex].set(
         ompDepOp.getResult());

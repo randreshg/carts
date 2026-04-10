@@ -290,8 +290,8 @@ void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
   for (Value v : loopBackParams)
     nextParams.push_back(
         rematerializeCarryValueAtAdvanceSite(builder, v, body, advanceMapping));
-  auto advance = CPSAdvanceOp::create(builder,
-      loc, nextParams, builder.getStringAttr(targetChainId));
+  auto advance = CPSAdvanceOp::create(builder, loc, nextParams,
+                                      builder.getStringAttr(targetChainId));
   advance->setAttr(CPSAdditiveParams, builder.getUnitAttr());
   advance->setAttr(CPSNumCarry,
                    builder.getI64IntegerAttr(loopBackParams.size()));

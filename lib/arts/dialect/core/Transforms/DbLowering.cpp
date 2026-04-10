@@ -22,9 +22,9 @@
 #include "arts/codegen/Codegen.h"
 #define GEN_PASS_DEF_DBLOWERING
 #include "arts/Dialect.h"
+#include "arts/dialect/core/Transforms/db/DbLayoutStrategy.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/dialect/core/Transforms/db/DbLayoutStrategy.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"

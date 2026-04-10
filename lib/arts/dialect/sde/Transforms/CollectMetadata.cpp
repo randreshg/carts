@@ -35,8 +35,8 @@
 #include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #define GEN_PASS_DEF_COLLECTMETADATA
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
+#include "arts/passes/Passes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"

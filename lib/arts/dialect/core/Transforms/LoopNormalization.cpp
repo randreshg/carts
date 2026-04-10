@@ -2,8 +2,8 @@
 /// LoopNormalization.cpp - Pattern-based loop normalization pass
 ///
 /// Applies loop normalization patterns to enable downstream DbPartitioning.
-/// Each pattern lives in its own file under dialect/core/Transforms/loop/ and is
-/// registered here in priority order (first match wins per loop).
+/// Each pattern lives in its own file under dialect/core/Transforms/loop/ and
+/// is registered here in priority order (first match wins per loop).
 ///
 /// Current patterns:
 ///   - SymmetricTriangularPattern (triangular → rectangular)
@@ -29,9 +29,9 @@
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #define GEN_PASS_DEF_LOOPNORMALIZATION
 #include "arts/Dialect.h"
+#include "arts/dialect/core/Transforms/loop/LoopNormalizer.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/dialect/core/Transforms/loop/LoopNormalizer.h"
 #include "arts/utils/Debug.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"

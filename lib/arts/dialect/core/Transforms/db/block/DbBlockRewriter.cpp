@@ -20,7 +20,6 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/db/block/DbBlockRewriter.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/db/DbPartitionWindowUtils.h"
 #include "arts/dialect/core/Transforms/db/block/DbBlockIndexer.h"
 #include "arts/utils/BlockedAccessUtils.h"
@@ -31,6 +30,7 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
@@ -246,22 +246,23 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     if (d < plan.outerSizes.size()) {
       Value maxBlock =
           arith::SubIOp::create(builder, loc, plan.outerSizes[d], one);
-      startAboveMax = arith::CmpIOp::create(builder,
-          loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
+      startAboveMax = arith::CmpIOp::create(
+          builder, loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
       Value clampedEnd =
           arith::MinUIOp::create(builder, loc, endBlock, maxBlock);
       endBlock = arith::SelectOp::create(builder, loc, startAboveMax, endBlock,
                                          clampedEnd);
     }
 
-    Value blockCount = arith::SubIOp::create(builder, loc, endBlock, startBlock);
+    Value blockCount =
+        arith::SubIOp::create(builder, loc, endBlock, startBlock);
     blockCount = arith::AddIOp::create(builder, loc, blockCount, one);
 
     if (startAboveMax) {
-      startBlock =
-          arith::SelectOp::create(builder, loc, startAboveMax, zero, startBlock);
-      blockCount =
-          arith::SelectOp::create(builder, loc, startAboveMax, zero, blockCount);
+      startBlock = arith::SelectOp::create(builder, loc, startAboveMax, zero,
+                                           startBlock);
+      blockCount = arith::SelectOp::create(builder, loc, startAboveMax, zero,
+                                           blockCount);
     }
 
     /// Check if single-block for this dimension
@@ -377,17 +378,16 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     }
 
     auto newRef = DbRefOp::create(builder, userLoc, newElementType, newSource,
-                                   localized.dbRefIndices);
+                                  localized.dbRefIndices);
 
     if (access->isRead()) {
       auto load = cast<memref::LoadOp>(user);
-      auto newLoad = memref::LoadOp::create(builder, userLoc, newRef.getResult(),
-                                            localized.memrefIndices);
+      auto newLoad = memref::LoadOp::create(
+          builder, userLoc, newRef.getResult(), localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
     } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
       memref::StoreOp::create(builder, userLoc, store.getValue(),
-                              newRef.getResult(),
-                              localized.memrefIndices);
+                              newRef.getResult(), localized.memrefIndices);
     }
     removal.markForRemoval(user);
   }
@@ -406,7 +406,7 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       localized.dbRefIndices.push_back(zero);
 
     auto newRef = DbRefOp::create(builder, loc, newElementType, newSource,
-                                   localized.dbRefIndices);
+                                  localized.dbRefIndices);
     ref.replaceAllUsesWith(newRef.getResult());
   }
 

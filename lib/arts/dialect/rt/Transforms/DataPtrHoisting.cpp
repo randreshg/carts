@@ -29,9 +29,9 @@
 ///==========================================================================///
 
 #define GEN_PASS_DEF_DATAPTRHOISTING
-#include "arts/passes/Passes.h"
-#include "arts/dialect/rt/Transforms/Passes.h.inc"
 #include "arts/dialect/rt/Transforms/DataPtrHoistingInternal.h"
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
+#include "arts/passes/Passes.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "mlir/Pass/Pass.h"

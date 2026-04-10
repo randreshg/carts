@@ -312,10 +312,14 @@ static const std::array<llvm::StringLiteral, 5> kOpenMPToArtsPasses = {
     "DeadCodeElimination", "CSE"};
 static const std::array<llvm::StringLiteral, 9> kPatternPipelinePasses = {
     "RaiseToLinalg",
-    "PatternDiscovery(seed)", "DepTransforms",
-    "LoopNormalization",      "StencilBoundaryPeeling",
-    "LoopReordering",         "PatternDiscovery(refine)",
-    "KernelTransforms",       "CSE"};
+    "PatternDiscovery(seed)",
+    "DepTransforms",
+    "LoopNormalization",
+    "StencilBoundaryPeeling",
+    "LoopReordering",
+    "PatternDiscovery(refine)",
+    "KernelTransforms",
+    "CSE"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
     "EdtStructuralOpt(runAnalysis=false)",
     "EdtICM",

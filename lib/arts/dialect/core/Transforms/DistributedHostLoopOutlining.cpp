@@ -329,8 +329,9 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
   OpBuilder epochBuilder = OpBuilder::atBlockBegin(&epochBlock);
 
   Value routeZero = arith::ConstantIntOp::create(epochBuilder, loc, 0, 32);
-  auto outlinedEdt = EdtOp::create(epochBuilder,
-      loc, EdtType::task, EdtConcurrency::internode, routeZero, ValueRange{});
+  auto outlinedEdt =
+      EdtOp::create(epochBuilder, loc, EdtType::task, EdtConcurrency::internode,
+                    routeZero, ValueRange{});
   outlinedEdt.setNoVerifyAttr(NoVerifyAttr::get(epochBuilder.getContext()));
   applyMachineWorkerTopology(outlinedEdt, machine, heuristics);
 
@@ -340,9 +341,10 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
 
   auto schedAttr = ForScheduleKindAttr::get(epochBuilder.getContext(),
                                             ForScheduleKind::Static);
-  auto outlinedFor = arts::ForOp::create(epochBuilder,
-      loc, ValueRange{loop.getLowerBound()}, ValueRange{loop.getUpperBound()},
-      ValueRange{loop.getStep()}, schedAttr, ValueRange{});
+  auto outlinedFor =
+      arts::ForOp::create(epochBuilder, loc, ValueRange{loop.getLowerBound()},
+                          ValueRange{loop.getUpperBound()},
+                          ValueRange{loop.getStep()}, schedAttr, ValueRange{});
 
   metadataManager.rewriteMetadata(loop, outlinedFor);
   cloneScfLoopBodyIntoArtsFor(loop, outlinedFor, epochBuilder);

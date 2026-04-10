@@ -24,10 +24,10 @@
 ///   - no extra ops around the inner loop
 ///==========================================================================///
 
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/loop/LoopNormalizer.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"

@@ -49,8 +49,8 @@
 #include "polygeist/Ops.h"
 
 #include "arts/Dialect.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
+#include "arts/utils/ValueAnalysis.h"
 
 #include "arts/utils/Debug.h"
 #include "llvm/ADT/DenseMap.h"
@@ -384,8 +384,7 @@ static int processMemoryAccesses(LLVM::LLVMFuncOp funcOp,
   return count;
 }
 
-struct AliasScopeGenPass
-    : public impl::AliasScopeGenBase<AliasScopeGenPass> {
+struct AliasScopeGenPass : public impl::AliasScopeGenBase<AliasScopeGenPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();

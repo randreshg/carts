@@ -7,8 +7,8 @@
 #ifndef ARTS_DIALECT_CORE_ANALYSIS_METADATA_ACCESSANALYZER_H
 #define ARTS_DIALECT_CORE_ANALYSIS_METADATA_ACCESSANALYZER_H
 
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/LoopUtils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"

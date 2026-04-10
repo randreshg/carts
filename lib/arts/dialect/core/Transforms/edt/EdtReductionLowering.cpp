@@ -18,11 +18,11 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/edt/EdtReductionLowering.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"

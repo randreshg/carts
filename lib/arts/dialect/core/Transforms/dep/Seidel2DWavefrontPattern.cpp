@@ -36,13 +36,13 @@
 #include "arts/dialect/core/Analysis/heuristics/DistributionHeuristics.h"
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/dep/DepTransform.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -276,8 +276,8 @@ static Value createSubtractOrZero(OpBuilder &builder, Location loc, Value lhs,
 static void rewriteSeidelSequential(SeidelWavefrontMatch &match,
                                     MetadataManager &metadataManager) {
   OpBuilder builder(match.rowFor);
-  auto seqRowFor = scf::ForOp::create(builder,
-      match.rowFor.getLoc(), match.rowFor.getLowerBound().front(),
+  auto seqRowFor = scf::ForOp::create(
+      builder, match.rowFor.getLoc(), match.rowFor.getLowerBound().front(),
       match.rowFor.getUpperBound().front(), match.rowFor.getStep().front());
   metadataManager.rewriteLoopMetadata(match.rowFor.getOperation(),
                                       seqRowFor.getOperation());
@@ -330,10 +330,10 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   Value numJTilesMinusOne = arith::SubIOp::create(builder, loc, numJTiles, one);
   Value doubleITilesMinusOne =
       arith::MulIOp::create(builder, loc, numITilesMinusOne, two);
-  Value waveUbExclusive = arith::AddIOp::create(builder,
-      loc,
+  Value waveUbExclusive = arith::AddIOp::create(
+      builder, loc,
       arith::AddIOp::create(builder, loc, doubleITilesMinusOne,
-                             numJTilesMinusOne),
+                            numJTilesMinusOne),
       one);
 
   /// Keep all wavefront ranks for one Seidel timestep inside a single epoch.
@@ -348,7 +348,7 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
 
   OpBuilder epochBuilder = OpBuilder::atBlockBegin(&epochBlock);
   auto waveLoop = scf::ForOp::create(epochBuilder, syntheticLoopLoc, zero,
-                                      waveUbExclusive, one);
+                                     waveUbExclusive, one);
   wavefrontContract.stamp(waveLoop.getOperation());
 
   OpBuilder waveBuilder = OpBuilder::atBlockBegin(waveLoop.getBody());
@@ -363,8 +363,8 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
       waveBuilder, loc, arith::AddIOp::create(waveBuilder, loc, halfWave, one),
       numITiles);
 
-  auto tileParallel = EdtOp::create(waveBuilder,
-      loc, EdtType::parallel, match.parallelEdt.getConcurrency());
+  auto tileParallel = EdtOp::create(waveBuilder, loc, EdtType::parallel,
+                                    match.parallelEdt.getConcurrency());
   tileParallel.setNoVerifyAttr(NoVerifyAttr::get(builder.getContext()));
   copyWorkerTopologyAttrs(match.parallelEdt.getOperation(),
                           tileParallel.getOperation());
@@ -383,9 +383,9 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   Value tileRowUb =
       arith::MulIOp::create(tileBuilder, loc, biMaxExclusive, tileRows);
 
-  auto tileFor = arts::ForOp::create(tileBuilder,
-      syntheticLoopLoc, ValueRange{tileRowLb}, ValueRange{tileRowUb},
-      ValueRange{tileRows},
+  auto tileFor = arts::ForOp::create(
+      tileBuilder, syntheticLoopLoc, ValueRange{tileRowLb},
+      ValueRange{tileRowUb}, ValueRange{tileRows},
       /*schedule=*/nullptr, /*reductionAccumulators=*/ValueRange{});
   /// This frontier loop is synthetic. It preserves the stencil contract, but
   /// it does not preserve the source row-loop trip count or other loop
@@ -406,9 +406,11 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
 
   OpBuilder tileLoopBuilder = OpBuilder::atBlockBegin(&tileBlock);
   Value tileRowBase = tileBlock.getArgument(0);
-  Value bi = arith::DivUIOp::create(tileLoopBuilder, loc, tileRowBase, tileRows);
-  Value bj = arith::SubIOp::create(tileLoopBuilder,
-      loc, wave, arith::MulIOp::create(tileLoopBuilder, loc, bi, two));
+  Value bi =
+      arith::DivUIOp::create(tileLoopBuilder, loc, tileRowBase, tileRows);
+  Value bj = arith::SubIOp::create(
+      tileLoopBuilder, loc, wave,
+      arith::MulIOp::create(tileLoopBuilder, loc, bi, two));
 
   Value iStart = createMaxIndex(tileLoopBuilder, loc, tileRowBase, iLb);
   Value iEnd = createMinIndex(

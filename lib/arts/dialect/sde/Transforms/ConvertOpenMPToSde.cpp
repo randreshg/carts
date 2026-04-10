@@ -40,11 +40,11 @@
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
-#include "arts/utils/ValueAnalysis.h"
-#include "arts/passes/Passes.h"
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
+#include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
@@ -96,8 +96,7 @@ convertScheduleKind(omp::ClauseScheduleKind kind) {
 }
 
 /// Infer SDE reduction kind from OMP DeclareReductionOp combiner body.
-static sde::SdeReductionKind
-inferReductionKind(omp::DeclareReductionOp decl) {
+static sde::SdeReductionKind inferReductionKind(omp::DeclareReductionOp decl) {
   Block &combinerBlock = decl.getReductionRegion().front();
   for (Operation &op : combinerBlock.without_terminator()) {
     if (isa<arith::AddFOp, arith::AddIOp>(op))
@@ -140,10 +139,9 @@ struct OMPParallelToSdePattern : public OpRewritePattern<omp::ParallelOp> {
     auto *ctx = rewriter.getContext();
 
     auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc,
-        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-        sde::SdeConcurrencyScopeAttr::get(ctx,
-                                           sde::SdeConcurrencyScope::distributed),
+        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
+        sde::SdeConcurrencyScopeAttr::get(
+            ctx, sde::SdeConcurrencyScope::distributed),
         /*nowait=*/nullptr);
 
     Block &old = op.getRegion().front();
@@ -165,10 +163,8 @@ struct MasterToSdePattern : public OpRewritePattern<omp::MasterOp> {
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
     auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc,
-        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
-        sde::SdeConcurrencyScopeAttr::get(ctx,
-                                           sde::SdeConcurrencyScope::local),
+        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
+        sde::SdeConcurrencyScopeAttr::get(ctx, sde::SdeConcurrencyScope::local),
         /*nowait=*/nullptr);
     Block &old = op.getRegion().front();
     Block &blk = ensureBlock(cuRegion.getBody());
@@ -186,10 +182,8 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
     auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc,
-        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
-        sde::SdeConcurrencyScopeAttr::get(ctx,
-                                           sde::SdeConcurrencyScope::local),
+        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
+        sde::SdeConcurrencyScopeAttr::get(ctx, sde::SdeConcurrencyScope::local),
         nowaitAttr(ctx, op.getNowait()));
     Block &old = op.getRegion().front();
     Block &blk = ensureBlock(cuRegion.getBody());
@@ -242,8 +236,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
               module.lookupSymbol(symRef.getLeafReference()));
           if (decl) {
             auto kind = inferReductionKind(decl);
-            reductionKinds.push_back(
-                sde::SdeReductionKindAttr::get(ctx, kind));
+            reductionKinds.push_back(sde::SdeReductionKindAttr::get(ctx, kind));
           }
         }
       }
@@ -293,8 +286,7 @@ private:
 
 /// omp.task -> sde.cu_task
 struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
-  TaskToSdePattern(MLIRContext *ctx,
-                   const llvm::DenseSet<Value> *writerSources)
+  TaskToSdePattern(MLIRContext *ctx, const llvm::DenseSet<Value> *writerSources)
       : OpRewritePattern(ctx), writerSources(writerSources) {}
 
   LogicalResult matchAndRewrite(omp::TaskOp op,
@@ -341,11 +333,11 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
         SmallVector<Value> offsets(ompDepOp.getIndices().begin(),
                                    ompDepOp.getIndices().end());
         SmallVector<Value> sizes(ompDepOp.getSizes().begin(),
-                                  ompDepOp.getSizes().end());
-        auto muDep = sde::SdeMuDepOp::create(
-            rewriter, loc, rewriter.getI64Type(),
-            sde::SdeAccessModeAttr::get(ctx, sdeMode),
-            ompDepOp.getSource(), offsets, sizes);
+                                 ompDepOp.getSizes().end());
+        auto muDep =
+            sde::SdeMuDepOp::create(rewriter, loc, rewriter.getI64Type(),
+                                    sde::SdeAccessModeAttr::get(ctx, sdeMode),
+                                    ompDepOp.getSource(), offsets, sizes);
         deps.push_back(muDep.getDep());
       }
     }
@@ -416,7 +408,7 @@ private:
 /// scf.parallel -> sde.cu_region parallel + sde.su_iterate
 struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
   SCFParallelToSdePattern(MLIRContext *context,
-                           MetadataManager &metadataManager)
+                          MetadataManager &metadataManager)
       : OpRewritePattern(context), metadataManager(metadataManager) {}
 
   LogicalResult matchAndRewrite(scf::ParallelOp op,
@@ -427,10 +419,9 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
     rewriter.setInsertionPoint(op);
 
     auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc,
-        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-        sde::SdeConcurrencyScopeAttr::get(ctx,
-                                           sde::SdeConcurrencyScope::distributed),
+        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
+        sde::SdeConcurrencyScopeAttr::get(
+            ctx, sde::SdeConcurrencyScope::distributed),
         /*nowait=*/nullptr);
     Block &parBlk = ensureBlock(cuRegion.getBody());
 
@@ -484,8 +475,7 @@ private:
 };
 
 /// omp.atomic.update -> sde.cu_atomic
-struct AtomicUpdateToSdePattern
-    : public OpRewritePattern<omp::AtomicUpdateOp> {
+struct AtomicUpdateToSdePattern : public OpRewritePattern<omp::AtomicUpdateOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(omp::AtomicUpdateOp op,
@@ -535,9 +525,8 @@ struct AtomicUpdateToSdePattern
 
     ++numAtomicsConverted;
     rewriter.replaceOpWithNewOp<sde::SdeCuAtomicOp>(
-        op,
-        sde::SdeReductionKindAttr::get(rewriter.getContext(), kind),
-        addr, inc);
+        op, sde::SdeReductionKindAttr::get(rewriter.getContext(), kind), addr,
+        inc);
     return success();
   }
 };
@@ -594,8 +583,7 @@ struct ConvertOpenMPToSdePass
     ARTS_INFO_HEADER(ConvertOpenMPToSdePass);
     MLIRContext *context = &getContext();
     if (!AM) {
-      module.emitError()
-          << "ConvertOpenMPToSdePass requires AnalysisManager";
+      module.emitError() << "ConvertOpenMPToSdePass requires AnalysisManager";
       signalPassFailure();
       return;
     }
@@ -608,8 +596,7 @@ struct ConvertOpenMPToSdePass
         auto dep = depVar.getDefiningOp<OmpDepOp>();
         if (!dep)
           continue;
-        if (dep.getMode() == ArtsMode::out ||
-            dep.getMode() == ArtsMode::inout)
+        if (dep.getMode() == ArtsMode::out || dep.getMode() == ArtsMode::inout)
           writerDepSources.insert(dep.getSource());
       }
     });

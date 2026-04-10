@@ -9,12 +9,12 @@
 #include "arts/dialect/core/Analysis/graphs/db/DbGraph.h"
 #include "arts/dialect/core/Analysis/graphs/db/MemoryAccessClassifier.h"
 #include "arts/dialect/core/Analysis/graphs/db/PartitionBoundsAnalyzer.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PartitionPredicates.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "llvm/ADT/DenseSet.h"
 
 using namespace mlir;

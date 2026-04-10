@@ -1,7 +1,8 @@
 ///==========================================================================///
 /// File: Passes.h
 ///
-/// Pass declarations for the SDE (Structured Decomposition Environment) dialect.
+/// Pass declarations for the SDE (Structured Decomposition Environment)
+/// dialect.
 ///==========================================================================///
 
 #ifndef ARTS_DIALECT_SDE_TRANSFORMS_PASSES_H

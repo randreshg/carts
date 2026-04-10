@@ -415,7 +415,7 @@ Value buildDepPtrLoad(OpBuilder &builder, Location loc, rt::DepGepOp depGep,
       builder, loc, depGep.getGuid().getType(), depGep.getPtr().getType(),
       depGep.getDepStruct(), depGep.getOffset(), indices, depGep.getStrides());
   return LLVM::LoadOp::create(builder, loc, depGep.getPtr().getType(),
-                               newDepGep.getPtr());
+                              newDepGep.getPtr());
 }
 
 Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc,
@@ -425,7 +425,7 @@ Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc,
     return buildDepPtrLoad(builder, loc, depGep, indices);
 
   auto ifOp = scf::IfOp::create(builder, loc, TypeRange{fallbackPtr.getType()},
-                                 guard, true);
+                                guard, true);
 
   {
     OpBuilder::InsertionGuard guardRegion(builder);
@@ -506,7 +506,8 @@ bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   Value negPtr = centerPtr;
   {
     SmallVector<Value> negIndices(indices.begin(), indices.end());
-    negIndices.back() = arith::SubIOp::create(beforeLoop, loc, centerIndex, one);
+    negIndices.back() =
+        arith::SubIOp::create(beforeLoop, loc, centerIndex, one);
     Value canUseNeg = arith::CmpIOp::create(
         beforeLoop, loc, arith::CmpIPredicate::ugt, centerIndex, zero);
     if (normalizedForceZeroCond) {
@@ -526,7 +527,8 @@ bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
     Value clampMax =
         ValueAnalysis::ensureIndexType(pattern.clampMax, beforeLoop, loc);
     SmallVector<Value> posIndices(indices.begin(), indices.end());
-    posIndices.back() = arith::AddIOp::create(beforeLoop, loc, centerIndex, one);
+    posIndices.back() =
+        arith::AddIOp::create(beforeLoop, loc, centerIndex, one);
     Value canUsePos = arith::CmpIOp::create(
         beforeLoop, loc, arith::CmpIPredicate::ult, centerIndex, clampMax);
     if (normalizedForceZeroCond) {
@@ -542,11 +544,12 @@ bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   OpBuilder atLoad(loadOp);
   Value loopIv =
       ValueAnalysis::ensureIndexType(loop.getInductionVar(), atLoad, loc);
-  Value candidateGlobal = arith::AddIOp::create(atLoad, loc, baseGlobal, loopIv);
+  Value candidateGlobal =
+      arith::AddIOp::create(atLoad, loc, baseGlobal, loopIv);
   Value nextBlockStart =
       arith::AddIOp::create(atLoad, loc, blockStart, blockSize);
-  Value belowCond = arith::CmpIOp::create(atLoad, loc, arith::CmpIPredicate::ult,
-                                           candidateGlobal, blockStart);
+  Value belowCond = arith::CmpIOp::create(
+      atLoad, loc, arith::CmpIPredicate::ult, candidateGlobal, blockStart);
   Value aboveCond = arith::CmpIOp::create(
       atLoad, loc, arith::CmpIPredicate::uge, candidateGlobal, nextBlockStart);
   Value localIndex =
@@ -561,9 +564,9 @@ bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   Value selectedPtr = centerPtr;
   Type ptrType = loadOp.getType();
   selectedPtr = LLVM::SelectOp::create(atLoad, loc, ptrType, belowCond, negPtr,
-                                        selectedPtr);
+                                       selectedPtr);
   selectedPtr = LLVM::SelectOp::create(atLoad, loc, ptrType, aboveCond, posPtr,
-                                        selectedPtr);
+                                       selectedPtr);
 
   loadOp.replaceAllUsesWith(selectedPtr);
   for (auto ptr2memref : ptr2memrefs) {
@@ -585,18 +588,18 @@ Value buildNeighborCandidateIndex(OpBuilder &builder, Location loc,
                                   int64_t adjust) {
   Value result = pattern.baseIndex;
   if (adjust > 0) {
-    result = arith::AddIOp::create(
-        builder, loc, result, createConstantIndex(builder, loc, adjust));
+    result = arith::AddIOp::create(builder, loc, result,
+                                   createConstantIndex(builder, loc, adjust));
   } else if (adjust < 0) {
-    result = arith::SubIOp::create(
-        builder, loc, result, createConstantIndex(builder, loc, -adjust));
+    result = arith::SubIOp::create(builder, loc, result,
+                                   createConstantIndex(builder, loc, -adjust));
   }
   if (pattern.clampMax)
     result = arith::MinUIOp::create(builder, loc, result, pattern.clampMax);
   if (pattern.forceZeroCond) {
     Value zero = createConstantIndex(builder, loc, 0);
     result = arith::SelectOp::create(builder, loc, pattern.forceZeroCond, zero,
-                                      result);
+                                     result);
   }
   return result;
 }
@@ -697,20 +700,21 @@ bool rewriteBlockedNeighborLocalIndices(Operation *op, scf::ForOp loop,
   }
   if (auto store = dyn_cast<memref::StoreOp>(op)) {
     memref::StoreOp::create(builder, loc, memInfo.storedValue, memInfo.memref,
-                             newIndices);
+                            newIndices);
     store.erase();
     return true;
   }
   if (auto dynLoad = dyn_cast<polygeist::DynLoadOp>(op)) {
-    auto newLoad = polygeist::DynLoadOp::create(
-        builder, loc, memInfo.resultType, memInfo.memref, newIndices, memInfo.sizes);
+    auto newLoad =
+        polygeist::DynLoadOp::create(builder, loc, memInfo.resultType,
+                                     memInfo.memref, newIndices, memInfo.sizes);
     dynLoad.replaceAllUsesWith(newLoad.getResult());
     dynLoad.erase();
     return true;
   }
   if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(op)) {
-    polygeist::DynStoreOp::create(
-        builder, loc, memInfo.storedValue, memInfo.memref, newIndices, memInfo.sizes);
+    polygeist::DynStoreOp::create(builder, loc, memInfo.storedValue,
+                                  memInfo.memref, newIndices, memInfo.sizes);
     dynStore.erase();
     return true;
   }
@@ -1137,8 +1141,8 @@ bool rewriteLoopWindowAccess(Operation *op, scf::ForOp loop,
     load.replaceAllUsesWith(newLoad.getResult());
     load.erase();
   } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-    memref::StoreOp::create(builder, loc, pattern.memInfo.storedValue, newMemref,
-                             newIndices);
+    memref::StoreOp::create(builder, loc, pattern.memInfo.storedValue,
+                            newMemref, newIndices);
     store.erase();
   } else if (auto dynLoad = dyn_cast<polygeist::DynLoadOp>(op)) {
     auto newLoad = polygeist::DynLoadOp::create(
@@ -1148,8 +1152,7 @@ bool rewriteLoopWindowAccess(Operation *op, scf::ForOp loop,
     dynLoad.erase();
   } else if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(op)) {
     polygeist::DynStoreOp::create(builder, loc, pattern.memInfo.storedValue,
-                                   newMemref, newIndices,
-                                   pattern.memInfo.sizes);
+                                  newMemref, newIndices, pattern.memInfo.sizes);
     dynStore.erase();
   } else {
     return false;
@@ -1257,8 +1260,9 @@ bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses) {
   Value middleSize = remainingAfterLeft;
   if (rightBand > 0) {
     Value rightBandVal = createConstantIndex(builder, loc, rightBand);
-    Value hasInterior = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::ugt, remainingAfterLeft, rightBandVal);
+    Value hasInterior =
+        arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ugt,
+                              remainingAfterLeft, rightBandVal);
     Value trimmed =
         arith::SubIOp::create(builder, loc, remainingAfterLeft, rightBandVal);
     middleSize =
@@ -1343,8 +1347,9 @@ bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
     SmallVector<Value> posIndices(indices.begin(), indices.end());
     posIndices.back() =
         buildNeighborCandidateIndex(beforeLoop, loc, pattern, /*adjust=*/1);
-    Value canUsePos = arith::CmpIOp::create(
-        beforeLoop, loc, arith::CmpIPredicate::ult, pattern.baseIndex, pattern.clampMax);
+    Value canUsePos =
+        arith::CmpIOp::create(beforeLoop, loc, arith::CmpIPredicate::ult,
+                              pattern.baseIndex, pattern.clampMax);
     if (pattern.forceZeroCond) {
       Value notSingle =
           buildLoopInvariantI1Not(beforeLoop, loc, pattern.forceZeroCond);
@@ -1359,11 +1364,11 @@ bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   Value selectedPtr = centerPtr;
   Type ptrType = loadOp.getType();
   if (pattern.belowCond)
-    selectedPtr = LLVM::SelectOp::create(atLoad, loc, ptrType, pattern.belowCond,
-                                          negPtr, selectedPtr);
+    selectedPtr = LLVM::SelectOp::create(
+        atLoad, loc, ptrType, pattern.belowCond, negPtr, selectedPtr);
   if (pattern.aboveCond)
-    selectedPtr = LLVM::SelectOp::create(atLoad, loc, ptrType, pattern.aboveCond,
-                                          posPtr, selectedPtr);
+    selectedPtr = LLVM::SelectOp::create(
+        atLoad, loc, ptrType, pattern.aboveCond, posPtr, selectedPtr);
 
   loadOp.replaceAllUsesWith(selectedPtr);
   loadOp.erase();

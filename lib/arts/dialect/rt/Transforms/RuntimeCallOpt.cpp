@@ -16,8 +16,8 @@
 #define GEN_PASS_DEF_RUNTIMECALLOPT
 #include "arts/Dialect.h"
 #include "arts/codegen/Types.h"
-#include "arts/passes/Passes.h"
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
+#include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -45,7 +45,6 @@ getOptimizableRuntimeFunction(func::CallOp call) {
   return fn;
 }
 
-
 struct RuntimeCallOptPass
     : public impl::RuntimeCallOptBase<RuntimeCallOptPass> {
   void runOnOperation() override {
@@ -65,8 +64,8 @@ struct RuntimeCallOptPass
       for (func::CallOp call : calls) {
         if (!call)
           continue;
-        scf::ForOp target = findHoistTarget(call.getOperation(),
-                                             call.getOperation(), domInfo);
+        scf::ForOp target =
+            findHoistTarget(call.getOperation(), call.getOperation(), domInfo);
         if (!target || !target->isAncestor(call))
           continue;
         call->moveBefore(target);

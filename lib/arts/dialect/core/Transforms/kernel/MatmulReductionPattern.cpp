@@ -532,7 +532,7 @@ static scf::ForOp createTiledForIfBeneficial(
 
   auto tileStepVal = arts::createConstantIndex(b, loc, tileSize);
   auto outer = scf::ForOp::create(b, loc, originalLoop.getLowerBound(),
-                                   originalLoop.getUpperBound(), tileStepVal);
+                                  originalLoop.getUpperBound(), tileStepVal);
 
   b.setInsertionPointToStart(outer.getBody());
   Value tileBase = outer.getInductionVar();
@@ -612,8 +612,8 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     }
   }
   if (!initAnchor) {
-    auto initLoop = scf::ForOp::create(b,
-        loc, jLoop.getLowerBound(), jLoop.getUpperBound(), jLoop.getStep());
+    auto initLoop = scf::ForOp::create(b, loc, jLoop.getLowerBound(),
+                                       jLoop.getUpperBound(), jLoop.getStep());
     {
       OpBuilder::InsertionGuard g(b);
       b.setInsertionPointToStart(initLoop.getBody());
@@ -627,7 +627,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
 
   /// Create k loop: for k: a = alpha*A[i,k]; for j: C[i,j] += a*B[k,j]
   auto newK = scf::ForOp::create(b, loc, kLoop.getLowerBound(),
-                                  kLoop.getUpperBound(), kLoop.getStep());
+                                 kLoop.getUpperBound(), kLoop.getStep());
   metadataManager.rewriteLoopMetadata(kLoop.getOperation(), newK.getOperation(),
                                       clearReductionLoopFacts);
 
@@ -690,7 +690,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
 
     if (!createdTiledUpdate) {
       auto newJ = scf::ForOp::create(b, loc, jLoop.getLowerBound(),
-                                      jLoop.getUpperBound(), jLoop.getStep());
+                                     jLoop.getUpperBound(), jLoop.getStep());
       metadataManager.rewriteLoopMetadata(
           jLoop.getOperation(), newJ.getOperation(), clearReductionLoopFacts);
       b.setInsertionPointToStart(newJ.getBody());

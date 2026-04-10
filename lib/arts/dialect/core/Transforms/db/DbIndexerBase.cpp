@@ -214,18 +214,17 @@ void DbIndexerBase::transformDbRefUsers(
         localizeForDbRefUser(elementIndices, newElementType, builder, userLoc);
 
     auto newRef = DbRefOp::create(builder, userLoc, newElementType, blockArg,
-                                          localized.dbRefIndices);
+                                  localized.dbRefIndices);
 
     if (access->isRead()) {
       auto load = cast<memref::LoadOp>(refUser);
-      auto newLoad = memref::LoadOp::create(builder, userLoc, newRef.getResult(),
-                                                    localized.memrefIndices);
+      auto newLoad = memref::LoadOp::create(
+          builder, userLoc, newRef.getResult(), localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
       opsToRemove.insert(load);
     } else if (auto store = dyn_cast<memref::StoreOp>(refUser)) {
       memref::StoreOp::create(builder, userLoc, store.getValue(),
-                                      newRef.getResult(),
-                                      localized.memrefIndices);
+                              newRef.getResult(), localized.memrefIndices);
       opsToRemove.insert(store);
     }
   }

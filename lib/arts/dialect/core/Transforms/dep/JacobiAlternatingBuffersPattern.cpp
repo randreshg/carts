@@ -37,7 +37,6 @@
 
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/dep/DepTransform.h"
 #include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "arts/utils/DbUtils.h"
@@ -45,6 +44,7 @@
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -680,9 +680,9 @@ static EdtOp cloneStencilEdt(EdtOp sourceEdt, Block *targetBlock, Value oldA,
   OpBuilder builder(targetBlock, targetTerminator
                                      ? Block::iterator(targetTerminator)
                                      : targetBlock->end());
-  auto cloned = EdtOp::create(builder,
-      sourceEdt.getLoc(), sourceEdt.getType(), sourceEdt.getConcurrency(),
-      sourceEdt.getRoute(), sourceEdt.getDependencies());
+  auto cloned = EdtOp::create(builder, sourceEdt.getLoc(), sourceEdt.getType(),
+                              sourceEdt.getConcurrency(), sourceEdt.getRoute(),
+                              sourceEdt.getDependencies());
   cloned->setAttrs(sourceEdt->getAttrs());
   stampJacobiAlternatingBuffers(cloned.getOperation());
 
@@ -726,7 +726,7 @@ static bool rewriteJacobiTimeLoop(JacobiLoopMatch &match) {
       arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq, rem, zero);
 
   auto ifOp = scf::IfOp::create(builder, loc, TypeRange{}, isSwapIter,
-                                 /*withElseRegion=*/true);
+                                /*withElseRegion=*/true);
   stampJacobiAlternatingBuffers(ifOp.getOperation());
 
   cloneStencilEdt(match.stencilEdt, &ifOp.getThenRegion().front(),

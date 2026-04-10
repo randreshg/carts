@@ -14,13 +14,13 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/db/DbBlockPlanResolver.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/dialect/core/Transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dominance.h"
@@ -66,8 +66,8 @@ computeDefaultBlockSize(DbAllocOp allocOp,
                 .getResult()
           : RuntimeQueryOp::create(builder, loc, RuntimeQueryKind::totalWorkers)
                 .getResult();
-  Value workers = arith::IndexCastUIOp::create(builder,
-      loc, builder.getIndexType(), parallelI32);
+  Value workers = arith::IndexCastUIOp::create(
+      builder, loc, builder.getIndexType(), parallelI32);
   Value workersClamped = arith::MaxUIOp::create(builder, loc, workers, one);
 
   /// Keep fallback stencil block sizing aligned with the same active-worker
@@ -82,7 +82,7 @@ computeDefaultBlockSize(DbAllocOp allocOp,
     maxWorkersByOwnedSpan =
         arith::MaxUIOp::create(builder, loc, maxWorkersByOwnedSpan, one);
     workersClamped = arith::MinUIOp::create(builder, loc, workersClamped,
-                                             maxWorkersByOwnedSpan);
+                                            maxWorkersByOwnedSpan);
   }
 
   Value workersMinusOne =
@@ -290,8 +290,8 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
   SmallVector<Value> globalMerged = rankedCandidates.front().blockSizes;
   for (size_t i = 1; i < rankedCandidates.size(); ++i) {
     for (unsigned dim = 0; dim < nDims; ++dim) {
-      globalMerged[dim] = arith::MinUIOp::create(builder,
-          loc, globalMerged[dim], rankedCandidates[i].blockSizes[dim]);
+      globalMerged[dim] = arith::MinUIOp::create(
+          builder, loc, globalMerged[dim], rankedCandidates[i].blockSizes[dim]);
     }
   }
 
@@ -407,8 +407,8 @@ collectCanonicalPartialNDBlockPlanCandidate(
       if (!mergedByDim[physDim]) {
         mergedByDim[physDim] = candidate;
       } else {
-        mergedByDim[physDim] = arith::MinUIOp::create(builder,
-            loc, mergedByDim[physDim], candidate);
+        mergedByDim[physDim] = arith::MinUIOp::create(
+            builder, loc, mergedByDim[physDim], candidate);
       }
       ++supportCounts[physDim];
     }
@@ -736,8 +736,8 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
         if (!canonicalCandidates.empty()) {
           dynamicCandidate = canonicalCandidates.front();
           for (size_t i = 1; i < canonicalCandidates.size(); ++i) {
-            dynamicCandidate = arith::MinUIOp::create(builder,
-                loc, dynamicCandidate, canonicalCandidates[i]);
+            dynamicCandidate = arith::MinUIOp::create(
+                builder, loc, dynamicCandidate, canonicalCandidates[i]);
           }
         }
       }

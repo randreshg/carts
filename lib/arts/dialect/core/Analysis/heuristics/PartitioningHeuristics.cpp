@@ -7,9 +7,9 @@
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/heuristics/HeuristicUtils.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/IR/BuiltinAttributes.h"
 

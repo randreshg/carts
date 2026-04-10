@@ -27,14 +27,14 @@
 /// - else: keep per-iteration reserve semantics
 ///==========================================================================///
 
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/codegen/Types.h"
 #include "arts/utils/LoopUtils.h"
+#include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_GUIDRANGCALLOPT
 #include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
+#include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -128,8 +128,9 @@ struct GuidRangCallOptPass
           OpBuilder callBuilder(reserveCall);
           Value ivI32 = arith::IndexCastOp::create(
               callBuilder, reserveCall.getLoc(), i32, loop.getInductionVar());
-          auto fromIndex = func::CallOp::create(
-              callBuilder, reserveCall.getLoc(), fromIndexFn, ValueRange{rangeGuid, ivI32});
+          auto fromIndex =
+              func::CallOp::create(callBuilder, reserveCall.getLoc(),
+                                   fromIndexFn, ValueRange{rangeGuid, ivI32});
           reserveCall.getResult(0).replaceAllUsesWith(fromIndex.getResult(0));
           reserveCall.erase();
           ++rewrittenStatic;
@@ -146,19 +147,19 @@ struct GuidRangCallOptPass
         Value u32Max = arith::ConstantIntOp::create(
             b, loc, std::numeric_limits<uint32_t>::max(), 64);
         Value fitsU32 = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ule,
-                                               ubI64, u32Max);
+                                              ubI64, u32Max);
         Value moreThanOne = arith::CmpIOp::create(
             b, loc, arith::CmpIPredicate::ugt, ubI64, oneI64);
         Value canUseRange = arith::AndIOp::create(b, loc, fitsU32, moreThanOne);
 
         auto chooseRangeGuid =
             scf::IfOp::create(b, loc, TypeRange{i64}, canUseRange,
-                               /*withElseRegion=*/true);
+                              /*withElseRegion=*/true);
         {
           OpBuilder thenBuilder =
               OpBuilder::atBlockBegin(&chooseRangeGuid.getThenRegion().front());
-          Value tripCountI32 = arith::IndexCastOp::create(
-              thenBuilder, loc, i32, loop.getUpperBound());
+          Value tripCountI32 = arith::IndexCastOp::create(thenBuilder, loc, i32,
+                                                          loop.getUpperBound());
           auto reserveRange = func::CallOp::create(
               thenBuilder, loc, reserveRangeFn,
               ValueRange{reserveCall.getOperand(0), tripCountI32,
@@ -168,32 +169,35 @@ struct GuidRangCallOptPass
         {
           OpBuilder elseBuilder =
               OpBuilder::atBlockBegin(&chooseRangeGuid.getElseRegion().front());
-          Value nullGuid = arith::ConstantIntOp::create(elseBuilder, loc, 0, 64);
+          Value nullGuid =
+              arith::ConstantIntOp::create(elseBuilder, loc, 0, 64);
           scf::YieldOp::create(elseBuilder, loc, nullGuid);
         }
         Value rangeGuid = chooseRangeGuid.getResult(0);
 
         OpBuilder callBuilder(reserveCall);
-        auto chooseGuid = scf::IfOp::create(
-            callBuilder, reserveCall.getLoc(), TypeRange{i64}, canUseRange,
-            /*withElseRegion=*/true);
+        auto chooseGuid = scf::IfOp::create(callBuilder, reserveCall.getLoc(),
+                                            TypeRange{i64}, canUseRange,
+                                            /*withElseRegion=*/true);
         {
           OpBuilder thenBuilder =
               OpBuilder::atBlockBegin(&chooseGuid.getThenRegion().front());
           Value ivI32 = arith::IndexCastOp::create(
               thenBuilder, reserveCall.getLoc(), i32, loop.getInductionVar());
-          auto fromIndex = func::CallOp::create(
-              thenBuilder, reserveCall.getLoc(), fromIndexFn, ValueRange{rangeGuid, ivI32});
+          auto fromIndex =
+              func::CallOp::create(thenBuilder, reserveCall.getLoc(),
+                                   fromIndexFn, ValueRange{rangeGuid, ivI32});
           scf::YieldOp::create(thenBuilder, reserveCall.getLoc(),
-                                fromIndex.getResult(0));
+                               fromIndex.getResult(0));
         }
         {
           OpBuilder elseBuilder =
               OpBuilder::atBlockBegin(&chooseGuid.getElseRegion().front());
-          auto reserve = func::CallOp::create(
-              elseBuilder, reserveCall.getLoc(), reserveFn, reserveCall.getOperands());
+          auto reserve =
+              func::CallOp::create(elseBuilder, reserveCall.getLoc(), reserveFn,
+                                   reserveCall.getOperands());
           scf::YieldOp::create(elseBuilder, reserveCall.getLoc(),
-                                reserve.getResult(0));
+                               reserve.getResult(0));
         }
 
         reserveCall.getResult(0).replaceAllUsesWith(chooseGuid.getResult(0));

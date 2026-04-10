@@ -44,11 +44,11 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/db/elementwise/DbElementWiseIndexer.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "polygeist/Ops.h"
@@ -578,7 +578,8 @@ SmallVector<Value> DbElementWiseIndexer::localizeCoordinates(
       Value stride = DbUtils::getStrideValue(builder, loc, oldElementSizes);
       if (stride) {
         /// localLinear = globalLinear - (offset * stride)
-        Value scaledOffset = arith::MulIOp::create(builder, loc, offset, stride);
+        Value scaledOffset =
+            arith::MulIOp::create(builder, loc, offset, stride);
         Value localLinear =
             arith::SubIOp::create(builder, loc, globalLinear, scaledOffset);
 
