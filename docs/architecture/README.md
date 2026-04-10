@@ -109,44 +109,54 @@ enables:
 - **Lossless from OMP**: Preserve reduction combiners, nowait, collapse, schedule
 - **Runtime-agnostic SDE**: Could target ARTS, Legion, StarPU, or GPU runtimes
 
-## Directory Layout (Target)
+## Directory Layout (Current — Phase 3 Complete)
 
 Each dialect owns its own IREE-style directory with `IR/`, `Conversion/`,
-`Transforms/`, and `Analysis/` subdirectories. Shared infrastructure
-(`patterns/`, `general/`, `verify/`, `analysis/`, `utils/`) sits outside
-the dialect directories.
+and `Transforms/` subdirectories. Shared infrastructure (`verify/`,
+`analysis/`, `utils/`) sits outside the dialect directories.
 
 ```
-include/arts/dialect/
-  sde/IR/          SdeDialect.td, SdeOps.td, SdeTypes.td, SdeAttrs.td, SdeDialect.h
-  core/IR/         ArtsDialect.td, ArtsOps.td, ArtsAttrs.td, ArtsTypes.td, ArtsDialect.h
-  rt/IR/           RtDialect.td, RtOps.td, RtDialect.h
+include/arts/
+  Dialect.td, Ops.td, Attributes.td, Types.td, Dialect.h   # Core TableGen stays here (135+ consumers)
+  dialect/
+    sde/IR/        SdeDialect.td, SdeOps.td, SdeDialect.h  # SDE dialect
+    rt/IR/         RtDialect.td, RtOps.td, RtDialect.h     # RT dialect
+    core/          Internal headers (BlockLoopStripMiningInternal.h, etc.)
 
 lib/arts/
   dialect/
     sde/                   "this computation reads A, writes C with neighbor deps"
       IR/                  SdeDialect.cpp, SdeOps.cpp
-      Analysis/            metadata/, ValueAnalysis, SdeLoopAnalysis
-      Transforms/          ConvertOpenMPToSde, RaiseToLinalg, RaiseToTensor, SdeOpt,
-                           LoopNormalization, LoopReordering, CollectMetadata
+      Transforms/          ConvertOpenMPToSde, CollectMetadata
+      Conversion/SdeToArts/ SdeToArtsPatterns
 
     core/                  "create an EDT with 3 deps partitioned as block-stencil"
-      IR/                  Dialect.cpp (reduced: 21 ops)
-      Transforms/          EdtStructuralOpt, DbPartitioning, CreateDbs, Concurrency,
-                           EdtDistribution, ForLowering, CreateEpochs, EpochOpt, ...
+      IR/                  Dialect.cpp
+      Transforms/          47 passes: EdtStructuralOpt, DbPartitioning, CreateDbs,
+                           Concurrency, EdtDistribution, ForLowering, CreateEpochs,
+                           EpochOpt, LoopNormalization, LoopReordering, PatternDiscovery,
+                           KernelTransforms, Inliner, RaiseMemRefDimensionality, ...
       Conversion/
-        SdeToArts/         SDE -> ARTS conversion (+ linalg-to-loops)
+        OmpToArts/         ConvertOpenMPToArts (legacy, used as SDE fallback)
+        ArtsToLLVM/        ConvertArtsToLLVM + core LLVM patterns
 
     rt/                    "call artsEdtCreate(guid, paramv, 3)"
       IR/                  RtDialect.cpp, RtOps.cpp (14 ops)
       Conversion/
-        ArtsToRt/          EdtLowering, EpochLowering (only passes producing arts_rt ops)
-        RtToLLVM/          RtToLLVMPatterns (14 patterns from ConvertArtsToLLVM)
+        ArtsToRt/          EdtLowering, EpochLowering
+        RtToLLVM/          RtToLLVMPatterns (14 patterns)
       Transforms/          DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt
 
-  patterns/                pattern detection and classification (no dialect dependency)
-  general/                 standard MLIR transforms (DCE, CSE, memref raising)
-  verify/                  pipeline barrier checks (11 passes)
+  passes/verify/           11 verification barrier passes
   analysis/                shared analysis framework
   utils/                   shared utilities
+```
+
+### Deferred Structure (Phase 2C, when tensor integration implemented)
+
+```
+lib/arts/dialect/sde/Transforms/ will add:
+  RaiseToLinalg.cpp        scf.for+memref -> linalg.generic
+  RaiseToTensor.cpp        linalg memref -> linalg tensor
+  SdeOpt.cpp               tensor-space analysis + optimization
 ```
