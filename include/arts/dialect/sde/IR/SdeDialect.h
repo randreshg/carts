@@ -1,0 +1,29 @@
+///==========================================================================///
+/// File: SdeDialect.h
+/// Defines the ARTS Structured Decomposition Environment dialect.
+///==========================================================================///
+
+#ifndef ARTS_SDE_DIALECT_H
+#define ARTS_SDE_DIALECT_H
+
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Dialect.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+
+#include "arts/dialect/sde/IR/SdeOpsDialect.h.inc"
+
+namespace mlir::arts::sde {} // namespace mlir::arts::sde
+
+#include "arts/dialect/sde/IR/SdeOpsEnums.h.inc"
+
+#define GET_ATTRDEF_CLASSES
+#include "arts/dialect/sde/IR/SdeOpsAttributes.h.inc"
+
+#define GET_OP_CLASSES
+#include "arts/dialect/sde/IR/SdeOps.h.inc"
+
+#endif // ARTS_SDE_DIALECT_H
