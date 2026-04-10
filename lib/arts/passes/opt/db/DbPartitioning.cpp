@@ -1370,7 +1370,8 @@ bool DbPartitioningPass::buildPerAcquireCapabilities(
     /// logical inner dimension (e.g. owner_dims=[1]) but the active acquire
     /// ptr is only rank-1 at this stage.
     if (thisAcquireCanBlock && contractSummary) {
-      if (auto sourcePtrTy = dyn_cast<MemRefType>(acquire.getSourcePtr().getType())) {
+      if (auto sourcePtrTy =
+              dyn_cast<MemRefType>(acquire.getSourcePtr().getType())) {
         unsigned sourceRank = sourcePtrTy.getRank();
         bool ownerDimsOutOfRange = llvm::any_of(
             contractSummary->contract.spatial.ownerDims, [&](int64_t dim) {

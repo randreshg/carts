@@ -28,9 +28,9 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #define GEN_PASS_DEF_EPOCHLOWERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
@@ -46,8 +46,8 @@
 #include "mlir/Support/LLVM.h"
 #include <limits>
 
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -75,14 +75,6 @@ static llvm::Statistic numEdtCreatesUpdatedWithEpoch{
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
-using mlir::arts::rt::CreateEpochOp;
-using mlir::arts::rt::DepForwardOp;
-using mlir::arts::rt::DepGepOp;
-using mlir::arts::rt::EdtCreateOp;
-using mlir::arts::rt::EdtParamPackOp;
-using mlir::arts::rt::EdtParamUnpackOp;
-using mlir::arts::rt::RecordDepOp;
-using mlir::arts::rt::WaitOnEpochOp;
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::CPSAdditiveParams;
@@ -97,6 +89,14 @@ using AttrNames::Operation::CPSNumCarry;
 using AttrNames::Operation::CPSOuterEpochParamIdx;
 using AttrNames::Operation::CPSParamPerm;
 using AttrNames::Operation::CPSPreserveCarryAbi;
+using mlir::arts::rt::CreateEpochOp;
+using mlir::arts::rt::DepForwardOp;
+using mlir::arts::rt::DepGepOp;
+using mlir::arts::rt::EdtCreateOp;
+using mlir::arts::rt::EdtParamPackOp;
+using mlir::arts::rt::EdtParamUnpackOp;
+using mlir::arts::rt::RecordDepOp;
+using mlir::arts::rt::WaitOnEpochOp;
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation

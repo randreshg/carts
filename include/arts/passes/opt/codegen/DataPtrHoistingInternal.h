@@ -10,8 +10,8 @@
 #define ARTS_PASSES_OPT_CODEGEN_DATAPTRHOISTINGINTERNAL_H
 
 #include "arts/Dialect.h"
-#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "arts/utils/LoopUtils.h"

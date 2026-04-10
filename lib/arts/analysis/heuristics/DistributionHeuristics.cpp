@@ -371,9 +371,8 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
     hasTriangularBound = summary->hasTriangularBound;
     if (summary->distributionPattern != EdtDistributionPattern::unknown)
       semanticDistributionPattern = summary->distributionPattern;
-    isStencilPattern = isStencilPattern ||
-                       semanticDistributionPattern ==
-                           EdtDistributionPattern::stencil;
+    isStencilPattern = isStencilPattern || semanticDistributionPattern ==
+                                               EdtDistributionPattern::stencil;
     /// Uniform kernels should account for the work hidden in perfectly nested
     /// inner loops even when the body contains neighbor accesses. The DB
     /// summary marks those accesses with `hasStencilOffset`, but that does not
@@ -422,11 +421,9 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   /// inner loops, such as specfem velocity.
   int64_t targetEffectiveTripCount =
       saturatingMulPositive(workerCfg.totalWorkers, minItersPerWorker);
-  int64_t nestedWorkSaturationTarget =
-      ceilDivPositive(std::max<int64_t>(1, targetEffectiveTripCount),
-                      tripCount);
-  int64_t nestedLoopWorkCap =
-      std::max<int64_t>(8, nestedWorkSaturationTarget);
+  int64_t nestedWorkSaturationTarget = ceilDivPositive(
+      std::max<int64_t>(1, targetEffectiveTripCount), tripCount);
+  int64_t nestedLoopWorkCap = std::max<int64_t>(8, nestedWorkSaturationTarget);
   nestedLoopWork = estimateNestedLoopWork(forOp, nestedLoopWorkCap);
 
   if (allowNestedWorkBoost) {

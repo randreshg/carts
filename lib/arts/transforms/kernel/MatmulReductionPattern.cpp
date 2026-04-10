@@ -264,9 +264,8 @@ static bool matchMatmulDotInArtsFor(ForOp artsFor, ReductionDotMatch &out) {
   if (!jLoop)
     return false;
 
-  auto matchScalarAccumulatorReduction = [&](scf::ForOp reductionLoop,
-                                            Value &sumVal,
-                                            Type &elemTy) -> bool {
+  auto matchScalarAccumulatorReduction =
+      [&](scf::ForOp reductionLoop, Value &sumVal, Type &elemTy) -> bool {
     Value accMemref;
     bool sawReductionLoop = false;
     memref::LoadOp finalLoad = nullptr;
@@ -391,7 +390,8 @@ static bool matchMatmulDotInArtsFor(ForOp artsFor, ReductionDotMatch &out) {
       if (!sawKLoop)
         continue;
       auto memrefType = dyn_cast<MemRefType>(st.getMemref().getType());
-      if (!memrefType || memrefType.getRank() != 2 || st.getIndices().size() != 2)
+      if (!memrefType || memrefType.getRank() != 2 ||
+          st.getIndices().size() != 2)
         continue;
       if (st.getIndices()[1] != jLoop.getInductionVar())
         continue;

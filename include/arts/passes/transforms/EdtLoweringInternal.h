@@ -10,9 +10,9 @@
 #define ARTS_PASSES_TRANSFORMS_EDTLOWERINGINTERNAL_H
 
 #include "arts/Dialect.h"
-#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
