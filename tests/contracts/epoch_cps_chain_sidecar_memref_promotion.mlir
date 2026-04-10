@@ -1,15 +1,20 @@
 // RUN: %carts-compile %s --arts-config %S/../examples/arts.cfg --arts-epoch-finish-continuation --start-from=epochs --pipeline=epochs | %FileCheck %s
 
-// STREAM-like timed loops carry sequential sidecars between epochs. The CPS
-// chain transform must preserve those sidecars by promoting loop-external
-// memref storage to DB-backed views that continuations can capture safely.
+// STREAM-like timed loops with host-call sidecars now stay blocking through
+// epochs. The timer memref remains stack-local, the loop stays in place, and
+// the two epoch bodies remain ordinary EDT launches.
 //
 // CHECK-LABEL: func.func @test_cps_chain_sidecar_memref_promotion
-// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%c0_i32 : i32) sizes[%c1] elementType(memref<4xf64>) elementSizes[%c4] : (memref<?xi64>, memref<1xmemref<4xf64>>)
-// CHECK: arts.cps_chain_id = "chain_0"
-// CHECK: arts.db_ref %{{.*}}[%c0] : memref<1xmemref<4xf64>> -> memref<4xf64>
-// CHECK: arts.cps_advance
-// CHECK-NOT: scf.for
+// CHECK-NOT: arts.db_alloc
+// CHECK-NOT: arts.cps_chain_id
+// CHECK-NOT: arts.cps_advance
+// CHECK: scf.for %{{.+}} = %c0 to %c4 step %c1
+// CHECK: func.call @now() : () -> f64
+// CHECK: arts.epoch
+// CHECK: arts.edt <task> <intranode> route(%c0_i32)
+// CHECK: func.call @sink_a() : () -> ()
+// CHECK: arts.edt <task> <intranode> route(%c0_i32)
+// CHECK: func.call @sink_b() : () -> ()
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f128, dense<128> : vector<2xi64>>, #dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i8, dense<[8, 32]> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i16, dense<[16, 32]> : vector<2xi64>>, #dlti.dl_entry<i128, dense<128> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i1, dense<8> : vector<2xi64>>, #dlti.dl_entry<f16, dense<16> : vector<2xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
 
