@@ -53,29 +53,32 @@ Phase 1D: Verification updates (in 1C commit)
   separate library) to avoid circular ArtsCodegen dependency
 - No circular dependencies -- rt ops use only standard MLIR types
 
-## Phase 2: Create SDE Dialect
+## Phase 2: Create SDE Dialect -- IN PROGRESS (2A+2B COMPLETE)
 
 See [sde-dialect.md](sde-dialect.md) and [pipeline-redesign.md](pipeline-redesign.md).
 
-### Sub-Phases
+### Completed Steps
 
 ```
-Phase 2A: SDE scaffold (additive)
-  1. Create include/arts/dialect/sde/ directory structure
-  2. Write SdeDialect.td, SdeOps.td, SdeTypes.td, SdeAttrs.td
-  3. Write SdeEffects.h (ComputeResource, DataResource, SyncResource)
-  4. Write SdeDialect.cpp, SdeOps.cpp (verifiers, builders)
-  5. Write CMakeLists.txt files
-  6. Build and verify tablegen
+Phase 2A: SDE scaffold (8d3ecbf0)
+  - Created include/arts/dialect/sde/IR/ (SdeDialect.td, SdeOps.td, SdeDialect.h)
+  - 8 ops: CuRegion, CuTask, CuReduce, CuAtomic, SuIterate, SuBarrier, MuDep, Yield
+  - 5 enums: SdeCuKind, SdeAccessMode, SdeReductionKind, SdeScheduleKind, SdeConcurrencyScope
+  - Registered in Compile.cpp
 
-Phase 2B: OMP-to-SDE conversion
-  7. Write ConvertOpenMPToSde.cpp (12 patterns, modeled on ConvertOpenMPToArts.cpp)
-  8. Write ConvertSdeToArts.cpp (reverse mapping)
-  9. Register sde dialect in Compile.cpp
-  10. Update pipeline in Compile.cpp: omp->sde->arts instead of omp->arts
-  11. Build, test, verify identical output
+Phase 2B: OMP-to-SDE-to-ARTS pipeline (cd75cf2a)
+  - ConvertOpenMPToSde.cpp: 11 patterns (parallel, master, single, wsloop,
+    task, taskloop, scf.parallel, atomic, terminator, barrier, taskwait)
+  - SdeToArtsPatterns.cpp: 8 patterns (cu_region, cu_task, su_iterate,
+    su_barrier, cu_atomic, cu_reduce, mu_dep, yield)
+  - Pipeline wired in Compile.cpp: omp->sde->arts replaces omp->arts
+  - 159/168 tests pass (same baseline)
+```
 
-Phase 2C: Tensor integration
+### Remaining Sub-Phases (deferred)
+
+```
+Phase 2C: Tensor integration (deferred — over-engineering for now)
   12. Write RaiseToLinalg.cpp (scf.for+memref -> linalg.generic)
   13. Write RaiseToTensor.cpp (linalg memref -> linalg tensor)
   14. Integrate one-shot-bufferize into pipeline
@@ -83,7 +86,7 @@ Phase 2C: Tensor integration
   16. Integrate linalg-to-loops into pipeline
   17. Build, test, verify identical output
 
-Phase 2D: Migrate general passes to SDE
+Phase 2D: Migrate general passes to SDE (deferred)
   18. Move CollectMetadata to sde/Transforms/
   19. Move LoopNormalization to sde/Transforms/
   20. Move LoopReordering to sde/Transforms/ (fix matmul-autodetect dep)
