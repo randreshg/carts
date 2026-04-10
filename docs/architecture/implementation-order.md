@@ -72,6 +72,7 @@ Phase 2B: OMP-to-SDE-to-ARTS pipeline (cd75cf2a)
   - SdeToArtsPatterns.cpp: 8 patterns (cu_region, cu_task, su_iterate,
     su_barrier, cu_atomic, cu_reduce, mu_dep, yield)
   - Pipeline wired in Compile.cpp: omp->sde->arts replaces omp->arts
+  - VerifySdeLowered pass added (ba2ec03d): checks no sde.* ops survive
   - 159/168 tests pass (same baseline)
 ```
 
@@ -86,10 +87,10 @@ Phase 2C: Tensor integration (deferred — over-engineering for now)
   16. Integrate linalg-to-loops into pipeline
   17. Build, test, verify identical output
 
-Phase 2D: Migrate general passes to SDE (deferred)
-  18. Move CollectMetadata to sde/Transforms/
-  19. Move LoopNormalization to sde/Transforms/
-  20. Move LoopReordering to sde/Transforms/ (fix matmul-autodetect dep)
+Phase 2D: Migrate general passes to SDE (partially complete)
+  18. Move CollectMetadata to sde/Transforms/ -- DONE (4d62f756)
+  19. Move LoopNormalization to sde/Transforms/ (blocked — uses arts::ForOp)
+  20. Move LoopReordering to sde/Transforms/ (blocked — uses DbPatternMatchers)
   21. Update includes project-wide
   22. Build and test
 ```
