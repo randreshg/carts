@@ -310,7 +310,8 @@ static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
 static const std::array<llvm::StringLiteral, 5> kOpenMPToArtsPasses = {
     "ConvertOpenMPToSde", "ConvertSdeToArts", "VerifySdeLowered",
     "DeadCodeElimination", "CSE"};
-static const std::array<llvm::StringLiteral, 8> kPatternPipelinePasses = {
+static const std::array<llvm::StringLiteral, 9> kPatternPipelinePasses = {
+    "RaiseToLinalg",
     "PatternDiscovery(seed)", "DepTransforms",
     "LoopNormalization",      "StencilBoundaryPeeling",
     "LoopReordering",         "PatternDiscovery(refine)",
@@ -744,6 +745,7 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 /// Dedicated semantic pattern pipeline that teaches ARTS about supported loop
 /// and dependence families before DB creation.
 void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
+  pm.addPass(arts::sde::createRaiseToLinalgPass());
   pm.addPass(arts::createPatternDiscoveryPass(AM, /*refine=*/false));
   pm.addPass(arts::createDepTransformsPass(AM));
   pm.addPass(arts::createLoopNormalizationPass(AM));

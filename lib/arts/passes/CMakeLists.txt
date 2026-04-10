@@ -16,6 +16,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   # SDE dialect passes
   ../dialect/sde/Transforms/CollectMetadata.cpp
   ../dialect/sde/Transforms/ConvertOpenMPToSde.cpp
+  ../dialect/sde/Transforms/RaiseToLinalg.cpp
   ../dialect/sde/Conversion/SdeToArts/SdeToArtsPatterns.cpp
 
   # Core dialect passes — conversion

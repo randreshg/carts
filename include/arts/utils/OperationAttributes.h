@@ -191,6 +191,16 @@ constexpr StringLiteral RelaunchStateSoundness =
 /// Persistent structured region attribute.
 constexpr llvm::StringLiteral PersistentRegion = "arts.persistent_region";
 
+/// Linalg-style structural classification (stamped by RaiseToLinalg pass).
+namespace Linalg {
+using namespace llvm;
+constexpr StringLiteral Pattern = "arts.linalg.pattern";
+constexpr StringLiteral IteratorTypes = "arts.linalg.iterator_types";
+constexpr StringLiteral IndexingMaps = "arts.linalg.indexing_maps";
+constexpr StringLiteral NumInputs = "arts.linalg.num_inputs";
+constexpr StringLiteral NumOutputs = "arts.linalg.num_outputs";
+} // namespace Linalg
+
 } // namespace Operation
 
 } // namespace AttrNames

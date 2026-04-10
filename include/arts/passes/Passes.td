@@ -742,6 +742,29 @@ def StencilBoundaryPeeling : Pass<"stencil-boundary-peeling",
   let constructor = "mlir::arts::createStencilBoundaryPeelingPass()";
 }
 
+def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
+  let summary = "Compute linalg-style structural classification for loop nests";
+  let description = [{
+    Analyzes loop nests inside arts.for operations and computes linalg-style
+    structural information: indexing maps, iterator types, and pattern
+    classification. Stamps the results as attributes on the arts.for op.
+
+    Recognized patterns:
+    - elementwise: all parallel iterators, identity/permutation indexing maps
+    - matmul: triple-nested with multiply-accumulate and reduction dimension
+    - stencil: parallel iterators with constant-offset indexing maps
+    - reduction: has reduction iterators with accumulation pattern
+
+    The stamped attributes enable PatternDiscovery to leverage structural
+    classification instead of manual access-pattern heuristics.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
+    "arith::ArithDialect", "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::sde::createRaiseToLinalgPass()";
+}
+
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let summary = "Reorder inner loops for cache-optimal access patterns";
   let description = [{
