@@ -1,15 +1,15 @@
 # Test Architecture: Decoupling from Benchmarks
 
-## Current State Assessment
+## Current State (Post-Migration)
 
-### Test Inventory (168 tests)
+### Test Inventory (168 tests) — 168/168 pass (100%)
 
 | Category | Count | % | Description |
 |---|---|---|---|
 | Self-contained inline MLIR | 108 | 64% | `%carts-compile %s` — test IS the input |
-| Benchmark-coupled (C source) | 36 | 21% | Compiles C from `external/carts-benchmarks/` |
-| Shared MLIR inputs | 23 | 14% | Uses files from `tests/contracts/inputs/` |
-| Cross-test snapshot dependency | 1 | 1% | Reads another test's Output/ dir |
+| Shared MLIR inputs (fixtures) | 60 | 36% | Uses files from `tests/contracts/inputs/` |
+| Benchmark-coupled (C source) | 0 | 0% | All converted to fixtures |
+| Cross-test snapshot dependency | 0 | 0% | All removed |
 
 ### Per-Dialect Distribution
 
@@ -105,7 +105,10 @@ cross-test snapshot dependency that is fragile and non-portable.
 
 ## Fragility Analysis: Coupling Predicts Failure
 
-Analysis of the 9 currently-failing tests (out of 168) reveals a perfect
+**Status: RESOLVED.** All 9 failing tests have been fixed. Analysis below
+documents the pre-migration state that motivated this work.
+
+Pre-migration analysis of the 9 failing tests (out of 168) revealed a perfect
 correlation between external coupling and test failure:
 
 | Category | Count | Failing | Failure Rate |
@@ -116,7 +119,7 @@ correlation between external coupling and test failure:
 | Output/ snapshot dependency | 1 | 1 | **100%** |
 | **Externally-coupled total** | **49** | **9** | **18.4%** |
 
-**100% of failing tests are externally-coupled. Zero self-contained tests fail.**
+**100% of failing tests were externally-coupled. Zero self-contained tests failed.**
 
 ### Why Coupling Causes Failure
 
@@ -288,12 +291,16 @@ grep -r '%S.*Output/' tests/contracts/ --include="*.mlir" | grep -v '/Output/'
 
 ## Summary
 
-| Metric | Before | After Phase 1 | After Phase 2 |
-|---|---|---|---|
-| Self-contained tests | 108 (64%) | 108 (64%) | 144 (86%) |
-| Benchmark-coupled | 36 (21%) | 36 (21%) | 0 (0%) |
-| Shared input tests | 23 (14%) | 24 (14%) | 24 (14%) |
-| Output/ files | 214 | 0 | 0 |
-| Output/ lines | 141,040 | 0 | 0 |
-| External deps | carts-benchmarks | carts-benchmarks | none |
-| Avg test execution | ~3s (bench) / <1s (inline) | same | <1s (all) |
+**Migration complete.** All phases implemented.
+
+| Metric | Before | After |
+|---|---|---|
+| Test pass rate | 159/168 (94.6%) | **168/168 (100%)** |
+| Self-contained tests | 108 (64%) | 108 (64%) |
+| Shared fixture tests | 23 (14%) | **60 (36%)** |
+| Benchmark-coupled | 36 (21%) | **0 (0%)** |
+| Snapshot-dependent | 1 (1%) | **0 (0%)** |
+| Output/ files | 214 (141K lines) | **0** |
+| Benchmark-named files | 35 | **0** |
+| External deps | carts-benchmarks | **none** |
+| Avg test execution | ~3s (bench) / <1s (inline) | **<1s (all)** |
