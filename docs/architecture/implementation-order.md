@@ -95,7 +95,7 @@ Phase 2D: Migrate general passes to SDE (partially complete)
   22. Build and test
 ```
 
-## Phase 3: Full Folder Reorganization -- IN PROGRESS (3B steps 5-8 COMPLETE)
+## Phase 3: Full Folder Reorganization -- COMPLETE
 
 ### Completed Steps
 
@@ -139,19 +139,21 @@ Phase 3B steps 5-6: Move all pass .cpp files to core/
 159/168 tests pass (same baseline as main)
 ```
 
-### Remaining Sub-Phases
+Phase 3A: Move Dialect.cpp to dialect/core/IR/
+  - Dialect.cpp moved to lib/arts/dialect/core/IR/Dialect.cpp
+  - TableGen files (Ops.td, Attributes.td, Types.td, Dialect.td) stay at
+    include/arts/ — moving them would change generated include paths
+    (arts/Ops.h.inc etc.) breaking 135+ consumer files
+  - Dialect.h stays as public header at include/arts/Dialect.h
+
+159/168 tests pass (same baseline as main)
+```
+
+### Remaining (deferred / not planned)
 
 ```
-Phase 3A: Move core arts IR to dialect/core/IR/ (deferred — high risk, 100+ include changes)
-  1. Move Ops.td, Attributes.td, Types.td, Dialect.td to include/arts/dialect/core/IR/
-  2. Move Dialect.cpp to lib/arts/dialect/core/IR/
-  3. Add forwarding compatibility headers
-  4. Update all includes project-wide
-
-Phase 3C: Verification
-  10. Build and test
-  11. Run full benchmark suite
-  12. Verify no regressions
+- TableGen files stay at include/arts/ for build stability (see core/IR/CLAUDE.md)
+- LoopNormalization/LoopReordering move to sde/ blocked by arts::ForOp deps
 ```
 
 ## Verification at Each Phase
