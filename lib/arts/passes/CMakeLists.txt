@@ -21,6 +21,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   transforms/ConvertOpenMPToArts.cpp
   transforms/ConvertArtsToLLVM.cpp
   transforms/ConvertArtsToLLVMPatterns.cpp
+  ../dialect/rt/Conversion/RtToLLVM/RtToLLVMPatterns.cpp
   transforms/DbLowering.cpp
   transforms/EdtLowering.cpp
   transforms/EdtLoweringSupport.cpp

@@ -300,9 +300,8 @@ bool mlir::arts::detectMatmulInitReductionLoopNest(
   if (initOps.empty() || !kLoop)
     return false;
 
-  bool hasInitEffects = llvm::any_of(initOps, [](Operation *op) {
-    return !isMemoryEffectFree(op);
-  });
+  bool hasInitEffects = llvm::any_of(
+      initOps, [](Operation *op) { return !isMemoryEffectFree(op); });
   if (!hasInitEffects)
     return false;
 

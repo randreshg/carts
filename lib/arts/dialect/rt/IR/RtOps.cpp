@@ -84,8 +84,7 @@ LogicalResult RecordDepOp::verify() {
   }
 
   if (getByteOffsets().empty() != getByteSizes().empty())
-    return emitOpError(
-        "byte_offsets and byte_sizes must be provided together");
+    return emitOpError("byte_offsets and byte_sizes must be provided together");
 
   return success();
 }

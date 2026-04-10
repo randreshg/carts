@@ -84,26 +84,25 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   config.setUseTopDownTraversal(true);
   config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
 
-  /// Run 1: runtime patterns
+  /// Run 1: runtime patterns (core arts ops: RuntimeQuery, Barrier, AtomicAdd)
   {
     ARTS_INFO("Running runtime patterns");
     RewritePatternSet runtimePatterns(context);
     convert_arts_to_llvm::populateRuntimePatterns(runtimePatterns, AC);
-    if (failed(
-            applyPatternsGreedily(module, std::move(runtimePatterns), config))) {
+    if (failed(applyPatternsGreedily(module, std::move(runtimePatterns),
+                                     config))) {
       ARTS_ERROR("Failed to apply runtime ARTS to LLVM conversion patterns");
       return signalPassFailure();
     }
   }
 
-  /// Run 2: core patterns
+  /// Run 2: arts_rt patterns (EDT create, deps, state, epochs)
   {
-    ARTS_INFO("Running core patterns");
-    RewritePatternSet corePatterns(context);
-    convert_arts_to_llvm::populateCorePatterns(corePatterns, AC);
-    if (failed(
-            applyPatternsGreedily(module, std::move(corePatterns), config))) {
-      ARTS_ERROR("Failed to apply core ARTS to LLVM conversion patterns");
+    ARTS_INFO("Running arts_rt to LLVM patterns");
+    RewritePatternSet rtPatterns(context);
+    convert_arts_to_llvm::populateRtToLLVMPatterns(rtPatterns, AC);
+    if (failed(applyPatternsGreedily(module, std::move(rtPatterns), config))) {
+      ARTS_ERROR("Failed to apply arts_rt to LLVM conversion patterns");
       return signalPassFailure();
     }
   }
@@ -113,8 +112,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     ARTS_INFO("Running db patterns");
     RewritePatternSet dbPatterns(context);
     convert_arts_to_llvm::populateDbPatterns(dbPatterns, AC);
-    if (failed(
-            applyPatternsGreedily(module, std::move(dbPatterns), config))) {
+    if (failed(applyPatternsGreedily(module, std::move(dbPatterns), config))) {
       ARTS_ERROR("Failed to apply DbAcquire/DbRelease conversion patterns");
       return signalPassFailure();
     }

@@ -26,12 +26,12 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #define GEN_PASS_DEF_EDTLOWERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
@@ -91,6 +91,11 @@ static llvm::Statistic numEdtsDemotedToTask{
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+using AttrNames::Operation::ContinuationForEpoch;
+using AttrNames::Operation::ControlDep;
+using AttrNames::Operation::CPSChainId;
+using AttrNames::Operation::CPSForwardDeps;
+using AttrNames::Operation::CPSParamPerm;
 using mlir::arts::rt::DbGepOp;
 using mlir::arts::rt::DepAccessMode;
 using mlir::arts::rt::DepAccessModeAttr;
@@ -102,11 +107,6 @@ using mlir::arts::rt::EdtParamPackOp;
 using mlir::arts::rt::EdtParamUnpackOp;
 using mlir::arts::rt::RecordDepOp;
 using mlir::arts::rt::StatePackOp;
-using AttrNames::Operation::ContinuationForEpoch;
-using AttrNames::Operation::ControlDep;
-using AttrNames::Operation::CPSChainId;
-using AttrNames::Operation::CPSForwardDeps;
-using AttrNames::Operation::CPSParamPerm;
 
 static const AnalysisKind kEdtLowering_invalidates[] = {
     AnalysisKind::DbAnalysis, AnalysisKind::EdtAnalysis};
@@ -159,11 +159,11 @@ static bool isOneLikeValue(Value value) {
 }
 
 static std::optional<std::pair<SmallVector<Value, 4>, SmallVector<Value, 4>>>
-trySynthesizeElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
-                          Location loc) {
+trySynthesizeElementSlice(ArtsCodegen *AC, DbAcquireOp acquire, Location loc) {
   if (!AC || !acquire)
     return std::nullopt;
-  if (!acquire.getElementOffsets().empty() || !acquire.getElementSizes().empty())
+  if (!acquire.getElementOffsets().empty() ||
+      !acquire.getElementSizes().empty())
     return std::nullopt;
 
   PartitionMode mode =
@@ -1036,73 +1036,74 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         byteOffset = AC->createIndexConstant(0, loc);
         byteSize = AC->createIndexConstant(0, loc);
       } else {
-      /// Get elementSizes from underlying allocation for stride computation
-      auto alloc = dyn_cast_or_null<DbAllocOp>(
-          DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
+        /// Get elementSizes from underlying allocation for stride computation
+        auto alloc = dyn_cast_or_null<DbAllocOp>(
+            DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
 
-      if (alloc && !alloc.getElementSizes().empty()) {
-        auto elementSizes = alloc.getElementSizes();
-        Value useSliceTransport = AC->create<arith::ConstantIntOp>(loc, 1, 1);
-        if (!dbAcquireOp.getElementOffsets().empty())
-          if (auto normalized =
-                  normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
-            elemOffsets.assign(normalized->offsets.begin(),
-                               normalized->offsets.end());
-            elemSizes.assign(normalized->sizes.begin(), normalized->sizes.end());
-          /// ARTS ESD is copy-based RO transport. If the normalized slice
-          /// still covers the entire local DB block, using
-          /// arts_add_dependence_at would only copy the whole block instead of
-          /// reusing the normal whole-DB dependence path.
-            Value sliceNarrowerThanBlock = AC->create<arith::XOrIOp>(
-                loc, normalized->wholeBlock,
-                AC->create<arith::ConstantIntOp>(loc, 1, 1));
-            Value sliceRepresentable = AC->create<arith::AndIOp>(
-                loc, normalized->representable, normalized->contiguous);
-            useSliceTransport = AC->create<arith::AndIOp>(
-                loc, sliceNarrowerThanBlock, sliceRepresentable);
+        if (alloc && !alloc.getElementSizes().empty()) {
+          auto elementSizes = alloc.getElementSizes();
+          Value useSliceTransport = AC->create<arith::ConstantIntOp>(loc, 1, 1);
+          if (!dbAcquireOp.getElementOffsets().empty())
+            if (auto normalized =
+                    normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
+              elemOffsets.assign(normalized->offsets.begin(),
+                                 normalized->offsets.end());
+              elemSizes.assign(normalized->sizes.begin(),
+                               normalized->sizes.end());
+              /// ARTS ESD is copy-based RO transport. If the normalized slice
+              /// still covers the entire local DB block, using
+              /// arts_add_dependence_at would only copy the whole block instead
+              /// of reusing the normal whole-DB dependence path.
+              Value sliceNarrowerThanBlock = AC->create<arith::XOrIOp>(
+                  loc, normalized->wholeBlock,
+                  AC->create<arith::ConstantIntOp>(loc, 1, 1));
+              Value sliceRepresentable = AC->create<arith::AndIOp>(
+                  loc, normalized->representable, normalized->contiguous);
+              useSliceTransport = AC->create<arith::AndIOp>(
+                  loc, sliceNarrowerThanBlock, sliceRepresentable);
+            }
+
+          /// Get scalar type size from the element type
+          Type elementType = alloc.getElementType();
+          if (auto memrefType = dyn_cast<MemRefType>(elementType))
+            elementType = memrefType.getElementType();
+          Value scalarSize = AC->create<polygeist::TypeSizeOp>(
+              loc, IndexType::get(AC->getContext()), elementType);
+
+          /// Compute byte_offset = linearize(element_offsets, elementSizes) *
+          /// scalarSize For 2D: byte_offset = (elemOffsets[0] * elementSizes[1]
+          /// + elemOffsets[1]) * scalarSize
+          Value linearOffset = AC->createIndexConstant(0, loc);
+          for (size_t i = 0; i < elemOffsets.size(); ++i) {
+            /// Compute stride for this dimension (product of trailing dims)
+            Value stride = AC->createIndexConstant(1, loc);
+            for (size_t j = i + 1; j < elementSizes.size(); ++j) {
+              stride = AC->create<arith::MulIOp>(loc, stride, elementSizes[j]);
+            }
+            Value dimOffset =
+                AC->create<arith::MulIOp>(loc, elemOffsets[i], stride);
+            linearOffset =
+                AC->create<arith::AddIOp>(loc, linearOffset, dimOffset);
           }
+          byteOffset = AC->create<arith::MulIOp>(loc, linearOffset, scalarSize);
 
-        /// Get scalar type size from the element type
-        Type elementType = alloc.getElementType();
-        if (auto memrefType = dyn_cast<MemRefType>(elementType))
-          elementType = memrefType.getElementType();
-        Value scalarSize = AC->create<polygeist::TypeSizeOp>(
-            loc, IndexType::get(AC->getContext()), elementType);
-
-        /// Compute byte_offset = linearize(element_offsets, elementSizes) *
-        /// scalarSize For 2D: byte_offset = (elemOffsets[0] * elementSizes[1] +
-        /// elemOffsets[1]) * scalarSize
-        Value linearOffset = AC->createIndexConstant(0, loc);
-        for (size_t i = 0; i < elemOffsets.size(); ++i) {
-          /// Compute stride for this dimension (product of trailing dims)
-          Value stride = AC->createIndexConstant(1, loc);
-          for (size_t j = i + 1; j < elementSizes.size(); ++j) {
-            stride = AC->create<arith::MulIOp>(loc, stride, elementSizes[j]);
+          /// Compute byte_size = product(element_sizes) * scalarSize
+          Value totalElements = AC->createIndexConstant(1, loc);
+          for (Value sz : elemSizes) {
+            totalElements = AC->create<arith::MulIOp>(loc, totalElements, sz);
           }
-          Value dimOffset =
-              AC->create<arith::MulIOp>(loc, elemOffsets[i], stride);
-          linearOffset =
-              AC->create<arith::AddIOp>(loc, linearOffset, dimOffset);
+          byteSize = AC->create<arith::MulIOp>(loc, totalElements, scalarSize);
+          Value zeroIdx = AC->createIndexConstant(0, loc);
+          byteOffset = AC->create<arith::SelectOp>(loc, useSliceTransport,
+                                                   byteOffset, zeroIdx);
+          byteSize = AC->create<arith::SelectOp>(loc, useSliceTransport,
+                                                 byteSize, zeroIdx);
+          hasEsdDeps = true;
+        } else {
+          /// Fallback: no allocation info available
+          byteOffset = AC->createIndexConstant(0, loc);
+          byteSize = AC->createIndexConstant(0, loc);
         }
-        byteOffset = AC->create<arith::MulIOp>(loc, linearOffset, scalarSize);
-
-        /// Compute byte_size = product(element_sizes) * scalarSize
-        Value totalElements = AC->createIndexConstant(1, loc);
-        for (Value sz : elemSizes) {
-          totalElements = AC->create<arith::MulIOp>(loc, totalElements, sz);
-        }
-        byteSize = AC->create<arith::MulIOp>(loc, totalElements, scalarSize);
-        Value zeroIdx = AC->createIndexConstant(0, loc);
-        byteOffset = AC->create<arith::SelectOp>(loc, useSliceTransport,
-                                                 byteOffset, zeroIdx);
-        byteSize = AC->create<arith::SelectOp>(loc, useSliceTransport, byteSize,
-                                               zeroIdx);
-        hasEsdDeps = true;
-      } else {
-        /// Fallback: no allocation info available
-        byteOffset = AC->createIndexConstant(0, loc);
-        byteSize = AC->createIndexConstant(0, loc);
-      }
       }
     } else {
       /// No partial acquisition - use zero for standard dependency
@@ -1542,9 +1543,9 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
       forwardedIndices = normalizeSliceIndices(
           forwardedIndices, depOffsets, depSizes, indicesAlreadySliceRelative);
 
-      return AC->create<DepDbAcquireOp>(
-          userLoc, depGuidType, depPtrType, depv, baseOffset, forwardedIndices,
-          depOffsets, depSizes, Value());
+      return AC->create<DepDbAcquireOp>(userLoc, depGuidType, depPtrType, depv,
+                                        baseOffset, forwardedIndices,
+                                        depOffsets, depSizes, Value());
     };
 
     SmallVector<unsigned, 4> depHandlePackIndices;

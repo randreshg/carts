@@ -1,15 +1,15 @@
 ///==========================================================================///
 /// File: VerifyLowered.cpp
 ///
-/// Verification pass that ensures no high-level ARTS dialect operations
-/// survive past the arts-to-llvm conversion. Any remaining EdtOp, ForOp,
-/// DbAllocOp, DbAcquireOp, DbReleaseOp, or EpochOp indicates a lowering
-/// bug.
+/// Verification pass that ensures no ARTS dialect operations (core or
+/// runtime) survive past the arts-to-llvm conversion. Any remaining
+/// arts.* or arts_rt.* op indicates a lowering bug.
 ///==========================================================================///
 
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_VERIFYLOWERED
 #include "arts/Dialect.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/Pass/Pass.h"
@@ -20,9 +20,15 @@ namespace {
 struct VerifyLoweredPass : public impl::VerifyLoweredBase<VerifyLoweredPass> {
   void runOnOperation() override {
     bool found = false;
+    auto *artsRtDialect = getOperation()
+                              ->getContext()
+                              ->getLoadedDialect<arts::rt::ArtsRtDialect>();
     getOperation().walk([&](Operation *op) {
       if (isArtsOp(op)) {
         op->emitError("high-level ARTS operation survived past arts-to-llvm");
+        found = true;
+      } else if (artsRtDialect && op->getDialect() == artsRtDialect) {
+        op->emitError("arts_rt operation survived past arts-to-llvm");
         found = true;
       }
     });

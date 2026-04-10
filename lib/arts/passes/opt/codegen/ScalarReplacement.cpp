@@ -430,8 +430,7 @@ struct ScalarReplacementPass
     unsigned forwardedScratchLoads = forwardScalarScratchLoads(module);
     unsigned erasedScratchAllocas = eraseDeadScalarScratchAllocas(module);
 
-    ARTS_INFO("Transformed " << transformedReductions
-                             << " reduction patterns");
+    ARTS_INFO("Transformed " << transformedReductions << " reduction patterns");
     ARTS_INFO("Forwarded " << forwardedScratchLoads
                            << " scalar scratch loads and erased "
                            << erasedScratchAllocas << " scratch allocas");

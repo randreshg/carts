@@ -143,8 +143,7 @@ static std::optional<int64_t> tryFoldKnownRuntimeShape(Value v,
                                       depth + 1);
     }
 
-    auto trueValue =
-        tryFoldKnownRuntimeShape(select.getTrueValue(), depth + 1);
+    auto trueValue = tryFoldKnownRuntimeShape(select.getTrueValue(), depth + 1);
     auto falseValue =
         tryFoldKnownRuntimeShape(select.getFalseValue(), depth + 1);
     if (trueValue && falseValue && *trueValue == *falseValue)
@@ -162,8 +161,7 @@ static std::optional<int64_t> resolveBlockSizeHint(Value value) {
   return extractBlockSizeFromHint(value);
 }
 
-static bool sameBlockSizeFamily(Value lhsValue,
-                                std::optional<int64_t> lhsConst,
+static bool sameBlockSizeFamily(Value lhsValue, std::optional<int64_t> lhsConst,
                                 Value rhsValue,
                                 std::optional<int64_t> rhsConst) {
   lhsValue = ValueAnalysis::stripNumericCasts(lhsValue);
@@ -317,9 +315,9 @@ NeighborhoodLoopInfo &getOrCreateNeighborhoodFamily(
     SmallVectorImpl<NeighborhoodLoopInfo> &families, Value blockSizeVal,
     std::optional<int64_t> blockSizeConst, Value invariantBase) {
   for (NeighborhoodLoopInfo &family : families) {
-    bool sameBlockSize = sameBlockSizeFamily(
-        family.blockSizeVal, family.blockSizeConst, blockSizeVal,
-        blockSizeConst);
+    bool sameBlockSize =
+        sameBlockSizeFamily(family.blockSizeVal, family.blockSizeConst,
+                            blockSizeVal, blockSizeConst);
     bool sameBase =
         (!family.invariantBase && !invariantBase) ||
         (family.invariantBase && invariantBase &&
@@ -414,7 +412,8 @@ bool recordRemPattern(Value lhs, Value rhs, Value remResult, Value iv,
     return false;
   if (!info.blockSizeVal) {
     info.blockSizeVal = normalizedRhs;
-    info.blockSizeConst = rhsConst ? rhsConst : resolveBlockSizeHint(normalizedRhs);
+    info.blockSizeConst =
+        rhsConst ? rhsConst : resolveBlockSizeHint(normalizedRhs);
   } else if (!sameBlockSizeFamily(info.blockSizeVal, info.blockSizeConst,
                                   normalizedRhs, rhsConst)) {
     if (!info.blockSizeConst || !rhsConst || *info.blockSizeConst != *rhsConst)

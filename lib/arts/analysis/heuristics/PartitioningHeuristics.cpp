@@ -89,10 +89,10 @@ hasReadOnlyNonLeadingOrMultiDimOwnerConflict(const PartitioningContext &ctx) {
 /// when a one-time non-leading writer feeds leading-dimension stencil readers.
 /// This matches pointer-backed setup phases such as poisson-for, where the
 /// producer writes by columns once but the hot repeated consumers read by row.
-static bool
-shouldUseMixedOrientationBlockNDForReadOnlyAfterInit(const PartitioningContext &ctx) {
-  if (!ctx.readOnlyAfterInit || !ctx.canBlock || !ctx.accessPatterns.hasStencil ||
-      ctx.memrefRank < 2)
+static bool shouldUseMixedOrientationBlockNDForReadOnlyAfterInit(
+    const PartitioningContext &ctx) {
+  if (!ctx.readOnlyAfterInit || !ctx.canBlock ||
+      !ctx.accessPatterns.hasStencil || ctx.memrefRank < 2)
     return false;
 
   bool sawNonLeadingWriter = false;
@@ -102,8 +102,7 @@ shouldUseMixedOrientationBlockNDForReadOnlyAfterInit(const PartitioningContext &
     if (!info.hasDistributionContract || info.ownerDimsCount == 0)
       continue;
 
-    bool isLeadingOwner =
-        info.ownerDimsCount == 1 && info.ownerDims[0] == 0;
+    bool isLeadingOwner = info.ownerDimsCount == 1 && info.ownerDims[0] == 0;
     bool isNonLeadingOrMultiDim =
         info.ownerDimsCount > 1 || info.ownerDims[0] > 0;
 
@@ -399,11 +398,11 @@ mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
       ARTS_DEBUG("H1.C3b skipped: small 1-D producer/readback vector keeps "
                  "block layout");
     } else {
-    ARTS_DEBUG("H1.C3b applied: Local producer + full-range read consumer "
-               "prefers coarse");
-    return PartitioningDecision::coarse(
-        ctx, "H1.C3b: Single-node full-range read consumer outweighs local "
-             "block producer");
+      ARTS_DEBUG("H1.C3b applied: Local producer + full-range read consumer "
+                 "prefers coarse");
+      return PartitioningDecision::coarse(
+          ctx, "H1.C3b: Single-node full-range read consumer outweighs local "
+               "block producer");
     }
   }
 

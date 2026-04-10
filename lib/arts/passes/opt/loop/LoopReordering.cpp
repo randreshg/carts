@@ -414,9 +414,8 @@ private:
       return false;
     }
 
-    bool needsInitLoop = llvm::any_of(initOps, [](Operation *op) {
-      return !isMemoryEffectFree(op);
-    });
+    bool needsInitLoop = llvm::any_of(
+        initOps, [](Operation *op) { return !isMemoryEffectFree(op); });
 
     if (needsInitLoop) {
       /// STEP 1: Create the init loop (for j: init_ops)
