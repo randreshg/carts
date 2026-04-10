@@ -28,6 +28,8 @@ ARTS_DEBUG_SETUP(db_utils);
 
 using namespace mlir;
 using namespace mlir::arts;
+using mlir::arts::rt::DbGepOp;
+using mlir::arts::rt::DepDbAcquireOp;
 
 namespace {
 

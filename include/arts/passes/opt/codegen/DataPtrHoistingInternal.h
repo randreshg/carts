@@ -10,6 +10,7 @@
 #define ARTS_PASSES_OPT_CODEGEN_DATAPTRHOISTINGINTERNAL_H
 
 #include "arts/Dialect.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/LoopInvarianceUtils.h"
@@ -122,12 +123,12 @@ Value buildLoopInvariantI1Not(OpBuilder &builder, Location loc, Value cond);
 Value buildLoopInvariantI1And(OpBuilder &builder, Location loc, Value lhs,
                               Value rhs);
 
-Value buildDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
+Value buildDepPtrLoad(OpBuilder &builder, Location loc, rt::DepGepOp depGep,
                       ArrayRef<Value> indices);
 
-Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
-                             ArrayRef<Value> indices, Value guard,
-                             Value fallbackPtr);
+Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc,
+                             rt::DepGepOp depGep, ArrayRef<Value> indices,
+                             Value guard, Value fallbackPtr);
 
 Value buildNormalizedForceZeroCond(OpBuilder &builder, Location loc,
                                    const BlockedNeighborCarryPattern &pattern);

@@ -28,6 +28,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #define GEN_PASS_DEF_EPOCHLOWERING
@@ -74,6 +75,14 @@ static llvm::Statistic numEdtCreatesUpdatedWithEpoch{
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+using mlir::arts::rt::CreateEpochOp;
+using mlir::arts::rt::DepForwardOp;
+using mlir::arts::rt::DepGepOp;
+using mlir::arts::rt::EdtCreateOp;
+using mlir::arts::rt::EdtParamPackOp;
+using mlir::arts::rt::EdtParamUnpackOp;
+using mlir::arts::rt::RecordDepOp;
+using mlir::arts::rt::WaitOnEpochOp;
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::CPSAdditiveParams;

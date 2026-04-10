@@ -26,6 +26,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/AnalysisDependencies.h"
 #include "arts/analysis/AnalysisManager.h"
 #include "arts/analysis/db/DbAnalysis.h"
@@ -90,6 +91,17 @@ static llvm::Statistic numEdtsDemotedToTask{
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
+using mlir::arts::rt::DbGepOp;
+using mlir::arts::rt::DepAccessMode;
+using mlir::arts::rt::DepAccessModeAttr;
+using mlir::arts::rt::DepBindOp;
+using mlir::arts::rt::DepDbAcquireOp;
+using mlir::arts::rt::DepGepOp;
+using mlir::arts::rt::EdtCreateOp;
+using mlir::arts::rt::EdtParamPackOp;
+using mlir::arts::rt::EdtParamUnpackOp;
+using mlir::arts::rt::RecordDepOp;
+using mlir::arts::rt::StatePackOp;
 using AttrNames::Operation::ContinuationForEpoch;
 using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::CPSChainId;
@@ -1493,7 +1505,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                       indicesAlreadySliceRelative);
       offsets = resolveParam(offsets, dbAcquire.getLoc());
       sizes = resolveParam(sizes, dbAcquire.getLoc());
-      auto depDbAcquire = AC->create<arts::DepDbAcquireOp>(
+      auto depDbAcquire = AC->create<DepDbAcquireOp>(
           dbAcquire.getLoc(), dbAcquire.getResult(0).getType(),
           dbAcquire.getResult(1).getType(), depv, baseOffset, indices, offsets,
           sizes, boundsValid);
@@ -1530,7 +1542,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
       forwardedIndices = normalizeSliceIndices(
           forwardedIndices, depOffsets, depSizes, indicesAlreadySliceRelative);
 
-      return AC->create<arts::DepDbAcquireOp>(
+      return AC->create<DepDbAcquireOp>(
           userLoc, depGuidType, depPtrType, depv, baseOffset, forwardedIndices,
           depOffsets, depSizes, Value());
     };
@@ -1609,7 +1621,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     /// or when the element type is itself a memref (block-of-blocks), because
     /// we must index depv, not treat a single dep entry as an array.
     bool hasIndexedUsers = llvm::any_of(users, [](Operation *op) {
-      return isa<arts::DbRefOp, arts::DbGepOp, memref::LoadOp, memref::StoreOp,
+      return isa<arts::DbRefOp, DbGepOp, memref::LoadOp, memref::StoreOp,
                  polygeist::Memref2PointerOp, polygeist::Pointer2MemrefOp>(op);
     });
     if (isSingleElement && !isNestedMemref && !hasIndexedUsers) {
@@ -1645,7 +1657,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
         depPtrType = sourceAcquire.getResult(1).getType();
       }
 
-      auto depDbAcquire = AC->create<arts::DepDbAcquireOp>(
+      auto depDbAcquire = AC->create<DepDbAcquireOp>(
           loc, depGuidType, depPtrType, depv, baseOffset,
           /*indices=*/SmallVector<Value>{},
           /*offsets=*/SmallVector<Value>{},
@@ -1734,7 +1746,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
           op->getResult(0).replaceAllUsesWith(depGep.getPtr());
         }
         op->erase();
-      } else if (auto dbGep = dyn_cast<arts::DbGepOp>(op)) {
+      } else if (auto dbGep = dyn_cast<DbGepOp>(op)) {
         AC->setInsertionPoint(op);
         SmallVector<Value> dbGepIndices(dbGep.getIndices().begin(),
                                         dbGep.getIndices().end());
