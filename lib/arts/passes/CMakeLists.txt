@@ -8,6 +8,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   verify/VerifyDbCreated.cpp
   verify/VerifyPreLowered.cpp
   verify/VerifyLowered.cpp
+  verify/VerifySdeLowered.cpp
   verify/VerifyEdtLowered.cpp
   verify/VerifyDbLowered.cpp
   verify/VerifyEpochLowered.cpp

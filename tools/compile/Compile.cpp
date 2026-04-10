@@ -724,6 +724,7 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
                                arts::AnalysisManager *AM = nullptr) {
   pm.addPass(arts::sde::createConvertOpenMPToSdePass(AM));
   pm.addPass(arts::sde::createConvertSdeToArtsPass(AM));
+  pm.addPass(arts::createVerifySdeLoweredPass());
   pm.addPass(arts::createDCEPass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createVerifyEdtCreatedPass());
