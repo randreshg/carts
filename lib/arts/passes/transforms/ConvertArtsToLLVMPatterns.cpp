@@ -8,6 +8,7 @@
 
 #include "arts/passes/transforms/ConvertArtsToLLVMInternal.h"
 
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
@@ -51,6 +52,21 @@ static llvm::Statistic numMiscOpsConverted{
 using namespace mlir;
 using namespace mlir::arts;
 using namespace mlir::arts::convert_arts_to_llvm;
+using mlir::arts::rt::CreateEpochOp;
+using mlir::arts::rt::DbGepOp;
+using mlir::arts::rt::DepAccessMode;
+using mlir::arts::rt::DepBindOp;
+using mlir::arts::rt::DepDbAcquireOp;
+using mlir::arts::rt::DepForwardOp;
+using mlir::arts::rt::DepGepOp;
+using mlir::arts::rt::EdtCreateOp;
+using mlir::arts::rt::EdtParamPackOp;
+using mlir::arts::rt::EdtParamUnpackOp;
+using mlir::arts::rt::IncrementDepOp;
+using mlir::arts::rt::RecordDepOp;
+using mlir::arts::rt::StatePackOp;
+using mlir::arts::rt::StateUnpackOp;
+using mlir::arts::rt::WaitOnEpochOp;
 
 ///===----------------------------------------------------------------------===///
 /// Helper Functions
@@ -1788,10 +1804,10 @@ struct DepDbAcquireOpPattern : public ArtsToLLVMPattern<DepDbAcquireOp> {
 };
 
 /// Pattern to convert arts.db_gep operations to LLVM GEP using element strides
-struct DbGepOpPattern : public ArtsToLLVMPattern<arts::DbGepOp> {
+struct DbGepOpPattern : public ArtsToLLVMPattern<DbGepOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
 
-  LogicalResult matchAndRewrite(arts::DbGepOp op,
+  LogicalResult matchAndRewrite(DbGepOp op,
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering DbGep Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);

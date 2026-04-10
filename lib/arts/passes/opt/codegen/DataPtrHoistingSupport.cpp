@@ -11,6 +11,8 @@ ARTS_DEBUG_SETUP(data_ptr_hoisting);
 
 using namespace mlir;
 using namespace mlir::arts;
+using mlir::arts::rt::DbGepOp;
+using mlir::arts::rt::DepGepOp;
 
 namespace mlir::arts::data_ptr_hoisting {
 
@@ -407,7 +409,7 @@ findBlockedNeighborCacheHoistLoop(scf::ForOp loop, int varyingIndex,
   return hoistLoop;
 }
 
-Value buildDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
+Value buildDepPtrLoad(OpBuilder &builder, Location loc, rt::DepGepOp depGep,
                       ArrayRef<Value> indices) {
   auto newDepGep = builder.create<DepGepOp>(
       loc, depGep.getGuid().getType(), depGep.getPtr().getType(),
@@ -416,9 +418,9 @@ Value buildDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
                                       newDepGep.getPtr());
 }
 
-Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
-                             ArrayRef<Value> indices, Value guard,
-                             Value fallbackPtr) {
+Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc,
+                             rt::DepGepOp depGep, ArrayRef<Value> indices,
+                             Value guard, Value fallbackPtr) {
   if (!guard)
     return buildDepPtrLoad(builder, loc, depGep, indices);
 

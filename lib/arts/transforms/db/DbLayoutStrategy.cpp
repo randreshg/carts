@@ -15,11 +15,13 @@
 #include "arts/transforms/db/DbLayoutStrategy.h"
 #include "arts/analysis/db/DbAnalysis.h"
 #include "arts/codegen/Codegen.h"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/utils/DbUtils.h"
 #include "mlir/IR/Operation.h"
 
 using namespace mlir;
 using namespace mlir::arts;
+using mlir::arts::rt::DbGepOp;
 
 LayoutInfo mlir::arts::buildLayoutInfo(Value source) {
   LayoutInfo info;
