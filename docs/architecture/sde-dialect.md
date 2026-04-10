@@ -805,12 +805,10 @@ lib/arts/dialect/sde/
     SdeLoopAnalysis.cpp
   Transforms/
     ConvertOpenMPToSde.cpp   # 12 OMP->SDE patterns
-    RaiseToLinalg.cpp        # scf.for+memref -> linalg.generic
-    RaiseToTensor.cpp        # linalg on memref -> linalg on tensor
-    SdeOpt.cpp               # tensor-space analysis + optimization
-    LoopNormalization.cpp
-    LoopReordering.cpp
     CollectMetadata.cpp
+    RaiseToLinalg.cpp        # scf.for+memref -> linalg.generic (deferred)
+    RaiseToTensor.cpp        # linalg on memref -> linalg on tensor (deferred)
+    SdeOpt.cpp               # tensor-space analysis + optimization (deferred)
 
 lib/arts/dialect/core/Conversion/SdeToArts/
   SdeToArtsPatterns.cpp      # SDE->ARTS lowering

@@ -53,7 +53,7 @@ Phase 1D: Verification updates (in 1C commit)
   separate library) to avoid circular ArtsCodegen dependency
 - No circular dependencies -- rt ops use only standard MLIR types
 
-## Phase 2: Create SDE Dialect -- IN PROGRESS (2A+2B COMPLETE)
+## Phase 2: Create SDE Dialect -- COMPLETE (2C tensor integration deferred)
 
 See [sde-dialect.md](sde-dialect.md) and [pipeline-redesign.md](pipeline-redesign.md).
 
@@ -104,23 +104,18 @@ Phase 2C: Tensor integration — DEFERRED (decision: 2026-04-10)
   16. Integrate linalg-to-loops into pipeline
   17. Build, test, verify identical output
 
-Phase 2D: Migrate general passes to SDE (partially complete)
+Phase 2D: Migrate general passes to SDE (complete — remaining items deferred)
   18. Move CollectMetadata to sde/Transforms/ -- DONE (4d62f756)
-  19. Move LoopNormalization to sde/Transforms/ — BLOCKED
-      Reason: LoopPattern interface takes arts::ForOp directly (not
-      LoopLikeOpInterface). LoopNormalization.cpp walks ForOp and
-      passes to LoopPattern::match(ForOp). Decoupling requires
-      refactoring include/arts/transforms/loop/LoopNormalizer.h to
-      use LoopLikeOpInterface, then updating all LoopPattern
-      implementations. Medium effort, requires careful testing.
-  20. Move LoopReordering to sde/Transforms/ — BLOCKED
-      Reason: Uses arts::ForOp AND DbPatternMatchers for matmul
-      auto-detection. The metadata-based path (lines ~68-80) is
-      SDE-compatible, but the auto-detection path calls
-      detectMatmulInitReductionLoopNest which is DB-analysis code.
-      Fix: split auto-detection into separate pattern pass.
-  21. Update includes project-wide
-  22. Build and test
+  19. Move LoopNormalization to sde/Transforms/ — PERMANENTLY DEFERRED
+      Both LoopPattern implementations (SymmetricTriangularPattern,
+      PerfectNestLinearizationPattern) operate directly on arts::ForOp:
+      match(ForOp), create ForOp, call DbPatternMatchers. These patterns
+      run at Stage 5 AFTER SDE→ARTS conversion — they work on ARTS IR,
+      not SDE IR. Correct placement is core/Transforms/.
+  20. Move LoopReordering to sde/Transforms/ — PERMANENTLY DEFERRED
+      Uses arts::ForOp AND DbPatternMatchers for matmul auto-detection.
+      Operates on ARTS IR at Stage 5. Correct placement is core/Transforms/.
+  21-22. N/A (no further moves needed)
 ```
 
 ## Phase 3: Full Folder Reorganization -- COMPLETE
@@ -185,8 +180,8 @@ Phase 3A: Move Dialect.cpp to dialect/core/IR/
   (arts/Ops.h.inc -> arts/dialect/core/IR/ArtsOps.h.inc) breaking 135+ files.
   IREE solves this differently (per-dialect .td from the start), but CARTS
   would need a large mechanical migration with forwarding headers.
-- LoopNormalization/LoopReordering move to sde/ blocked by arts::ForOp deps
-  (see Phase 2D notes above)
+- LoopNormalization/LoopReordering stay in core/ permanently — they operate
+  on ARTS IR (ForOp) at Stage 5, after SDE→ARTS conversion (see Phase 2D)
 - Pattern passes (PatternDiscovery, KernelTransforms, StencilBoundaryPeeling,
   DepTransforms) stay in core/ — investigation found all 4 have ARTS op deps
   (PatternDiscovery stamps on EdtOp, LoopReordering calls DbPatternMatchers,
@@ -221,16 +216,24 @@ Phase 3A: Move Dialect.cpp to dialect/core/IR/
 6. **Existing metadata pipeline covers ~80%** — CollectMetadata +
    PatternDiscovery handle most benchmarks without tensor space.
 
-### 2026-04-10: LoopNormalization Decoupling Feasible
+### 2026-04-10: LoopNormalization Stays in core/
 
-**Finding**: Can move LoopNormalization to sde/Transforms/ in ~2-3 days:
-- Generalize LoopPattern::match(ForOp) → match(Operation*)
-- Filter by LoopLikeOpInterface (arts::ForOp already implements it)
-- Add LoopLikeOpInterface to sde::SdeSuIterateOp
-- SymmetricTriangularPattern: store outerLoop as Operation*, cast when needed
-- PerfectNestLinearizationPattern: ARTS-specific (creates ForOp), stays in core/
+**Original finding**: Decoupling was deemed feasible by generalizing
+`LoopPattern::match(ForOp)` → `match(Operation*)`.
 
-**Not blocking**: LoopReordering stays in core/ permanently (DbPatternMatchers dep).
+**Revised decision**: Both LoopPattern implementations are deeply ARTS-coupled:
+- `SymmetricTriangularPattern` calls `detectSymmetricTriangularPattern(ForOp)` from
+  `DbPatternMatchers`, accesses `ForOp::getBody()`, `ForOp::getUpperBound()`
+- `PerfectNestLinearizationPattern` creates `arts::ForOp`, uses `arts::YieldOp`,
+  calls `isZeroReductionFreeArtsFor(ForOp)`, accesses ForOp-specific members
+- Both patterns run at Stage 5, AFTER SDE→ARTS conversion (Stage 4) — they
+  operate on ARTS IR, not SDE IR
+
+Moving to `sde/Transforms/` would be architecturally wrong. These patterns
+normalize ARTS loops for downstream `DbPartitioning`, which is an ARTS concern.
+Correct placement: `core/Transforms/` (where they already are).
+
+LoopReordering also stays in `core/` (DbPatternMatchers dep).
 
 ## Verification at Each Phase
 
