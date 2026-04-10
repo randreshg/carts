@@ -4,7 +4,7 @@
 /// CPS-chain epoch loop transform used by EpochOpt.
 ///==========================================================================///
 
-#include "arts/passes/opt/epoch/EpochOptInternal.h"
+#include "arts/dialect/core/Transforms/EpochOptInternal.h"
 #include "arts/utils/Debug.h"
 
 ARTS_DEBUG_SETUP(epoch_opt);

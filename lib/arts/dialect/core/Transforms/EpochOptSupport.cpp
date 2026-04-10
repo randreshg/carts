@@ -4,7 +4,7 @@
 /// Shared local helpers for the split EpochOpt implementation.
 ///==========================================================================///
 
-#include "arts/passes/opt/epoch/EpochOptInternal.h"
+#include "arts/dialect/core/Transforms/EpochOptInternal.h"
 
 using namespace mlir;
 using namespace mlir::arts;

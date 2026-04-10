@@ -6,7 +6,7 @@
 /// ArtsCodegen infrastructure shared with the core arts-to-LLVM conversion.
 ///==========================================================================///
 
-#include "arts/passes/transforms/ConvertArtsToLLVMInternal.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMInternal.h"
 
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"

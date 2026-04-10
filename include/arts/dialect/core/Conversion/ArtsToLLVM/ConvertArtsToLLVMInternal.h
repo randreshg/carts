@@ -6,8 +6,8 @@
 /// should not be used as shared compiler infrastructure.
 ///==========================================================================///
 
-#ifndef ARTS_PASSES_TRANSFORMS_CONVERTARTSTOLLVMINTERNAL_H
-#define ARTS_PASSES_TRANSFORMS_CONVERTARTSTOLLVMINTERNAL_H
+#ifndef ARTS_DIALECT_CORE_CONVERSION_ARTSTOLLVM_CONVERTARTSTOLLVMINTERNAL_H
+#define ARTS_DIALECT_CORE_CONVERSION_ARTSTOLLVM_CONVERTARTSTOLLVMINTERNAL_H
 
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
@@ -92,4 +92,4 @@ void populateOtherPatterns(RewritePatternSet &patterns, ArtsCodegen *AC);
 
 } // namespace mlir::arts::convert_arts_to_llvm
 
-#endif // ARTS_PASSES_TRANSFORMS_CONVERTARTSTOLLVMINTERNAL_H
+#endif // ARTS_DIALECT_CORE_CONVERSION_ARTSTOLLVM_CONVERTARTSTOLLVMINTERNAL_H

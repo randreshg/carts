@@ -95,7 +95,7 @@ Phase 2D: Migrate general passes to SDE (partially complete)
   22. Build and test
 ```
 
-## Phase 3: Full Folder Reorganization -- IN PROGRESS (3B steps 7-8 COMPLETE)
+## Phase 3: Full Folder Reorganization -- IN PROGRESS (3B steps 5-8 COMPLETE)
 
 ### Completed Steps
 
@@ -111,29 +111,42 @@ Phase 3B step 8: Move codegen passes to rt/Transforms/
   - RuntimeCallOpt.cpp
   - These operate post-lowering on arts_rt ops or LLVM runtime calls
 
+Phase 3B steps 5-6: Move all pass .cpp files to core/
+  - 47 pass files moved to lib/arts/dialect/core/Transforms/
+  - EDT passes (7): EdtStructuralOpt, EdtAllocaSinking, EdtICM,
+    EdtTransformsPass, EdtOrchestrationOpt, StructuredKernelPlanPass,
+    PersistentStructuredRegion
+  - DB passes (9): BlockLoopStripMining(+Support), ContractValidation,
+    DbDistributedOwnership, DbModeTightening, DbPartitioning(+Support),
+    DbScratchElimination, DbTransformsPass
+  - Epoch passes (5): EpochOpt, EpochOptCpsChain, EpochOptScheduling,
+    EpochOptStructural, EpochOptSupport
+  - Core transforms (10): Concurrency, CreateDbs, CreateEpochs,
+    DbLowering, ParallelEdtLowering, ForLowering, ForOpt,
+    DistributedHostLoopOutlining, EdtDistribution, EdtPtrRematerialization
+  - Pattern passes (4): PatternDiscovery, KernelTransforms,
+    StencilBoundaryPeeling, DepTransforms
+  - Loop passes (3): LoopFusion, LoopNormalization, LoopReordering
+  - General passes (5): Inliner, RaiseMemRefDimensionality, HandleDeps,
+    DeadCodeElimination, ScalarReplacement
+  - Codegen passes (4): AliasScopeGen, Hoisting, LoopVectorizationHints,
+    LoweringContractCleanup
+  - ConvertOpenMPToArts.cpp → core/Conversion/OmpToArts/
+  - ConvertArtsToLLVM.cpp + Patterns → core/Conversion/ArtsToLLVM/
+  - 4 internal headers moved to include/arts/dialect/core/
+  - Include guards + paths updated in all moved files
+
 159/168 tests pass (same baseline as main)
 ```
 
 ### Remaining Sub-Phases
 
 ```
-Phase 3A: Move core arts to dialect/core/ (deferred — high risk, 100+ include changes)
+Phase 3A: Move core arts IR to dialect/core/IR/ (deferred — high risk, 100+ include changes)
   1. Move Ops.td, Attributes.td, Types.td, Dialect.td to include/arts/dialect/core/IR/
   2. Move Dialect.cpp to lib/arts/dialect/core/IR/
   3. Add forwarding compatibility headers
   4. Update all includes project-wide
-
-Phase 3B remaining: Move passes to dialect-owned structure
-  5. Move EDT passes to core/Transforms/
-  6. Move DB passes to core/Transforms/
-  9. Move truly ARTS-agnostic passes to general/
-     (Only ScalarReplacement is truly agnostic — RaiseMemRef and DCE
-      have hidden ARTS deps: OmpDepOp creation and EDT/DB dead code)
-  10. Create patterns/Analysis/ for read-only analysis
-      (DbPatternMatchers, AccessPatternAnalysis — no op mutation)
-      NOTE: Pattern *transform* passes (PatternDiscovery,
-      KernelTransforms, StencilBoundaryPeeling, DepTransforms)
-      all have ARTS structural op deps and stay in core/Transforms/
 
 Phase 3C: Verification
   10. Build and test

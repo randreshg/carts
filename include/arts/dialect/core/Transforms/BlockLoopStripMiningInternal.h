@@ -6,8 +6,8 @@
 /// and should not be used as shared compiler infrastructure.
 ///==========================================================================///
 
-#ifndef ARTS_PASSES_OPT_DB_BLOCKLOOPSTRIPMININGINTERNAL_H
-#define ARTS_PASSES_OPT_DB_BLOCKLOOPSTRIPMININGINTERNAL_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_BLOCKLOOPSTRIPMININGINTERNAL_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_BLOCKLOOPSTRIPMININGINTERNAL_H
 
 #include "arts/Dialect.h"
 #include "arts/analysis/value/ValueAnalysis.h"
@@ -200,4 +200,4 @@ bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info);
 
 } // namespace mlir::arts::block_loop_strip_mining
 
-#endif // ARTS_PASSES_OPT_DB_BLOCKLOOPSTRIPMININGINTERNAL_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_BLOCKLOOPSTRIPMININGINTERNAL_H

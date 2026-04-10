@@ -30,7 +30,7 @@
 /// and rewrite plans, but does not weaken EDT/event ordering.
 ///==========================================================================///
 
-#include "arts/passes/opt/db/DbPartitioningInternal.h"
+#include "arts/dialect/core/Transforms/DbPartitioningInternal.h"
 
 using namespace mlir;
 using namespace mlir::func;

@@ -6,6 +6,10 @@ headers/TableGen, 1 compile driver.
 
 **Legend**: `=` stays in place, `->` moves, `NEW` created, `DEAD` removed.
 
+**Status**: Phase 1, 2A-2B, 3B (steps 5-8) COMPLETE. All pass .cpp files
+have moved to their target locations under `lib/arts/dialect/`. Only Phase 3A
+(moving core IR TableGen/headers to `dialect/core/IR/`) remains.
+
 ---
 
 ## 1. Dialect IR (TableGen + Dialect.cpp)
@@ -60,8 +64,8 @@ LLVM conversion patterns. They stay shared.
 |---|---|---|---|
 | `CollectMetadata.cpp` | `lib/arts/dialect/sde/Transforms/CollectMetadata.cpp` | 2D | SDE metadata; zero ARTS deps |
 | `ConvertOpenMPToArts.cpp` | `lib/arts/dialect/core/Conversion/OmpToArts/ConvertOpenMPToArts.cpp` | 3 | Phase 2: replaced by OmpToSde; Phase 3: move remainder |
-| `ConvertArtsToLLVM.cpp` | = (pass driver stays in core) | — | Calls both populateCorePatterns + populateRtToLLVMPatterns |
-| `ConvertArtsToLLVMPatterns.cpp` | = (core patterns stay) | 1 | Phase 1: extract 14 rt patterns to RtToLLVMPatterns.cpp |
+| `ConvertArtsToLLVM.cpp` | `lib/arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVM.cpp` | 3 | DONE — calls both populateCorePatterns + populateRtToLLVMPatterns |
+| `ConvertArtsToLLVMPatterns.cpp` | `lib/arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMPatterns.cpp` | 1+3 | DONE — Phase 1: extract 14 rt patterns; Phase 3: move |
 | `Concurrency.cpp` | `lib/arts/dialect/core/Transforms/Concurrency.cpp` | 3 | Walks EdtOp concurrency graph |
 | `CreateDbs.cpp` | `lib/arts/dialect/core/Transforms/CreateDbs.cpp` | 3 | Creates arts.db_alloc from memref analysis |
 | `CreateEpochs.cpp` | `lib/arts/dialect/core/Transforms/CreateEpochs.cpp` | 3 | Creates arts.epoch regions |
@@ -89,7 +93,7 @@ LLVM conversion patterns. They stay shared.
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
-| `ConvertArtsToLLVMInternal.h` | = | — | Shared ArtsToLLVMPattern<T> base |
+| `ConvertArtsToLLVMInternal.h` | `include/arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMInternal.h` | 3 | DONE — shared ArtsToLLVMPattern<T> base |
 | `EdtLoweringInternal.h` | `include/arts/dialect/rt/Conversion/ArtsToRt/EdtLoweringInternal.h` | 3 | Phase 1: add using decls |
 
 ### Pass Declarations: `include/arts/passes/`
@@ -107,14 +111,14 @@ LLVM conversion patterns. They stay shared.
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
-| `AliasScopeGen.cpp` | `lib/arts/general/Transforms/AliasScopeGen.cpp` | 3 | LLVM alias scopes; generic; Phase 1: add using decls |
+| `AliasScopeGen.cpp` | `lib/arts/dialect/core/Transforms/AliasScopeGen.cpp` | 3 | DONE — LLVM alias scopes |
 | `DataPtrHoisting.cpp` | `lib/arts/dialect/rt/Transforms/DataPtrHoisting.cpp` | 3 | Hoists lowered dep/db ptr loads |
 | `DataPtrHoistingSupport.cpp` | `lib/arts/dialect/rt/Transforms/DataPtrHoistingSupport.cpp` | 3 | Phase 1: add using decls |
 | `GuidRangCallOpt.cpp` | `lib/arts/dialect/rt/Transforms/GuidRangCallOpt.cpp` | 3 | arts_guid_reserve -> range |
 | `Hoisting.cpp` | `lib/arts/dialect/core/Transforms/Hoisting.cpp` | 3 | Hoists arts.db_acquire/ref |
-| `LoopVectorizationHints.cpp` | `lib/arts/general/Transforms/LoopVectorizationHints.cpp` | 3 | LLVM vectorization metadata |
-| `RuntimeCallOpt.cpp` | `lib/arts/dialect/rt/Transforms/RuntimeCallOpt.cpp` | 3 | Runtime call hoisting |
-| `ScalarReplacement.cpp` | `lib/arts/general/Transforms/ScalarReplacement.cpp` | 3 | Generic memref->register |
+| `LoopVectorizationHints.cpp` | `lib/arts/dialect/core/Transforms/LoopVectorizationHints.cpp` | 3 | DONE — LLVM vectorization metadata |
+| `RuntimeCallOpt.cpp` | `lib/arts/dialect/rt/Transforms/RuntimeCallOpt.cpp` | 3 | DONE — Runtime call hoisting |
+| `ScalarReplacement.cpp` | `lib/arts/dialect/core/Transforms/ScalarReplacement.cpp` | 3 | DONE — Generic memref->register |
 
 #### Internal Headers: `include/arts/passes/opt/codegen/`
 

@@ -6,8 +6,8 @@
 /// shared compiler infrastructure.
 ///==========================================================================///
 
-#ifndef CARTS_PASSES_OPT_EPOCH_EPOCHOPTINTERNAL_H
-#define CARTS_PASSES_OPT_EPOCH_EPOCHOPTINTERNAL_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_EPOCHOPTINTERNAL_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_EPOCHOPTINTERNAL_H
 
 #include "arts/Dialect.h"
 #include "arts/analysis/AnalysisManager.h"
@@ -108,4 +108,4 @@ bool tryCPSChainTransform(scf::ForOp forOp, const EpochAnalysis &epochAnalysis);
 
 } // namespace mlir::arts::epoch_opt
 
-#endif // CARTS_PASSES_OPT_EPOCH_EPOCHOPTINTERNAL_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_EPOCHOPTINTERNAL_H
