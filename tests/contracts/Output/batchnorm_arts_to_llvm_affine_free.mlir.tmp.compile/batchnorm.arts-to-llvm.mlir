@@ -1606,12 +1606,12 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
     call @carts_phase_timer_start(%55, %7) : (memref<?xi8>, memref<?xi8>) -> ()
     call @carts_phase_timer_stop(%55) : (memref<?xi8>) -> ()
     call @carts_e2e_timer_stop() : () -> ()
-    memref.dealloc %alloc_7 : memref<32xi64>
     memref.dealloc %alloc_6 : memref<32xi64>
-    memref.dealloc %alloc : memref<?xi64>
-    memref.dealloc %alloc_3 : memref<?x!llvm.ptr>
     memref.dealloc %alloc_4 : memref<1xi64>
     memref.dealloc %alloc_5 : memref<1x!llvm.ptr>
+    memref.dealloc %alloc : memref<?xi64>
+    memref.dealloc %alloc_3 : memref<?x!llvm.ptr>
+    memref.dealloc %alloc_7 : memref<32xi64>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

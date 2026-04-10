@@ -134,9 +134,9 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
             %47 = arith.addi %46, %c1 : index
             %48 = arith.select %44, %c0, %40 : index
             %49 = arith.select %44, %c0, %47 : index
-            %guid_15, %ptr_16 = arts.db_acquire[<in>] (%guid_6 : memref<?xi64>, %ptr_7 : memref<?xmemref<?xf32>>) partitioning(<block>, offsets[%33], sizes[%38]), offsets[%48], sizes[%49] {arts.id = 139 : i64, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?xf32>>)
+            %guid_15, %ptr_16 = arts.db_acquire[<in>] (%guid_6 : memref<?xi64>, %ptr_7 : memref<?xmemref<?xf32>>) partitioning(<block>, offsets[%33], sizes[%38]), offsets[%48], sizes[%49] {arts.id = 138 : i64, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?xf32>>)
             arts.lowering_contract(%ptr_16 : memref<?xmemref<?xf32>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<postDbRefined = true, criticalPathDistance = 0 : i64>) {arts.proof.dep_slice_soundness = true, arts.proof.halo_legality = true, arts.proof.owner_dim_reachability = false, arts.proof.partition_access_mapping = false, arts.proof.relaunch_state_soundness = true}
-            %guid_17, %ptr_18 = arts.db_acquire[<in>] (%guid_8 : memref<?xi64>, %ptr_9 : memref<?xmemref<?xf32>>) partitioning(<block>, offsets[%33], sizes[%38]), offsets[%48], sizes[%49] {arts.id = 138 : i64, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?xf32>>)
+            %guid_17, %ptr_18 = arts.db_acquire[<in>] (%guid_8 : memref<?xi64>, %ptr_9 : memref<?xmemref<?xf32>>) partitioning(<block>, offsets[%33], sizes[%38]), offsets[%48], sizes[%49] {arts.id = 139 : i64, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?xf32>>)
             arts.lowering_contract(%ptr_18 : memref<?xmemref<?xf32>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<postDbRefined = true, criticalPathDistance = 0 : i64>) {arts.proof.dep_slice_soundness = true, arts.proof.halo_legality = true, arts.proof.owner_dim_reachability = false, arts.proof.partition_access_mapping = false, arts.proof.relaunch_state_soundness = true}
             arts.edt <task> <intranode> route(%c-1_i32) (%ptr_14, %ptr_16, %ptr_18) : memref<?xmemref<?x?xf32>>, memref<?xmemref<?xf32>>, memref<?xmemref<?xf32>> attributes {arts.id = 137 : i64, arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "blocking", arts.plan.cost.expected_local_work = 0 : i64, arts.plan.cost.relaunch_amortization = 0 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "uniform", arts.plan.repetition_structure = "none", critical_path_distance = 0 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [8, 1024]} {
             ^bb0(%arg1: memref<?xmemref<?x?xf32>>, %arg2: memref<?xmemref<?xf32>>, %arg3: memref<?xmemref<?xf32>>):
@@ -224,10 +224,10 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
     }
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?x?xf32>>
-    arts.db_free(%guid_6) : memref<?xi64>
-    arts.db_free(%ptr_7) : memref<?xmemref<?xf32>>
     arts.db_free(%guid_8) : memref<?xi64>
     arts.db_free(%ptr_9) : memref<?xmemref<?xf32>>
+    arts.db_free(%guid_6) : memref<?xi64>
+    arts.db_free(%ptr_7) : memref<?xmemref<?xf32>>
     return %15 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

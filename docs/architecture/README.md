@@ -117,11 +117,14 @@ and `Transforms/` subdirectories. Shared infrastructure (`verify/`,
 
 ```
 include/arts/
-  Dialect.td, Ops.td, Attributes.td, Types.td, Dialect.h   # Core TableGen stays here (135+ consumers)
+  Dialect.td, Ops.td, Attributes.td, Types.td               # Forwarding headers (redirect to dialect/core/IR/)
+  Dialect.h                                                  # Public header (includes from new generated paths)
   dialect/
     sde/IR/        SdeDialect.td, SdeOps.td, SdeDialect.h  # SDE dialect
     rt/IR/         RtDialect.td, RtOps.td, RtDialect.h     # RT dialect
-    core/          Internal headers (BlockLoopStripMiningInternal.h, etc.)
+    core/
+      IR/            Dialect.td, Ops.td, Attributes.td, Types.td  # Core TableGen definitions
+      ...            Internal headers (BlockLoopStripMiningInternal.h, etc.)
 
 lib/arts/
   dialect/

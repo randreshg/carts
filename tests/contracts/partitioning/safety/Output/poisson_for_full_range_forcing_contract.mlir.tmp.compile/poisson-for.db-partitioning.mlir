@@ -141,8 +141,8 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
         memref.store %cst_4, %64[%63, %arg1] : memref<?x?xf64>
       } {arts.id = 58 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 100 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "poisson-for.c:106:5">, arts.metadata_provenance = "exact"}
     } {arts.id = 46 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 100 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "poisson-for.c:105:3">, arts.metadata_provenance = "recovered"}
-    %alloca_44 = memref.alloca() {arts.id = 62 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "poisson-for.c:114:3", totalAccesses = 4 : i64, readCount = 2 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 8 : i64, firstUseId = 62 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = false, reuseDistance = 1 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 32 : i64>, arts.metadata_provenance = "exact"} : memref<f64>
-    %alloca_45 = memref.alloca() {arts.id = 64 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "poisson-for.c:114:3", totalAccesses = 4 : i64, readCount = 2 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 8 : i64, firstUseId = 64 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 1 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 32 : i64>, arts.metadata_provenance = "exact"} : memref<f64>
+    %alloca_44 = memref.alloca() {arts.id = 64 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "poisson-for.c:114:3", totalAccesses = 4 : i64, readCount = 2 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 8 : i64, firstUseId = 64 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 1 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 32 : i64>, arts.metadata_provenance = "exact"} : memref<f64>
+    %alloca_45 = memref.alloca() {arts.id = 62 : i64, arts.memref = #arts.memref_metadata<rank = 0 : i64, allocationId = "poisson-for.c:114:3", totalAccesses = 4 : i64, readCount = 2 : i64, writeCount = 2 : i64, allAccessesAffine = true, hasNonAffineAccesses = false, memoryFootprint = 8 : i64, firstUseId = 62 : i64, hasUniformAccess = true, dominantAccessPattern = 1 : i64, accessedInParallelLoop = true, hasLoopCarriedDeps = false, reuseDistance = 1 : i64, hasGoodSpatialLocality = true, estimatedAccessBytes = 32 : i64>, arts.metadata_provenance = "exact"} : memref<f64>
     %45 = arts.epoch attributes {arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "blocking", arts.plan.cost.expected_local_work = 0 : i64, arts.plan.cost.relaunch_amortization = 0 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "uniform", arts.plan.repetition_structure = "none", depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32} {
       scf.for %arg0 = %c0 to %c8 step %c1 {
         %50 = arith.muli %arg0, %c13 : index
@@ -179,7 +179,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
           %78 = arith.select %72, %c0_52, %76 : index
           %guid_53, %ptr_54 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%50], sizes[%c13]), offsets[%77], sizes[%c1_51] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = [100, 13], stencil_owner_dims = [1]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_54 : memref<?xmemref<?x?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c100] contract(<ownerDims = [1]>)
-          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_54) : memref<?xmemref<?x?xf64>> attributes {arts.id = 213 : i64, arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "blocking", arts.plan.cost.expected_local_work = 0 : i64, arts.plan.cost.relaunch_amortization = 0 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "uniform", arts.plan.repetition_structure = "none", depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [100, 13]} {
+          arts.edt <task> <intranode> route(%c-1_i32) (%ptr_54) : memref<?xmemref<?x?xf64>> attributes {arts.id = 215 : i64, arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "blocking", arts.plan.cost.expected_local_work = 0 : i64, arts.plan.cost.relaunch_amortization = 0 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "uniform", arts.plan.repetition_structure = "none", depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [100, 13]} {
           ^bb0(%arg1: memref<?xmemref<?x?xf64>>):
             %c1_55 = arith.constant 1 : index
             %c0_56 = arith.constant 0 : index
@@ -206,14 +206,14 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
               %92 = arith.index_cast %91 : index to i32
               %93 = arith.sitofp %92 : i32 to f64
               %94 = arith.divf %93, %cst_3 : f64
-              memref.store %94, %alloca_44[] : memref<f64>
+              memref.store %94, %alloca_45[] : memref<f64>
               %95 = arith.cmpi eq, %92, %c0_i32 : i32
               %96 = arith.cmpi eq, %92, %c99_i32 : i32
               scf.for %arg3 = %c0 to %c100 step %c1 {
                 %97 = arith.index_cast %arg3 : index to i32
                 %98 = arith.sitofp %97 : i32 to f64
                 %99 = arith.divf %98, %cst_3 : f64
-                memref.store %99, %alloca_45[] : memref<f64>
+                memref.store %99, %alloca_44[] : memref<f64>
                 %100 = arith.cmpi eq, %97, %c0_i32 : i32
                 %101 = scf.if %100 -> (i1) {
                   scf.yield %true : i1
@@ -224,8 +224,8 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                 %102 = arith.select %101, %true, %95 : i1
                 %103 = arith.select %102, %true, %96 : i1
                 scf.if %103 {
-                  %104 = memref.load %alloca_45[] : memref<f64>
-                  %105 = memref.load %alloca_44[] : memref<f64>
+                  %104 = memref.load %alloca_44[] : memref<f64>
+                  %105 = memref.load %alloca_45[] : memref<f64>
                   %106 = arith.mulf %104, %cst_2 : f64
                   %107 = arith.mulf %106, %105 : f64
                   %108 = math.sin %107 : f64
@@ -242,8 +242,8 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                   %115 = arts.db_ref %arg1[%c0_56] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                   memref.store %108, %115[%arg3, %arg2] : memref<?x?xf64>
                 } else {
-                  %104 = memref.load %alloca_45[] : memref<f64>
-                  %105 = memref.load %alloca_44[] : memref<f64>
+                  %104 = memref.load %alloca_44[] : memref<f64>
+                  %105 = memref.load %alloca_45[] : memref<f64>
                   %106 = arith.mulf %104, %104 : f64
                   %107 = arith.mulf %105, %105 : f64
                   %108 = arith.addf %106, %107 : f64
@@ -267,7 +267,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                   memref.store %114, %121[%arg3, %arg2] : memref<?x?xf64>
                 }
               } {arts.id = 94 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 100 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "poisson-for.c:114:3">, arts.metadata_provenance = "exact"}
-            } {arts.id = 212 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "poisson-for.c:114:3">, arts.metadata_provenance = "exact"}
+            } {arts.id = 213 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "poisson-for.c:114:3">, arts.metadata_provenance = "exact"}
             arts.db_release(%arg1) : memref<?xmemref<?x?xf64>>
           }
         }
@@ -432,7 +432,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
               %138 = arith.select %132, %c0_59, %136 : index
               %guid_61, %ptr_62 = arts.db_acquire[<out>] (%guid_25 : memref<?xi64>, %ptr_26 : memref<?xmemref<?x?xf64>>) partitioning(<block>), offsets[%137], sizes[%138] element_offsets[%67] element_sizes[%68] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = [13, 100], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
               arts.lowering_contract(%ptr_62 : memref<?xmemref<?x?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c13] contract(<ownerDims = [0]>)
-              arts.edt <task> <intranode> route(%c-1_i32) (%ptr_54, %ptr_62) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 214 : i64, arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "cps_chain", arts.plan.cost.expected_local_work = 5000000 : i64, arts.plan.cost.relaunch_amortization = 1000 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "uniform", arts.plan.repetition_structure = "full_timestep", depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [13, 100]} {
+              arts.edt <task> <intranode> route(%c-1_i32) (%ptr_54, %ptr_62) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 216 : i64, arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "cps_chain", arts.plan.cost.expected_local_work = 5000000 : i64, arts.plan.cost.relaunch_amortization = 1000 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "uniform", arts.plan.repetition_structure = "full_timestep", depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [13, 100]} {
               ^bb0(%arg2: memref<?xmemref<?x?xf64>>, %arg3: memref<?xmemref<?x?xf64>>):
                 %c1_63 = arith.constant 1 : index
                 %c0_64 = arith.constant 0 : index
@@ -596,7 +596,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
               %124 = arith.select %118, %c0_63, %122 : index
               %guid_65, %ptr_66 = arts.db_acquire[<in>] (%guid_25 : memref<?xi64>, %ptr_26 : memref<?xmemref<?x?xf64>>) partitioning(<block>), offsets[%123], sizes[%124] element_offsets[%77] element_sizes[%82] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<stencil>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = [13, 100], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
               arts.lowering_contract(%ptr_66 : memref<?xmemref<?x?xf64>>) pattern(<depPattern = <stencil>, distributionKind = <block>, distributionPattern = <stencil>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c13] contract(<ownerDims = [0]>)
-              arts.edt <task> <intranode> route(%c-1_i32) (%ptr_54, %ptr_58, %ptr_66) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 215 : i64, arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "cps_chain", arts.plan.cost.expected_local_work = 30087500 : i64, arts.plan.cost.relaunch_amortization = 1000 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "stencil", arts.plan.repetition_structure = "full_timestep", depPattern = #arts.dep_pattern<stencil>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>, distribution_version = 1 : i32, stencil_block_shape = [13, 100]} {
+              arts.edt <task> <intranode> route(%c-1_i32) (%ptr_54, %ptr_58, %ptr_66) : memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?x?xf64>> attributes {arts.id = 217 : i64, arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "cps_chain", arts.plan.cost.expected_local_work = 30087500 : i64, arts.plan.cost.relaunch_amortization = 1000 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "stencil", arts.plan.repetition_structure = "full_timestep", depPattern = #arts.dep_pattern<stencil>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>, distribution_version = 1 : i32, stencil_block_shape = [13, 100]} {
               ^bb0(%arg2: memref<?xmemref<?x?xf64>>, %arg3: memref<?xmemref<?x?xf64>>, %arg4: memref<?xmemref<?x?xf64>>):
                 %c1_67 = arith.constant 1 : index
                 %c0_68 = arith.constant 0 : index
@@ -604,12 +604,12 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                 %c0_69 = arith.constant 0 : index
                 %c1_70 = arith.constant 1 : index
                 %c0_71 = arith.constant 0 : index
-                %126 = arith.maxui %21, %c1_70 : index
-                %127 = arith.select %118, %c0_63, %113 : index
-                %c1_72 = arith.constant 1 : index
-                %c0_73 = arith.constant 0 : index
-                %128 = arith.maxui %7, %c1_72 : index
+                %126 = arith.maxui %7, %c1_70 : index
+                %c0_72 = arith.constant 0 : index
+                %c1_73 = arith.constant 1 : index
                 %c0_74 = arith.constant 0 : index
+                %127 = arith.maxui %21, %c1_73 : index
+                %128 = arith.select %118, %c0_63, %113 : index
                 memref.store %46, %alloca_50[] : memref<i32>
                 memref.store %c100_i32, %alloca_50[] : memref<i32>
                 %129 = memref.load %alloca_50[] : memref<i32>
@@ -652,9 +652,9 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                     }
                     scf.if %154 {
                       %c1_75 = arith.constant 1 : index
-                      %155 = arith.maxui %128, %c1_75 : index
+                      %155 = arith.maxui %126, %c1_75 : index
                       %156 = arith.divui %arg6, %155 : index
-                      %157 = arith.subi %156, %c0_74 : index
+                      %157 = arith.subi %156, %c0_72 : index
                       %158 = arith.remui %arg6, %155 : index
                       %159 = arts.db_ref %arg2[%157] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                       %160 = memref.load %159[%143, %158] : memref<?x?xf64>
@@ -667,18 +667,18 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                       memref.store %160, %165[%164, %arg6] : memref<?x?xf64>
                     } else {
                       %c1_75 = arith.constant 1 : index
-                      %155 = arith.maxui %126, %c1_75 : index
+                      %155 = arith.maxui %127, %c1_75 : index
                       %156 = arith.divui %148, %155 : index
-                      %157 = arith.subi %156, %127 : index
+                      %157 = arith.subi %156, %128 : index
                       %158 = arith.remui %148, %155 : index
                       %159 = arts.db_ref %arg4[%157] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                       %160 = memref.load %159[%158, %arg6] : memref<?x?xf64>
                       %161 = arith.addi %151, %c1_i32 : i32
                       %162 = arith.index_cast %161 : i32 to index
                       %c1_76 = arith.constant 1 : index
-                      %163 = arith.maxui %126, %c1_76 : index
+                      %163 = arith.maxui %127, %c1_76 : index
                       %164 = arith.divui %143, %163 : index
-                      %165 = arith.subi %164, %127 : index
+                      %165 = arith.subi %164, %128 : index
                       %166 = arith.remui %143, %163 : index
                       %167 = arts.db_ref %arg4[%165] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                       %168 = memref.load %167[%166, %162] : memref<?x?xf64>
@@ -686,25 +686,25 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                       %170 = arith.addi %151, %c-1_i32 : i32
                       %171 = arith.index_cast %170 : i32 to index
                       %c1_77 = arith.constant 1 : index
-                      %172 = arith.maxui %126, %c1_77 : index
+                      %172 = arith.maxui %127, %c1_77 : index
                       %173 = arith.divui %143, %172 : index
-                      %174 = arith.subi %173, %127 : index
+                      %174 = arith.subi %173, %128 : index
                       %175 = arith.remui %143, %172 : index
                       %176 = arts.db_ref %arg4[%174] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                       %177 = memref.load %176[%175, %171] : memref<?x?xf64>
                       %178 = arith.addf %169, %177 : f64
                       %c1_78 = arith.constant 1 : index
-                      %179 = arith.maxui %126, %c1_78 : index
+                      %179 = arith.maxui %127, %c1_78 : index
                       %180 = arith.divui %150, %179 : index
-                      %181 = arith.subi %180, %127 : index
+                      %181 = arith.subi %180, %128 : index
                       %182 = arith.remui %150, %179 : index
                       %183 = arts.db_ref %arg4[%181] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                       %184 = memref.load %183[%182, %arg6] : memref<?x?xf64>
                       %185 = arith.addf %178, %184 : f64
                       %c1_79 = arith.constant 1 : index
-                      %186 = arith.maxui %128, %c1_79 : index
+                      %186 = arith.maxui %126, %c1_79 : index
                       %187 = arith.divui %arg6, %186 : index
-                      %188 = arith.subi %187, %c0_74 : index
+                      %188 = arith.subi %187, %c0_72 : index
                       %189 = arith.remui %arg6, %186 : index
                       %190 = arts.db_ref %arg2[%188] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
                       %191 = memref.load %190[%143, %189] : memref<?x?xf64>
@@ -721,7 +721,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
                       memref.store %195, %200[%199, %arg6] : memref<?x?xf64>
                     }
                   } {arts.id = 186 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 100 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "poisson-for.c:132:5">, arts.metadata_provenance = "exact"}
-                } {arts.id = 135 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 2 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "poisson-for.c:132:5">, arts.metadata_provenance = "exact"}
+                } {arts.id = 214 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 2 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "poisson-for.c:132:5">, arts.metadata_provenance = "exact"}
                 arts.db_release(%arg2) : memref<?xmemref<?x?xf64>>
                 arts.db_release(%arg3) : memref<?xmemref<?x?xf64>>
                 arts.db_release(%arg4) : memref<?xmemref<?x?xf64>>
@@ -758,10 +758,10 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
     call @carts_e2e_timer_stop() : () -> ()
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?x?xf64>>
-    arts.db_free(%guid_25) : memref<?xi64>
-    arts.db_free(%ptr_26) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid_38) : memref<?xi64>
     arts.db_free(%ptr_39) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_25) : memref<?xi64>
+    arts.db_free(%ptr_26) : memref<?xmemref<?x?xf64>>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

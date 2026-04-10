@@ -24,17 +24,17 @@
 #include <optional>
 
 /// Arts Dialect
-#include "arts/OpsDialect.h.inc"
+#include "arts/dialect/core/IR/OpsDialect.h.inc"
 
 bool isArtsRegion(mlir::Operation *op);
 bool isArtsOp(mlir::Operation *op);
 
 /// Arts Dialect Types
 #define GET_TYPEDEF_CLASSES
-#include "arts/OpsTypes.h.inc"
+#include "arts/dialect/core/IR/OpsTypes.h.inc"
 
 /// Arts Dialect Enums
-#include "arts/OpsEnums.h.inc"
+#include "arts/dialect/core/IR/OpsEnums.h.inc"
 
 /// Transitional runtime dialect compatibility shims.
 #include "arts/dialect/rt/IR/RtDialect.h"
@@ -72,11 +72,11 @@ struct PartitionInfo {
 
 /// Arts Dialect Attributes
 #define GET_ATTRDEF_CLASSES
-#include "arts/OpsAttributes.h.inc"
+#include "arts/dialect/core/IR/OpsAttributes.h.inc"
 
 /// Arts Dialect Operations
 #define GET_OP_CLASSES
-#include "arts/Ops.h.inc"
+#include "arts/dialect/core/IR/Ops.h.inc"
 
 namespace mlir {
 namespace arts {
