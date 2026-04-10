@@ -23,10 +23,10 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/graphs/edt/EdtGraph.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
+#include "arts/dialect/core/Analysis/graphs/edt/EdtGraph.h"
 #include "arts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 /// Other

@@ -4,10 +4,10 @@
 /// Lowering-time helpers for materializing runtime work-distribution state.
 ///==========================================================================///
 
-#include "arts/transforms/edt/WorkDistributionUtils.h"
-#include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
+#include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PartitionPredicates.h"

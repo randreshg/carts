@@ -13,9 +13,9 @@
 ///        {partitioning = #arts.partitioning<stencil>}
 ///==========================================================================///
 
-#include "arts/transforms/db/DbPartitionPlanner.h"
-#include "arts/analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/db/DbPartitionPlanner.h"
+#include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"

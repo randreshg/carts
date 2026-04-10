@@ -3,7 +3,7 @@
 /// Shared helpers for pre-DB pattern contracts and transforms.
 ///==========================================================================///
 
-#include "arts/transforms/pattern/PatternTransform.h"
+#include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 

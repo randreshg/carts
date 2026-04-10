@@ -5,8 +5,8 @@
 /// dependency-aligned element windows before DB-space block conversion.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DB_DBPARTITIONWINDOWUTILS_H
-#define ARTS_TRANSFORMS_DB_DBPARTITIONWINDOWUTILS_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_DBPARTITIONWINDOWUTILS_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_DBPARTITIONWINDOWUTILS_H
 
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -69,4 +69,4 @@ expandElementWindowWithHalo(OpBuilder &builder, Location loc, Value elemOffset,
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DB_DBPARTITIONWINDOWUTILS_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_DBPARTITIONWINDOWUTILS_H

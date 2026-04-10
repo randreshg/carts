@@ -15,8 +15,8 @@
 ///                        partition_sizes = [%worker_sz]}
 ///==========================================================================///
 
-#include "arts/transforms/edt/EdtTaskLoopLowering.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/edt/EdtTaskLoopLowering.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;

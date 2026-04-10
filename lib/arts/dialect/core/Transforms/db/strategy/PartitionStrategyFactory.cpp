@@ -4,7 +4,7 @@
 /// Factory implementation for creating partition strategies.
 ///==========================================================================///
 
-#include "arts/transforms/db/PartitionStrategy.h"
+#include "arts/dialect/core/Transforms/db/PartitionStrategy.h"
 
 using namespace mlir;
 using namespace mlir::arts;

@@ -28,11 +28,11 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/metadata/AccessAnalyzer.h"
-#include "arts/analysis/metadata/DependenceAnalyzer.h"
-#include "arts/analysis/metadata/LoopAnalyzer.h"
-#include "arts/analysis/metadata/MemrefAnalyzer.h"
-#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/dialect/core/Analysis/metadata/AccessAnalyzer.h"
+#include "arts/dialect/core/Analysis/metadata/DependenceAnalyzer.h"
+#include "arts/dialect/core/Analysis/metadata/LoopAnalyzer.h"
+#include "arts/dialect/core/Analysis/metadata/MemrefAnalyzer.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #define GEN_PASS_DEF_COLLECTMETADATA
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"

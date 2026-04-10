@@ -37,8 +37,8 @@ loop operations.
 **Pass**: `db-opt` (mode tightening, scratch elimination)
 
 **Source files**:
-- `include/arts/analysis/db/DbAnalysis.h`
-- `lib/arts/analysis/db/DbAnalysis.cpp`
+- `include/arts/dialect/core/Analysis/db/DbAnalysis.h`
+- `lib/arts/dialect/core/Analysis/db/DbAnalysis.cpp`
 
 **What happens**: `DbAnalysis` builds `DbGraph` per function, computing
 `AcquireContractSummary` and `AcquirePartitionSummary` for each `DbAcquireOp`.
@@ -209,7 +209,7 @@ iterations without teardown.
 
 ## 3. DbPartitionState Infrastructure
 
-Defined in `include/arts/analysis/db/DbPartitionState.h`.
+Defined in `include/arts/dialect/core/Analysis/db/DbPartitionState.h`.
 
 ### 3.1 ProvenancedFact<T>
 

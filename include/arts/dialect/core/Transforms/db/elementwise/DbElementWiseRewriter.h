@@ -4,10 +4,10 @@
 /// Element-wise rewriter: each element is a separate datablock.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEREWRITER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEREWRITER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_ELEMENTWISE_DBELEMENTWISEREWRITER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_ELEMENTWISE_DBELEMENTWISEREWRITER_H
 
-#include "arts/transforms/db/DbRewriter.h"
+#include "arts/dialect/core/Transforms/db/DbRewriter.h"
 
 namespace mlir {
 namespace arts {
@@ -33,4 +33,4 @@ protected:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEREWRITER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_ELEMENTWISE_DBELEMENTWISEREWRITER_H

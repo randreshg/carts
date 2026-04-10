@@ -38,9 +38,9 @@
 
 #define GEN_PASS_DEF_CONVERTOPENMPTOSDE
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"

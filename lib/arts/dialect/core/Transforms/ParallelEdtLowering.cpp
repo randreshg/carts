@@ -22,7 +22,7 @@
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/transforms/edt/WorkDistributionUtils.h"
+#include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"

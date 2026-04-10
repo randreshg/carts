@@ -17,9 +17,9 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/LoopUtils.h"
 #define GEN_PASS_DEF_VERIFYMETADATA
 #include "arts/passes/Passes.h"

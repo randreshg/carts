@@ -186,7 +186,7 @@ The `rt/` dialect directory contains TWO conversion directories:
   calls. These are the 14 patterns extracted from ConvertArtsToLLVMPatterns.cpp.
 
 Following IREE's convention, conversion directories live in the TARGET dialect:
-`rt/Conversion/ArtsToRt/` (arts is source, rt is target) and
+`core/Conversion/ArtsToRt/` (conversion lives in source dialect) and
 `rt/Conversion/RtToLLVM/` (rt is source, LLVM is target).
 
 ## TableGen
@@ -259,17 +259,17 @@ passes. Each needs `using` declarations when ops move to `arts::rt::`.
 |---|---|---|
 | `lib/arts/passes/opt/codegen/DataPtrHoistingSupport.cpp` | `DepGepOp`, `DbGepOp` | Creates new `DepGepOp` instances; detects dep-pointer loads |
 | `include/arts/passes/opt/codegen/DataPtrHoistingInternal.h` | `DepGepOp` | Function signatures with `DepGepOp` parameters |
-| `lib/arts/transforms/db/DbLayoutStrategy.cpp` | `DbGepOp` | Creates `DbGepOp` for element address computation |
+| `lib/arts/dialect/core/Transforms/db/DbLayoutStrategy.cpp` | `DbGepOp` | Creates `DbGepOp` for element address computation |
 | `lib/arts/passes/opt/epoch/EpochOptScheduling.cpp` | `DepDbAcquireOp` | Distinguishes local vs dep acquire for CPS state |
-| `lib/arts/analysis/heuristics/EpochHeuristics.cpp` | `CreateEpochOp` | Continuation boundary detection |
+| `lib/arts/dialect/core/Analysis/heuristics/EpochHeuristics.cpp` | `CreateEpochOp` | Continuation boundary detection |
 | `lib/arts/passes/opt/codegen/AliasScopeGen.cpp` | `DepGepOp` | Fallback pattern for pre-lowering form |
 
 ### Low (defensive type checks in analysis)
 
 | File | Ops Referenced | What It Does |
 |---|---|---|
-| `lib/arts/analysis/value/ValueAnalysis.cpp` | `DbGepOp` | Value tracing through pointer ops |
-| `lib/arts/analysis/db/DbDistributedEligibility.cpp` | `DbGepOp` | DB handle user tracing |
+| `lib/arts/utils/ValueAnalysis.cpp` | `DbGepOp` | Value tracing through pointer ops |
+| `lib/arts/dialect/core/Analysis/db/DbDistributedEligibility.cpp` | `DbGepOp` | DB handle user tracing |
 | `lib/arts/Dialect.cpp` | All 14 | Op builders and verifiers (move to RtOps.cpp) |
 
 ### Lowering passes (expected, need `using` declarations)
@@ -300,12 +300,12 @@ passes. Each needs `using` declarations when ops move to `arts::rt::`.
 | `include/arts/utils/DbUtils.h` | Forward decl or `using` for template |
 | `lib/arts/passes/opt/codegen/DataPtrHoistingSupport.cpp` | `using arts::rt::{DepGepOp,DbGepOp}` |
 | `include/arts/passes/opt/codegen/DataPtrHoistingInternal.h` | `using arts::rt::DepGepOp` |
-| `lib/arts/transforms/db/DbLayoutStrategy.cpp` | `using arts::rt::DbGepOp` |
+| `lib/arts/dialect/core/Transforms/db/DbLayoutStrategy.cpp` | `using arts::rt::DbGepOp` |
 | `lib/arts/passes/opt/epoch/EpochOptScheduling.cpp` | `using arts::rt::DepDbAcquireOp` |
-| `lib/arts/analysis/heuristics/EpochHeuristics.cpp` | `using arts::rt::CreateEpochOp` |
+| `lib/arts/dialect/core/Analysis/heuristics/EpochHeuristics.cpp` | `using arts::rt::CreateEpochOp` |
 | `lib/arts/passes/opt/codegen/AliasScopeGen.cpp` | `using arts::rt::DepGepOp` |
-| `lib/arts/analysis/value/ValueAnalysis.cpp` | `using arts::rt::DbGepOp` |
-| `lib/arts/analysis/db/DbDistributedEligibility.cpp` | `using arts::rt::DbGepOp` |
+| `lib/arts/utils/ValueAnalysis.cpp` | `using arts::rt::DbGepOp` |
+| `lib/arts/dialect/core/Analysis/db/DbDistributedEligibility.cpp` | `using arts::rt::DbGepOp` |
 | `include/arts/passes/transforms/EdtLoweringInternal.h` | `using arts::rt::DepDbAcquireOp` |
 | `tools/compile/Compile.cpp` | Register `arts::rt::ArtsRtDialect` |
 | `tools/compile/CMakeLists.txt` | Link `MLIRArtsRt` |

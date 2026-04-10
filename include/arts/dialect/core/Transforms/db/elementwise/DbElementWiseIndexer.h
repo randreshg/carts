@@ -28,10 +28,10 @@
 ///
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEINDEXER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEINDEXER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_ELEMENTWISE_DBELEMENTWISEINDEXER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_ELEMENTWISE_DBELEMENTWISEINDEXER_H
 
-#include "arts/transforms/db/DbIndexerBase.h"
+#include "arts/dialect/core/Transforms/db/DbIndexerBase.h"
 
 namespace mlir {
 namespace arts {
@@ -122,4 +122,4 @@ private:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEINDEXER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_ELEMENTWISE_DBELEMENTWISEINDEXER_H

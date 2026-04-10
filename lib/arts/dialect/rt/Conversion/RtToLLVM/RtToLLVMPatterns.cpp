@@ -9,7 +9,7 @@
 #include "arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMInternal.h"
 
 #include "arts/dialect/rt/IR/RtDialect.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"

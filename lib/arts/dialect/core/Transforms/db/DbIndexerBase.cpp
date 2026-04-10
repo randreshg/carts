@@ -20,7 +20,7 @@
 ///   %v = memref.load %ref[%local_i, %local_j]
 ///==========================================================================///
 
-#include "arts/transforms/db/DbIndexerBase.h"
+#include "arts/dialect/core/Transforms/db/DbIndexerBase.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"

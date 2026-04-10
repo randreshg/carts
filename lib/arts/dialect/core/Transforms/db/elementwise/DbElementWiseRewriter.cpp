@@ -23,9 +23,9 @@
 /// Index localization: local = global - elemOffset
 ///==========================================================================///
 
-#include "arts/transforms/db/elementwise/DbElementWiseRewriter.h"
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/db/elementwise/DbElementWiseIndexer.h"
+#include "arts/dialect/core/Transforms/db/elementwise/DbElementWiseRewriter.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/db/elementwise/DbElementWiseIndexer.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"

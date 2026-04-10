@@ -18,8 +18,8 @@
 /// - localizeForDbRefUser(): DbRefOp user localization strategy
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBINDEXERBASE_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBINDEXERBASE_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_DBINDEXERBASE_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_DBINDEXERBASE_H
 
 #include "arts/Dialect.h"
 #include "arts/utils/DbUtils.h"
@@ -165,4 +165,4 @@ public:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBINDEXERBASE_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_DBINDEXERBASE_H

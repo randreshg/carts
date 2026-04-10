@@ -4,11 +4,11 @@
 /// Strategy-specific task loop lowering for ForLowering.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H
-#define ARTS_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H
 
 #include "arts/codegen/Codegen.h"
-#include "arts/transforms/edt/WorkDistributionUtils.h"
+#include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/SetVector.h"
 #include <memory>
@@ -121,4 +121,4 @@ std::unique_ptr<EdtTaskLoopLowering> createTile2DTaskLoopLowering();
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H

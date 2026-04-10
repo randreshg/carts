@@ -1,3 +1,2 @@
-# RtToLLVMPatterns.cpp is compiled as part of MLIRArtsTransforms
-# (lib/arts/passes/CMakeLists.txt) to share ArtsCodegen infrastructure
-# without introducing circular library dependencies.
+file(GLOB CARTS_RT_TO_LLVM_SOURCE_FILES CONFIGURE_DEPENDS "*.cpp")
+set(CARTS_RT_TO_LLVM_SOURCE_FILES ${CARTS_RT_TO_LLVM_SOURCE_FILES} PARENT_SCOPE)

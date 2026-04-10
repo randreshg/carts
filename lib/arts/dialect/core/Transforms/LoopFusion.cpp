@@ -37,9 +37,9 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/loop/LoopAnalysis.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoopUtils.h"

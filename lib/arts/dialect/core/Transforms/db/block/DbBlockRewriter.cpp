@@ -19,10 +19,10 @@
 /// Index localization: block = global / blockSize, local = global % blockSize
 ///==========================================================================///
 
-#include "arts/transforms/db/block/DbBlockRewriter.h"
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/db/DbPartitionWindowUtils.h"
-#include "arts/transforms/db/block/DbBlockIndexer.h"
+#include "arts/dialect/core/Transforms/db/block/DbBlockRewriter.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/db/DbPartitionWindowUtils.h"
+#include "arts/dialect/core/Transforms/db/block/DbBlockIndexer.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"

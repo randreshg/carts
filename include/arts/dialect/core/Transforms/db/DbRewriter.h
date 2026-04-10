@@ -12,12 +12,12 @@
 /// must be finished before a DbRewritePlan reaches this layer.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_DBREWRITER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_DBREWRITER_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/graphs/db/DbAccessPattern.h"
-#include "arts/transforms/db/DbIndexerBase.h"
+#include "arts/dialect/core/Analysis/graphs/db/DbAccessPattern.h"
+#include "arts/dialect/core/Transforms/db/DbIndexerBase.h"
 #include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/Utils.h"
 #include "mlir/IR/Builders.h"
@@ -196,4 +196,4 @@ protected:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_DBREWRITER_H

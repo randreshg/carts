@@ -6,7 +6,7 @@
 ///==========================================================================///
 
 #include "arts/utils/PatternSemantics.h"
-#include "arts/analysis/heuristics/DistributionHeuristics.h"
+#include "arts/dialect/core/Analysis/heuristics/DistributionHeuristics.h"
 
 namespace mlir {
 namespace arts {

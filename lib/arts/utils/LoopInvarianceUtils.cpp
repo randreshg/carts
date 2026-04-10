@@ -7,7 +7,7 @@
 ///==========================================================================///
 
 #include "arts/utils/LoopInvarianceUtils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 namespace mlir {

@@ -270,12 +270,12 @@ for (auto alloc : cache.getDbAllocs(func)) { ... }
 ### Phase 1: InformationCache (1-2 days, **HIGH PRIORITY**)
 
 **Files to create:**
-1. `include/arts/analysis/ArtsInformationCache.h` (~100 lines)
-2. `lib/arts/analysis/ArtsInformationCache.cpp` (~200 lines)
+1. `include/arts/dialect/core/Analysis/ArtsInformationCache.h` (~100 lines)
+2. `lib/arts/dialect/core/Analysis/ArtsInformationCache.cpp` (~200 lines)
 
 **Files to modify:**
-1. `include/arts/analysis/AnalysisManager.h` (+5 lines, add cache field)
-2. `lib/arts/analysis/AnalysisManager.cpp` (+20 lines, builder + invalidation)
+1. `include/arts/dialect/core/Analysis/AnalysisManager.h` (+5 lines, add cache field)
+2. `lib/arts/dialect/core/Analysis/AnalysisManager.cpp` (+20 lines, builder + invalidation)
 3. `lib/arts/passes/opt/db/DbPartitioning.cpp` (-10 walks, use cache)
 4. `lib/arts/passes/transforms/CreateDbs.cpp` (-5 walks, use cache)
 5. `lib/arts/passes/opt/edt/EdtStructuralOpt.cpp` (-3 walks, use cache)
@@ -293,12 +293,12 @@ for (auto alloc : cache.getDbAllocs(func)) { ... }
 ### Phase 2: Cost Model (3-5 days, **MEDIUM PRIORITY**)
 
 **Files to create:**
-1. `include/arts/analysis/heuristics/PartitioningCostModel.h` (~150 lines)
-2. `lib/arts/analysis/heuristics/PartitioningCostModel.cpp` (~250 lines)
+1. `include/arts/dialect/core/Analysis/heuristics/PartitioningCostModel.h` (~150 lines)
+2. `lib/arts/dialect/core/Analysis/heuristics/PartitioningCostModel.cpp` (~250 lines)
 
 **Files to modify:**
-1. `include/arts/analysis/heuristics/DbHeuristics.h` (add cost model getter)
-2. `lib/arts/analysis/heuristics/DbHeuristics.cpp` (integrate cost model)
+1. `include/arts/dialect/core/Analysis/heuristics/DbHeuristics.h` (add cost model getter)
+2. `lib/arts/dialect/core/Analysis/heuristics/DbHeuristics.cpp` (integrate cost model)
 3. `tools/compile/Compile.cpp` (add `--enable-cost-model` flag)
 
 **Calibration:**
@@ -317,8 +317,8 @@ for (auto alloc : cache.getDbAllocs(func)) { ... }
 ### Phase 3: State Lattice (2-3 days, **MEDIUM PRIORITY**)
 
 **Files to modify:**
-1. `include/arts/analysis/db/DbAnalysis.h` (rename 5 fields in AcquireContractSummary)
-2. `lib/arts/analysis/db/DbAnalysis.cpp` (update ~20 call sites)
+1. `include/arts/dialect/core/Analysis/db/DbAnalysis.h` (rename 5 fields in AcquireContractSummary)
+2. `lib/arts/dialect/core/Analysis/db/DbAnalysis.cpp` (update ~20 call sites)
 3. `lib/arts/passes/opt/db/DbPartitioning.cpp` (3-5 updates)
 4. `docs/compiler/analysis-architecture.md` (formalization, examples)
 
@@ -436,9 +436,9 @@ This file contains:
 ## 9. References & Key Files
 
 **Analyzed Files:**
-- `include/arts/analysis/heuristics/PartitioningHeuristics.h` (H1 heuristics, lines 8-21)
-- `include/arts/analysis/heuristics/DbHeuristics.h` (thresholds, lines 67-77)
-- `include/arts/analysis/db/DbAnalysis.h` (state structure, lines 63-134)
+- `include/arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h` (H1 heuristics, lines 8-21)
+- `include/arts/dialect/core/Analysis/heuristics/DbHeuristics.h` (thresholds, lines 67-77)
+- `include/arts/dialect/core/Analysis/db/DbAnalysis.h` (state structure, lines 63-134)
 - `lib/arts/passes/opt/db/DbPartitioning.cpp` (decision flow, lines 1-31)
 - `include/arts/utils/abstract_machine/AbstractMachine.h` (machine model, lines 28-100)
 

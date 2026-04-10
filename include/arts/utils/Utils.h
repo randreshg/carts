@@ -8,7 +8,7 @@
 #define CARTS_UTILS_ARTSUTILS_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"

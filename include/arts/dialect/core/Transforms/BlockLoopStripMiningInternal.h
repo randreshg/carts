@@ -10,7 +10,7 @@
 #define ARTS_DIALECT_CORE_TRANSFORMS_BLOCKLOOPSTRIPMININGINTERNAL_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"

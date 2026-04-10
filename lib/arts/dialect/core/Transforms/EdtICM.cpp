@@ -26,7 +26,7 @@
 #include "arts/Dialect.h"
 
 /// Others
-#include "arts/transforms/edt/EdtICM.h"
+#include "arts/dialect/core/Transforms/edt/EdtICM.h"
 
 /// LLVM support
 #include "llvm/Support/Debug.h"

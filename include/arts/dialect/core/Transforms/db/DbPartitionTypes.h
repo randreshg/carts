@@ -6,11 +6,11 @@
 /// graph facts and not final rewrite payloads.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONTYPES_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONTYPES_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_DBPARTITIONTYPES_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_DBPARTITIONTYPES_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/graphs/db/DbAccessPattern.h"
+#include "arts/dialect/core/Analysis/graphs/db/DbAccessPattern.h"
 #include <optional>
 
 namespace mlir {
@@ -40,4 +40,4 @@ struct AcquirePartitionInfo {
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONTYPES_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_DBPARTITIONTYPES_H

@@ -78,10 +78,10 @@ LLVM conversion patterns. They stay shared.
 | `DepTransforms.cpp` | `lib/arts/dialect/core/Transforms/DepTransforms.cpp` | 3 | Dependency transforms; has ARTS EdtOp deps |
 | `DistributedHostLoopOutlining.cpp` | `lib/arts/dialect/core/Transforms/DistributedHostLoopOutlining.cpp` | 3 | ARTS structural |
 | `EdtDistribution.cpp` | `lib/arts/dialect/core/Transforms/EdtDistribution.cpp` | 3 | ARTS structural |
-| `EdtLowering.cpp` | `lib/arts/dialect/rt/Conversion/ArtsToRt/EdtLowering.cpp` | 3 | arts.edt -> arts_rt.edt_create; Phase 1: add using decls |
-| `EdtLoweringSupport.cpp` | `lib/arts/dialect/rt/Conversion/ArtsToRt/EdtLoweringSupport.cpp` | 3 | Support for EdtLowering; Phase 1: add using decls |
+| `EdtLowering.cpp` | `lib/arts/dialect/core/Conversion/ArtsToRt/EdtLowering.cpp` | 3 | arts.edt -> arts_rt.edt_create; Phase 1: add using decls |
+| `EdtLoweringSupport.cpp` | `lib/arts/dialect/core/Conversion/ArtsToRt/EdtLoweringSupport.cpp` | 3 | Support for EdtLowering; Phase 1: add using decls |
 | `EdtPtrRematerialization.cpp` | `lib/arts/dialect/core/Transforms/EdtPtrRematerialization.cpp` | 3 | ARTS structural |
-| `EpochLowering.cpp` | `lib/arts/dialect/rt/Conversion/ArtsToRt/EpochLowering.cpp` | 3 | arts.epoch -> arts_rt.create_epoch; Phase 1: add using decls |
+| `EpochLowering.cpp` | `lib/arts/dialect/core/Conversion/ArtsToRt/EpochLowering.cpp` | 3 | arts.epoch -> arts_rt.create_epoch; Phase 1: add using decls |
 | `ForLowering.cpp` | `lib/arts/dialect/core/Transforms/ForLowering.cpp` | 3 | arts.for -> EDT structure; Phase 1: add using decls |
 | `ForOpt.cpp` | `lib/arts/dialect/core/Transforms/ForOpt.cpp` | 3 | ARTS structural |
 | `LoweringContractCleanup.cpp` | `lib/arts/dialect/core/Transforms/LoweringContractCleanup.cpp` | 3 | Removes ARTS metadata attrs; has ARTS deps |
@@ -99,7 +99,7 @@ LLVM conversion patterns. They stay shared.
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
 | `ConvertArtsToLLVMInternal.h` | `include/arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMInternal.h` | 3 | DONE — shared ArtsToLLVMPattern<T> base |
-| `EdtLoweringInternal.h` | `include/arts/dialect/rt/Conversion/ArtsToRt/EdtLoweringInternal.h` | 3 | Phase 1: add using decls |
+| `EdtLoweringInternal.h` | `include/arts/dialect/core/Conversion/ArtsToRt/EdtLoweringInternal.h` | 3 | Phase 1: add using decls |
 
 ### Pass Declarations: `include/arts/passes/`
 
@@ -231,12 +231,12 @@ LLVM conversion patterns. They stay shared.
 
 ## 6. Rewriter Infrastructure
 
-### Current: `lib/arts/transforms/`
+### Current: `lib/arts/dialect/core/Transforms/`
 
 Rewriter libraries provide the implementation behind pass files.
 They move with their owning dialect.
 
-### 6.1 DB Rewriters: `lib/arts/transforms/db/`
+### 6.1 DB Rewriters: `lib/arts/dialect/core/Transforms/db/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -259,7 +259,7 @@ They move with their owning dialect.
 | `strategy/StencilPartitionStrategy.cpp` | `lib/arts/dialect/core/Transforms/db/strategy/StencilPartitionStrategy.cpp` | 3 | |
 | `transforms/GUIDRangeDetection.cpp` | DEAD | 3 | Dead code (identified in audit) |
 
-#### DB Rewriter Headers: `include/arts/transforms/db/`
+#### DB Rewriter Headers: `include/arts/dialect/core/Transforms/db/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -280,7 +280,7 @@ They move with their owning dialect.
 | `stencil/DbStencilRewriter.h` | `include/arts/dialect/core/Transforms/db/stencil/DbStencilRewriter.h` | 3 | |
 | `transforms/GUIDRangeDetection.h` | DEAD | 3 | Dead code |
 
-### 6.2 EDT Rewriters: `lib/arts/transforms/edt/`
+### 6.2 EDT Rewriters: `lib/arts/dialect/core/Transforms/edt/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -293,7 +293,7 @@ They move with their owning dialect.
 | `WorkDistributionUtils.cpp` | `lib/arts/dialect/core/Transforms/edt/WorkDistributionUtils.cpp` | 3 | |
 | `tiling2d/Tile2DTaskLoopLowering.cpp` | `lib/arts/dialect/core/Transforms/edt/tiling2d/Tile2DTaskLoopLowering.cpp` | 3 | |
 
-#### EDT Rewriter Headers: `include/arts/transforms/edt/`
+#### EDT Rewriter Headers: `include/arts/dialect/core/Transforms/edt/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -306,20 +306,20 @@ They move with their owning dialect.
 | `EdtTransforms.h` | `include/arts/dialect/core/Transforms/edt/EdtTransforms.h` | 3 | |
 | `WorkDistributionUtils.h` | `include/arts/dialect/core/Transforms/edt/WorkDistributionUtils.h` | 3 | |
 
-### 6.3 Dep Rewriters: `lib/arts/transforms/dep/`
+### 6.3 Dep Rewriters: `lib/arts/dialect/core/Transforms/dep/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
 | `JacobiAlternatingBuffersPattern.cpp` | `lib/arts/patterns/Transforms/dep/JacobiAlternatingBuffersPattern.cpp` | 3 | Pattern-specific |
 | `Seidel2DWavefrontPattern.cpp` | `lib/arts/patterns/Transforms/dep/Seidel2DWavefrontPattern.cpp` | 3 | Pattern-specific |
 
-#### Dep Rewriter Headers: `include/arts/transforms/dep/`
+#### Dep Rewriter Headers: `include/arts/dialect/core/Transforms/dep/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
 | `DepTransform.h` | `include/arts/patterns/Transforms/dep/DepTransform.h` | 3 | |
 
-### 6.4 Kernel Rewriters: `lib/arts/transforms/kernel/`
+### 6.4 Kernel Rewriters: `lib/arts/dialect/core/Transforms/kernel/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -327,13 +327,13 @@ They move with their owning dialect.
 | `MatmulReductionPattern.cpp` | `lib/arts/patterns/Transforms/kernel/MatmulReductionPattern.cpp` | 3 | Pattern-specific |
 | `StencilTilingNDPattern.cpp` | `lib/arts/patterns/Transforms/kernel/StencilTilingNDPattern.cpp` | 3 | Pattern-specific |
 
-#### Kernel Rewriter Headers: `include/arts/transforms/kernel/`
+#### Kernel Rewriter Headers: `include/arts/dialect/core/Transforms/kernel/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
 | `KernelTransform.h` | `include/arts/patterns/Transforms/kernel/KernelTransform.h` | 3 | |
 
-### 6.5 Loop Rewriters: `lib/arts/transforms/loop/`
+### 6.5 Loop Rewriters: `lib/arts/dialect/core/Transforms/loop/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -341,19 +341,19 @@ They move with their owning dialect.
 | `PerfectNestLinearizationPattern.cpp` | `lib/arts/patterns/Transforms/loop/PerfectNestLinearizationPattern.cpp` | 3 | Pattern-specific |
 | `SymmetricTriangularPattern.cpp` | `lib/arts/patterns/Transforms/loop/SymmetricTriangularPattern.cpp` | 3 | Pattern-specific |
 
-#### Loop Rewriter Headers: `include/arts/transforms/loop/`
+#### Loop Rewriter Headers: `include/arts/dialect/core/Transforms/loop/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
 | `LoopNormalizer.h` | `include/arts/dialect/sde/Transforms/loop/LoopNormalizer.h` | 2D | |
 
-### 6.6 Pattern Rewriters: `lib/arts/transforms/pattern/`
+### 6.6 Pattern Rewriters: `lib/arts/dialect/core/Transforms/pattern/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
 | `PatternTransform.cpp` | `lib/arts/patterns/Transforms/pattern/PatternTransform.cpp` | 3 | |
 
-#### Pattern Rewriter Headers: `include/arts/transforms/pattern/`
+#### Pattern Rewriter Headers: `include/arts/dialect/core/Transforms/pattern/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -363,16 +363,16 @@ They move with their owning dialect.
 
 ## 7. Analysis Layer
 
-### 7.1 Top-Level Analysis: `lib/arts/analysis/`
+### 7.1 Top-Level Analysis: `lib/arts/dialect/core/Analysis/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
 | `AccessPatternAnalysis.cpp` | `lib/arts/patterns/Analysis/AccessPatternAnalysis.cpp` | 3 | Pattern-level |
-| `AnalysisManager.cpp` | `lib/arts/analysis/AnalysisManager.cpp` | = | Shared framework |
-| `InformationCache.cpp` | `lib/arts/analysis/InformationCache.cpp` | = | Shared framework |
-| `StringAnalysis.cpp` | `lib/arts/analysis/StringAnalysis.cpp` | = | Shared |
+| `AnalysisManager.cpp` | `lib/arts/dialect/core/Analysis/AnalysisManager.cpp` | = | Shared framework |
+| `InformationCache.cpp` | `lib/arts/dialect/core/Analysis/InformationCache.cpp` | = | Shared framework |
+| `StringAnalysis.cpp` | `lib/arts/dialect/core/Analysis/StringAnalysis.cpp` | = | Shared |
 
-#### Top-Level Analysis Headers: `include/arts/analysis/`
+#### Top-Level Analysis Headers: `include/arts/dialect/core/Analysis/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -383,7 +383,7 @@ They move with their owning dialect.
 | `InformationCache.h` | = | — | Shared |
 | `StringAnalysis.h` | = | — | Shared |
 
-### 7.2 DB Analysis: `lib/arts/analysis/db/`
+### 7.2 DB Analysis: `lib/arts/dialect/core/Analysis/db/`
 
 All ARTS-structural. Stay in shared `analysis/` or move to `dialect/core/Analysis/`.
 
@@ -395,7 +395,7 @@ All ARTS-structural. Stay in shared `analysis/` or move to `dialect/core/Analysi
 | `DbPatternMatchers.cpp` | `lib/arts/patterns/Analysis/DbPatternMatchers.cpp` | 3 | Pattern-level detection |
 | `OwnershipProof.cpp` | = | — | ARTS structural |
 
-#### DB Analysis Headers: `include/arts/analysis/db/`
+#### DB Analysis Headers: `include/arts/dialect/core/Analysis/db/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -406,7 +406,7 @@ All ARTS-structural. Stay in shared `analysis/` or move to `dialect/core/Analysi
 | `DbPatternMatchers.h` | `include/arts/patterns/Analysis/DbPatternMatchers.h` | 3 | Pattern-level |
 | `OwnershipProof.h` | = | — | ARTS structural |
 
-### 7.3 EDT Analysis: `lib/arts/analysis/edt/`
+### 7.3 EDT Analysis: `lib/arts/dialect/core/Analysis/edt/`
 
 All ARTS-structural. Stay in `analysis/`.
 
@@ -416,7 +416,7 @@ All ARTS-structural. Stay in `analysis/`.
 | `EdtDataFlowAnalysis.cpp` | = | — | ARTS structural |
 | `EpochAnalysis.cpp` | = | — | ARTS structural |
 
-#### EDT Analysis Headers: `include/arts/analysis/edt/`
+#### EDT Analysis Headers: `include/arts/dialect/core/Analysis/edt/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -425,7 +425,7 @@ All ARTS-structural. Stay in `analysis/`.
 | `EdtInfo.h` | = | — | ARTS structural |
 | `EpochAnalysis.h` | = | — | ARTS structural |
 
-### 7.4 Graph Infrastructure: `lib/arts/analysis/graphs/`
+### 7.4 Graph Infrastructure: `lib/arts/dialect/core/Analysis/graphs/`
 
 All ARTS-structural. Stay in `analysis/`.
 
@@ -442,7 +442,7 @@ All ARTS-structural. Stay in `analysis/`.
 | `edt/EdtGraph.cpp` | = | — | |
 | `edt/EdtNode.cpp` | = | — | |
 
-#### Graph Headers: `include/arts/analysis/graphs/`
+#### Graph Headers: `include/arts/dialect/core/Analysis/graphs/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -459,7 +459,7 @@ All ARTS-structural. Stay in `analysis/`.
 | `edt/EdtGraph.h` | = | — | |
 | `edt/EdtNode.h` | = | — | |
 
-### 7.5 Heuristics: `lib/arts/analysis/heuristics/`
+### 7.5 Heuristics: `lib/arts/dialect/core/Analysis/heuristics/`
 
 All ARTS-structural (cost models for EDT/DB/Epoch decisions). Stay in `analysis/`.
 
@@ -474,7 +474,7 @@ All ARTS-structural (cost models for EDT/DB/Epoch decisions). Stay in `analysis/
 | `PersistentRegionCostModel.cpp` | = | — | |
 | `StructuredKernelPlanAnalysis.cpp` | = | — | |
 
-#### Heuristic Headers: `include/arts/analysis/heuristics/`
+#### Heuristic Headers: `include/arts/dialect/core/Analysis/heuristics/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -487,7 +487,7 @@ All ARTS-structural (cost models for EDT/DB/Epoch decisions). Stay in `analysis/
 | `PersistentRegionCostModel.h` | = | — | |
 | `StructuredKernelPlanAnalysis.h` | = | — | |
 
-### 7.6 Loop Analysis: `lib/arts/analysis/loop/`
+### 7.6 Loop Analysis: `lib/arts/dialect/core/Analysis/loop/`
 
 Hybrid — core loop info is SDE-compatible, DB facade is ARTS-structural.
 
@@ -496,14 +496,14 @@ Hybrid — core loop info is SDE-compatible, DB facade is ARTS-structural.
 | `LoopAnalysis.cpp` | = (split in Phase 2) | 2 | Extract SdeLoopAnalysis; keep DB facade |
 | `LoopNode.cpp` | = (split in Phase 2) | 2 | Extract core loop info to SDE |
 
-#### Loop Analysis Headers: `include/arts/analysis/loop/`
+#### Loop Analysis Headers: `include/arts/dialect/core/Analysis/loop/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
 | `LoopAnalysis.h` | = (split in Phase 2) | 2 | SDE base + ARTS extension |
 | `LoopNode.h` | = (split in Phase 2) | 2 | SDE base + ARTS extension |
 
-### 7.7 Metadata Analysis: `lib/arts/analysis/metadata/`
+### 7.7 Metadata Analysis: `lib/arts/dialect/core/Analysis/metadata/`
 
 All SDE-compatible (zero ARTS deps). Move to SDE analysis.
 
@@ -516,7 +516,7 @@ All SDE-compatible (zero ARTS deps). Move to SDE analysis.
 | `MetadataManager.cpp` | `lib/arts/dialect/sde/Analysis/metadata/MetadataManager.cpp` | 2D | |
 | `MetadataRegistry.cpp` | `lib/arts/dialect/sde/Analysis/metadata/MetadataRegistry.cpp` | 2D | |
 
-#### Metadata Analysis Headers: `include/arts/analysis/metadata/`
+#### Metadata Analysis Headers: `include/arts/dialect/core/Analysis/metadata/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -529,7 +529,7 @@ All SDE-compatible (zero ARTS deps). Move to SDE analysis.
 | `MetadataManager.h` | `include/arts/dialect/sde/Analysis/metadata/MetadataManager.h` | 2D | |
 | `MetadataRegistry.h` | `include/arts/dialect/sde/Analysis/metadata/MetadataRegistry.h` | 2D | |
 
-### 7.8 Value Analysis: `lib/arts/analysis/value/`
+### 7.8 Value Analysis: `lib/arts/utils/`
 
 SDE-compatible (pure MLIR value ops, except 1 DbGepOp ref).
 
@@ -537,7 +537,7 @@ SDE-compatible (pure MLIR value ops, except 1 DbGepOp ref).
 |---|---|---|---|
 | `ValueAnalysis.cpp` | `lib/arts/dialect/sde/Analysis/ValueAnalysis.cpp` | 2D | Phase 1: add using decl for DbGepOp |
 
-#### Value Analysis Headers: `include/arts/analysis/value/`
+#### Value Analysis Headers: `include/arts/utils/`
 
 | Current Location | Target | Phase | Notes |
 |---|---|---|---|
@@ -636,7 +636,7 @@ All stay in place — shared across all dialect layers.
 | `dialect/core/Conversion/` | 2 | 0 | 2 | NEW + moved: OmpToArts, SdeToArts |
 | `dialect/rt/IR/` | 2 | 3 | 5 | NEW: arts_rt dialect |
 | `dialect/rt/Transforms/` | 4 | 1 | 5 | Moved: codegen post-lowering |
-| `dialect/rt/Conversion/ArtsToRt/` | 5 | 1 | 6 | Moved: EDT/epoch/DB/parallel lowering |
+| `dialect/core/Conversion/ArtsToRt/` | 3 | 1 | 4 | EDT/epoch lowering (core→rt conversion) |
 | `dialect/rt/Conversion/RtToLLVM/` | 1 | 0 | 1 | NEW: 14 patterns from ConvertArtsToLLVM |
 | `patterns/Transforms/` | 10 | 3 | 13 | Moved: pattern detection + kernel rewrites |
 | `patterns/Analysis/` | 3 | 4 | 7 | Moved: pattern matchers, access analysis |

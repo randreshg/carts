@@ -12,8 +12,8 @@
 ///   %elt = arts.db_element_ptr %ref[%block][%inner_offset] ...
 ///==========================================================================///
 
-#include "arts/transforms/db/DbLayoutStrategy.h"
-#include "arts/analysis/db/DbAnalysis.h"
+#include "arts/dialect/core/Transforms/db/DbLayoutStrategy.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/utils/DbUtils.h"

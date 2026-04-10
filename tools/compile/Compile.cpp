@@ -39,7 +39,7 @@
 #include "polygeist/Passes/Passes.h"
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/dialect/sde/IR/SdeDialect.h"
 #include "arts/passes/Passes.h"

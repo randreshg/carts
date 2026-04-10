@@ -39,8 +39,8 @@
 /// invariant code, which is not the intended behavior.
 ///==========================================================================///=
 
-#ifndef CARTS_TRANSFORMS_EDTICM_H
-#define CARTS_TRANSFORMS_EDTICM_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTICM_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTICM_H
 
 #include "mlir/Support/LLVM.h"
 
@@ -66,4 +66,4 @@ uint64_t moveEdtInvariantCode(EdtOp edtOp);
 } // namespace arts
 } // end namespace mlir
 
-#endif // CARTS_TRANSFORMS_EDTICM_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTICM_H

@@ -353,7 +353,7 @@ Acceptance criteria:
 
 Files likely involved:
 
-- `lib/arts/analysis/heuristics/DistributionHeuristics.cpp`
+- `lib/arts/dialect/core/Analysis/heuristics/DistributionHeuristics.cpp`
 - `lib/arts/passes/transforms/EdtDistribution.cpp`
 - `lib/arts/passes/transforms/ForLowering.cpp`
 - `tools/compile/Compile.cpp`
@@ -371,7 +371,7 @@ Files likely involved:
 
 Files likely involved:
 
-- `lib/arts/analysis/db/DbAnalysis.cpp`
+- `lib/arts/dialect/core/Analysis/db/DbAnalysis.cpp`
 - `lib/arts/passes/opt/db/DbPartitioning.cpp`
 - `lib/arts/passes/opt/db/ContractValidation.cpp`
 - `lib/arts/utils/DbUtils.cpp`
@@ -381,7 +381,7 @@ Files likely involved:
 Files likely involved:
 
 - `lib/arts/passes/opt/edt/EpochOpt.cpp`
-- `lib/arts/analysis/heuristics/EpochHeuristics.cpp`
+- `lib/arts/dialect/core/Analysis/heuristics/EpochHeuristics.cpp`
 - `lib/arts/passes/transforms/EpochLowering.cpp`
 
 ### Workstream E: Benchmark / Contract Gate

@@ -28,8 +28,8 @@
 /// }
 ///==========================================================================///
 
-#ifndef CARTS_TRANSFORMS_EDTPOINTERREMATERIALIZATION_H
-#define CARTS_TRANSFORMS_EDTPOINTERREMATERIALIZATION_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTPTRREMATERIALIZATION_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTPTRREMATERIALIZATION_H
 
 namespace mlir {
 namespace arts {
@@ -40,4 +40,4 @@ void rematerializePointersInEdt(EdtOp edtOp);
 } // namespace arts
 } // namespace mlir
 
-#endif // CARTS_TRANSFORMS_EDTPOINTERREMATERIALIZATION_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTPTRREMATERIALIZATION_H

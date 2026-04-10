@@ -16,10 +16,10 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
-#include "arts/transforms/kernel/KernelTransform.h"
+#include "arts/dialect/core/Transforms/kernel/KernelTransform.h"
 #include "arts/utils/Debug.h"
 #include "mlir/Pass/Pass.h"
 

@@ -21,10 +21,10 @@
 
 #define GEN_PASS_DEF_PERSISTENTSTRUCTUREDREGION
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/db/OwnershipProof.h"
-#include "arts/analysis/heuristics/PersistentRegionCostModel.h"
-#include "arts/analysis/heuristics/StructuredKernelPlanAnalysis.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/db/OwnershipProof.h"
+#include "arts/dialect/core/Analysis/heuristics/PersistentRegionCostModel.h"
+#include "arts/dialect/core/Analysis/heuristics/StructuredKernelPlanAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"

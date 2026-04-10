@@ -17,9 +17,8 @@ add_mlir_dialect_library(MLIRArtsTransforms
   ../dialect/sde/Transforms/CollectMetadata.cpp
   ../dialect/sde/Transforms/ConvertOpenMPToSde.cpp
   ../dialect/sde/Transforms/RaiseToLinalg.cpp
-  ../dialect/sde/Conversion/SdeToArts/SdeToArtsPatterns.cpp
-
   # Core dialect passes — conversion
+  ../dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp
   ../dialect/core/Conversion/OmpToArts/ConvertOpenMPToArts.cpp
   ../dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVM.cpp
   ../dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMPatterns.cpp
@@ -79,10 +78,12 @@ add_mlir_dialect_library(MLIRArtsTransforms
   ../dialect/core/Transforms/Hoisting.cpp
   ../dialect/core/Transforms/LoopVectorizationHints.cpp
 
+  # Core dialect passes — ArtsToRt conversion
+  ../dialect/core/Conversion/ArtsToRt/EdtLowering.cpp
+  ../dialect/core/Conversion/ArtsToRt/EdtLoweringSupport.cpp
+  ../dialect/core/Conversion/ArtsToRt/EpochLowering.cpp
+
   # RT dialect passes
-  ../dialect/rt/Conversion/ArtsToRt/EdtLowering.cpp
-  ../dialect/rt/Conversion/ArtsToRt/EdtLoweringSupport.cpp
-  ../dialect/rt/Conversion/ArtsToRt/EpochLowering.cpp
   ../dialect/rt/Conversion/RtToLLVM/RtToLLVMPatterns.cpp
   ../dialect/rt/Transforms/DataPtrHoisting.cpp
   ../dialect/rt/Transforms/DataPtrHoistingSupport.cpp

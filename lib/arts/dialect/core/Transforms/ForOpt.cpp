@@ -12,9 +12,9 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
 #define GEN_PASS_DEF_FOROPT
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"

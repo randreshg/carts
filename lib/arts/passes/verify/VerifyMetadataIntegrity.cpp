@@ -6,8 +6,8 @@
 /// provenance and trustworthiness of the metadata that exists.
 ///==========================================================================///
 
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"

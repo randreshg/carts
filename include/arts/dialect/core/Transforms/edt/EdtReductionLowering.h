@@ -9,11 +9,11 @@
 ///   3) post-epoch finalization and cleanup
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
-#define ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/codegen/Codegen.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/DenseSet.h"
@@ -75,4 +75,4 @@ void finalizeReductionAfterEpoch(ArtsCodegen *AC,
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H

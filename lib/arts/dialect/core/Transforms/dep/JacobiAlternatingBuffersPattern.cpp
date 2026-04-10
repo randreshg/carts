@@ -36,10 +36,10 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/dep/DepTransform.h"
-#include "arts/transforms/pattern/PatternTransform.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/dep/DepTransform.h"
+#include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"

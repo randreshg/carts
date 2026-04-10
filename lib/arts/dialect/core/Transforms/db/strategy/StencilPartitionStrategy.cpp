@@ -13,9 +13,9 @@
 /// allocations for each block.
 ///==========================================================================///
 
-#include "arts/analysis/heuristics/HeuristicUtils.h"
-#include "arts/analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/transforms/db/PartitionStrategy.h"
+#include "arts/dialect/core/Analysis/heuristics/HeuristicUtils.h"
+#include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/dialect/core/Transforms/db/PartitionStrategy.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 

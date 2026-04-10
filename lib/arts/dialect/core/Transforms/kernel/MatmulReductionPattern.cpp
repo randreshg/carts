@@ -44,9 +44,9 @@
 /// It changes a reduction-carried matmul kernel into an update form that is
 /// easier for downstream ARTS distribution and DB partitioning to exploit.
 
-#include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/transforms/kernel/KernelTransform.h"
-#include "arts/transforms/pattern/PatternTransform.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
+#include "arts/dialect/core/Transforms/kernel/KernelTransform.h"
+#include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"

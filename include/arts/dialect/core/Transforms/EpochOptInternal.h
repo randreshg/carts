@@ -10,11 +10,11 @@
 #define ARTS_DIALECT_CORE_TRANSFORMS_EPOCHOPTINTERNAL_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/edt/EpochAnalysis.h"
-#include "arts/analysis/heuristics/EpochHeuristics.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
+#include "arts/dialect/core/Analysis/edt/EpochAnalysis.h"
+#include "arts/dialect/core/Analysis/heuristics/EpochHeuristics.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"

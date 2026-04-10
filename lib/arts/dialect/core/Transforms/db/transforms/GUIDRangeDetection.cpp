@@ -43,8 +43,8 @@
 
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/db/transforms/GUIDRangeDetection.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/db/transforms/GUIDRangeDetection.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"

@@ -4,7 +4,7 @@
 /// Implementation of unified ID registry.
 ///==========================================================================///
 #include "arts/utils/metadata/IdRegistry.h"
-#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/metadata/LocationMetadata.h"
 #include "arts/utils/metadata/LoopMetadata.h"

@@ -24,7 +24,7 @@ Upgrading LLVM 18 → 23 across CARTS + Polygeist requires **~3,100 breaking cal
 | Codebase | Files | Lines | Migration Effort |
 |----------|-------|-------|-----------------|
 | **CARTS passes** (`lib/arts/passes/`) | 50 .cpp | 25,098 | MEDIUM |
-| **CARTS transforms/utils** (`lib/arts/transforms/`, `utils/`, etc.) | 79 .cpp | 32,109 | MEDIUM |
+| **CARTS transforms/utils** (`lib/arts/dialect/core/Transforms/`, `utils/`, etc.) | 79 .cpp | 32,109 | MEDIUM |
 | **Polygeist passes** (`external/Polygeist/lib/`) | 24 .cpp + 11 others | 21,854 | HIGH |
 | **cgeist frontend** (`external/Polygeist/tools/cgeist/`) | 9 .cc files | ~20,000 | LOW (no Clang API breaks) |
 | **Total** | ~170 source files | ~99,000 | |
@@ -209,7 +209,7 @@ This means `ConvertOpenMPToArts.cpp` calls to `op.getLowerBound()`, `op.getUpper
 | `lib/arts/passes/opt/general/HandleDeps.cpp` | 7 | OMP dep handling |
 | `lib/arts/utils/Utils.cpp` | 4 | OMP utilities |
 | `lib/arts/utils/LoopUtils.cpp` | 1 | |
-| `lib/arts/analysis/metadata/MetadataRegistry.cpp` | 1 | |
+| `lib/arts/dialect/core/Analysis/metadata/MetadataRegistry.cpp` | 1 | |
 | **Polygeist** `OpenMPOpt.cpp` | ~10 | WsLoopOp patterns |
 | **Polygeist** `ConvertPolygeistToLLVM.cpp` | ~5 | omp::ParallelOp, WsLoopOp |
 

@@ -71,10 +71,10 @@ No existing pass or dialect should introduce ops with these names.
 | Analysis | Phase | Source |
 |----------|-------|--------|
 | `StructuredKernelPlanAnalysis` | Phase 1 | New analysis producing `StructuredKernelPlan` |
-| `DbAnalysis` | Existing | `include/arts/analysis/db/DbAnalysis.h` |
-| `EdtAnalysis` | Existing | `include/arts/analysis/edt/EdtAnalysis.h` |
-| `LoopAnalysis` | Existing | `include/arts/analysis/loop/LoopAnalysis.h` |
-| `EpochAnalysis` | Existing | `include/arts/analysis/edt/EpochAnalysis.h` |
+| `DbAnalysis` | Existing | `include/arts/dialect/core/Analysis/db/DbAnalysis.h` |
+| `EdtAnalysis` | Existing | `include/arts/dialect/core/Analysis/edt/EdtAnalysis.h` |
+| `LoopAnalysis` | Existing | `include/arts/dialect/core/Analysis/loop/LoopAnalysis.h` |
+| `EpochAnalysis` | Existing | `include/arts/dialect/core/Analysis/edt/EpochAnalysis.h` |
 
 ## 4. Pass Naming Conventions
 
@@ -93,7 +93,7 @@ New passes introduced by the RFC must follow these naming rules:
 
 | Pass Name | Phase | Location |
 |-----------|-------|----------|
-| `StructuredKernelPlanAnalysis` | Phase 1 | `lib/arts/analysis/` |
+| `StructuredKernelPlanAnalysis` | Phase 1 | `lib/arts/dialect/core/Analysis/` |
 | `StructuredKernelPlanPass` | Phase 1 | `lib/arts/passes/opt/general/` |
 | `SplitLaunchStatePass` | Phase 2 | `lib/arts/passes/transforms/` |
 | `CpsSchemaCleanupPass` | Phase 3 | `lib/arts/passes/transforms/` |

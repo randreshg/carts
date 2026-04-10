@@ -102,7 +102,7 @@ lib/arts/passes/
 - **What**: Pass wrapper for Seidel2D wavefront and Jacobi alternating buffers
 - **Why misplaced**: It's a semantic schedule rewrite (transform), not an optimization.
   Runs in stage 5 (pattern-pipeline). The actual pattern implementations already
-  live correctly in `lib/arts/transforms/dep/`.
+  live correctly in `lib/arts/dialect/core/Transforms/dep/`.
 - **Root cause**: PascalCase-to-lowercase directory rename preserved wrong location.
 
 #### B. `LoopReordering.cpp` — `transforms/` should be `opt/loop/`
@@ -186,9 +186,9 @@ Minor consolidation opportunity: expose `bodyIsEpochOnly()` as a public utility
   Passes.h, and implementations
 - Pipeline integration: all 60 passes properly wired in Compile.cpp
 - Existing library extractions (good examples):
-  - `lib/arts/transforms/db/stencil/DbStencilIndexer.cpp` (1209 LOC)
-  - `lib/arts/transforms/edt/EdtRewriter.cpp` (1110 LOC)
-  - `lib/arts/transforms/db/DbBlockPlanResolver.cpp` (788 LOC)
+  - `lib/arts/dialect/core/Transforms/db/stencil/DbStencilIndexer.cpp` (1209 LOC)
+  - `lib/arts/dialect/core/Transforms/edt/EdtRewriter.cpp` (1110 LOC)
+  - `lib/arts/dialect/core/Transforms/db/DbBlockPlanResolver.cpp` (788 LOC)
 
 ---
 

@@ -7,8 +7,8 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_DBSCRATCHELIMINATION
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"

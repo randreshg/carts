@@ -16,8 +16,8 @@
 #include <cassert>
 
 #include "arts/Dialect.h"
-#include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"

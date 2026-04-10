@@ -24,8 +24,8 @@
 ///      arts.stencil_max_offsets = [1, 0]}
 ///==========================================================================///
 
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/kernel/KernelTransform.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/kernel/KernelTransform.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"

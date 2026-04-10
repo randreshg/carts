@@ -20,8 +20,8 @@
 ///   %v2 = memref.load %right_halo[%local_i + 1 - %tile, %j]
 ///==========================================================================///
 
-#include "arts/transforms/db/stencil/DbStencilIndexer.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/db/stencil/DbStencilIndexer.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"

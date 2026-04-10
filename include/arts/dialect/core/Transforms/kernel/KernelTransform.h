@@ -9,11 +9,11 @@
 /// rewrites in DepTransforms.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_KERNEL_KERNELTRANSFORM_H
-#define ARTS_TRANSFORMS_KERNEL_KERNELTRANSFORM_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_KERNEL_KERNELTRANSFORM_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_KERNEL_KERNELTRANSFORM_H
 
-#include "arts/transforms/loop/LoopNormalizer.h"
-#include "arts/transforms/pattern/PatternTransform.h"
+#include "arts/dialect/core/Transforms/loop/LoopNormalizer.h"
+#include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include <optional>
 
 namespace mlir {
@@ -47,4 +47,4 @@ matchExplicitStencilNDContract(ForOp artsFor, int64_t revision = 1);
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_KERNEL_KERNELTRANSFORM_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_KERNEL_KERNELTRANSFORM_H

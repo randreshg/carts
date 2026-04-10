@@ -14,7 +14,7 @@
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"

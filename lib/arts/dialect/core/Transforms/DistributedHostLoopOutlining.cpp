@@ -8,12 +8,12 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/heuristics/DistributionHeuristics.h"
-#include "arts/analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/analysis/loop/LoopAnalysis.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/heuristics/DistributionHeuristics.h"
+#include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_DISTRIBUTEDHOSTLOOPOUTLINING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"

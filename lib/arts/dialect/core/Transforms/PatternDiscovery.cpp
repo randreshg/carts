@@ -11,12 +11,12 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/kernel/KernelTransform.h"
-#include "arts/transforms/pattern/PatternTransform.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/kernel/KernelTransform.h"
+#include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #define GEN_PASS_DEF_PATTERNDISCOVERY
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
