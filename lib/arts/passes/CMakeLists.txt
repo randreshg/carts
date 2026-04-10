@@ -14,7 +14,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   verify/VerifyEpochLowered.cpp
 
   # Transformation passes
-  transforms/CollectMetadata.cpp
+  ../dialect/sde/Transforms/CollectMetadata.cpp
   transforms/PatternDiscovery.cpp
   transforms/CreateDbs.cpp
   transforms/CreateEpochs.cpp
