@@ -103,6 +103,57 @@ cross-test snapshot dependency that is fragile and non-portable.
 
 ---
 
+## Fragility Analysis: Coupling Predicts Failure
+
+Analysis of the 9 currently-failing tests (out of 168) reveals a perfect
+correlation between external coupling and test failure:
+
+| Category | Count | Failing | Failure Rate |
+|---|---|---|---|
+| Self-contained (inline MLIR) | 119 | 0 | **0.0%** |
+| Benchmark-coupled (C source) | 36 | 6 | **16.7%** |
+| Examples MLIR input | 12 | 2 | **16.7%** |
+| Output/ snapshot dependency | 1 | 1 | **100%** |
+| **Externally-coupled total** | **49** | **9** | **18.4%** |
+
+**100% of failing tests are externally-coupled. Zero self-contained tests fail.**
+
+### Why Coupling Causes Failure
+
+1. **Full-pipeline amplification**: Benchmark-coupled tests compile C through
+   all 18 stages. Any change to stages 1-N breaks tests checking stage N,
+   even when stage N itself is correct. The 6 failing benchmark tests all
+   target mid/late stages (db-partitioning, pre-lowering, arts-to-llvm).
+
+2. **Upstream drift propagation**: The SDE restructuring renamed ops,
+   reorganized passes, and rewired conversion. This changed IR at every stage,
+   breaking CHECK patterns in tests that match whole-program IR.
+
+### Maintenance Burden
+
+- **20 of 285 test-touching commits (7.0%)** are pure maintenance ("Refresh",
+  "Stabilize", "Realign") with no compiler functionality change
+- **Churn ratio**: Failing tests average 12.1 commits each vs 3.3 for
+  self-contained tests — a **3.7x higher modification rate**
+- **April 10 alone**: 8 refresh commits in 14 hours, cascading from
+  the SDE restructuring
+
+### The 9 Failing Tests
+
+| Test | Coupling | Input Source |
+|---|---|---|
+| `atax_read_only_mixed_owner_dims_keep_block` | Benchmark | polybench/atax C |
+| `rhs4sg_base_readonly_full_range_prefers_coarse` | Benchmark | sw4lite/rhs4sg C |
+| `specfem3d_stress_block_halo_contract` | Benchmark | specfem3d/stress C |
+| `rhs4sg_base_block_aligned_worker_slices` | Benchmark | sw4lite/rhs4sg C |
+| `rhs4sg_base_neighbor_dep_cache` | Benchmark | sw4lite/rhs4sg C |
+| `specfem3d_velocity_worker_dep_slices` | Benchmark | specfem3d/velocity C |
+| `db_partition_mode_block` | Examples | examples MLIR input |
+| `db_partition_mode_block_full_range_indirect` | Examples | examples MLIR input |
+| `matmul_reduction_inputs_preserve_full_range` | Snapshot | Output/ pre-computed MLIR |
+
+---
+
 ## What's Wrong with Benchmark-Coupled Tests
 
 ### 1. External dependency fragility
