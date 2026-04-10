@@ -21,6 +21,8 @@ add_mlir_dialect_library(MLIRArts
 add_subdirectory(dialect)
 add_subdirectory(utils)
 add_subdirectory(dialect/core/Transforms)
+add_subdirectory(dialect/core/Conversion)
 add_subdirectory(dialect/core/Analysis)
 add_subdirectory(codegen)
+add_subdirectory(passes/verify)
 add_subdirectory(passes)
