@@ -25,9 +25,9 @@ add_mlir_dialect_library(MLIRArtsTransforms
   transforms/ConvertArtsToLLVMPatterns.cpp
   ../dialect/rt/Conversion/RtToLLVM/RtToLLVMPatterns.cpp
   transforms/DbLowering.cpp
-  transforms/EdtLowering.cpp
-  transforms/EdtLoweringSupport.cpp
-  transforms/EpochLowering.cpp
+  ../dialect/rt/Conversion/ArtsToRt/EdtLowering.cpp
+  ../dialect/rt/Conversion/ArtsToRt/EdtLoweringSupport.cpp
+  ../dialect/rt/Conversion/ArtsToRt/EpochLowering.cpp
   transforms/LoweringContractCleanup.cpp
   transforms/ForOpt.cpp
   transforms/DistributedHostLoopOutlining.cpp
@@ -71,10 +71,10 @@ add_mlir_dialect_library(MLIRArtsTransforms
   opt/edt/PersistentStructuredRegion.cpp
   opt/codegen/AliasScopeGen.cpp
   opt/codegen/Hoisting.cpp
-  opt/codegen/DataPtrHoisting.cpp
-  opt/codegen/DataPtrHoistingSupport.cpp
-  opt/codegen/GuidRangCallOpt.cpp
-  opt/codegen/RuntimeCallOpt.cpp
+  ../dialect/rt/Transforms/DataPtrHoisting.cpp
+  ../dialect/rt/Transforms/DataPtrHoistingSupport.cpp
+  ../dialect/rt/Transforms/GuidRangCallOpt.cpp
+  ../dialect/rt/Transforms/RuntimeCallOpt.cpp
   opt/codegen/LoopVectorizationHints.cpp
   opt/codegen/ScalarReplacement.cpp
   

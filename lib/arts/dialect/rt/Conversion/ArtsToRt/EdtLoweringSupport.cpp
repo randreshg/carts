@@ -6,7 +6,7 @@
 /// declared in EdtLoweringInternal.h.
 ///==========================================================================///
 
-#include "arts/passes/transforms/EdtLoweringInternal.h"
+#include "arts/dialect/rt/Conversion/ArtsToRt/EdtLoweringInternal.h"
 
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"

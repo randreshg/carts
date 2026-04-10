@@ -94,30 +94,40 @@ Phase 2D: Migrate general passes to SDE (deferred)
   22. Build and test
 ```
 
-## Phase 3: Full Folder Reorganization
+## Phase 3: Full Folder Reorganization -- IN PROGRESS (3B steps 7-8 COMPLETE)
 
-### Sub-Phases
+### Completed Steps
 
 ```
-Phase 3A: Move core arts to dialect/core/
+Phase 3B step 7: Move lowering passes to rt/Conversion/ArtsToRt/
+  - EdtLowering.cpp + EdtLoweringSupport.cpp + EdtLoweringInternal.h
+  - EpochLowering.cpp
+  - These are the only passes that produce arts_rt ops
+
+Phase 3B step 8: Move codegen passes to rt/Transforms/
+  - DataPtrHoisting.cpp + DataPtrHoistingSupport.cpp + DataPtrHoistingInternal.h
+  - GuidRangCallOpt.cpp
+  - RuntimeCallOpt.cpp
+  - These operate post-lowering on arts_rt ops or LLVM runtime calls
+
+159/168 tests pass (same baseline as main)
+```
+
+### Remaining Sub-Phases
+
+```
+Phase 3A: Move core arts to dialect/core/ (deferred — high risk, 100+ include changes)
   1. Move Ops.td, Attributes.td, Types.td, Dialect.td to include/arts/dialect/core/IR/
   2. Move Dialect.cpp to lib/arts/dialect/core/IR/
   3. Add forwarding compatibility headers
   4. Update all includes project-wide
 
-Phase 3B: Move passes to dialect-owned structure
+Phase 3B remaining: Move passes to dialect-owned structure
   5. Move EDT passes to core/Transforms/
   6. Move DB passes to core/Transforms/
-  7. Move lowering passes to rt/Conversion/ArtsToRt/
-     (EdtLowering, EpochLowering ONLY — these are the only passes
-      that produce arts_rt ops. DbLowering and ParallelEdtLowering
-      stay in core/Transforms/ as they do core->core lowering.)
-  8. Move codegen passes to rt/Transforms/
-     (DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt)
   9. Move truly ARTS-agnostic passes to general/
-     (RaiseMemRef, DCE, ScalarReplacement ONLY — AliasScopeGen,
-      HandleDeps, ArtsInliner, Hoisting, LoweringContractCleanup
-      have hidden ARTS deps and stay in core/Transforms/)
+     (Only ScalarReplacement is truly agnostic — RaiseMemRef and DCE
+      have hidden ARTS deps: OmpDepOp creation and EDT/DB dead code)
   10. Create patterns/Analysis/ for read-only analysis
       (DbPatternMatchers, AccessPatternAnalysis — no op mutation)
       NOTE: Pattern *transform* passes (PatternDiscovery,

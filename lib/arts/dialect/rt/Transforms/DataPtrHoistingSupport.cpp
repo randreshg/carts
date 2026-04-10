@@ -4,7 +4,7 @@
 /// Shared local helpers for the split DataPtrHoisting implementation.
 ///==========================================================================///
 
-#include "arts/passes/opt/codegen/DataPtrHoistingInternal.h"
+#include "arts/dialect/rt/Transforms/DataPtrHoistingInternal.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(data_ptr_hoisting);
