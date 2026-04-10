@@ -76,10 +76,27 @@ Phase 2B: OMP-to-SDE-to-ARTS pipeline (cd75cf2a)
   - 159/168 tests pass (same baseline)
 ```
 
-### Remaining Sub-Phases (deferred)
+### Deferred Sub-Phases
 
 ```
-Phase 2C: Tensor integration (deferred — over-engineering for now)
+Phase 2C: Tensor integration — DEFERRED (decision: 2026-04-10)
+  Rationale: RaiseToLinalg requires inverse pattern recognition (scf.for+memref
+  -> linalg.generic), which is fundamentally harder than forward conversion.
+  No MLIR upstream equivalent exists. RaiseToTensor requires proving alias
+  freedom for memref->tensor conversion. Both introduce new IR forms that all
+  18 downstream passes must handle — high risk of miscompilation.
+
+  The existing metadata pipeline (CollectMetadata + PatternDiscovery) covers
+  ~80% of cases. The tensor window (stages 3.6-3.9) should be implemented
+  AFTER the structural reorganization stabilizes and when a clear benchmark
+  gap demonstrates the need.
+
+  CMake readiness: linalg/tensor/bufferization dialects are already registered
+  (registerAllDialects in Compile.cpp) and linked via ${dialect_libs}. When
+  implementing, add MLIRLinalgDialect, MLIRLinalgTransforms, MLIRTensorDialect,
+  MLIRBufferizationTransforms to lib/arts/passes/CMakeLists.txt LINK_LIBS.
+
+  Steps when ready:
   12. Write RaiseToLinalg.cpp (scf.for+memref -> linalg.generic)
   13. Write RaiseToTensor.cpp (linalg memref -> linalg tensor)
   14. Integrate one-shot-bufferize into pipeline
@@ -89,8 +106,19 @@ Phase 2C: Tensor integration (deferred — over-engineering for now)
 
 Phase 2D: Migrate general passes to SDE (partially complete)
   18. Move CollectMetadata to sde/Transforms/ -- DONE (4d62f756)
-  19. Move LoopNormalization to sde/Transforms/ (blocked — uses arts::ForOp)
-  20. Move LoopReordering to sde/Transforms/ (blocked — uses DbPatternMatchers)
+  19. Move LoopNormalization to sde/Transforms/ — BLOCKED
+      Reason: LoopPattern interface takes arts::ForOp directly (not
+      LoopLikeOpInterface). LoopNormalization.cpp walks ForOp and
+      passes to LoopPattern::match(ForOp). Decoupling requires
+      refactoring include/arts/transforms/loop/LoopNormalizer.h to
+      use LoopLikeOpInterface, then updating all LoopPattern
+      implementations. Medium effort, requires careful testing.
+  20. Move LoopReordering to sde/Transforms/ — BLOCKED
+      Reason: Uses arts::ForOp AND DbPatternMatchers for matmul
+      auto-detection. The metadata-based path (lines ~68-80) is
+      SDE-compatible, but the auto-detection path calls
+      detectMatmulInitReductionLoopNest which is DB-analysis code.
+      Fix: split auto-detection into separate pattern pass.
   21. Update includes project-wide
   22. Build and test
 ```
@@ -153,8 +181,56 @@ Phase 3A: Move Dialect.cpp to dialect/core/IR/
 
 ```
 - TableGen files stay at include/arts/ for build stability (see core/IR/CLAUDE.md)
+  Moving Ops.td/Attributes.td/Types.td/Dialect.td would change generated paths
+  (arts/Ops.h.inc -> arts/dialect/core/IR/ArtsOps.h.inc) breaking 135+ files.
+  IREE solves this differently (per-dialect .td from the start), but CARTS
+  would need a large mechanical migration with forwarding headers.
 - LoopNormalization/LoopReordering move to sde/ blocked by arts::ForOp deps
+  (see Phase 2D notes above)
+- Pattern passes (PatternDiscovery, KernelTransforms, StencilBoundaryPeeling,
+  DepTransforms) stay in core/ — investigation found all 4 have ARTS op deps
+  (PatternDiscovery stamps on EdtOp, LoopReordering calls DbPatternMatchers,
+  etc.). Moving to a standalone patterns/ dir requires refactoring.
 ```
+
+## Decision Log
+
+### 2026-04-10: Phase 2C Tensor Integration DEFERRED
+
+**Decision**: Defer RaiseToLinalg/RaiseToTensor/Bufferize pipeline to post-stabilization.
+
+**Research findings** (6-agent parallel investigation):
+1. **No upstream "raise to linalg" pass exists** — MLIR's ElementwiseToLinalg
+   converts tensor-space elementwise ops, but the inverse (scf.for+memref →
+   linalg.generic) requires custom pattern recognition. This is essentially
+   reimplementing PatternDiscovery in a different form.
+2. **CMake is ready** — registerAllDialects() already loads linalg/tensor/bufferization;
+   ${dialect_libs} transitively links them. Only need to add explicit LINK_LIBS
+   (MLIRLinalgTransforms, MLIRTensorDialect, MLIRBufferizationTransforms) to
+   lib/arts/passes/CMakeLists.txt when implementing.
+3. **Pipeline insertion points identified** — 4 new StageId entries between
+   OpenMPToArts and PatternPipeline in Compile.cpp (lines 218-219), with
+   build functions at line ~732 and registry entries at line ~1044.
+4. **ForOp decoupling feasible** — arts::ForOp already implements
+   LoopLikeOpInterface. Generalizing LoopPattern::match(ForOp) to
+   match(Operation*) would take ~2-3 days and unblock LoopNormalization
+   move to sde/. LoopReordering stays in core/ (DbPatternMatchers dep).
+5. **High risk of downstream breakage** — Adding linalg.generic IR between
+   omp-to-sde and pattern-pipeline means all 18 downstream passes must
+   handle the new IR form. One missed case = silent miscompilation.
+6. **Existing metadata pipeline covers ~80%** — CollectMetadata +
+   PatternDiscovery handle most benchmarks without tensor space.
+
+### 2026-04-10: LoopNormalization Decoupling Feasible
+
+**Finding**: Can move LoopNormalization to sde/Transforms/ in ~2-3 days:
+- Generalize LoopPattern::match(ForOp) → match(Operation*)
+- Filter by LoopLikeOpInterface (arts::ForOp already implements it)
+- Add LoopLikeOpInterface to sde::SdeSuIterateOp
+- SymmetricTriangularPattern: store outerLoop as Operation*, cast when needed
+- PerfectNestLinearizationPattern: ARTS-specific (creates ForOp), stays in core/
+
+**Not blocking**: LoopReordering stays in core/ permanently (DbPatternMatchers dep).
 
 ## Verification at Each Phase
 
