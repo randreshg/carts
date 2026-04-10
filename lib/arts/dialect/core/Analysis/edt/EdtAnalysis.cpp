@@ -8,9 +8,7 @@
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtGraph.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtNode.h"
-#include "arts/dialect/core/Analysis/heuristics/HeuristicUtils.h"
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -27,14 +25,7 @@
 #include <algorithm>
 
 using namespace mlir;
-using namespace arts;
-
-namespace {
-static bool hasExplicitReductionLoop(const LoopMetadata *metadata) {
-  return metadata && metadata->hasReductions;
-}
-
-} // namespace
+using namespace mlir::arts;
 
 ///==========================================================================///
 /// EdtAnalysis
@@ -229,11 +220,6 @@ EdtAnalysis::getAllocAccessPattern(Operation *allocOp) {
   return it->second;
 }
 
-bool EdtAnalysis::hasSharedReadonlyInputs(EdtOp first, EdtOp second) {
-  return DbUtils::hasSharedReadonlyRoot(first.getOperation(),
-                                        second.getOperation());
-}
-
 const EdtCaptureSummary *EdtAnalysis::getCaptureSummary(EdtOp edt) {
   if (!edt)
     return nullptr;
@@ -241,47 +227,6 @@ const EdtCaptureSummary *EdtAnalysis::getCaptureSummary(EdtOp edt) {
     analyze();
   auto *edtNode = getEdtNode(edt);
   return edtNode ? &edtNode->getInfo().captureSummary : nullptr;
-}
-
-EdtAnalysis::ParallelEdtWorkSummary
-EdtAnalysis::summarizeParallelEdtWork(EdtOp edt, int64_t workerCount) {
-  ParallelEdtWorkSummary summary;
-  if (!edt)
-    return summary;
-
-  MetadataManager &metadataManager = getMetadataManager();
-  LoopAnalysis &loopAnalysis = getLoopAnalysis();
-  int64_t effectiveWorkers = std::max<int64_t>(1, workerCount);
-  int64_t nestedWorkCap =
-      std::max<int64_t>(1, effectiveWorkers * effectiveWorkers);
-
-  for (Operation &op : edt.getBody().front().without_terminator()) {
-    auto forOp = dyn_cast<ForOp>(&op);
-    if (!forOp)
-      continue;
-
-    metadataManager.ensureLoopMetadata(forOp.getOperation());
-    const LoopMetadata *metadata =
-        metadataManager.getLoopMetadata(forOp.getOperation());
-
-    int64_t nestedWork =
-        std::max<int64_t>(1, loopAnalysis
-                                 .estimateStaticPerfectNestedWork(
-                                     forOp.getOperation(), nestedWorkCap)
-                                 .value_or(1));
-    int64_t tripCount =
-        loopAnalysis.getStaticTripCount(forOp.getOperation()).value_or(0);
-    int64_t workPerWorker = nestedWork;
-    if (tripCount > 0)
-      workPerWorker = ceilDivPositive(tripCount, effectiveWorkers) * nestedWork;
-
-    summary.hasReductionLoop =
-        summary.hasReductionLoop || hasExplicitReductionLoop(metadata);
-    summary.peakWorkPerWorker =
-        std::max(summary.peakWorkPerWorker, workPerWorker);
-  }
-
-  return summary;
 }
 
 void EdtAnalysis::forEachAllocAccessPattern(
@@ -305,18 +250,6 @@ bool EdtAnalysis::invalidateGraph(func::FuncOp func) {
   return false;
 }
 
-void EdtAnalysis::invalidate() {
-  std::unique_lock<std::shared_mutex> writeLock(edtGraphMutex);
-  for (auto &kv : edtGraphs)
-    if (kv.second)
-      kv.second->invalidate();
-  edtGraphs.clear();
-  edtPatternByOp.clear();
-  allocPatternByOp.clear();
-  edtOrderIndex.clear();
-  analyzed.store(false, std::memory_order_release);
-}
-
 bool EdtAnalysis::isParallelEdtFusable(EdtOp edt) {
   if (edt.getType() != arts::EdtType::parallel)
     return false;
@@ -333,15 +266,23 @@ bool EdtAnalysis::isParallelEdtFusable(EdtOp edt) {
   return true;
 }
 
+void EdtAnalysis::invalidate() {
+  std::unique_lock<std::shared_mutex> writeLock(edtGraphMutex);
+  for (auto &kv : edtGraphs)
+    if (kv.second)
+      kv.second->invalidate();
+  edtGraphs.clear();
+  edtPatternByOp.clear();
+  allocPatternByOp.clear();
+  edtOrderIndex.clear();
+  analyzed.store(false, std::memory_order_release);
+}
+
 EdtNode *EdtAnalysis::getEdtNode(EdtOp op) {
   auto func = op->getParentOfType<func::FuncOp>();
   if (!func)
     return nullptr;
   return getOrCreateEdtGraph(func).getEdtNode(op);
-}
-
-MetadataManager &EdtAnalysis::getMetadataManager() {
-  return getAnalysisManager().getMetadataManager();
 }
 
 LoopAnalysis &EdtAnalysis::getLoopAnalysis() {

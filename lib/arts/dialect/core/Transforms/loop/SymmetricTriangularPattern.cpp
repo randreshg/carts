@@ -48,15 +48,11 @@ namespace arts {
 
 class SymmetricTriangularPattern : public LoopPattern {
 public:
-  explicit SymmetricTriangularPattern(MetadataManager &metadataManager)
-      : metadataManager(metadataManager) {}
-
   bool match(ForOp artsFor) override;
   LogicalResult apply(OpBuilder &builder) override;
   StringRef getName() const override { return "symmetric-triangular"; }
 
 private:
-  MetadataManager &metadataManager;
   ForOp outerArtsFor;
   SymmetricTriangularPatternMatch matchResult;
 };
@@ -141,8 +137,7 @@ LogicalResult SymmetricTriangularPattern::apply(OpBuilder &builder) {
       });
 
   /// Step 3: Copy loop attributes to new j-loop
-  rewriteNormalizedLoop(m.jLoop.getOperation(), newJLoop.getOperation(),
-                        metadataManager);
+  rewriteNormalizedLoop(m.jLoop.getOperation(), newJLoop.getOperation());
 
   /// Step 4: Handle diagonal store — move it after the new j-loop
   if (m.diagStore) {
@@ -162,8 +157,8 @@ LogicalResult SymmetricTriangularPattern::apply(OpBuilder &builder) {
 
 /// Factory function — called from LoopNormalization pass
 std::unique_ptr<LoopPattern>
-createSymmetricTriangularPattern(MetadataManager &metadataManager) {
-  return std::make_unique<SymmetricTriangularPattern>(metadataManager);
+createSymmetricTriangularPattern() {
+  return std::make_unique<SymmetricTriangularPattern>();
 }
 
 } // namespace arts

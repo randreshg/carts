@@ -2,7 +2,7 @@
 /// File: LoopAnalysis.h
 ///
 /// LoopAnalysis manages loop operations and their associated metadata.
-/// Owns LoopNode objects which combine graph structure with LoopMetadata.
+/// Owns LoopNode objects which combine graph structure with loop metadata.
 ///==========================================================================///
 
 #ifndef ARTS_DIALECT_CORE_ANALYSIS_LOOP_LOOPANALYSIS_H

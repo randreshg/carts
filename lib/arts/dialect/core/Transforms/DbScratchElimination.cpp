@@ -10,7 +10,6 @@
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_DBSCRATCHELIMINATION
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
@@ -59,16 +58,6 @@ struct ScratchCandidate {
   SmallVector<ScratchUse, 4> uses;
 };
 
-static bool isSingleSizeOne(ValueRange sizes) {
-  return sizes.size() == 1 && ValueAnalysis::isOneConstant(sizes.front());
-}
-
-static bool isZeroIndexList(ValueRange values) {
-  return !values.empty() && llvm::all_of(values, [](Value v) {
-    return ValueAnalysis::isZeroConstant(v);
-  });
-}
-
 static SmallVector<Value> getDynamicAllocaSizes(DbAllocOp alloc,
                                                 MemRefType refType) {
   SmallVector<Value> dynSizes;
@@ -86,7 +75,8 @@ static bool matchInitStore(DbRefOp initRef, Operation *&initStore) {
   initStore = nullptr;
   if (!initRef)
     return true;
-  if (!isZeroIndexList(initRef.getIndices()))
+  if (initRef.getIndices().empty() ||
+      !llvm::all_of(initRef.getIndices(), ValueAnalysis::isZeroConstant))
     return false;
   if (!initRef->hasOneUse())
     return false;
@@ -108,7 +98,8 @@ static bool matchScratchDbRef(BlockArgument arg, DbRefOp &dbRef) {
     auto ref = dyn_cast<DbRefOp>(user);
     if (!ref || dbRef)
       return false;
-    if (!isZeroIndexList(ref.getIndices()))
+    if (ref.getIndices().empty() ||
+        !llvm::all_of(ref.getIndices(), ValueAnalysis::isZeroConstant))
       return false;
     dbRef = ref;
   }
@@ -150,7 +141,8 @@ static std::optional<ScratchCandidate>
 matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
   if (!alloc || alloc.getAllocType() != DbAllocType::stack)
     return std::nullopt;
-  if (!DbAnalysis::isCoarseGrained(alloc) || !isSingleSizeOne(alloc.getSizes()))
+  if (!DbAnalysis::isCoarseGrained(alloc) || alloc.getSizes().size() != 1 ||
+      !ValueAnalysis::isOneConstant(alloc.getSizes().front()))
     return std::nullopt;
 
   auto ptrType = dyn_cast<MemRefType>(alloc.getPtr().getType());
@@ -220,7 +212,8 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
     DbAcquireOp acquire = use.acquire;
     if (!acquire || acquire.getMode() == ArtsMode::in)
       return std::nullopt;
-    if (!isSingleSizeOne(acquire.getSizes()) ||
+    if (acquire.getSizes().size() != 1 ||
+        !ValueAnalysis::isOneConstant(acquire.getSizes().front()) ||
         acquire.getOffsets().size() != 1 ||
         !ValueAnalysis::isZeroConstant(acquire.getOffsets().front()))
       return std::nullopt;

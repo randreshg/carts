@@ -278,19 +278,18 @@ tensor/linalg window (steps 2-6) is a transient analysis phase.
 
 ## Current RaiseToLinalg: A Skeleton, Not a Transformation
 
-The current `RaiseToLinalg.cpp` (384 LOC) is a **metadata-stamping pass**,
-not a transformation pass. It:
+The current `RaiseToLinalg.cpp` (~355 LOC) is a **diagnostic-only pass**
+that classifies loop nests but does not modify IR. It:
 
 1. Walks `arts::ForOp` ops (not SDE ops — it runs after SDE→ARTS)
 2. Collects perfectly-nested `scf.for` chains
 3. Builds `AffineMap` indexing maps from memref access indices
 4. Classifies: elementwise / stencil / matmul / reduction
-5. Stamps 5 attributes: `arts.linalg.pattern`, `arts.linalg.iterator_types`,
-   `arts.linalg.indexing_maps`, `arts.linalg.num_inputs`, `arts.linalg.num_outputs`
+5. Logs classifications via `ARTS_DEBUG` / `ARTS_INFO` — **stamps zero
+   attributes** (contrary to earlier drafts of this doc)
 
-**Critical finding**: These 5 attributes are consumed by **zero** downstream
-passes. Grep across all of `lib/arts/` confirms no file reads any
-`arts.linalg.*` attribute. The pass is a dead-end prototype.
+The pass is a diagnostic prototype — no IR mutations, no attribute
+stamping, no downstream consumers.
 
 ### What a Real RaiseToLinalg Would Do
 

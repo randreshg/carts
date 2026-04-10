@@ -370,8 +370,7 @@ bool PartitionBoundsAnalyzer::hasValidEdtAndAccesses(DbAcquireNode *node) {
   if (!edtNode)
     return skip("missing EDT node");
 
-  if (isTaskEdt && !edtNode->hasParallelLoopMetadata()) {
-    ARTS_DEBUG("Skipping parallel loop metadata check: treating as full-range");
+  if (isTaskEdt) {
     node->setPartitionInfo(Value(), Value());
   }
 

@@ -28,13 +28,15 @@
 /// they don't alias with data stores.
 ///==========================================================================///
 
-#define GEN_PASS_DEF_DATAPTRHOISTING
 #include "arts/dialect/rt/Transforms/DataPtrHoistingInternal.h"
+#include "arts/dialect/rt/Transforms/Passes.h"
+namespace mlir::arts {
+#define GEN_PASS_DEF_DATAPTRHOISTING
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
+} // namespace mlir::arts
 #include "arts/passes/Passes.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "arts/utils/LoopUtils.h"
-#include "mlir/Pass/Pass.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(data_ptr_hoisting);
@@ -46,7 +48,7 @@ using namespace mlir::arts::data_ptr_hoisting;
 namespace {
 
 struct DataPtrHoistingPass
-    : public impl::DataPtrHoistingBase<DataPtrHoistingPass> {
+    : public arts::impl::DataPtrHoistingBase<DataPtrHoistingPass> {
   void runOnOperation() override;
 };
 

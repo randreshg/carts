@@ -14,7 +14,6 @@
 
 /// Dialects
 #define GEN_PASS_DEF_EDTPTRREMATERIALIZATION
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/IR/BuiltinOps.h"

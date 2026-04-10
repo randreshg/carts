@@ -19,7 +19,6 @@
 
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_PARALLELEDTLOWERING
-#include "arts/Dialect.h"
 #include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"

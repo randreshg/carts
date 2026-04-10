@@ -21,7 +21,6 @@
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtNode.h"
 #define GEN_PASS_DEF_CONCURRENCY
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
@@ -34,8 +33,7 @@
 #include "llvm/ADT/Statistic.h"
 ARTS_DEBUG_SETUP(concurrency)
 
-using mlir::arts::AnalysisDependencyInfo;
-using mlir::arts::AnalysisKind;
+using namespace mlir::arts;
 
 static const AnalysisKind kConcurrency_reads[] = {
     AnalysisKind::DbAnalysis, AnalysisKind::EdtAnalysis,
@@ -62,7 +60,6 @@ static llvm::Statistic numDbModesAdjusted{
     "Number of DB modes adjusted for concurrency"};
 
 using namespace mlir;
-using namespace mlir::arts;
 
 ///==========================================================================///
 /// ConcurrencyPass

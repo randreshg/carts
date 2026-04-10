@@ -28,8 +28,7 @@ ARTS_DEBUG_SETUP(db_utils);
 
 using namespace mlir;
 using namespace mlir::arts;
-using mlir::arts::rt::DbGepOp;
-using mlir::arts::rt::DepDbAcquireOp;
+using namespace mlir::arts::rt;
 
 namespace {
 
@@ -209,14 +208,6 @@ static void appendDynamicSubviewOffsets(memref::SubViewOp subview,
   for (OpFoldResult off : subview.getMixedOffsets())
     if (auto v = dyn_cast<Value>(off))
       chain.push_back(v);
-}
-
-static bool dependsOnOffset(Value v, Value offset) {
-  if (!v || !offset)
-    return false;
-  Value vStripped = ValueAnalysis::stripNumericCasts(v);
-  Value oStripped = ValueAnalysis::stripNumericCasts(offset);
-  return ValueAnalysis::dependsOn(vStripped, oStripped);
 }
 
 struct RootAccessSummary {
@@ -683,7 +674,7 @@ Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
   if (!sizeHint || depth > 6)
     return Value();
 
-  if (!offsetHint || !dependsOnOffset(sizeHint, offsetHint))
+  if (!offsetHint || !ValueAnalysis::dependsOn(sizeHint, offsetHint))
     return sizeHint;
 
   Operation *defOp = sizeHint.getDefiningOp();
@@ -693,8 +684,8 @@ Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
   if (auto minOp = dyn_cast<arith::MinUIOp>(defOp)) {
     Value lhs = minOp.getLhs();
     Value rhs = minOp.getRhs();
-    bool lhsDep = dependsOnOffset(lhs, offsetHint);
-    bool rhsDep = dependsOnOffset(rhs, offsetHint);
+    bool lhsDep = ValueAnalysis::dependsOn(lhs, offsetHint);
+    bool rhsDep = ValueAnalysis::dependsOn(rhs, offsetHint);
     if (lhsDep && !rhsDep)
       return extractBaseBlockSizeCandidate(offsetHint, rhs, depth + 1);
     if (rhsDep && !lhsDep)
@@ -707,8 +698,8 @@ Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
   if (auto minOp = dyn_cast<arith::MinSIOp>(defOp)) {
     Value lhs = minOp.getLhs();
     Value rhs = minOp.getRhs();
-    bool lhsDep = dependsOnOffset(lhs, offsetHint);
-    bool rhsDep = dependsOnOffset(rhs, offsetHint);
+    bool lhsDep = ValueAnalysis::dependsOn(lhs, offsetHint);
+    bool rhsDep = ValueAnalysis::dependsOn(rhs, offsetHint);
     if (lhsDep && !rhsDep)
       return extractBaseBlockSizeCandidate(offsetHint, rhs, depth + 1);
     if (rhsDep && !lhsDep)
@@ -721,8 +712,8 @@ Value DbUtils::extractBaseBlockSizeCandidate(Value offsetHint, Value sizeHint,
   if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
     Value tVal = selectOp.getTrueValue();
     Value fVal = selectOp.getFalseValue();
-    bool tDep = dependsOnOffset(tVal, offsetHint);
-    bool fDep = dependsOnOffset(fVal, offsetHint);
+    bool tDep = ValueAnalysis::dependsOn(tVal, offsetHint);
+    bool fDep = ValueAnalysis::dependsOn(fVal, offsetHint);
     if (tDep && !fDep)
       return extractBaseBlockSizeCandidate(offsetHint, fVal, depth + 1);
     if (fDep && !tDep)

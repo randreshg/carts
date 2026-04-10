@@ -115,12 +115,6 @@ static cl::opt<std::string> MetadataFile("metadata-file",
                                          cl::value_desc("filename"),
                                          cl::init(kDefaultMetadataFile));
 
-/// Shorthand for metadata export in carts_cli.py / benchmark scripts.
-/// Equivalent to --pipeline=collect-metadata.
-static cl::opt<bool> CollectMetadataFlag(
-    "collect-metadata",
-    cl::desc("Collect and export metadata, then stop the pipeline"),
-    cl::init(false));
 
 static cl::opt<uint64_t>
     ArtsIdStride("arts-id-stride",
@@ -132,11 +126,6 @@ static cl::opt<bool>
              cl::desc("Export diagnostic information about compilation"),
              cl::init(false));
 
-static cl::opt<bool> VerifyMetadataIntegrityInput(
-    "verify-metadata-integrity",
-    cl::desc("Run metadata integrity verification on the current input module "
-             "and stop"),
-    cl::init(false));
 
 static cl::opt<std::string> DiagnoseOutput(
     "diagnose-output", cl::desc("Output file for diagnostic JSON export"),
@@ -213,7 +202,6 @@ static cl::opt<bool> EpochFinishContinuation(
 ///===----------------------------------------------------------------------===///
 enum class StageId {
   RaiseMemRefDimensionality,
-  CollectMetadata,
   InitialCleanup,
   OpenMPToArts,
   PatternPipeline,
@@ -296,15 +284,6 @@ static const std::array<llvm::StringLiteral, 8>
                                         "HandleDeps",
                                         "DeadCodeElimination",
                                         "CSE"};
-static const std::array<llvm::StringLiteral, 8> kCollectMetadataPasses = {
-    "replaceAffineCFG(func)",
-    "RaiseSCFToAffine(func)",
-    "replaceAffineCFG(func)",
-    "RaiseSCFToAffine(func)",
-    "CSE(func)",
-    "CollectMetadata",
-    "VerifyMetadata (diagnose mode)",
-    "VerifyMetadataIntegrity (diagnose mode)"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
 static const std::array<llvm::StringLiteral, 5> kOpenMPToArtsPasses = {
@@ -694,30 +673,6 @@ void buildRaiseMemRefDimensionalityPipeline(PassManager &pm) {
   pm.addPass(createCSEPass());
 }
 
-/// Metadata collection pass.
-void buildCollectMetadataPipeline(PassManager &pm,
-                                  arts::AnalysisManager *AM = nullptr,
-                                  bool shouldExport = false,
-                                  StringRef metadataFile = "") {
-  std::string actualMetadataFile =
-      metadataFile.empty() ? MetadataFile.getValue() : metadataFile.str();
-  /// Raise to affine first
-  OpPassManager &optPM = pm.nest<func::FuncOp>();
-  optPM.addPass(polygeist::replaceAffineCFGPass());
-  optPM.addPass(polygeist::createRaiseSCFToAffinePass());
-  optPM.addPass(polygeist::replaceAffineCFGPass());
-  optPM.addPass(polygeist::createRaiseSCFToAffinePass());
-  optPM.addPass(createCSEPass());
-  if (shouldExport)
-    pm.addPass(arts::createCollectMetadataPass(true, actualMetadataFile));
-  else
-    pm.addPass(arts::createCollectMetadataPass());
-  if (AM) {
-    pm.addPass(arts::createVerifyMetadataPass(AM));
-    pm.addPass(arts::createVerifyMetadataIntegrityPass(AM));
-  }
-}
-
 /// Initial cleanup and simplification passes.
 void buildInitialCleanupPipeline(OpPassManager &optPM) {
   optPM.addPass(createLowerAffinePass());
@@ -996,8 +951,6 @@ isStageEnabledWhenEmitLLVMRequested(const StageExecutionContext &ctx) {
 // --- Pipeline dependency declarations ---
 static constexpr llvm::StringLiteral kDepRaiseMemref[] = {
     "raise-memref-dimensionality"};
-static constexpr llvm::StringLiteral kDepCollectMetadata[] = {
-    "collect-metadata"};
 static constexpr llvm::StringLiteral kDepInitialCleanup[] = {"initial-cleanup"};
 static constexpr llvm::StringLiteral kDepOpenMPToArts[] = {"openmp-to-arts"};
 static constexpr llvm::StringLiteral kDepCreateDbs[] = {"create-dbs"};
@@ -1012,7 +965,7 @@ static constexpr llvm::StringLiteral kDepPreLowering[] = {
 static constexpr llvm::StringLiteral kDepArtsToLLVM[] = {"pre-lowering"};
 
 static ArrayRef<StageDescriptor> getStageRegistry() {
-  static const std::array<StageDescriptor, 20> kStageRegistry = {{
+  static const std::array<StageDescriptor, 19> kStageRegistry = {{
       {StageId::RaiseMemRefDimensionality, "raise-memref-dimensionality",
        llvm::ArrayRef<llvm::StringLiteral>(), StageKind::Core, true, true,
        false, "Error when raising memref dimensionality",
@@ -1022,15 +975,6 @@ static ArrayRef<StageDescriptor> getStageRegistry() {
        },
        isStageEnabledAlways,
        /*dependsOn=*/llvm::ArrayRef<llvm::StringLiteral>()},
-      {StageId::CollectMetadata, "collect-metadata",
-       llvm::ArrayRef<llvm::StringLiteral>(), StageKind::Core, true, true,
-       false, "Error when collecting metadata", kCollectMetadataPasses,
-       [](PassManager &pm, const StageExecutionContext &ctx) {
-         buildCollectMetadataPipeline(pm, ctx.analysisManager,
-                                      ctx.stopAfterStage);
-       },
-       isStageEnabledAlways,
-       /*dependsOn=*/kDepRaiseMemref},
       {StageId::InitialCleanup, "initial-cleanup",
        llvm::ArrayRef<llvm::StringLiteral>(), StageKind::Core, true, true,
        false, "Error simplifying the IR", kInitialCleanupPasses,
@@ -1039,7 +983,7 @@ static ArrayRef<StageDescriptor> getStageRegistry() {
          buildInitialCleanupPipeline(optPM);
        },
        isStageEnabledAlways,
-       /*dependsOn=*/kDepCollectMetadata},
+       /*dependsOn=*/kDepRaiseMemref},
       {StageId::OpenMPToArts, "openmp-to-arts",
        llvm::ArrayRef<llvm::StringLiteral>(), StageKind::Core, true, true,
        false, "Error when converting OpenMP to ARTS", kOpenMPToArtsPasses,
@@ -1313,11 +1257,6 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   if (machine.getNodeCount() > 1 && !DistributedDb)
     ARTS_WARN("Multi-node execution without --distributed-db: all DBs will "
               "be created on their origin node");
-  int collectMetadataIndex =
-      stageIndex(StageId::CollectMetadata, StageKind::Core);
-  if (startIndex > collectMetadataIndex)
-    AM->syncMetadataManagerFromModule(/*allowJsonImportIfUninitialized=*/true);
-
   /// Create shared timing data for pass instrumentation.
   arts::PassTimingData timingData;
   arts::PassTimingData *timingDataPtr = PassTiming ? &timingData : nullptr;
@@ -1340,14 +1279,6 @@ buildPassManager(ModuleOp module, MLIRContext &context,
         module, context, AM.get(), &machine, stopAfterStage, Opt, EmitLLVM};
     stage.build(pm, stageContext);
     auto result = pm.run(module);
-    if (succeeded(result)) {
-      /// Keep the shared metadata registry aligned with the current IR between
-      /// stage boundaries. CollectMetadata builds its own metadata manager, and
-      /// generic canonicalization passes may erase or replace ops without
-      /// updating the cached registry.
-      AM->syncMetadataManagerFromModule(
-          /*allowJsonImportIfUninitialized=*/false);
-    }
 
     if (hooks && hooks->afterStep)
       hooks->afterStep(stage.id, result);
@@ -1445,8 +1376,6 @@ int main(int argc, char **argv) {
   }
 
   std::string effectivePipelineToken = Pipeline;
-  if (CollectMetadataFlag)
-    effectivePipelineToken = std::string("collect-metadata");
 
   FailureOr<std::optional<StageId>> resolvedStopAt =
       resolvePipelineStopToken(effectivePipelineToken);
@@ -1478,25 +1407,6 @@ int main(int argc, char **argv) {
   /// Set up optional pipeline hooks for diagnostics.
   PipelineHooks hooks;
   PipelineHooks *hooksPtr = nullptr;
-  if (VerifyMetadataIntegrityInput) {
-    auto verifyAM = std::make_unique<arts::AnalysisManager>(
-        module.get(), ArtsConfig, MetadataFile);
-    PassManager verifyPM(&context);
-    if (failed(configurePassManager(verifyPM))) {
-      ARTS_ERROR("Error configuring pass manager for metadata integrity "
-                 "verification");
-      return 1;
-    }
-    verifyPM.addPass(
-        arts::createVerifyMetadataIntegrityPass(/*AM=*/verifyAM.get(),
-                                                /*failOnError=*/true));
-    if (failed(verifyPM.run(module.get()))) {
-      ARTS_ERROR("Metadata integrity verification failed");
-      return 1;
-    }
-    return 0;
-  }
-
   if (Diagnose) {
     hooks.afterStep = [](StageId stage, LogicalResult result) {
       ARTS_INFO("Pipeline " << stageName(stage)

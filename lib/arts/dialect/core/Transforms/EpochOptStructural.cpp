@@ -170,26 +170,22 @@ static bool isRankZeroLocalAlloca(Value value) {
   return alloca && alloca.getType().getRank() == 0;
 }
 
-static bool isLoopInvariantForRepeat(Value value, Value loopIv) {
-  return value && !ValueAnalysis::dependsOn(value, loopIv);
-}
-
 static bool isAmortizableSetupOp(Operation *op, Value loopIv) {
   if (!op)
     return false;
   if (isSideEffectFreeArithmeticLikeOp(op))
     return llvm::all_of(op->getOperands(), [&](Value operand) {
-      return isLoopInvariantForRepeat(operand, loopIv);
+      return !ValueAnalysis::dependsOn(operand, loopIv);
     });
 
   if (auto load = dyn_cast<memref::LoadOp>(op))
     return isRankZeroLocalAlloca(load.getMemRef()) &&
-           isLoopInvariantForRepeat(load.getMemRef(), loopIv);
+           !ValueAnalysis::dependsOn(load.getMemRef(), loopIv);
 
   if (auto store = dyn_cast<memref::StoreOp>(op))
     return isRankZeroLocalAlloca(store.getMemRef()) &&
-           isLoopInvariantForRepeat(store.getMemRef(), loopIv) &&
-           isLoopInvariantForRepeat(store.getValue(), loopIv);
+           !ValueAnalysis::dependsOn(store.getMemRef(), loopIv) &&
+           !ValueAnalysis::dependsOn(store.getValue(), loopIv);
 
   return false;
 }
@@ -199,8 +195,8 @@ static bool isAmortizableTailOp(Operation *op, Value loopIv) {
     return true;
   if (auto store = dyn_cast<memref::StoreOp>(op))
     return isRankZeroLocalAlloca(store.getMemRef()) &&
-           isLoopInvariantForRepeat(store.getMemRef(), loopIv) &&
-           isLoopInvariantForRepeat(store.getValue(), loopIv);
+           !ValueAnalysis::dependsOn(store.getMemRef(), loopIv) &&
+           !ValueAnalysis::dependsOn(store.getValue(), loopIv);
   return false;
 }
 
@@ -492,7 +488,7 @@ bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp) {
     if (wrappingIf->getBlock() != loopBody ||
         epochOp->getBlock() != &wrappingIf.getThenRegion().front())
       return false;
-    if (!isLoopInvariantForRepeat(wrappingIf.getCondition(), loopIv))
+    if (ValueAnalysis::dependsOn(wrappingIf.getCondition(), loopIv))
       return false;
 
     bool seenIf = false;

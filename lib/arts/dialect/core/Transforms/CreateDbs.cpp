@@ -47,10 +47,8 @@
 #include "arts/dialect/core/Analysis/AnalysisDependencies.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_CREATEDBS
-#include "arts/Dialect.h"
 #include "arts/dialect/core/Transforms/db/DbRewriter.h"
 #include "arts/dialect/core/Transforms/db/DbTransforms.h"
 #include "arts/dialect/core/Transforms/db/block/DbBlockIndexer.h"
@@ -62,12 +60,6 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/metadata/MemrefMetadata.h"
-#include "arts/utils/metadata/Metadata.h"
-#include "mlir/Pass/Pass.h"
-#include <optional>
-
-#include "arts/passes/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -93,12 +85,10 @@
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(create_dbs);
 
-using mlir::arts::AnalysisDependencyInfo;
-using mlir::arts::AnalysisKind;
+using namespace mlir::arts;
 
 static const AnalysisKind kCreateDbs_reads[] = {AnalysisKind::DbAnalysis,
-                                                AnalysisKind::DbHeuristics,
-                                                AnalysisKind::MetadataManager};
+                                                AnalysisKind::DbHeuristics};
 [[maybe_unused]] static const AnalysisDependencyInfo kCreateDbs_deps = {
     kCreateDbs_reads, {}};
 
@@ -125,7 +115,6 @@ static llvm::Statistic numOpsRewrittenToDbViews{
     "Number of operations rewritten to access datablock-backed views"};
 
 using namespace mlir;
-using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
 /// Helper Functions
@@ -786,13 +775,8 @@ void CreateDbsPass::createDbAllocOps() {
     /// Initialize global DBs
     initializeGlobalDbIfNeeded(alloc, dbAllocOp, sizes, allocType);
 
-    /// Transfer metadata from original allocation to DbAllocOp
-    if (AM->getMetadataManager().transferMetadata(alloc, dbAllocOp)) {
-      ARTS_DEBUG(
-          "  Transferred metadata from original allocation to DbAllocOp");
-    } else {
-      ARTS_DEBUG("  No metadata found for original allocation");
-    }
+    /// Copy ARTS ID from original allocation to DbAllocOp
+    copyArtsMetadataAttrs(alloc, dbAllocOp.getOperation());
 
     /// Create coarse rewrite plan - DbPartitioning will refine based on hint
     DbRewritePlan plan(PartitionMode::coarse);

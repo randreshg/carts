@@ -8,7 +8,6 @@
 #define ARTS_DIALECT_CORE_ANALYSIS_LOOP_LOOPNODE_H
 
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -24,7 +23,7 @@ namespace arts {
 ///==========================================================================///
 class LoopAnalysis;
 struct DbAcquirePartitionFacts;
-class LoopNode : public LoopMetadata {
+class LoopNode {
 public:
   /// Constructor: automatically imports metadata from operation
   explicit LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis = nullptr);
@@ -48,8 +47,6 @@ public:
   bool dependsOnInductionVar(Value v);
   bool dependsOnInductionVarNormalized(Value v);
   bool isValueLoopInvariant(Value v);
-  bool hasExplicitLoopMetadata() const;
-  bool isParallelizableByMetadata() const;
   static bool dependsOnLoopInit(Value value, Value base);
   static bool dependsOnLoopInitNormalized(Value value, Value base);
 

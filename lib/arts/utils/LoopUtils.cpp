@@ -339,10 +339,5 @@ bool collectSpatialNestIvs(ForOp artsFor, SmallVector<Value, 4> &ivs,
   return !ivs.empty() && spatialBody;
 }
 
-void clearReductionLoopFacts(LoopMetadata &metadata) {
-  metadata.hasReductions = false;
-  metadata.reductionKinds.clear();
-}
-
 } // namespace arts
 } // namespace mlir

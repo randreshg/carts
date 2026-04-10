@@ -17,18 +17,6 @@ class Operation;
 
 namespace arts {
 
-class LoopNode;
-
-///===----------------------------------------------------------------------===///
-/// Loop Classification Helpers
-///===----------------------------------------------------------------------===///
-
-/// Check whether a loop should be treated as sequential based on its metadata.
-/// Examines both the LoopNode (if available) and the LoopMetadataAttr on
-/// the operation for inter-iteration dependencies and the Sequential
-/// parallel classification.
-bool isSequentialLoop(ForOp forOp, LoopNode *loopNode = nullptr);
-
 /// Shared arithmetic helpers for bounded heuristic cost models.
 int64_t ceilDivPositive(int64_t num, int64_t denom);
 int64_t clampPositive(int64_t value, int64_t minValue, int64_t maxValue);

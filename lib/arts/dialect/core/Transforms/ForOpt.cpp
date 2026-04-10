@@ -16,7 +16,6 @@
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
 #define GEN_PASS_DEF_FOROPT
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"
@@ -27,8 +26,7 @@
 #include "llvm/ADT/Statistic.h"
 ARTS_DEBUG_SETUP(for_opt);
 
-using mlir::arts::AnalysisDependencyInfo;
-using mlir::arts::AnalysisKind;
+using namespace mlir::arts;
 
 static const AnalysisKind kForOpt_reads[] = {AnalysisKind::DbAnalysis,
                                              AnalysisKind::EdtHeuristics};
@@ -47,7 +45,6 @@ static llvm::Statistic numLoopsSkippedExistingHint{
     "Number of loops skipped because they already had a hint"};
 
 using namespace mlir;
-using namespace mlir::arts;
 
 namespace {
 

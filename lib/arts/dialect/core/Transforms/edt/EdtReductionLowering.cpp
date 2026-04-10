@@ -23,7 +23,6 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -90,9 +89,8 @@ void mlir::arts::collectOldAccumulatorDbRefs(
 }
 
 ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
-    ArtsCodegen *AC, MetadataManager &metadataManager, ForOp forOp,
-    EdtOp parallelEdt, Location loc, bool splitMode,
-    Value workerCountOverride) {
+    ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt, Location loc,
+    bool splitMode, Value workerCountOverride) {
   ReductionLoweringInfo redInfo;
   redInfo.loopLocation = forOp.getLoc();
   redInfo.parentConcurrency = parallelEdt.getConcurrency();
@@ -271,7 +269,6 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
     } else {
       auto initLoop =
           AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers, one);
-      metadataManager.refreshMetadata(initLoop.getOperation());
       AC->setInsertionPointToStart(initLoop.getBody());
       Value workerIdx = initLoop.getInductionVar();
 
@@ -311,7 +308,6 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
 }
 
 void mlir::arts::createResultEdt(ArtsCodegen *AC,
-                                 MetadataManager &metadataManager,
                                  ReductionLoweringInfo &redInfo, Location loc) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   if (redInfo.reductionVars.empty())
@@ -440,8 +436,6 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
     } else {
       auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers,
                                                 sizeOne, ValueRange{identity});
-      metadataManager.refreshMetadata(combineLoop.getOperation());
-
       AC->setInsertionPointToStart(combineLoop.getBody());
       Value workerIdx = combineLoop.getInductionVar();
       Value accumulator = combineLoop.getRegionIterArg(0);

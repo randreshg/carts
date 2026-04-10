@@ -9,7 +9,6 @@
 #include "arts/Dialect.h"
 #include "arts/dialect/sde/IR/SdeDialect.h"
 #define GEN_PASS_DEF_VERIFYSDELOWERED
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/Pass/Pass.h"

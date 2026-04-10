@@ -63,10 +63,6 @@ struct BoundaryPeelingMatch {
   SmallVector<Operation *> preludeOps;
 };
 
-static std::optional<int64_t> getConstInt(Value value) {
-  return ValueAnalysis::getConstantIndexStripped(value);
-}
-
 static bool yieldsConstantBool(Block &block, bool expected) {
   auto yield = dyn_cast<scf::YieldOp>(block.getTerminator());
   if (!yield || yield.getNumOperands() != 1)
@@ -86,8 +82,8 @@ static bool matchEqConst(Value condition, Value value, int64_t expectedConst) {
   value = ValueAnalysis::stripNumericCasts(value);
   Value lhs = ValueAnalysis::stripNumericCasts(cmp.getLhs());
   Value rhs = ValueAnalysis::stripNumericCasts(cmp.getRhs());
-  auto lhsConst = getConstInt(lhs);
-  auto rhsConst = getConstInt(rhs);
+  auto lhsConst = ValueAnalysis::getConstantIndexStripped(lhs);
+  auto rhsConst = ValueAnalysis::getConstantIndexStripped(rhs);
   if (lhs == value && rhsConst && *rhsConst == expectedConst)
     return true;
   if (rhs == value && lhsConst && *lhsConst == expectedConst)

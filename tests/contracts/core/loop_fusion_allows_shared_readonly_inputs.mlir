@@ -37,7 +37,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vec
         %scaled = arith.mulf %val, %scale : f64
         %dst = arts.db_ref %arg1[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
         memref.store %scaled, %dst[%iv] : memref<?xf64>
-      }} {arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 1 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = true, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "stale">}
+      }}
       arts.for(%c0) to(%c16) step(%c1) {{
       ^bb0(%iv: index):
         %src = arts.db_ref %arg0[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>

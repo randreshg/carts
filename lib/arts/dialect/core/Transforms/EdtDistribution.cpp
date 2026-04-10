@@ -39,8 +39,7 @@
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_distribution);
 
-using mlir::arts::AnalysisDependencyInfo;
-using mlir::arts::AnalysisKind;
+using namespace mlir::arts;
 
 static const AnalysisKind kEdtDistribution_reads[] = {
     AnalysisKind::DbAnalysis, AnalysisKind::EdtHeuristics,
@@ -65,7 +64,6 @@ static llvm::Statistic numPlanDrivenAnnotations{
     "Number of loops annotated using structured kernel plan"};
 
 using namespace mlir;
-using namespace mlir::arts;
 
 namespace {
 

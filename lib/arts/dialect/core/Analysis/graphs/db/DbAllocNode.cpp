@@ -8,13 +8,11 @@
 #include "arts/dialect/core/Analysis/db/DbAliasAnalysis.h"
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/dialect/core/Analysis/graphs/db/DbNode.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/metadata/MemrefMetadata.h"
-#include "arts/utils/metadata/Metadata.h"
+#include "arts/utils/metadata/MetadataEnums.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include <algorithm>
@@ -59,24 +57,10 @@ collectAllAcquireNodes(const SmallVector<std::unique_ptr<DbAcquireNode>, 4>
 /// DbAllocNode
 ///===----------------------------------------------------------------------===///
 DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
-    : MemrefMetadata(op.getOperation()), dbAllocOp(op), dbFreeOp(nullptr),
-      op(op.getOperation()), analysis(analysis) {
+    : dbAllocOp(op), dbFreeOp(nullptr), op(op.getOperation()),
+      analysis(analysis) {
   assert(op && "DbAllocOp is required to create DbAllocNode");
   assert(op.getOperation() && "Operation is required to create DbAllocNode");
-
-  analysis->getAnalysisManager()
-      .getMetadataManager()
-      .getIdRegistry()
-      .getOrCreate(op.getOperation());
-
-  /// Import metadata from operation attributes, falling back to manager
-  bool hasMetadata = importFromOp();
-  if (!hasMetadata) {
-    MetadataManager &metadataManager =
-        analysis->getAnalysisManager().getMetadataManager();
-    if (metadataManager.ensureMemrefMetadata(op.getOperation()))
-      importFromOp();
-  }
 
   if (Value address = dbAllocOp.getAddress()) {
     auto &stringAnalysis = analysis->getAnalysisManager().getStringAnalysis();

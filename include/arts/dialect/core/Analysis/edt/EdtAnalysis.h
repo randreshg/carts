@@ -30,7 +30,6 @@ namespace mlir {
 namespace arts {
 
 class LoopAnalysis;
-class MetadataManager;
 
 ///==========================================================================///
 /// ReductionOp: recognized reduction operation kinds
@@ -51,11 +50,6 @@ enum class ReductionOp {
 
 class EdtAnalysis : public ArtsAnalysis {
 public:
-  struct ParallelEdtWorkSummary {
-    bool hasReductionLoop = false;
-    int64_t peakWorkPerWorker = 0;
-  };
-
   EdtAnalysis(AnalysisManager &AM);
 
   /// Build summaries for all EDTs in the module.
@@ -73,18 +67,8 @@ public:
   /// loops.
   std::optional<DbAccessPattern> getAllocAccessPattern(Operation *allocOp);
 
-  /// Return true when two EDTs share at least one common input that both only
-  /// read. This is used by fusion profitability policy, not legality.
-  bool hasSharedReadonlyInputs(EdtOp first, EdtOp second);
-
   /// Return the canonical captured-value summary for one EDT.
   const EdtCaptureSummary *getCaptureSummary(EdtOp edt);
-
-  /// Summarize the dominant loop workload inside one parallel EDT. The
-  /// returned peak work is normalized per worker so heuristics can compare
-  /// launch amortization against preserved parallel slack.
-  ParallelEdtWorkSummary summarizeParallelEdtWork(EdtOp edt,
-                                                  int64_t workerCount);
 
   /// Iterate all analyzed DB allocation access patterns.
   void forEachAllocAccessPattern(
@@ -117,7 +101,6 @@ public:
 
   /// Expose sub-analyses so that EdtNode / EdtGraph can reach them
   /// without storing a raw AnalysisManager pointer.
-  MetadataManager &getMetadataManager();
   LoopAnalysis &getLoopAnalysis();
 
   //===--------------------------------------------------------------------===//

@@ -25,15 +25,6 @@ struct RelativeOffsetRange {
   bool hasBase = false;
 };
 
-static bool matchesBaseValue(Value candidate, Value base) {
-  if (!candidate || !base)
-    return false;
-  candidate = ValueAnalysis::stripNumericCasts(candidate);
-  base = ValueAnalysis::stripNumericCasts(base);
-  return ValueAnalysis::sameValue(candidate, base) ||
-         ValueAnalysis::areValuesEquivalent(candidate, base);
-}
-
 static bool matchesBasePattern(Value value, Value loopIV, Value blockBase) {
   if (!value || !loopIV || !blockBase)
     return false;
@@ -45,8 +36,10 @@ static bool matchesBasePattern(Value value, Value loopIV, Value blockBase) {
 
   Value lhs = ValueAnalysis::stripNumericCasts(addOp.getLhs());
   Value rhs = ValueAnalysis::stripNumericCasts(addOp.getRhs());
-  return (matchesBaseValue(lhs, loopIV) && matchesBaseValue(rhs, blockBase)) ||
-         (matchesBaseValue(lhs, blockBase) && matchesBaseValue(rhs, loopIV));
+  return (ValueAnalysis::areValuesEquivalent(lhs, loopIV) &&
+          ValueAnalysis::areValuesEquivalent(rhs, blockBase)) ||
+         (ValueAnalysis::areValuesEquivalent(lhs, blockBase) &&
+          ValueAnalysis::areValuesEquivalent(rhs, loopIV));
 }
 
 static std::optional<RelativeOffsetRange> getSmallLoopOffsetRange(Value value) {
@@ -128,7 +121,8 @@ extractRelativeOffsetRange(Value value, Value loopIV, Value blockBase,
   loopIV = ValueAnalysis::stripNumericCasts(loopIV);
   blockBase = ValueAnalysis::stripNumericCasts(blockBase);
 
-  if (matchesBaseValue(value, loopIV) || matchesBaseValue(value, blockBase) ||
+  if (ValueAnalysis::areValuesEquivalent(value, loopIV) ||
+      ValueAnalysis::areValuesEquivalent(value, blockBase) ||
       matchesBasePattern(value, loopIV, blockBase))
     return RelativeOffsetRange{0, 0, /*hasBase=*/true};
 

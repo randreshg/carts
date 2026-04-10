@@ -8,7 +8,6 @@
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/dialect/core/Analysis/graphs/db/DbNode.h"
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LocationMetadata.h"
@@ -492,16 +491,8 @@ llvm::json::Value DbGraph::exportToJsonValue(bool includeAnalysis) const {
   for (const auto &kv : allocNodes) {
     DbAllocNode *allocNode = kv.second.get();
     DbAllocOp allocOp = allocNode->getDbAllocOp();
-    const MemrefMetadata &meta = *allocNode;
 
     Object db;
-
-    /// ARTS ID from operation attribute (set by DbAllocNode constructor)
-    int64_t artsId =
-        analysis->getAnalysisManager().getMetadataManager().getIdRegistry().get(
-            allocNode->getOp());
-    if (artsId != 0)
-      db["arts_id"] = artsId;
 
     /// Partitioning mode
     PartitionMode partitionMode =
@@ -590,14 +581,14 @@ llvm::json::Value DbGraph::exportToJsonValue(bool includeAnalysis) const {
     /// String datablock flag
     staticAnalysis["is_string_backed"] = allocNode->isStringDatablock();
 
-    /// Memory footprint from MemrefMetadata
-    if (meta.memoryFootprint.has_value())
-      staticAnalysis["memory_footprint_bytes"] = *meta.memoryFootprint;
+    /// Memory footprint
+    if (allocNode->memoryFootprint.has_value())
+      staticAnalysis["memory_footprint_bytes"] = *allocNode->memoryFootprint;
 
-    /// Access pattern from MemrefMetadata
-    if (meta.dominantAccessPattern.has_value()) {
+    /// Access pattern
+    if (allocNode->dominantAccessPattern.has_value()) {
       std::string pattern;
-      switch (*meta.dominantAccessPattern) {
+      switch (*allocNode->dominantAccessPattern) {
       case AccessPatternType::Unknown:
         pattern = "unknown";
         break;
@@ -634,14 +625,6 @@ llvm::json::Value DbGraph::exportToJsonValue(bool includeAnalysis) const {
         return;
 
       Object acq;
-
-      /// ARTS ID from operation attribute
-      int64_t acqArtsId = analysis->getAnalysisManager()
-                              .getMetadataManager()
-                              .getIdRegistry()
-                              .get(acqNode->getOp());
-      if (acqArtsId != 0)
-        acq["arts_id"] = acqArtsId;
 
       /// Access mode
       ArtsMode acqMode = acqOp.getMode();

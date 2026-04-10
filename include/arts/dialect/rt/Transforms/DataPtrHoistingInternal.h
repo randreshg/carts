@@ -96,10 +96,6 @@ bool isDepsPtrLoad(LLVM::LoadOp loadOp);
 /// Check if an LLVM load is loading a datablock pointer from a db_gep.
 bool isDbPtrLoad(LLVM::LoadOp loadOp);
 
-bool isMinusOneConstant(Value value);
-
-bool isZeroIndexConstant(Value value);
-
 bool matchGreaterThanConstIcmp(Value cond, Value value, int64_t threshold);
 
 bool hasDominatingBlockSizeGuard(scf::ForOp loop, Value blockSize,

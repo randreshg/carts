@@ -9,10 +9,9 @@
 #include "arts/Dialect.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "arts/utils/metadata/IdRegistry.h"
 #include "arts/utils/metadata/LocationMetadata.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/IR/BuiltinAttributes.h"
 
 ARTS_DEBUG_SETUP(db_heuristics)
@@ -33,8 +32,8 @@ static std::string extractHeuristicId(llvm::StringRef rationale) {
 
 } // namespace
 
-DbHeuristics::DbHeuristics(const AbstractMachine &machine, IdRegistry &registry)
-    : machine(machine), idRegistry(registry) {}
+DbHeuristics::DbHeuristics(const AbstractMachine &machine)
+    : machine(machine) {}
 
 bool DbHeuristics::isSingleNode() const { return machine.isSingleNode(); }
 
@@ -43,7 +42,7 @@ bool DbHeuristics::isValid() const { return machine.isValid(); }
 void DbHeuristics::recordDecision(llvm::StringRef heuristic, bool applied,
                                   llvm::StringRef rationale, Operation *op,
                                   const llvm::StringMap<int64_t> &inputs) {
-  int64_t artsId = op ? idRegistry.getOrCreate(op) : 0;
+  int64_t artsId = op ? getArtsId(op) : 0;
   int64_t allocId = 0;
   SmallVector<int64_t> affectedDbIds;
   std::string sourceLocation;
@@ -56,7 +55,7 @@ void DbHeuristics::recordDecision(llvm::StringRef heuristic, bool applied,
     if (auto acquireOp = dyn_cast<DbAcquireOp>(op)) {
       if (Operation *allocOp =
               DbUtils::getUnderlyingDbAlloc(acquireOp.getSourcePtr())) {
-        allocId = idRegistry.getOrCreate(allocOp);
+        allocId = getArtsId(allocOp);
         ValueRange offsets = acquireOp.getOffsets();
         ValueRange sizes = acquireOp.getSizes();
 

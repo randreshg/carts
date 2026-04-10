@@ -5,5 +5,5 @@
 // halo/ownership contract. The stencil strip coarsening policy must therefore
 // leave full worker parallelism intact and avoid forcing a block-size hint.
 // CHECK: arts.edt <parallel>
-// CHECK: depPattern = #arts.dep_pattern<stencil>
+// CHECK: depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK-NOT: arts.partition_hint = {blockSize =

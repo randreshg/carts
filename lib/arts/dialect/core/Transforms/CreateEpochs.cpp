@@ -28,7 +28,6 @@
 /// Arts
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_CREATEEPOCHS
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/EdtUtils.h"

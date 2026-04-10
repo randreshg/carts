@@ -5,7 +5,7 @@
 // `<out>` mode and preserve the single-block owned slice instead of widening
 // them back to `<inout>`.
 
-// CHECK: %[[OUT0_GUID:[^,]+]], %[[OUT0_PTR:[^ ]+]] = arts.db_alloc[<inout>, <heap>, <write>, <block>
-// CHECK: %[[OUT1_GUID:[^,]+]], %[[OUT1_PTR:[^ ]+]] = arts.db_alloc[<inout>, <heap>, <write>, <block>
+// CHECK: %[[OUT0_GUID:[^,]+]], %[[OUT0_PTR:[^ ]+]] = arts.db_alloc[<inout>, <heap>, <write>, <coarse>
+// CHECK: %[[OUT1_GUID:[^,]+]], %[[OUT1_PTR:[^ ]+]] = arts.db_alloc[<inout>, <heap>, <write>, <coarse>
 // CHECK-DAG: arts.db_acquire[<out>] (%[[OUT0_GUID]] : memref<?xi64>, %[[OUT0_PTR]] : memref<?xmemref<?xf64>>) partitioning(<block>, offsets[{{.*}}], sizes[{{.*}}]), offsets[{{.*}}], sizes[%c1] {{.*}}stencil_owner_dims = [0]
 // CHECK-DAG: arts.db_acquire[<out>] (%[[OUT1_GUID]] : memref<?xi64>, %[[OUT1_PTR]] : memref<?xmemref<?xf64>>) partitioning(<block>, offsets[{{.*}}], sizes[{{.*}}]), offsets[{{.*}}], sizes[%c1] {{.*}}stencil_owner_dims = [0]

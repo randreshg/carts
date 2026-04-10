@@ -98,7 +98,7 @@ static void initializeDimFacts(DbAcquireNode *node,
   unsigned rank = getPartitionRank(node);
   facts.dims.reserve(rank);
 
-  SmallVector<MemrefMetadata::DimAccessPatternType> allocDimPatterns;
+  SmallVector<DimAccessPatternType> allocDimPatterns;
   if (DbAllocNode *allocNode = node->getRootAlloc())
     allocDimPatterns = allocNode->dimAccessPatterns;
 

@@ -36,7 +36,6 @@
 ///==========================================================================///
 
 #define GEN_PASS_DEF_ALIASSCOPEGEN
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"

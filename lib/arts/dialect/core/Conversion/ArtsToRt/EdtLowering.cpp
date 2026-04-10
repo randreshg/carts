@@ -25,30 +25,26 @@
 /// pass errors out otherwise to avoid bypassing runtime dependency semantics.
 ///==========================================================================///
 
-#include "arts/Dialect.h"
+#include "arts/dialect/rt/Transforms/Passes.h"
+namespace mlir::arts {
+#define GEN_PASS_DEF_EDTLOWERING
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
+} // namespace mlir::arts
 #include "arts/codegen/Codegen.h"
 #include "arts/dialect/core/Analysis/AnalysisDependencies.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/utils/IdRegistry.h"
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
-#include "arts/dialect/rt/IR/RtDialect.h"
-#include "arts/utils/ValueAnalysis.h"
-#define GEN_PASS_DEF_EDTLOWERING
-#include "arts/Dialect.h"
 #include "arts/dialect/core/Conversion/ArtsToRt/EdtLoweringInternal.h"
-#include "arts/dialect/rt/Transforms/Passes.h.inc"
+#include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/passes/Passes.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/metadata/IdRegistry.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
@@ -56,10 +52,10 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "polygeist/Ops.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -71,7 +67,6 @@
 #include <memory>
 
 #include "arts/utils/Debug.h"
-#include "polygeist/Ops.h"
 ARTS_DEBUG_SETUP(edt_lowering);
 
 #include "llvm/ADT/Statistic.h"
@@ -96,17 +91,7 @@ using AttrNames::Operation::ControlDep;
 using AttrNames::Operation::CPSChainId;
 using AttrNames::Operation::CPSForwardDeps;
 using AttrNames::Operation::CPSParamPerm;
-using mlir::arts::rt::DbGepOp;
-using mlir::arts::rt::DepAccessMode;
-using mlir::arts::rt::DepAccessModeAttr;
-using mlir::arts::rt::DepBindOp;
-using mlir::arts::rt::DepDbAcquireOp;
-using mlir::arts::rt::DepGepOp;
-using mlir::arts::rt::EdtCreateOp;
-using mlir::arts::rt::EdtParamPackOp;
-using mlir::arts::rt::EdtParamUnpackOp;
-using mlir::arts::rt::RecordDepOp;
-using mlir::arts::rt::StatePackOp;
+using namespace mlir::arts::rt;
 
 static const AnalysisKind kEdtLowering_invalidates[] = {
     AnalysisKind::DbAnalysis, AnalysisKind::EdtAnalysis};
@@ -194,21 +179,15 @@ trySynthesizeElementSlice(ArtsCodegen *AC, DbAcquireOp acquire, Location loc) {
       std::move(elementOffsets), std::move(elementSizes)};
 }
 
-static bool hasSingleDepWindow(ArrayRef<Value> sizes) {
-  if (sizes.empty())
-    return true;
-  return llvm::all_of(sizes, ValueAnalysis::isOneLikeValue);
-}
-
 ///===----------------------------------------------------------------------===///
 /// EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
-struct EdtLoweringPass : public impl::EdtLoweringBase<EdtLoweringPass> {
+struct EdtLoweringPass : public arts::impl::EdtLoweringBase<EdtLoweringPass> {
   explicit EdtLoweringPass(mlir::arts::AnalysisManager *AM = nullptr,
                            uint64_t idStride = IdRegistry::DefaultStride)
       : idStride(idStride), AM(AM) {}
   EdtLoweringPass(const EdtLoweringPass &other)
-      : impl::EdtLoweringBase<EdtLoweringPass>(other), idStride(other.idStride),
+      : arts::impl::EdtLoweringBase<EdtLoweringPass>(other), idStride(other.idStride),
         functionCounter(other.functionCounter), module(other.module),
         AM(other.AM), AC(other.AC), idRegistry(other.idRegistry) {}
   void runOnOperation() override;
@@ -1391,7 +1370,9 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     const bool hasDbGepUsers = llvm::any_of(
         users, [](Operation *op) { return isa<arts::DbGepOp>(op); });
     const bool useInvariantSingleDepView = indicesAlreadySliceRelative &&
-                                           hasSingleDepWindow(depSizes) &&
+                                           (depSizes.empty() ||
+                                            llvm::all_of(depSizes,
+                                                         ValueAnalysis::isOneLikeValue)) &&
                                            !hasDbGepUsers;
 
     const bool accessIndicesAlreadySliceRelative =

@@ -7,7 +7,6 @@
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/graphs/db/DbNode.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
@@ -124,55 +123,21 @@ std::optional<int64_t> LoopAnalysis::getStaticTripCount(Operation *loopOp) {
   if (!loopOp || !isLoopOperation(loopOp))
     return std::nullopt;
 
-  auto getTripCountFromMetadata = [&](LoopNode *loopNode) {
-    if (loopNode && loopNode->tripCount && *loopNode->tripCount > 0)
-      return std::optional<int64_t>(*loopNode->tripCount);
-
-    if (auto artsFor = dyn_cast<arts::ForOp>(loopOp)) {
-      if (auto loopAttr = artsFor->getAttrOfType<LoopMetadataAttr>(
-              AttrNames::LoopMetadata::Name)) {
-        if (auto tripAttr = loopAttr.getTripCount()) {
-          int64_t tc = tripAttr.getInt();
-          if (tc > 0)
-            return std::optional<int64_t>(tc);
-        }
+  if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp)) {
+    if (affineFor.hasConstantBounds()) {
+      int64_t lb = affineFor.getConstantLowerBound();
+      int64_t ub = affineFor.getConstantUpperBound();
+      int64_t step = affineFor.getStepAsInt();
+      if (step > 0) {
+        int64_t span = ub - lb;
+        if (span <= 0)
+          return 0;
+        return (span + step - 1) / step;
       }
     }
-
-    return std::optional<int64_t>{};
-  };
-  auto getTripCountFromConstantBounds = [&]() -> std::optional<int64_t> {
-    if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp)) {
-      if (affineFor.hasConstantBounds()) {
-        int64_t lb = affineFor.getConstantLowerBound();
-        int64_t ub = affineFor.getConstantUpperBound();
-        int64_t step = affineFor.getStepAsInt();
-        if (step > 0) {
-          int64_t span = ub - lb;
-          if (span <= 0)
-            return 0;
-          return (span + step - 1) / step;
-        }
-      }
-      return std::nullopt;
-    }
-    return arts::getStaticTripCount(loopOp);
-  };
-
-  LoopNode *loopNode = getLoopNode(loopOp);
-  std::optional<int64_t> constantTripCount = getTripCountFromConstantBounds();
-  std::optional<int64_t> metadataTripCount = getTripCountFromMetadata(loopNode);
-
-  if (constantTripCount) {
-    if (metadataTripCount && *metadataTripCount != *constantTripCount) {
-      ARTS_DEBUG("Preferring direct static trip count "
-                 << *constantTripCount << " over metadata "
-                 << *metadataTripCount << " for " << loopOp->getName());
-    }
-    return constantTripCount;
+    return std::nullopt;
   }
-
-  return metadataTripCount;
+  return arts::getStaticTripCount(loopOp);
 }
 
 std::optional<int64_t>

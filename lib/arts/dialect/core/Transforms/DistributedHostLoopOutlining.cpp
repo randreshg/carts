@@ -12,17 +12,14 @@
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/heuristics/DistributionHeuristics.h"
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
 #include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_DISTRIBUTEDHOSTLOOPOUTLINING
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Pass/Pass.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -43,21 +40,12 @@ using namespace mlir;
 using namespace mlir::arts;
 
 static const AnalysisKind kDistributedHostLoopOutlining_reads[] = {
-    AnalysisKind::AbstractMachine, AnalysisKind::EdtHeuristics,
-    AnalysisKind::LoopAnalysis, AnalysisKind::MetadataManager};
+    AnalysisKind::AbstractMachine, AnalysisKind::EdtHeuristics};
 [[maybe_unused]] static const AnalysisDependencyInfo
     kDistributedHostLoopOutlining_deps = {kDistributedHostLoopOutlining_reads,
                                           {}};
 
 namespace {
-
-static bool hasSafeLoopMetadata(scf::ForOp loop, LoopAnalysis *loopAnalysis) {
-  if (!loopAnalysis)
-    return true;
-  if (LoopNode *loopNode = loopAnalysis->getOrCreateLoopNode(loop))
-    return loopNode->isParallelizableByMetadata();
-  return true;
-}
 
 static bool hasNestedIterArgLoops(scf::ForOp loop) {
   bool hasIterArgs = false;
@@ -218,7 +206,6 @@ static bool hasAlignedInternodeForUseAfter(scf::ForOp loop,
 }
 
 static bool isEligibleDistributedHostLoop(scf::ForOp loop,
-                                          LoopAnalysis *loopAnalysis,
                                           const AbstractMachine *machine) {
   if (!loop)
     return false;
@@ -233,11 +220,6 @@ static bool isEligibleDistributedHostLoop(scf::ForOp loop,
 
   if (!loop.getInitArgs().empty()) {
     ARTS_DEBUG("Skip loop (iter_args unsupported): " << loop);
-    return false;
-  }
-
-  if (!hasSafeLoopMetadata(loop, loopAnalysis)) {
-    ARTS_DEBUG("Skip loop (metadata says non-parallelizable): " << loop);
     return false;
   }
 
@@ -314,8 +296,7 @@ static void applyMachineWorkerTopology(EdtOp outlinedEdt,
 }
 
 static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
-                        const EdtHeuristics *heuristics,
-                        MetadataManager &metadataManager) {
+                        const EdtHeuristics *heuristics) {
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
 
@@ -346,7 +327,7 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
                           ValueRange{loop.getUpperBound()},
                           ValueRange{loop.getStep()}, schedAttr, ValueRange{});
 
-  metadataManager.rewriteMetadata(loop, outlinedFor);
+  copyArtsMetadataAttrs(loop.getOperation(), outlinedFor.getOperation());
   cloneScfLoopBodyIntoArtsFor(loop, outlinedFor, epochBuilder);
 
   epochBuilder.setInsertionPointToEnd(&edtBody);
@@ -369,12 +350,8 @@ struct DistributedHostLoopOutliningPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    auto &loopAnalysis = AM->getLoopAnalysis();
-    loopAnalysis.invalidate();
     auto &edtHeuristics = AM->getEdtHeuristics();
     const auto &machine = AM->getAbstractMachine();
-    auto &metadataManager = AM->getMetadataManager();
-
     SmallVector<scf::ForOp> candidates;
     module.walk([&](func::FuncOp funcOp) {
       if (funcOp.isDeclaration())
@@ -394,7 +371,7 @@ struct DistributedHostLoopOutliningPass
           ARTS_DEBUG("Skip loop (function has DbControlOps): " << loop);
           return;
         }
-        if (isEligibleDistributedHostLoop(loop, &loopAnalysis, &machine))
+        if (isEligibleDistributedHostLoop(loop, &machine))
           candidates.push_back(loop);
       });
     });
@@ -404,7 +381,7 @@ struct DistributedHostLoopOutliningPass
     for (scf::ForOp loop : candidates) {
       if (!loop || !loop->getBlock())
         continue;
-      outlineLoop(loop, &machine, &edtHeuristics, metadataManager);
+      outlineLoop(loop, &machine, &edtHeuristics);
       ++numConverted;
     }
 

@@ -18,8 +18,7 @@
 
 ARTS_DEBUG_SETUP(epoch_opt);
 
-using mlir::arts::AnalysisDependencyInfo;
-using mlir::arts::AnalysisKind;
+using namespace mlir::arts;
 
 static const AnalysisKind kEpochOpt_reads[] = {AnalysisKind::EpochAnalysis};
 static const AnalysisKind kEpochOpt_invalidates[] = {
@@ -30,7 +29,6 @@ static const AnalysisKind kEpochOpt_invalidates[] = {
     kEpochOpt_reads, kEpochOpt_invalidates};
 
 using namespace mlir;
-using namespace mlir::arts;
 using namespace mlir::arts::epoch_opt;
 
 namespace {

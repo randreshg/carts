@@ -18,7 +18,6 @@
 
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_CONTRACTVALIDATION
-#include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/db/OwnershipProof.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"

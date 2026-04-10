@@ -8,7 +8,6 @@
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/ValueAnalysis.h"
@@ -85,14 +84,7 @@ static Operation *getSingleDirectNestedLoop(Operation *loopOp) {
 }
 
 LoopNode::LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis)
-    : LoopMetadata(loopOp), loopOp(loopOp), loopAnalysis(loopAnalysis) {
-  bool hasMetadata = importFromOp();
-  if (!hasMetadata && loopAnalysis) {
-    auto &analysisManager = loopAnalysis->getAnalysisManager();
-    auto &metadataManager = analysisManager.getMetadataManager();
-    if (metadataManager.ensureLoopMetadata(loopOp))
-      importFromOp();
-  }
+    : loopOp(loopOp), loopAnalysis(loopAnalysis) {
   hierId = "loop@" + std::to_string(reinterpret_cast<uintptr_t>(loopOp));
 }
 
@@ -104,12 +96,6 @@ void LoopNode::print(llvm::raw_ostream &os) const {
       .Case<arts::ForOp>([&](auto) { os << " arts.for"; })
       .Case<scf::ParallelOp>([&](auto) { os << " scf.parallel"; })
       .Case<scf::WhileOp>([&](auto) { os << " scf.while"; });
-
-  if (tripCount.has_value())
-    os << " trip=" << tripCount.value();
-  if (nestingLevel.has_value())
-    os << " depth=" << nestingLevel.value();
-  os << " parallel=" << (potentiallyParallel ? "yes" : "no");
   os << "\n";
 }
 
@@ -172,31 +158,6 @@ bool LoopNode::dependsOnInductionVarNormalized(Value v) {
   return dependsOnInductionVar(ValueAnalysis::stripNumericCasts(v));
 }
 
-bool LoopNode::hasExplicitLoopMetadata() const {
-  return loopOp && loopOp->hasAttr(AttrNames::LoopMetadata::Name);
-}
-
-bool LoopNode::isParallelizableByMetadata() const {
-  /// No explicit metadata means unknown. Let callers apply structural checks.
-  if (!hasExplicitLoopMetadata())
-    return true;
-
-  if (!potentiallyParallel)
-    return false;
-
-  if (hasInterIterationDeps && hasInterIterationDeps.value())
-    return false;
-
-  if (hasReductions)
-    return false;
-
-  if (parallelClassification &&
-      *parallelClassification ==
-          LoopMetadata::ParallelClassification::Sequential)
-    return false;
-
-  return true;
-}
 
 static bool dependsOnLoopInitImpl(Value value, Value base, unsigned depth) {
   if (!value || !base || depth > 8)

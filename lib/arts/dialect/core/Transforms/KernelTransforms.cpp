@@ -31,10 +31,8 @@ using namespace mlir::arts;
 
 ARTS_DEBUG_SETUP(kernel_transforms);
 
-static const AnalysisKind kKernelTransforms_reads[] = {
-    AnalysisKind::MetadataManager};
 [[maybe_unused]] static const AnalysisDependencyInfo kKernelTransforms_deps = {
-    kKernelTransforms_reads, {}};
+    {}, {}};
 
 namespace {
 
@@ -54,18 +52,17 @@ struct KernelTransformsPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    auto &metadataManager = AM->getMetadataManager();
     ARTS_INFO_HEADER(KernelTransformsPass);
 
     int rewrites = 0;
     if (enableElementwisePipeline)
-      rewrites += applyElementwisePipelineTransform(module, metadataManager);
+      rewrites += applyElementwisePipelineTransform(module);
 
     SmallVector<std::unique_ptr<KernelPatternTransform>> patterns;
     patterns.push_back(createStencilTilingNDPattern());
     if (enableMatmul) {
       patterns.push_back(createMatmulReductionPattern(
-          enableTiling, tileJ, minTripCount, metadataManager));
+          enableTiling, tileJ, minTripCount));
     }
 
     SmallVector<ForOp, 16> artsFors;

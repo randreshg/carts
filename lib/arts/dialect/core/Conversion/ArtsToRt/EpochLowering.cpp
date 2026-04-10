@@ -27,22 +27,19 @@
 ///     // NO wait_on_epoch
 ///==========================================================================///
 
-#include "arts/Dialect.h"
+#include "arts/dialect/rt/Transforms/Passes.h"
+namespace mlir::arts {
+#define GEN_PASS_DEF_EPOCHLOWERING
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
+} // namespace mlir::arts
 #include "arts/codegen/Codegen.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
-#include "arts/utils/ValueAnalysis.h"
-#define GEN_PASS_DEF_EPOCHLOWERING
-#include "arts/Dialect.h"
-#include "arts/dialect/rt/Transforms/Passes.h.inc"
 #include "arts/passes/Passes.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include <limits>
 
@@ -53,7 +50,6 @@
 #include <memory>
 
 #include "arts/utils/Debug.h"
-#include "arts/utils/OperationAttributes.h"
 ARTS_DEBUG_SETUP(epoch_lowering);
 
 #include "llvm/ADT/Statistic.h"
@@ -89,19 +85,12 @@ using AttrNames::Operation::CPSNumCarry;
 using AttrNames::Operation::CPSOuterEpochParamIdx;
 using AttrNames::Operation::CPSParamPerm;
 using AttrNames::Operation::CPSPreserveCarryAbi;
-using mlir::arts::rt::CreateEpochOp;
-using mlir::arts::rt::DepForwardOp;
-using mlir::arts::rt::DepGepOp;
-using mlir::arts::rt::EdtCreateOp;
-using mlir::arts::rt::EdtParamPackOp;
-using mlir::arts::rt::EdtParamUnpackOp;
-using mlir::arts::rt::RecordDepOp;
-using mlir::arts::rt::WaitOnEpochOp;
+using namespace mlir::arts::rt;
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
-struct EpochLoweringPass : public impl::EpochLoweringBase<EpochLoweringPass> {
+struct EpochLoweringPass : public arts::impl::EpochLoweringBase<EpochLoweringPass> {
   explicit EpochLoweringPass(bool debug = false) : debugMode(debug) {}
 
   void runOnOperation() override;

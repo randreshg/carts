@@ -22,7 +22,6 @@ enum class AnalysisKind : uint8_t {
   StringAnalysis,
   DbHeuristics,
   EdtHeuristics,
-  MetadataManager,
   AbstractMachine,
   StructuredKernelPlan,
 };

@@ -29,10 +29,6 @@ class AbstractMachine;
 
 /// General IR cleanup and canonicalization passes.
 std::unique_ptr<Pass> createArtsInlinerPass();
-/// Collect source-level loop/memref metadata used by later analyses.
-std::unique_ptr<Pass> createCollectMetadataPass();
-std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
-                                                llvm::StringRef metadataFile);
 /// Raise nested pointer allocations to N-dimensional memrefs.
 std::unique_ptr<Pass> createRaiseMemRefDimensionalityPass();
 /// Convert residual OMP task dependencies to arts.omp_dep.
@@ -136,12 +132,7 @@ std::unique_ptr<Pass> createConvertSdeToArtsPass(AnalysisManager *AM = nullptr);
 std::unique_ptr<Pass> createRaiseToLinalgPass();
 } // namespace sde
 
-/// Validation passes for metadata and lowering contracts.
-std::unique_ptr<Pass> createVerifyMetadataPass(AnalysisManager *AM,
-                                               bool failOnMissing = false);
-std::unique_ptr<Pass>
-createVerifyMetadataIntegrityPass(AnalysisManager *AM,
-                                  bool failOnError = false);
+/// Validation passes for lowering contracts.
 std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
 
 /// Verification passes at lowering boundaries.
@@ -192,15 +183,17 @@ class PolygeistDialect;
 #define GEN_PASS_REGISTRATION
 #include "arts/passes/Passes.h.inc"
 
-// Per-dialect pass registrations
-#define GEN_PASS_DECL
+} // namespace mlir
+
+// Per-dialect pass declarations (self-contained headers with dialect deps)
+#include "arts/dialect/rt/Transforms/Passes.h"
+#include "arts/dialect/sde/Transforms/Passes.h"
+
+// Per-dialect pass registrations (need create functions visible from above)
 #define GEN_PASS_REGISTRATION
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
 
-#define GEN_PASS_DECL
 #define GEN_PASS_REGISTRATION
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
-
-} // namespace mlir
 
 #endif /// ARTS_PASSES_PASSES_H

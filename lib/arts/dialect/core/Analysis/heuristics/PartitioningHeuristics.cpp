@@ -10,7 +10,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "arts/utils/metadata/LoopMetadata.h"
+#include "arts/utils/metadata/MetadataAttrNames.h"
 #include "mlir/IR/BuiltinAttributes.h"
 
 ARTS_DEBUG_SETUP(partitioning_heuristics)

@@ -10,7 +10,7 @@
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/graphs/base/NodeBase.h"
 #include "arts/dialect/core/Analysis/graphs/db/DbAccessPattern.h"
-#include "arts/utils/metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/MetadataEnums.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
@@ -33,7 +33,6 @@ namespace arts {
 /// Forward declarations
 class DbAnalysis;
 class DbAcquireNode;
-class MetadataManager;
 class LoopNode;
 
 /// Derived per-entry partition legality cache for one acquire.
@@ -59,8 +58,8 @@ struct DbPartitionEntryFact {
 /// rewrite-plan object.
 struct DbDimPartitionFact {
   unsigned dim = 0;
-  MemrefMetadata::DimAccessPatternType accessPattern =
-      MemrefMetadata::DimAccessPatternType::Unknown;
+  DimAccessPatternType accessPattern =
+      DimAccessPatternType::Unknown;
   bool isLeadingDynamic = false;
   bool selectedByPartitionEntry = false;
   bool needsFullRange = false;
@@ -160,7 +159,7 @@ struct DbAcquirePartitionFacts {
 /// DbAllocNode
 /// Represents a `arts.db.alloc` operation in the DB graph.
 ///===----------------------------------------------------------------------===///
-class DbAllocNode : public NodeBase, public MemrefMetadata {
+class DbAllocNode : public NodeBase {
 public:
   DbAllocNode(DbAllocOp op, DbAnalysis *analysis);
 
@@ -208,6 +207,20 @@ public:
   unsigned long long totalAccessBytes = 0;
   uint64_t numAcquires = 0;
   bool isStringBacked = false;
+
+  /// Metadata fields (previously inherited from MemrefMetadata)
+  std::optional<int64_t> rank;
+  std::optional<bool> allAccessesAffine, hasAffineAccesses,
+      hasNonAffineAccesses;
+  std::optional<int64_t> memoryFootprint;
+  std::optional<bool> isFlattenedArrayFlag;
+  std::optional<bool> hasUniformAccess, hasStrideOneAccess;
+  std::optional<AccessPatternType> dominantAccessPattern;
+  std::optional<bool> accessedInParallelLoop, hasLoopCarriedDeps;
+  std::optional<TemporalLocalityLevel> temporalLocality;
+  std::optional<SpatialLocalityLevel> spatialLocality;
+  std::optional<int64_t> estimatedAccessBytes;
+  SmallVector<DimAccessPatternType> dimAccessPatterns;
 
   /// Twin-diff overlap analysis
   bool hasSingleWriter() const;

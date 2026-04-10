@@ -3,9 +3,9 @@
 ///
 /// Analyzes loop nests inside arts.for operations and computes linalg-style
 /// structural information: indexing maps, iterator types, and pattern
-/// classification.  Stamps the results as attributes on the arts.for op so
-/// that PatternDiscovery (and downstream passes) can leverage structural
-/// classification instead of manual access-pattern heuristics.
+/// classification.  Currently a diagnostic-only pass (logs classifications
+/// but does not modify IR).  The analysis infrastructure here is the
+/// foundation for future linalg.generic raising.
 ///
 /// Recognized patterns:
 ///   - elementwise : all-parallel iterators, identity/permutation maps
@@ -15,22 +15,16 @@
 ///
 ///==========================================================================///
 
-#include "arts/Dialect.h"
+#include "arts/dialect/sde/Transforms/Passes.h"
+namespace mlir::arts {
 #define GEN_PASS_DEF_RAISETOLINALG
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
+} // namespace mlir::arts
 #include "arts/passes/Passes.h"
-#include "arts/utils/OperationAttributes.h"
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "mlir/Pass/Pass.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -41,6 +35,16 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
+
+/// Iterator type classification values (analogous to linalg iterator types).
+constexpr llvm::StringLiteral kIterParallel = "parallel";
+constexpr llvm::StringLiteral kIterReduction = "reduction";
+
+/// Pattern classification values.
+constexpr llvm::StringLiteral kPatternElementwise = "elementwise";
+constexpr llvm::StringLiteral kPatternStencil = "stencil";
+constexpr llvm::StringLiteral kPatternMatmul = "matmul";
+constexpr llvm::StringLiteral kPatternReduction = "reduction";
 
 //===----------------------------------------------------------------------===//
 // Loop nest collection
@@ -236,10 +240,8 @@ static void computeIteratorTypes(unsigned numDims,
     }
   }
 
-  auto parallel =
-      StringAttr::get(ctx, AttrNames::Operation::Linalg::IterParallel);
-  auto reduction =
-      StringAttr::get(ctx, AttrNames::Operation::Linalg::IterReduction);
+  auto parallel = StringAttr::get(ctx, kIterParallel);
+  auto reduction = StringAttr::get(ctx, kIterReduction);
   for (unsigned d = 0; d < numDims; ++d)
     iterTypes.push_back(dimsInOutputs.test(d) ? parallel : reduction);
 }
@@ -273,8 +275,7 @@ static StringRef classifyPattern(ArrayRef<MemrefAccessEntry> reads,
                                  unsigned numDims) {
   unsigned numParallel = 0, numReduction = 0;
   for (auto attr : iterTypes) {
-    if (cast<StringAttr>(attr).getValue() ==
-        AttrNames::Operation::Linalg::IterParallel)
+    if (cast<StringAttr>(attr).getValue() == kIterParallel)
       ++numParallel;
     else
       ++numReduction;
@@ -284,24 +285,24 @@ static StringRef classifyPattern(ArrayRef<MemrefAccessEntry> reads,
   if (numReduction == 0) {
     for (auto &entry : reads) {
       if (hasConstantOffsets(entry.indexingMap))
-        return AttrNames::Operation::Linalg::PatternStencil;
+        return kPatternStencil;
     }
-    return AttrNames::Operation::Linalg::PatternElementwise;
+    return kPatternElementwise;
   }
 
   // 2 parallel + 1 reduction in 3D → potential matmul.
   if (numParallel == 2 && numReduction == 1 && numDims == 3 &&
       reads.size() >= 2 && writes.size() >= 1)
-    return AttrNames::Operation::Linalg::PatternMatmul;
+    return kPatternMatmul;
 
-  return AttrNames::Operation::Linalg::PatternReduction;
+  return kPatternReduction;
 }
 
 //===----------------------------------------------------------------------===//
 // Pass implementation
 //===----------------------------------------------------------------------===//
 
-struct RaiseToLinalgPass : public impl::RaiseToLinalgBase<RaiseToLinalgPass> {
+struct RaiseToLinalgPass : public arts::impl::RaiseToLinalgBase<RaiseToLinalgPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -310,10 +311,6 @@ struct RaiseToLinalgPass : public impl::RaiseToLinalgBase<RaiseToLinalgPass> {
 
     module.walk([&](arts::ForOp forOp) {
       ++analyzed;
-
-      // Skip if already classified.
-      if (forOp->hasAttr(AttrNames::Operation::Linalg::Pattern))
-        return;
 
       // 1. Collect the perfectly nested loop structure.
       LoopNestInfo nest;
@@ -330,7 +327,6 @@ struct RaiseToLinalgPass : public impl::RaiseToLinalgBase<RaiseToLinalgPass> {
                                  ctx))
         return;
 
-      // Must have at least one write (output) for a complete computation.
       if (writes.empty())
         return;
 
@@ -338,35 +334,12 @@ struct RaiseToLinalgPass : public impl::RaiseToLinalgBase<RaiseToLinalgPass> {
       SmallVector<Attribute> iterTypes;
       computeIteratorTypes(numDims, writes, iterTypes, ctx);
 
-      // 4. Build the combined indexing-map list: reads first, then writes.
-      SmallVector<Attribute> indexingMapAttrs;
-      for (auto &entry : reads)
-        indexingMapAttrs.push_back(AffineMapAttr::get(entry.indexingMap));
-      for (auto &entry : writes)
-        indexingMapAttrs.push_back(AffineMapAttr::get(entry.indexingMap));
-
-      int64_t numInputs = static_cast<int64_t>(reads.size());
-      int64_t numOutputs = static_cast<int64_t>(writes.size());
-
-      // 5. Classify.
+      // 4. Classify.
       StringRef pattern = classifyPattern(reads, writes, iterTypes, numDims);
 
-      // 6. Stamp attributes on the arts.for.
-      auto i64Ty = IntegerType::get(ctx, 64);
-      forOp->setAttr(AttrNames::Operation::Linalg::Pattern,
-                     StringAttr::get(ctx, pattern));
-      forOp->setAttr(AttrNames::Operation::Linalg::IteratorTypes,
-                     ArrayAttr::get(ctx, iterTypes));
-      forOp->setAttr(AttrNames::Operation::Linalg::IndexingMaps,
-                     ArrayAttr::get(ctx, indexingMapAttrs));
-      forOp->setAttr(AttrNames::Operation::Linalg::NumInputs,
-                     IntegerAttr::get(i64Ty, numInputs));
-      forOp->setAttr(AttrNames::Operation::Linalg::NumOutputs,
-                     IntegerAttr::get(i64Ty, numOutputs));
-
       ARTS_DEBUG("classified arts.for as '"
-                 << pattern << "' with " << numDims << " dims (" << numInputs
-                 << " ins, " << numOutputs << " outs)");
+                 << pattern << "' with " << numDims << " dims ("
+                 << reads.size() << " ins, " << writes.size() << " outs)");
       ++classified;
     });
 

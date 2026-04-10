@@ -7,7 +7,6 @@
 
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_VERIFYDBLOWERED
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "mlir/Pass/Pass.h"

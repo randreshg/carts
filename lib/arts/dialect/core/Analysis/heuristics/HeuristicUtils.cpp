@@ -6,48 +6,11 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Analysis/heuristics/HeuristicUtils.h"
-#include "arts/Dialect.h"
-#include "arts/dialect/core/Analysis/loop/LoopNode.h"
-#include "arts/utils/OperationAttributes.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include <algorithm>
 #include <limits>
 
 using namespace mlir;
 using namespace mlir::arts;
-
-///===----------------------------------------------------------------------===///
-/// Loop Classification Helpers
-///===----------------------------------------------------------------------===///
-
-bool mlir::arts::isSequentialLoop(ForOp forOp, LoopNode *loopNode) {
-  /// Check LoopNode fields first (already resolved metadata).
-  if (loopNode) {
-    if (loopNode->hasInterIterationDeps && *loopNode->hasInterIterationDeps)
-      return true;
-    if (loopNode->parallelClassification &&
-        *loopNode->parallelClassification ==
-            LoopMetadata::ParallelClassification::Sequential)
-      return true;
-  }
-
-  /// Fall back to on-operation LoopMetadataAttr.
-  if (auto loopAttr = forOp->getAttrOfType<LoopMetadataAttr>(
-          AttrNames::LoopMetadata::Name)) {
-    if (auto depsAttr = loopAttr.getHasInterIterationDeps())
-      if (depsAttr.getValue())
-        return true;
-
-    if (auto classAttr = loopAttr.getParallelClassification()) {
-      if (classAttr.getInt() ==
-          static_cast<int64_t>(
-              LoopMetadata::ParallelClassification::Sequential))
-        return true;
-    }
-  }
-
-  return false;
-}
 
 int64_t mlir::arts::ceilDivPositive(int64_t num, int64_t denom) {
   if (num <= 0 || denom <= 0)

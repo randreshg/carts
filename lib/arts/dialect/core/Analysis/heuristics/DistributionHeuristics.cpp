@@ -325,10 +325,6 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   if (workerCfg.totalWorkers <= 0)
     return decision;
 
-  LoopNode *loopNode = loopAnalysis.getOrCreateLoopNode(forOp.getOperation());
-  if (isSequentialLoop(forOp, loopNode))
-    return decision;
-
   auto tripOpt = loopAnalysis.getStaticTripCount(forOp.getOperation());
   if (!tripOpt)
     return decision;

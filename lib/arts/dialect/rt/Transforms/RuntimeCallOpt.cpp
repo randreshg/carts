@@ -13,18 +13,18 @@
 ///  2) Deduplicate dominated duplicate calls per callee
 ///==========================================================================///
 
+#include "arts/dialect/rt/Transforms/Passes.h"
+namespace mlir::arts {
 #define GEN_PASS_DEF_RUNTIMECALLOPT
-#include "arts/Dialect.h"
-#include "arts/codegen/Types.h"
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
+} // namespace mlir::arts
+#include "arts/codegen/Types.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopInvarianceUtils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
-#include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
 
 ARTS_DEBUG_SETUP(runtime_call_opt);
@@ -46,7 +46,7 @@ getOptimizableRuntimeFunction(func::CallOp call) {
 }
 
 struct RuntimeCallOptPass
-    : public impl::RuntimeCallOptBase<RuntimeCallOptPass> {
+    : public arts::impl::RuntimeCallOptBase<RuntimeCallOptPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     int hoisted = 0;

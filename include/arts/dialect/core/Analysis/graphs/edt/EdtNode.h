@@ -21,7 +21,6 @@ namespace arts {
 /// Forward declarations
 class LoopNode;
 class LoopAnalysis;
-class MetadataManager;
 class EdtAnalysis;
 
 ////===----------------------------------------------------------------------===////
@@ -58,9 +57,6 @@ public:
   }
 
   ArrayRef<LoopNode *> getAssociatedLoops() const { return enclosingLoops; }
-
-  /// Check if this EDT has parallel loop metadata
-  bool hasParallelLoopMetadata() const;
 
   /// Check if this EDT contains nested EDT operations
   bool hasNestedEdts() const;

@@ -123,21 +123,25 @@ Provides trip count via metadata. But `ForOp` already has bounds —
 `getUpperBound()`, `getLowerBound()`, `getStep()` — which can be
 constant-folded on demand.
 
-## Dead Metadata: 7 of 35 Attributes Never Consumed
+## Dead Metadata: 4 of 35 Attributes Never Consumed
 
 These attributes are computed by CollectMetadata but read by **no pass**:
 
 | Attribute | LOC to compute | Consumers |
 |-----------|---------------|-----------|
 | `reuse_distance` | ~50 | None |
-| `temporal_locality` | ~20 | None |
-| `has_good_spatial_locality` | ~15 | None |
 | `first_use_id` | ~10 | None |
 | `last_use_id` | ~10 | None |
 | `nesting_depth` | ~5 | None |
-| `accessed_in_parallel_loop` | ~5 | None |
 
-~115 LOC computing data nobody reads.
+~75 LOC computing data nobody reads.
+
+Note: `temporal_locality`, `has_good_spatial_locality`, and
+`accessed_in_parallel_loop` were initially counted as dead but have real
+consumers:
+- `temporalLocality` → DbAliasAnalysis.cpp (heuristic hint, line ~251)
+- `spatialLocality` → DbAliasAnalysis.cpp (heuristic hint, line ~234)
+- `accessedInParallelLoop` → DbAllocNode (used in isParallelFriendly)
 
 ## Metadata Lifecycle: Dies at Stage 5
 
@@ -182,12 +186,12 @@ available in the memref IR at each consumer's stage.
 
 ### Phase A: Remove dead metadata (immediate, safe)
 
-Remove the 7 never-consumed attributes and their computation:
-- `reuse_distance`, `temporal_locality`, `has_good_spatial_locality`
+Remove the 4 never-consumed attributes and their computation:
+- `reuse_distance`
 - `first_use_id`, `last_use_id`
-- `nesting_depth`, `accessed_in_parallel_loop`
+- `nesting_depth`
 
-~115 LOC removed. Zero functional impact.
+~75 LOC removed. Zero functional impact.
 
 ### Phase B: Inline consumers (1-2 days)
 
