@@ -26,10 +26,8 @@ ARTS_DEBUG_SETUP(dep_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-static const AnalysisKind kDepTransforms_reads[] = {
-    AnalysisKind::MetadataManager};
 [[maybe_unused]] static const AnalysisDependencyInfo kDepTransforms_deps = {
-    kDepTransforms_reads, {}};
+    {}, {}};
 
 namespace {
 
@@ -40,9 +38,8 @@ struct DepTransformsPass : public impl::DepTransformsBase<DepTransformsPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    auto &metadataManager = AM->getMetadataManager();
     SmallVector<std::unique_ptr<DepPatternTransform>> patterns;
-    patterns.push_back(createSeidel2DWavefrontPattern(metadataManager));
+    patterns.push_back(createSeidel2DWavefrontPattern());
     patterns.push_back(createJacobiAlternatingBuffersPattern());
 
     int rewrites = 0;

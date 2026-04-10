@@ -16,7 +16,6 @@
 #include "arts/dialect/core/Analysis/heuristics/EdtHeuristics.h"
 #include "arts/dialect/core/Analysis/heuristics/StructuredKernelPlanAnalysis.h"
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -69,11 +68,6 @@ public:
   AbstractMachine &getAbstractMachine() { return abstractMachine; }
   const AbstractMachine &getAbstractMachine() const { return abstractMachine; }
 
-  /// Get the metadata manager
-  MetadataManager &getMetadataManager();
-  const MetadataManager &getMetadataManager() const;
-  void
-  syncMetadataManagerFromModule(bool allowJsonImportIfUninitialized = false);
   const StringAnalysis &getStringAnalysis() const;
 
   /// Print summary of analysis objects and their graphs
@@ -125,8 +119,6 @@ private:
   std::unique_ptr<StructuredKernelPlanAnalysis> structuredKernelPlanAnalysis;
   std::unique_ptr<LoopAnalysis> loopAnalysis;
   std::unique_ptr<StringAnalysis> stringAnalysis;
-  std::unique_ptr<MetadataManager> metadataManager;
-
   /// Cached diagnostic data
   std::optional<std::string> cachedDiagnosticJson;
 

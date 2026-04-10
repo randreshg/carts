@@ -34,14 +34,6 @@ void clearGeneratedStripMiningMarks(func::FuncOp func) {
   });
 }
 
-bool getConstIndex(Value v, int64_t &out) {
-  if (auto folded = ValueAnalysis::getConstantIndexStripped(v)) {
-    out = *folded;
-    return true;
-  }
-  return false;
-}
-
 static std::optional<int64_t> resolveBlockSizeHint(Value value) {
   if (!value)
     return std::nullopt;
@@ -705,8 +697,8 @@ analyzeNeighborhoodLoop(scf::ForOp loop, DominanceInfo &domInfo) {
   Value iv = loop.getInductionVar();
   SmallVector<NeighborhoodLoopInfo, 4> candidates;
 
-  int64_t step = 0;
-  if (!getConstIndex(loop.getStep(), step) || step != 1) {
+  auto step = ValueAnalysis::getConstantIndexStripped(loop.getStep());
+  if (!step || *step != 1) {
     ARTS_DEBUG("Neighborhood strip-mining skipped: non-unit step");
     return std::nullopt;
   }
@@ -788,12 +780,12 @@ std::optional<LoopBlockInfo> analyzeLegacyLoop(scf::ForOp loop,
   Value loopLowerBound = loop.getLowerBound();
 
   /// Require constant step = 1; allow dynamic upper bound.
-  int64_t ub = 0, step = 0;
-  if (!getConstIndex(loop.getStep(), step) || step != 1)
+  auto step = ValueAnalysis::getConstantIndexStripped(loop.getStep());
+  if (!step || *step != 1)
     return std::nullopt;
   info.lowerBoundConst = ValueAnalysis::tryFoldConstantIndex(loopLowerBound);
-  if (getConstIndex(loop.getUpperBound(), ub) && info.lowerBoundConst &&
-      ub <= *info.lowerBoundConst)
+  auto ub = ValueAnalysis::getConstantIndexStripped(loop.getUpperBound());
+  if (ub && info.lowerBoundConst && *ub <= *info.lowerBoundConst)
     return std::nullopt;
 
   bool invalid = false;
@@ -942,8 +934,8 @@ bool stripMineNeighborhoodLoopImpl(scf::ForOp loop,
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
 
-  int64_t step = 0;
-  if (!getConstIndex(loop.getStep(), step) || step != 1)
+  auto step = ValueAnalysis::getConstantIndexStripped(loop.getStep());
+  if (!step || *step != 1)
     return false;
 
   Operation *origTerminator =
@@ -1205,8 +1197,8 @@ bool stripMineNeighborhoodLoop(scf::ForOp loop,
 bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   Location loc = loop.getLoc();
   OpBuilder builder(loop);
-  int64_t ub = 0, step = 0;
-  if (!getConstIndex(loop.getStep(), step) || step != 1)
+  auto step = ValueAnalysis::getConstantIndexStripped(loop.getStep());
+  if (!step || *step != 1)
     return false;
 
   if (info.blockSizeConst && *info.blockSizeConst <= 1)
@@ -1235,9 +1227,9 @@ bool stripMineLegacyLoop(scf::ForOp loop, const LoopBlockInfo &info) {
   Value bsMinusOne = arith::SubIOp::create(builder, loc, bsVal, one);
   Value tripPlus = arith::AddIOp::create(builder, loc, tripCount, bsMinusOne);
   Value numBlocksVal = arith::DivUIOp::create(builder, loc, tripPlus, bsVal);
-  if (info.blockSizeConst && info.lowerBoundConst &&
-      getConstIndex(loop.getUpperBound(), ub)) {
-    int64_t tripCountConst = ub - *info.lowerBoundConst;
+  auto ub = ValueAnalysis::getConstantIndexStripped(loop.getUpperBound());
+  if (info.blockSizeConst && info.lowerBoundConst && ub) {
+    int64_t tripCountConst = *ub - *info.lowerBoundConst;
     if (tripCountConst <= *info.blockSizeConst)
       return false;
     int64_t numBlocksConst =

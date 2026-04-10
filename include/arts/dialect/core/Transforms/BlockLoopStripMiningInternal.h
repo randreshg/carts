@@ -100,7 +100,6 @@ bool isGeneratedByStripMining(scf::ForOp loop);
 void markGeneratedByStripMining(scf::ForOp loop);
 void clearGeneratedStripMiningMarks(func::FuncOp func);
 
-bool getConstIndex(Value v, int64_t &out);
 std::optional<Value> extractInvariantOffset(Value lhs, Value iv);
 bool mergeInvariantBase(Value &currentBase, Value candidateBase);
 std::optional<NeighborhoodExprInfo> extractNeighborhoodExprInfo(Value value,

@@ -52,21 +52,7 @@ static llvm::Statistic numMiscOpsConverted{
 using namespace mlir;
 using namespace mlir::arts;
 using namespace mlir::arts::convert_arts_to_llvm;
-using mlir::arts::rt::CreateEpochOp;
-using mlir::arts::rt::DbGepOp;
-using mlir::arts::rt::DepAccessMode;
-using mlir::arts::rt::DepBindOp;
-using mlir::arts::rt::DepDbAcquireOp;
-using mlir::arts::rt::DepForwardOp;
-using mlir::arts::rt::DepGepOp;
-using mlir::arts::rt::EdtCreateOp;
-using mlir::arts::rt::EdtParamPackOp;
-using mlir::arts::rt::EdtParamUnpackOp;
-using mlir::arts::rt::IncrementDepOp;
-using mlir::arts::rt::RecordDepOp;
-using mlir::arts::rt::StatePackOp;
-using mlir::arts::rt::StateUnpackOp;
-using mlir::arts::rt::WaitOnEpochOp;
+using namespace mlir::arts::rt;
 
 ///===----------------------------------------------------------------------===///
 /// Epoch Patterns
@@ -594,12 +580,6 @@ private:
     Value scalarSize = nullptr;
   };
 
-  static bool isUnitExtent(Value extent) {
-    auto constant = ValueAnalysis::tryFoldConstantIndex(
-        ValueAnalysis::stripNumericCasts(extent));
-    return constant && *constant == 1;
-  }
-
   static Value buildTrailingExtentProduct(ArtsCodegen *AC,
                                           ArrayRef<Value> extents,
                                           unsigned firstDim, Location loc) {
@@ -676,7 +656,9 @@ private:
         // become strided and must stay on the whole-DB dependency path.
         bool contiguousFace = true;
         for (unsigned lead = 0; lead < physicalDim; ++lead)
-          contiguousFace &= isUnitExtent(depInfo.blockElementSizes[lead]);
+          contiguousFace &=
+              ValueAnalysis::isOneConstant(ValueAnalysis::stripNumericCasts(
+                  depInfo.blockElementSizes[lead]));
         if (!contiguousFace)
           continue;
 
@@ -733,7 +715,8 @@ private:
         return {Value(), Value()};
 
       for (unsigned lead = 0; lead < physicalDim; ++lead)
-        if (!isUnitExtent(depInfo.blockElementSizes[lead]))
+        if (!ValueAnalysis::isOneConstant(ValueAnalysis::stripNumericCasts(
+                depInfo.blockElementSizes[lead])))
           return {Value(), Value()};
 
       int64_t haloBefore = std::max<int64_t>(0, -(*staticMin)[0]);

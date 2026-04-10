@@ -21,18 +21,17 @@
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
 #define GEN_PASS_DEF_DBLOWERING
-#include "arts/Dialect.h"
 #include "arts/dialect/core/Transforms/db/DbLayoutStrategy.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/EdtUtils.h"
+#include "arts/utils/IdRegistry.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/RemovalUtils.h"
-#include "arts/utils/metadata/IdRegistry.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -65,7 +64,7 @@ static llvm::Statistic numAllocsSkippedAlreadyLowered{
     "Number of DB allocations skipped because already lowered"};
 
 using namespace mlir;
-using namespace arts;
+using namespace mlir::arts;
 
 namespace {
 

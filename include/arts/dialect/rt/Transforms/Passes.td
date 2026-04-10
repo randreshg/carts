@@ -46,8 +46,10 @@ def DataPtrHoisting
     }
     ```
   }];
-  let dependentDialects =
-      ["arts::ArtsDialect", "LLVM::LLVMDialect", "scf::SCFDialect"];
+  let dependentDialects = [
+    "::mlir::arts::ArtsDialect", "::mlir::LLVM::LLVMDialect",
+    "::mlir::scf::SCFDialect"
+  ];
   let constructor = "mlir::arts::createDataPtrHoistingPass()";
 }
 
@@ -79,8 +81,8 @@ def GuidRangCallOpt
     otherwise preserve per-iteration reserve behavior.
   }];
   let dependentDialects = [
-    "func::FuncDialect", "arith::ArithDialect", "scf::SCFDialect",
-    "LLVM::LLVMDialect"
+    "::mlir::func::FuncDialect", "::mlir::arith::ArithDialect",
+    "::mlir::scf::SCFDialect", "::mlir::LLVM::LLVMDialect"
   ];
   let constructor = "mlir::arts::createGuidRangCallOptPass()";
 }
@@ -107,7 +109,7 @@ def RuntimeCallOpt
       2) Deduplicate dominated duplicate calls per callee within a function.
   }];
   let dependentDialects = [
-    "func::FuncDialect", "scf::SCFDialect"
+    "::mlir::func::FuncDialect", "::mlir::scf::SCFDialect"
   ];
   let constructor = "mlir::arts::createRuntimeCallOptPass()";
 }
@@ -115,8 +117,9 @@ def RuntimeCallOpt
 def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS EDTs to LLVM";
   let dependentDialects = [
-    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
-    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
+    "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect",
+    "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect",
+    "::mlir::arith::ArithDialect", "::mlir::polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createEdtLoweringPass()";
 }
@@ -124,8 +127,9 @@ def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
 def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS epochs and propagate epoch GUIDs to EDTs";
   let dependentDialects = [
-    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
-    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
+    "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect",
+    "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect",
+    "::mlir::arith::ArithDialect", "::mlir::polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createEpochLoweringPass()";
 }

@@ -30,7 +30,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vec
         }
         memref.store %sum, %arg1[%iv] : memref<64xf64>
         arts.yield
-      }} {arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = true, tripCount = 64 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = true, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "bicg_like_left">}
+      }}
       arts.yield
     }
 
@@ -44,7 +44,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vec
         }
         memref.store %sum, %arg2[%iv] : memref<64xf64>
         arts.yield
-      }} {arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = true, tripCount = 64 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = true, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "bicg_like_right">}
+      }}
       arts.yield
     }
 

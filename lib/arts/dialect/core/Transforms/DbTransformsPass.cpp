@@ -31,7 +31,6 @@
 #include "arts/dialect/core/Analysis/graphs/db/DbNode.h"
 #include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_DBTRANSFORMS
-#include "arts/Dialect.h"
 #include "arts/dialect/core/Transforms/db/transforms/GUIDRangeDetection.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"

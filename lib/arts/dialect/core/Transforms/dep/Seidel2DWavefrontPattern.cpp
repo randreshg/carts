@@ -35,7 +35,6 @@
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/heuristics/DistributionHeuristics.h"
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/dialect/core/Transforms/dep/DepTransform.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoopUtils.h"
@@ -273,14 +272,13 @@ static Value createSubtractOrZero(OpBuilder &builder, Location loc, Value lhs,
   return arith::SelectOp::create(builder, loc, canSubtract, diff, zero);
 }
 
-static void rewriteSeidelSequential(SeidelWavefrontMatch &match,
-                                    MetadataManager &metadataManager) {
+static void rewriteSeidelSequential(SeidelWavefrontMatch &match) {
   OpBuilder builder(match.rowFor);
   auto seqRowFor = scf::ForOp::create(
       builder, match.rowFor.getLoc(), match.rowFor.getLowerBound().front(),
       match.rowFor.getUpperBound().front(), match.rowFor.getStep().front());
-  metadataManager.rewriteLoopMetadata(match.rowFor.getOperation(),
-                                      seqRowFor.getOperation());
+  copyArtsMetadataAttrs(match.rowFor.getOperation(),
+                        seqRowFor.getOperation());
   copyPatternAttrs(match.rowFor.getOperation(), seqRowFor.getOperation());
 
   OpBuilder rowBuilder = OpBuilder::atBlockBegin(seqRowFor.getBody());
@@ -448,9 +446,6 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
 
 class Seidel2DWavefrontPattern final : public DepPatternTransform {
 public:
-  explicit Seidel2DWavefrontPattern(MetadataManager &metadataManager)
-      : metadataManager(metadataManager) {}
-
   int run(ModuleOp module) override {
     int rewrites = 0;
     while (true) {
@@ -468,7 +463,7 @@ public:
       auto tilingPlan = chooseWavefrontTilingPlan(match);
       bool usedSequentialFallback = !tilingPlan;
       if (usedSequentialFallback)
-        rewriteSeidelSequential(match, metadataManager);
+        rewriteSeidelSequential(match);
       else
         rewriteSeidelWavefront(match, *tilingPlan);
       rewrites++;
@@ -484,15 +479,13 @@ public:
   }
   int64_t getRevision() const override { return 1; }
 
-private:
-  MetadataManager &metadataManager;
 };
 
 } // namespace
 
 std::unique_ptr<DepPatternTransform>
-createSeidel2DWavefrontPattern(MetadataManager &metadataManager) {
-  return std::make_unique<Seidel2DWavefrontPattern>(metadataManager);
+createSeidel2DWavefrontPattern() {
+  return std::make_unique<Seidel2DWavefrontPattern>();
 }
 
 } // namespace arts

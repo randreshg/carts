@@ -1,7 +1,7 @@
 // RUN: %carts-compile %s --O3 --arts-config %S/../../../../examples/arts.cfg --pipeline db-partitioning | %FileCheck %s
 
 // CHECK-LABEL: func.func @main
-// CHECK: arts.db_alloc[{{.*}}<block>,
+// CHECK: arts.db_alloc[{{.*}}<coarse>, <stencil>]
 // CHECK: arts.epoch attributes {distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
 // CHECK: arts.db_acquire[<in>] ({{.*}}) partitioning(<block>
 // CHECK: arts.db_acquire[<inout>] ({{.*}}) partitioning(<block>

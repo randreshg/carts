@@ -14,7 +14,6 @@
 
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/DenseSet.h"
 #include <optional>
@@ -59,14 +58,13 @@ void collectOldAccumulatorDbRefs(ForOp forOp, Block &parallelBlock,
 
 /// Allocate reduction DBs and initialize worker-local partial accumulators.
 ReductionLoweringInfo
-allocatePartialAccumulators(ArtsCodegen *AC, MetadataManager &metadataManager,
-                            ForOp forOp, EdtOp parallelEdt, Location loc,
-                            bool splitMode = false,
+allocatePartialAccumulators(ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt,
+                            Location loc, bool splitMode = false,
                             Value workerCountOverride = Value());
 
 /// Create result EDT to combine partial accumulators into final result DBs.
-void createResultEdt(ArtsCodegen *AC, MetadataManager &metadataManager,
-                     ReductionLoweringInfo &redInfo, Location loc);
+void createResultEdt(ArtsCodegen *AC, ReductionLoweringInfo &redInfo,
+                     Location loc);
 
 /// Copy final reduction results back and release temporary reduction DBs.
 void finalizeReductionAfterEpoch(ArtsCodegen *AC,

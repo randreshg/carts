@@ -21,7 +21,7 @@
 
 using namespace mlir;
 using namespace mlir::arts;
-using mlir::arts::rt::DbGepOp;
+using namespace mlir::arts::rt;
 
 LayoutInfo mlir::arts::buildLayoutInfo(Value source) {
   LayoutInfo info;

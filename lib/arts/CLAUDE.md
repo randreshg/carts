@@ -5,7 +5,7 @@
 ```
 dialect/                 MLIR dialects (IREE-style per-dialect structure)
   core/                  THE COMPILER — all passes, analysis, transforms
-    Analysis/            All analysis (db, edt, graphs, heuristics, loop, metadata)
+    Analysis/            All analysis (db, edt, graphs, heuristics, loop)
     Conversion/
       ArtsToLLVM/        ConvertArtsToLLVM pass + core LLVM patterns
       ArtsToRt/          EDT/epoch lowering (core → rt conversion)
@@ -18,9 +18,9 @@ dialect/                 MLIR dialects (IREE-style per-dialect structure)
     Conversion/
       RtToLLVM/          arts_rt → LLVM conversion patterns
     Transforms/          DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt
-  sde/                   SEMANTIC — metadata collection + OMP conversion
+  sde/                   SEMANTIC — OMP conversion + linalg raising
     IR/                  sde dialect (SdeDialect.cpp, SdeOps.cpp)
-    Transforms/          CollectMetadata, ConvertOpenMPToSde, RaiseToLinalg
+    Transforms/          ConvertOpenMPToSde, RaiseToLinalg
 codegen/                 Shared lowering infra (ArtsCodegen)
 passes/
   verify/                Verification barrier passes

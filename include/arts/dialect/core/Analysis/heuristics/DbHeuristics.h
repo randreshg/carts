@@ -28,8 +28,6 @@ class Operation;
 
 namespace arts {
 
-class IdRegistry;
-
 struct HeuristicDecision {
   std::string heuristic;
   bool applied;
@@ -58,8 +56,7 @@ struct AcquirePolicyInput {
 
 class DbHeuristics {
 public:
-  DbHeuristics(const mlir::arts::AbstractMachine &machine,
-               IdRegistry &idRegistry);
+  explicit DbHeuristics(const mlir::arts::AbstractMachine &machine);
 
   bool isSingleNode() const;
   bool isValid() const;
@@ -89,7 +86,6 @@ public:
 
 private:
   const mlir::arts::AbstractMachine &machine;
-  IdRegistry &idRegistry;
   llvm::SmallVector<HeuristicDecision> decisions;
   int64_t maxOuterDBsOverride = kMaxOuterDBs;
   int64_t maxDepsPerEDTOverride = kMaxDepsPerEDT;

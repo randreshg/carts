@@ -5,5 +5,5 @@
 // when the kernel call is wrapped in an outer serial repetition loop.
 
 // CHECK: func.func private @__arts_edt_1
-// CHECK: %[[W:.+]] = memref.alloca() {{.*}} : memref<5xf32>
+// CHECK: %[[W:.+]] = memref.alloca() : memref<5xf32>
 // CHECK: memref.load %[[W]][

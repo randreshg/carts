@@ -28,27 +28,20 @@
 ///     }
 ///==========================================================================///
 
-#include "arts/dialect/sde/IR/SdeDialect.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/BuiltinOps.h"
-
+#include "arts/dialect/sde/Transforms/Passes.h"
+namespace mlir::arts {
 #define GEN_PASS_DEF_CONVERTOPENMPTOSDE
-#include "arts/Dialect.h"
-#include "arts/dialect/core/Analysis/AnalysisManager.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
+} // namespace mlir::arts
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/ValueAnalysis.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -195,8 +188,7 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
 
 /// omp.wsloop + omp.loop_nest -> sde.su_iterate
 struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
-  WsloopToSdePattern(MLIRContext *context, MetadataManager &metadataManager)
-      : OpRewritePattern(context), metadataManager(metadataManager) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(omp::WsloopOp op,
                                 PatternRewriter &rewriter) const override {
@@ -248,7 +240,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
         reductionKinds.empty() ? nullptr
                                : rewriter.getArrayAttr(reductionKinds));
 
-    metadataManager.rewriteMetadata(op, suIter);
+    copyArtsMetadataAttrs(op, suIter);
 
     // Create body
     Region &dstRegion = suIter.getBody();
@@ -279,9 +271,6 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     rewriter.eraseOp(op);
     return success();
   }
-
-private:
-  MetadataManager &metadataManager;
 };
 
 /// omp.task -> sde.cu_task
@@ -359,8 +348,7 @@ private:
 
 /// omp.taskloop -> sde.su_iterate
 struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
-  TaskloopToSdePattern(MLIRContext *context, MetadataManager &metadataManager)
-      : OpRewritePattern(context), metadataManager(metadataManager) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(omp::TaskloopOp op,
                                 PatternRewriter &rewriter) const override {
@@ -378,7 +366,7 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
         /*reductionAccumulators=*/ValueRange{},
         /*reductionKinds=*/nullptr);
 
-    metadataManager.rewriteMetadata(op, suIter);
+    copyArtsMetadataAttrs(op, suIter);
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
@@ -400,16 +388,11 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
     rewriter.eraseOp(op);
     return success();
   }
-
-private:
-  MetadataManager &metadataManager;
 };
 
 /// scf.parallel -> sde.cu_region parallel + sde.su_iterate
 struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
-  SCFParallelToSdePattern(MLIRContext *context,
-                          MetadataManager &metadataManager)
-      : OpRewritePattern(context), metadataManager(metadataManager) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(scf::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
@@ -437,7 +420,7 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
         /*reductionAccumulators=*/ValueRange{},
         /*reductionKinds=*/nullptr);
 
-    metadataManager.rewriteMetadata(op, suIter);
+    copyArtsMetadataAttrs(op, suIter);
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
@@ -469,9 +452,6 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
     rewriter.eraseOp(op);
     return success();
   }
-
-private:
-  MetadataManager &metadataManager;
 };
 
 /// omp.atomic.update -> sde.cu_atomic
@@ -573,7 +553,7 @@ struct TaskwaitToSdePattern : public OpRewritePattern<omp::TaskwaitOp> {
 
 namespace {
 struct ConvertOpenMPToSdePass
-    : public impl::ConvertOpenMPToSdeBase<ConvertOpenMPToSdePass> {
+    : public arts::impl::ConvertOpenMPToSdeBase<ConvertOpenMPToSdePass> {
 
   explicit ConvertOpenMPToSdePass(mlir::arts::AnalysisManager *AM = nullptr)
       : AM(AM) {}
@@ -587,8 +567,6 @@ struct ConvertOpenMPToSdePass
       signalPassFailure();
       return;
     }
-    MetadataManager &metadataManager = AM->getMetadataManager();
-
     // Pre-scan writer sources for dependency filtering
     llvm::DenseSet<Value> writerDepSources;
     module.walk([&](omp::TaskOp task) {
@@ -603,11 +581,11 @@ struct ConvertOpenMPToSdePass
 
     RewritePatternSet patterns(context);
     patterns.add<OMPParallelToSdePattern>(context);
-    patterns.add<SCFParallelToSdePattern>(context, metadataManager);
+    patterns.add<SCFParallelToSdePattern>(context);
     patterns.add<MasterToSdePattern>(context);
     patterns.add<SingleToSdePattern>(context);
-    patterns.add<TaskloopToSdePattern>(context, metadataManager);
-    patterns.add<WsloopToSdePattern>(context, metadataManager);
+    patterns.add<TaskloopToSdePattern>(context);
+    patterns.add<WsloopToSdePattern>(context);
     patterns.add<AtomicUpdateToSdePattern>(context);
     patterns.add<TerminatorToSdePattern>(context);
     patterns.add<BarrierToSdePattern>(context);

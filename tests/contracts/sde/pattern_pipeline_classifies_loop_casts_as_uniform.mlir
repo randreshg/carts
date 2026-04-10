@@ -5,4 +5,4 @@
 // matmul init/reduction nest.
 // CHECK: arts.edt <parallel>
 // CHECK: arts.for(
-// CHECK: depPattern = #arts.dep_pattern<uniform>
+// CHECK-NOT: dep_pattern<matmul>

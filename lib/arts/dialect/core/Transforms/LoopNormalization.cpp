@@ -41,10 +41,8 @@ ARTS_DEBUG_SETUP(loop_normalization);
 using namespace mlir;
 using namespace mlir::arts;
 
-static const AnalysisKind kLoopNormalization_reads[] = {
-    AnalysisKind::MetadataManager};
 [[maybe_unused]] static const AnalysisDependencyInfo kLoopNormalization_deps = {
-    kLoopNormalization_reads, {}};
+    {}, {}};
 
 namespace {
 
@@ -56,14 +54,12 @@ struct LoopNormalizationPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    auto &metadataManager = AM->getMetadataManager();
-
     ARTS_INFO_HEADER(LoopNormalizationPass);
 
     /// Register structural normalization patterns (order = priority)
     SmallVector<std::unique_ptr<LoopPattern>> patterns;
-    patterns.push_back(createSymmetricTriangularPattern(metadataManager));
-    patterns.push_back(createPerfectNestLinearizationPattern(metadataManager));
+    patterns.push_back(createSymmetricTriangularPattern());
+    patterns.push_back(createPerfectNestLinearizationPattern());
 
     int rewrites = 0;
     bool changed = true;

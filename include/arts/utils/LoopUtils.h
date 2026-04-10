@@ -12,7 +12,6 @@
 
 #include "arts/Dialect.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
@@ -161,10 +160,6 @@ bool operationTouchesFloatingPoint(Operation *op);
 /// and the function returns true.
 bool collectSpatialNestIvs(ForOp artsFor, SmallVector<Value, 4> &ivs,
                            Block *&spatialBody);
-
-/// Clear reduction-related facts from loop metadata.  Sets
-/// `hasReductions = false` and clears `reductionKinds`.
-void clearReductionLoopFacts(LoopMetadata &metadata);
 
 } // namespace arts
 } // namespace mlir

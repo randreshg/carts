@@ -30,8 +30,7 @@ static llvm::Statistic numPlansRejected{
     "structured_kernel_plan", "NumPlansRejected",
     "Number of ForOps where plan synthesis was skipped"};
 
-using mlir::arts::AnalysisDependencyInfo;
-using mlir::arts::AnalysisKind;
+using namespace mlir::arts;
 
 static const AnalysisKind kStructuredKernelPlan_reads[] = {
     AnalysisKind::DbAnalysis, AnalysisKind::LoopAnalysis,
@@ -40,7 +39,6 @@ static const AnalysisKind kStructuredKernelPlan_reads[] = {
     kStructuredKernelPlan_deps = {kStructuredKernelPlan_reads, {}};
 
 using namespace mlir;
-using namespace mlir::arts;
 
 namespace {
 

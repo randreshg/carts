@@ -16,13 +16,12 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-bool arts::rewriteNormalizedLoop(Operation *source, Operation *target,
-                                 MetadataManager &metadataManager) {
+bool arts::rewriteNormalizedLoop(Operation *source, Operation *target) {
   if (!source || !target)
     return false;
-  bool rewritten = metadataManager.rewriteLoopMetadata(source, target);
+  copyArtsMetadataAttrs(source, target);
   copyPatternAttrs(source, target);
-  return rewritten;
+  return true;
 }
 
 std::optional<int64_t> arts::getTriangularOffset(Value lb, Value outerIV) {

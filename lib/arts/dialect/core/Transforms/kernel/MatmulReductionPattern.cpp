@@ -44,7 +44,6 @@
 /// It changes a reduction-carried matmul kernel into an update form that is
 /// easier for downstream ARTS distribution and DB partitioning to exploit.
 
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/dialect/core/Transforms/kernel/KernelTransform.h"
 #include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "arts/utils/Debug.h"
@@ -563,8 +562,7 @@ static bool isTilingApplicable(scf::ForOp loop, int64_t tileSize,
 }
 
 static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
-                                          int64_t tileJ, int64_t minTripCount,
-                                          MetadataManager &metadataManager) {
+                                          int64_t tileJ, int64_t minTripCount) {
   scf::ForOp jLoop = m.jLoop;
   scf::ForOp kLoop = m.kLoop;
 
@@ -628,8 +626,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
   /// Create k loop: for k: a = alpha*A[i,k]; for j: C[i,j] += a*B[k,j]
   auto newK = scf::ForOp::create(b, loc, kLoop.getLowerBound(),
                                  kLoop.getUpperBound(), kLoop.getStep());
-  metadataManager.rewriteLoopMetadata(kLoop.getOperation(), newK.getOperation(),
-                                      clearReductionLoopFacts);
+  copyArtsMetadataAttrs(kLoop.getOperation(), newK.getOperation());
 
   b.setInsertionPointToStart(newK.getBody());
   Value kIV = newK.getInductionVar();
@@ -678,9 +675,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
               })) {
         for (Operation &op : tiledUpdateOuter.getBody()->without_terminator()) {
           if (auto innerJ = dyn_cast<scf::ForOp>(&op)) {
-            metadataManager.rewriteLoopMetadata(jLoop.getOperation(),
-                                                innerJ.getOperation(),
-                                                clearReductionLoopFacts);
+            copyArtsMetadataAttrs(jLoop.getOperation(), innerJ.getOperation());
             break;
           }
         }
@@ -691,8 +686,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     if (!createdTiledUpdate) {
       auto newJ = scf::ForOp::create(b, loc, jLoop.getLowerBound(),
                                      jLoop.getUpperBound(), jLoop.getStep());
-      metadataManager.rewriteLoopMetadata(
-          jLoop.getOperation(), newJ.getOperation(), clearReductionLoopFacts);
+      copyArtsMetadataAttrs(jLoop.getOperation(), newJ.getOperation());
       b.setInsertionPointToStart(newJ.getBody());
       emitUpdateBody(b, loc, newJ.getInductionVar());
     }
@@ -709,10 +703,8 @@ namespace arts {
 
 class MatmulReductionPattern : public KernelPatternTransform {
 public:
-  MatmulReductionPattern(bool enableTiling, int64_t tileJ, int64_t minTripCount,
-                         MetadataManager &metadataManager)
-      : enableTiling(enableTiling), tileJ(tileJ), minTripCount(minTripCount),
-        metadataManager(metadataManager) {}
+  MatmulReductionPattern(bool enableTiling, int64_t tileJ, int64_t minTripCount)
+      : enableTiling(enableTiling), tileJ(tileJ), minTripCount(minTripCount) {}
 
   bool match(ForOp artsFor) override {
     matchResult = {};
@@ -742,8 +734,7 @@ public:
     int64_t effectiveTileJ = enableTiling ? tileJ : 1;
     ARTS_INFO("Detected reduction dot-product pattern inside arts.for; "
               << "rewriting to k-j update form");
-    rewriteReductionDotToKJUpdate(matchResult, effectiveTileJ, minTripCount,
-                                  metadataManager);
+    rewriteReductionDotToKJUpdate(matchResult, effectiveTileJ, minTripCount);
 
     /// Stamp matmul contract on the transformed loop and parent EDT.
     /// This is a lightweight marker-only contract - see MatmulPatternContract
@@ -764,16 +755,14 @@ private:
   bool enableTiling;
   int64_t tileJ;
   int64_t minTripCount;
-  MetadataManager &metadataManager;
   ReductionDotMatch matchResult;
 };
 
 std::unique_ptr<KernelPatternTransform>
 createMatmulReductionPattern(bool enableTiling, int64_t tileJ,
-                             int64_t minTripCount,
-                             MetadataManager &metadataManager) {
-  return std::make_unique<MatmulReductionPattern>(
-      enableTiling, tileJ, minTripCount, metadataManager);
+                             int64_t minTripCount) {
+  return std::make_unique<MatmulReductionPattern>(enableTiling, tileJ,
+                                                  minTripCount);
 }
 
 } // namespace arts

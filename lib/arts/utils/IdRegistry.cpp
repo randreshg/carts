@@ -3,12 +3,10 @@
 ///
 /// Implementation of unified ID registry.
 ///==========================================================================///
-#include "arts/utils/metadata/IdRegistry.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
+#include "arts/utils/IdRegistry.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/metadata/LocationMetadata.h"
-#include "arts/utils/metadata/LoopMetadata.h"
-#include "arts/utils/metadata/MemrefMetadata.h"
+#include "arts/utils/metadata/MetadataAttrNames.h"
 
 #include "mlir/IR/Builders.h"
 #include "llvm/Support/JSON.h"
@@ -121,15 +119,15 @@ void IdRegistry::loadFromJsonObject(const llvm::json::Object &root) {
       if (!obj)
         continue;
 
-      auto idVal = obj->getInteger(AttrNames::Metadata::ArtsId);
+      auto idVal = obj->getInteger("arts_id");
       if (!idVal)
         continue;
 
       /// Try to get location from nested object (new format)
       std::string locKey;
-      if (auto fileStr = obj->getString(AttrNames::Metadata::File)) {
-        auto line = obj->getInteger(AttrNames::Metadata::Line).value_or(0);
-        auto col = obj->getInteger(AttrNames::Metadata::Column).value_or(0);
+      if (auto fileStr = obj->getString("file")) {
+        auto line = obj->getInteger("line").value_or(0);
+        auto col = obj->getInteger("column").value_or(0);
         locKey = LocationMetadata::getBasename(*fileStr) + ":" +
                  std::to_string(line) + ":" + std::to_string(col);
       }
@@ -150,9 +148,8 @@ void IdRegistry::loadFromJsonObject(const llvm::json::Object &root) {
     }
   };
 
-  loadSection(AttrNames::Metadata::Loops, AttrNames::LoopMetadata::LocationKey);
-  loadSection(AttrNames::Metadata::Memrefs,
-              AttrNames::MemrefMetadata::AllocationId);
+  loadSection("loops", AttrNames::LoopMetadata::LocationKey);
+  loadSection("memrefs", AttrNames::MemrefMetadata::AllocationId);
 
   initialized = true;
   ARTS_DEBUG("IdRegistry: Loaded " << locationCache.size()

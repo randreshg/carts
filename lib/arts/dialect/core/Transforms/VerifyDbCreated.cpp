@@ -8,14 +8,13 @@
 
 #include "arts/Dialect.h"
 #define GEN_PASS_DEF_VERIFYDBCREATED
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/Debug.h"
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
-using mlir::arts::debugStream;
+using namespace mlir::arts;
 
 ARTS_DEBUG_SETUP(verify_db_created);
 

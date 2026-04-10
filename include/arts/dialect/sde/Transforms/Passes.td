@@ -8,36 +8,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def CollectMetadata : Pass<"collect-metadata", "mlir::ModuleOp"> {
-  let summary = "Collect metadata for dual-compilation strategy";
-  let description = [{
-    This pass analyzes program structures (loops, array accesses, both affine
-    and non-affine) and attaches comprehensive metadata for use in dual-compilation.
-    It runs on sequential (non-OpenMP) code where analysis is cleaner, then the
-    metadata is exported and injected into the parallel compilation.
-
-    Metadata collected from both affine and non-affine operations:
-    - Array dimensions inferred from access patterns (e.g., i*128+j → [128,128])
-    - Loop bounds (static and dynamic), trip counts, and parallelism opportunities
-    - Memory access patterns and regions (affine and non-affine loads/stores)
-    - Data dependencies and access frequency statistics
-    - Read/write ratios and lifetime information
-
-    This preserves high-level semantic information through OpenMP transformations.
-  }];
-  let dependentDialects = [
-    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
-    "arith::ArithDialect", "affine::AffineDialect"
-  ];
-  let options = [
-    Option<"exportMetadata", "export-metadata", "bool", "false",
-           "Export metadata to JSON file after collection">,
-    Option<"metadataFile", "metadata-file", "std::string",
-           "\".carts-metadata.json\"", "Path to metadata JSON file for export">
-  ];
-  let constructor = "mlir::arts::createCollectMetadataPass()";
-}
-
 def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
   let summary = "Compute linalg-style structural classification for loop nests";
   let description = [{
@@ -55,8 +25,9 @@ def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
     classification instead of manual access-pattern heuristics.
   }];
   let dependentDialects = [
-    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
-    "arith::ArithDialect", "scf::SCFDialect"
+    "::mlir::memref::MemRefDialect", "::mlir::func::FuncDialect",
+    "::mlir::arts::ArtsDialect", "::mlir::arith::ArithDialect",
+    "::mlir::scf::SCFDialect"
   ];
   let constructor = "mlir::arts::sde::createRaiseToLinalgPass()";
 }
@@ -72,9 +43,9 @@ def ConvertOpenMPToSde : Pass<"convert-openmp-to-sde", "mlir::ModuleOp"> {
     - Task completion tokens
   }];
   let dependentDialects = [
-    "memref::MemRefDialect", "omp::OpenMPDialect",
-    "arts::sde::ArtsSdeDialect", "arts::ArtsDialect",
-    "arith::ArithDialect", "scf::SCFDialect"
+    "::mlir::memref::MemRefDialect", "::mlir::omp::OpenMPDialect",
+    "::mlir::arts::sde::ArtsSdeDialect", "::mlir::arts::ArtsDialect",
+    "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"
   ];
   let constructor = "mlir::arts::sde::createConvertOpenMPToSdePass()";
 }
@@ -86,8 +57,8 @@ def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
     that ConvertOpenMPToArts currently generates.
   }];
   let dependentDialects = [
-    "arts::sde::ArtsSdeDialect", "arts::ArtsDialect",
-    "memref::MemRefDialect", "arith::ArithDialect"
+    "::mlir::arts::sde::ArtsSdeDialect", "::mlir::arts::ArtsDialect",
+    "::mlir::memref::MemRefDialect", "::mlir::arith::ArithDialect"
   ];
   let constructor = "mlir::arts::sde::createConvertSdeToArtsPass()";
 }

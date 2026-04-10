@@ -7,8 +7,6 @@
 #ifndef ARTS_DIALECT_CORE_ANALYSIS_METADATA_DEPENDENCEANALYZER_H
 #define ARTS_DIALECT_CORE_ANALYSIS_METADATA_DEPENDENCEANALYZER_H
 
-#include "arts/dialect/core/Analysis/metadata/AccessAnalyzer.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -24,9 +22,7 @@ namespace arts {
 ///===----------------------------------------------------------------------===///
 class DependenceAnalyzer {
 public:
-  explicit DependenceAnalyzer(MLIRContext *context,
-                              AccessAnalyzer &accessAnalyzer)
-      : context(context), accessAnalyzer(accessAnalyzer) {}
+  explicit DependenceAnalyzer(MLIRContext *context) : context(context) {}
 
   /// Check if a loop has inter-iteration dependencies
   bool hasInterIterationDeps(Operation *loopOp) const {
@@ -190,7 +186,6 @@ public:
 
 private:
   MLIRContext *context [[maybe_unused]];
-  AccessAnalyzer &accessAnalyzer [[maybe_unused]];
 
   struct DependenceSummary {
     bool hasDependence = false;

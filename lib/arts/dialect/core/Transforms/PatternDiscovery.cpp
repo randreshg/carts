@@ -1,32 +1,26 @@
 ///==========================================================================///
 /// File: PatternDiscovery.cpp
 ///
-/// Metadata-guided seed/refine pass for pre-DB pattern contracts.
+/// Local-analysis seed/refine pass for pre-DB pattern contracts.
 ///
-/// The pass is intentionally conservative:
-/// - metadata is treated as a hint, not as proof
-/// - seed mode only stamps families when loop and memref metadata agree
-/// - refine mode can strengthen generic stencil contracts when the metadata
-///   clearly indicates a multi-dimensional stencil shape
+/// The pass uses only local IR analysis to discover patterns:
+/// - collectLocalStencilEvidence() walks the loop body for stencil detection
+/// - collectEvidence() walks memref uses for affine/uniform classification
+/// - arts::ForOp is inherently parallel (from omp.wsloop); reductions
+///   are detected via the ForOp's reductionAccumulators operand
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
-#include "arts/dialect/core/Analysis/AnalysisManager.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/dialect/core/Transforms/kernel/KernelTransform.h"
 #include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_PATTERNDISCOVERY
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/metadata/LoopMetadata.h"
-#include "arts/utils/metadata/MemrefMetadata.h"
 #include "mlir/Pass/Pass.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -46,80 +40,22 @@ ARTS_DEBUG_SETUP(pattern_discovery);
 using namespace mlir;
 using namespace mlir::arts;
 
-static const AnalysisKind kPatternDiscovery_reads[] = {
-    AnalysisKind::MetadataManager};
-[[maybe_unused]] static const AnalysisDependencyInfo kPatternDiscovery_deps = {
-    kPatternDiscovery_reads, {}};
-
 namespace {
 
 enum class DiscoveryMode { Seed, Refine };
 
 struct DiscoveryEvidence {
-  const LoopMetadata *loopMeta = nullptr;
-  SmallVector<const MemrefMetadata *> memrefs;
   bool loopAllowsParallelFamily = false;
   bool loopHasReductions = false;
-  bool loopHasDeps = false;
   unsigned totalMemrefs = 0;
   unsigned affineMemrefs = 0;
   unsigned uniformMemrefs = 0;
   unsigned stencilMemrefs = 0;
   unsigned multiDimStencilMemrefs = 0;
-  unsigned locallyVerifiedStencilMemrefs = 0;
-  unsigned locallyVerifiedMultiDimStencilMemrefs = 0;
 };
 
 static int64_t revisionForMode(DiscoveryMode mode) {
   return mode == DiscoveryMode::Refine ? 2 : 1;
-}
-
-static bool isLoopParallelCandidate(const LoopMetadata &meta) {
-  if (meta.hasReductions)
-    return false;
-  if (meta.parallelClassification &&
-      *meta.parallelClassification ==
-          LoopMetadata::ParallelClassification::Sequential)
-    return false;
-  if (meta.hasInterIterationDeps && *meta.hasInterIterationDeps)
-    return false;
-  return meta.potentiallyParallel;
-}
-
-static unsigned countSpatialLikeDims(const MemrefMetadata &meta) {
-  unsigned count = 0;
-  for (auto pattern : meta.dimAccessPatterns) {
-    if (pattern == MemrefMetadata::DimAccessPatternType::UnitStride ||
-        pattern == MemrefMetadata::DimAccessPatternType::Affine)
-      ++count;
-  }
-  return count;
-}
-
-static bool isUniformMemref(const MemrefMetadata &meta) {
-  if (meta.dominantAccessPattern &&
-      *meta.dominantAccessPattern == AccessPatternType::Sequential)
-    return true;
-  if (meta.hasUniformAccess && *meta.hasUniformAccess)
-    return true;
-  if (meta.hasStrideOneAccess && *meta.hasStrideOneAccess)
-    return true;
-  return false;
-}
-
-static bool isStencilMemref(const MemrefMetadata &meta) {
-  return meta.dominantAccessPattern &&
-         *meta.dominantAccessPattern == AccessPatternType::Stencil;
-}
-
-static bool isMultiDimStencilMemref(const MemrefMetadata &meta) {
-  if (!isStencilMemref(meta))
-    return false;
-
-  if (meta.rank && *meta.rank >= 2)
-    return true;
-
-  return countSpatialLikeDims(meta) >= 2;
 }
 
 static Operation *resolveAllocLikeSource(Value value) {
@@ -130,28 +66,78 @@ static Operation *resolveAllocLikeSource(Value value) {
   return nullptr;
 }
 
+/// Check if all uses of a memref within the loop body are via affine ops.
+static bool isMemrefAllAffineInBody(Operation *allocLike, Block *body) {
+  for (Operation &op : *body) {
+    Value memref = DbUtils::getAccessedMemref(&op);
+    if (!memref)
+      continue;
+    if (resolveAllocLikeSource(memref) != allocLike)
+      continue;
+    if (!isa<affine::AffineLoadOp, affine::AffineStoreOp>(&op))
+      return false;
+  }
+  // Also check nested regions (inner loops, etc.)
+  for (Operation &op : *body) {
+    for (Region &region : op.getRegions()) {
+      for (Block &block : region) {
+        if (!isMemrefAllAffineInBody(allocLike, &block))
+          return false;
+      }
+    }
+  }
+  return true;
+}
+
+/// Check if a memref has uniform (stride-one or all-affine) access in the body.
+static bool isMemrefUniformInBody(Operation *allocLike, Block *body,
+                                  ArrayRef<Value> ivs) {
+  bool hasAccess = false;
+
+  body->walk([&](Operation *op) {
+    Value memref = DbUtils::getAccessedMemref(op);
+    if (!memref)
+      return;
+    if (resolveAllocLikeSource(memref) != allocLike)
+      return;
+
+    hasAccess = true;
+
+    // Affine ops are uniform by definition
+    if (isa<affine::AffineLoadOp, affine::AffineStoreOp>(op))
+      return;
+
+    // For non-affine ops, check that the innermost index is stride-one (iv+c)
+    SmallVector<Value> indices = DbUtils::getMemoryAccessIndices(op);
+    if (indices.empty()) {
+      hasAccess = false; // Can't verify — mark as non-uniform
+      return;
+    }
+
+    Value innermost = indices.back();
+    Value stripped = ValueAnalysis::stripNumericCasts(innermost);
+    bool foundStrideOne = false;
+    for (Value iv : ivs) {
+      int64_t offset = 0;
+      Value base = ValueAnalysis::stripNumericCasts(
+          ValueAnalysis::stripConstantOffset(stripped, &offset));
+      if (base == iv) {
+        foundStrideOne = true;
+        break;
+      }
+    }
+    if (!foundStrideOne)
+      hasAccess = false; // Non-stride-one access — not uniform
+  });
+
+  return hasAccess;
+}
+
 struct LocalStencilEvidence {
   bool isStencil = false;
   bool isMultiDimStencil = false;
   std::optional<StencilNDPatternContract> explicitContract;
 };
-
-static const LoopMetadata *
-resolveLoopMetadataForArtsFor(arts::ForOp forOp, MetadataManager &manager) {
-  if (!forOp)
-    return nullptr;
-
-  if (const LoopMetadata *meta = manager.getLoopMetadata(forOp.getOperation()))
-    return meta;
-
-  const LoopMetadata *nestedMeta = nullptr;
-  forOp.getBody()->walk([&](Operation *op) {
-    if (nestedMeta || !isa<scf::ForOp, affine::AffineForOp>(op))
-      return;
-    nestedMeta = manager.getLoopMetadata(op);
-  });
-  return nestedMeta;
-}
 
 static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp,
                                                         int64_t revision) {
@@ -230,21 +216,29 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp,
 }
 
 static DiscoveryEvidence
-collectEvidence(arts::ForOp forOp, MetadataManager &manager,
+collectEvidence(arts::ForOp forOp,
                 const LocalStencilEvidence &localStencil) {
   DiscoveryEvidence evidence;
-  evidence.loopMeta = resolveLoopMetadataForArtsFor(forOp, manager);
-  if (!evidence.loopMeta)
+
+  // arts::ForOp is inherently parallel (created from omp.wsloop).
+  // It only fails the parallel check if it has reductions.
+  bool hasReductions = !forOp.getReductionAccumulators().empty();
+  evidence.loopHasReductions = hasReductions;
+  evidence.loopAllowsParallelFamily = !hasReductions;
+
+  Block *body = forOp.getBody();
+  if (!body)
     return evidence;
 
-  evidence.loopAllowsParallelFamily =
-      isLoopParallelCandidate(*evidence.loopMeta);
-  evidence.loopHasReductions = evidence.loopMeta->hasReductions;
-  evidence.loopHasDeps = evidence.loopMeta->hasInterIterationDeps &&
-                         *evidence.loopMeta->hasInterIterationDeps;
+  // Collect induction variables for uniform access detection.
+  SmallVector<Value, 4> ivs;
+  Block *spatialBody = nullptr;
+  if (!collectSpatialNestIvs(forOp, ivs, spatialBody)) {
+    ivs.append(body->getArguments().begin(), body->getArguments().end());
+  }
 
   llvm::SmallPtrSet<Operation *, 8> seenAllocs;
-  forOp.getBody()->walk([&](Operation *op) {
+  body->walk([&](Operation *op) {
     Value memref = DbUtils::getAccessedMemref(op);
     if (!memref)
       return;
@@ -253,38 +247,29 @@ collectEvidence(arts::ForOp forOp, MetadataManager &manager,
     if (!allocLike || !seenAllocs.insert(allocLike).second)
       return;
 
-    if (const MemrefMetadata *meta = manager.getMemrefMetadata(allocLike)) {
-      evidence.memrefs.push_back(meta);
-      ++evidence.totalMemrefs;
+    ++evidence.totalMemrefs;
 
-      if ((meta->allAccessesAffine && *meta->allAccessesAffine) ||
-          (meta->hasAffineAccesses && *meta->hasAffineAccesses))
-        ++evidence.affineMemrefs;
-      if (isUniformMemref(*meta))
-        ++evidence.uniformMemrefs;
-      if (isStencilMemref(*meta) && localStencil.isStencil)
-        ++evidence.stencilMemrefs;
-      if (isMultiDimStencilMemref(*meta) && localStencil.isMultiDimStencil)
-        ++evidence.multiDimStencilMemrefs;
-      if (localStencil.isStencil)
-        ++evidence.locallyVerifiedStencilMemrefs;
-      if (localStencil.isMultiDimStencil)
-        ++evidence.locallyVerifiedMultiDimStencilMemrefs;
-    }
+    if (isMemrefAllAffineInBody(allocLike, body))
+      ++evidence.affineMemrefs;
+    if (isMemrefUniformInBody(allocLike, body, ivs))
+      ++evidence.uniformMemrefs;
+    if (localStencil.isStencil)
+      ++evidence.stencilMemrefs;
+    if (localStencil.isMultiDimStencil)
+      ++evidence.multiDimStencilMemrefs;
   });
 
   return evidence;
 }
 
 static std::optional<ArtsDepPattern>
-chooseMetadataCandidate(const DiscoveryEvidence &evidence) {
-  if (!evidence.loopMeta || !evidence.loopAllowsParallelFamily)
+chooseCandidate(const DiscoveryEvidence &evidence) {
+  if (!evidence.loopAllowsParallelFamily)
     return std::nullopt;
   if (evidence.totalMemrefs == 0)
     return std::nullopt;
 
-  if (evidence.locallyVerifiedStencilMemrefs > 0 &&
-      evidence.locallyVerifiedMultiDimStencilMemrefs > 0)
+  if (evidence.stencilMemrefs > 0 && evidence.multiDimStencilMemrefs > 0)
     return ArtsDepPattern::stencil;
 
   if (evidence.uniformMemrefs == evidence.totalMemrefs &&
@@ -298,7 +283,7 @@ static std::optional<ArtsDepPattern>
 chooseRefinedPattern(std::optional<ArtsDepPattern> existing,
                      std::optional<ArtsDepPattern> candidate,
                      const DiscoveryEvidence &evidence, DiscoveryMode mode) {
-  if (!evidence.loopMeta || evidence.totalMemrefs == 0)
+  if (evidence.totalMemrefs == 0)
     return candidate;
 
   if (!existing)
@@ -342,17 +327,12 @@ static bool wouldContractChange(Operation *op,
 
 struct PatternDiscoveryPass
     : public impl::PatternDiscoveryBase<PatternDiscoveryPass> {
-  PatternDiscoveryPass(mlir::arts::AnalysisManager *AM, bool refineMode)
-      : analysisManager(AM) {
-    assert(AM && "AnalysisManager must be provided externally");
-    this->refine = refineMode;
-  }
+  PatternDiscoveryPass(bool refineMode) { this->refine = refineMode; }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
     DiscoveryMode mode = refine ? DiscoveryMode::Refine : DiscoveryMode::Seed;
     int64_t targetRevision = revisionForMode(mode);
-    auto &manager = analysisManager->getMetadataManager();
 
     int seeded = 0;
     int revised = 0;
@@ -361,15 +341,13 @@ struct PatternDiscoveryPass
     module.walk([&](arts::ForOp forOp) {
       LocalStencilEvidence localStencil =
           collectLocalStencilEvidence(forOp, targetRevision);
-      DiscoveryEvidence evidence =
-          collectEvidence(forOp, manager, localStencil);
+      DiscoveryEvidence evidence = collectEvidence(forOp, localStencil);
       std::optional<StencilNDPatternContract> explicitStencil;
       if (mode == DiscoveryMode::Refine)
         explicitStencil = localStencil.explicitContract;
       std::optional<ArtsDepPattern> existing =
           getDepPattern(forOp.getOperation());
-      std::optional<ArtsDepPattern> candidate =
-          chooseMetadataCandidate(evidence);
+      std::optional<ArtsDepPattern> candidate = chooseCandidate(evidence);
       std::optional<ArtsDepPattern> chosen =
           chooseRefinedPattern(existing, candidate, evidence, mode);
 
@@ -424,9 +402,6 @@ struct PatternDiscoveryPass
               << "): seeded=" << seeded << ", revised=" << revised
               << ", skipped=" << skipped);
   }
-
-private:
-  mlir::arts::AnalysisManager *analysisManager = nullptr;
 };
 
 } // namespace
@@ -436,7 +411,8 @@ namespace arts {
 
 std::unique_ptr<Pass> createPatternDiscoveryPass(AnalysisManager *AM,
                                                  bool refine) {
-  return std::make_unique<PatternDiscoveryPass>(AM, refine);
+  (void)AM; // No longer needed — kept for API compatibility
+  return std::make_unique<PatternDiscoveryPass>(refine);
 }
 
 } // namespace arts

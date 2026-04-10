@@ -7,6 +7,7 @@
 
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtGraph.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtNode.h"
 #include "arts/dialect/core/Analysis/loop/LoopNode.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -47,8 +48,6 @@ void AnalysisManager::invalidate() {
     edtHeuristics->invalidate();
   if (dbHeuristics)
     dbHeuristics->clearDecisions();
-  if (metadataManager)
-    metadataManager->clear();
   metadataCoverage = MetadataCoverage{};
   cachedDiagnosticJson.reset();
 }
@@ -83,32 +82,6 @@ StringAnalysis &AnalysisManager::getStringAnalysis() {
   return *stringAnalysis;
 }
 
-MetadataManager &AnalysisManager::getMetadataManager() {
-  if (!metadataManager) {
-    metadataManager = std::make_unique<MetadataManager>(module.getContext());
-    metadataManager->getIdRegistry().initializeFromModule(module);
-    metadataManager->importFromJsonFile(module, metadataFile);
-  }
-  return *metadataManager;
-}
-
-const MetadataManager &AnalysisManager::getMetadataManager() const {
-  assert(metadataManager && "Metadata manager not initialized. Call non-const "
-                            "getMetadataManager() first.");
-  return *metadataManager;
-}
-
-void AnalysisManager::syncMetadataManagerFromModule(
-    bool allowJsonImportIfUninitialized) {
-  if (!metadataManager) {
-    metadataManager = std::make_unique<MetadataManager>(module.getContext());
-    metadataManager->getIdRegistry().initializeFromModule(module);
-    if (allowJsonImportIfUninitialized)
-      metadataManager->importFromJsonFile(module, metadataFile);
-  }
-  metadataManager->collectFromModule(module);
-}
-
 const StringAnalysis &AnalysisManager::getStringAnalysis() const {
   assert(stringAnalysis && "String analysis not initialized. Call non-const "
                            "getStringAnalysis() first.");
@@ -117,9 +90,7 @@ const StringAnalysis &AnalysisManager::getStringAnalysis() const {
 
 DbHeuristics &AnalysisManager::getDbHeuristics() {
   if (!dbHeuristics) {
-    /// Ensure MetadataManager and IdRegistry are initialized first
-    auto &idRegistry = getMetadataManager().getIdRegistry();
-    dbHeuristics = std::make_unique<DbHeuristics>(abstractMachine, idRegistry);
+    dbHeuristics = std::make_unique<DbHeuristics>(abstractMachine);
   }
   return *dbHeuristics;
 }
@@ -234,7 +205,6 @@ void AnalysisManager::captureDiagnostics() {
   /// Unified entities array
   Array entities;
   DenseMap<Operation *, int64_t> loopToEdtMap;
-  auto &idRegistry = getMetadataManager().getIdRegistry();
   bool capturedSourceFile = false;
 
   for (auto func : module.getOps<func::FuncOp>()) {
@@ -261,7 +231,7 @@ void AnalysisManager::captureDiagnostics() {
       auto *edtNode = dyn_cast<EdtNode>(node);
       if (!edtNode)
         return;
-      int64_t edtId = idRegistry.get(edtNode->getOp());
+      int64_t edtId = getArtsId(edtNode->getOp());
       if (edtId == 0)
         return;
       for (auto *loop : edtNode->getAssociatedLoops()) {
@@ -280,48 +250,6 @@ void AnalysisManager::captureDiagnostics() {
         }
       }
     }
-  }
-
-  /// Collect loops from MetadataManager (entity_type = "loop")
-  /// Flattened properties - no nested static_analysis
-  auto &mm = getMetadataManager();
-  for (auto *loopOp : mm.getLoopOperations()) {
-    auto *meta = mm.getLoopMetadata(loopOp);
-    if (!meta)
-      continue;
-
-    Object loop;
-
-    /// ARTS ID
-    int64_t artsId = mm.getIdRegistry().get(loopOp);
-    if (artsId != 0)
-      loop["arts_id"] = artsId;
-
-    loop["entity_type"] = "loop";
-
-    /// Source location
-    if (meta->locationMetadata.isValid())
-      loop["source_location"] = meta->locationMetadata.file + ":" +
-                                std::to_string(meta->locationMetadata.line);
-    else
-      loop["source_location"] = "unknown";
-
-    /// Containing EDT (bidirectional relationship)
-    if (auto it = loopToEdtMap.find(loopOp); it != loopToEdtMap.end())
-      loop["containing_edt_id"] = it->second;
-
-    /// Core loop properties (flattened - no nested static_analysis)
-    loop["potentially_parallel"] = meta->potentiallyParallel;
-
-    if (meta->tripCount)
-      loop["trip_count"] = *meta->tripCount;
-    if (meta->nestingLevel)
-      loop["nesting_level"] = *meta->nestingLevel;
-
-    /// Loop reordering legality (for ArtsMate to know if hint is safe)
-    loop["reorder_legal"] = !meta->reorderNestTo.empty();
-
-    entities.push_back(std::move(loop));
   }
 
   root["entities"] = std::move(entities);

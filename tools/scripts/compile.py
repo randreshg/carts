@@ -577,8 +577,6 @@ def compile_cmd(
         help="(.mlir input) write one output per pipeline step"),
     emit_llvm: bool = Option(
         False, "--emit-llvm", help="Emit LLVM IR output"),
-    collect_metadata: bool = Option(
-        False, "--collect-metadata", help="Collect and export metadata"),
     partition_fallback: Optional[str] = Option(
         None, "--partition-fallback",
         help="Partition fallback strategy (coarse, fine)"),
@@ -629,9 +627,9 @@ def compile_cmd(
         if all_pipelines:
             print_error("--all-pipelines is only supported for .mlir input")
             raise Exit(1)
-        if emit_llvm or collect_metadata or partition_fallback or diagnose or diagnose_output:
+        if emit_llvm or partition_fallback or diagnose or diagnose_output:
             print_error(
-                "--emit-llvm, --collect-metadata, --partition-fallback, and diagnose "
+                "--emit-llvm, --partition-fallback, and diagnose "
                 "options are not supported for .ll input (link-only)"
             )
             raise Exit(1)
@@ -670,9 +668,6 @@ def compile_cmd(
         if emit_llvm:
             print_error("--emit-llvm is only supported for .mlir input")
             raise Exit(1)
-        if collect_metadata:
-            print_error("--collect-metadata is only supported for .mlir input")
-            raise Exit(1)
         if start_from:
             print_error("--start-from is only supported for .mlir input")
             raise Exit(1)
@@ -684,7 +679,7 @@ def compile_cmd(
             print_error("--all-pipelines cannot be combined with --pipeline or --start-from")
             raise Exit(1)
         _compile_from_mlir(input_file, output, optimize, debug, pipeline,
-                           all_pipelines, emit_llvm, collect_metadata,
+                           all_pipelines, emit_llvm,
                            partition_fallback, diagnose, diagnose_output,
                            normalized_arts_debug,
                            start_from, passthrough_args)
@@ -762,7 +757,6 @@ def _compile_from_mlir(
     pipeline: Optional[str],
     all_pipelines: bool,
     emit_llvm: bool,
-    collect_metadata: bool,
     partition_fallback: Optional[str] = None,
     diagnose: bool = False,
     diagnose_output: Optional[Path] = None,
@@ -807,8 +801,6 @@ def _compile_from_mlir(
         cmd.append("--O3")
     if emit_llvm:
         cmd.append("--emit-llvm")
-    if collect_metadata:
-        cmd.append("--collect-metadata")
     if debug:
         cmd.append("-g")
     if pipeline:
@@ -909,41 +901,6 @@ def _find_metadata_file(input_file: Path, pipeline_args: List[str]) -> Optional[
     return None
 
 
-def _collect_flag_args(args: List[str], allowed_flags: List[str]) -> List[str]:
-    """Collect selected long flags in either `--flag value` or `--flag=value` form."""
-    collected: List[str] = []
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        matched = next((flag for flag in allowed_flags if arg == flag), None)
-        if matched is not None:
-            collected.append(arg)
-            if i + 1 < len(args):
-                next_arg = args[i + 1]
-                if not next_arg.startswith("--") or _is_numeric(next_arg):
-                    collected.append(next_arg)
-                    i += 1
-            i += 1
-            continue
-        if any(arg.startswith(f"{flag}=") for flag in allowed_flags):
-            collected.append(arg)
-        i += 1
-    return collected
-
-
-def _metadata_json_path_from_args(args: List[str]) -> Path:
-    """Return metadata JSON path from passthrough args or default."""
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == FLAG_METADATA_FILE and i + 1 < len(args):
-            return Path(args[i + 1])
-        if arg.startswith(f"{FLAG_METADATA_FILE}="):
-            return Path(arg.split("=", 1)[1])
-        i += 1
-    return Path(DEFAULT_METADATA_FILENAME)
-
-
 def _build_cgeist_cmd(
     config: CartsConfig,
     input_file: Path,
@@ -1002,14 +959,12 @@ def _compile_c_pipeline(
     diagnose_output: Optional[Path] = None,
     pipeline_stop: Optional[str] = None,
 ) -> None:
-    """C/C++ compilation pipeline with metadata extraction.
+    """C/C++ compilation pipeline.
 
     Steps:
-    1. Sequential compilation (no OpenMP) - for metadata extraction
-    2. Collect metadata from sequential MLIR
-    3. Parallel compilation (with OpenMP) - for ARTS transformation
-    4. Apply ARTS transformations
-    5. Link final executable (skipped if pipeline_stop is set)
+    1. Compilation (with OpenMP) - for ARTS transformation
+    2. Apply ARTS transformations
+    3. Link final executable (skipped if pipeline_stop is set)
     """
     base_name = input_file.stem
     extension = input_file.suffix
@@ -1017,7 +972,7 @@ def _compile_c_pipeline(
     passthrough_args = passthrough_args or []
     skip_link = pipeline_stop is not None
 
-    total_steps = 4 if skip_link else 5
+    total_steps = 2 if skip_link else 3
     step_label = f"/{total_steps}]"
 
     print_header("CARTS Compile Pipeline")
@@ -1032,69 +987,27 @@ def _compile_c_pipeline(
 
     carts_compile_bin = config.get_carts_tool(TOOL_CARTS_COMPILE)
 
-    metadata_args = _collect_flag_args(
-        pipeline_args, [FLAG_ARTS_CONFIG, FLAG_METADATA_FILE]
-    )
-
     # Output file paths
-    seq_mlir = Path(f"{base_name}_seq.mlir")
-    metadata_mlir = Path(f"{base_name}_arts_metadata.mlir")
     par_mlir = Path(f"{base_name}.mlir")
     ll_file = Path(f"{base_name}-arts.ll")
-    metadata_json = _metadata_json_path_from_args(metadata_args)
-
-    # Step 2 rewrites metadata from the current sequential MLIR. A stale file
-    # from an unrelated prior compile can poison JSON import and crash later
-    # pipeline stages, so start from a clean metadata cache path.
-    try:
-        metadata_json.unlink(missing_ok=True)
-    except OSError as exc:
-        print_warning(f"Could not remove stale metadata file {metadata_json}: {exc}")
 
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        # Step 1: Sequential compilation (no OpenMP, with debug info for metadata)
-        task = progress.add_task(f"[1{step_label} Sequential compilation...", total=None)
-        cmd = _build_cgeist_cmd(config, input_file, std_flag, passthrough_args,
-                                with_openmp=False, with_debug_info=True)
-        if run_command_with_output(cmd, seq_mlir) != 0:
-            print_error("Failed sequential compilation")
-            raise Exit(1)
-        progress.remove_task(task)
-        print_success(f"[1{step_label} {seq_mlir}")
-
-        # Step 2: Extract metadata from sequential MLIR
-        task = progress.add_task(f"[2{step_label} Collecting metadata...", total=None)
-        cmd = [str(carts_compile_bin), str(seq_mlir),
-               "--collect-metadata", FLAG_OUTPUT, str(metadata_mlir)]
-        arts_cfg = _find_arts_config(input_file, pipeline_args, config)
-        if arts_cfg and not _has_flag(metadata_args, FLAG_ARTS_CONFIG):
-            cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
-        cmd.extend(metadata_args)
-        if run_subprocess(cmd, check=False).returncode != 0:
-            print_error("Failed to collect metadata")
-            raise Exit(1)
-        progress.remove_task(task)
-        if metadata_json.is_file():
-            print_success(f"[2{step_label} {metadata_json}")
-        else:
-            print_warning(f"[2{step_label} Metadata file not created")
-
-        # Step 3: Parallel compilation (with OpenMP for ARTS transformation)
-        task = progress.add_task(f"[3{step_label} Parallel compilation...", total=None)
+        # Step 1: Compilation (with OpenMP for ARTS transformation)
+        task = progress.add_task(f"[1{step_label} Compilation...", total=None)
         cmd = _build_cgeist_cmd(config, input_file, std_flag, passthrough_args,
                                 with_openmp=True, with_debug_info=True)
         if run_command_with_output(cmd, par_mlir) != 0:
-            print_error("Failed parallel compilation")
+            print_error("Failed compilation")
             raise Exit(1)
         progress.remove_task(task)
-        print_success(f"[3{step_label} {par_mlir}")
+        print_success(f"[1{step_label} {par_mlir}")
 
-        # Step 4: Apply ARTS transformations
-        task = progress.add_task(f"[4{step_label} ARTS transformations...", total=None)
+        # Step 2: Apply ARTS transformations
+        task = progress.add_task(f"[2{step_label} ARTS transformations...", total=None)
         cmd = [str(carts_compile_bin), str(par_mlir)]
         if enable_pipeline_o3:
             cmd.append("--O3")
@@ -1119,7 +1032,7 @@ def _compile_c_pipeline(
             print_error("Failed ARTS transformations")
             raise Exit(1)
         progress.remove_task(task)
-        print_success(f"[4{step_label} {out_file}")
+        print_success(f"[2{step_label} {out_file}")
 
         if skip_link:
             console.print()
@@ -1131,22 +1044,20 @@ def _compile_c_pipeline(
             ))
             return
 
-        # Step 5: Link with ARTS runtime
-        task = progress.add_task(f"[5{step_label} Final linking...", total=None)
+        # Step 3: Link with ARTS runtime
+        task = progress.add_task(f"[3{step_label} Final linking...", total=None)
         cmd = _build_link_cmd(
             config, ll_file, output_name, debug, link_args)
         if run_subprocess(cmd, check=False).returncode != 0:
             print_error("Failed final linking")
             raise Exit(1)
         progress.remove_task(task)
-        print_success(f"[5{step_label} {output_name}")
+        print_success(f"[3{step_label} {output_name}")
 
     console.print()
     files_info = (
         f"[{Colors.SUCCESS}]Generated:[/{Colors.SUCCESS}] {output_name}\n"
-        f"[{Colors.DIM}]Sequential: {seq_mlir}[/{Colors.DIM}]\n"
-        f"[{Colors.DIM}]Metadata: {metadata_json}[/{Colors.DIM}]\n"
-        f"[{Colors.DIM}]Parallel: {par_mlir}[/{Colors.DIM}]\n"
+        f"[{Colors.DIM}]MLIR: {par_mlir}[/{Colors.DIM}]\n"
         f"[{Colors.DIM}]LLVM IR: {ll_file}[/{Colors.DIM}]"
     )
     console.print(Panel(files_info, title="Success", border_style=Colors.SUCCESS))

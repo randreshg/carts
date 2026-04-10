@@ -20,7 +20,7 @@
 ARTS_DEBUG_SETUP(string_analysis);
 
 using namespace mlir;
-using namespace arts;
+using namespace mlir::arts;
 
 StringAnalysis::StringAnalysis(AnalysisManager &manager)
     : ArtsAnalysis(manager), module(manager.getModule()) {}

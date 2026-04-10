@@ -21,7 +21,6 @@
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
 #define GEN_PASS_DEF_CONVERTARTSTOLLVM
-#include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
@@ -34,7 +33,7 @@
 ARTS_DEBUG_SETUP(convert_arts_to_llvm);
 
 using namespace mlir;
-using namespace arts;
+using namespace mlir::arts;
 
 using namespace mlir::arts::convert_arts_to_llvm;
 

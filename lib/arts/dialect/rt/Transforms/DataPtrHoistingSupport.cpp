@@ -11,8 +11,7 @@ ARTS_DEBUG_SETUP(data_ptr_hoisting);
 
 using namespace mlir;
 using namespace mlir::arts;
-using mlir::arts::rt::DbGepOp;
-using mlir::arts::rt::DepGepOp;
+using namespace mlir::arts::rt;
 
 namespace mlir::arts::data_ptr_hoisting {
 
@@ -56,16 +55,6 @@ bool isDbPtrLoad(LLVM::LoadOp loadOp) {
   if (auto defOp = loadOp.getAddr().getDefiningOp<DbGepOp>())
     return true;
   return false;
-}
-
-bool isMinusOneConstant(Value value) {
-  auto folded = ValueAnalysis::tryFoldConstantIndex(
-      ValueAnalysis::stripNumericCasts(value));
-  return folded && *folded == -1;
-}
-
-bool isZeroIndexConstant(Value value) {
-  return ValueAnalysis::isZeroConstant(ValueAnalysis::stripNumericCasts(value));
 }
 
 bool matchGreaterThanConstIcmp(Value cond, Value value, int64_t threshold) {
@@ -239,14 +228,16 @@ bool matchCarryAdjust(Value value, Value &belowCond, Value &aboveCond) {
   Value lowArm = ValueAnalysis::stripNumericCasts(highSel.getFalseValue());
 
   if (auto lowSel = lowArm.getDefiningOp<arith::SelectOp>()) {
-    if (!isMinusOneConstant(lowSel.getTrueValue()) ||
-        !isZeroIndexConstant(lowSel.getFalseValue()))
+    if (!ValueAnalysis::isConstantEqual(
+            ValueAnalysis::stripNumericCasts(lowSel.getTrueValue()), -1) ||
+        !ValueAnalysis::isZeroConstant(
+            ValueAnalysis::stripNumericCasts(lowSel.getFalseValue())))
       return false;
     belowCond = lowSel.getCondition();
     return true;
   }
 
-  if (isZeroIndexConstant(lowArm)) {
+  if (ValueAnalysis::isZeroConstant(lowArm)) {
     belowCond = Value();
     return true;
   }
@@ -281,7 +272,8 @@ bool matchNeighborCarryIndex(Value value, scf::ForOp loop,
   value = ValueAnalysis::stripNumericCasts(value);
 
   if (auto forceZero = value.getDefiningOp<arith::SelectOp>()) {
-    if (!isZeroIndexConstant(forceZero.getTrueValue()))
+    if (!ValueAnalysis::isZeroConstant(
+            ValueAnalysis::stripNumericCasts(forceZero.getTrueValue())))
       return false;
     pattern.forceZeroCond = forceZero.getCondition();
     value = ValueAnalysis::stripNumericCasts(forceZero.getFalseValue());

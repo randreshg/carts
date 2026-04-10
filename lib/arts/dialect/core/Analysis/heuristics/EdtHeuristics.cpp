@@ -81,32 +81,6 @@ EdtHeuristics::evaluateParallelEdtFusion(EdtOp first, EdtOp second) const {
     return decision;
   }
 
-  const AbstractMachine &machine = getMachine();
-  int64_t workerCount = std::max<int64_t>(
-      1, resolveWorkerConfig(first).value_or(WorkerConfig{}).totalWorkers);
-  if (workerCount <= 1) {
-    auto fallback = DistributionHeuristics::resolveParallelismFromMachine(
-        machine.isValid() ? &machine : nullptr);
-    workerCount = std::max<int64_t>(1, fallback.totalWorkers);
-  }
-
-  EdtAnalysis &edtAnalysis = getAnalysisManager().getEdtAnalysis();
-  EdtAnalysis::ParallelEdtWorkSummary firstLoops =
-      edtAnalysis.summarizeParallelEdtWork(first, workerCount);
-  EdtAnalysis::ParallelEdtWorkSummary secondLoops =
-      edtAnalysis.summarizeParallelEdtWork(second, workerCount);
-  bool sharedReadonlyInputs =
-      edtAnalysis.hasSharedReadonlyInputs(first, second);
-  bool heavyReductionPipeline = workerCount > 1 && sharedReadonlyInputs &&
-                                firstLoops.hasReductionLoop &&
-                                secondLoops.hasReductionLoop &&
-                                firstLoops.peakWorkPerWorker >= workerCount &&
-                                secondLoops.peakWorkPerWorker >= workerCount;
-  if (heavyReductionPipeline) {
-    decision.rationale = "sibling reductions already amortize launch overhead";
-    return decision;
-  }
-
   decision.shouldFuse = true;
   decision.rationale = "eligible";
   return decision;

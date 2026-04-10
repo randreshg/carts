@@ -29,10 +29,8 @@
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/dialect/core/Analysis/heuristics/DistributionHeuristics.h"
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_FORLOWERING
-#include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/db/OwnershipProof.h"
 #include "arts/dialect/core/Transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/dialect/core/Transforms/edt/EdtReductionLowering.h"
@@ -43,13 +41,11 @@
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
-#include "arts/utils/LoopUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Pass/Pass.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -73,18 +69,16 @@
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(for_lowering);
 
-using mlir::arts::AnalysisDependencyInfo;
-using mlir::arts::AnalysisKind;
+using namespace mlir::arts;
 
 static const AnalysisKind kForLowering_reads[] = {
     AnalysisKind::DbAnalysis, AnalysisKind::EdtHeuristics,
-    AnalysisKind::AbstractMachine, AnalysisKind::MetadataManager};
+    AnalysisKind::AbstractMachine};
 [[maybe_unused]] static const AnalysisDependencyInfo kForLowering_deps = {
     kForLowering_reads, {}};
 
 using namespace mlir;
 using namespace mlir::func;
-using namespace mlir::arts;
 
 namespace {
 
@@ -485,14 +479,34 @@ static void cloneExternalAllocasIntoEdt(Region *taskEdtRegion, Block &taskBlock,
   }
 }
 
-static void markReductionLoweredLoop(LoopMetadata &metadata) {
-  metadata.potentiallyParallel = true;
-  metadata.hasReductions = false;
-  metadata.reductionKinds.clear();
-  metadata.hasInterIterationDeps = false;
-  metadata.memrefsWithLoopCarriedDeps = 0;
-  metadata.parallelClassification =
-      LoopMetadata::ParallelClassification::Likely;
+/// Count memrefs in the loop body that have both reads and writes,
+/// which indicates potential loop-carried dependencies.
+static int64_t countMemrefsWithLoopCarriedDeps(arts::ForOp forOp) {
+  DenseMap<Value, bool> hasRead, hasWrite;
+  SmallPtrSet<Value, 8> seenMemrefs;
+
+  forOp.getBody()->walk([&](Operation *op) {
+    Value memref;
+    if (auto load = dyn_cast<memref::LoadOp>(op))
+      memref = load.getMemref();
+    else if (auto store = dyn_cast<memref::StoreOp>(op))
+      memref = store.getMemRef();
+    else
+      return;
+
+    seenMemrefs.insert(memref);
+    if (isa<memref::LoadOp>(op))
+      hasRead[memref] = true;
+    else
+      hasWrite[memref] = true;
+  });
+
+  int64_t count = 0;
+  for (Value m : seenMemrefs) {
+    if (hasRead.count(m) && hasWrite.count(m))
+      ++count;
+  }
+  return count;
 }
 
 /// ForLowering Pass Implementation
@@ -576,9 +590,6 @@ private:
                               Value workerCountOverride = Value());
 
   void createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo, Location loc);
-  MetadataManager &getMetadataManager() const;
-  void attachLoweredLoopMetadata(ForOp sourceFor, scf::ForOp loweredLoop,
-                                 bool parallelizeReductionOnly = false);
 
   /// Lower an arts.for with DB acquires rewired directly to DbAllocOp.
   /// This is used when splitting the parallel region - the for body is
@@ -842,26 +853,6 @@ bool ForLoweringPass::lowerOrchestratedWaveGroup(ArrayRef<EdtOp> groupedEdts) {
   return true;
 }
 
-MetadataManager &ForLoweringPass::getMetadataManager() const {
-  assert(AM && "AnalysisManager must be provided externally");
-  return AM->getMetadataManager();
-}
-
-void ForLoweringPass::attachLoweredLoopMetadata(ForOp sourceFor,
-                                                scf::ForOp loweredLoop,
-                                                bool parallelizeReductionOnly) {
-  auto &metadataManager = getMetadataManager();
-  if (parallelizeReductionOnly) {
-    metadataManager.cloneLoopMetadata(sourceFor.getOperation(),
-                                      loweredLoop.getOperation(),
-                                      markReductionLoweredLoop);
-    return;
-  }
-  metadataManager.cloneLoopMetadata(sourceFor.getOperation(),
-                                    loweredLoop.getOperation(),
-                                    clearReductionLoopFacts);
-}
-
 void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,
                                     scf::ForOp chunkLoop, Value chunkOffset,
                                     IRMapping &mapper) {
@@ -925,14 +916,14 @@ void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,
 ReductionInfo ForLoweringPass::allocatePartialAccumulators(
     ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt, Location loc,
     bool splitMode, Value workerCountOverride) {
-  return mlir::arts::allocatePartialAccumulators(
-      AC, getMetadataManager(), forOp, parallelEdt, loc, splitMode,
-      workerCountOverride);
+  return mlir::arts::allocatePartialAccumulators(AC, forOp, parallelEdt, loc,
+                                                   splitMode,
+                                                   workerCountOverride);
 }
 
 void ForLoweringPass::createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo,
                                       Location loc) {
-  arts::createResultEdt(AC, getMetadataManager(), redInfo, loc);
+  arts::createResultEdt(AC, redInfo, loc);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1543,7 +1534,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         taskLoopLowering->lower(taskLoopInput, mappedLoopValues);
     loopInfo.insideBounds = loweredLoop.insideBounds;
     scf::ForOp iterLoop = loweredLoop.iterLoop;
-    attachLoweredLoopMetadata(forOp, iterLoop);
 
     AC->setInsertionPointToStart(iterLoop.getBody());
 
@@ -1771,37 +1761,28 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   chunkOffset = loweredLoop.iterStart;
   scf::ForOp iterLoop = loweredLoop.iterLoop;
 
-  bool parallelizeReductionOnly = false;
   if (!reductionVarIndex.empty()) {
-    auto &metadataManager = getMetadataManager();
-    metadataManager.refreshMetadata(forOp.getOperation());
-    if (auto *sourceMetadata = metadataManager.getLoopMetadata(forOp)) {
-      int64_t memrefDeps =
-          sourceMetadata->memrefsWithLoopCarriedDeps.value_or(0);
-      int64_t numReductionVars = reductionVarIndex.size();
+    int64_t memrefDeps = countMemrefsWithLoopCarriedDeps(forOp);
+    int64_t numReductionVars = reductionVarIndex.size();
 
-      /// Check if ALL loop-carried dependencies are from reduction variables.
-      /// If memrefDeps == numReductionVars, all deps are reductions, which is
-      /// safe to parallelize because reduction dependencies are handled via
-      /// worker-local accumulators and a final reduction phase, NOT via
-      /// cross-iteration data flow. If memrefDeps < numReductionVars, some
-      /// reductions have no deps (write-only), which is also safe. If
-      /// memrefDeps > numReductionVars, there are non-reduction dependencies
-      /// (likely stencil patterns), which we must keep sequential.
-      if (memrefDeps <= numReductionVars) {
-        parallelizeReductionOnly = true;
-        ARTS_DEBUG("  Updated loop metadata: potentiallyParallel=true "
-                   "(reduction-only deps: "
-                   << memrefDeps << " memrefs with deps, " << numReductionVars
-                   << " reduction vars, no stencil patterns)");
-      } else {
-        ARTS_DEBUG("  Keeping original metadata: memrefsWithLoopCarriedDeps="
-                   << memrefDeps << " > reduction vars=" << numReductionVars
-                   << " (stencil patterns detected)");
-      }
+    /// Check if ALL loop-carried dependencies are from reduction variables.
+    /// If memrefDeps == numReductionVars, all deps are reductions, which is
+    /// safe to parallelize because reduction dependencies are handled via
+    /// worker-local accumulators and a final reduction phase, NOT via
+    /// cross-iteration data flow. If memrefDeps < numReductionVars, some
+    /// reductions have no deps (write-only), which is also safe. If
+    /// memrefDeps > numReductionVars, there are non-reduction dependencies
+    /// (likely stencil patterns), which we must keep sequential.
+    if (memrefDeps <= numReductionVars) {
+      ARTS_DEBUG("  Reduction-only deps: "
+                 << memrefDeps << " memrefs with deps, " << numReductionVars
+                 << " reduction vars, no stencil patterns");
+    } else {
+      ARTS_DEBUG("  memrefsWithLoopCarriedDeps="
+                 << memrefDeps << " > reduction vars=" << numReductionVars
+                 << " (stencil patterns detected)");
     }
   }
-  attachLoweredLoopMetadata(forOp, iterLoop, parallelizeReductionOnly);
 
   AC->setInsertionPointToStart(iterLoop.getBody());
 

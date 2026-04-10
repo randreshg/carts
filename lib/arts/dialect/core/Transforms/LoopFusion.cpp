@@ -208,16 +208,8 @@ bool LoopFusionPass::areIndependent(ForOp a, ForOp b,
   LoopNode *loopNodeA = loopAnalysis.getLoopNode(a.getOperation());
   LoopNode *loopNodeB = loopAnalysis.getLoopNode(b.getOperation());
 
-  if (loopNodeA && loopNodeB) {
-    if (loopNodeA->hasInterIterationDeps.has_value() &&
-        loopNodeA->hasInterIterationDeps.value()) {
-      ARTS_DEBUG("Loop A has inter-iteration dependencies");
-    }
-    if (loopNodeB->hasInterIterationDeps.has_value() &&
-        loopNodeB->hasInterIterationDeps.value()) {
-      ARTS_DEBUG("Loop B has inter-iteration dependencies");
-    }
-  }
+  (void)loopNodeA;
+  (void)loopNodeB;
 
   ARTS_DEBUG("Loops are independent - can fuse");
   return true; /// No shared memrefs - loops are independent

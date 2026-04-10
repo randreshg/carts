@@ -12,6 +12,7 @@
 #include "arts/dialect/core/Analysis/graphs/edt/EdtEdge.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtNode.h"
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/dialect/core/Analysis/loop/LoopNode.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
@@ -332,8 +333,7 @@ llvm::json::Value EdtGraph::exportToJsonValue(bool includeAnalysis) const {
     Object edt;
 
     /// ARTS ID
-    int64_t artsId =
-        edtAnalysis->getMetadataManager().getIdRegistry().get(edtNode->getOp());
+    int64_t artsId = getArtsId(edtNode->getOp());
     if (artsId != 0)
       edt["arts_id"] = artsId;
 
@@ -343,13 +343,11 @@ llvm::json::Value EdtGraph::exportToJsonValue(bool includeAnalysis) const {
     /// Concurrency scope
     edt["concurrency"] = "intranode";
 
-    auto &idRegistry = edtAnalysis->getMetadataManager().getIdRegistry();
-
     /// Associated loops (EDT ↔ Loop bidirectional relationship)
     if (!edtNode->getAssociatedLoops().empty()) {
       Array loopIds;
       for (LoopNode *loop : edtNode->getAssociatedLoops()) {
-        int64_t loopId = idRegistry.get(loop->getOp());
+        int64_t loopId = getArtsId(loop->getOp());
         if (loopId != 0)
           loopIds.push_back(loopId);
       }
@@ -357,21 +355,8 @@ llvm::json::Value EdtGraph::exportToJsonValue(bool includeAnalysis) const {
         edt["loop_ids"] = std::move(loopIds);
     }
 
-    /// Loop metadata
-    bool inLoop = edtNode->hasParallelLoopMetadata();
-    edt["in_loop"] = inLoop;
-
-    if (inLoop && !edtNode->getAssociatedLoops().empty()) {
-      LoopNode *loop = edtNode->getAssociatedLoops()[0];
-      auto lb = loop->getLowerBoundConstant();
-      auto ub = loop->getUpperBoundConstant();
-      Array bounds;
-      bounds.push_back(lb ? llvm::json::Value(*lb)
-                          : llvm::json::Value(nullptr));
-      bounds.push_back(ub ? llvm::json::Value(*ub)
-                          : llvm::json::Value(nullptr));
-      edt["loop_bounds"] = std::move(bounds);
-    }
+    /// Loop metadata (always false — metadata infrastructure removed)
+    edt["in_loop"] = false;
 
     /// Source location
     auto loc = LocationMetadata::fromLocation(edtOp->getLoc());

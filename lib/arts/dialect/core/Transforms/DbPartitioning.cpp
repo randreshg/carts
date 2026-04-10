@@ -46,8 +46,7 @@ ARTS_DEBUG_SETUP(db_partitioning);
 
 static const AnalysisKind kDbPartitioning_reads[] = {
     AnalysisKind::DbAnalysis, AnalysisKind::DbHeuristics,
-    AnalysisKind::LoopAnalysis, AnalysisKind::AbstractMachine,
-    AnalysisKind::MetadataManager};
+    AnalysisKind::LoopAnalysis, AnalysisKind::AbstractMachine};
 static const AnalysisKind kDbPartitioning_invalidates[] = {
     AnalysisKind::DbAnalysis};
 [[maybe_unused]] static const AnalysisDependencyInfo kDbPartitioning_deps = {
@@ -2023,7 +2022,7 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
       break;
     }
 
-    AM->getMetadataManager().transferMetadata(allocOp, result.value());
+    copyArtsMetadataAttrs(allocOp.getOperation(), result.value().getOperation());
 
     /// EXT-PART-5: Write resolved partition decisions back to the
     /// LoweringContractOp on the alloc's ptr so downstream passes can read

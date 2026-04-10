@@ -15,20 +15,18 @@
 ///   sde.yield               ->  arts.yield
 ///==========================================================================///
 
-#include "arts/dialect/sde/IR/SdeDialect.h"
+#include "arts/dialect/sde/Transforms/Passes.h"
+namespace mlir::arts {
 #define GEN_PASS_DEF_CONVERTSDETOARTS
-#include "arts/Dialect.h"
-#include "arts/dialect/core/Analysis/AnalysisManager.h"
-#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
+} // namespace mlir::arts
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "arts/utils/Debug.h"
@@ -195,8 +193,7 @@ struct CuTaskToArtsPattern : public OpRewritePattern<sde::SdeCuTaskOp> {
 
 /// sde.su_iterate -> arts.for
 struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
-  SuIterateToArtsPattern(MLIRContext *context, MetadataManager &metadataManager)
-      : OpRewritePattern(context), metadataManager(metadataManager) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(sde::SdeSuIterateOp op,
                                 PatternRewriter &rewriter) const override {
@@ -209,7 +206,7 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
         ForOp::create(rewriter, loc, op.getLowerBounds(), op.getUpperBounds(),
                       op.getSteps(), schedAttr, op.getReductionAccumulators());
 
-    metadataManager.rewriteMetadata(op, artsFor);
+    copyArtsMetadataAttrs(op, artsFor);
 
     // Move the body
     Region &dstRegion = artsFor.getRegion();
@@ -240,9 +237,6 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
     rewriter.eraseOp(op);
     return success();
   }
-
-private:
-  MetadataManager &metadataManager;
 };
 
 /// sde.su_barrier -> arts.barrier
@@ -335,7 +329,7 @@ struct CuReduceToArtsPattern : public OpRewritePattern<sde::SdeCuReduceOp> {
 
 namespace {
 struct ConvertSdeToArtsPass
-    : public impl::ConvertSdeToArtsBase<ConvertSdeToArtsPass> {
+    : public arts::impl::ConvertSdeToArtsBase<ConvertSdeToArtsPass> {
 
   explicit ConvertSdeToArtsPass(mlir::arts::AnalysisManager *AM = nullptr)
       : AM(AM) {}
@@ -349,13 +343,11 @@ struct ConvertSdeToArtsPass
       signalPassFailure();
       return;
     }
-    MetadataManager &metadataManager = AM->getMetadataManager();
-
     RewritePatternSet patterns(context);
     // Process cu_task before mu_dep since cu_task consumes mu_dep results
     patterns.add<CuTaskToArtsPattern>(context);
     patterns.add<CuRegionToArtsPattern>(context);
-    patterns.add<SuIterateToArtsPattern>(context, metadataManager);
+    patterns.add<SuIterateToArtsPattern>(context);
     patterns.add<SuBarrierToArtsPattern>(context);
     patterns.add<CuAtomicToArtsPattern>(context);
     patterns.add<CuReduceToArtsPattern>(context);

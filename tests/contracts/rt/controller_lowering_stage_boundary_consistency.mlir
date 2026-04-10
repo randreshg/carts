@@ -5,7 +5,7 @@
 // RUN: %carts-compile %S/../inputs/uniform_block.mlir --O3 --arts-config %S/../inputs/arts_multinode.cfg --pipeline pre-lowering | %FileCheck %s --check-prefix=DIST-PRE
 
 // DB-POLICY-LABEL: func.func @main
-// DB-POLICY: arts.db_alloc[<inout>, <heap>, <write>, <block>, <indexed>]
+// DB-POLICY: arts.db_alloc[<inout>, <heap>, <write>, <coarse>, <uniform>]
 // DB-POLICY: arts.lowering_contract(
 // DB-POLICY-SAME: block_shape[
 // DB-POLICY-SAME: contract(<ownerDims = [0], postDbRefined = true>)
