@@ -223,12 +223,12 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
     call @carts_phase_timer_start(%22, %5) : (memref<?xi8>, memref<?xi8>) -> ()
     call @carts_phase_timer_stop(%22) : (memref<?xi8>) -> ()
     call @carts_e2e_timer_stop() : () -> ()
-    arts.db_free(%guid_4) : memref<?xi64>
-    arts.db_free(%ptr_5) : memref<?xmemref<?xf64>>
     arts.db_free(%guid_2) : memref<?xi64>
     arts.db_free(%ptr_3) : memref<?xmemref<?xf64>>
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?x?xf64>>
+    arts.db_free(%guid_4) : memref<?xi64>
+    arts.db_free(%ptr_5) : memref<?xmemref<?xf64>>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

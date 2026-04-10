@@ -28,24 +28,24 @@ using namespace mlir::arts;
 void ArtsDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "arts/Ops.cpp.inc"
+#include "arts/dialect/core/IR/Ops.cpp.inc"
       >();
 
   addTypes<
 #define GET_TYPEDEF_LIST
-#include "arts/OpsTypes.cpp.inc"
+#include "arts/dialect/core/IR/OpsTypes.cpp.inc"
       >();
 
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "arts/OpsAttributes.cpp.inc"
+#include "arts/dialect/core/IR/OpsAttributes.cpp.inc"
       >();
 }
 
-#include "arts/OpsDialect.cpp.inc"
+#include "arts/dialect/core/IR/OpsDialect.cpp.inc"
 
 #define GET_OP_CLASSES
-#include "arts/Ops.cpp.inc"
+#include "arts/dialect/core/IR/Ops.cpp.inc"
 
 namespace {
 struct FoldDbDimFromDbOps : public OpRewritePattern<DbDimOp> {
@@ -152,12 +152,12 @@ bool isArtsOp(Operation *op) {
 
 /// Arts Dialect Types
 #define GET_TYPEDEF_CLASSES
-#include "arts/OpsTypes.cpp.inc"
+#include "arts/dialect/core/IR/OpsTypes.cpp.inc"
 
 #define GET_ATTRDEF_CLASSES
-#include "arts/OpsAttributes.cpp.inc"
+#include "arts/dialect/core/IR/OpsAttributes.cpp.inc"
 
-#include "arts/OpsEnums.cpp.inc"
+#include "arts/dialect/core/IR/OpsEnums.cpp.inc"
 
 class UndefToLLVM final : public OpRewritePattern<UndefOp> {
 public:

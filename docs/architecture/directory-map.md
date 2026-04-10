@@ -6,24 +6,29 @@ headers/TableGen, 1 compile driver.
 
 **Legend**: `=` stays in place, `->` moves, `NEW` created, `DEAD` removed.
 
-**Status**: Phase 1, 2A-2B, 3B (steps 5-8) COMPLETE. All pass .cpp files
-have moved to their target locations under `lib/arts/dialect/`. Only Phase 3A
-(moving core IR TableGen/headers to `dialect/core/IR/`) remains.
+**Status**: Phase 1, 2A-2B, 3A, 3B COMPLETE. All pass .cpp files and core
+TableGen definitions have moved to their target locations under
+`lib/arts/dialect/` and `include/arts/dialect/core/IR/` respectively.
+Forwarding headers at `include/arts/` provide backward compatibility.
 
 ---
 
 ## 1. Dialect IR (TableGen + Dialect.cpp)
 
-### Current: `include/arts/` + `lib/arts/Dialect.cpp`
+### Core: `include/arts/dialect/core/IR/` + `lib/arts/dialect/core/IR/`
 
-| Current Location | Target Location | Phase | Notes |
-|---|---|---|---|
-| `include/arts/Dialect.td` | `include/arts/dialect/core/IR/ArtsDialect.td` | 3 | Forwarding header at old path |
-| `include/arts/Ops.td` | `include/arts/dialect/core/IR/ArtsOps.td` | 1+3 | Phase 1: remove 14 rt ops; Phase 3: move file |
-| `include/arts/Attributes.td` | `include/arts/dialect/core/IR/ArtsAttrs.td` | 1+3 | Phase 1: remove DepAccessMode; Phase 3: move |
-| `include/arts/Types.td` | `include/arts/dialect/core/IR/ArtsTypes.td` | 3 | Move |
-| `include/arts/Dialect.h` | `include/arts/dialect/core/IR/ArtsDialect.h` | 3 | Forwarding header at old path |
-| `lib/arts/Dialect.cpp` | `lib/arts/dialect/core/IR/Dialect.cpp` | 1+3 | Phase 1: remove 2 verifiers + 2 builders; Phase 3: move |
+| Location | Phase | Notes |
+|---|---|---|
+| `include/arts/dialect/core/IR/Dialect.td` | 3 DONE | Moved from `include/arts/`; forwarding header at old path |
+| `include/arts/dialect/core/IR/Ops.td` | 1+3 DONE | Phase 1: removed 14 rt ops; Phase 3: moved file |
+| `include/arts/dialect/core/IR/Attributes.td` | 1+3 DONE | Phase 1: removed DepAccessMode; Phase 3: moved |
+| `include/arts/dialect/core/IR/Types.td` | 3 DONE | Moved from `include/arts/` |
+| `include/arts/Dialect.h` | 3 DONE | Public header; updated to include from new generated paths |
+| `include/arts/Dialect.td` | 3 DONE | Forwarding header redirects to `dialect/core/IR/Dialect.td` |
+| `include/arts/Ops.td` | 3 DONE | Forwarding header redirects to `dialect/core/IR/Ops.td` |
+| `include/arts/Attributes.td` | 3 DONE | Forwarding header redirects to `dialect/core/IR/Attributes.td` |
+| `include/arts/Types.td` | 3 DONE | Forwarding header redirects to `dialect/core/IR/Types.td` |
+| `lib/arts/dialect/core/IR/Dialect.cpp` | 1+3 DONE | Phase 1: removed 2 verifiers + 2 builders; Phase 3: moved |
 | — | `include/arts/dialect/rt/IR/RtDialect.td` | NEW/1 | `arts_rt` dialect definition |
 | — | `include/arts/dialect/rt/IR/RtOps.td` | NEW/1 | 14 ops extracted from Ops.td |
 | — | `include/arts/dialect/rt/IR/RtDialect.h` | NEW/1 | Public C++ header |

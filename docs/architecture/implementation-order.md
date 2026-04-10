@@ -162,12 +162,13 @@ Phase 3B steps 5-6: Move all pass .cpp files to core/
 159/168 tests pass (same baseline as main)
 ```
 
-Phase 3A: Move Dialect.cpp to dialect/core/IR/
+Phase 3A: Move core IR to dialect/core/IR/
   - Dialect.cpp moved to lib/arts/dialect/core/IR/Dialect.cpp
-  - TableGen files (Ops.td, Attributes.td, Types.td, Dialect.td) stay at
-    include/arts/ — moving them would change generated include paths
-    (arts/Ops.h.inc etc.) breaking 135+ consumer files
-  - Dialect.h stays as public header at include/arts/Dialect.h
+  - TableGen files (Ops.td, Attributes.td, Types.td, Dialect.td) moved to
+    include/arts/dialect/core/IR/
+  - Generated files appear at build/include/arts/dialect/core/IR/
+  - Forwarding headers at include/arts/ redirect for backward compatibility
+  - Dialect.h updated to include from new generated paths
 
 159/168 tests pass (same baseline as main)
 ```
@@ -175,11 +176,9 @@ Phase 3A: Move Dialect.cpp to dialect/core/IR/
 ### Remaining (deferred / not planned)
 
 ```
-- TableGen files stay at include/arts/ for build stability (see core/IR/CLAUDE.md)
-  Moving Ops.td/Attributes.td/Types.td/Dialect.td would change generated paths
-  (arts/Ops.h.inc -> arts/dialect/core/IR/ArtsOps.h.inc) breaking 135+ files.
-  IREE solves this differently (per-dialect .td from the start), but CARTS
-  would need a large mechanical migration with forwarding headers.
+- TableGen files have been moved to include/arts/dialect/core/IR/ (see core/IR/CLAUDE.md).
+  Forwarding headers at include/arts/ redirect for backward compatibility with
+  135+ consumer files. Generated files appear at build/include/arts/dialect/core/IR/.
 - LoopNormalization/LoopReordering stay in core/ permanently — they operate
   on ARTS IR (ForOp) at Stage 5, after SDE→ARTS conversion (see Phase 2D)
 - Pattern passes (PatternDiscovery, KernelTransforms, StencilBoundaryPeeling,
