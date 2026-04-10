@@ -106,10 +106,10 @@ unsigned narrowEpoch(EpochOp epoch) {
   OpBuilder builder(epoch->getBlock(), std::next(Block::iterator(epoch)));
   for (unsigned g = 1; g < groups.size(); ++g) {
     auto [gStart, gEnd] = groups[g];
-    auto newEpoch = builder.create<EpochOp>(loc);
+    auto newEpoch = EpochOp::create(builder, loc);
     auto &newBlock = newEpoch.getBody().emplaceBlock();
     OpBuilder innerBuilder(&newBlock, newBlock.begin());
-    innerBuilder.create<YieldOp>(loc);
+    YieldOp::create(innerBuilder, loc);
 
     Operation *terminator = newBlock.getTerminator();
     for (unsigned i = gStart; i < gEnd; ++i)
@@ -276,10 +276,10 @@ void wrapEdtBodyWithRepeatLoop(EdtOp edt, int64_t repeatCount) {
 
   OpBuilder builder(insertionPoint);
   Location loc = edt.getLoc();
-  Value c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
-  Value cN = builder.create<arith::ConstantIndexOp>(loc, repeatCount);
-  Value c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
-  auto repeatFor = builder.create<scf::ForOp>(loc, c0, cN, c1);
+  Value c0 = arith::ConstantIndexOp::create(builder, loc, 0);
+  Value cN = arith::ConstantIndexOp::create(builder, loc, repeatCount);
+  Value c1 = arith::ConstantIndexOp::create(builder, loc, 1);
+  auto repeatFor = scf::ForOp::create(builder, loc, c0, cN, c1);
 
   Operation *repeatTerminator = repeatFor.getBody()->getTerminator();
   for (Operation *op : repeatOps)

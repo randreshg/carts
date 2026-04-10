@@ -98,7 +98,7 @@ LogicalResult SymmetricTriangularPattern::apply(OpBuilder &builder) {
   /// Collect iter_args from original j-loop
   ValueRange initArgs = m.jLoop.getInitArgs();
 
-  auto newJLoop = builder.create<scf::ForOp>(
+  auto newJLoop = scf::ForOp::create(builder,
       loc, c0, ub, step, initArgs,
       [&](OpBuilder &bodyBuilder, Location bodyLoc, Value newJIV,
           ValueRange iterArgs) {

@@ -250,33 +250,33 @@ static Value createCeilDivPositive(OpBuilder &builder, Location loc, Value num,
                                    int64_t denom) {
   Value denomVal = createConstantIndex(builder, loc, denom);
   Value bias = createConstantIndex(builder, loc, denom - 1);
-  Value biased = builder.create<arith::AddIOp>(loc, num, bias);
-  return builder.create<arith::DivUIOp>(loc, biased, denomVal);
+  Value biased = arith::AddIOp::create(builder, loc, num, bias);
+  return arith::DivUIOp::create(builder, loc, biased, denomVal);
 }
 
 static Value createMinIndex(OpBuilder &builder, Location loc, Value lhs,
                             Value rhs) {
-  return builder.create<arith::MinUIOp>(loc, lhs, rhs);
+  return arith::MinUIOp::create(builder, loc, lhs, rhs);
 }
 
 static Value createMaxIndex(OpBuilder &builder, Location loc, Value lhs,
                             Value rhs) {
-  return builder.create<arith::MaxUIOp>(loc, lhs, rhs);
+  return arith::MaxUIOp::create(builder, loc, lhs, rhs);
 }
 
 static Value createSubtractOrZero(OpBuilder &builder, Location loc, Value lhs,
                                   Value rhs) {
   Value canSubtract =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, lhs, rhs);
-  Value diff = builder.create<arith::SubIOp>(loc, lhs, rhs);
+      arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge, lhs, rhs);
+  Value diff = arith::SubIOp::create(builder, loc, lhs, rhs);
   Value zero = createZeroIndex(builder, loc);
-  return builder.create<arith::SelectOp>(loc, canSubtract, diff, zero);
+  return arith::SelectOp::create(builder, loc, canSubtract, diff, zero);
 }
 
 static void rewriteSeidelSequential(SeidelWavefrontMatch &match,
                                     MetadataManager &metadataManager) {
   OpBuilder builder(match.rowFor);
-  auto seqRowFor = builder.create<scf::ForOp>(
+  auto seqRowFor = scf::ForOp::create(builder,
       match.rowFor.getLoc(), match.rowFor.getLowerBound().front(),
       match.rowFor.getUpperBound().front(), match.rowFor.getStep().front());
   metadataManager.rewriteLoopMetadata(match.rowFor.getOperation(),
@@ -321,34 +321,34 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   Value iUb = match.rowFor.getUpperBound().front();
   Value jLb = match.innerLowerBound;
   Value jUb = match.innerUpperBound;
-  Value iTrip = builder.create<arith::SubIOp>(loc, iUb, iLb);
-  Value jTrip = builder.create<arith::SubIOp>(loc, jUb, jLb);
+  Value iTrip = arith::SubIOp::create(builder, loc, iUb, iLb);
+  Value jTrip = arith::SubIOp::create(builder, loc, jUb, jLb);
   Value numITiles = createCeilDivPositive(builder, loc, iTrip, tileRowsConst);
   Value numJTiles = createCeilDivPositive(builder, loc, jTrip, tileColsConst);
 
-  Value numITilesMinusOne = builder.create<arith::SubIOp>(loc, numITiles, one);
-  Value numJTilesMinusOne = builder.create<arith::SubIOp>(loc, numJTiles, one);
+  Value numITilesMinusOne = arith::SubIOp::create(builder, loc, numITiles, one);
+  Value numJTilesMinusOne = arith::SubIOp::create(builder, loc, numJTiles, one);
   Value doubleITilesMinusOne =
-      builder.create<arith::MulIOp>(loc, numITilesMinusOne, two);
-  Value waveUbExclusive = builder.create<arith::AddIOp>(
+      arith::MulIOp::create(builder, loc, numITilesMinusOne, two);
+  Value waveUbExclusive = arith::AddIOp::create(builder,
       loc,
-      builder.create<arith::AddIOp>(loc, doubleITilesMinusOne,
-                                    numJTilesMinusOne),
+      arith::AddIOp::create(builder, loc, doubleITilesMinusOne,
+                             numJTilesMinusOne),
       one);
 
   /// Keep all wavefront ranks for one Seidel timestep inside a single epoch.
   /// The DB dependence graph already carries the true cross-rank ordering; a
   /// barrier after every rank forces unnecessary create/wait cycles and hides
   /// useful overlap between ready tasks from adjacent ranks.
-  auto epoch = builder.create<EpochOp>(loc);
+  auto epoch = EpochOp::create(builder, loc);
   Region &epochRegion = epoch.getRegion();
   if (epochRegion.empty())
     epochRegion.push_back(new Block());
   Block &epochBlock = epochRegion.front();
 
   OpBuilder epochBuilder = OpBuilder::atBlockBegin(&epochBlock);
-  auto waveLoop = epochBuilder.create<scf::ForOp>(syntheticLoopLoc, zero,
-                                                  waveUbExclusive, one);
+  auto waveLoop = scf::ForOp::create(epochBuilder, syntheticLoopLoc, zero,
+                                      waveUbExclusive, one);
   wavefrontContract.stamp(waveLoop.getOperation());
 
   OpBuilder waveBuilder = OpBuilder::atBlockBegin(waveLoop.getBody());
@@ -358,12 +358,12 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
       createSubtractOrZero(waveBuilder, loc, wave, numJTilesMinusOne);
   Value biMin = createCeilDivPositive(waveBuilder, loc, clippedTmp, 2);
 
-  Value halfWave = waveBuilder.create<arith::DivUIOp>(loc, wave, two);
+  Value halfWave = arith::DivUIOp::create(waveBuilder, loc, wave, two);
   Value biMaxExclusive = createMinIndex(
-      waveBuilder, loc, waveBuilder.create<arith::AddIOp>(loc, halfWave, one),
+      waveBuilder, loc, arith::AddIOp::create(waveBuilder, loc, halfWave, one),
       numITiles);
 
-  auto tileParallel = waveBuilder.create<EdtOp>(
+  auto tileParallel = EdtOp::create(waveBuilder,
       loc, EdtType::parallel, match.parallelEdt.getConcurrency());
   tileParallel.setNoVerifyAttr(NoVerifyAttr::get(builder.getContext()));
   copyWorkerTopologyAttrs(match.parallelEdt.getOperation(),
@@ -379,11 +379,11 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   /// first physical tile straddles two DB blocks and local indices drift by
   /// one element. Iterate aligned block starts here and clamp the actual loop
   /// body back to [lb, ub) below.
-  Value tileRowLb = tileBuilder.create<arith::MulIOp>(loc, biMin, tileRows);
+  Value tileRowLb = arith::MulIOp::create(tileBuilder, loc, biMin, tileRows);
   Value tileRowUb =
-      tileBuilder.create<arith::MulIOp>(loc, biMaxExclusive, tileRows);
+      arith::MulIOp::create(tileBuilder, loc, biMaxExclusive, tileRows);
 
-  auto tileFor = tileBuilder.create<arts::ForOp>(
+  auto tileFor = arts::ForOp::create(tileBuilder,
       syntheticLoopLoc, ValueRange{tileRowLb}, ValueRange{tileRowUb},
       ValueRange{tileRows},
       /*schedule=*/nullptr, /*reductionAccumulators=*/ValueRange{});
@@ -406,21 +406,21 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
 
   OpBuilder tileLoopBuilder = OpBuilder::atBlockBegin(&tileBlock);
   Value tileRowBase = tileBlock.getArgument(0);
-  Value bi = tileLoopBuilder.create<arith::DivUIOp>(loc, tileRowBase, tileRows);
-  Value bj = tileLoopBuilder.create<arith::SubIOp>(
-      loc, wave, tileLoopBuilder.create<arith::MulIOp>(loc, bi, two));
+  Value bi = arith::DivUIOp::create(tileLoopBuilder, loc, tileRowBase, tileRows);
+  Value bj = arith::SubIOp::create(tileLoopBuilder,
+      loc, wave, arith::MulIOp::create(tileLoopBuilder, loc, bi, two));
 
   Value iStart = createMaxIndex(tileLoopBuilder, loc, tileRowBase, iLb);
   Value iEnd = createMinIndex(
       tileLoopBuilder, loc,
-      tileLoopBuilder.create<arith::AddIOp>(loc, tileRowBase, tileRows), iUb);
-  Value tileColBase = tileLoopBuilder.create<arith::MulIOp>(loc, bj, tileCols);
+      arith::AddIOp::create(tileLoopBuilder, loc, tileRowBase, tileRows), iUb);
+  Value tileColBase = arith::MulIOp::create(tileLoopBuilder, loc, bj, tileCols);
   Value jStart = createMaxIndex(tileLoopBuilder, loc, tileColBase, jLb);
   Value jEnd = createMinIndex(
       tileLoopBuilder, loc,
-      tileLoopBuilder.create<arith::AddIOp>(loc, tileColBase, tileCols), jUb);
+      arith::AddIOp::create(tileLoopBuilder, loc, tileColBase, tileCols), jUb);
 
-  auto iLoop = tileLoopBuilder.create<scf::ForOp>(loc, iStart, iEnd, one);
+  auto iLoop = scf::ForOp::create(tileLoopBuilder, loc, iStart, iEnd, one);
   OpBuilder iBuilder = OpBuilder::atBlockBegin(iLoop.getBody());
   IRMapping outerMap;
   outerMap.map(match.rowIV, iLoop.getInductionVar());
@@ -428,7 +428,7 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   for (Operation *op : match.preludeOps)
     iBuilder.clone(*op, outerMap);
 
-  auto jLoop = iBuilder.create<scf::ForOp>(loc, jStart, jEnd, one);
+  auto jLoop = scf::ForOp::create(iBuilder, loc, jStart, jEnd, one);
   OpBuilder jBuilder = OpBuilder::atBlockBegin(jLoop.getBody());
   IRMapping innerMap = outerMap;
   innerMap.map(match.innerIV, jLoop.getInductionVar());
@@ -436,10 +436,10 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   for (Operation &op : getLoopBody(match.innerLoop).without_terminator())
     jBuilder.clone(op, innerMap);
 
-  tileLoopBuilder.create<arts::YieldOp>(loc);
-  tileBuilder.create<arts::YieldOp>(loc);
+  arts::YieldOp::create(tileLoopBuilder, loc);
+  arts::YieldOp::create(tileBuilder, loc);
   epochBuilder.setInsertionPointToEnd(&epochBlock);
-  epochBuilder.create<arts::YieldOp>(loc);
+  arts::YieldOp::create(epochBuilder, loc);
 
   match.parallelEdt.erase();
 }

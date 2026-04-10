@@ -34,7 +34,7 @@
 #define GEN_PASS_DEF_EPOCHLOWERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -2017,8 +2017,8 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
     }
 
     builder.setInsertionPoint(unpackOp);
-    auto newUnpack = builder.create<EdtParamUnpackOp>(unpackOp.getLoc(),
-                                                      liveTypes, paramMemref);
+    auto newUnpack = EdtParamUnpackOp::create(builder, unpackOp.getLoc(),
+                                              liveTypes, paramMemref);
     for (auto [newIdx, oldIdx] : llvm::enumerate(keptUnpackSlots))
       unpackOp.getResult(oldIdx).replaceAllUsesWith(
           newUnpack.getResult(newIdx));
@@ -2037,10 +2037,10 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
       if (newIdx == oldIdx)
         continue;
       builder.setInsertionPoint(load);
-      Value newIdxVal = builder.create<arith::ConstantIndexOp>(
+      Value newIdxVal = arith::ConstantIndexOp::create(builder,
           load.getLoc(), static_cast<int64_t>(newIdx));
-      auto newLoad = builder.create<memref::LoadOp>(load.getLoc(), paramMemref,
-                                                    ValueRange{newIdxVal});
+      auto newLoad = memref::LoadOp::create(builder, load.getLoc(), paramMemref,
+                                            ValueRange{newIdxVal});
       load.getResult().replaceAllUsesWith(newLoad.getResult());
       load.erase();
     }
@@ -2068,7 +2068,7 @@ LogicalResult EpochLoweringPass::compactContinuationParamAbi() {
         auto packType =
             MemRefType::get({ShapedType::kDynamic}, builder.getI64Type());
         auto newPack =
-            builder.create<EdtParamPackOp>(packOp.getLoc(), packType, operands);
+            EdtParamPackOp::create(builder, packOp.getLoc(), packType, operands);
         edt->setOperand(0, newPack.getMemref());
         if (packOp->use_empty())
           packOp.erase();

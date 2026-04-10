@@ -35,7 +35,7 @@
 /// at function entry for LLVM to recognize the alias scopes.
 ///==========================================================================///
 
-#define GEN_PASS_DEF_ALIASCOPEGEN
+#define GEN_PASS_DEF_ALIASSCOPEGEN
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
@@ -274,7 +274,7 @@ emitScopeDeclarations(LLVM::LLVMFuncOp funcOp,
   builder.setInsertionPointToStart(&funcOp.getBody().front());
 
   for (auto &info : dataPointers) {
-    builder.create<LLVM::NoAliasScopeDeclOp>(funcOp.getLoc(), info.scope);
+    LLVM::NoAliasScopeDeclOp::create(builder, funcOp.getLoc(), info.scope);
     ARTS_DEBUG_TYPE("Emitted noalias scope decl for array_" << info.depIndex);
   }
 }
@@ -385,17 +385,7 @@ static int processMemoryAccesses(LLVM::LLVMFuncOp funcOp,
 }
 
 struct AliasScopeGenPass
-    : public PassWrapper<AliasScopeGenPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AliasScopeGenPass)
-
-  StringRef getArgument() const override { return "arts-alias-scope-gen"; }
-  StringRef getDescription() const override {
-    return "Generate alias scope metadata for ARTS data arrays";
-  }
-
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect>();
-  }
+    : public impl::AliasScopeGenBase<AliasScopeGenPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();

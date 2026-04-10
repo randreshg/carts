@@ -151,30 +151,30 @@ void promoteAllocsForCPSChain(scf::ForOp forOp,
       if (memRefType.isDynamicDim(i)) {
         elementSizes.push_back(dynamicSizes[dynamicIdx++]);
       } else {
-        elementSizes.push_back(builder.create<arith::ConstantIndexOp>(
+        elementSizes.push_back(arith::ConstantIndexOp::create(builder,
             loc, memRefType.getDimSize(i)));
       }
     }
     if (memRefType.getRank() == 0)
-      elementSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
-    SmallVector<Value> sizes = {builder.create<arith::ConstantIndexOp>(loc, 1)};
+      elementSizes.push_back(arith::ConstantIndexOp::create(builder, loc, 1));
+    SmallVector<Value> sizes = {arith::ConstantIndexOp::create(builder, loc, 1)};
 
-    Value route = builder.create<arith::ConstantOp>(
+    Value route = arith::ConstantOp::create(builder,
         loc, builder.getI32Type(), builder.getI32IntegerAttr(0));
 
     // For CPS-promoted allocs (single partition), use static shape.
     // The DB stores whole memrefs, so elementType is the memref itself.
     auto ptrType = MemRefType::get({1}, memRefType);
-    auto dbAlloc = builder.create<DbAllocOp>(
+    auto dbAlloc = DbAllocOp::create(builder,
         loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
         memRefType, ptrType, sizes, elementSizes);
-    Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-    Value dbView = builder.create<DbRefOp>(loc, dbAlloc.getPtr(),
-                                           SmallVector<Value>{zero});
+    Value zero = arith::ConstantIndexOp::create(builder, loc, 0);
+    Value dbView = DbRefOp::create(builder, loc, dbAlloc.getPtr(),
+                                   SmallVector<Value>{zero});
     Value replacement = dbView;
     if (replacement.getType() != allocValue.getType())
       replacement =
-          builder.create<memref::CastOp>(loc, allocValue.getType(), dbView);
+          memref::CastOp::create(builder, loc, allocValue.getType(), dbView);
 
     SmallVector<Operation *> deallocOps;
     if (allocOp) {
@@ -186,8 +186,8 @@ void promoteAllocsForCPSChain(scf::ForOp forOp,
     allocValue.replaceAllUsesWith(replacement);
 
     OpBuilder afterLoop(forOp->getNextNode());
-    afterLoop.create<DbFreeOp>(loc, dbAlloc.getGuid());
-    afterLoop.create<DbFreeOp>(loc, dbAlloc.getPtr());
+    DbFreeOp::create(afterLoop, loc, dbAlloc.getGuid());
+    DbFreeOp::create(afterLoop, loc, dbAlloc.getPtr());
 
     for (Operation *deallocOp : deallocOps)
       deallocOp->erase();
@@ -332,7 +332,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
   builder.setInsertionPoint(forOp);
   auto outerEpoch =
-      builder.create<EpochOp>(loc, IntegerType::get(builder.getContext(), 64));
+      EpochOp::create(builder, loc, IntegerType::get(builder.getContext(), 64));
   outerEpoch->setAttr(ContinuationForEpoch, builder.getUnitAttr());
   outerEpoch->setAttr(AttrNames::Operation::CPSOuterEpoch,
                       builder.getUnitAttr());
@@ -363,7 +363,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
   SmallVector<std::pair<Block *, Operation *>> advanceSites;
 
   for (unsigned i = 0; i < slotCount; ++i) {
-    auto contEdt = chainBuilder.create<EdtOp>(
+    auto contEdt = EdtOp::create(chainBuilder,
         loc, EdtType::task, EdtConcurrency::intranode, SmallVector<Value>{});
     markAsContinuation(contEdt, chainBuilder, forOp.getOperation(), i);
     copyNormalizedPlanAttrs(forOp.getOperation(), contEdt.getOperation(),
@@ -402,7 +402,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
         Value ifCond = clonedIf.getCondition();
         OpBuilder preIfBuilder(clonedIf);
         auto newIf =
-            preIfBuilder.create<scf::IfOp>(loc, ifCond, /*withElse=*/true);
+            scf::IfOp::create(preIfBuilder, loc, ifCond, /*withElse=*/true);
 
         Block &oldThenBlock = clonedIf.getThenRegion().front();
         Block &newThenBlock = newIf.getThenRegion().front();
@@ -511,53 +511,53 @@ bool tryCPSChainTransform(scf::ForOp forOp,
                 << " scalars");
 
       OpBuilder preEpochBuilder(outerEpoch);
-      Value zero = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 0);
-      Value one = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 1);
+      Value zero = arith::ConstantIndexOp::create(preEpochBuilder, loc, 0);
+      Value one = arith::ConstantIndexOp::create(preEpochBuilder, loc, 1);
 
       if (!dataGuids.empty()) {
         Value totalGuidSlots =
-            preEpochBuilder.create<arith::ConstantIndexOp>(loc, 0);
+            arith::ConstantIndexOp::create(preEpochBuilder, loc, 0);
 
         SmallVector<std::pair<Value, Value>> guidArrayLayout;
         for (auto &[guidValue, info] : dataGuids) {
           Value count =
-              preEpochBuilder.create<DbNumElementsOp>(loc, info.alloc);
+              DbNumElementsOp::create(preEpochBuilder, loc, info.alloc);
           guidArrayLayout.push_back({totalGuidSlots, count});
           totalGuidSlots =
-              preEpochBuilder.create<arith::AddIOp>(loc, totalGuidSlots, count);
+              arith::AddIOp::create(preEpochBuilder, loc, totalGuidSlots, count);
         }
 
-        Value route = preEpochBuilder.create<arith::ConstantOp>(
+        Value route = arith::ConstantOp::create(preEpochBuilder,
             loc, preEpochBuilder.getI32Type(),
             preEpochBuilder.getI32IntegerAttr(0));
 
         auto i64Type = preEpochBuilder.getI64Type();
         auto scratchPtrType = MemRefType::get({ShapedType::kDynamic}, i64Type);
-        scratchAlloc = preEpochBuilder.create<DbAllocOp>(
+        scratchAlloc = DbAllocOp::create(preEpochBuilder,
             loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
             i64Type, scratchPtrType, SmallVector<Value>{one},
             SmallVector<Value>{totalGuidSlots});
 
-        Value scratchView = preEpochBuilder.create<DbRefOp>(
+        Value scratchView = DbRefOp::create(preEpochBuilder,
             loc, scratchAlloc.getPtr(), SmallVector<Value>{zero});
 
         for (unsigned g = 0; g < dataGuids.size(); ++g) {
           Value guidArray = dataGuids[g].first;
           auto [offset, count] = guidArrayLayout[g];
 
-          auto loop = preEpochBuilder.create<scf::ForOp>(
-              loc, preEpochBuilder.create<arith::ConstantIndexOp>(loc, 0),
-              count, preEpochBuilder.create<arith::ConstantIndexOp>(loc, 1));
+          auto loop = scf::ForOp::create(preEpochBuilder,
+              loc, arith::ConstantIndexOp::create(preEpochBuilder, loc, 0),
+              count, arith::ConstantIndexOp::create(preEpochBuilder, loc, 1));
           OpBuilder loopBody = OpBuilder::atBlockTerminator(loop.getBody());
           Value i = loop.getInductionVar();
           Value guid =
-              loopBody.create<memref::LoadOp>(loc, guidArray, ValueRange{i});
-          Value scratchIdx = loopBody.create<arith::AddIOp>(loc, offset, i);
-          loopBody.create<memref::StoreOp>(loc, guid, scratchView,
-                                           ValueRange{scratchIdx});
+              memref::LoadOp::create(loopBody, loc, guidArray, ValueRange{i});
+          Value scratchIdx = arith::AddIOp::create(loopBody, loc, offset, i);
+          memref::StoreOp::create(loopBody, loc, guid, scratchView,
+                                  ValueRange{scratchIdx});
         }
 
-        scratchGuidScalar = preEpochBuilder.create<memref::LoadOp>(
+        scratchGuidScalar = memref::LoadOp::create(preEpochBuilder,
             loc, scratchAlloc.getGuid(), ValueRange{zero});
       }
 
@@ -570,7 +570,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
       for (auto &[ptrValue, info] : timingDbs) {
         if (info.isGuid || !info.alloc)
           continue;
-        Value guidScalar = preEpochBuilder.create<memref::LoadOp>(
+        Value guidScalar = memref::LoadOp::create(preEpochBuilder,
             loc, info.alloc.getGuid(), ValueRange{zero});
         depGuidPrefix.push_back(guidScalar);
         depGuidValues.push_back(guidScalar);
@@ -624,8 +624,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
       !timingDbs.empty() || !dataGuids.empty() || !dataPtrs.empty();
   if (hasDbHandles && firstContinuation) {
     OpBuilder preEpochBuilder(outerEpoch);
-    Value zero = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 0);
-    Value one = preEpochBuilder.create<arith::ConstantIndexOp>(loc, 1);
+    Value zero = arith::ConstantIndexOp::create(preEpochBuilder, loc, 0);
+    Value one = arith::ConstantIndexOp::create(preEpochBuilder, loc, 1);
     SmallVector<Value> contDeps;
     Value scratchDepGuid;
     DenseSet<Operation *> releasedDbRoots;
@@ -634,7 +634,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
       Operation *underlyingDb = DbUtils::getUnderlyingDb(dbPtr);
       if (!underlyingDb || !releasedDbRoots.insert(underlyingDb).second)
         return;
-      preEpochBuilder.create<DbReleaseOp>(loc, dbPtr);
+      DbReleaseOp::create(preEpochBuilder, loc, dbPtr);
     };
 
     for (auto &[guidValue, info] : dataGuids) {
@@ -650,7 +650,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
         continue;
       }
       emitEarlyRelease(info.alloc.getPtr());
-      auto acq = preEpochBuilder.create<DbAcquireOp>(
+      auto acq = DbAcquireOp::create(preEpochBuilder,
           loc, ArtsMode::inout, info.alloc.getGuid(), info.alloc.getPtr(),
           info.alloc.getPtr().getType(), /*partitionMode=*/std::nullopt,
           /*indices=*/SmallVector<Value>{},
@@ -667,7 +667,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
       if (!allocPtr || !routedDataPtrRoots.insert(allocPtr).second)
         continue;
       emitEarlyRelease(allocPtr);
-      auto acq = preEpochBuilder.create<DbAcquireOp>(
+      auto acq = DbAcquireOp::create(preEpochBuilder,
           loc, ArtsMode::in, info.alloc.getGuid(), allocPtr, allocPtr.getType(),
           /*partitionMode=*/std::nullopt,
           /*indices=*/SmallVector<Value>{},
@@ -678,7 +678,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
     if (scratchAlloc) {
       emitEarlyRelease(scratchAlloc.getPtr());
-      auto scratchAcq = preEpochBuilder.create<DbAcquireOp>(
+      auto scratchAcq = DbAcquireOp::create(preEpochBuilder,
           loc, ArtsMode::in, scratchAlloc.getGuid(), scratchAlloc.getPtr(),
           scratchAlloc.getPtr().getType(), /*partitionMode=*/std::nullopt,
           /*indices=*/SmallVector<Value>{},
@@ -761,7 +761,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
         if (ptrValue != (info.alloc ? info.alloc.getPtr() : Value())) {
           bodyBuilder.setInsertionPoint(&contBlock, contBlock.begin());
-          Value czero = bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
+          Value czero = arith::ConstantIndexOp::create(bodyBuilder, loc, 0);
 
           // Extract result type from the BlockArgument's memref element type.
           // depArg is a DB pointer like memref<1xmemref<10xf64>>, so the
@@ -771,12 +771,12 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
           // Create DbRefOp with explicit result type (builder can't infer from
           // BlockArgument). Use the 3-arg create<> overload.
-          Value dbView = bodyBuilder.create<DbRefOp>(
+          Value dbView = DbRefOp::create(bodyBuilder,
               loc, dbViewResultType, depArg, SmallVector<Value>{czero});
 
           Value replacement = dbView;
           if (replacement.getType() != ptrValue.getType())
-            replacement = bodyBuilder.create<memref::CastOp>(
+            replacement = memref::CastOp::create(bodyBuilder,
                 loc, ptrValue.getType(), dbView);
           ptrValue.replaceUsesWithIf(replacement, isWithinContinuationScope);
         }
@@ -801,7 +801,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
         if (ptrValue != allocPtr) {
           Value replacement = depArg;
           if (replacement.getType() != ptrValue.getType())
-            replacement = bodyBuilder.create<memref::CastOp>(
+            replacement = memref::CastOp::create(bodyBuilder,
                 loc, ptrValue.getType(), depArg);
           ptrValue.replaceUsesWithIf(replacement, isWithinContinuationScope);
         }
@@ -819,10 +819,10 @@ bool tryCPSChainTransform(scf::ForOp forOp,
         for (int64_t dim : memrefTy.getShape()) {
           if (dim == ShapedType::kDynamic)
             dynSizes.push_back(
-                bodyBuilder.create<arith::ConstantIndexOp>(loc, 1));
+                arith::ConstantIndexOp::create(bodyBuilder, loc, 1));
         }
         Value dummyGuid =
-            bodyBuilder.create<memref::AllocaOp>(loc, memrefTy, dynSizes);
+            memref::AllocaOp::create(bodyBuilder, loc, memrefTy, dynSizes);
         guidValue.replaceUsesWithIf(dummyGuid, isWithinContinuationScope);
         if (info.alloc && info.alloc.getGuid() != guidValue &&
             !replacedAllocGuids.count(info.alloc.getGuid())) {
@@ -858,16 +858,16 @@ bool tryCPSChainTransform(scf::ForOp forOp,
         Value scratchView = scratchArg;
         if (scratchView.getType() != i64MemrefTy)
           scratchView =
-              bodyBuilder.create<memref::CastOp>(loc, i64MemrefTy, scratchArg);
+              memref::CastOp::create(bodyBuilder, loc, i64MemrefTy, scratchArg);
 
         Value runningOffset =
-            bodyBuilder.create<arith::ConstantIndexOp>(loc, 0);
+            arith::ConstantIndexOp::create(bodyBuilder, loc, 0);
         SmallVector<std::pair<Value, Value>> guidLayoutForBody;
         for (auto &[guidValue, info] : dataGuids) {
-          Value count = bodyBuilder.create<DbNumElementsOp>(loc, info.alloc);
+          Value count = DbNumElementsOp::create(bodyBuilder, loc, info.alloc);
           guidLayoutForBody.push_back({runningOffset, count});
           runningOffset =
-              bodyBuilder.create<arith::AddIOp>(loc, runningOffset, count);
+              arith::AddIOp::create(bodyBuilder, loc, runningOffset, count);
         }
 
         for (unsigned g = 0; g < dataGuids.size(); ++g) {
@@ -878,27 +878,27 @@ bool tryCPSChainTransform(scf::ForOp forOp,
           if (!origMemrefTy)
             continue;
 
-          Value localGuids = bodyBuilder.create<memref::AllocOp>(
+          Value localGuids = memref::AllocOp::create(bodyBuilder,
               loc, i64MemrefTy, ValueRange{count});
           if (auto allocId =
                   DbUtils::resolveRootAllocId(origGuidArray, guidInfo.alloc))
             setDbRootAllocId(localGuids.getDefiningOp(), *allocId);
 
-          auto copyLoop = bodyBuilder.create<scf::ForOp>(
-              loc, bodyBuilder.create<arith::ConstantIndexOp>(loc, 0), count,
-              bodyBuilder.create<arith::ConstantIndexOp>(loc, 1));
+          auto copyLoop = scf::ForOp::create(bodyBuilder,
+              loc, arith::ConstantIndexOp::create(bodyBuilder, loc, 0), count,
+              arith::ConstantIndexOp::create(bodyBuilder, loc, 1));
           OpBuilder copyBody = OpBuilder::atBlockTerminator(copyLoop.getBody());
           Value ci2 = copyLoop.getInductionVar();
-          Value scratchIdx = copyBody.create<arith::AddIOp>(loc, offset, ci2);
-          Value guidVal = copyBody.create<memref::LoadOp>(
+          Value scratchIdx = arith::AddIOp::create(copyBody, loc, offset, ci2);
+          Value guidVal = memref::LoadOp::create(copyBody,
               loc, scratchView, ValueRange{scratchIdx});
-          copyBody.create<memref::StoreOp>(loc, guidVal, localGuids,
-                                           ValueRange{ci2});
+          memref::StoreOp::create(copyBody, loc, guidVal, localGuids,
+                                  ValueRange{ci2});
 
           Value replacement = localGuids;
           if (replacement.getType() != origMemrefTy) {
-            auto castOp = bodyBuilder.create<memref::CastOp>(loc, origMemrefTy,
-                                                             localGuids);
+            auto castOp = memref::CastOp::create(bodyBuilder, loc, origMemrefTy,
+                                                localGuids);
             if (auto allocId =
                     DbUtils::resolveRootAllocId(origGuidArray, guidInfo.alloc))
               setDbRootAllocId(castOp.getOperation(), *allocId);
@@ -957,8 +957,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
         OpBuilder advBuilder(adv);
         auto targetId = adv.getTargetChainIdAttr();
-        auto newAdv = advBuilder.create<CPSAdvanceOp>(adv.getLoc(),
-                                                      newNextParams, targetId);
+        auto newAdv = CPSAdvanceOp::create(advBuilder, adv.getLoc(),
+                                          newNextParams, targetId);
         for (auto attr : adv->getAttrs())
           if (attr.getName() != "targetChainId")
             newAdv->setAttr(attr.getName(), attr.getValue());
@@ -1091,8 +1091,8 @@ bool tryCPSChainTransform(scf::ForOp forOp,
 
   if (scratchAlloc) {
     OpBuilder afterEpoch(outerEpoch->getNextNode());
-    afterEpoch.create<DbFreeOp>(loc, scratchAlloc.getGuid());
-    afterEpoch.create<DbFreeOp>(loc, scratchAlloc.getPtr());
+    DbFreeOp::create(afterEpoch, loc, scratchAlloc.getGuid());
+    DbFreeOp::create(afterEpoch, loc, scratchAlloc.getPtr());
   }
 
   ARTS_INFO("CPS Chain: Transformed " << slotCount

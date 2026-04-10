@@ -146,7 +146,7 @@ void ConcurrencyPass::updateRuntimeQueryOperations() {
               << stringifyRuntimeQueryKind(op.getKind()) << " with "
               << stringifyRuntimeQueryKind(newKind));
     OpBuilder builder(op);
-    auto newOp = builder.create<RuntimeQueryOp>(op.getLoc(), newKind);
+    auto newOp = RuntimeQueryOp::create(builder, op.getLoc(), newKind);
     op.replaceAllUsesWith(newOp.getResult());
     op.erase();
   }

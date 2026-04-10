@@ -322,7 +322,7 @@ static bool hoistAcquiresInWorkerLoop(scf::ForOp loop) {
 
       OpBuilder builder(loop);
       builder.setInsertionPointAfter(loop);
-      builder.create<DbReleaseOp>(loop.getLoc(), acq.getPtr());
+      DbReleaseOp::create(builder, loop.getLoc(), acq.getPtr());
     }
   }
 
@@ -393,7 +393,7 @@ static bool hoistAcquiresInEpoch(EpochOp epoch) {
       acq->moveBefore(epoch);
       OpBuilder builder(epoch);
       builder.setInsertionPointAfter(epoch);
-      builder.create<DbReleaseOp>(epoch.getLoc(), acq.getPtr());
+      DbReleaseOp::create(builder, epoch.getLoc(), acq.getPtr());
       localChanged = true;
     }
 

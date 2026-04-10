@@ -157,7 +157,7 @@ LocalizedIndices DbElementWiseIndexer::splitIndices(ValueRange globalIndices,
     if (g >= 0 && offsets[o]) {
       /// Localize: subtract offset from global index
       Value localIdx =
-          builder.create<arith::SubIOp>(loc, globalIndices[g], offsets[o]);
+          arith::SubIOp::create(builder, loc, globalIndices[g], offsets[o]);
       result.dbRefIndices.push_back(localIdx);
     }
   }
@@ -243,14 +243,14 @@ DbElementWiseIndexer::localizeLinearized(Value globalLinearIndex, Value stride,
   ///   Therefore:
   ///   localLinear  = globalLinear - (elemOffset * stride)
 
-  Value scaledOffset = builder.create<arith::MulIOp>(loc, elemOffset, stride);
+  Value scaledOffset = arith::MulIOp::create(builder, loc, elemOffset, stride);
   Value localLinear =
-      builder.create<arith::SubIOp>(loc, globalLinearIndex, scaledOffset);
+      arith::SubIOp::create(builder, loc, globalLinearIndex, scaledOffset);
 
   /// For element-wise, dbRef index = row index relative to start
   Value globalRow =
-      builder.create<arith::DivUIOp>(loc, globalLinearIndex, stride);
-  Value dbRefIdx = builder.create<arith::SubIOp>(loc, globalRow, elemOffset);
+      arith::DivUIOp::create(builder, loc, globalLinearIndex, stride);
+  Value dbRefIdx = arith::SubIOp::create(builder, loc, globalRow, elemOffset);
 
   result.dbRefIndices.push_back(dbRefIdx);
   result.memrefIndices.push_back(localLinear);
@@ -382,7 +382,7 @@ LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
             ValueAnalysis::dependsOn(globalIndices[g], baseOffset)) {
           /// Found a match - localize this dimension
           Value localIdx =
-              builder.create<arith::SubIOp>(loc, globalIndices[g], baseOffset);
+              arith::SubIOp::create(builder, loc, globalIndices[g], baseOffset);
           result.dbRefIndices.push_back(localIdx);
           isMatched[g] = true;
           break;
@@ -396,7 +396,7 @@ LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
         Value globalIdx = globalIndices[i];
         if (i < acquireOffsets.size() && acquireOffsets[i]) {
           Value localIdx =
-              builder.create<arith::SubIOp>(loc, globalIdx, acquireOffsets[i]);
+              arith::SubIOp::create(builder, loc, globalIdx, acquireOffsets[i]);
           result.dbRefIndices.push_back(localIdx);
         } else {
           result.dbRefIndices.push_back(globalIdx);
@@ -435,7 +435,7 @@ LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
       Value globalIdx = globalIndices[g];
       Value partitionIdx = acquireIndices[p];
       Value localIdx =
-          builder.create<arith::SubIOp>(loc, globalIdx, partitionIdx);
+          arith::SubIOp::create(builder, loc, globalIdx, partitionIdx);
       result.dbRefIndices.push_back(localIdx);
     } else if (!anyMatched && p < globalIndices.size()) {
       /// Positional fallback: no values matched at all, use position p.
@@ -443,7 +443,7 @@ LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
       Value globalIdx = globalIndices[p];
       Value partitionIdx = acquireIndices[p];
       Value localIdx =
-          builder.create<arith::SubIOp>(loc, globalIdx, partitionIdx);
+          arith::SubIOp::create(builder, loc, globalIdx, partitionIdx);
       result.dbRefIndices.push_back(localIdx);
       isMatched.set(p);
       ARTS_DEBUG("  Phase 2 positional fallback: dim " << p);
@@ -578,9 +578,9 @@ SmallVector<Value> DbElementWiseIndexer::localizeCoordinates(
       Value stride = DbUtils::getStrideValue(builder, loc, oldElementSizes);
       if (stride) {
         /// localLinear = globalLinear - (offset * stride)
-        Value scaledOffset = builder.create<arith::MulIOp>(loc, offset, stride);
+        Value scaledOffset = arith::MulIOp::create(builder, loc, offset, stride);
         Value localLinear =
-            builder.create<arith::SubIOp>(loc, globalLinear, scaledOffset);
+            arith::SubIOp::create(builder, loc, globalLinear, scaledOffset);
 
         if (auto staticStride = DbUtils::getStaticStride(oldElementSizes)) {
           ARTS_DEBUG(
@@ -594,7 +594,7 @@ SmallVector<Value> DbElementWiseIndexer::localizeCoordinates(
     }
 
     /// Non-linearized single index: simple subtraction
-    Value local = builder.create<arith::SubIOp>(loc, globalLinear, offset);
+    Value local = arith::SubIOp::create(builder, loc, globalLinear, offset);
     result.push_back(local);
     return result;
   }
@@ -609,7 +609,7 @@ SmallVector<Value> DbElementWiseIndexer::localizeCoordinates(
     } else if (d == numIndexedDims && !sliceOffsets.empty()) {
       /// First sliced dimension: subtract element offset
       Value offset = sliceOffsets[0];
-      Value local = builder.create<arith::SubIOp>(loc, globalIdx, offset);
+      Value local = arith::SubIOp::create(builder, loc, globalIdx, offset);
       result.push_back(local);
     } else {
       /// Pass through unchanged

@@ -248,8 +248,10 @@ void cloneNonSlotArith(OpBuilder &builder, Block &body,
 }
 
 void ensureYieldTerminator(Block &block, Location loc) {
-  if (block.empty() || !block.back().hasTrait<OpTrait::IsTerminator>())
-    OpBuilder::atBlockEnd(&block).create<YieldOp>(loc);
+  if (block.empty() || !block.back().hasTrait<OpTrait::IsTerminator>()) {
+    OpBuilder endBuilder = OpBuilder::atBlockEnd(&block);
+    YieldOp::create(endBuilder, loc);
+  }
 }
 
 Operation *getLastNonTerminatorOp(Block &block) {
@@ -268,7 +270,7 @@ void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
                       ArrayRef<Operation *> allSequentialOps,
                       ArrayRef<Value> loopBackParams,
                       const IRMapping *seedMapping) {
-  Value tNext = builder.create<arith::AddIOp>(loc, tCurrent, step);
+  Value tNext = arith::AddIOp::create(builder, loc, tCurrent, step);
   IRMapping advanceMapping;
   if (seedMapping)
     advanceMapping = *seedMapping;
@@ -282,13 +284,13 @@ void emitAdvanceLogic(OpBuilder &builder, Location loc, Value iv,
   }
 
   auto i64Ty = IntegerType::get(builder.getContext(), 64);
-  Value stepI64 = builder.create<arith::IndexCastOp>(loc, i64Ty, step);
-  Value ubI64 = builder.create<arith::IndexCastOp>(loc, i64Ty, ub);
+  Value stepI64 = arith::IndexCastOp::create(builder, loc, i64Ty, step);
+  Value ubI64 = arith::IndexCastOp::create(builder, loc, i64Ty, ub);
   SmallVector<Value> nextParams = {stepI64, ubI64};
   for (Value v : loopBackParams)
     nextParams.push_back(
         rematerializeCarryValueAtAdvanceSite(builder, v, body, advanceMapping));
-  auto advance = builder.create<CPSAdvanceOp>(
+  auto advance = CPSAdvanceOp::create(builder,
       loc, nextParams, builder.getStringAttr(targetChainId));
   advance->setAttr(CPSAdditiveParams, builder.getUnitAttr());
   advance->setAttr(CPSNumCarry,

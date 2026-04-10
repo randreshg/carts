@@ -56,7 +56,7 @@ bool dominatesOrInAncestor(Value v, Operation *op, DominanceInfo &domInfo) {
 ///===----------------------------------------------------------------------===///
 
 Value createConstantIndex(OpBuilder &builder, Location loc, int64_t val) {
-  return builder.create<arith::ConstantIndexOp>(loc, val);
+  return arith::ConstantIndexOp::create(builder, loc, val);
 }
 
 Value createZeroIndex(OpBuilder &builder, Location loc) {
@@ -68,7 +68,7 @@ Value createOneIndex(OpBuilder &builder, Location loc) {
 }
 
 Value createCurrentNodeRoute(OpBuilder &builder, Location loc) {
-  return builder.create<arith::ConstantIntOp>(loc, kCurrentNodeRoute, 32);
+  return arith::ConstantIntOp::create(builder, loc, kCurrentNodeRoute, 32);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -380,7 +380,7 @@ SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
       return v;
     if ((v.getType().isIndex() && isa<IntegerType>(targetTy)) ||
         (isa<IntegerType>(v.getType()) && targetTy.isIndex()))
-      return builder.create<arith::IndexCastOp>(loc, targetTy, v);
+      return arith::IndexCastOp::create(builder, loc, targetTy, v);
     return v;
   };
 
@@ -388,7 +388,7 @@ SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
     if (ty.isIndex())
       return createOneIndex(builder, loc);
     if (auto intTy = dyn_cast<IntegerType>(ty))
-      return builder.create<arith::ConstantIntOp>(loc, intTy, 1);
+      return arith::ConstantIntOp::create(builder, loc, intTy, 1);
     return Value();
   };
 
@@ -396,7 +396,7 @@ SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
     if (ty.isIndex())
       return createZeroIndex(builder, loc);
     if (auto intTy = dyn_cast<IntegerType>(ty))
-      return builder.create<arith::ConstantIntOp>(loc, intTy, 0);
+      return arith::ConstantIntOp::create(builder, loc, intTy, 0);
     return Value();
   };
 
@@ -423,23 +423,23 @@ SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
     if (dim < dimSizes.size()) {
       dimSize = dimSizes[dim];
     } else if (sourceType.isDynamicDim(dim)) {
-      dimSize = builder.create<memref::DimOp>(loc, source, dim);
+      dimSize = memref::DimOp::create(builder, loc, source, dim);
     } else {
       dimSize = createConstantIndex(builder, loc, sourceType.getDimSize(dim));
     }
 
     Value dimSizeTyped = castToType(dimSize, idxTy);
-    Value upper = builder.create<arith::SubIOp>(loc, dimSizeTyped, one);
+    Value upper = arith::SubIOp::create(builder, loc, dimSizeTyped, one);
 
-    Value belowZero = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::slt, idx, zero);
+    Value belowZero = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::slt, idx, zero);
     Value afterLowerClamp =
-        builder.create<arith::SelectOp>(loc, belowZero, zero, idx);
+        arith::SelectOp::create(builder, loc, belowZero, zero, idx);
 
-    Value aboveUpper = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sgt, afterLowerClamp, upper);
-    Value finalIdx = builder.create<arith::SelectOp>(loc, aboveUpper, upper,
-                                                     afterLowerClamp);
+    Value aboveUpper = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::sgt, afterLowerClamp, upper);
+    Value finalIdx = arith::SelectOp::create(builder, loc, aboveUpper, upper,
+                                             afterLowerClamp);
     clamped.push_back(finalIdx);
   }
 

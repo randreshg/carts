@@ -188,9 +188,19 @@ namespace polygeist {
 class PolygeistDialect;
 } // namespace polygeist
 
+// Core ARTS passes (generated from include/arts/passes/Passes.td)
 #define GEN_PASS_DECL
 #define GEN_PASS_REGISTRATION
 #include "arts/passes/Passes.h.inc"
+
+// Per-dialect pass registrations
+#define GEN_PASS_DECL
+#define GEN_PASS_REGISTRATION
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
+
+#define GEN_PASS_DECL
+#define GEN_PASS_REGISTRATION
+#include "arts/dialect/sde/Transforms/Passes.h.inc"
 
 } // namespace mlir
 

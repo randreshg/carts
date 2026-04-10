@@ -84,7 +84,7 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
   }
 
   Type i64Type = builder.getI64Type();
-  Value oneI64 = builder.create<arith::ConstantIntOp>(loc, 1, 64);
+  Value oneI64 = arith::ConstantIntOp::create(builder, loc, 1, 64);
   unsigned nPartDims = blockSizes.size();
 
   if (!partitionedDims.empty()) {
@@ -104,13 +104,13 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
         continue;
 
       Value dimSize = elemSizes[dim];
-      Value dimI64 = builder.create<arith::IndexCastOp>(loc, i64Type, dimSize);
-      Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
-      Value sum = builder.create<arith::AddIOp>(loc, dimI64, bsI64);
-      Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
+      Value dimI64 = arith::IndexCastOp::create(builder, loc, i64Type, dimSize);
+      Value bsI64 = arith::IndexCastOp::create(builder, loc, i64Type, bs);
+      Value sum = arith::AddIOp::create(builder, loc, dimI64, bsI64);
+      Value sumMinusOne = arith::SubIOp::create(builder, loc, sum, oneI64);
       Value numBlocksI64 =
-          builder.create<arith::DivUIOp>(loc, sumMinusOne, bsI64);
-      Value numBlocks = builder.create<arith::IndexCastOp>(
+          arith::DivUIOp::create(builder, loc, sumMinusOne, bsI64);
+      Value numBlocks = arith::IndexCastOp::create(builder,
           loc, builder.getIndexType(), numBlocksI64);
       newOuterSizes.push_back(numBlocks);
     }
@@ -130,13 +130,13 @@ static void computeBlockShape(DbAllocOp allocOp, ArrayRef<Value> blockSizes,
         continue;
 
       Value dim = elemSizes[d];
-      Value dimI64 = builder.create<arith::IndexCastOp>(loc, i64Type, dim);
-      Value bsI64 = builder.create<arith::IndexCastOp>(loc, i64Type, bs);
-      Value sum = builder.create<arith::AddIOp>(loc, dimI64, bsI64);
-      Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
+      Value dimI64 = arith::IndexCastOp::create(builder, loc, i64Type, dim);
+      Value bsI64 = arith::IndexCastOp::create(builder, loc, i64Type, bs);
+      Value sum = arith::AddIOp::create(builder, loc, dimI64, bsI64);
+      Value sumMinusOne = arith::SubIOp::create(builder, loc, sum, oneI64);
       Value numBlocksI64 =
-          builder.create<arith::DivUIOp>(loc, sumMinusOne, bsI64);
-      Value numBlocks = builder.create<arith::IndexCastOp>(
+          arith::DivUIOp::create(builder, loc, sumMinusOne, bsI64);
+      Value numBlocks = arith::IndexCastOp::create(builder,
           loc, builder.getIndexType(), numBlocksI64);
       newOuterSizes.push_back(numBlocks);
       newInnerSizes.push_back(bs);

@@ -62,13 +62,13 @@ computeDefaultBlockSize(DbAllocOp allocOp,
   Value one = arts::createOneIndex(builder, loc);
   Value parallelI32 =
       useNodes
-          ? builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalNodes)
+          ? RuntimeQueryOp::create(builder, loc, RuntimeQueryKind::totalNodes)
                 .getResult()
-          : builder.create<RuntimeQueryOp>(loc, RuntimeQueryKind::totalWorkers)
+          : RuntimeQueryOp::create(builder, loc, RuntimeQueryKind::totalWorkers)
                 .getResult();
-  Value workers = builder.create<arith::IndexCastUIOp>(
+  Value workers = arith::IndexCastUIOp::create(builder,
       loc, builder.getIndexType(), parallelI32);
-  Value workersClamped = builder.create<arith::MaxUIOp>(loc, workers, one);
+  Value workersClamped = arith::MaxUIOp::create(builder, loc, workers, one);
 
   /// Keep fallback stencil block sizing aligned with the same active-worker
   /// space that ForOpt uses for intranode stencil coarsening. Without this
@@ -78,20 +78,20 @@ computeDefaultBlockSize(DbAllocOp allocOp,
   if (clampStencilFallbackWorkers && !useNodes) {
     Value minOwnedOuterIters = arts::createConstantIndex(builder, loc, 8);
     Value maxWorkersByOwnedSpan =
-        builder.create<arith::DivUIOp>(loc, elemSize, minOwnedOuterIters);
+        arith::DivUIOp::create(builder, loc, elemSize, minOwnedOuterIters);
     maxWorkersByOwnedSpan =
-        builder.create<arith::MaxUIOp>(loc, maxWorkersByOwnedSpan, one);
-    workersClamped = builder.create<arith::MinUIOp>(loc, workersClamped,
-                                                    maxWorkersByOwnedSpan);
+        arith::MaxUIOp::create(builder, loc, maxWorkersByOwnedSpan, one);
+    workersClamped = arith::MinUIOp::create(builder, loc, workersClamped,
+                                             maxWorkersByOwnedSpan);
   }
 
   Value workersMinusOne =
-      builder.create<arith::SubIOp>(loc, workersClamped, one);
+      arith::SubIOp::create(builder, loc, workersClamped, one);
   Value adjusted =
-      builder.create<arith::AddIOp>(loc, elemSize, workersMinusOne);
+      arith::AddIOp::create(builder, loc, elemSize, workersMinusOne);
   Value blockSize =
-      builder.create<arith::DivUIOp>(loc, adjusted, workersClamped);
-  return builder.create<arith::MaxUIOp>(loc, blockSize, one);
+      arith::DivUIOp::create(builder, loc, adjusted, workersClamped);
+  return arith::MaxUIOp::create(builder, loc, blockSize, one);
 }
 
 static SmallVector<Value>
@@ -290,7 +290,7 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
   SmallVector<Value> globalMerged = rankedCandidates.front().blockSizes;
   for (size_t i = 1; i < rankedCandidates.size(); ++i) {
     for (unsigned dim = 0; dim < nDims; ++dim) {
-      globalMerged[dim] = builder.create<arith::MinUIOp>(
+      globalMerged[dim] = arith::MinUIOp::create(builder,
           loc, globalMerged[dim], rankedCandidates[i].blockSizes[dim]);
     }
   }
@@ -322,7 +322,7 @@ static SmallVector<Value> collectCanonicalNDBlockSizeCandidates(
         mergedVal = rc.blockSizes[d];
       } else {
         mergedVal =
-            builder.create<arith::MinUIOp>(loc, mergedVal, rc.blockSizes[d]);
+            arith::MinUIOp::create(builder, loc, mergedVal, rc.blockSizes[d]);
       }
       ++contributorCount;
     }
@@ -407,7 +407,7 @@ collectCanonicalPartialNDBlockPlanCandidate(
       if (!mergedByDim[physDim]) {
         mergedByDim[physDim] = candidate;
       } else {
-        mergedByDim[physDim] = builder.create<arith::MinUIOp>(
+        mergedByDim[physDim] = arith::MinUIOp::create(builder,
             loc, mergedByDim[physDim], candidate);
       }
       ++supportCounts[physDim];
@@ -736,7 +736,7 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
         if (!canonicalCandidates.empty()) {
           dynamicCandidate = canonicalCandidates.front();
           for (size_t i = 1; i < canonicalCandidates.size(); ++i) {
-            dynamicCandidate = builder.create<arith::MinUIOp>(
+            dynamicCandidate = arith::MinUIOp::create(builder,
                 loc, dynamicCandidate, canonicalCandidates[i]);
           }
         }
@@ -775,7 +775,7 @@ mlir::arts::resolveDbBlockPlan(const DbBlockPlanInput &input) {
     if (ValueAnalysis::isZeroConstant(stripped))
       result.blockSizes[i] = one;
     result.blockSizes[i] =
-        builder.create<arith::MaxUIOp>(loc, result.blockSizes[i], one);
+        arith::MaxUIOp::create(builder, loc, result.blockSizes[i], one);
   }
 
   if (result.partitionedDims.empty()) {

@@ -14,7 +14,7 @@ using namespace mlir::arts::rt;
 
 namespace {
 Value createZeroI32(OpBuilder &builder, Location loc) {
-  return builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  return arith::ConstantIntOp::create(builder, loc, 0, 32);
 }
 } // namespace
 

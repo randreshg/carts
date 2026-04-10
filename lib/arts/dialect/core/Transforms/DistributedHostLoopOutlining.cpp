@@ -291,7 +291,7 @@ static void cloneScfLoopBodyIntoArtsFor(scf::ForOp sourceLoop,
   builder.setInsertionPointToStart(&targetBlock);
   for (Operation &op : sourceBlock.without_terminator())
     builder.clone(op, mapper);
-  builder.create<arts::YieldOp>(sourceLoop.getLoc());
+  arts::YieldOp::create(builder, sourceLoop.getLoc());
 }
 
 static void applyMachineWorkerTopology(EdtOp outlinedEdt,
@@ -321,15 +321,15 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
 
   /// Preserve program order: the outlined EDT must complete before later host
   /// code observes loop results.
-  auto epoch = builder.create<EpochOp>(loc);
+  auto epoch = EpochOp::create(builder, loc);
   Region &epochRegion = epoch.getRegion();
   if (epochRegion.empty())
     epochRegion.push_back(new Block());
   Block &epochBlock = epochRegion.front();
   OpBuilder epochBuilder = OpBuilder::atBlockBegin(&epochBlock);
 
-  Value routeZero = epochBuilder.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto outlinedEdt = epochBuilder.create<EdtOp>(
+  Value routeZero = arith::ConstantIntOp::create(epochBuilder, loc, 0, 32);
+  auto outlinedEdt = EdtOp::create(epochBuilder,
       loc, EdtType::task, EdtConcurrency::internode, routeZero, ValueRange{});
   outlinedEdt.setNoVerifyAttr(NoVerifyAttr::get(epochBuilder.getContext()));
   applyMachineWorkerTopology(outlinedEdt, machine, heuristics);
@@ -340,7 +340,7 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
 
   auto schedAttr = ForScheduleKindAttr::get(epochBuilder.getContext(),
                                             ForScheduleKind::Static);
-  auto outlinedFor = epochBuilder.create<arts::ForOp>(
+  auto outlinedFor = arts::ForOp::create(epochBuilder,
       loc, ValueRange{loop.getLowerBound()}, ValueRange{loop.getUpperBound()},
       ValueRange{loop.getStep()}, schedAttr, ValueRange{});
 
@@ -348,10 +348,10 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
   cloneScfLoopBodyIntoArtsFor(loop, outlinedFor, epochBuilder);
 
   epochBuilder.setInsertionPointToEnd(&edtBody);
-  epochBuilder.create<arts::YieldOp>(loc);
+  arts::YieldOp::create(epochBuilder, loc);
 
   epochBuilder.setInsertionPointToEnd(&epochBlock);
-  epochBuilder.create<arts::YieldOp>(loc);
+  arts::YieldOp::create(epochBuilder, loc);
 
   ARTS_DEBUG("Outlined host scf.for into distributed arts.edt<task>: " << loop);
   loop.erase();

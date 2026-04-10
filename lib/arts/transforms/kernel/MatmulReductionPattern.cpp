@@ -79,16 +79,16 @@ static bool isFloatReduction(ReductionKind kind) {
 }
 
 static Value getOrCreateZero(OpBuilder &b, Location loc, Type ty) {
-  return b.create<arith::ConstantOp>(loc, ty, b.getZeroAttr(ty));
+  return arith::ConstantOp::create(b, loc, ty, b.getZeroAttr(ty));
 }
 
 static Value getOrCreateOne(OpBuilder &b, Location loc, Type ty) {
   if (ty.isF32())
-    return b.create<arith::ConstantOp>(loc, FloatAttr::get(ty, 1.0f));
+    return arith::ConstantOp::create(b, loc, FloatAttr::get(ty, 1.0f));
   if (ty.isF64())
-    return b.create<arith::ConstantOp>(loc, FloatAttr::get(ty, 1.0));
+    return arith::ConstantOp::create(b, loc, FloatAttr::get(ty, 1.0));
   if (ty.isIntOrIndex())
-    return b.create<arith::ConstantOp>(loc, ty, b.getIntegerAttr(ty, 1));
+    return arith::ConstantOp::create(b, loc, ty, b.getIntegerAttr(ty, 1));
   return Value();
 }
 
@@ -127,17 +127,17 @@ static bool matchAddOp(Value v, Value &lhs, Value &rhs) {
 static Value createMul(OpBuilder &b, Location loc, Value lhs, Value rhs,
                        ReductionKind kind) {
   if (isFloatReduction(kind))
-    return b.create<arith::MulFOp>(loc, lhs, rhs);
+    return arith::MulFOp::create(b, loc, lhs, rhs);
   else
-    return b.create<arith::MulIOp>(loc, lhs, rhs);
+    return arith::MulIOp::create(b, loc, lhs, rhs);
 }
 
 static Value createAdd(OpBuilder &b, Location loc, Value lhs, Value rhs,
                        ReductionKind kind) {
   if (isFloatReduction(kind))
-    return b.create<arith::AddFOp>(loc, lhs, rhs);
+    return arith::AddFOp::create(b, loc, lhs, rhs);
   else
-    return b.create<arith::AddIOp>(loc, lhs, rhs);
+    return arith::AddIOp::create(b, loc, lhs, rhs);
 }
 
 /// Reduction dot-product pattern match result.
@@ -535,17 +535,17 @@ static scf::ForOp createTiledForIfBeneficial(
     return nullptr;
 
   auto tileStepVal = arts::createConstantIndex(b, loc, tileSize);
-  auto outer = b.create<scf::ForOp>(loc, originalLoop.getLowerBound(),
-                                    originalLoop.getUpperBound(), tileStepVal);
+  auto outer = scf::ForOp::create(b, loc, originalLoop.getLowerBound(),
+                                   originalLoop.getUpperBound(), tileStepVal);
 
   b.setInsertionPointToStart(outer.getBody());
   Value tileBase = outer.getInductionVar();
-  auto tileEnd = b.create<arith::AddIOp>(loc, tileBase, tileStepVal);
+  auto tileEnd = arith::AddIOp::create(b, loc, tileBase, tileStepVal);
   auto innerUb =
-      b.create<arith::MinUIOp>(loc, tileEnd, originalLoop.getUpperBound());
+      arith::MinUIOp::create(b, loc, tileEnd, originalLoop.getUpperBound());
 
   auto inner =
-      b.create<scf::ForOp>(loc, tileBase, innerUb, originalLoop.getStep());
+      scf::ForOp::create(b, loc, tileBase, innerUb, originalLoop.getStep());
   b.setInsertionPointToStart(inner.getBody());
   innerBodyBuilder(b, loc, inner.getInductionVar());
 
@@ -593,7 +593,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
   /// Create C init loop: for j: C[i,j] = beta*C[i,j]
   auto emitInitBody = [&](OpBuilder &ib, Location iloc, Value jIV) {
     auto cOld =
-        ib.create<memref::LoadOp>(iloc, m.memC, ValueRange{iIndex, jIV});
+        memref::LoadOp::create(ib, iloc, m.memC, ValueRange{iIndex, jIV});
     Value scaled;
     if (ValueAnalysis::isZeroConstant(beta)) {
       scaled = zero;
@@ -602,7 +602,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     } else {
       scaled = createMul(ib, iloc, cOld, beta, kind);
     }
-    ib.create<memref::StoreOp>(iloc, scaled, m.memC, ValueRange{iIndex, jIV});
+    memref::StoreOp::create(ib, iloc, scaled, m.memC, ValueRange{iIndex, jIV});
   };
 
   Operation *initAnchor = nullptr;
@@ -616,7 +616,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     }
   }
   if (!initAnchor) {
-    auto initLoop = b.create<scf::ForOp>(
+    auto initLoop = scf::ForOp::create(b,
         loc, jLoop.getLowerBound(), jLoop.getUpperBound(), jLoop.getStep());
     {
       OpBuilder::InsertionGuard g(b);
@@ -630,8 +630,8 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
   b.setInsertionPointAfter(initAnchor);
 
   /// Create k loop: for k: a = alpha*A[i,k]; for j: C[i,j] += a*B[k,j]
-  auto newK = b.create<scf::ForOp>(loc, kLoop.getLowerBound(),
-                                   kLoop.getUpperBound(), kLoop.getStep());
+  auto newK = scf::ForOp::create(b, loc, kLoop.getLowerBound(),
+                                  kLoop.getUpperBound(), kLoop.getStep());
   metadataManager.rewriteLoopMetadata(kLoop.getOperation(), newK.getOperation(),
                                       clearReductionLoopFacts);
 
@@ -641,9 +641,9 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
   /// Load A[i,k]
   Value aLoad;
   if (m.aIsKI)
-    aLoad = b.create<memref::LoadOp>(loc, m.memA, ValueRange{kIV, iIndex});
+    aLoad = memref::LoadOp::create(b, loc, m.memA, ValueRange{kIV, iIndex});
   else
-    aLoad = b.create<memref::LoadOp>(loc, m.memA, ValueRange{iIndex, kIV});
+    aLoad = memref::LoadOp::create(b, loc, m.memA, ValueRange{iIndex, kIV});
 
   Value aAlpha;
   if (ValueAnalysis::isOneConstant(alpha))
@@ -658,15 +658,15 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
   auto emitUpdateBody = [&](OpBuilder &ub, Location uloc, Value jIV) {
     Value bVal;
     if (m.bIsKJ)
-      bVal = ub.create<memref::LoadOp>(uloc, m.memB, ValueRange{kIV, jIV});
+      bVal = memref::LoadOp::create(ub, uloc, m.memB, ValueRange{kIV, jIV});
     else
-      bVal = ub.create<memref::LoadOp>(uloc, m.memB, ValueRange{jIV, kIV});
+      bVal = memref::LoadOp::create(ub, uloc, m.memB, ValueRange{jIV, kIV});
 
     auto cOld =
-        ub.create<memref::LoadOp>(uloc, m.memC, ValueRange{iIndex, jIV});
+        memref::LoadOp::create(ub, uloc, m.memC, ValueRange{iIndex, jIV});
     Value prod = createMul(ub, uloc, aAlpha, bVal, kind);
     Value cNew = createAdd(ub, uloc, cOld, prod, kind);
-    ub.create<memref::StoreOp>(uloc, cNew, m.memC, ValueRange{iIndex, jIV});
+    memref::StoreOp::create(ub, uloc, cNew, m.memC, ValueRange{iIndex, jIV});
   };
 
   bool createdTiledUpdate = false;
@@ -693,8 +693,8 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     }
 
     if (!createdTiledUpdate) {
-      auto newJ = b.create<scf::ForOp>(loc, jLoop.getLowerBound(),
-                                       jLoop.getUpperBound(), jLoop.getStep());
+      auto newJ = scf::ForOp::create(b, loc, jLoop.getLowerBound(),
+                                      jLoop.getUpperBound(), jLoop.getStep());
       metadataManager.rewriteLoopMetadata(
           jLoop.getOperation(), newJ.getOperation(), clearReductionLoopFacts);
       b.setInsertionPointToStart(newJ.getBody());

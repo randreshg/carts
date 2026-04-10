@@ -669,7 +669,7 @@ bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
 
     /// Create replacement outer acquire with inner's mode
     OpBuilder builder(outerAcq);
-    auto newAcq = builder.create<DbAcquireOp>(
+    auto newAcq = DbAcquireOp::create(builder,
         outerAcq.getLoc(), innerAcq.getMode(), outerAcq.getSourceGuid(),
         outerAcq.getSourcePtr(), outerAcq.getPtr().getType(),
         outerAcq.getPartitionMode(), SmallVector<Value>(outerAcq.getIndices()),
@@ -700,7 +700,7 @@ bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
   /// Step 3: Create sync EDT with rewired dependencies
   OpBuilder builder(parallelOp);
   auto syncEdt =
-      builder.create<EdtOp>(loc, EdtType::sync, singleOp.getConcurrency());
+      EdtOp::create(builder, loc, EdtType::sync, singleOp.getConcurrency());
 
   /// Setup region and block arguments
   Region &syncRegion = syncEdt.getRegion();
@@ -734,7 +734,7 @@ bool EdtStructuralOptPass::convertParallelWithAcquiresToSync(
 
   /// Add yield terminator if needed
   if (syncBody.empty() || !syncBody.back().hasTrait<OpTrait::IsTerminator>())
-    builder.create<YieldOp>(loc);
+    YieldOp::create(builder, loc);
 
   /// Step 5: Clean up old operations
   /// First erase the single EDT (its operands reference inner acquire results)
@@ -824,7 +824,7 @@ EdtOp EdtStructuralOptPass::createEdtWithMergedDepsAndRegion(
   /// concurrency. Create with empty deps first, then set them after adding
   /// block args.
   auto newEdt =
-      builder.create<arts::EdtOp>(loc, newType, EdtConcurrency::intranode);
+      arts::EdtOp::create(builder, loc, newType, EdtConcurrency::intranode);
 
   /// Setup block and block arguments
   Region &newRegion = newEdt.getRegion();
@@ -860,7 +860,7 @@ EdtOp EdtStructuralOptPass::createEdtWithMergedDepsAndRegion(
 
   /// Add yield terminator if needed
   if (newBody.empty() || !newBody.back().hasTrait<OpTrait::IsTerminator>())
-    builder.create<YieldOp>(loc);
+    YieldOp::create(builder, loc);
 
   return newEdt;
 }
@@ -884,10 +884,10 @@ bool EdtStructuralOptPass::processSyncTaskEdts() {
 
     /// Create an arts::EpochOp and its block
     auto loc = op.getLoc();
-    auto epochOp = builder.create<arts::EpochOp>(loc);
+    auto epochOp = arts::EpochOp::create(builder, loc);
     auto &epochBlock = epochOp.getRegion().emplaceBlock();
     builder.setInsertionPointToEnd(&epochBlock);
-    builder.create<arts::YieldOp>(loc);
+    arts::YieldOp::create(builder, loc);
 
     /// Move all operations except the terminator from the EdtOp's region to the
     /// epoch block

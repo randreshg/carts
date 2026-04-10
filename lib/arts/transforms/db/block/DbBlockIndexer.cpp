@@ -124,10 +124,10 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
   Value anchor = lb;
   if (invariantBase) {
     Value base = ValueAnalysis::ensureIndexType(invariantBase, builder, loc);
-    anchor = builder.create<arith::AddIOp>(loc, base, lb);
+    anchor = arith::AddIOp::create(builder, loc, base, lb);
   }
 
-  Value baseBlock = builder.create<arith::DivUIOp>(loc, anchor, bs);
+  Value baseBlock = arith::DivUIOp::create(builder, loc, anchor, bs);
   Value baseLocal;
   if (invariantBase && arts::isAlignedToBlock(invariantBase, bs) &&
       arts::isKnownNonNegative(lb)) {
@@ -135,40 +135,40 @@ tryLocalizeFromLoopWindow(Value globalIdx, Value startBlock, Value blockSize,
     /// in-block coordinate starts at the loop lower bound itself.
     baseLocal = lb;
   } else {
-    baseLocal = builder.create<arith::RemUIOp>(loc, anchor, bs);
+    baseLocal = arith::RemUIOp::create(builder, loc, anchor, bs);
   }
-  Value ivDelta = builder.create<arith::SubIOp>(loc, loopIv, lb);
-  Value localRaw = builder.create<arith::AddIOp>(loc, baseLocal, ivDelta);
+  Value ivDelta = arith::SubIOp::create(builder, loc, loopIv, lb);
+  Value localRaw = arith::AddIOp::create(builder, loc, baseLocal, ivDelta);
   if (constOffset > 0) {
-    localRaw = builder.create<arith::AddIOp>(
-        loc, localRaw, arts::createConstantIndex(builder, loc, constOffset));
+    localRaw = arith::AddIOp::create(
+        builder, loc, localRaw, arts::createConstantIndex(builder, loc, constOffset));
   } else if (constOffset < 0) {
-    localRaw = builder.create<arith::SubIOp>(
-        loc, localRaw, arts::createConstantIndex(builder, loc, -constOffset));
+    localRaw = arith::SubIOp::create(
+        builder, loc, localRaw, arts::createConstantIndex(builder, loc, -constOffset));
   }
 
-  Value baseRelBlock = builder.create<arith::SubIOp>(loc, baseBlock, sb);
+  Value baseRelBlock = arith::SubIOp::create(builder, loc, baseBlock, sb);
   if (constOffset == 0 && ValueAnalysis::sameValue(baseLocal, lb) &&
       arts::isKnownNonNegative(lb) && arts::isLoopIvBoundedBy(loopIv, bs)) {
     return LoopWindowLocalization{baseRelBlock, loopIv};
   }
 
-  Value belowZero = builder.create<arith::CmpIOp>(
+  Value belowZero = arith::CmpIOp::create(builder,
       loc, arith::CmpIPredicate::slt, localRaw, zero);
-  Value aboveBlock = builder.create<arith::CmpIOp>(
+  Value aboveBlock = arith::CmpIOp::create(builder,
       loc, arith::CmpIPredicate::sge, localRaw, bs);
 
-  Value adjust = builder.create<arith::SelectOp>(loc, belowZero, negOne, zero);
-  adjust = builder.create<arith::SelectOp>(loc, aboveBlock, one, adjust);
+  Value adjust = arith::SelectOp::create(builder, loc, belowZero, negOne, zero);
+  adjust = arith::SelectOp::create(builder, loc, aboveBlock, one, adjust);
 
-  Value dbRefIdx = builder.create<arith::AddIOp>(loc, baseRelBlock, adjust);
+  Value dbRefIdx = arith::AddIOp::create(builder, loc, baseRelBlock, adjust);
 
   Value localIdx = localRaw;
-  Value localMinusBlock = builder.create<arith::SubIOp>(loc, localRaw, bs);
-  Value localPlusBlock = builder.create<arith::AddIOp>(loc, localRaw, bs);
+  Value localMinusBlock = arith::SubIOp::create(builder, loc, localRaw, bs);
+  Value localPlusBlock = arith::AddIOp::create(builder, loc, localRaw, bs);
   localIdx =
-      builder.create<arith::SelectOp>(loc, belowZero, localPlusBlock, localIdx);
-  localIdx = builder.create<arith::SelectOp>(loc, aboveBlock, localMinusBlock,
+      arith::SelectOp::create(builder, loc, belowZero, localPlusBlock, localIdx);
+  localIdx = arith::SelectOp::create(builder, loc, aboveBlock, localMinusBlock,
                                              localIdx);
 
   return LoopWindowLocalization{dbRefIdx, localIdx};
@@ -273,7 +273,7 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
         Value globalIdx = globalIndices[dim];
         Value bs =
             (p < blockSizes.size() && blockSizes[p]) ? blockSizes[p] : one();
-        bs = builder.create<arith::MaxUIOp>(loc, bs, one());
+        bs = arith::MaxUIOp::create(builder, loc, bs, one());
 
         Value sb = (p < startBlocks.size() && startBlocks[p]) ? startBlocks[p]
                                                               : zero();
@@ -306,14 +306,14 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
             dbRefIdx = zero();
           } else {
             Value physBlock =
-                builder.create<arith::DivUIOp>(loc, globalIdx, bs);
-            dbRefIdx = builder.create<arith::SubIOp>(loc, physBlock, sb);
+                arith::DivUIOp::create(builder, loc, globalIdx, bs);
+            dbRefIdx = arith::SubIOp::create(builder, loc, physBlock, sb);
           }
           if (acquireSingleBlock) {
-            Value blockBase = builder.create<arith::MulIOp>(loc, sb, bs);
-            localIdx = builder.create<arith::SubIOp>(loc, globalIdx, blockBase);
+            Value blockBase = arith::MulIOp::create(builder, loc, sb, bs);
+            localIdx = arith::SubIOp::create(builder, loc, globalIdx, blockBase);
           } else {
-            localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
+            localIdx = arith::RemUIOp::create(builder, loc, globalIdx, bs);
           }
         }
         result.dbRefIndices.push_back(dbRefIdx);
@@ -349,7 +349,7 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
   for (unsigned d = 0; d < nPartDims && d < globalIndices.size(); ++d) {
     Value globalIdx = globalIndices[d];
     Value bs = (d < blockSizes.size() && blockSizes[d]) ? blockSizes[d] : one();
-    bs = builder.create<arith::MaxUIOp>(loc, bs, one());
+    bs = arith::MaxUIOp::create(builder, loc, bs, one());
 
     Value sb =
         (d < startBlocks.size() && startBlocks[d]) ? startBlocks[d] : zero();
@@ -384,14 +384,14 @@ LocalizedIndices DbBlockIndexer::localize(ArrayRef<Value> globalIndices,
         /// Always compute full formula: relBlock = (globalIdx / bs) -
         /// startBlock The startBlock = 0 case will naturally simplify to
         /// physBlock
-        Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
-        dbRefIdx = builder.create<arith::SubIOp>(loc, physBlock, sb);
+        Value physBlock = arith::DivUIOp::create(builder, loc, globalIdx, bs);
+        dbRefIdx = arith::SubIOp::create(builder, loc, physBlock, sb);
       }
       if (acquireSingleBlock) {
-        Value blockBase = builder.create<arith::MulIOp>(loc, sb, bs);
-        localIdx = builder.create<arith::SubIOp>(loc, globalIdx, blockBase);
+        Value blockBase = arith::MulIOp::create(builder, loc, sb, bs);
+        localIdx = arith::SubIOp::create(builder, loc, globalIdx, blockBase);
       } else {
-        localIdx = builder.create<arith::RemUIOp>(loc, globalIdx, bs);
+        localIdx = arith::RemUIOp::create(builder, loc, globalIdx, bs);
       }
     }
     result.dbRefIndices.push_back(dbRefIdx);
@@ -448,19 +448,19 @@ LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
 
   /// De-linearize: globalLinear = globalRow * stride + col
   Value globalRow =
-      builder.create<arith::DivUIOp>(loc, globalLinearIndex, stride);
+      arith::DivUIOp::create(builder, loc, globalLinearIndex, stride);
   Value globalCol =
-      builder.create<arith::RemUIOp>(loc, globalLinearIndex, stride);
+      arith::RemUIOp::create(builder, loc, globalLinearIndex, stride);
 
   /// Get block sizes for both dimensions
   /// For 2D blocking: bsRow for row dimension, bsCol for column dimension
   Value bsRow = (!blockSizes.empty() && blockSizes[0]) ? blockSizes[0] : one();
-  bsRow = builder.create<arith::MaxUIOp>(loc, bsRow, one());
+  bsRow = arith::MaxUIOp::create(builder, loc, bsRow, one());
 
   /// Column block size: use blockSizes[1] if available, otherwise same as row
   Value bsCol =
       (blockSizes.size() > 1 && blockSizes[1]) ? blockSizes[1] : bsRow;
-  bsCol = builder.create<arith::MaxUIOp>(loc, bsCol, one());
+  bsCol = arith::MaxUIOp::create(builder, loc, bsCol, one());
 
   if (allocSingleBlock || acquireSingleBlock) {
     result.dbRefIndices.push_back(zero());
@@ -469,8 +469,8 @@ LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
         (!startBlocks.empty() && startBlocks[0]) ? startBlocks[0] : zero();
 
     /// dbRefIdx = (globalRow / blockSize) - startBlock
-    Value physBlock = builder.create<arith::DivUIOp>(loc, globalRow, bsRow);
-    Value relBlock = builder.create<arith::SubIOp>(loc, physBlock, sb);
+    Value physBlock = arith::DivUIOp::create(builder, loc, globalRow, bsRow);
+    Value relBlock = arith::SubIOp::create(builder, loc, physBlock, sb);
     result.dbRefIndices.push_back(relBlock);
   }
 
@@ -479,15 +479,15 @@ LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
   if (acquireSingleBlock) {
     Value sb =
         (!startBlocks.empty() && startBlocks[0]) ? startBlocks[0] : zero();
-    Value blockBase = builder.create<arith::MulIOp>(loc, sb, bsRow);
-    localRow = builder.create<arith::SubIOp>(loc, globalRow, blockBase);
+    Value blockBase = arith::MulIOp::create(builder, loc, sb, bsRow);
+    localRow = arith::SubIOp::create(builder, loc, globalRow, blockBase);
   } else {
-    localRow = builder.create<arith::RemUIOp>(loc, globalRow, bsRow);
+    localRow = arith::RemUIOp::create(builder, loc, globalRow, bsRow);
   }
 
   /// Compute local col (modulo block size)
   /// For 2D blocks, the column also needs to be localized within the block
-  Value localCol = builder.create<arith::RemUIOp>(loc, globalCol, bsCol);
+  Value localCol = arith::RemUIOp::create(builder, loc, globalCol, bsCol);
 
   /// If innerRank >= 2, return separate indices to match element type rank
   /// Otherwise, re-linearize with LOCAL stride
@@ -499,8 +499,8 @@ LocalizedIndices DbBlockIndexer::localizeLinearized(Value globalLinearIndex,
   } else {
     /// Re-linearize with LOCAL stride (block size), not global stride
     /// Block memory is [bsRow x bsCol], so stride is bsCol
-    Value localLinear = builder.create<arith::MulIOp>(loc, localRow, bsCol);
-    localLinear = builder.create<arith::AddIOp>(loc, localLinear, localCol);
+    Value localLinear = arith::MulIOp::create(builder, loc, localRow, bsCol);
+    localLinear = arith::AddIOp::create(builder, loc, localLinear, localCol);
     result.memrefIndices.push_back(localLinear);
     ARTS_DEBUG("  innerRank=" << innerRank
                               << ", re-linearized to single index");
@@ -543,14 +543,14 @@ bool DbBlockIndexer::handleSubIndexOp(
       /// Apply div/mod like load/store (see localize())
       Value one = AC.createIndexConstant(1, loc);
       Value bs = (blockSizes.size() > 0 && blockSizes[0]) ? blockSizes[0] : one;
-      bs = AC.getBuilder().create<arith::MaxUIOp>(loc, bs, one);
+      bs = arith::MaxUIOp::create(AC.getBuilder(), loc, bs, one);
       Value sb =
           (startBlocks.size() > 0 && startBlocks[0]) ? startBlocks[0] : zero;
 
       Value physBlock =
-          AC.getBuilder().create<arith::DivUIOp>(loc, globalIdx, bs);
+          arith::DivUIOp::create(AC.getBuilder(), loc, globalIdx, bs);
       Value relBlock =
-          AC.getBuilder().create<arith::SubIOp>(loc, physBlock, sb);
+          arith::SubIOp::create(AC.getBuilder(), loc, physBlock, sb);
 
       dbRefIndices.push_back(relBlock); // Block-relative, not raw!
     }
@@ -615,8 +615,8 @@ DbBlockIndexer::localizeCoordinates(ArrayRef<Value> globalIndices,
           result.push_back(zero());
         } else {
           /// dbRefIdx = (globalIdx / blockSize) - startBlock
-          Value physBlock = builder.create<arith::DivUIOp>(loc, globalIdx, bs);
-          Value relBlock = builder.create<arith::SubIOp>(loc, physBlock, sb);
+          Value physBlock = arith::DivUIOp::create(builder, loc, globalIdx, bs);
+          Value relBlock = arith::SubIOp::create(builder, loc, physBlock, sb);
           result.push_back(relBlock);
         }
         ARTS_DEBUG("  Dim " << d << ": div/mod by blockSize[" << partIdx
@@ -628,7 +628,7 @@ DbBlockIndexer::localizeCoordinates(ArrayRef<Value> globalIndices,
       /// Other sliced dimensions: subtract offset
       unsigned offsetIdx = d - numIndexedDims;
       Value offset = sliceOffsets[offsetIdx];
-      Value local = builder.create<arith::SubIOp>(loc, globalIdx, offset);
+      Value local = arith::SubIOp::create(builder, loc, globalIdx, offset);
       result.push_back(local);
     } else {
       /// Pass through unchanged

@@ -1056,28 +1056,28 @@ void arts::convertElementSliceToBlockSlice(
     Value totalBlocks =
         ValueAnalysis::castToIndex(totalBlockCounts[i], builder, loc);
 
-    blockSpan = builder.create<arith::MaxUIOp>(loc, blockSpan, one);
-    elementSize = builder.create<arith::MaxUIOp>(loc, elementSize, one);
+    blockSpan = arith::MaxUIOp::create(builder, loc, blockSpan, one);
+    elementSize = arith::MaxUIOp::create(builder, loc, elementSize, one);
 
     Value startBlock =
-        builder.create<arith::DivUIOp>(loc, elementOffset, blockSpan);
+        arith::DivUIOp::create(builder, loc, elementOffset, blockSpan);
     Value endElem =
-        builder.create<arith::AddIOp>(loc, elementOffset, elementSize);
-    endElem = builder.create<arith::SubIOp>(loc, endElem, one);
-    Value endBlock = builder.create<arith::DivUIOp>(loc, endElem, blockSpan);
-    Value maxBlock = builder.create<arith::SubIOp>(loc, totalBlocks, one);
-    Value startAboveMax = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
-    Value clampedEnd = builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
-    endBlock = builder.create<arith::SelectOp>(loc, startAboveMax, endBlock,
-                                               clampedEnd);
+        arith::AddIOp::create(builder, loc, elementOffset, elementSize);
+    endElem = arith::SubIOp::create(builder, loc, endElem, one);
+    Value endBlock = arith::DivUIOp::create(builder, loc, endElem, blockSpan);
+    Value maxBlock = arith::SubIOp::create(builder, loc, totalBlocks, one);
+    Value startAboveMax = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
+    Value clampedEnd = arith::MinUIOp::create(builder, loc, endBlock, maxBlock);
+    endBlock = arith::SelectOp::create(builder, loc, startAboveMax, endBlock,
+                                       clampedEnd);
 
-    Value blockCount = builder.create<arith::SubIOp>(loc, endBlock, startBlock);
-    blockCount = builder.create<arith::AddIOp>(loc, blockCount, one);
+    Value blockCount = arith::SubIOp::create(builder, loc, endBlock, startBlock);
+    blockCount = arith::AddIOp::create(builder, loc, blockCount, one);
     startBlock =
-        builder.create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
+        arith::SelectOp::create(builder, loc, startAboveMax, zero, startBlock);
     blockCount =
-        builder.create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
+        arith::SelectOp::create(builder, loc, startAboveMax, zero, blockCount);
 
     blockOffsets.push_back(startBlock);
     blockSizes.push_back(blockCount);

@@ -364,7 +364,7 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromWhile(
     if (!boundIdx)
       continue;
     blockSizes.push_back(
-        builder.create<arith::SubIOp>(loc, boundIdx, startIdx));
+        arith::SubIOp::create(builder, loc, boundIdx, startIdx));
   }
 
   if (blockSizes.empty())
@@ -372,10 +372,10 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromWhile(
 
   Value minSize = blockSizes.front();
   for (Value candidate : llvm::drop_begin(blockSizes))
-    minSize = builder.create<arith::MinSIOp>(loc, minSize, candidate);
+    minSize = arith::MinSIOp::create(builder, loc, minSize, candidate);
 
   Value zero = arts::createZeroIndex(builder, loc);
-  minSize = builder.create<arith::MaxSIOp>(loc, minSize, zero);
+  minSize = arith::MaxSIOp::create(builder, loc, minSize, zero);
 
   auto [partitionOffset, partitionSize] = node->getPartitionInfo();
   std::optional<unsigned> partitionDim =
@@ -399,20 +399,20 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromWhile(
 
   if (bounds.minOffset < 0) {
     Value absAdj = arts::createConstantIndex(builder, loc, -bounds.minOffset);
-    Value cond = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
-                                               startIdx, absAdj);
-    Value sub = builder.create<arith::SubIOp>(loc, startIdx, absAdj);
+    Value cond = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge,
+                                       startIdx, absAdj);
+    Value sub = arith::SubIOp::create(builder, loc, startIdx, absAdj);
     Value zeroIdx = arts::createZeroIndex(builder, loc);
-    adjustedOffset = builder.create<arith::SelectOp>(loc, cond, sub, zeroIdx);
+    adjustedOffset = arith::SelectOp::create(builder, loc, cond, sub, zeroIdx);
   } else if (bounds.minOffset > 0) {
     Value adj = arts::createConstantIndex(builder, loc, bounds.minOffset);
-    adjustedOffset = builder.create<arith::AddIOp>(loc, startIdx, adj);
+    adjustedOffset = arith::AddIOp::create(builder, loc, startIdx, adj);
   }
 
   int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
   if (sizeAdjustment != 0) {
     Value adjustment = arts::createConstantIndex(builder, loc, sizeAdjustment);
-    adjustedSize = builder.create<arith::AddIOp>(loc, minSize, adjustment);
+    adjustedSize = arith::AddIOp::create(builder, loc, minSize, adjustment);
   }
 
   blockOffset = adjustedOffset;
@@ -513,7 +513,7 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromHints(
         Value adjustment =
             arts::createConstantIndex(builder, loc, bounds.minOffset);
         blockOffset =
-            builder.create<arith::AddIOp>(loc, partitionOffset, adjustment);
+            arith::AddIOp::create(builder, loc, partitionOffset, adjustment);
       } else {
         blockOffset = partitionOffset;
       }
@@ -523,7 +523,7 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromHints(
         Value adjustment =
             arts::createConstantIndex(builder, loc, sizeAdjustment);
         blockSize =
-            builder.create<arith::AddIOp>(loc, partitionSize, adjustment);
+            arith::AddIOp::create(builder, loc, partitionSize, adjustment);
       } else {
         blockSize = partitionSize;
       }
@@ -675,14 +675,14 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromForLoop(
 
     if (bounds.minOffset < 0) {
       Value absAdj = arts::createConstantIndex(builder, loc, -bounds.minOffset);
-      Value cond = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
-                                                 adjustedOffset, absAdj);
-      Value sub = builder.create<arith::SubIOp>(loc, adjustedOffset, absAdj);
+      Value cond = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge,
+                                         adjustedOffset, absAdj);
+      Value sub = arith::SubIOp::create(builder, loc, adjustedOffset, absAdj);
       Value zeroIdx = arts::createZeroIndex(builder, loc);
-      adjustedOffset = builder.create<arith::SelectOp>(loc, cond, sub, zeroIdx);
+      adjustedOffset = arith::SelectOp::create(builder, loc, cond, sub, zeroIdx);
     } else if (bounds.minOffset > 0) {
       Value adj = arts::createConstantIndex(builder, loc, bounds.minOffset);
-      adjustedOffset = builder.create<arith::AddIOp>(loc, adjustedOffset, adj);
+      adjustedOffset = arith::AddIOp::create(builder, loc, adjustedOffset, adj);
     }
 
     int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
@@ -690,7 +690,7 @@ LogicalResult DbBlockInfoComputer::computeBlockInfoFromForLoop(
       Value adjustment =
           arts::createConstantIndex(builder, loc, sizeAdjustment);
       adjustedSize =
-          builder.create<arith::AddIOp>(loc, adjustedSize, adjustment);
+          arith::AddIOp::create(builder, loc, adjustedSize, adjustment);
     }
 
     blockOffset = adjustedOffset;

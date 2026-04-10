@@ -18,36 +18,6 @@ def ArtsInliner : Pass<"arts-inliner", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createArtsInlinerPass()";
 }
 
-def CollectMetadata : Pass<"collect-metadata", "mlir::ModuleOp"> {
-  let summary = "Collect metadata for dual-compilation strategy";
-  let description = [{
-    This pass analyzes program structures (loops, array accesses, both affine
-    and non-affine) and attaches comprehensive metadata for use in dual-compilation.
-    It runs on sequential (non-OpenMP) code where analysis is cleaner, then the
-    metadata is exported and injected into the parallel compilation.
-
-    Metadata collected from both affine and non-affine operations:
-    - Array dimensions inferred from access patterns (e.g., i*128+j → [128,128])
-    - Loop bounds (static and dynamic), trip counts, and parallelism opportunities
-    - Memory access patterns and regions (affine and non-affine loads/stores)
-    - Data dependencies and access frequency statistics
-    - Read/write ratios and lifetime information
-
-    This preserves high-level semantic information through OpenMP transformations.
-  }];
-  let dependentDialects = [
-    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
-    "arith::ArithDialect", "affine::AffineDialect"
-  ];
-  let options = [
-    Option<"exportMetadata", "export-metadata", "bool", "false",
-           "Export metadata to JSON file after collection">,
-    Option<"metadataFile", "metadata-file", "std::string",
-           "\".carts-metadata.json\"", "Path to metadata JSON file for export">
-  ];
-  let constructor = "mlir::arts::createCollectMetadataPass()";
-}
-
 def RaiseMemRefDimensionality : Pass<"raise-memref-dimensionality", "mlir::ModuleOp"> {
   let summary = "Raise nested pointer allocations to N-dimensional memrefs";
   let description = [{
@@ -337,110 +307,6 @@ def EdtICM : Pass<"arts-edt-icm", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEdtICMPass()";
 }
 
-def DataPtrHoisting
-    : Pass<"arts-data-ptr-hoisting", "mlir::ModuleOp"> {
-  let summary =
-      "Hoist invariant dep/db views and recover loop-local blocked slices";
-  let description = [{
-    This pass hoists invariant llvm.load operations that extract dependency or
-    datablock pointers to before enclosing loops.
-
-    It also recognizes blocked worker loops that already stay inside a single
-    owned slice and rewrites them to reuse one hoisted dep view plus the local
-    loop IV, instead of rebuilding dep_gep/div/rem selection on every element.
-
-    Without hoisting, these pointer loads happen inside innermost loops
-    (O(n^3) loads for 3-nested loops). With hoisting, the pointers are loaded
-    once before the loop nest (O(1) loads).
-
-    This is critical for performance because LLVM's LICM cannot hoist these loads
-    without TBAA metadata proving they don't alias with data stores.
-
-    Example transformation:
-    ```mlir
-    scf.for %i = ... {
-      scf.for %j = ... {
-        % ptr = llvm.load % dep_ptr_addr : !llvm.ptr->!llvm.ptr % val =
-                    polygeist.load % ptr[% i, % j] : memref < ? x ? xf64 >
-      }
-    }
-    ```
-    becomes:
-    ```mlir
-    %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr
-    scf.for %i = ... {
-      scf.for %j = ... {
-        % val = polygeist.load % ptr[% i, % j] : memref < ? x ? xf64 >
-      }
-    }
-    ```
-  }];
-  let dependentDialects =
-      ["arts::ArtsDialect", "LLVM::LLVMDialect", "scf::SCFDialect"];
-  let constructor = "mlir::arts::createDataPtrHoistingPass()";
-}
-
-def GuidRangCallOpt
-    : Pass<"arts-guid-range-call-opt", "mlir::ModuleOp"> {
-  let summary = "Rewrite per-iteration GUID reserve calls into GUID-range calls";
-  let description = [{
-    Runs after ARTS-to-LLVM lowering and rewrites canonical loops of the form:
-
-      scf.for %i = 0 to N step 1 {
-        %g = call @arts_guid_reserve(...)
-        ...
-      }
-
-    into:
-
-      %range = call @arts_guid_reserve_range(..., N, ...)
-      scf.for %i = 0 to N step 1 {
-        %g = call @arts_guid_from_index(%range, %i)
-        ...
-      }
-
-    This pass is conservative and requires lower-bound 0, step 1,
-    and route(0) to preserve runtime semantics.
-
-    For dynamic trip counts it emits a guarded rewrite:
-    use range reservation only when upperBound > 1 and
-    upperBound <= UINT32_MAX,
-    otherwise preserve per-iteration reserve behavior.
-  }];
-  let dependentDialects = [
-    "func::FuncDialect", "arith::ArithDialect", "scf::SCFDialect",
-    "LLVM::LLVMDialect"
-  ];
-  let constructor = "mlir::arts::createGuidRangCallOptPass()";
-}
-
-def RuntimeCallOpt
-    : Pass<"arts-runtime-call-opt", "mlir::ModuleOp"> {
-  let summary = "Hoist and deduplicate selected pure ARTS runtime calls";
-  let description = [{
-    Runs after ARTS-to-LLVM lowering and optimizes only a conservative set of
-    runtime topology/identity queries that are safe to treat as loop-invariant
-    within a function:
-
-      - arts_get_total_workers
-      - arts_get_total_nodes
-      - arts_get_current_worker
-      - arts_get_current_node
-
-    The pass intentionally ignores stateful runtime calls (guid reserve, DB
-    create, EDT/event signaling, etc.) and only rewrites zero-operand query
-    calls.
-
-    Transformations:
-      1) Hoist loop-invariant calls out of nested `scf.for` loops.
-      2) Deduplicate dominated duplicate calls per callee within a function.
-  }];
-  let dependentDialects = [
-    "func::FuncDialect", "scf::SCFDialect"
-  ];
-  let constructor = "mlir::arts::createRuntimeCallOptPass()";
-}
-
 def EdtPtrRematerialization
     : Pass<"edt-ptr-rematerialization", "mlir::ModuleOp"> {
   let summary = "Rematerialize pointer dependencies in EDTs.";
@@ -449,16 +315,6 @@ def EdtPtrRematerialization
         driven tasks(EDTs) to optimize memory usage and data movement.}];
   let constructor = "mlir::arts::createEdtPtrRematerializationPass()";
 }
-
-def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
-  let summary = "Lower ARTS epochs and propagate epoch GUIDs to EDTs";
-  let dependentDialects = [
-    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
-    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
-  ];
-  let constructor = "mlir::arts::createEpochLoweringPass()";
-}
-
 
 def ParallelEdtLowering : Pass<"parallel-edt-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS parallel EDTs to task graphs";
@@ -551,15 +407,6 @@ def ForLowering : Pass<"for-lowering", "mlir::ModuleOp"> {
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createForLoweringPass()";
-}
-
-def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
-  let summary = "Lower ARTS EDTs to LLVM";
-  let dependentDialects = [
-    "memref::MemRefDialect", "LLVM::LLVMDialect", "func::FuncDialect",
-    "arts::ArtsDialect", "arith::ArithDialect", "polygeist::PolygeistDialect"
-  ];
-  let constructor = "mlir::arts::createEdtLoweringPass()";
 }
 
 def LoweringContractCleanup : Pass<"lowering-contract-cleanup", "mlir::ModuleOp"> {
@@ -740,29 +587,6 @@ def StencilBoundaryPeeling : Pass<"stencil-boundary-peeling",
     "scf::SCFDialect", "memref::MemRefDialect"
   ];
   let constructor = "mlir::arts::createStencilBoundaryPeelingPass()";
-}
-
-def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
-  let summary = "Compute linalg-style structural classification for loop nests";
-  let description = [{
-    Analyzes loop nests inside arts.for operations and computes linalg-style
-    structural information: indexing maps, iterator types, and pattern
-    classification. Stamps the results as attributes on the arts.for op.
-
-    Recognized patterns:
-    - elementwise: all parallel iterators, identity/permutation indexing maps
-    - matmul: triple-nested with multiply-accumulate and reduction dimension
-    - stencil: parallel iterators with constant-offset indexing maps
-    - reduction: has reduction iterators with accumulation pattern
-
-    The stamped attributes enable PatternDiscovery to leverage structural
-    classification instead of manual access-pattern heuristics.
-  }];
-  let dependentDialects = [
-    "memref::MemRefDialect", "func::FuncDialect", "arts::ArtsDialect",
-    "arith::ArithDialect", "scf::SCFDialect"
-  ];
-  let constructor = "mlir::arts::sde::createRaiseToLinalgPass()";
 }
 
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {

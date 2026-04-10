@@ -82,14 +82,14 @@ EpochOp wrapBodyInEpoch(Block &body, Location loc) {
     return nullptr;
 
   OpBuilder builder(body.getTerminator());
-  auto epochOp = builder.create<EpochOp>(loc);
+  auto epochOp = EpochOp::create(builder, loc);
   auto &epochBlock = epochOp.getRegion().emplaceBlock();
 
   for (Operation *op : opsToMove)
     op->moveBefore(&epochBlock, epochBlock.end());
 
   builder.setInsertionPointToEnd(&epochBlock);
-  builder.create<YieldOp>(loc);
+  YieldOp::create(builder, loc);
 
   return epochOp;
 }

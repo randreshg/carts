@@ -415,7 +415,7 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
       for (const auto &entryPair : entryCounts) {
         size_t entry = entryPair.first;
         DbRefOp newRef =
-            refBuilder.create<DbRefOp>(dbRef.getLoc(), dbRef.getType(),
+            DbRefOp::create(refBuilder, dbRef.getLoc(), dbRef.getType(),
                                        newBlockArgs[entry], dbRef.getIndices());
         entryRefs[entry] = newRef;
       }
@@ -449,7 +449,7 @@ bool DbPartitioningPass::expandMultiEntryAcquires() {
     if (existingRelease) {
       OpBuilder releaseBuilder(existingRelease);
       for (size_t i = 1; i < numEntries; ++i) {
-        releaseBuilder.create<DbReleaseOp>(original.getLoc(), newBlockArgs[i]);
+        DbReleaseOp::create(releaseBuilder, original.getLoc(), newBlockArgs[i]);
       }
       ARTS_DEBUG("    Created " << (numEntries - 1)
                                 << " db_release ops for expanded block args");
@@ -1701,18 +1701,18 @@ std::optional<StencilInfo> DbPartitioningPass::computeStencilHaloInfo(
 
     if (info.totalRows && (info.haloLeft > 0 || info.haloRight > 0)) {
       if (!info.totalRows.getType().isIndex())
-        info.totalRows = builder.create<arith::IndexCastOp>(
+        info.totalRows = arith::IndexCastOp::create(builder,
             loc, builder.getIndexType(), info.totalRows);
 
       Value haloTotal = arts::createConstantIndex(
           builder, loc, info.haloLeft + info.haloRight);
       Value zero = arts::createZeroIndex(builder, loc);
-      Value canSubtract = builder.create<arith::CmpIOp>(
+      Value canSubtract = arith::CmpIOp::create(builder,
           loc, arith::CmpIPredicate::uge, info.totalRows, haloTotal);
       Value reduced =
-          builder.create<arith::SubIOp>(loc, info.totalRows, haloTotal);
+          arith::SubIOp::create(builder, loc, info.totalRows, haloTotal);
       info.totalRows =
-          builder.create<arith::SelectOp>(loc, canSubtract, reduced, zero);
+          arith::SelectOp::create(builder, loc, canSubtract, reduced, zero);
     }
   }
 

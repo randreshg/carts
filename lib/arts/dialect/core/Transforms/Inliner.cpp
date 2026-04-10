@@ -231,7 +231,7 @@ struct ArtsInlinerInterface : public mlir::InlinerInterface {
 
     /// Replace the return with a branch to the dest.
     mlir::OpBuilder builder(op);
-    builder.create<mlir::cf::BranchOp>(op->getLoc(), newDest,
+    mlir::cf::BranchOp::create(builder, op->getLoc(), newDest,
                                        returnOp.getOperands());
     op->erase();
   }

@@ -170,10 +170,10 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     Value bs = plan.getBlockSize(d);
     if (!bs)
       bs = one;
-    bs = builder.create<arith::MaxUIOp>(loc, bs, one);
+    bs = arith::MaxUIOp::create(builder, loc, bs, one);
     Value totalExtent =
         (d < plan.outerSizes.size() && plan.outerSizes[d])
-            ? builder.create<arith::MulIOp>(loc, plan.outerSizes[d], bs)
+            ? arith::MulIOp::create(builder, loc, plan.outerSizes[d], bs)
             : Value();
 
     /// Get element offset and size for this dimension from partitionInfo.
@@ -233,10 +233,10 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
       }
     }
 
-    Value startBlock = builder.create<arith::DivUIOp>(loc, elemOff, bs);
-    Value endPos = builder.create<arith::AddIOp>(loc, elemOff, elemSz);
-    endPos = builder.create<arith::SubIOp>(loc, endPos, one);
-    Value endBlock = builder.create<arith::DivUIOp>(loc, endPos, bs);
+    Value startBlock = arith::DivUIOp::create(builder, loc, elemOff, bs);
+    Value endPos = arith::AddIOp::create(builder, loc, elemOff, elemSz);
+    endPos = arith::SubIOp::create(builder, loc, endPos, one);
+    Value endBlock = arith::DivUIOp::create(builder, loc, endPos, bs);
 
     /// Clamp only when the slice starts in-range.
     /// For out-of-range starts (e.g., i-1 at the first row), emit an empty
@@ -245,23 +245,23 @@ void DbBlockRewriter::transformAcquire(const DbRewriteAcquire &info,
     Value startAboveMax;
     if (d < plan.outerSizes.size()) {
       Value maxBlock =
-          builder.create<arith::SubIOp>(loc, plan.outerSizes[d], one);
-      startAboveMax = builder.create<arith::CmpIOp>(
+          arith::SubIOp::create(builder, loc, plan.outerSizes[d], one);
+      startAboveMax = arith::CmpIOp::create(builder,
           loc, arith::CmpIPredicate::ugt, startBlock, maxBlock);
       Value clampedEnd =
-          builder.create<arith::MinUIOp>(loc, endBlock, maxBlock);
-      endBlock = builder.create<arith::SelectOp>(loc, startAboveMax, endBlock,
-                                                 clampedEnd);
+          arith::MinUIOp::create(builder, loc, endBlock, maxBlock);
+      endBlock = arith::SelectOp::create(builder, loc, startAboveMax, endBlock,
+                                         clampedEnd);
     }
 
-    Value blockCount = builder.create<arith::SubIOp>(loc, endBlock, startBlock);
-    blockCount = builder.create<arith::AddIOp>(loc, blockCount, one);
+    Value blockCount = arith::SubIOp::create(builder, loc, endBlock, startBlock);
+    blockCount = arith::AddIOp::create(builder, loc, blockCount, one);
 
     if (startAboveMax) {
       startBlock =
-          builder.create<arith::SelectOp>(loc, startAboveMax, zero, startBlock);
+          arith::SelectOp::create(builder, loc, startAboveMax, zero, startBlock);
       blockCount =
-          builder.create<arith::SelectOp>(loc, startAboveMax, zero, blockCount);
+          arith::SelectOp::create(builder, loc, startAboveMax, zero, blockCount);
     }
 
     /// Check if single-block for this dimension
@@ -376,18 +376,18 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
       localized.memrefIndices.push_back(zero);
     }
 
-    auto newRef = builder.create<DbRefOp>(userLoc, newElementType, newSource,
-                                          localized.dbRefIndices);
+    auto newRef = DbRefOp::create(builder, userLoc, newElementType, newSource,
+                                   localized.dbRefIndices);
 
     if (access->isRead()) {
       auto load = cast<memref::LoadOp>(user);
-      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef.getResult(),
-                                                    localized.memrefIndices);
+      auto newLoad = memref::LoadOp::create(builder, userLoc, newRef.getResult(),
+                                            localized.memrefIndices);
       load.replaceAllUsesWith(newLoad.getResult());
     } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
-      builder.create<memref::StoreOp>(userLoc, store.getValue(),
-                                      newRef.getResult(),
-                                      localized.memrefIndices);
+      memref::StoreOp::create(builder, userLoc, store.getValue(),
+                              newRef.getResult(),
+                              localized.memrefIndices);
     }
     removal.markForRemoval(user);
   }
@@ -405,8 +405,8 @@ void DbBlockRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     if (localized.dbRefIndices.empty())
       localized.dbRefIndices.push_back(zero);
 
-    auto newRef = builder.create<DbRefOp>(loc, newElementType, newSource,
-                                          localized.dbRefIndices);
+    auto newRef = DbRefOp::create(builder, loc, newElementType, newSource,
+                                   localized.dbRefIndices);
     ref.replaceAllUsesWith(newRef.getResult());
   }
 
@@ -473,7 +473,7 @@ bool DbBlockRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
     Value bs = plan.getBlockSize(d);
     if (!bs)
       bs = one;
-    bs = builder.create<arith::MaxUIOp>(loc, bs, one);
+    bs = arith::MaxUIOp::create(builder, loc, bs, one);
     effectiveBlockSizes.push_back(bs);
 
     /// Always use DB-space offset as startBlock (even for single-block mode)

@@ -228,7 +228,7 @@ void RemovalUtils::replaceWithUndef(Operation *op, OpBuilder &builder) {
   for (Value result : op->getResults()) {
     if (!result.use_empty()) {
       auto undef =
-          builder.create<arts::UndefOp>(op->getLoc(), result.getType());
+          arts::UndefOp::create(builder, op->getLoc(), result.getType());
       result.replaceAllUsesWith(undef.getResult());
     }
   }

@@ -226,15 +226,15 @@ void DbElementWiseRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
 
     /// Create new db_ref with transformed outer indices
     auto newRef =
-        builder.create<DbRefOp>(userLoc, newElementType, newSource, newOuter);
+        DbRefOp::create(builder, userLoc, newElementType, newSource, newOuter);
 
     /// Create new load/store with transformed inner indices
     if (access->isRead()) {
       auto load = cast<memref::LoadOp>(user);
-      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef, newInner);
+      auto newLoad = memref::LoadOp::create(builder, userLoc, newRef, newInner);
       load.replaceAllUsesWith(newLoad.getResult());
     } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
-      builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
+      memref::StoreOp::create(builder, userLoc, store.getValue(), newRef,
                                       newInner);
     }
     removal.markForRemoval(user);
@@ -249,7 +249,7 @@ void DbElementWiseRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
     if (indices.empty())
       indices.push_back(arts::createZeroIndex(builder, loc));
     auto newRef =
-        builder.create<DbRefOp>(loc, newElementType, newSource, indices);
+        DbRefOp::create(builder, loc, newElementType, newSource, indices);
     ref.replaceAllUsesWith(newRef.getResult());
   }
 
