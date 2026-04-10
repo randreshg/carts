@@ -65,8 +65,8 @@ LLVM conversion patterns. They stay shared.
 | `Concurrency.cpp` | `lib/arts/dialect/core/Transforms/Concurrency.cpp` | 3 | Walks EdtOp concurrency graph |
 | `CreateDbs.cpp` | `lib/arts/dialect/core/Transforms/CreateDbs.cpp` | 3 | Creates arts.db_alloc from memref analysis |
 | `CreateEpochs.cpp` | `lib/arts/dialect/core/Transforms/CreateEpochs.cpp` | 3 | Creates arts.epoch regions |
-| `DbLowering.cpp` | `lib/arts/dialect/rt/Conversion/ArtsToRt/DbLowering.cpp` | 3 | arts.db_* -> arts_rt.dep_db_acquire |
-| `DepTransforms.cpp` | `lib/arts/patterns/Transforms/DepTransforms.cpp` | 3 | Dependency transforms; pattern-level |
+| `DbLowering.cpp` | `lib/arts/dialect/core/Transforms/DbLowering.cpp` | 3 | arts.db_alloc -> arts.db_acquire (core->core, NOT rt) |
+| `DepTransforms.cpp` | `lib/arts/dialect/core/Transforms/DepTransforms.cpp` | 3 | Dependency transforms; has ARTS EdtOp deps |
 | `DistributedHostLoopOutlining.cpp` | `lib/arts/dialect/core/Transforms/DistributedHostLoopOutlining.cpp` | 3 | ARTS structural |
 | `EdtDistribution.cpp` | `lib/arts/dialect/core/Transforms/EdtDistribution.cpp` | 3 | ARTS structural |
 | `EdtLowering.cpp` | `lib/arts/dialect/rt/Conversion/ArtsToRt/EdtLowering.cpp` | 3 | arts.edt -> arts_rt.edt_create; Phase 1: add using decls |
@@ -75,9 +75,9 @@ LLVM conversion patterns. They stay shared.
 | `EpochLowering.cpp` | `lib/arts/dialect/rt/Conversion/ArtsToRt/EpochLowering.cpp` | 3 | arts.epoch -> arts_rt.create_epoch; Phase 1: add using decls |
 | `ForLowering.cpp` | `lib/arts/dialect/core/Transforms/ForLowering.cpp` | 3 | arts.for -> EDT structure; Phase 1: add using decls |
 | `ForOpt.cpp` | `lib/arts/dialect/core/Transforms/ForOpt.cpp` | 3 | ARTS structural |
-| `LoweringContractCleanup.cpp` | `lib/arts/general/Transforms/LoweringContractCleanup.cpp` | 3 | Generic cleanup |
-| `ParallelEdtLowering.cpp` | `lib/arts/dialect/rt/Conversion/ArtsToRt/ParallelEdtLowering.cpp` | 3 | arts.edt(parallel) -> arts_rt |
-| `PatternDiscovery.cpp` | `lib/arts/patterns/Transforms/PatternDiscovery.cpp` | 3 | Pattern detection; hidden EDT dep must be resolved |
+| `LoweringContractCleanup.cpp` | `lib/arts/dialect/core/Transforms/LoweringContractCleanup.cpp` | 3 | Removes ARTS metadata attrs; has ARTS deps |
+| `ParallelEdtLowering.cpp` | `lib/arts/dialect/core/Transforms/ParallelEdtLowering.cpp` | 3 | arts.edt(parallel) -> arts.edt workers (core->core, NOT rt) |
+| `PatternDiscovery.cpp` | `lib/arts/dialect/core/Transforms/PatternDiscovery.cpp` | 3 | Pattern detection; has EdtOp/ForOp deps |
 | — | `lib/arts/dialect/rt/Conversion/RtToLLVM/RtToLLVMPatterns.cpp` | NEW/1 | 14 patterns extracted from ConvertArtsToLLVMPatterns.cpp |
 | — | `lib/arts/dialect/sde/Transforms/ConvertOpenMPToSde.cpp` | NEW/2 | 12 OMP->SDE patterns |
 | — | `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | NEW/2 | SDE->ARTS lowering |

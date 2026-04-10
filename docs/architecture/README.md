@@ -73,7 +73,7 @@ following IREE's proven multi-dialect pattern.
 | Document | Contents |
 |---|---|
 | [sde-dialect.md](sde-dialect.md) | SDE dialect specification: CU/SU/MU ops, types, attributes, effect system, OMP-to-SDE conversion |
-| [arts-rt-dialect.md](arts-rt-dialect.md) | Phase 1: Extract 14 runtime ops into `arts_rt` dialect |
+| [arts-rt-dialect.md](arts-rt-dialect.md) | Phase 1 (COMPLETE): Extract 14 runtime ops into `arts_rt` dialect |
 | [pipeline-redesign.md](pipeline-redesign.md) | Pipeline stages with tensor raise/analyze/bufferize cycle |
 | [pass-placement.md](pass-placement.md) | All 69 passes classified into sde/patterns/core/rt/general/verify |
 | [mlir-infrastructure.md](mlir-infrastructure.md) | MLIR dialect integration: linalg, tensor, bufferization, affine, vector |
@@ -140,7 +140,7 @@ lib/arts/
     rt/                    "call artsEdtCreate(guid, paramv, 3)"
       IR/                  RtDialect.cpp, RtOps.cpp (14 ops)
       Conversion/
-        ArtsToRt/          EdtLowering, EpochLowering, DbLowering, ParallelEdtLowering
+        ArtsToRt/          EdtLowering, EpochLowering (only passes producing arts_rt ops)
         RtToLLVM/          RtToLLVMPatterns (14 patterns from ConvertArtsToLLVM)
       Transforms/          DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt
 

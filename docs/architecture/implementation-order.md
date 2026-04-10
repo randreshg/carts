@@ -10,57 +10,47 @@ Phase 2: Create SDE dialect (depends on directory structure from Phase 1)
 Phase 3: Full folder reorganization (depends on both Phase 1 and 2)
 ```
 
-## Phase 1: Extract `arts_rt` Dialect
+## Phase 1: Extract `arts_rt` Dialect -- COMPLETE
 
 See [arts-rt-dialect.md](arts-rt-dialect.md) for full details.
 
-### Tier Breakdown
+**Status**: All sub-phases complete. 159/168 tests pass (same baseline as main).
+
+### Completed Steps
 
 ```
-Tier 0: Create rt dialect scaffold (TableGen + headers)
-  |-- No dependencies -- pure file creation
-  |-- ~0.5h
+Phase 1A: arts_rt scaffold (ef893f12)
+  - Created include/arts/dialect/rt/IR/ (RtDialect.td, RtOps.td, RtDialect.h)
+  - Created lib/arts/dialect/rt/IR/ (RtDialect.cpp, RtOps.cpp)
+  - CMakeLists.txt for TableGen + MLIRArtsRt library
 
-Tier 1: Move 14 op definitions to RtOps.td
-  |-- Blocked by: Tier 0
-  |-- Parallelizable: Split by op group (epoch, EDT, dep/state)
-  |-- ~3h
+Phase 1B: Op extraction (35ece54e, 27812b9a)
+  - Removed 14 ops from include/arts/Ops.td
+  - Removed DepAccessMode from include/arts/Attributes.td
+  - Removed verifiers/builders from lib/arts/Dialect.cpp
+  - Added using declarations to 15+ lowering/analysis files
+  - Registered arts_rt dialect in Compile.cpp
+  - Renamed ops in 24+ test files
 
-Tier 2: CMakeLists + TableGen generation
-  |-- Blocked by: Tier 1
-  |-- ~0.5h
+Phase 1C: Conversion pattern split (162fceef)
+  - Created lib/arts/dialect/rt/Conversion/RtToLLVM/RtToLLVMPatterns.cpp
+    (14 patterns, 1841 lines extracted from ConvertArtsToLLVMPatterns.cpp)
+  - ConvertArtsToLLVMPatterns.cpp reduced from 2982 to 1221 lines
+  - 4-phase greedy rewrite: runtime -> rt -> db -> other
+  - populateRtToLLVMPatterns() wired into ConvertArtsToLLVM pass
 
-Tier 3: Dialect C++ implementation
-  |-- 3.1: RtDialect.cpp (register ops)
-  |-- 3.2: Register in Compile.cpp
-  |-- ~0.75h
-
-Tier 4: Conversion pattern split (PARALLEL)
-  |-- 4.1a: Keep core patterns in ConvertArtsToLLVMPatterns.cpp
-  |-- 4.1b: Move epoch rt patterns (3)
-  |-- 4.1c: Move remaining rt patterns (11)
-  |-- 4.2: Wire populateRtToLLVMPatterns into pass
-  |-- All 4.1x run in parallel
-  |-- ~3h
-
-Tier 5: Include/namespace updates (HIGHLY PARALLEL)
-  |-- Add using declarations to 15 files (see arts-rt-dialect.md cross-refs)
-  |-- ~0.5h (parallelized)
-
-Tier 6: Test migration + verification
-  |-- sed on 24 test files
-  |-- Build + test
-  |-- ~0.5h
+Phase 1D: Verification updates (in 1C commit)
+  - VerifyLowered.cpp checks both arts.* and arts_rt.* survival
+  - Transitional using declarations in include/arts/Dialect.h
 ```
 
-**Critical path**: T0 -> T1 -> T2 -> T3 -> T4 -> T6 = ~8h
-**With parallelization** (8-10 agents): ~5-6h
+### Key Decisions Made
 
-### Key Constraints
-
-- `ArtsCodegen` cannot be split -- stays in core, used by all patterns
-- `DepAccessMode` moves to RtOps.td (only used by rt ops)
-- `ArtsToLLVMPattern<T>` stays shared via `ConvertArtsToLLVMInternal.h`
+- `ArtsCodegen` stays shared -- used by all conversion patterns
+- `DepAccessMode` moved to RtOps.td (only used by rt ops)
+- `ArtsToLLVMPattern<T>` shared via `ConvertArtsToLLVMInternal.h`
+- RtToLLVMPatterns.cpp compiled as part of MLIRArtsTransforms (not
+  separate library) to avoid circular ArtsCodegen dependency
 - No circular dependencies -- rt ops use only standard MLIR types
 
 ## Phase 2: Create SDE Dialect
@@ -116,13 +106,20 @@ Phase 3B: Move passes to dialect-owned structure
   5. Move EDT passes to core/Transforms/
   6. Move DB passes to core/Transforms/
   7. Move lowering passes to rt/Conversion/ArtsToRt/
-     (EdtLowering, EpochLowering, DbLowering, ParallelEdtLowering)
+     (EdtLowering, EpochLowering ONLY — these are the only passes
+      that produce arts_rt ops. DbLowering and ParallelEdtLowering
+      stay in core/Transforms/ as they do core->core lowering.)
   8. Move codegen passes to rt/Transforms/
      (DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt)
-  9. Move standard passes to general/
-     (RaiseMemRef, DCE, ScalarReplacement, AliasScopeGen, LoopVecHints)
-  10. Create patterns/ directory and move pattern passes
-      (PatternDiscovery, KernelTransforms, StencilBoundaryPeeling, DepTransforms)
+  9. Move truly ARTS-agnostic passes to general/
+     (RaiseMemRef, DCE, ScalarReplacement ONLY — AliasScopeGen,
+      HandleDeps, ArtsInliner, Hoisting, LoweringContractCleanup
+      have hidden ARTS deps and stay in core/Transforms/)
+  10. Create patterns/Analysis/ for read-only analysis
+      (DbPatternMatchers, AccessPatternAnalysis — no op mutation)
+      NOTE: Pattern *transform* passes (PatternDiscovery,
+      KernelTransforms, StencilBoundaryPeeling, DepTransforms)
+      all have ARTS structural op deps and stay in core/Transforms/
 
 Phase 3C: Verification
   10. Build and test

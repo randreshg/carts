@@ -1,4 +1,8 @@
-# Phase 1: Extract `arts_rt` Dialect
+# Phase 1: Extract `arts_rt` Dialect -- COMPLETE
+
+**Status**: All sub-phases implemented on branch `architecture/sde-restructuring`.
+159/168 tests pass (same baseline as main). Key commits: `ef893f12` (scaffold),
+`35ece54e` (op extraction), `162fceef` (pattern split).
 
 The cleanest boundary -- 14 ops created only in pre-lowering (stage 17),
 consumed only by ConvertArtsToLLVM (stage 18), with zero type dependency
