@@ -1,12 +1,5 @@
 module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for high-thread single-node lowering checks.\0Aworker_threads=64\0A\0A# Network configuration\0Asender_threads=0\0Areceiver_threads=0\0Aport_count=1\0A\0A# Launcher configuration\0Alauncher=local\0Amaster_node=localhost\0Anode_count=1\0Anodes=localhost\0Adefault_ports=34739\0A\0A# Scheduling\0Aworker_init_deque_size=2048\0Aroute_table_size=16\0A\0A# Debug\0Acore_dump=1\0Acounter_folder=./counters\0A", arts.runtime_static_workers = false, arts.runtime_total_nodes = 1 : i64, arts.runtime_total_workers = 64 : i64, dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vector<4xi64>, !llvm.ptr<271> = dense<32> : vector<4xi64>, !llvm.ptr<272> = dense<64> : vector<4xi64>, i64 = dense<64> : vector<2xi64>, i128 = dense<128> : vector<2xi64>, f80 = dense<128> : vector<2xi64>, !llvm.ptr = dense<64> : vector<4xi64>, i1 = dense<8> : vector<2xi64>, i8 = dense<8> : vector<2xi64>, i16 = dense<16> : vector<2xi64>, i32 = dense<32> : vector<2xi64>, f16 = dense<16> : vector<2xi64>, f64 = dense<64> : vector<2xi64>, f128 = dense<128> : vector<2xi64>, "dlti.endianness" = "little", "dlti.mangling_mode" = "e", "dlti.legal_int_widths" = array<i32: 8, 16, 32, 64>, "dlti.stack_alignment" = 128 : i64>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   func.func private @__arts_edt_1(%arg0: i32, %arg1: memref<?xi64> {llvm.noalias, llvm.nocapture, llvm.nofree, llvm.readonly}, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> {llvm.noalias, llvm.nocapture, llvm.nofree, llvm.readonly}) {
-    %c7 = arith.constant 7 : index
-    %c6 = arith.constant 6 : index
-    %c5 = arith.constant 5 : index
-    %c4 = arith.constant 4 : index
-    %c3 = arith.constant 3 : index
-    %c2 = arith.constant 2 : index
-    %c2304 = arith.constant 2304 : index
     %c0 = arith.constant 0 : index
     %c1_i32 = arith.constant 1 : i32
     %c1 = arith.constant 1 : index
@@ -14,113 +7,112 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
     %cst = arith.constant 1.000000e+00 : f64
     %cst_0 = arith.constant 1.000000e-03 : f64
     %c47 = arith.constant 47 : index
-    %0:7 = arts_rt.edt_param_unpack %arg1 : memref<?xi64> : (index, index, index, index, index, index, index)
-    %guid, %ptr = arts_rt.dep_db_acquire(%arg3) offset[%c0 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
-    %guid_1, %ptr_2 = arts_rt.dep_db_acquire(%arg3) offset[%c1 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
-    %guid_3, %ptr_4 = arts_rt.dep_db_acquire(%arg3) offset[%c2 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
-    %guid_5, %ptr_6 = arts_rt.dep_db_acquire(%arg3) offset[%c3 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
-    %guid_7, %ptr_8 = arts_rt.dep_db_acquire(%arg3) offset[%c4 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
-    %guid_9, %ptr_10 = arts_rt.dep_db_acquire(%arg3) offset[%c5 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
-    %guid_11, %ptr_12 = arts_rt.dep_db_acquire(%arg3) offset[%c6 : index] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> memref<?xi64>, memref<?x!llvm.ptr>
-    %1 = arith.addi %0#4, %c7 : index
-    %2 = arith.addi %1, %0#5 : index
-    %3 = arith.subi %c0, %0#0 : index
-    %4 = arith.cmpi slt, %3, %c0 : index
-    %5 = arith.select %4, %c0, %3 : index
-    %6 = arith.cmpi slt, %0#1, %c0 : index
-    %7 = arith.select %6, %c0, %0#1 : index
-    %8 = arith.minui %7, %0#2 : index
-    %9 = arts_rt.db_gep(%ptr : memref<?x!llvm.ptr>) indices[%c0] strides[%c2304, %c48, %c1] : !llvm.ptr
-    %10 = arts_rt.db_gep(%ptr_2 : memref<?x!llvm.ptr>) indices[%c0] strides[%c2304, %c48, %c1] : !llvm.ptr
-    %11 = arts_rt.db_gep(%ptr_4 : memref<?x!llvm.ptr>) indices[%c0] strides[%c2304, %c48, %c1] : !llvm.ptr
-    %12 = arts_rt.db_gep(%ptr_6 : memref<?x!llvm.ptr>) indices[%c0] strides[%c2304, %c48, %c1] : !llvm.ptr
-    %13 = arts_rt.db_gep(%ptr_8 : memref<?x!llvm.ptr>) indices[%c0] strides[%c2304, %c48, %c1] : !llvm.ptr
-    %14 = arts_rt.db_gep(%ptr_10 : memref<?x!llvm.ptr>) indices[%c0] strides[%c2304, %c48, %c1] : !llvm.ptr
-    %15 = arts_rt.db_gep(%ptr_12 : memref<?x!llvm.ptr>) indices[%c0] strides[%c2304, %c48, %c1] : !llvm.ptr
-    %guid_13, %ptr_14 = arts_rt.dep_gep(%arg3) offset[%c7 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
-    %guid_15, %ptr_16 = arts_rt.dep_gep(%arg3) offset[%1 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
-    %guid_17, %ptr_18 = arts_rt.dep_gep(%arg3) offset[%2 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
-    %16 = llvm.load %ptr_14 : !llvm.ptr -> !llvm.ptr
-    %17 = llvm.load %ptr_16 : !llvm.ptr -> !llvm.ptr
-    %18 = llvm.load %ptr_18 : !llvm.ptr -> !llvm.ptr
-    %19 = llvm.load %9 : !llvm.ptr -> !llvm.ptr
-    %20 = polygeist.pointer2memref %19 : !llvm.ptr to memref<?x?x?xf64>
-    %21 = llvm.load %10 : !llvm.ptr -> !llvm.ptr
-    %22 = polygeist.pointer2memref %21 : !llvm.ptr to memref<?x?x?xf64>
-    %23 = llvm.load %11 : !llvm.ptr -> !llvm.ptr
-    %24 = polygeist.pointer2memref %23 : !llvm.ptr to memref<?x?x?xf64>
-    %25 = llvm.load %12 : !llvm.ptr -> !llvm.ptr
-    %26 = polygeist.pointer2memref %25 : !llvm.ptr to memref<?x?x?xf64>
-    %27 = llvm.load %13 : !llvm.ptr -> !llvm.ptr
-    %28 = polygeist.pointer2memref %27 : !llvm.ptr to memref<?x?x?xf64>
-    %29 = llvm.load %14 : !llvm.ptr -> !llvm.ptr
-    %30 = polygeist.pointer2memref %29 : !llvm.ptr to memref<?x?x?xf64>
-    %31 = llvm.load %15 : !llvm.ptr -> !llvm.ptr
-    %32 = polygeist.pointer2memref %31 : !llvm.ptr to memref<?x?x?xf64>
-    %33 = polygeist.pointer2memref %16 : !llvm.ptr to memref<?x?x?xf64>
-    %34 = polygeist.pointer2memref %17 : !llvm.ptr to memref<?x?x?xf64>
-    %35 = polygeist.pointer2memref %18 : !llvm.ptr to memref<?x?x?xf64>
-    scf.for %arg4 = %5 to %8 step %c1 {
-      %36 = arith.addi %0#3, %arg4 : index
-      %37 = arith.index_cast %36 : index to i32
-      %38 = arith.addi %37, %c1_i32 : i32
-      %39 = arith.index_cast %38 : i32 to index
+    %0:14 = arts_rt.edt_param_unpack %arg1 : memref<?xi64> : (index, index, index, index, index, index, index, index, index, index, index, index, index, index)
+    %1 = arith.addi %0#4, %0#5 : index
+    %2 = arith.addi %1, %0#6 : index
+    %3 = arith.addi %2, %0#7 : index
+    %4 = arith.addi %3, %0#8 : index
+    %5 = arith.addi %4, %0#9 : index
+    %6 = arith.addi %5, %0#10 : index
+    %7 = arith.addi %6, %0#11 : index
+    %8 = arith.addi %7, %0#12 : index
+    %9 = arith.subi %c0, %0#0 : index
+    %10 = arith.cmpi slt, %9, %c0 : index
+    %11 = arith.select %10, %c0, %9 : index
+    %12 = arith.cmpi slt, %0#1, %c0 : index
+    %13 = arith.select %12, %c0, %0#1 : index
+    %14 = arith.minui %13, %0#2 : index
+    %guid, %ptr = arts_rt.dep_gep(%arg3) offset[%c0 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %guid_1, %ptr_2 = arts_rt.dep_gep(%arg3) offset[%0#4 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %guid_3, %ptr_4 = arts_rt.dep_gep(%arg3) offset[%1 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %guid_5, %ptr_6 = arts_rt.dep_gep(%arg3) offset[%2 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %guid_7, %ptr_8 = arts_rt.dep_gep(%arg3) offset[%3 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %guid_9, %ptr_10 = arts_rt.dep_gep(%arg3) offset[%4 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %guid_11, %ptr_12 = arts_rt.dep_gep(%arg3) offset[%5 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %guid_13, %ptr_14 = arts_rt.dep_gep(%arg3) offset[%6 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %guid_15, %ptr_16 = arts_rt.dep_gep(%arg3) offset[%7 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %guid_17, %ptr_18 = arts_rt.dep_gep(%arg3) offset[%8 : index] indices[%c0 : index] strides[%c1] : memref<?x!llvm.struct<(i64, ptr, i32, i32, i64, i64)>> -> !llvm.ptr, !llvm.ptr
+    %15 = llvm.load %ptr : !llvm.ptr -> !llvm.ptr
+    %16 = llvm.load %ptr_2 : !llvm.ptr -> !llvm.ptr
+    %17 = llvm.load %ptr_4 : !llvm.ptr -> !llvm.ptr
+    %18 = llvm.load %ptr_6 : !llvm.ptr -> !llvm.ptr
+    %19 = llvm.load %ptr_8 : !llvm.ptr -> !llvm.ptr
+    %20 = llvm.load %ptr_10 : !llvm.ptr -> !llvm.ptr
+    %21 = llvm.load %ptr_12 : !llvm.ptr -> !llvm.ptr
+    %22 = llvm.load %ptr_14 : !llvm.ptr -> !llvm.ptr
+    %23 = llvm.load %ptr_16 : !llvm.ptr -> !llvm.ptr
+    %24 = llvm.load %ptr_18 : !llvm.ptr -> !llvm.ptr
+    %25 = polygeist.pointer2memref %15 : !llvm.ptr to memref<?x?x?xf64>
+    %26 = polygeist.pointer2memref %16 : !llvm.ptr to memref<?x?x?xf64>
+    %27 = polygeist.pointer2memref %17 : !llvm.ptr to memref<?x?x?xf64>
+    %28 = polygeist.pointer2memref %18 : !llvm.ptr to memref<?x?x?xf64>
+    %29 = polygeist.pointer2memref %19 : !llvm.ptr to memref<?x?x?xf64>
+    %30 = polygeist.pointer2memref %20 : !llvm.ptr to memref<?x?x?xf64>
+    %31 = polygeist.pointer2memref %21 : !llvm.ptr to memref<?x?x?xf64>
+    %32 = polygeist.pointer2memref %22 : !llvm.ptr to memref<?x?x?xf64>
+    %33 = polygeist.pointer2memref %23 : !llvm.ptr to memref<?x?x?xf64>
+    %34 = polygeist.pointer2memref %24 : !llvm.ptr to memref<?x?x?xf64>
+    scf.for %arg4 = %11 to %14 step %c1 {
+      %35 = arith.addi %0#3, %arg4 : index
+      %36 = arith.index_cast %35 : index to i32
+      %37 = arith.addi %36, %c1_i32 : i32
+      %38 = arith.index_cast %37 : i32 to index
       scf.for %arg5 = %c1 to %c47 step %c1 {
-        %40 = arith.index_cast %arg5 : index to i32
-        %41 = arith.addi %40, %c1_i32 : i32
-        %42 = arith.index_cast %41 : i32 to index
+        %39 = arith.index_cast %arg5 : index to i32
+        %40 = arith.addi %39, %c1_i32 : i32
+        %41 = arith.index_cast %40 : i32 to index
         scf.for %arg6 = %c1 to %c47 step %c1 {
-          %43 = arith.index_cast %arg6 : index to i32
-          %44 = polygeist.load %20[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %45 = arith.divf %cst, %44 : f64
-          %46 = arith.addi %43, %c1_i32 : i32
-          %47 = arith.index_cast %46 : i32 to index
-          %48 = polygeist.load %22[%47, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %49 = polygeist.load %22[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %50 = arith.subf %48, %49 : f64
-          %51 = polygeist.load %24[%arg6, %42, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %52 = polygeist.load %24[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %53 = arith.subf %51, %52 : f64
-          %54 = arith.addf %50, %53 : f64
-          %55 = polygeist.load %26[%arg6, %arg5, %39] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %56 = polygeist.load %26[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %57 = arith.subf %55, %56 : f64
-          %58 = arith.addf %54, %57 : f64
-          %59 = polygeist.load %24[%47, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %60 = polygeist.load %24[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %61 = arith.subf %59, %60 : f64
-          %62 = polygeist.load %28[%arg6, %42, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %63 = polygeist.load %28[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %64 = arith.subf %62, %63 : f64
-          %65 = arith.addf %61, %64 : f64
-          %66 = polygeist.load %30[%arg6, %arg5, %39] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %67 = polygeist.load %30[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %68 = arith.subf %66, %67 : f64
-          %69 = arith.addf %65, %68 : f64
-          %70 = polygeist.load %26[%47, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %71 = polygeist.load %26[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %72 = arith.subf %70, %71 : f64
-          %73 = polygeist.load %30[%arg6, %42, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %74 = polygeist.load %30[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %75 = arith.subf %73, %74 : f64
-          %76 = arith.addf %72, %75 : f64
-          %77 = polygeist.load %32[%arg6, %arg5, %39] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %78 = polygeist.load %32[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %79 = arith.subf %77, %78 : f64
-          %80 = arith.addf %76, %79 : f64
-          %81 = arith.mulf %45, %cst_0 : f64
-          %82 = arith.mulf %81, %58 : f64
-          %83 = polygeist.load %33[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %84 = arith.addf %83, %82 : f64
-          polygeist.store %84, %33[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : f64, memref<?x?x?xf64>
-          %85 = arith.mulf %81, %69 : f64
-          %86 = polygeist.load %34[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %87 = arith.addf %86, %85 : f64
-          polygeist.store %87, %34[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : f64, memref<?x?x?xf64>
-          %88 = arith.mulf %81, %80 : f64
-          %89 = polygeist.load %35[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
-          %90 = arith.addf %89, %88 : f64
-          polygeist.store %90, %35[%arg6, %arg5, %36] sizes(%c48, %c48, %c48) : f64, memref<?x?x?xf64>
+          %42 = arith.index_cast %arg6 : index to i32
+          %43 = polygeist.load %25[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %44 = arith.divf %cst, %43 : f64
+          %45 = arith.addi %42, %c1_i32 : i32
+          %46 = arith.index_cast %45 : i32 to index
+          %47 = polygeist.load %26[%46, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %48 = polygeist.load %26[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %49 = arith.subf %47, %48 : f64
+          %50 = polygeist.load %27[%arg6, %41, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %51 = polygeist.load %27[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %52 = arith.subf %50, %51 : f64
+          %53 = arith.addf %49, %52 : f64
+          %54 = polygeist.load %28[%arg6, %arg5, %38] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %55 = polygeist.load %28[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %56 = arith.subf %54, %55 : f64
+          %57 = arith.addf %53, %56 : f64
+          %58 = polygeist.load %27[%46, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %59 = polygeist.load %27[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %60 = arith.subf %58, %59 : f64
+          %61 = polygeist.load %29[%arg6, %41, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %62 = polygeist.load %29[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %63 = arith.subf %61, %62 : f64
+          %64 = arith.addf %60, %63 : f64
+          %65 = polygeist.load %30[%arg6, %arg5, %38] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %66 = polygeist.load %30[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %67 = arith.subf %65, %66 : f64
+          %68 = arith.addf %64, %67 : f64
+          %69 = polygeist.load %28[%46, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %70 = polygeist.load %28[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %71 = arith.subf %69, %70 : f64
+          %72 = polygeist.load %30[%arg6, %41, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %73 = polygeist.load %30[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %74 = arith.subf %72, %73 : f64
+          %75 = arith.addf %71, %74 : f64
+          %76 = polygeist.load %31[%arg6, %arg5, %38] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %77 = polygeist.load %31[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %78 = arith.subf %76, %77 : f64
+          %79 = arith.addf %75, %78 : f64
+          %80 = arith.mulf %44, %cst_0 : f64
+          %81 = arith.mulf %80, %57 : f64
+          %82 = polygeist.load %32[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %83 = arith.addf %82, %81 : f64
+          polygeist.store %83, %32[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : f64, memref<?x?x?xf64>
+          %84 = arith.mulf %80, %68 : f64
+          %85 = polygeist.load %33[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %86 = arith.addf %85, %84 : f64
+          polygeist.store %86, %33[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : f64, memref<?x?x?xf64>
+          %87 = arith.mulf %80, %79 : f64
+          %88 = polygeist.load %34[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : memref<?x?x?xf64> -> f64
+          %89 = arith.addf %88, %87 : f64
+          polygeist.store %89, %34[%arg6, %arg5, %35] sizes(%c48, %c48, %c48) : f64, memref<?x?x?xf64>
         } {arts.id = 188 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 46 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 7 : i64, parallelClassification = 3 : i64, locationKey = "velocity_update.c:133:5">, arts.metadata_provenance = "exact"}
       } {arts.id = 190 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 46 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 7 : i64, parallelClassification = 3 : i64, locationKey = "velocity_update.c:133:5">, arts.metadata_provenance = "exact"}
     } {arts.id = 212 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "velocity_update.c:133:5">, arts.metadata_provenance = "exact"}
@@ -272,20 +264,6 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
     } {arts.id = 109 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 48 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = true, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "velocity_update.c:127:3">, arts.metadata_provenance = "recovered"}
     call @carts_phase_timer_stop(%6) : (memref<?xi8>) -> ()
     call @carts_kernel_timer_start(%5) : (memref<?xi8>) -> ()
-    %guid_24, %ptr_25 = arts.db_acquire[<in>] (%guid_9 : memref<?xi64>, %ptr_10 : memref<?x!llvm.ptr>) partitioning(<coarse>), offsets[%c0], sizes[%c1] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
-    arts.lowering_contract(%ptr_25 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
-    %guid_26, %ptr_27 = arts.db_acquire[<in>] (%guid_11 : memref<?xi64>, %ptr_12 : memref<?x!llvm.ptr>) partitioning(<coarse>), offsets[%c0], sizes[%c1] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
-    arts.lowering_contract(%ptr_27 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
-    %guid_28, %ptr_29 = arts.db_acquire[<in>] (%guid_17 : memref<?xi64>, %ptr_18 : memref<?x!llvm.ptr>) partitioning(<coarse>), offsets[%c0], sizes[%c1] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
-    arts.lowering_contract(%ptr_29 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
-    %guid_30, %ptr_31 = arts.db_acquire[<in>] (%guid_19 : memref<?xi64>, %ptr_20 : memref<?x!llvm.ptr>) partitioning(<coarse>), offsets[%c0], sizes[%c1] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
-    arts.lowering_contract(%ptr_31 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
-    %guid_32, %ptr_33 = arts.db_acquire[<in>] (%guid_13 : memref<?xi64>, %ptr_14 : memref<?x!llvm.ptr>) partitioning(<coarse>), offsets[%c0], sizes[%c1] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
-    arts.lowering_contract(%ptr_33 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
-    %guid_34, %ptr_35 = arts.db_acquire[<in>] (%guid_21 : memref<?xi64>, %ptr_22 : memref<?x!llvm.ptr>) partitioning(<coarse>), offsets[%c0], sizes[%c1] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
-    arts.lowering_contract(%ptr_35 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
-    %guid_36, %ptr_37 = arts.db_acquire[<in>] (%guid_15 : memref<?xi64>, %ptr_16 : memref<?x!llvm.ptr>) partitioning(<coarse>), offsets[%c0], sizes[%c1] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
-    arts.lowering_contract(%ptr_37 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
     %38 = arts_rt.create_epoch : i64
     scf.for %arg0 = %c0 to %c46 step %c1 {
       %47 = arith.cmpi ult, %arg0, %c46 : index
@@ -298,100 +276,171 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
       %54 = arith.cmpi ugt, %53, %c0 : index
       scf.if %54 {
         %55 = arith.addi %49, %c1 : index
-        %56 = arith.maxui %48, %c1 : index
-        %57 = arith.divui %55, %c48 : index
-        %58 = arith.addi %55, %56 : index
-        %59 = arith.subi %58, %c1 : index
-        %60 = arith.divui %59, %c48 : index
-        %61 = arith.cmpi ugt, %57, %c0 : index
-        %62 = arith.select %61, %60, %c0 : index
-        %63 = arith.subi %62, %57 : index
-        %64 = arith.addi %63, %c1 : index
-        %65 = arith.select %61, %c0, %57 : index
-        %66 = arith.select %61, %c0, %64 : index
-        %guid_38, %ptr_39 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%55], sizes[%48]), offsets[%65], sizes[%66] element_offsets[%c0, %c0, %55] element_sizes[%c48, %c48, %48] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        %56 = arith.addi %55, %53 : index
+        %57 = arith.cmpi uge, %55, %c1 : index
+        %58 = arith.select %57, %49, %c0 : index
+        %59 = arith.addi %56, %c1 : index
+        %60 = arith.minui %59, %c48 : index
+        %61 = arith.cmpi uge, %60, %58 : index
+        %62 = arith.subi %60, %58 : index
+        %63 = arith.select %61, %62, %c0 : index
+        %64 = arith.maxui %63, %c1 : index
+        %65 = arith.divui %58, %c48 : index
+        %66 = arith.addi %58, %64 : index
+        %67 = arith.subi %66, %c1 : index
+        %68 = arith.divui %67, %c48 : index
+        %69 = arith.cmpi ugt, %65, %c0 : index
+        %70 = arith.select %69, %68, %c0 : index
+        %71 = arith.subi %70, %65 : index
+        %72 = arith.addi %71, %c1 : index
+        %73 = arith.select %69, %c0, %65 : index
+        %74 = arith.select %69, %c0, %72 : index
+        %guid_24, %ptr_25 = arts.db_acquire[<in>] (%guid_9 : memref<?xi64>, %ptr_10 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%58], sizes[%63]), offsets[%73], sizes[%74] element_offsets[%c0, %c0, %58] element_sizes[%c48, %c48, %63] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        arts.lowering_contract(%ptr_25 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], narrowableDep = true, postDbRefined = true, criticalPathDistance = 0 : i64>)
+        %guid_26, %ptr_27 = arts.db_acquire[<in>] (%guid_11 : memref<?xi64>, %ptr_12 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%58], sizes[%63]), offsets[%73], sizes[%74] element_offsets[%c0, %c0, %58] element_sizes[%c48, %c48, %63] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        arts.lowering_contract(%ptr_27 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], narrowableDep = true, postDbRefined = true, criticalPathDistance = 0 : i64>)
+        %guid_28, %ptr_29 = arts.db_acquire[<in>] (%guid_17 : memref<?xi64>, %ptr_18 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%58], sizes[%63]), offsets[%73], sizes[%74] element_offsets[%c0, %c0, %58] element_sizes[%c48, %c48, %63] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        arts.lowering_contract(%ptr_29 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], narrowableDep = true, postDbRefined = true, criticalPathDistance = 0 : i64>)
+        %guid_30, %ptr_31 = arts.db_acquire[<in>] (%guid_19 : memref<?xi64>, %ptr_20 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%58], sizes[%63]), offsets[%73], sizes[%74] element_offsets[%c0, %c0, %58] element_sizes[%c48, %c48, %63] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        arts.lowering_contract(%ptr_31 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], narrowableDep = true, postDbRefined = true, criticalPathDistance = 0 : i64>)
+        %guid_32, %ptr_33 = arts.db_acquire[<in>] (%guid_13 : memref<?xi64>, %ptr_14 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%58], sizes[%63]), offsets[%73], sizes[%74] element_offsets[%c0, %c0, %58] element_sizes[%c48, %c48, %63] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        arts.lowering_contract(%ptr_33 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], narrowableDep = true, postDbRefined = true, criticalPathDistance = 0 : i64>)
+        %guid_34, %ptr_35 = arts.db_acquire[<in>] (%guid_21 : memref<?xi64>, %ptr_22 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%58], sizes[%63]), offsets[%73], sizes[%74] element_offsets[%c0, %c0, %58] element_sizes[%c48, %c48, %63] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        arts.lowering_contract(%ptr_35 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], narrowableDep = true, postDbRefined = true, criticalPathDistance = 0 : i64>)
+        %guid_36, %ptr_37 = arts.db_acquire[<in>] (%guid_15 : memref<?xi64>, %ptr_16 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%58], sizes[%63]), offsets[%73], sizes[%74] element_offsets[%c0, %c0, %58] element_sizes[%c48, %c48, %63] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        arts.lowering_contract(%ptr_37 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], narrowableDep = true, postDbRefined = true, criticalPathDistance = 0 : i64>)
+        %75 = arith.maxui %48, %c1 : index
+        %76 = arith.divui %55, %c48 : index
+        %77 = arith.addi %55, %75 : index
+        %78 = arith.subi %77, %c1 : index
+        %79 = arith.divui %78, %c48 : index
+        %80 = arith.cmpi ugt, %76, %c0 : index
+        %81 = arith.select %80, %79, %c0 : index
+        %82 = arith.subi %81, %76 : index
+        %83 = arith.addi %82, %c1 : index
+        %84 = arith.select %80, %c0, %76 : index
+        %85 = arith.select %80, %c0, %83 : index
+        %guid_38, %ptr_39 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%55], sizes[%48]), offsets[%84], sizes[%85] element_offsets[%c0, %c0, %55] element_sizes[%c48, %c48, %48] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
         arts.lowering_contract(%ptr_39 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
-        %guid_40, %ptr_41 = arts.db_acquire[<inout>] (%guid_5 : memref<?xi64>, %ptr_6 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%55], sizes[%48]), offsets[%65], sizes[%66] element_offsets[%c0, %c0, %55] element_sizes[%c48, %c48, %48] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        %guid_40, %ptr_41 = arts.db_acquire[<inout>] (%guid_5 : memref<?xi64>, %ptr_6 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%55], sizes[%48]), offsets[%84], sizes[%85] element_offsets[%c0, %c0, %55] element_sizes[%c48, %c48, %48] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
         arts.lowering_contract(%ptr_41 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
-        %guid_42, %ptr_43 = arts.db_acquire[<inout>] (%guid_7 : memref<?xi64>, %ptr_8 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%55], sizes[%48]), offsets[%65], sizes[%66] element_offsets[%c0, %c0, %55] element_sizes[%c48, %c48, %48] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
+        %guid_42, %ptr_43 = arts.db_acquire[<inout>] (%guid_7 : memref<?xi64>, %ptr_8 : memref<?x!llvm.ptr>) partitioning(<block>, offsets[%55], sizes[%48]), offsets[%84], sizes[%85] element_offsets[%c0, %c0, %55] element_sizes[%c48, %c48, %48] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [], stencil_owner_dims = [2]} -> (memref<?xi64>, memref<?x!llvm.ptr>)
         arts.lowering_contract(%ptr_43 : memref<?x!llvm.ptr>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) contract(<ownerDims = [2], postDbRefined = true, criticalPathDistance = 0 : i64>)
-        %67 = arts_rt.edt_param_pack(%49, %51, %53, %55, %65, %66, %48, %65, %66, %65, %66) : index, index, index, index, index, index, index, index, index, index, index : memref<?xi64>
-        %68 = arts_rt.edt_param_pack(%49, %51, %53, %55, %66, %66, %66) : index, index, index, index, index, index, index : memref<?xi64>
-        %69 = arts_rt.state_pack(%49, %51, %53, %55, %4, %c0, %c1_i32, %c1, %c48, %cst_0, %cst, %c47) : index, index, index, index, f64, index, i32, index, index, f64, f64, index -> memref<12xi64>
-        %70 = memref.load %guid_24[%c0] : memref<?xi64>
-        %71 = arts_rt.dep_bind(%70, %c0_i64)
-        %72 = memref.load %guid_26[%c0] : memref<?xi64>
-        %73 = arts_rt.dep_bind(%72, %c0_i64)
-        %74 = memref.load %guid_28[%c0] : memref<?xi64>
-        %75 = arts_rt.dep_bind(%74, %c0_i64)
-        %76 = memref.load %guid_30[%c0] : memref<?xi64>
-        %77 = arts_rt.dep_bind(%76, %c0_i64)
-        %78 = memref.load %guid_32[%c0] : memref<?xi64>
-        %79 = arts_rt.dep_bind(%78, %c0_i64)
-        %80 = memref.load %guid_34[%c0] : memref<?xi64>
-        %81 = arts_rt.dep_bind(%80, %c0_i64)
-        %82 = memref.load %guid_36[%c0] : memref<?xi64>
-        %83 = arts_rt.dep_bind(%82, %c0_i64)
-        %84 = memref.load %guid_38[%c0] : memref<?xi64>
-        %85 = arts_rt.dep_bind(%84, %c2_i64)
-        %86 = memref.load %guid_40[%c0] : memref<?xi64>
-        %87 = arts_rt.dep_bind(%86, %c2_i64)
-        %88 = memref.load %guid_42[%c0] : memref<?xi64>
-        %89 = arts_rt.dep_bind(%88, %c2_i64)
-        %90 = arith.index_cast %66 : index to i32
-        %91 = arith.addi %90, %c7_i32 : i32
-        %92 = arith.addi %91, %90 : i32
-        %93 = arith.addi %92, %90 : i32
-        %94 = arts_rt.edt_create(%68 : memref<?xi64>) depCount(%93) route(%c-1_i32) epoch(%38 : i64) {arts.create_id = 213000 : i64, arts.plan.kernel_family = "uniform", outlined_func = "__arts_edt_1"}
-        %95 = arith.addi %55, %48 : index
-        %96 = arith.muli %65, %c48 : index
-        %97 = arith.cmpi ult, %55, %c48 : index
-        %98 = arith.cmpi ule, %95, %c48 : index
-        %99 = arith.andi %97, %98 : i1
-        %100 = arith.cmpi ule, %66, %c1 : index
-        %101 = arith.cmpi uge, %55, %96 : index
-        %102 = arith.subi %55, %96 : index
-        %103 = arith.select %101, %102, %c0 : index
-        %104 = arith.minui %103, %c48 : index
-        %105 = arith.cmpi uge, %95, %96 : index
-        %106 = arith.subi %95, %96 : index
-        %107 = arith.select %105, %106, %c0 : index
-        %108 = arith.minui %107, %c48 : index
-        %109 = arith.cmpi uge, %108, %104 : index
-        %110 = arith.subi %108, %104 : index
-        %111 = arith.select %109, %110, %c0 : index
-        %112 = arith.muli %66, %c48 : index
-        %113 = arith.addi %96, %112 : index
-        %114 = arith.cmpi ule, %55, %96 : index
-        %115 = arith.cmpi uge, %95, %113 : index
-        %116 = arith.andi %114, %115 : i1
-        %117 = arith.ori %100, %116 : i1
-        %118 = arith.ori %99, %117 : i1
-        %119 = arith.select %100, %104, %c0 : index
-        %120 = arith.select %100, %111, %c48 : index
-        %121 = arith.select %99, %55, %119 : index
-        %122 = arith.select %99, %48, %120 : index
-        %123 = arith.cmpi eq, %121, %c0 : index
-        %124 = arith.cmpi eq, %122, %c48 : index
+        %86 = arts_rt.edt_param_pack(%49, %51, %53, %55, %73, %74, %58, %63, %73, %74, %73, %74, %73, %74, %73, %74, %73, %74, %73, %74, %84, %85, %48, %84, %85, %84, %85) : index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index, index : memref<?xi64>
+        %87 = arts_rt.edt_param_pack(%49, %51, %53, %55, %74, %74, %74, %74, %74, %74, %74, %85, %85, %85) : index, index, index, index, index, index, index, index, index, index, index, index, index, index : memref<?xi64>
+        %88 = arts_rt.state_pack(%49, %51, %53, %55, %4, %c0, %c1_i32, %c1, %c48, %cst_0, %cst, %c47) : index, index, index, index, f64, index, i32, index, index, f64, f64, index -> memref<12xi64>
+        %89 = memref.load %guid_24[%c0] : memref<?xi64>
+        %90 = arts_rt.dep_bind(%89, %c0_i64)
+        %91 = memref.load %guid_26[%c0] : memref<?xi64>
+        %92 = arts_rt.dep_bind(%91, %c0_i64)
+        %93 = memref.load %guid_28[%c0] : memref<?xi64>
+        %94 = arts_rt.dep_bind(%93, %c0_i64)
+        %95 = memref.load %guid_30[%c0] : memref<?xi64>
+        %96 = arts_rt.dep_bind(%95, %c0_i64)
+        %97 = memref.load %guid_32[%c0] : memref<?xi64>
+        %98 = arts_rt.dep_bind(%97, %c0_i64)
+        %99 = memref.load %guid_34[%c0] : memref<?xi64>
+        %100 = arts_rt.dep_bind(%99, %c0_i64)
+        %101 = memref.load %guid_36[%c0] : memref<?xi64>
+        %102 = arts_rt.dep_bind(%101, %c0_i64)
+        %103 = memref.load %guid_38[%c0] : memref<?xi64>
+        %104 = arts_rt.dep_bind(%103, %c2_i64)
+        %105 = memref.load %guid_40[%c0] : memref<?xi64>
+        %106 = arts_rt.dep_bind(%105, %c2_i64)
+        %107 = memref.load %guid_42[%c0] : memref<?xi64>
+        %108 = arts_rt.dep_bind(%107, %c2_i64)
+        %109 = arith.index_cast %74 : index to i32
+        %110 = arith.addi %109, %109 : i32
+        %111 = arith.addi %110, %109 : i32
+        %112 = arith.addi %111, %109 : i32
+        %113 = arith.addi %112, %109 : i32
+        %114 = arith.addi %113, %109 : i32
+        %115 = arith.addi %114, %109 : i32
+        %116 = arith.index_cast %85 : index to i32
+        %117 = arith.addi %115, %116 : i32
+        %118 = arith.addi %117, %116 : i32
+        %119 = arith.addi %118, %116 : i32
+        %120 = arts_rt.edt_create(%87 : memref<?xi64>) depCount(%119) route(%c-1_i32) epoch(%38 : i64) {arts.create_id = 213000 : i64, arts.plan.kernel_family = "uniform", outlined_func = "__arts_edt_1"}
+        %121 = arith.addi %58, %63 : index
+        %122 = arith.muli %73, %c48 : index
+        %123 = arith.cmpi ult, %58, %c48 : index
+        %124 = arith.cmpi ule, %121, %c48 : index
         %125 = arith.andi %123, %124 : i1
-        %126 = arith.xori %125, %true : i1
-        %127 = arith.andi %118, %125 : i1
-        %128 = arith.andi %126, %127 : i1
-        %129 = arith.muli %121, %c8 : index
-        %130 = arith.muli %122, %c18432 : index
-        %131 = arith.select %128, %129, %c0 : index
-        %132 = arith.select %128, %130, %c0 : index
-        arts_rt.rec_dep %94(%guid_24, %guid_26, %guid_28, %guid_30, %guid_32, %guid_34, %guid_36, %guid_38, %guid_40, %guid_42 : memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>) bounds_valids(%true, %true, %true, %true, %true, %true, %true, %true, %true, %true) byte_offsets(%c0, %c0, %c0, %c0, %c0, %c0, %c0, %131, %131, %131) byte_sizes(%c0, %c0, %c0, %c0, %c0, %c0, %c0, %132, %132, %132) {acquire_modes = array<i32: 1, 1, 1, 1, 1, 1, 1, 2, 2, 2>}
+        %126 = arith.cmpi ule, %74, %c1 : index
+        %127 = arith.cmpi uge, %58, %122 : index
+        %128 = arith.subi %58, %122 : index
+        %129 = arith.select %127, %128, %c0 : index
+        %130 = arith.minui %129, %c48 : index
+        %131 = arith.cmpi uge, %121, %122 : index
+        %132 = arith.subi %121, %122 : index
+        %133 = arith.select %131, %132, %c0 : index
+        %134 = arith.minui %133, %c48 : index
+        %135 = arith.cmpi uge, %134, %130 : index
+        %136 = arith.subi %134, %130 : index
+        %137 = arith.select %135, %136, %c0 : index
+        %138 = arith.muli %74, %c48 : index
+        %139 = arith.addi %122, %138 : index
+        %140 = arith.cmpi ule, %58, %122 : index
+        %141 = arith.cmpi uge, %121, %139 : index
+        %142 = arith.andi %140, %141 : i1
+        %143 = arith.ori %126, %142 : i1
+        %144 = arith.ori %125, %143 : i1
+        %145 = arith.select %126, %130, %c0 : index
+        %146 = arith.select %126, %137, %c48 : index
+        %147 = arith.select %125, %58, %145 : index
+        %148 = arith.select %125, %63, %146 : index
+        %149 = arith.cmpi eq, %147, %c0 : index
+        %150 = arith.cmpi eq, %148, %c48 : index
+        %151 = arith.andi %149, %150 : i1
+        %152 = arith.xori %151, %true : i1
+        %153 = arith.andi %144, %151 : i1
+        %154 = arith.andi %152, %153 : i1
+        %155 = arith.muli %147, %c8 : index
+        %156 = arith.muli %148, %c18432 : index
+        %157 = arith.select %154, %155, %c0 : index
+        %158 = arith.select %154, %156, %c0 : index
+        %159 = arith.addi %55, %48 : index
+        %160 = arith.muli %84, %c48 : index
+        %161 = arith.cmpi ult, %55, %c48 : index
+        %162 = arith.cmpi ule, %159, %c48 : index
+        %163 = arith.andi %161, %162 : i1
+        %164 = arith.cmpi ule, %85, %c1 : index
+        %165 = arith.cmpi uge, %55, %160 : index
+        %166 = arith.subi %55, %160 : index
+        %167 = arith.select %165, %166, %c0 : index
+        %168 = arith.minui %167, %c48 : index
+        %169 = arith.cmpi uge, %159, %160 : index
+        %170 = arith.subi %159, %160 : index
+        %171 = arith.select %169, %170, %c0 : index
+        %172 = arith.minui %171, %c48 : index
+        %173 = arith.cmpi uge, %172, %168 : index
+        %174 = arith.subi %172, %168 : index
+        %175 = arith.select %173, %174, %c0 : index
+        %176 = arith.muli %85, %c48 : index
+        %177 = arith.addi %160, %176 : index
+        %178 = arith.cmpi ule, %55, %160 : index
+        %179 = arith.cmpi uge, %159, %177 : index
+        %180 = arith.andi %178, %179 : i1
+        %181 = arith.ori %164, %180 : i1
+        %182 = arith.ori %163, %181 : i1
+        %183 = arith.select %164, %168, %c0 : index
+        %184 = arith.select %164, %175, %c48 : index
+        %185 = arith.select %163, %55, %183 : index
+        %186 = arith.select %163, %48, %184 : index
+        %187 = arith.cmpi eq, %185, %c0 : index
+        %188 = arith.cmpi eq, %186, %c48 : index
+        %189 = arith.andi %187, %188 : i1
+        %190 = arith.xori %189, %true : i1
+        %191 = arith.andi %182, %189 : i1
+        %192 = arith.andi %190, %191 : i1
+        %193 = arith.muli %185, %c8 : index
+        %194 = arith.muli %186, %c18432 : index
+        %195 = arith.select %192, %193, %c0 : index
+        %196 = arith.select %192, %194, %c0 : index
+        arts_rt.rec_dep %120(%guid_24, %guid_26, %guid_28, %guid_30, %guid_32, %guid_34, %guid_36, %guid_38, %guid_40, %guid_42 : memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>, memref<?xi64>) bounds_valids(%true, %true, %true, %true, %true, %true, %true, %true, %true, %true) byte_offsets(%157, %157, %157, %157, %157, %157, %157, %195, %195, %195) byte_sizes(%158, %158, %158, %158, %158, %158, %158, %196, %196, %196) {acquire_modes = array<i32: 1, 1, 1, 1, 1, 1, 1, 2, 2, 2>}
       }
     } {arts.id = 183 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 46 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = true, memrefsWithLoopCarriedDeps = 4 : i64, parallelClassification = 3 : i64, locationKey = "velocity_update.c:133:5">, arts.metadata_provenance = "recovered"}
     arts_rt.wait_on_epoch %38 : i64
-    arts.db_release(%ptr_37) : memref<?x!llvm.ptr>
-    arts.db_release(%ptr_35) : memref<?x!llvm.ptr>
-    arts.db_release(%ptr_33) : memref<?x!llvm.ptr>
-    arts.db_release(%ptr_31) : memref<?x!llvm.ptr>
-    arts.db_release(%ptr_29) : memref<?x!llvm.ptr>
-    arts.db_release(%ptr_27) : memref<?x!llvm.ptr>
-    arts.db_release(%ptr_25) : memref<?x!llvm.ptr>
     call @carts_kernel_timer_accum(%5) : (memref<?xi8>) -> ()
     call @carts_kernel_timer_print(%5) : (memref<?xi8>) -> ()
     %39 = polygeist.pointer2memref %1 : !llvm.ptr to memref<?xi8>
@@ -419,26 +468,26 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
     call @carts_phase_timer_start(%46, %5) : (memref<?xi8>, memref<?xi8>) -> ()
     call @carts_phase_timer_stop(%46) : (memref<?xi8>) -> ()
     call @carts_e2e_timer_stop() : () -> ()
-    arts.db_free(%guid_7) : memref<?xi64>
-    arts.db_free(%ptr_8) : memref<?x!llvm.ptr>
-    arts.db_free(%guid_9) : memref<?xi64>
-    arts.db_free(%ptr_10) : memref<?x!llvm.ptr>
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?x!llvm.ptr>
+    arts.db_free(%guid_13) : memref<?xi64>
+    arts.db_free(%ptr_14) : memref<?x!llvm.ptr>
+    arts.db_free(%guid_15) : memref<?xi64>
+    arts.db_free(%ptr_16) : memref<?x!llvm.ptr>
+    arts.db_free(%guid_7) : memref<?xi64>
+    arts.db_free(%ptr_8) : memref<?x!llvm.ptr>
+    arts.db_free(%guid_5) : memref<?xi64>
+    arts.db_free(%ptr_6) : memref<?x!llvm.ptr>
+    arts.db_free(%guid_19) : memref<?xi64>
+    arts.db_free(%ptr_20) : memref<?x!llvm.ptr>
     arts.db_free(%guid_11) : memref<?xi64>
     arts.db_free(%ptr_12) : memref<?x!llvm.ptr>
+    arts.db_free(%guid_9) : memref<?xi64>
+    arts.db_free(%ptr_10) : memref<?x!llvm.ptr>
     arts.db_free(%guid_21) : memref<?xi64>
     arts.db_free(%ptr_22) : memref<?x!llvm.ptr>
     arts.db_free(%guid_17) : memref<?xi64>
     arts.db_free(%ptr_18) : memref<?x!llvm.ptr>
-    arts.db_free(%guid_19) : memref<?xi64>
-    arts.db_free(%ptr_20) : memref<?x!llvm.ptr>
-    arts.db_free(%guid_5) : memref<?xi64>
-    arts.db_free(%ptr_6) : memref<?x!llvm.ptr>
-    arts.db_free(%guid_15) : memref<?xi64>
-    arts.db_free(%ptr_16) : memref<?x!llvm.ptr>
-    arts.db_free(%guid_13) : memref<?xi64>
-    arts.db_free(%ptr_14) : memref<?x!llvm.ptr>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

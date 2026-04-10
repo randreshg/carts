@@ -297,20 +297,20 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for si
     memref.dealloc %alloc {arts.id = 301 : i64} : memref<100xf32>
     call @carts_phase_timer_stop(%27) : (memref<?xi8>) -> ()
     call @carts_e2e_timer_stop() : () -> ()
+    arts.db_free(%guid_18) : memref<?xi64>
+    arts.db_free(%ptr_19) : memref<?xmemref<?xf32>>
+    arts.db_free(%guid_24) : memref<?xi64>
+    arts.db_free(%ptr_25) : memref<?xmemref<?xf32>>
     arts.db_free(%guid_26) : memref<?xi64>
     arts.db_free(%ptr_27) : memref<?xmemref<?xf32>>
     arts.db_free(%guid_20) : memref<?xi64>
     arts.db_free(%ptr_21) : memref<?xmemref<?xf32>>
-    arts.db_free(%guid_22) : memref<?xi64>
-    arts.db_free(%ptr_23) : memref<?xmemref<?xf32>>
-    arts.db_free(%guid_24) : memref<?xi64>
-    arts.db_free(%ptr_25) : memref<?xmemref<?xf32>>
-    arts.db_free(%guid_28) : memref<?xi64>
-    arts.db_free(%ptr_29) : memref<?xmemref<?xf32>>
-    arts.db_free(%guid_18) : memref<?xi64>
-    arts.db_free(%ptr_19) : memref<?xmemref<?xf32>>
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?xf32>>
+    arts.db_free(%guid_22) : memref<?xi64>
+    arts.db_free(%ptr_23) : memref<?xmemref<?xf32>>
+    arts.db_free(%guid_28) : memref<?xi64>
+    arts.db_free(%ptr_29) : memref<?xmemref<?xf32>>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}

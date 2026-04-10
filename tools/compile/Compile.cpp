@@ -719,10 +719,11 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
   optPM.addPass(polygeist::createCanonicalizeForPass());
 }
 
-/// OpenMP to ARTS conversion pass.
+/// OpenMP to ARTS conversion pass (via SDE intermediate representation).
 void buildOpenMPToArtsPipeline(PassManager &pm,
                                arts::AnalysisManager *AM = nullptr) {
-  pm.addPass(arts::createConvertOpenMPToArtsPass(AM));
+  pm.addPass(arts::sde::createConvertOpenMPToSdePass(AM));
+  pm.addPass(arts::sde::createConvertSdeToArtsPass(AM));
   pm.addPass(arts::createDCEPass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createVerifyEdtCreatedPass());

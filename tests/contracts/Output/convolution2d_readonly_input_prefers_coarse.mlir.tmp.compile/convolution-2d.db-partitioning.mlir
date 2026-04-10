@@ -113,7 +113,7 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for hi
           %42 = arith.select %38, %c0, %34 : index
           %43 = arith.select %38, %c0, %41 : index
           %guid_23, %ptr_24 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf32>>) partitioning(<block>, offsets[%27], sizes[%32]), offsets[%42], sizes[%43] element_offsets[%27] element_sizes[%32] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<stencil>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = [16, 1024], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf32>>)
-          arts.lowering_contract(%ptr_24 : memref<?xmemref<?x?xf32>>) pattern(<depPattern = <stencil>, distributionKind = <block>, distributionPattern = <stencil>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c16] contract(<ownerDims = [0], narrowableDep = true, postDbRefined = true>)
+          arts.lowering_contract(%ptr_24 : memref<?xmemref<?x?xf32>>) pattern(<depPattern = <stencil>, distributionKind = <block>, distributionPattern = <stencil>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c16] contract(<ownerDims = [0], postDbRefined = true>)
           %44 = arith.divui %18, %c1024 : index
           %45 = arith.addi %18, %c15 : index
           %46 = arith.divui %45, %c1024 : index

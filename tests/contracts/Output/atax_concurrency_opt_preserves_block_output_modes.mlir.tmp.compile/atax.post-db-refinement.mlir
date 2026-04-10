@@ -78,49 +78,58 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
           %31 = arith.select %30, %c0, %29 : index
           %guid_6, %ptr_7 = arts.db_acquire[<out>] (%guid_4 : memref<?xi64>, %ptr_5 : memref<?xmemref<?xf64>>) partitioning(<block>, offsets[%23], sizes[%c2000]), offsets[%31], sizes[%c1] element_offsets[%23] element_sizes[%c2000] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = [2000], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           arts.lowering_contract(%ptr_7 : memref<?xmemref<?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c2000] contract(<ownerDims = [0], postDbRefined = true, criticalPathDistance = 0 : i64>) {arts.proof.dep_slice_soundness = true, arts.proof.halo_legality = true, arts.proof.owner_dim_reachability = true, arts.proof.partition_access_mapping = true, arts.proof.relaunch_state_soundness = true}
-          %32 = arith.cmpi slt, %25, %c0 : index
-          %33 = arith.select %32, %c0, %25 : index
-          %34 = arith.minui %33, %27 : index
-          %35 = arith.maxui %13, %c1 : index
-          %36 = arith.divui %23, %35 : index
-          %37 = arith.addi %23, %34 : index
-          %38 = arith.subi %37, %c1 : index
-          %39 = arith.divui %38, %35 : index
-          %40 = arith.subi %17, %c1 : index
-          %41 = arith.cmpi ugt, %36, %40 : index
-          %42 = arith.minui %39, %40 : index
-          %43 = arith.select %41, %39, %42 : index
-          %44 = arith.subi %43, %36 : index
-          %45 = arith.addi %44, %c1 : index
-          %46 = arith.select %41, %c0, %36 : index
-          %47 = arith.select %41, %c0, %45 : index
-          %guid_8, %ptr_9 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%46], sizes[%47] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [2000, 4000], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          %32 = arith.addi %23, %27 : index
+          %33 = arith.cmpi uge, %23, %c1 : index
+          %34 = arith.subi %23, %c1 : index
+          %35 = arith.select %33, %34, %c0 : index
+          %36 = arith.addi %32, %c1 : index
+          %37 = arith.minui %36, %c4000 : index
+          %38 = arith.cmpi uge, %37, %35 : index
+          %39 = arith.subi %37, %35 : index
+          %40 = arith.select %38, %39, %c0 : index
+          %41 = arith.maxui %13, %c1 : index
+          %42 = arith.divui %35, %41 : index
+          %43 = arith.addi %35, %40 : index
+          %44 = arith.subi %43, %c1 : index
+          %45 = arith.divui %44, %41 : index
+          %46 = arith.subi %17, %c1 : index
+          %47 = arith.cmpi ugt, %42, %46 : index
+          %48 = arith.minui %45, %46 : index
+          %49 = arith.select %47, %45, %48 : index
+          %50 = arith.subi %49, %42 : index
+          %51 = arith.addi %50, %c1 : index
+          %52 = arith.select %47, %c0, %42 : index
+          %53 = arith.select %47, %c0, %51 : index
+          %guid_8, %ptr_9 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%35], sizes[%40]), offsets[%52], sizes[%53] element_offsets[%35] element_sizes[%40] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = [2000, 4000], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_9 : memref<?xmemref<?x?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c2000] contract(<ownerDims = [0], postDbRefined = true, criticalPathDistance = 0 : i64>) {arts.proof.dep_slice_soundness = true, arts.proof.halo_legality = true, arts.proof.owner_dim_reachability = true, arts.proof.partition_access_mapping = true, arts.proof.relaunch_state_soundness = true}
           %guid_10, %ptr_11 = arts.db_acquire[<out>] (%guid_2 : memref<?xi64>, %ptr_3 : memref<?xmemref<?xf64>>) partitioning(<block>, offsets[%23], sizes[%c2000]), offsets[%31], sizes[%c1] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           arts.lowering_contract(%ptr_11 : memref<?xmemref<?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c2000] contract(<ownerDims = [0], postDbRefined = true, criticalPathDistance = 0 : i64>) {arts.proof.dep_slice_soundness = true, arts.proof.halo_legality = true, arts.proof.owner_dim_reachability = true, arts.proof.partition_access_mapping = true, arts.proof.relaunch_state_soundness = true}
           arts.edt <task> <intranode> route(%c-1_i32) (%ptr_7, %ptr_9, %ptr_11) : memref<?xmemref<?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?xf64>> attributes {arts.id = 84 : i64, arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "blocking", arts.plan.cost.expected_local_work = 0 : i64, arts.plan.cost.relaunch_amortization = 0 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "uniform", arts.plan.repetition_structure = "none", critical_path_distance = 0 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [2000, 4000]} {
           ^bb0(%arg3: memref<?xmemref<?xf64>>, %arg4: memref<?xmemref<?x?xf64>>, %arg5: memref<?xmemref<?xf64>>):
-            %48 = arith.subi %c0, %23 : index
-            %49 = arith.cmpi slt, %48, %c0 : index
-            %50 = arith.select %49, %c0, %48 : index
-            scf.for %arg6 = %50 to %34 step %c1 {
-              %51 = arith.addi %23, %arg6 : index
-              %52 = arts.db_ref %arg3[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
-              memref.store %cst_1, %52[%arg6] : memref<?xf64>
+            %54 = arith.subi %c0, %23 : index
+            %55 = arith.cmpi slt, %54, %c0 : index
+            %56 = arith.select %55, %c0, %54 : index
+            %57 = arith.cmpi slt, %25, %c0 : index
+            %58 = arith.select %57, %c0, %25 : index
+            %59 = arith.minui %58, %27 : index
+            scf.for %arg6 = %56 to %59 step %c1 {
+              %60 = arith.addi %23, %arg6 : index
+              %61 = arts.db_ref %arg3[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+              memref.store %cst_1, %61[%arg6] : memref<?xf64>
               scf.for %arg7 = %c0 to %c4000 step %c1 {
-                %53 = memref.load %52[%arg6] : memref<?xf64>
-                %54 = arith.maxui %35, %c1 : index
-                %55 = arith.divui %51, %54 : index
-                %56 = arith.subi %55, %46 : index
-                %57 = arith.remui %51, %54 : index
-                %58 = arts.db_ref %arg4[%56] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                %59 = memref.load %58[%57, %arg7] : memref<?x?xf64>
-                %60 = arith.index_cast %arg7 : index to i32
-                %61 = arith.sitofp %60 : i32 to f64
-                %62 = arith.mulf %61, %cst : f64
-                %63 = arith.mulf %59, %62 : f64
-                %64 = arith.addf %53, %63 : f64
-                memref.store %64, %52[%arg6] : memref<?xf64>
+                %62 = memref.load %61[%arg6] : memref<?xf64>
+                %63 = arith.maxui %41, %c1 : index
+                %64 = arith.divui %60, %63 : index
+                %65 = arith.subi %64, %52 : index
+                %66 = arith.remui %60, %63 : index
+                %67 = arts.db_ref %arg4[%65] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                %68 = memref.load %67[%66, %arg7] : memref<?x?xf64>
+                %69 = arith.index_cast %arg7 : index to i32
+                %70 = arith.sitofp %69 : i32 to f64
+                %71 = arith.mulf %70, %cst : f64
+                %72 = arith.mulf %68, %71 : f64
+                %73 = arith.addf %62, %72 : f64
+                memref.store %73, %61[%arg6] : memref<?xf64>
               } {arts.id = 60 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 4000 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "atax.c:103:5">, arts.metadata_provenance = "exact"}
             } {arts.id = 82 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "atax.c:103:5">, arts.metadata_provenance = "exact"}
             arts.db_release(%arg3) : memref<?xmemref<?xf64>>
@@ -141,40 +150,49 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
         scf.if %28 {
           %guid_6, %ptr_7 = arts.db_acquire[<in>] (%guid_4 : memref<?xi64>, %ptr_5 : memref<?xmemref<?xf64>>) partitioning(<block>, offsets[%23], sizes[%c2000]), offsets[%c0], sizes[%c2] {arts.id = 86 : i64, arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = []} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           arts.lowering_contract(%ptr_7 : memref<?xmemref<?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c2000] contract(<ownerDims = [0], postDbRefined = true, criticalPathDistance = 0 : i64>) {arts.proof.dep_slice_soundness = true, arts.proof.halo_legality = true, arts.proof.owner_dim_reachability = true, arts.proof.partition_access_mapping = true, arts.proof.relaunch_state_soundness = true}
-          %guid_8, %ptr_9 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), offsets[%c0], sizes[%17] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [4000, 2000], stencil_owner_dims = [1]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+          %29 = arith.addi %23, %27 : index
+          %30 = arith.cmpi uge, %23, %c1 : index
+          %31 = arith.subi %23, %c1 : index
+          %32 = arith.select %30, %31, %c0 : index
+          %33 = arith.addi %29, %c1 : index
+          %34 = arith.minui %33, %c4000 : index
+          %35 = arith.cmpi uge, %34, %32 : index
+          %36 = arith.subi %34, %32 : index
+          %37 = arith.select %35, %36, %c0 : index
+          %guid_8, %ptr_9 = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>, offsets[%32], sizes[%37]), offsets[%c0], sizes[%17] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = [4000, 2000], stencil_owner_dims = [1]} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
           arts.lowering_contract(%ptr_9 : memref<?xmemref<?x?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c4000] contract(<ownerDims = [1], postDbRefined = true, criticalPathDistance = 0 : i64>) {arts.proof.dep_slice_soundness = true, arts.proof.halo_legality = true, arts.proof.owner_dim_reachability = false, arts.proof.partition_access_mapping = false, arts.proof.relaunch_state_soundness = true}
-          %29 = arith.divui %23, %c2000 : index
-          %30 = arith.cmpi ugt, %29, %c1 : index
-          %31 = arith.select %30, %c0, %29 : index
-          %guid_10, %ptr_11 = arts.db_acquire[<out>] (%guid_2 : memref<?xi64>, %ptr_3 : memref<?xmemref<?xf64>>) partitioning(<block>, offsets[%23], sizes[%c2000]), offsets[%31], sizes[%c1] element_offsets[%23] element_sizes[%c2000] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = [2000], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+          %38 = arith.divui %23, %c2000 : index
+          %39 = arith.cmpi ugt, %38, %c1 : index
+          %40 = arith.select %39, %c0, %38 : index
+          %guid_10, %ptr_11 = arts.db_acquire[<out>] (%guid_2 : memref<?xi64>, %ptr_3 : memref<?xmemref<?xf64>>) partitioning(<block>, offsets[%23], sizes[%c2000]), offsets[%40], sizes[%c1] element_offsets[%23] element_sizes[%c2000] {arts.pattern_revision = 2 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, preserve_dep_edge = #arts.preserve_dep_edge, stencil_block_shape = [2000], stencil_owner_dims = [0]} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
           arts.lowering_contract(%ptr_11 : memref<?xmemref<?xf64>>) pattern(<depPattern = <uniform>, distributionKind = <block>, distributionPattern = <uniform>, distributionVersion = 1 : i64, revision = 2 : i64>) block_shape[%c2000] contract(<ownerDims = [0], postDbRefined = true, criticalPathDistance = 0 : i64>) {arts.proof.dep_slice_soundness = true, arts.proof.halo_legality = true, arts.proof.owner_dim_reachability = true, arts.proof.partition_access_mapping = true, arts.proof.relaunch_state_soundness = true}
           arts.edt <task> <intranode> route(%c-1_i32) (%ptr_7, %ptr_9, %ptr_11) : memref<?xmemref<?xf64>>, memref<?xmemref<?x?xf64>>, memref<?xmemref<?xf64>> attributes {arts.id = 85 : i64, arts.pattern_revision = 2 : i64, arts.plan.async_strategy = "blocking", arts.plan.cost.expected_local_work = 0 : i64, arts.plan.cost.relaunch_amortization = 0 : i64, arts.plan.cost.scheduler_overhead = 300 : i64, arts.plan.cost.slice_widening_pressure = 0 : i64, arts.plan.iteration_topology = "owner_strip", arts.plan.kernel_family = "uniform", arts.plan.repetition_structure = "none", critical_path_distance = 0 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, stencil_block_shape = [2000]} {
           ^bb0(%arg3: memref<?xmemref<?xf64>>, %arg4: memref<?xmemref<?x?xf64>>, %arg5: memref<?xmemref<?xf64>>):
-            %32 = arith.maxui %13, %c1 : index
-            %33 = arith.subi %c0, %23 : index
-            %34 = arith.cmpi slt, %33, %c0 : index
-            %35 = arith.select %34, %c0, %33 : index
-            %36 = arith.cmpi slt, %25, %c0 : index
-            %37 = arith.select %36, %c0, %25 : index
-            %38 = arith.minui %37, %27 : index
-            scf.for %arg6 = %35 to %38 step %c1 {
-              %39 = arith.addi %23, %arg6 : index
-              %40 = arts.db_ref %arg5[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
-              memref.store %cst_1, %40[%arg6] : memref<?xf64>
+            %41 = arith.maxui %13, %c1 : index
+            %42 = arith.subi %c0, %23 : index
+            %43 = arith.cmpi slt, %42, %c0 : index
+            %44 = arith.select %43, %c0, %42 : index
+            %45 = arith.cmpi slt, %25, %c0 : index
+            %46 = arith.select %45, %c0, %25 : index
+            %47 = arith.minui %46, %27 : index
+            scf.for %arg6 = %44 to %47 step %c1 {
+              %48 = arith.addi %23, %arg6 : index
+              %49 = arts.db_ref %arg5[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+              memref.store %cst_1, %49[%arg6] : memref<?xf64>
               scf.for %arg7 = %c0 to %c4000 step %c1 {
-                %41 = memref.load %40[%arg6] : memref<?xf64>
-                %42 = arith.maxui %32, %c1 : index
-                %43 = arith.divui %arg7, %42 : index
-                %44 = arith.remui %arg7, %42 : index
-                %45 = arts.db_ref %arg4[%43] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-                %46 = memref.load %45[%44, %39] : memref<?x?xf64>
-                %47 = arith.divui %arg7, %c2000 : index
-                %48 = arith.remui %arg7, %c2000 : index
-                %49 = arts.db_ref %arg3[%47] : memref<?xmemref<?xf64>> -> memref<?xf64>
-                %50 = memref.load %49[%48] : memref<?xf64>
-                %51 = arith.mulf %46, %50 : f64
-                %52 = arith.addf %41, %51 : f64
-                memref.store %52, %40[%arg6] : memref<?xf64>
+                %50 = memref.load %49[%arg6] : memref<?xf64>
+                %51 = arith.maxui %41, %c1 : index
+                %52 = arith.divui %arg7, %51 : index
+                %53 = arith.remui %arg7, %51 : index
+                %54 = arts.db_ref %arg4[%52] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
+                %55 = memref.load %54[%53, %48] : memref<?x?xf64>
+                %56 = arith.divui %arg7, %c2000 : index
+                %57 = arith.remui %arg7, %c2000 : index
+                %58 = arts.db_ref %arg3[%56] : memref<?xmemref<?xf64>> -> memref<?xf64>
+                %59 = memref.load %58[%57] : memref<?xf64>
+                %60 = arith.mulf %55, %59 : f64
+                %61 = arith.addf %50, %60 : f64
+                memref.store %61, %49[%arg6] : memref<?xf64>
               } {arts.id = 74 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, tripCount = 4000 : i64, nestingLevel = 0 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 1 : i64, parallelClassification = 3 : i64, locationKey = "atax.c:103:5">, arts.metadata_provenance = "exact"}
             } {arts.id = 83 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, tripCount = 0 : i64, nestingLevel = 1 : i64, hasInterIterationDeps = false, memrefsWithLoopCarriedDeps = 0 : i64, parallelClassification = 2 : i64, locationKey = "atax.c:103:5">, arts.metadata_provenance = "exact"}
             arts.db_release(%arg3) : memref<?xmemref<?xf64>>
@@ -205,12 +223,12 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Contract config for tw
     call @carts_phase_timer_start(%22, %5) : (memref<?xi8>, memref<?xi8>) -> ()
     call @carts_phase_timer_stop(%22) : (memref<?xi8>) -> ()
     call @carts_e2e_timer_stop() : () -> ()
-    arts.db_free(%guid_4) : memref<?xi64>
-    arts.db_free(%ptr_5) : memref<?xmemref<?xf64>>
     arts.db_free(%guid) : memref<?xi64>
     arts.db_free(%ptr) : memref<?xmemref<?x?xf64>>
     arts.db_free(%guid_2) : memref<?xi64>
     arts.db_free(%ptr_3) : memref<?xmemref<?xf64>>
+    arts.db_free(%guid_4) : memref<?xi64>
+    arts.db_free(%ptr_5) : memref<?xmemref<?xf64>>
     return %c0_i32 : i32
   }
   func.func private @carts_benchmarks_start() attributes {llvm.linkage = #llvm.linkage<external>}
