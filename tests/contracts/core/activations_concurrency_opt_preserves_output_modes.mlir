@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../../external/carts-benchmarks/ml-kernels/activations/activations.c --pipeline post-db-refinement --arts-config %S/../inputs/arts_1t.cfg -- -DNREPS=1 >/dev/null && cat %t.compile/activations.post-db-refinement.mlir' | %FileCheck %s
+// RUN: %carts-compile %S/../inputs/snapshots/activations_openmp_to_arts.mlir --pipeline post-db-refinement --arts-config %S/../inputs/arts_1t.cfg | %FileCheck %s
 
 // Verify that the late DbModeTightening pass does not degrade write-capable
 // activation outputs back to read-only acquires after post-db-refinement rewrites
@@ -14,6 +14,3 @@
 // CHECK: arts.db_acquire[<out>] (%[[GELU_GUID]] : memref<?xi64>, %[[GELU_PTR]] : memref<?xmemref<?xf32>>) partitioning(<coarse>)
 // CHECK: arts.db_acquire[<out>] (%[[SIGMOID_GUID]] : memref<?xi64>, %[[SIGMOID_PTR]] : memref<?xmemref<?xf32>>) partitioning(<coarse>)
 // CHECK: arts.db_acquire[<out>] (%[[TANH_GUID]] : memref<?xi64>, %[[TANH_PTR]] : memref<?xmemref<?xf32>>) partitioning(<coarse>)
-
-module {
-}

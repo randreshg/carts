@@ -1,4 +1,4 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../../external/carts-benchmarks/polybench/convolution-2d/convolution-2d.c --pipeline db-partitioning --arts-config %S/../inputs/arts_64t.cfg -- -I%S/../../../external/carts-benchmarks/polybench/convolution-2d -I%S/../../../external/carts-benchmarks/polybench/common -I%S/../../../external/carts-benchmarks/polybench/utilities -DNI=1024 -DNJ=1024 -DNREPS=1 -lm >/dev/null && cat %t.compile/convolution-2d.db-partitioning.mlir' | %FileCheck %s
+// RUN: %carts-compile %S/../inputs/snapshots/conv2d_openmp_to_arts.mlir --pipeline db-partitioning --arts-config %S/../inputs/arts_64t.cfg | %FileCheck %s
 
 // For single-node convolution-style neighborhood kernels, the read-only input
 // now stays coarse at allocation time while worker lowering still uses
@@ -9,6 +9,3 @@
 // CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>, <indexed>]
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>
 // CHECK: arts.db_acquire[<inout>] {{.*}} partitioning(<block>
-
-module {
-}

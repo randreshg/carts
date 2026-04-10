@@ -1,5 +1,5 @@
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile %carts compile %S/../../../external/carts-benchmarks/sw4lite/rhs4sg-base/rhs4sg_base.c --pipeline pre-lowering --arts-config %S/../inputs/arts_64t.cfg -- -I%S/../../../external/carts-benchmarks/sw4lite/common -DNX=320 -DNY=320 -DNZ=576 -DNREPS=10 >/dev/null && cat %t.compile/rhs4sg_base.pre-lowering.mlir' | %FileCheck %s
-// RUN: sh -c 'CARTS_COMPILE_WORKDIR=%t.compile.llvm %carts compile %S/../../../external/carts-benchmarks/sw4lite/rhs4sg-base/rhs4sg_base.c --pipeline arts-to-llvm --arts-config %S/../inputs/arts_64t.cfg -- -I%S/../../../external/carts-benchmarks/sw4lite/common -DNX=320 -DNY=320 -DNZ=576 -DNREPS=10 >/dev/null && cat %t.compile.llvm/rhs4sg_base.arts-to-llvm.mlir' | %FileCheck %s --check-prefix=LLVM
+// RUN: %carts-compile %S/../inputs/snapshots/rhs4sg_base_openmp_to_arts.mlir --pipeline pre-lowering --arts-config %S/../inputs/arts_64t.cfg | %FileCheck %s
+// RUN: %carts-compile %S/../inputs/snapshots/rhs4sg_base_openmp_to_arts.mlir --pipeline arts-to-llvm --arts-config %S/../inputs/arts_64t.cfg | %FileCheck %s --check-prefix=LLVM
 
 // Verify that rhs4sg-base aligns worker chunking to the 9-element DB ownership
 // grid on k, keeps the writer on the owner-local block slice, and preserves
@@ -21,6 +21,3 @@
 // CHECK: arts.lowering_contract({{.*}}) pattern(<{{.*}}distributionKind = <block>, distributionPattern = <uniform>{{.*}}) block_shape[%c3] contract(<ownerDims = [3], postDbRefined = true, criticalPathDistance = 0 : i64>)
 
 // LLVM: func.call @arts_add_dependence(
-
-module {
-}
