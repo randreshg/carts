@@ -23,10 +23,10 @@
 ///   4. Maintain backward compatibility during migration (Track B2)
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DB_PARTITIONSTRATEGY_H
-#define ARTS_TRANSFORMS_DB_PARTITIONSTRATEGY_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_PARTITIONSTRATEGY_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_PARTITIONSTRATEGY_H
 
-#include "arts/analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
 #include "llvm/ADT/StringRef.h"
 #include <memory>
@@ -99,4 +99,4 @@ private:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DB_PARTITIONSTRATEGY_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_PARTITIONSTRATEGY_H

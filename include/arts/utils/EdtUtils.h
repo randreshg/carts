@@ -11,7 +11,7 @@
 #define CARTS_UTILS_EDTUTILS_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/edt/EdtInfo.h"
+#include "arts/dialect/core/Analysis/edt/EdtInfo.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"

@@ -9,8 +9,8 @@
 ///          {arts.id = 42, arts.dep_pattern = #arts.dep_pattern<wavefront_2d>}
 ///==========================================================================///
 
-#include "arts/transforms/loop/LoopNormalizer.h"
-#include "arts/analysis/db/DbPatternMatchers.h"
+#include "arts/dialect/core/Transforms/loop/LoopNormalizer.h"
+#include "arts/dialect/core/Analysis/db/DbPatternMatchers.h"
 #include "arts/utils/OperationAttributes.h"
 
 using namespace mlir;

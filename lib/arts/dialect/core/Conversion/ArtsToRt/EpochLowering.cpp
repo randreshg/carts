@@ -28,7 +28,7 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #define GEN_PASS_DEF_EPOCHLOWERING

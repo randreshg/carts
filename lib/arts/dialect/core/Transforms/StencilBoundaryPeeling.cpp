@@ -28,7 +28,7 @@
 /// exposes row-invariant computations to later hoisting passes.
 ///==========================================================================///
 
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_STENCILBOUNDARYPEELING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"

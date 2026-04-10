@@ -11,7 +11,7 @@
 #define ARTS_UTILS_LOOPUTILS_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"

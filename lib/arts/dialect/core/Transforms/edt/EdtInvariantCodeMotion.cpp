@@ -24,7 +24,7 @@
 
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/transforms/edt/EdtICM.h"
+#include "arts/dialect/core/Transforms/edt/EdtICM.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 
 /// Others

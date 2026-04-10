@@ -17,9 +17,9 @@
 /// and dependency recording in downstream lowering.
 ///==========================================================================///
 
-#include "arts/transforms/edt/EdtReductionLowering.h"
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/edt/WorkDistributionUtils.h"
+#include "arts/dialect/core/Transforms/edt/EdtReductionLowering.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"

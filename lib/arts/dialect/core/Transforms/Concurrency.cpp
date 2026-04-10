@@ -17,9 +17,9 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/graphs/edt/EdtNode.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/graphs/edt/EdtNode.h"
 #define GEN_PASS_DEF_CONCURRENCY
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"

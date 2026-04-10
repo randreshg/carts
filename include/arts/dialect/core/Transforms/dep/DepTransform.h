@@ -5,10 +5,10 @@
 /// the execution schedule seen by later ARTS passes.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DEPENDENCE_DEPENDENCETRANSFORM_H
-#define ARTS_TRANSFORMS_DEPENDENCE_DEPENDENCETRANSFORM_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DEP_DEPTRANSFORM_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DEP_DEPTRANSFORM_H
 
-#include "arts/transforms/pattern/PatternTransform.h"
+#include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 
 namespace mlir {
 namespace arts {
@@ -28,4 +28,4 @@ createSeidel2DWavefrontPattern(MetadataManager &metadataManager);
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DEPENDENCE_DEPENDENCETRANSFORM_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DEP_DEPTRANSFORM_H

@@ -6,12 +6,12 @@
 /// downstream DbPartitioning.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_LOOP_LOOPNORMALIZER_H
-#define ARTS_TRANSFORMS_LOOP_LOOPNORMALIZER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_LOOP_LOOPNORMALIZER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_LOOP_LOOPNORMALIZER_H
 
 #include "arts/Dialect.h"
-#include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/transforms/pattern/PatternTransform.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
+#include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/StringRef.h"
 #include <memory>
@@ -65,4 +65,4 @@ createPerfectNestLinearizationPattern(MetadataManager &metadataManager);
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_LOOP_LOOPNORMALIZER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_LOOP_LOOPNORMALIZER_H

@@ -22,8 +22,8 @@
 ///     }
 ///==========================================================================///
 
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/edt/EdtTaskLoopLowering.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/edt/EdtTaskLoopLowering.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "llvm/ADT/STLExtras.h"

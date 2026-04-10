@@ -25,11 +25,11 @@
 /// Index localization: 3-way select based on (globalRow - baseOffset)
 ///==========================================================================///
 
-#include "arts/transforms/db/stencil/DbStencilRewriter.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/db/stencil/DbStencilRewriter.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/transforms/db/DbPartitionWindowUtils.h"
-#include "arts/transforms/db/stencil/DbStencilIndexer.h"
+#include "arts/dialect/core/Transforms/db/DbPartitionWindowUtils.h"
+#include "arts/dialect/core/Transforms/db/stencil/DbStencilIndexer.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"

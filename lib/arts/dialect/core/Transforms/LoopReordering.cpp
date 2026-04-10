@@ -16,15 +16,15 @@
 ///==========================================================================///
 
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/db/DbPatternMatchers.h"
-#include "arts/analysis/metadata/MetadataManager.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/db/DbPatternMatchers.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
 #define GEN_PASS_DEF_LOOPREORDERING
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/transforms/loop/LoopNormalizer.h"
+#include "arts/dialect/core/Transforms/loop/LoopNormalizer.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LoopMetadata.h"

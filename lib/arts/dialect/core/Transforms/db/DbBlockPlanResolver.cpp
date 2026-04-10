@@ -13,9 +13,9 @@
 ///   %a  = arts.db_acquire %db ... {partition_sizes = [%bx, %by]}
 ///==========================================================================///
 
-#include "arts/transforms/db/DbBlockPlanResolver.h"
-#include "arts/analysis/value/ValueAnalysis.h"
-#include "arts/transforms/db/DbRewriter.h"
+#include "arts/dialect/core/Transforms/db/DbBlockPlanResolver.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/db/DbRewriter.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoweringContractUtils.h"

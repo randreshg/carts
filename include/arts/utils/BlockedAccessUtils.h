@@ -9,7 +9,7 @@
 #ifndef ARTS_UTILS_BLOCKEDACCESSUTILS_H
 #define ARTS_UTILS_BLOCKEDACCESSUTILS_H
 
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

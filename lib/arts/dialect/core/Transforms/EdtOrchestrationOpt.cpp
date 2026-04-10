@@ -7,10 +7,10 @@
 
 #define GEN_PASS_DEF_EDTORCHESTRATIONOPT
 #include "arts/Dialect.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/transforms/edt/EdtParallelSplitLowering.h"
+#include "arts/dialect/core/Transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"

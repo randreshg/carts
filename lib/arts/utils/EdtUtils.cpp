@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/utils/EdtUtils.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"

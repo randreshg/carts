@@ -109,7 +109,7 @@ Cannon and SUMMA remain viable future paths once collective-like orchestration i
 ## 3. Strategy Selection Policy (H2)
 
 Current policy is implemented in
-`DistributionHeuristics::selectDistributionKind` (`lib/arts/analysis/heuristics/DistributionHeuristics.cpp`).
+`DistributionHeuristics::selectDistributionKind` (`lib/arts/dialect/core/Analysis/heuristics/DistributionHeuristics.cpp`).
 
 Selection order matters:
 
@@ -142,8 +142,8 @@ Pattern detection is centralized in analysis APIs, not in lowering passes.
 - `DbAnalysis::getLoopDistributionPattern(ForOp)` exposes pattern.
 - `AnalysisManager::getLoopDistributionPattern(Operation *)` is the unified pass-facing API.
 - Pattern-specific IR matching is centralized in
-  `include/arts/analysis/db/DbPatternMatchers.h` /
-  `lib/arts/analysis/db/DbPatternMatchers.cpp` and reused by analysis and
+  `include/arts/dialect/core/Analysis/db/DbPatternMatchers.h` /
+  `lib/arts/dialect/core/Analysis/db/DbPatternMatchers.cpp` and reused by analysis and
   loop-normalization transforms.
 
 ### 4.2 EDT-facing view
@@ -153,7 +153,7 @@ Pattern detection is centralized in analysis APIs, not in lowering passes.
 
 ### 4.3 Access-pattern unification
 
-- Shared utility: `AccessPatternAnalysis` (`include/arts/analysis/AccessPatternAnalysis.h`, `lib/arts/analysis/AccessPatternAnalysis.cpp`)
+- Shared utility: `AccessPatternAnalysis` (`include/arts/dialect/core/Analysis/AccessPatternAnalysis.h`, `lib/arts/dialect/core/Analysis/AccessPatternAnalysis.cpp`)
 - DB graph nodes and DB analysis both use the same bounds logic.
 
 ## 5. Pipeline Architecture

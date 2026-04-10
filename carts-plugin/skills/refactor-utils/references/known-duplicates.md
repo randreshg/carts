@@ -5,11 +5,11 @@ Last updated: 2026-04-10 (audit rev 2)
 ## Tier 1: Exact Duplicates
 
 ### `isOneLikeValue` / `isOneLike`
-- **Location 1**: `lib/arts/dialect/rt/Conversion/ArtsToRt/EdtLowering.cpp:128` (static)
-- **Location 2**: `lib/arts/analysis/db/DbAnalysis.cpp:1534` (lambda in `hasSingleSize`)
+- **Location 1**: `lib/arts/dialect/core/Conversion/ArtsToRt/EdtLowering.cpp:128` (static)
+- **Location 2**: `lib/arts/dialect/core/Analysis/db/DbAnalysis.cpp:1534` (lambda in `hasSingleSize`)
 - **Implementation**: Checks `ValueAnalysis::isOneConstant()`, then pattern-matches `add(1, sub(x,x))` and `add(1, sub(min(a,b), a))`
 - **Both are 100% identical** except parameter naming
-- **Target**: `ValueAnalysis::isOneLikeValue()` in `include/arts/analysis/value/ValueAnalysis.h`
+- **Target**: `ValueAnalysis::isOneLikeValue()` in `include/arts/utils/ValueAnalysis.h`
 
 ### `hasWorkAfterInParentBlock`
 - **Location 1**: `lib/arts/dialect/core/Conversion/OmpToArts/ConvertOpenMPToArts.cpp:86`
@@ -18,14 +18,14 @@ Last updated: 2026-04-10 (audit rev 2)
 - **Target**: `Utils.h`
 
 ### `isPureOp`
-- **Location 1**: `lib/arts/transforms/kernel/StencilTilingNDPattern.cpp:80`
+- **Location 1**: `lib/arts/dialect/core/Transforms/kernel/StencilTilingNDPattern.cpp:80`
 - **Location 2**: `lib/arts/dialect/core/Transforms/PatternDiscovery.cpp:152`
 - **Implementation**: Checks isa<> for memory ops, calls MemoryEffectOpInterface
 - **Related**: `isSideEffectFreeArithmeticLikeOp()` in `Utils.h` (similar but narrower)
 - **Target**: `Utils.h` as `isPureOp()` (broader than existing)
 
 ### `collectSpatialNestIvs`
-- **Location 1**: `lib/arts/transforms/kernel/StencilTilingNDPattern.cpp:122`
+- **Location 1**: `lib/arts/dialect/core/Transforms/kernel/StencilTilingNDPattern.cpp:122`
 - **Location 2**: `lib/arts/dialect/core/Transforms/PatternDiscovery.cpp:167`
 - **Implementation**: Collects IVs from perfectly nested spatial arts::ForOps
 - **Difference**: Only null-check style differs (combined vs separate)
@@ -50,14 +50,14 @@ Last updated: 2026-04-10 (audit rev 2)
 - **Action**: Replace DataPtrHoistingSupport's version with `DbUtils::getMemoryAccessInfo()`
 
 ### `clearReductionLoopFacts` **(NEW — found 2026-04-10 rev 2)**
-- **Location 1**: `lib/arts/transforms/kernel/MatmulReductionPattern.cpp:65`
+- **Location 1**: `lib/arts/dialect/core/Transforms/kernel/MatmulReductionPattern.cpp:65`
 - **Location 2**: `lib/arts/dialect/core/Transforms/ForLowering.cpp:502`
 - **Implementation**: Clears `metadata.hasReductions` and `metadata.reductionKinds`
 - **Both are 100% identical** (3-line body)
 - **Target**: `LoopUtils.h` (operates on `LoopMetadata`)
 
 ### `isUndefLikeOp` / undef string check **(NEW — found 2026-04-10 rev 2)**
-- **Location 1**: `lib/arts/dialect/rt/Conversion/ArtsToRt/EdtLowering.cpp:120` (static `isUndefLikeOp`)
+- **Location 1**: `lib/arts/dialect/core/Conversion/ArtsToRt/EdtLowering.cpp:120` (static `isUndefLikeOp`)
 - **Location 2**: `lib/arts/utils/EdtUtils.cpp:258` (inline check `== "llvm.mlir.undef"`)
 - **Location 3**: `lib/arts/dialect/core/Transforms/EpochOptCpsChain.cpp:450` (inline check `== "llvm.mlir.undef"`)
 - **Implementation**: All check if an op is an undef-like value (llvm.mlir.undef, polygeist.undef, arts.undef)
@@ -121,7 +121,7 @@ return name == "llvm.mlir.undef" || name == "polygeist.undef" || name == "arts.u
 | `dialect/core/Transforms/` | 230 | 59.1% |
 | `transforms/` (all subdirs) | 114 | 29.3% |
 | `dialect/sde/Transforms/` | 15 | 3.9% |
-| `dialect/rt/Conversion/ArtsToRt/` | 13 | 3.3% |
+| `dialect/core/Conversion/ArtsToRt/` | 13 | 3.3% |
 | `dialect/core/Conversion/OmpToArts/` | 7 | 1.8% |
 | `dialect/core/Conversion/ArtsToLLVM/` | 5 | 1.3% |
 | `dialect/sde/Conversion/SdeToArts/` | 3 | 0.8% |

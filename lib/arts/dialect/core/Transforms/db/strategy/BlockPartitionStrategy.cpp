@@ -13,9 +13,9 @@
 ///   H1.B6: Multi-node with block support -> block
 ///==========================================================================///
 
-#include "arts/analysis/heuristics/HeuristicUtils.h"
-#include "arts/analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/transforms/db/PartitionStrategy.h"
+#include "arts/dialect/core/Analysis/heuristics/HeuristicUtils.h"
+#include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/dialect/core/Transforms/db/PartitionStrategy.h"
 #include "arts/utils/Debug.h"
 
 ARTS_DEBUG_SETUP(block_partition_strategy)

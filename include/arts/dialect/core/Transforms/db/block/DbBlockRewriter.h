@@ -6,10 +6,10 @@
 /// boundaries.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBBLOCKREWRITER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBBLOCKREWRITER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_BLOCK_DBBLOCKREWRITER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_BLOCK_DBBLOCKREWRITER_H
 
-#include "arts/transforms/db/DbRewriter.h"
+#include "arts/dialect/core/Transforms/db/DbRewriter.h"
 
 namespace mlir {
 namespace arts {
@@ -35,4 +35,4 @@ protected:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBBLOCKREWRITER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_BLOCK_DBBLOCKREWRITER_H

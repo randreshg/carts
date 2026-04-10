@@ -4,26 +4,25 @@
 
 ```
 dialect/                 MLIR dialects (IREE-style per-dialect structure)
-  core/
+  core/                  THE COMPILER — all passes, analysis, transforms
+    Analysis/            All analysis (db, edt, graphs, heuristics, loop, metadata)
     Conversion/
       ArtsToLLVM/        ConvertArtsToLLVM pass + core LLVM patterns
+      ArtsToRt/          EDT/epoch lowering (core → rt conversion)
       OmpToArts/         OpenMP-to-ARTS conversion
-    Transforms/          All ARTS-structural passes (EDT, DB, epoch, loop, codegen, general)
-  rt/
+      SdeToArts/         SDE-to-ARTS conversion patterns
+    IR/                  Core dialect definition
+    Transforms/          All passes + transform libraries (db/, edt/, loop/, kernel/, dep/)
+  rt/                    THIN — dialect def + post-lowering optimizations
     IR/                  arts_rt dialect (RtDialect.cpp, RtOps.cpp)
     Conversion/
-      ArtsToRt/          EDT/epoch lowering to arts_rt ops
-      RtToLLVM/          arts_rt LLVM conversion patterns
-    Transforms/          Post-lowering optimizations (DataPtrHoisting, GuidRangCallOpt)
-  sde/
+      RtToLLVM/          arts_rt → LLVM conversion patterns
+    Transforms/          DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt
+  sde/                   SEMANTIC — metadata collection + OMP conversion
     IR/                  sde dialect (SdeDialect.cpp, SdeOps.cpp)
-    Conversion/
-      SdeToArts/         SDE-to-ARTS conversion patterns
-    Transforms/          SDE-level passes (CollectMetadata, ConvertOpenMPToSde)
-analysis/                Analysis framework
-  graphs/                DB and EDT dependency graphs
-  heuristics/            Partitioning and distribution decision logic
+    Transforms/          CollectMetadata, ConvertOpenMPToSde, RaiseToLinalg
+codegen/                 Shared lowering infra (ArtsCodegen)
 passes/
   verify/                Verification barrier passes
-utils/                   Shared utilities (attribute names, debug macros, value helpers)
+utils/                   Shared utilities (attrs, debug, loop, value, metadata)
 ```

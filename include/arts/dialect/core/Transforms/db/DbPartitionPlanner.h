@@ -11,11 +11,11 @@
 /// The planner does not rerun heuristics and does not inspect raw DB graphs.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONPLANNER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONPLANNER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_DBPARTITIONPLANNER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_DBPARTITIONPLANNER_H
 
-#include "arts/analysis/graphs/db/DbAccessPattern.h"
-#include "arts/transforms/db/DbRewriter.h"
+#include "arts/dialect/core/Analysis/graphs/db/DbAccessPattern.h"
+#include "arts/dialect/core/Transforms/db/DbRewriter.h"
 #include "mlir/IR/Builders.h"
 #include <optional>
 
@@ -56,4 +56,4 @@ void buildRewriteAcquire(PartitionMode mode,
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBPARTITIONPLANNER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_DBPARTITIONPLANNER_H

@@ -15,8 +15,8 @@
 ///   scf::ForOp -> "has_guid_range_alloc"  (UnitAttr)
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DB_TRANSFORMS_GUIDRANGEDETECTION_H
-#define ARTS_TRANSFORMS_DB_TRANSFORMS_GUIDRANGEDETECTION_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_TRANSFORMS_GUIDRANGEDETECTION_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_TRANSFORMS_GUIDRANGEDETECTION_H
 
 #include "mlir/IR/BuiltinOps.h"
 
@@ -31,4 +31,4 @@ bool detectGUIDRangeCandidates(ModuleOp module);
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DB_TRANSFORMS_GUIDRANGEDETECTION_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_TRANSFORMS_GUIDRANGEDETECTION_H

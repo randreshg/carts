@@ -8,10 +8,10 @@
 ///   2) partitioned dimensions for block/stencil plans
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBBLOCKPLANRESOLVER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBBLOCKPLANRESOLVER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_DBBLOCKPLANRESOLVER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_DBBLOCKPLANRESOLVER_H
 
-#include "arts/transforms/db/DbPartitionTypes.h"
+#include "arts/dialect/core/Transforms/db/DbPartitionTypes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LogicalResult.h"
 #include <optional>
@@ -43,4 +43,4 @@ FailureOr<DbBlockPlanResult> resolveDbBlockPlan(const DbBlockPlanInput &input);
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBBLOCKPLANRESOLVER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_DBBLOCKPLANRESOLVER_H

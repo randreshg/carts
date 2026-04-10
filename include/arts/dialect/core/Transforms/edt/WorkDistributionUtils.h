@@ -8,10 +8,10 @@
 /// plans, and per-worker bounds as SSA values for lowering.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_EDT_WORKDISTRIBUTIONUTILS_H
-#define ARTS_TRANSFORMS_EDT_WORKDISTRIBUTIONUTILS_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_EDT_WORKDISTRIBUTIONUTILS_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_EDT_WORKDISTRIBUTIONUTILS_H
 
-#include "arts/analysis/heuristics/DistributionHeuristics.h"
+#include "arts/dialect/core/Analysis/heuristics/DistributionHeuristics.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "mlir/IR/Builders.h"
@@ -116,4 +116,4 @@ private:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_EDT_WORKDISTRIBUTIONUTILS_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_EDT_WORKDISTRIBUTIONUTILS_H

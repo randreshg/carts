@@ -28,8 +28,8 @@
 /// partitioning and eliminating cross-partition symmetric writes.
 ///==========================================================================///
 
-#include "arts/analysis/db/DbPatternMatchers.h"
-#include "arts/transforms/loop/LoopNormalizer.h"
+#include "arts/dialect/core/Analysis/db/DbPatternMatchers.h"
+#include "arts/dialect/core/Transforms/loop/LoopNormalizer.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"

@@ -23,7 +23,7 @@
 
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/transforms/edt/EdtPtrRematerialization.h"
+#include "arts/dialect/core/Transforms/edt/EdtPtrRematerialization.h"
 
 /// LLVM
 #include "llvm/ADT/SmallVector.h"

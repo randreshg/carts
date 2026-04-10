@@ -27,7 +27,7 @@
 /// - else: keep per-iteration reserve semantics
 ///==========================================================================///
 
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/codegen/Types.h"
 #include "arts/utils/LoopUtils.h"

@@ -22,10 +22,10 @@
 ///   memrefIdx = globalRow % blockSize
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBBLOCKINDEXER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBBLOCKINDEXER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_BLOCK_DBBLOCKINDEXER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_BLOCK_DBBLOCKINDEXER_H
 
-#include "arts/transforms/db/DbIndexerBase.h"
+#include "arts/dialect/core/Transforms/db/DbIndexerBase.h"
 
 namespace mlir {
 namespace arts {
@@ -110,4 +110,4 @@ public:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBBLOCKINDEXER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_BLOCK_DBBLOCKINDEXER_H

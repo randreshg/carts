@@ -4,8 +4,8 @@
 /// Layout-aware element pointer computation for datablock lowering.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBLAYOUTSTRATEGY_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBLAYOUTSTRATEGY_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_DBLAYOUTSTRATEGY_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_DBLAYOUTSTRATEGY_H
 
 #include "arts/Dialect.h"
 #include "mlir/IR/Location.h"
@@ -40,4 +40,4 @@ Value computeDbElementPointer(ArtsCodegen &AC, Location loc, Value base,
 } // namespace arts
 } // namespace mlir
 
-#endif /// ARTS_TRANSFORMS_DATABLOCK_DBLAYOUTSTRATEGY_H
+#endif /// ARTS_DIALECT_CORE_TRANSFORMS_DB_DBLAYOUTSTRATEGY_H

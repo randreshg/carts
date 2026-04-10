@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "arts/utils/LoopUtils.h"
-#include "arts/analysis/loop/LoopNode.h"
+#include "arts/dialect/core/Analysis/loop/LoopNode.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"

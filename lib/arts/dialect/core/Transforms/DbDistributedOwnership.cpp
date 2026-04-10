@@ -13,10 +13,10 @@
 
 #define GEN_PASS_DEF_DBDISTRIBUTEDOWNERSHIP
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/db/DbAnalysis.h"
-#include "arts/analysis/db/DbDistributedEligibility.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
+#include "arts/dialect/core/Analysis/db/DbDistributedEligibility.h"
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/OperationAttributes.h"

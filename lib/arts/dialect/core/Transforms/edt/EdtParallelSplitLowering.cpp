@@ -16,7 +16,7 @@
 /// DbAlloc GUIDs before cloning post-loop operations.
 ///==========================================================================///
 
-#include "arts/transforms/edt/EdtParallelSplitLowering.h"
+#include "arts/dialect/core/Transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 

@@ -43,8 +43,8 @@
 /// overrides.
 ///==========================================================================///
 
-#include "arts/transforms/db/elementwise/DbElementWiseIndexer.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/db/elementwise/DbElementWiseIndexer.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"

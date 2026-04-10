@@ -8,8 +8,8 @@
 ///==========================================================================///
 
 #include "arts/utils/LoweringContractUtils.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"

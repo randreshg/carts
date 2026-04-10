@@ -28,11 +28,11 @@
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
 #include "arts/Dialect.h"
-#include "arts/analysis/AnalysisDependencies.h"
-#include "arts/analysis/AnalysisManager.h"
-#include "arts/analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/analysis/metadata/MetadataManager.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Analysis/AnalysisDependencies.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
+#include "arts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_CONVERTOPENMPTOARTS
 #include "arts/Dialect.h"
 #include "arts/passes/Passes.h"

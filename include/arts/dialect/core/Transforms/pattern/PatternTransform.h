@@ -7,8 +7,8 @@
 /// pass-local helpers.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_PATTERN_PATTERNTRANSFORM_H
-#define ARTS_TRANSFORMS_PATTERN_PATTERNTRANSFORM_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_PATTERN_PATTERNTRANSFORM_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_PATTERN_PATTERNTRANSFORM_H
 
 #include "arts/Dialect.h"
 #include "mlir/IR/Operation.h"
@@ -190,4 +190,4 @@ public:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_PATTERN_PATTERNTRANSFORM_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_PATTERN_PATTERNTRANSFORM_H

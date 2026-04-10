@@ -37,7 +37,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopInvarianceUtils.h"
 #include "arts/utils/LoopUtils.h"

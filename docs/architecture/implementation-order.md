@@ -123,7 +123,7 @@ Phase 2D: Migrate general passes to SDE (complete — remaining items deferred)
 ### Completed Steps
 
 ```
-Phase 3B step 7: Move lowering passes to rt/Conversion/ArtsToRt/
+Phase 3B step 7: Move lowering passes to core/Conversion/ArtsToRt/ (Phase 4A corrected location)
   - EdtLowering.cpp + EdtLoweringSupport.cpp + EdtLoweringInternal.h
   - EpochLowering.cpp
   - These are the only passes that produce arts_rt ops
@@ -287,7 +287,7 @@ lib/arts/dialect/rt/
 
 Note: In Phase 1, the lowering passes (EdtLowering, EpochLowering, etc.)
 stay in their current location (`lib/arts/passes/transforms/`). They move
-to `lib/arts/dialect/rt/Conversion/ArtsToRt/` in Phase 3 (full folder
+to `lib/arts/dialect/core/Conversion/ArtsToRt/` (corrected in Phase 4A) (full folder
 reorganization). Phase 1 is purely about extracting the 14 ops and their
 LLVM patterns, not about moving passes.
 
@@ -321,12 +321,12 @@ Namespace updates (15 files, see [arts-rt-dialect.md](arts-rt-dialect.md) cross-
 - `lib/arts/passes/transforms/ForLowering.cpp` -- using declarations
 - `lib/arts/utils/DbUtils.cpp` + header -- using + template instantiation
 - `lib/arts/passes/opt/codegen/DataPtrHoistingSupport.cpp` + header -- using
-- `lib/arts/transforms/db/DbLayoutStrategy.cpp` -- using
+- `lib/arts/dialect/core/Transforms/db/DbLayoutStrategy.cpp` -- using
 - `lib/arts/passes/opt/epoch/EpochOptScheduling.cpp` -- using
-- `lib/arts/analysis/heuristics/EpochHeuristics.cpp` -- using
+- `lib/arts/dialect/core/Analysis/heuristics/EpochHeuristics.cpp` -- using
 - `lib/arts/passes/opt/codegen/AliasScopeGen.cpp` -- using
-- `lib/arts/analysis/value/ValueAnalysis.cpp` -- using
-- `lib/arts/analysis/db/DbDistributedEligibility.cpp` -- using
+- `lib/arts/utils/ValueAnalysis.cpp` -- using
+- `lib/arts/dialect/core/Analysis/db/DbDistributedEligibility.cpp` -- using
 - `include/arts/passes/transforms/EdtLoweringInternal.h` -- using
 
 Registration:

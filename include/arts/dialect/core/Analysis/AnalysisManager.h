@@ -1,0 +1,140 @@
+///==========================================================================///
+/// File: AnalysisManager.h
+///
+/// This file defines the AnalysisManager for centralized management
+/// of all ARTS analysis objects.
+///==========================================================================///
+
+#ifndef ARTS_DIALECT_CORE_ANALYSIS_ANALYSISMANAGER_H
+#define ARTS_DIALECT_CORE_ANALYSIS_ANALYSISMANAGER_H
+
+#include "arts/dialect/core/Analysis/StringAnalysis.h"
+#include "arts/dialect/core/Analysis/db/DbAnalysis.h"
+#include "arts/dialect/core/Analysis/edt/EdtAnalysis.h"
+#include "arts/dialect/core/Analysis/edt/EpochAnalysis.h"
+#include "arts/dialect/core/Analysis/heuristics/DbHeuristics.h"
+#include "arts/dialect/core/Analysis/heuristics/EdtHeuristics.h"
+#include "arts/dialect/core/Analysis/heuristics/StructuredKernelPlanAnalysis.h"
+#include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
+#include "arts/dialect/core/Analysis/metadata/MetadataManager.h"
+#include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinOps.h"
+#include <memory>
+#include <optional>
+
+namespace mlir {
+
+class Pass;
+
+namespace arts {
+
+/// Centralized manager for all ARTS analysis objects.
+class AnalysisManager {
+public:
+  AnalysisManager(ModuleOp module, const std::string &configFile = "",
+                  const std::string &metadataFile = "");
+  ~AnalysisManager();
+
+  /// Invalidate all analysis objects and graphs
+  void invalidate();
+
+  /// Get analysis objects
+  DbAnalysis &getDbAnalysis();
+  EdtAnalysis &getEdtAnalysis();
+  EpochAnalysis &getEpochAnalysis();
+  LoopAnalysis &getLoopAnalysis();
+  StringAnalysis &getStringAnalysis();
+  DbHeuristics &getDbHeuristics();
+  EdtHeuristics &getEdtHeuristics();
+  StructuredKernelPlanAnalysis &getStructuredKernelPlanAnalysis();
+
+  /// Unified analysis queries spanning EDT and DB analyses.
+  std::optional<DbAnalysis::LoopDbAccessSummary>
+  getLoopDbAccessSummary(Operation *loopOp);
+  std::optional<EdtDistributionPattern>
+  getLoopDistributionPattern(Operation *loopOp);
+
+  /// Invalidate and rebuild DB graphs for all functions in the module.
+  void invalidateAndRebuildGraphs(ModuleOp module);
+
+  /// Other functions
+  bool invalidateFunction(func::FuncOp func);
+
+  ModuleOp &getModule() { return module; }
+  const std::string &getConfigFile() const { return configFile; }
+  const std::string &getMetadataFile() const { return metadataFile; }
+
+  /// Get the ARTS abstract machine
+  AbstractMachine &getAbstractMachine() { return abstractMachine; }
+  const AbstractMachine &getAbstractMachine() const { return abstractMachine; }
+
+  /// Get the metadata manager
+  MetadataManager &getMetadataManager();
+  const MetadataManager &getMetadataManager() const;
+  void
+  syncMetadataManagerFromModule(bool allowJsonImportIfUninitialized = false);
+  const StringAnalysis &getStringAnalysis() const;
+
+  /// Print summary of analysis objects and their graphs
+  void print(llvm::raw_ostream &os);
+
+  /// Capture diagnostic data
+  void captureDiagnostics();
+
+  /// Export analysis objects and graphs to JSON
+  void exportToJson(llvm::raw_ostream &os, bool includeAnalysis = false);
+  bool hasCapturedDiagnostics() const {
+    return cachedDiagnosticJson.has_value();
+  }
+
+  /// Metadata coverage data
+  struct MetadataCoverage {
+    int64_t loopsAnalyzed = 0;
+    int64_t loopsTotal = 0;
+    int64_t memrefsAnalyzed = 0;
+    int64_t memrefsTotal = 0;
+    bool hasData = false;
+  };
+
+  /// Set metadata coverage data
+  void setMetadataCoverage(int64_t loopsAnalyzed, int64_t loopsTotal,
+                           int64_t memrefsAnalyzed, int64_t memrefsTotal) {
+    metadataCoverage.loopsAnalyzed = loopsAnalyzed;
+    metadataCoverage.loopsTotal = loopsTotal;
+    metadataCoverage.memrefsAnalyzed = memrefsAnalyzed;
+    metadataCoverage.memrefsTotal = memrefsTotal;
+    metadataCoverage.hasData = true;
+  }
+
+  /// Get metadata coverage data
+  const MetadataCoverage &getMetadataCoverage() const {
+    return metadataCoverage;
+  }
+
+private:
+  ModuleOp module;
+  std::string configFile;
+  std::string metadataFile;
+  AbstractMachine abstractMachine;
+  std::unique_ptr<DbAnalysis> dbAnalysis;
+  std::unique_ptr<EdtAnalysis> edtAnalysis;
+  std::unique_ptr<EpochAnalysis> epochAnalysis;
+  std::unique_ptr<DbHeuristics> dbHeuristics;
+  std::unique_ptr<EdtHeuristics> edtHeuristics;
+  std::unique_ptr<StructuredKernelPlanAnalysis> structuredKernelPlanAnalysis;
+  std::unique_ptr<LoopAnalysis> loopAnalysis;
+  std::unique_ptr<StringAnalysis> stringAnalysis;
+  std::unique_ptr<MetadataManager> metadataManager;
+
+  /// Cached diagnostic data
+  std::optional<std::string> cachedDiagnosticJson;
+
+  /// Metadata coverage from VerifyMetadataPass
+  MetadataCoverage metadataCoverage;
+};
+
+} // namespace arts
+} // namespace mlir
+
+#endif // ARTS_DIALECT_CORE_ANALYSIS_ANALYSISMANAGER_H

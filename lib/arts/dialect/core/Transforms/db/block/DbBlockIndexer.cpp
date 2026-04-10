@@ -36,8 +36,8 @@
 /// handleSubIndexOp override and the localize/localizeLinearized methods.
 ///==========================================================================///
 
-#include "arts/transforms/db/block/DbBlockIndexer.h"
-#include "arts/analysis/value/ValueAnalysis.h"
+#include "arts/dialect/core/Transforms/db/block/DbBlockIndexer.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "arts/codegen/Codegen.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"

@@ -15,13 +15,13 @@
 ///   %r  = arts.db_ref %db[%block]
 ///==========================================================================///
 
-#include "arts/transforms/db/DbRewriter.h"
-#include "arts/transforms/db/block/DbBlockIndexer.h"
-#include "arts/transforms/db/block/DbBlockRewriter.h"
-#include "arts/transforms/db/elementwise/DbElementWiseIndexer.h"
-#include "arts/transforms/db/elementwise/DbElementWiseRewriter.h"
-#include "arts/transforms/db/stencil/DbStencilIndexer.h"
-#include "arts/transforms/db/stencil/DbStencilRewriter.h"
+#include "arts/dialect/core/Transforms/db/DbRewriter.h"
+#include "arts/dialect/core/Transforms/db/block/DbBlockIndexer.h"
+#include "arts/dialect/core/Transforms/db/block/DbBlockRewriter.h"
+#include "arts/dialect/core/Transforms/db/elementwise/DbElementWiseIndexer.h"
+#include "arts/dialect/core/Transforms/db/elementwise/DbElementWiseRewriter.h"
+#include "arts/dialect/core/Transforms/db/stencil/DbStencilIndexer.h"
+#include "arts/dialect/core/Transforms/db/stencil/DbStencilRewriter.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/RemovalUtils.h"

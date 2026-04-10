@@ -5,10 +5,10 @@
 /// Creates owned chunk + left/right halo acquires for boundary data.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBSTENCILREWRITER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBSTENCILREWRITER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_DB_STENCIL_DBSTENCILREWRITER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_DB_STENCIL_DBSTENCILREWRITER_H
 
-#include "arts/transforms/db/DbRewriter.h"
+#include "arts/dialect/core/Transforms/db/DbRewriter.h"
 
 namespace mlir {
 namespace arts {
@@ -44,4 +44,4 @@ private:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBSTENCILREWRITER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_DB_STENCIL_DBSTENCILREWRITER_H

@@ -4,8 +4,8 @@
 /// Split-analysis and continuation EDT lowering helpers used by ForLowering.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H
-#define ARTS_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H
 
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
@@ -45,4 +45,4 @@ void cleanupOriginalParallel(EdtOp originalParallel,
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H

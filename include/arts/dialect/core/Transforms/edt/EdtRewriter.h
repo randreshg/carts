@@ -4,12 +4,12 @@
 /// Acquire rewriting for creating per-worker DbAcquireOps during ForLowering.
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_EDT_EDTREWRITER_H
-#define ARTS_TRANSFORMS_EDT_EDTREWRITER_H
+#ifndef ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTREWRITER_H
+#define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTREWRITER_H
 
 #include "arts/Dialect.h"
 #include "arts/codegen/Codegen.h"
-#include "arts/transforms/edt/WorkDistributionUtils.h"
+#include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
@@ -120,4 +120,4 @@ void applyTaskAcquireContractMetadata(
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_EDT_EDTREWRITER_H
+#endif // ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTREWRITER_H

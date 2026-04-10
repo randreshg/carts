@@ -22,8 +22,10 @@ file = "environment.yml"
 name = "carts"
 
 [agents]
-source = ".agents"
+source = "carts-plugin"
 targets = ["claude", "codex", "copilot", "cursor"]
+enrich = true
+version = "0.1.0"
 
 [tools]
 conda       = { command = "conda" }

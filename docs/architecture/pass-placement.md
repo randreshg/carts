@@ -8,7 +8,7 @@
 | `patterns/Analysis/` | shared | Pattern analysis only (DbPatternMatchers, AccessPatternAnalysis); all pattern *passes* are in core/ due to ARTS deps |
 | `core/Transforms/` | arts dialect | EDT/DB/Epoch structural optimization |
 | `core/Conversion/OmpToArts/` | arts dialect | SDE -> arts conversion |
-| `rt/Conversion/ArtsToRt/` | arts_rt dialect | arts -> arts_rt lowering |
+| `core/Conversion/ArtsToRt/` | arts dialect | arts -> arts_rt lowering |
 | `rt/Conversion/RtToLLVM/` | arts_rt dialect | arts_rt -> LLVM codegen |
 | `rt/Transforms/` | arts_rt dialect | Post-lowering optimization |
 | `general/Transforms/` | shared | Standard MLIR + codegen (DCE, CSE, scalar replacement) |
@@ -150,7 +150,7 @@ Stage 17 (pre-lowering):
   core/:                    ParallelEdtLowering (core->core: splits parallel EDTs),
                             DbLowering (core->core: db_alloc -> db_acquire/release),
                             EdtAllocaSinking, EpochOptScheduling
-  rt/Conversion/ArtsToRt/:  EdtLowering, EpochLowering
+  core/Conversion/ArtsToRt/:  EdtLowering, EpochLowering
                             (arts.edt/epoch → arts_rt.edt_create/create_epoch)
   rt/Transforms/:           DataPtrHoisting (hoists lowered dep/db ptr loads)
   general/:                 PolygeistCanonicalize, CSE, LICM, ScalarReplacement
@@ -173,7 +173,7 @@ Stage 18 (arts-to-llvm):
 | patterns/Analysis/ | 2 | DbPatternMatchers, AccessPatternAnalysis (pure analysis, no op mutation) |
 | core/Transforms/ | 34 | EdtStructuralOpt, DbPartitioning, PatternDiscovery, KernelTransforms, StencilBoundaryPeeling, DepTransforms, LoopNormalization, LoopReordering, DbLowering, ParallelEdtLowering, Hoisting, AliasScopeGen, HandleDeps, ArtsInliner, LoweringContractCleanup, + 19 others |
 | core/Conversion/SdeToArts/ | 2 | ConvertSdeToArts, CreateDbs |
-| rt/Conversion/ArtsToRt/ | 2 | EdtLowering, EpochLowering (the only passes that produce arts_rt ops) |
+| core/Conversion/ArtsToRt/ | 2 | EdtLowering, EpochLowering (the only passes that produce arts_rt ops) |
 | rt/Conversion/RtToLLVM/ | 1 | ConvertArtsToLLVM (14 rt patterns + core DB/barrier patterns) |
 | rt/Transforms/ | 4 | DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt |
 | general/Transforms/ | 3 | RaiseMemRef, DCE, ScalarReplacement (truly ARTS-agnostic) |
@@ -233,14 +233,14 @@ Truly generic passes (correct for `general/`):
 
 **DbLowering.cpp** does NOT produce arts_rt ops. It lowers `arts.db_alloc` →
 `arts.db_acquire`/`arts.db_release` (core→core lowering). It belongs in
-`core/Transforms/`, not `rt/Conversion/ArtsToRt/`.
+`core/Transforms/`, not `core/Conversion/ArtsToRt/`.
 
 **ParallelEdtLowering.cpp** lowers `arts.edt(parallel)` by splitting into
 worker EDTs, but the output is still `arts.edt` + `arts.for` ops (core→core).
 It belongs in `core/Transforms/`.
 
 Only **EdtLowering.cpp** and **EpochLowering.cpp** actually produce arts_rt
-ops and belong in `rt/Conversion/ArtsToRt/`.
+ops and belong in `core/Conversion/ArtsToRt/` (conversion in source dialect).
 
 ### LoopReordering.cpp -- calls DbPatternMatchers
 
