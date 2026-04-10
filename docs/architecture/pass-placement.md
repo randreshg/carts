@@ -140,10 +140,12 @@ Stage 16 (epochs):
 
 ```
 Stage 17 (pre-lowering):
-  rt/Conversion/ArtsToRt/:  ParallelEdtLowering, DbLowering, EdtLowering, EpochLowering
+  core/:                    ParallelEdtLowering (core->core: splits parallel EDTs),
+                            DbLowering (core->core: db_alloc -> db_acquire/release),
+                            EdtAllocaSinking, EpochOptScheduling
+  rt/Conversion/ArtsToRt/:  EdtLowering, EpochLowering
                             (arts.edt/epoch → arts_rt.edt_create/create_epoch)
   rt/Transforms/:           DataPtrHoisting (hoists lowered dep/db ptr loads)
-  core/:                    EdtAllocaSinking, EpochOptScheduling
   general/:                 PolygeistCanonicalize, CSE, LICM, ScalarReplacement
   verify/:                  VerifyEdtLowered, VerifyPreLowered
 
@@ -156,34 +158,88 @@ Stage 18 (arts-to-llvm):
   verify/:                  VerifyDbLowered, VerifyLowered
 ```
 
-## Summary Statistics
+## Summary Statistics (Revised per Agent Investigation)
 
 | Classification | Count | Key Passes |
 |---|---|---|
 | sde/Transforms/ | 7 | CollectMetadata, ConvertOpenMPToSde, RaiseToLinalg, RaiseToTensor, LoopNormalization, LoopReordering, SdeOpt |
-| patterns/Transforms/ | 4 | PatternDiscovery, KernelTransforms, StencilBoundaryPeeling, DepTransforms |
-| core/Transforms/ | 23 | EdtStructuralOpt, DbPartitioning, Concurrency, CreateEpochs, LoopFusion |
+| patterns/Analysis/ | 2 | DbPatternMatchers, AccessPatternAnalysis (pure analysis, no op mutation) |
+| core/Transforms/ | 32 | EdtStructuralOpt, DbPartitioning, PatternDiscovery, KernelTransforms, StencilBoundaryPeeling, DepTransforms, DbLowering, ParallelEdtLowering, Hoisting, AliasScopeGen, HandleDeps, ArtsInliner, LoweringContractCleanup, + 19 others |
 | core/Conversion/SdeToArts/ | 2 | ConvertSdeToArts, CreateDbs |
-| rt/Conversion/ArtsToRt/ | 4 | EdtLowering, EpochLowering, DbLowering, ParallelEdtLowering |
+| rt/Conversion/ArtsToRt/ | 2 | EdtLowering, EpochLowering (the only passes that produce arts_rt ops) |
 | rt/Conversion/RtToLLVM/ | 1 | ConvertArtsToLLVM (14 rt patterns + core DB/barrier patterns) |
 | rt/Transforms/ | 4 | DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt |
-| general/Transforms/ | 16 | RaiseMemRef, DCE, ScalarReplacement, AliasScopeGen, LoopVecHints |
+| general/Transforms/ | 3 | RaiseMemRef, DCE, ScalarReplacement (truly ARTS-agnostic) |
 | verify/ | 11+ | VerifyMetadata, VerifyEdtCreated, VerifySdeLowered, VerifyLowered |
 
-## Hidden ARTS Dependencies in SDE/Pattern Passes
+**Key revision**: The original plan had 23 core, 4 patterns, 16 general.
+Investigation revealed most "patterns" and "general" passes have ARTS structural
+op dependencies, moving them to core (32 core, 0 patterns, 3 general). Pattern
+*analysis* (read-only) stays in `patterns/Analysis/`.
 
-Three passes have hidden ARTS deps that must be resolved:
+## Hidden ARTS Dependencies (Agent Investigation Findings)
 
-### 1. PatternDiscovery.cpp -- stamps contracts on EdtOp
+Deep investigation by 10 parallel agents revealed more hidden dependencies
+than initially planned. These corrections are critical for Phase 2/3 scoping.
 
-**Fix**: PatternDiscovery stamps contracts on ForOp only. A downstream
-core/ pass propagates to EDT ops after SDE->ARTS conversion.
+### Pattern Passes: ALL Have ARTS Dependencies
 
-### 2. LoopReordering.cpp -- calls DbPatternMatchers
+The original plan claimed pattern passes reference "ZERO ARTS structural ops."
+**This is wrong.** All 4 pattern passes have direct ARTS op references:
+
+1. **PatternDiscovery.cpp** -- stamps contracts on `EdtOp`, checks `ForOp`,
+   `YieldOp`. Fix: stamp on ForOp only; propagate to EDT in core/ pass.
+
+2. **KernelTransforms.cpp** -- walks `EdtOp` bodies, checks `ForOp` iterator
+   types, modifies `ForOp` attributes. Cannot move to `patterns/` without
+   refactoring to use interfaces instead of concrete op types.
+
+3. **StencilBoundaryPeeling.cpp** -- operates on `ForOp` loop bounds and
+   accesses. Tightly coupled to ARTS loop representation.
+
+4. **DepTransforms.cpp** -- walks `EdtOp` dependency structures. Cannot be
+   separated from ARTS structural ops.
+
+**Revised classification**: All 4 pattern passes stay in `core/Transforms/`
+until SDE provides an interface-based alternative. The `patterns/` directory
+should contain only pattern *analysis* (DbPatternMatchers, AccessPatternAnalysis)
+which are pure analysis with no op mutation.
+
+### General Passes: 5 of 8 Have ARTS Dependencies
+
+Originally planned as "general/" but actually ARTS-dependent:
+
+| Pass | ARTS Dependency | Correct Placement |
+|---|---|---|
+| `Hoisting.cpp` | Hoists `arts.db_acquire`, `arts.db_ref` | `core/Transforms/` |
+| `AliasScopeGen.cpp` | Generates scopes for `arts.db_acquire` results | `core/Transforms/` |
+| `HandleDeps.cpp` | Walks `arts.omp_dep` ops | `core/Transforms/` |
+| `ArtsInliner.cpp` | Policy based on `EdtOp` boundaries | `core/Transforms/` |
+| `LoweringContractCleanup.cpp` | Removes ARTS metadata attributes | `core/Transforms/` |
+
+Truly generic passes (correct for `general/`):
+- `RaiseMemRefDimensionality.cpp` -- pure memref transforms
+- `DeadCodeElimination.cpp` -- standard DCE
+- `ScalarReplacement.cpp` -- pure memref->register
+
+### Lowering Passes: DbLowering and ParallelEdtLowering Misclassified
+
+**DbLowering.cpp** does NOT produce arts_rt ops. It lowers `arts.db_alloc` →
+`arts.db_acquire`/`arts.db_release` (core→core lowering). It belongs in
+`core/Transforms/`, not `rt/Conversion/ArtsToRt/`.
+
+**ParallelEdtLowering.cpp** lowers `arts.edt(parallel)` by splitting into
+worker EDTs, but the output is still `arts.edt` + `arts.for` ops (core→core).
+It belongs in `core/Transforms/`.
+
+Only **EdtLowering.cpp** and **EpochLowering.cpp** actually produce arts_rt
+ops and belong in `rt/Conversion/ArtsToRt/`.
+
+### LoopReordering.cpp -- calls DbPatternMatchers
 
 **Fix**: Metadata-based reordering path is SDE-compatible. Extract matmul
 auto-detection into a separate pattern-pipeline pass.
 
-### 3. LoopFusion.cpp -- walks EdtOp + BarrierOp
+### LoopFusion.cpp -- walks EdtOp + BarrierOp
 
 **Classification**: This is `core/Transforms/`, not patterns/.
