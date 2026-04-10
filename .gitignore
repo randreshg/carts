@@ -47,6 +47,7 @@ external/*/cmake_install.cmake
 *.mlir
 *.ll
 !tests/contracts/*.mlir
+!tests/contracts/**/*.mlir
 !tests/contracts/partitioning/safety/specfem3d_stress_block_halo_contract.mlir
 
 # CARTS generated executables
