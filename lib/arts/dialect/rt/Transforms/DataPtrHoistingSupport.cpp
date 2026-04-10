@@ -1372,25 +1372,6 @@ bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   return true;
 }
 
-/// Find the highest loop that can legally hoist the address computation.
-scf::ForOp findHoistTarget(Operation *op, Operation *addrOp,
-                           DominanceInfo &domInfo) {
-  scf::ForOp target = nullptr;
-  for (Operation *parent = op->getParentOp(); parent;
-       parent = parent->getParentOp()) {
-    auto loop = dyn_cast<scf::ForOp>(parent);
-    if (!loop)
-      continue;
-    Region &loopRegion = loop.getRegion();
-    if (!allOperandsDefinedOutside(addrOp, loopRegion))
-      break;
-    if (!allOperandsDominate(addrOp, loop, domInfo))
-      break;
-    target = loop;
-  }
-  return target;
-}
-
 /// Find the highest loop that can legally hoist a pure, operand-only op.
 /// This complements load hoisting for materializations like
 /// polygeist.pointer2memref whose sole source pointer has already been hoisted

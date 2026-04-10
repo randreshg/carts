@@ -76,5 +76,23 @@ bool allOperandsDominate(Operation *op, Operation *insertionPoint,
   return true;
 }
 
+scf::ForOp findHoistTarget(Operation *op, Operation *addrOp,
+                            DominanceInfo &domInfo) {
+  scf::ForOp target = nullptr;
+  for (Operation *parent = op->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    auto loop = dyn_cast<scf::ForOp>(parent);
+    if (!loop)
+      continue;
+    Region &loopRegion = loop.getRegion();
+    if (!allOperandsDefinedOutside(addrOp, loopRegion))
+      break;
+    if (!allOperandsDominate(addrOp, loop, domInfo))
+      break;
+    target = loop;
+  }
+  return target;
+}
+
 } // namespace arts
 } // namespace mlir

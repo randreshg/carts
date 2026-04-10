@@ -1531,46 +1531,12 @@ bool DbAnalysis::hasSingleSize(Operation *dbOp) {
   if (!dbOp)
     return false;
 
-  auto isOneLike = [](Value size) -> bool {
-    if (ValueAnalysis::isOneConstant(size))
-      return true;
-
-    auto addOp = size.getDefiningOp<arith::AddIOp>();
-    if (!addOp)
-      return false;
-
-    Value lhs = addOp.getLhs();
-    Value rhs = addOp.getRhs();
-    Value other;
-    if (ValueAnalysis::isOneConstant(lhs))
-      other = rhs;
-    else if (ValueAnalysis::isOneConstant(rhs))
-      other = lhs;
-    else
-      return false;
-
-    auto subOp = other.getDefiningOp<arith::SubIOp>();
-    if (!subOp)
-      return false;
-
-    Value subLhs = subOp.getLhs();
-    Value subRhs = subOp.getRhs();
-    if (subLhs == subRhs)
-      return true;
-
-    if (auto minOp = subLhs.getDefiningOp<arith::MinUIOp>()) {
-      if (minOp.getLhs() == subRhs || minOp.getRhs() == subRhs)
-        return true;
-    }
-    return false;
-  };
-
   SmallVector<Value> sizes = DbUtils::getSizesFromDb(dbOp);
   if (sizes.empty())
     return true;
 
   for (Value size : sizes) {
-    if (!isOneLike(size))
+    if (!ValueAnalysis::isOneLikeValue(size))
       return false;
   }
   return true;

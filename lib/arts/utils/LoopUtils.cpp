@@ -7,11 +7,15 @@
 #include "arts/utils/LoopUtils.h"
 #include "arts/analysis/loop/LoopNode.h"
 #include "arts/utils/BlockedAccessUtils.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/StringRef.h"
 #include <limits>
 
@@ -288,6 +292,56 @@ PointwiseLoopComputeClass classifyPointwiseLoopCompute(arts::ForOp loop) {
     return WalkResult::advance();
   });
   return computeClass;
+}
+
+/// Return true when an operation is considered "pure" for spatial nest
+/// traversal: loop ops, memory ops, and side-effect-free ops are allowed,
+/// while calls are conservatively rejected.
+bool collectSpatialNestIvs(ForOp artsFor, SmallVector<Value, 4> &ivs,
+                           Block *&spatialBody) {
+  if (!artsFor)
+    return false;
+  if (artsFor.getBody()->getNumArguments() == 0)
+    return false;
+  ivs.push_back(artsFor.getBody()->getArgument(0));
+
+  Block *block = artsFor.getBody();
+  while (block) {
+    SmallVector<Operation *, 2> nestedFors;
+    for (Operation &op : block->without_terminator()) {
+      if (isa<scf::ForOp, affine::AffineForOp>(&op)) {
+        nestedFors.push_back(&op);
+        continue;
+      }
+      if (!isPureOp(&op))
+        return false;
+    }
+
+    /// Allow index/scalar setup alongside the single nested spatial loop.
+    /// Real kernels often materialize loop-local arithmetic before descending
+    /// into the next loop, and treating that as a structural mismatch causes
+    /// us to miss reusable stencil families like sw4lite/rhs4sg-base.
+    if (nestedFors.size() != 1)
+      break;
+
+    Operation *nestedLoop = nestedFors.front();
+    if (auto scfFor = dyn_cast<scf::ForOp>(nestedLoop)) {
+      ivs.push_back(scfFor.getInductionVar());
+      block = scfFor.getBody();
+      continue;
+    }
+    auto affineFor = cast<affine::AffineForOp>(nestedLoop);
+    ivs.push_back(affineFor.getInductionVar());
+    block = affineFor.getBody();
+  }
+
+  spatialBody = block;
+  return !ivs.empty() && spatialBody;
+}
+
+void clearReductionLoopFacts(LoopMetadata &metadata) {
+  metadata.hasReductions = false;
+  metadata.reductionKinds.clear();
 }
 
 } // namespace arts

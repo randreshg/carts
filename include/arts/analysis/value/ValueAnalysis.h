@@ -37,13 +37,23 @@ public:
   static std::optional<int64_t> getConstantValue(Value v);
 
   /// Recursively fold constant index expressions through basic arith ops.
+  /// Also resolves RuntimeQueryOp (totalWorkers, totalNodes) from module attrs.
   static std::optional<int64_t> tryFoldConstantIndex(Value v,
                                                      unsigned depth = 0);
+
+  /// Convenience: strip numeric casts then try to fold. Combines
+  /// stripNumericCasts + tryFoldConstantIndex in a single call.
+  static std::optional<int64_t> getConstantIndexStripped(Value v);
 
   static std::optional<double> getConstantFloat(Value v);
   static bool isConstantEqual(Value v, int64_t val);
   static bool isZeroConstant(Value v);
   static bool isOneConstant(Value v);
+
+  /// Check if a value is structurally "one-like": either a literal 1, or
+  /// an expression of the form `1 + (x - x)` or `1 + (min(x,y) - y)` that
+  /// canonically reduces to one.
+  static bool isOneLikeValue(Value value);
 
   /// Check equivalence after stripping casts (same Value or same constant).
   static bool sameValue(Value a, Value b);

@@ -22,7 +22,9 @@
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/metadata/LoopMetadata.h"
 #include "arts/utils/metadata/MemrefMetadata.h"
 #include "mlir/Pass/Pass.h"
@@ -128,78 +130,12 @@ static Operation *resolveAllocLikeSource(Value value) {
   return nullptr;
 }
 
-static SmallVector<Value> getAccessIndices(Operation *op) {
-  SmallVector<Value> indices;
-  if (auto load = dyn_cast<memref::LoadOp>(op)) {
-    indices.append(load.getIndices().begin(), load.getIndices().end());
-  } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-    indices.append(store.getIndices().begin(), store.getIndices().end());
-  } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
-    indices.append(load.getMapOperands().begin(), load.getMapOperands().end());
-  } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
-    indices.append(store.getMapOperands().begin(),
-                   store.getMapOperands().end());
-  }
-  return indices;
-}
 
 struct LocalStencilEvidence {
   bool isStencil = false;
   bool isMultiDimStencil = false;
   std::optional<StencilNDPatternContract> explicitContract;
 };
-
-static bool isPureOp(Operation *op) {
-  if (!op)
-    return false;
-  if (isa<arts::ForOp, arts::YieldOp, memref::LoadOp, memref::StoreOp,
-          affine::AffineLoadOp, affine::AffineStoreOp, affine::AffineApplyOp,
-          scf::ForOp, scf::YieldOp, affine::AffineForOp, affine::AffineYieldOp>(
-          op))
-    return true;
-  if (isa<CallOpInterface>(op))
-    return false;
-  if (auto iface = dyn_cast<MemoryEffectOpInterface>(op))
-    return iface.hasNoEffect();
-  return op->getNumRegions() == 0;
-}
-
-static bool collectSpatialNestIvs(arts::ForOp artsFor,
-                                  SmallVector<Value, 4> &ivs,
-                                  Block *&spatialBody) {
-  if (!artsFor || artsFor.getBody()->getNumArguments() == 0)
-    return false;
-  ivs.push_back(artsFor.getBody()->getArgument(0));
-
-  Block *block = artsFor.getBody();
-  while (block) {
-    SmallVector<Operation *, 2> nestedFors;
-    for (Operation &op : block->without_terminator()) {
-      if (isa<scf::ForOp, affine::AffineForOp>(&op)) {
-        nestedFors.push_back(&op);
-        continue;
-      }
-      if (!isPureOp(&op))
-        return false;
-    }
-
-    if (nestedFors.size() != 1)
-      break;
-
-    Operation *nestedLoop = nestedFors.front();
-    if (auto scfFor = dyn_cast<scf::ForOp>(nestedLoop)) {
-      ivs.push_back(scfFor.getInductionVar());
-      block = scfFor.getBody();
-      continue;
-    }
-    auto affineFor = cast<affine::AffineForOp>(nestedLoop);
-    ivs.push_back(affineFor.getInductionVar());
-    block = affineFor.getBody();
-  }
-
-  spatialBody = block;
-  return !ivs.empty() && spatialBody;
-}
 
 static const LoopMetadata *
 resolveLoopMetadataForArtsFor(arts::ForOp forOp, MetadataManager &manager) {
@@ -248,7 +184,7 @@ static LocalStencilEvidence collectLocalStencilEvidence(arts::ForOp forOp,
     if (!allocLike)
       return;
 
-    SmallVector<Value> indices = getAccessIndices(op);
+    SmallVector<Value> indices = DbUtils::getMemoryAccessIndices(op);
     auto &dimOffsets = offsetsByAlloc[allocLike];
     if (dimOffsets.size() < indices.size())
       dimOffsets.resize(indices.size());

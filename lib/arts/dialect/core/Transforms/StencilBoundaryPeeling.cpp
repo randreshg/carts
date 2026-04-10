@@ -64,10 +64,7 @@ struct BoundaryPeelingMatch {
 };
 
 static std::optional<int64_t> getConstInt(Value value) {
-  if (!value)
-    return std::nullopt;
-  return ValueAnalysis::getConstantValue(
-      ValueAnalysis::stripNumericCasts(value));
+  return ValueAnalysis::getConstantIndexStripped(value);
 }
 
 static bool yieldsConstantBool(Block &block, bool expected) {

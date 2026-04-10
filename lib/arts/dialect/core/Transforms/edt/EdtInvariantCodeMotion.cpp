@@ -25,6 +25,7 @@
 /// Arts
 #include "arts/Dialect.h"
 #include "arts/transforms/edt/EdtICM.h"
+#include "arts/utils/LoopInvarianceUtils.h"
 
 /// Others
 #include "mlir/IR/OpDefinition.h"
@@ -42,10 +43,6 @@ ARTS_DEBUG_SETUP(edt_invariant_code_motion);
 
 namespace mlir {
 namespace arts {
-
-static inline bool isDefinedOutsideEdt(Region &region, Value value) {
-  return !region.isAncestor(value.getParentRegion());
-};
 
 bool canBeHoistedFromEdt(Region &edtRegion, Operation *op) {
   /// Do not move terminators.
@@ -74,7 +71,7 @@ bool canBeHoistedFromEdt(Region &edtRegion, Operation *op) {
       /// Ignore values defined in a nested region
       if (op->isAncestor(operand.getParentRegion()->getParentOp()))
         continue;
-      if (!isDefinedOutsideEdt(edtRegion, operand))
+      if (!arts::isDefinedOutside(edtRegion, operand))
         return WalkResult::interrupt();
     }
     return WalkResult::advance();

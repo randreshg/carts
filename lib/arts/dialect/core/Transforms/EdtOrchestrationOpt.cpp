@@ -11,6 +11,7 @@
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/transforms/edt/EdtParallelSplitLowering.h"
+#include "arts/utils/EdtUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -32,26 +33,11 @@ using namespace mlir::arts;
 
 namespace {
 
-constexpr llvm::StringLiteral kRepeatedWaveGroup = "repeated_wave_group";
-
-static bool hasPlanAttr(Operation *op, StringRef attrName, StringRef expected) {
-  auto attr = op->getAttrOfType<StringAttr>(attrName);
-  return attr && attr.getValue() == expected;
-}
 
 static bool isAllowedInterstitialOp(Operation *op) {
   if (isa<DbAcquireOp, LoweringContractOp>(op))
     return true;
   return op->hasTrait<OpTrait::ConstantLike>();
-}
-
-static SmallVector<ForOp, 2> getTopLevelForOps(EdtOp edt) {
-  SmallVector<ForOp, 2> result;
-  Block &body = edt.getBody().front();
-  for (Operation &op : body.without_terminator())
-    if (auto forOp = dyn_cast<ForOp>(&op))
-      result.push_back(forOp);
-  return result;
 }
 
 struct RepeatedWaveSignature {
@@ -78,10 +64,10 @@ getRepeatedWaveSignature(EdtOp edt) {
   ForOp forOp = analysis.forOps.front();
   if (!forOp.getReductionAccumulators().empty())
     return std::nullopt;
-  if (!hasPlanAttr(forOp.getOperation(),
+  if (!hasPlanAttrValue(forOp.getOperation(),
                    AttrNames::Operation::Plan::KernelFamily, "uniform"))
     return std::nullopt;
-  if (!hasPlanAttr(forOp.getOperation(),
+  if (!hasPlanAttrValue(forOp.getOperation(),
                    AttrNames::Operation::Plan::RepetitionStructure,
                    "full_timestep")) {
     return std::nullopt;
@@ -125,7 +111,7 @@ static bool compatibleSignature(const RepeatedWaveSignature &lhs,
 
 static void stampWaveGroup(ArrayRef<EdtOp> group, uint64_t groupId) {
   auto *ctx = group.front()->getContext();
-  auto kindAttr = StringAttr::get(ctx, kRepeatedWaveGroup);
+  auto kindAttr = StringAttr::get(ctx, AttrNames::Operation::RepeatedWaveGroup);
   auto i64Type = IntegerType::get(ctx, 64);
   auto groupAttr = IntegerAttr::get(i64Type, groupId);
   auto countAttr = IntegerAttr::get(i64Type, group.size());

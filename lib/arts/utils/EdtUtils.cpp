@@ -7,6 +7,7 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -21,6 +22,17 @@ using namespace mlir::arts;
 
 namespace mlir {
 namespace arts {
+
+SmallVector<ForOp, 2> getTopLevelForOps(EdtOp edt) {
+  SmallVector<ForOp, 2> result;
+  if (!edt)
+    return result;
+  Block &body = edt.getBody().front();
+  for (Operation &op : body.without_terminator())
+    if (auto forOp = dyn_cast<ForOp>(&op))
+      result.push_back(forOp);
+  return result;
+}
 
 ForOp getSingleTopLevelFor(EdtOp edt) {
   if (!edt)
@@ -255,7 +267,7 @@ SmallVector<Value> collectEdtPackedValues(EdtOp edt) {
 
   for (Value parameter : parameters) {
     if (auto *defOp = parameter.getDefiningOp())
-      if (defOp->getName().getStringRef() == "llvm.mlir.undef")
+      if (isUndefLikeOp(defOp))
         continue;
     valueToPackIndex.try_emplace(parameter, packedValues.size());
     packedValues.push_back(parameter);

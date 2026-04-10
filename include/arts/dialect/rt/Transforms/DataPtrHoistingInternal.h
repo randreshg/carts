@@ -216,10 +216,6 @@ bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses);
 
 bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop);
 
-/// Find the highest loop that can legally hoist the address computation.
-scf::ForOp findHoistTarget(Operation *op, Operation *addrOp,
-                           DominanceInfo &domInfo);
-
 /// Find the highest loop that can legally hoist a pure, operand-only op.
 scf::ForOp findInvariantOpHoistTarget(Operation *op, DominanceInfo &domInfo);
 

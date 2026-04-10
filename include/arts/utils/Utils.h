@@ -11,6 +11,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
@@ -112,6 +113,25 @@ ArtsMode convertOmpMode(omp::ClauseTaskDepend mode);
 SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
                                    OpBuilder &builder, Location loc,
                                    ArrayRef<Value> dimSizes = {});
+
+/// Return true when non-terminator operations exist after `op` in its parent
+/// block. Used to decide whether a trailing synchronization barrier is needed.
+bool hasWorkAfterInParentBlock(Operation *op);
+
+/// Return true for operations considered "pure" for stencil/pattern analysis:
+/// known loop/load/store ops, side-effect-free regionless ops, and ops
+/// implementing MemoryEffectOpInterface with no effects. Returns false for
+/// call-like operations.
+bool isPureOp(Operation *op);
+
+/// Sort memref::StoreOp operations by their position in the parent block.
+/// Stores in the same block are ordered by `isBeforeInBlock`; stores in
+/// different blocks fall back to pointer comparison for a stable order.
+void sortStoresInProgramOrder(MutableArrayRef<memref::StoreOp> stores);
+
+/// Return true when `op` is an undef-like operation (llvm.mlir.undef,
+/// polygeist.undef, or arts.undef).
+bool isUndefLikeOp(Operation *op);
 
 } // namespace arts
 } // namespace mlir

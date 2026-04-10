@@ -5,13 +5,17 @@
 #include "arts/utils/Utils.h"
 #include "arts/Dialect.h"
 #include "arts/codegen/Types.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -444,6 +448,70 @@ SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
   }
 
   return clamped;
+}
+
+///===----------------------------------------------------------------------===///
+/// Block Work Detection Utilities
+///===----------------------------------------------------------------------===///
+
+bool hasWorkAfterInParentBlock(Operation *op) {
+  if (!op || !op->getBlock())
+    return false;
+
+  for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
+    if (next->hasTrait<OpTrait::IsTerminator>())
+      continue;
+    return true;
+  }
+  return false;
+}
+
+///===----------------------------------------------------------------------===///
+/// Pure Operation Detection Utilities
+///===----------------------------------------------------------------------===///
+
+bool isPureOp(Operation *op) {
+  if (!op)
+    return false;
+  if (isa<arts::ForOp, arts::YieldOp, memref::LoadOp, memref::StoreOp,
+          affine::AffineLoadOp, affine::AffineStoreOp, affine::AffineApplyOp,
+          scf::ForOp, scf::YieldOp, affine::AffineForOp, affine::AffineYieldOp>(
+          op))
+    return true;
+  if (isa<CallOpInterface>(op))
+    return false;
+  if (auto iface = dyn_cast<MemoryEffectOpInterface>(op))
+    return iface.hasNoEffect();
+  return op->getNumRegions() == 0;
+}
+
+///===----------------------------------------------------------------------===///
+/// Store Ordering Utilities
+///===----------------------------------------------------------------------===///
+
+void sortStoresInProgramOrder(MutableArrayRef<memref::StoreOp> stores) {
+  std::stable_sort(stores.begin(), stores.end(),
+                   [](memref::StoreOp lhs, memref::StoreOp rhs) {
+                     Operation *lhsOp = lhs.getOperation();
+                     Operation *rhsOp = rhs.getOperation();
+                     if (lhsOp == rhsOp)
+                       return false;
+                     if (lhsOp->getBlock() == rhsOp->getBlock())
+                       return lhsOp->isBeforeInBlock(rhsOp);
+                     return lhsOp < rhsOp;
+                   });
+}
+
+///===----------------------------------------------------------------------===///
+/// Undef-Like Operation Detection Utilities
+///===----------------------------------------------------------------------===///
+
+bool isUndefLikeOp(Operation *op) {
+  if (!op)
+    return false;
+  StringRef name = op->getName().getStringRef();
+  return name == "llvm.mlir.undef" || name == "polygeist.undef" ||
+         name == "arts.undef";
 }
 
 } // namespace arts

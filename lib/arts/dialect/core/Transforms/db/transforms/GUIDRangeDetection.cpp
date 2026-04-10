@@ -46,6 +46,7 @@
 #include "arts/analysis/value/ValueAnalysis.h"
 #include "arts/transforms/db/transforms/GUIDRangeDetection.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 
 ARTS_DEBUG_SETUP(guid_range_detection);
@@ -59,27 +60,6 @@ using AttrNames::Operation::GuidRangeTripCount;
 using AttrNames::Operation::HasGuidRangeAlloc;
 
 namespace {
-
-/// Try to compute the static trip count of a scf::ForOp.
-/// Returns the trip count if all bounds are constant, std::nullopt otherwise.
-static std::optional<int64_t> tryComputeStaticTripCount(scf::ForOp forOp) {
-  int64_t lb = 0, ub = 0, step = 0;
-  if (!ValueAnalysis::getConstantIndex(forOp.getLowerBound(), lb))
-    return std::nullopt;
-  if (!ValueAnalysis::getConstantIndex(forOp.getUpperBound(), ub))
-    return std::nullopt;
-  if (!ValueAnalysis::getConstantIndex(forOp.getStep(), step))
-    return std::nullopt;
-
-  if (step <= 0)
-    return std::nullopt;
-
-  int64_t span = ub - lb;
-  if (span <= 0)
-    return 0;
-
-  return (span + step - 1) / step;
-}
 
 /// Collect all DbAllocOps that are direct children of a ForOp body
 /// (not nested inside inner ForOps).  Returns the count of DbAllocOps
@@ -128,7 +108,7 @@ bool mlir::arts::detectGUIDRangeCandidates(ModuleOp module) {
     }
 
     /// Single DbAllocOp -- this is a candidate.
-    auto staticCount = tryComputeStaticTripCount(forOp);
+    auto staticCount = arts::getStaticTripCount(forOp);
     int64_t tripCount = staticCount.value_or(-1);
 
     /// Mark the DbAllocOp with the trip count.

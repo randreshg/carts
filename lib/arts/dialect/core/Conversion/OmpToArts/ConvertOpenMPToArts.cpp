@@ -83,18 +83,6 @@ static llvm::Statistic numAtomicUpdatesConverted{
 using namespace mlir;
 using namespace arts;
 
-static bool hasWorkAfterInParentBlock(Operation *op) {
-  if (!op || !op->getBlock())
-    return false;
-
-  for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
-    if (next->hasTrait<OpTrait::IsTerminator>())
-      continue;
-    return true;
-  }
-  return false;
-}
-
 static void carryRewriteMetadata(Operation *sourceOp, Operation *targetOp,
                                  MetadataManager &metadataManager) {
   if (!sourceOp || !targetOp)

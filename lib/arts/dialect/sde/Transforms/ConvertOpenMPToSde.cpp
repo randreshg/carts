@@ -76,17 +76,6 @@ using namespace mlir::arts;
 // Helpers
 //===----------------------------------------------------------------------===//
 
-static bool hasWorkAfterInParentBlock(Operation *op) {
-  if (!op || !op->getBlock())
-    return false;
-  for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
-    if (next->hasTrait<OpTrait::IsTerminator>())
-      continue;
-    return true;
-  }
-  return false;
-}
-
 /// Map OMP schedule kind to SDE schedule kind.
 static std::optional<sde::SdeScheduleKind>
 convertScheduleKind(omp::ClauseScheduleKind kind) {

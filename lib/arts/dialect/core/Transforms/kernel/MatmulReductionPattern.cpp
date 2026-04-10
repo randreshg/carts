@@ -48,6 +48,7 @@
 #include "arts/transforms/kernel/KernelTransform.h"
 #include "arts/transforms/pattern/PatternTransform.h"
 #include "arts/utils/Debug.h"
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -61,11 +62,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
-static void clearReductionLoopFacts(LoopMetadata &metadata) {
-  metadata.hasReductions = false;
-  metadata.reductionKinds.clear();
-}
 
 /// Reduction operation kind - supports both float and integer operations.
 enum class ReductionKind {

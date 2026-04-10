@@ -237,8 +237,8 @@ static void computeIteratorTypes(unsigned numDims,
     }
   }
 
-  auto parallel = StringAttr::get(ctx, "parallel");
-  auto reduction = StringAttr::get(ctx, "reduction");
+  auto parallel = StringAttr::get(ctx, AttrNames::Operation::Linalg::IterParallel);
+  auto reduction = StringAttr::get(ctx, AttrNames::Operation::Linalg::IterReduction);
   for (unsigned d = 0; d < numDims; ++d)
     iterTypes.push_back(dimsInOutputs.test(d) ? parallel : reduction);
 }
@@ -272,7 +272,8 @@ static StringRef classifyPattern(ArrayRef<MemrefAccessEntry> reads,
                                  unsigned numDims) {
   unsigned numParallel = 0, numReduction = 0;
   for (auto attr : iterTypes) {
-    if (cast<StringAttr>(attr).getValue() == "parallel")
+    if (cast<StringAttr>(attr).getValue() ==
+        AttrNames::Operation::Linalg::IterParallel)
       ++numParallel;
     else
       ++numReduction;
@@ -282,17 +283,17 @@ static StringRef classifyPattern(ArrayRef<MemrefAccessEntry> reads,
   if (numReduction == 0) {
     for (auto &entry : reads) {
       if (hasConstantOffsets(entry.indexingMap))
-        return "stencil";
+        return AttrNames::Operation::Linalg::PatternStencil;
     }
-    return "elementwise";
+    return AttrNames::Operation::Linalg::PatternElementwise;
   }
 
   // 2 parallel + 1 reduction in 3D → potential matmul.
   if (numParallel == 2 && numReduction == 1 && numDims == 3 &&
       reads.size() >= 2 && writes.size() >= 1)
-    return "matmul";
+    return AttrNames::Operation::Linalg::PatternMatmul;
 
-  return "reduction";
+  return AttrNames::Operation::Linalg::PatternReduction;
 }
 
 //===----------------------------------------------------------------------===//
