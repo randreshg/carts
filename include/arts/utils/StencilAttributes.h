@@ -38,14 +38,17 @@ constexpr StringLiteral SupportedBlockHalo("stencil_supported_block_halo");
 } // namespace Operation
 } // namespace AttrNames
 
-inline ArrayAttr buildI64ArrayAttr(Operation *op, ArrayRef<int64_t> values) {
+inline ArrayAttr buildI64ArrayAttr(MLIRContext *ctx, ArrayRef<int64_t> values) {
   SmallVector<Attribute, 8> attrs;
   attrs.reserve(values.size());
-  for (int64_t value : values) {
-    attrs.push_back(
-        IntegerAttr::get(IntegerType::get(op->getContext(), 64), value));
-  }
-  return ArrayAttr::get(op->getContext(), attrs);
+  auto i64Type = IntegerType::get(ctx, 64);
+  for (int64_t value : values)
+    attrs.push_back(IntegerAttr::get(i64Type, value));
+  return ArrayAttr::get(ctx, attrs);
+}
+
+inline ArrayAttr buildI64ArrayAttr(Operation *op, ArrayRef<int64_t> values) {
+  return buildI64ArrayAttr(op->getContext(), values);
 }
 
 inline std::optional<SmallVector<int64_t, 4>> readI64ArrayAttr(Operation *op,

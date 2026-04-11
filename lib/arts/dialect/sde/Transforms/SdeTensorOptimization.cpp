@@ -15,6 +15,7 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/costs/SDECostModel.h"
 
@@ -23,6 +24,8 @@ namespace mlir::arts {
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 
@@ -37,45 +40,10 @@ static Value stripSimpleMemrefAlias(Value value) {
   return value;
 }
 
-static NamedAttrList getRewrittenAttrs(sde::SdeSuIterateOp op) {
-  NamedAttrList attrs(op->getAttrs());
-  attrs.erase(op.getOperandSegmentSizesAttrName().getValue());
-  return attrs;
-}
-
-static Block &ensureBlock(Region &region) {
-  if (region.empty())
-    region.push_back(new Block());
-  return region.front();
-}
-
 static bool isTensorOptimizationSchedule(sde::SdeScheduleKindAttr schedule) {
   if (!schedule)
     return true;
   return schedule.getValue() == sde::SdeScheduleKind::static_;
-}
-
-static std::optional<int64_t> getConstantTripCount(sde::SdeSuIterateOp op) {
-  if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
-      op.getSteps().size() != 1)
-    return std::nullopt;
-
-  int64_t lb = 0, ub = 0, step = 0;
-  if (!ValueAnalysis::getConstantIndex(op.getLowerBounds().front(), lb) ||
-      !ValueAnalysis::getConstantIndex(op.getUpperBounds().front(), ub) ||
-      !ValueAnalysis::getConstantIndex(op.getSteps().front(), step) ||
-      step <= 0)
-    return std::nullopt;
-
-  if (ub <= lb)
-    return int64_t{0};
-
-  int64_t span = ub - lb;
-  return (span + step - 1) / step;
-}
-
-static int64_t ceilDiv(int64_t lhs, int64_t rhs) {
-  return (lhs + rhs - 1) / rhs;
 }
 
 static Value getConstantIndex(OpBuilder &builder, Location loc, int64_t value) {
@@ -84,7 +52,7 @@ static Value getConstantIndex(OpBuilder &builder, Location loc, int64_t value) {
 
 static Value buildTripCountValue(OpBuilder &builder, Location loc,
                                  sde::SdeSuIterateOp op) {
-  if (std::optional<int64_t> tripCount = getConstantTripCount(op))
+  if (std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation()))
     return getConstantIndex(builder, loc, *tripCount);
 
   if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
@@ -332,7 +300,7 @@ struct SdeTensorOptimizationPass
       if (!isTensorOptimizationCandidate(op, body, tensorGeneric))
         return;
 
-      std::optional<int64_t> tripCount = getConstantTripCount(op);
+      std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
       if (tripCount && *tripCount <= 1)
         return;
       rewrites.push_back(op);
@@ -344,8 +312,8 @@ struct SdeTensorOptimizationPass
       Location loc = op.getLoc();
 
       Value tileIterations;
-      if (std::optional<int64_t> tripCount = getConstantTripCount(op)) {
-        int64_t balancedTile = ceilDiv(
+      if (std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation())) {
+        int64_t balancedTile = llvm::divideCeil(
             *tripCount, std::max<int64_t>(1, costModel->getWorkerCount()));
         int64_t tileCount = std::clamp(
             std::max<int64_t>(balancedTile,
@@ -377,9 +345,9 @@ struct SdeTensorOptimizationPass
           op.getStructuredClassificationAttr(), op.getAccessMinOffsetsAttr(),
           op.getAccessMaxOffsetsAttr(), op.getOwnerDimsAttr(),
           op.getSpatialDimsAttr(), op.getWriteFootprintAttr());
-      newOp->setAttrs(getRewrittenAttrs(op));
+      newOp->setAttrs(sde::getRewrittenAttrs(op));
 
-      Block &newBody = ensureBlock(newOp.getBody());
+      Block &newBody = sde::ensureBlock(newOp.getBody());
       if (newBody.getNumArguments() == 0)
         newBody.addArgument(rewriter.getIndexType(), loc);
       Value tileBase = newBody.getArgument(0);

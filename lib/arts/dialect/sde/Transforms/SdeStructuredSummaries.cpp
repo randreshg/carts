@@ -6,6 +6,7 @@
 
 #include "arts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "arts/dialect/sde/Transforms/Passes.h"
+#include "arts/utils/StencilAttributes.h"
 
 namespace mlir::arts {
 #define GEN_PASS_DEF_SDESTRUCTUREDSUMMARIES
@@ -19,15 +20,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
-static ArrayAttr buildI64ArrayAttr(MLIRContext *ctx, ArrayRef<int64_t> values) {
-  SmallVector<Attribute> attrs;
-  attrs.reserve(values.size());
-  auto i64Type = IntegerType::get(ctx, 64);
-  for (int64_t value : values)
-    attrs.push_back(IntegerAttr::get(i64Type, value));
-  return ArrayAttr::get(ctx, attrs);
-}
 
 struct SdeStructuredSummariesPass
     : public arts::impl::SdeStructuredSummariesBase<

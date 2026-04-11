@@ -12,6 +12,7 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/costs/SDECostModel.h"
 
@@ -19,18 +20,14 @@ namespace mlir::arts {
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 
+#include "llvm/Support/MathExtras.h"
+
 #include <algorithm>
 
 using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
-static NamedAttrList getRewrittenAttrs(sde::SdeSuIterateOp op) {
-  NamedAttrList attrs(op->getAttrs());
-  attrs.erase(op.getOperandSegmentSizesAttrName().getValue());
-  return attrs;
-}
 
 static bool isChunkOptimizableSchedule(sde::SdeScheduleKindAttr schedule) {
   if (!schedule)
@@ -44,36 +41,13 @@ static bool isChunkOptimizableSchedule(sde::SdeScheduleKindAttr schedule) {
   }
 }
 
-static std::optional<int64_t> getConstantTripCount(sde::SdeSuIterateOp op) {
-  if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
-      op.getSteps().size() != 1)
-    return std::nullopt;
-
-  int64_t lb = 0, ub = 0, step = 0;
-  if (!ValueAnalysis::getConstantIndex(op.getLowerBounds().front(), lb) ||
-      !ValueAnalysis::getConstantIndex(op.getUpperBounds().front(), ub) ||
-      !ValueAnalysis::getConstantIndex(op.getSteps().front(), step) ||
-      step <= 0)
-    return std::nullopt;
-
-  if (ub <= lb)
-    return int64_t{0};
-
-  int64_t span = ub - lb;
-  return (span + step - 1) / step;
-}
-
-static int64_t ceilDiv(int64_t lhs, int64_t rhs) {
-  return (lhs + rhs - 1) / rhs;
-}
-
 static Value getConstantIndex(OpBuilder &builder, Location loc, int64_t value) {
   return arith::ConstantIndexOp::create(builder, loc, value);
 }
 
 static Value buildTripCountValue(OpBuilder &builder, Location loc,
                                  sde::SdeSuIterateOp op) {
-  if (std::optional<int64_t> tripCount = getConstantTripCount(op))
+  if (std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation()))
     return getConstantIndex(builder, loc, *tripCount);
 
   if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
@@ -153,7 +127,7 @@ struct SdeChunkOptimizationPass
           !isChunkOptimizableSchedule(op.getScheduleAttr()))
         return;
 
-      std::optional<int64_t> tripCount = getConstantTripCount(op);
+      std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
       if (tripCount && *tripCount <= 1)
         return;
 
@@ -161,7 +135,7 @@ struct SdeChunkOptimizationPass
         int64_t workerCount = std::max<int64_t>(1, costModel->getWorkerCount());
         int64_t minIterations =
             std::max<int64_t>(1, costModel->getMinIterationsPerWorker());
-        int64_t balancedChunk = ceilDiv(*tripCount, workerCount);
+        int64_t balancedChunk = llvm::divideCeil(*tripCount, workerCount);
         int64_t chunkSize = std::clamp(std::max(minIterations, balancedChunk),
                                        int64_t{1}, *tripCount);
         rewrites.push_back({op, chunkSize});
@@ -203,7 +177,7 @@ struct SdeChunkOptimizationPass
           rewrite.op.getAccessMinOffsetsAttr(),
           rewrite.op.getAccessMaxOffsetsAttr(), rewrite.op.getOwnerDimsAttr(),
           rewrite.op.getSpatialDimsAttr(), rewrite.op.getWriteFootprintAttr());
-      newOp->setAttrs(getRewrittenAttrs(rewrite.op));
+      newOp->setAttrs(sde::getRewrittenAttrs(rewrite.op));
       newOp.getBody().takeBody(rewrite.op.getBody());
       rewriter.eraseOp(rewrite.op);
     }

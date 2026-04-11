@@ -12,10 +12,12 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/costs/SDECostModel.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/PatternMatch.h"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -26,12 +28,6 @@ struct PlannedDistribution {
   sde::SdeSuIterateOp op;
   sde::SdeDistributionKind kind = sde::SdeDistributionKind::blocked;
 };
-
-static Block &ensureBlock(Region &region) {
-  if (region.empty())
-    region.push_back(new Block());
-  return region.front();
-}
 
 static std::optional<sde::SdeConcurrencyScope>
 getEnclosingParallelScope(sde::SdeSuIterateOp op) {
@@ -47,35 +43,9 @@ getEnclosingParallelScope(sde::SdeSuIterateOp op) {
   return std::nullopt;
 }
 
-static std::optional<int64_t> getConstantTripCount(sde::SdeSuIterateOp op) {
-  if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
-      op.getSteps().size() != 1)
-    return std::nullopt;
-
-  auto lowerBound =
-      dyn_cast_or_null<arith::ConstantIndexOp>(op.getLowerBounds().front().getDefiningOp());
-  auto upperBound =
-      dyn_cast_or_null<arith::ConstantIndexOp>(op.getUpperBounds().front().getDefiningOp());
-  auto step =
-      dyn_cast_or_null<arith::ConstantIndexOp>(op.getSteps().front().getDefiningOp());
-  if (!lowerBound || !upperBound || !step)
-    return std::nullopt;
-
-  int64_t lb = lowerBound.value();
-  int64_t ub = upperBound.value();
-  int64_t stepValue = step.value();
-  if (stepValue <= 0)
-    return std::nullopt;
-  if (ub <= lb)
-    return int64_t{0};
-
-  int64_t span = ub - lb;
-  return (span + stepValue - 1) / stepValue;
-}
-
 static bool hasEnoughDistributedWork(sde::SdeSuIterateOp op,
                                      sde::SDECostModel &costModel) {
-  std::optional<int64_t> tripCount = getConstantTripCount(op);
+  std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
   if (!tripCount)
     return true;
 
@@ -135,13 +105,13 @@ struct SdeDistributionPlanningPass
     });
 
     for (PlannedDistribution rewrite : rewrites) {
-      PatternRewriter rewriter(rewrite.op.getContext());
+      IRRewriter rewriter(rewrite.op.getContext());
       rewriter.setInsertionPoint(rewrite.op);
 
       auto distributeOp = sde::SdeSuDistributeOp::create(
           rewriter, rewrite.op.getLoc(),
           sde::SdeDistributionKindAttr::get(&getContext(), rewrite.kind));
-      Block &body = ensureBlock(distributeOp.getBody());
+      Block &body = sde::ensureBlock(distributeOp.getBody());
       rewrite.op->moveBefore(&body, body.end());
     }
   }

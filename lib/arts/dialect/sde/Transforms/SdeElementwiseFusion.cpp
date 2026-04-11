@@ -17,6 +17,7 @@ namespace mlir::arts {
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
 
@@ -30,29 +31,6 @@ struct ElementwiseStage {
   SmallVector<Value, 4> writes;
 };
 
-static Block &ensureBlock(Region &region) {
-  if (region.empty())
-    region.push_back(new Block());
-  return region.front();
-}
-
-static NamedAttrList getRewrittenAttrs(sde::SdeSuIterateOp op) {
-  NamedAttrList attrs(op->getAttrs());
-  attrs.erase(op.getOperandSegmentSizesAttrName().getValue());
-  return attrs;
-}
-
-static bool haveEquivalentIndexValue(Value lhs, Value rhs) {
-  if (ValueAnalysis::sameValue(lhs, rhs))
-    return true;
-
-  int64_t lhsConstant = 0;
-  int64_t rhsConstant = 0;
-  return ValueAnalysis::getConstantIndex(lhs, lhsConstant) &&
-         ValueAnalysis::getConstantIndex(rhs, rhsConstant) &&
-         lhsConstant == rhsConstant;
-}
-
 static bool haveSameIterationSpace(sde::SdeSuIterateOp lhs,
                                    sde::SdeSuIterateOp rhs) {
   if (lhs.getLowerBounds().size() != rhs.getLowerBounds().size() ||
@@ -61,15 +39,15 @@ static bool haveSameIterationSpace(sde::SdeSuIterateOp lhs,
     return false;
 
   for (auto [a, b] : llvm::zip(lhs.getLowerBounds(), rhs.getLowerBounds())) {
-    if (!haveEquivalentIndexValue(a, b))
+    if (!ValueAnalysis::areValuesEquivalent(a, b))
       return false;
   }
   for (auto [a, b] : llvm::zip(lhs.getUpperBounds(), rhs.getUpperBounds())) {
-    if (!haveEquivalentIndexValue(a, b))
+    if (!ValueAnalysis::areValuesEquivalent(a, b))
       return false;
   }
   for (auto [a, b] : llvm::zip(lhs.getSteps(), rhs.getSteps())) {
-    if (!haveEquivalentIndexValue(a, b))
+    if (!ValueAnalysis::areValuesEquivalent(a, b))
       return false;
   }
   return true;
@@ -86,7 +64,7 @@ static bool haveCompatibleSchedule(sde::SdeSuIterateOp lhs,
   Value rhsChunk = rhs.getChunkSize();
   if (!lhsChunk || !rhsChunk)
     return lhsChunk == rhsChunk;
-  return haveEquivalentIndexValue(lhsChunk, rhsChunk);
+  return ValueAnalysis::areValuesEquivalent(lhsChunk, rhsChunk);
 }
 
 static Value getWriteRoot(Value value) {
@@ -137,7 +115,7 @@ static bool isSkippableInterStageOp(Operation *op) {
 }
 
 static sde::SdeSuIterateOp
-fuseStages(MutableArrayRef<ElementwiseStage> stages, PatternRewriter &rewriter) {
+fuseStages(MutableArrayRef<ElementwiseStage> stages, IRRewriter &rewriter) {
   assert(stages.size() >= 2 && "expected at least two stages");
 
   sde::SdeSuIterateOp first = stages.front().op;
@@ -155,13 +133,13 @@ fuseStages(MutableArrayRef<ElementwiseStage> stages, PatternRewriter &rewriter) 
       first.getAccessMinOffsetsAttr(), first.getAccessMaxOffsetsAttr(),
       first.getOwnerDimsAttr(), first.getSpatialDimsAttr(),
       first.getWriteFootprintAttr());
-  fused->setAttrs(getRewrittenAttrs(first));
+  fused->setAttrs(sde::getRewrittenAttrs(first));
   fused.setStructuredClassificationAttr(
       sde::SdeStructuredClassificationAttr::get(
           first.getContext(),
           sde::SdeStructuredClassification::elementwise_pipeline));
 
-  Block &dst = ensureBlock(fused.getBody());
+  Block &dst = sde::ensureBlock(fused.getBody());
   if (dst.getNumArguments() == 0) {
     for (BlockArgument arg : stages.front().op.getBody().front().getArguments())
       dst.addArgument(arg.getType(), loc);
@@ -228,7 +206,7 @@ struct SdeElementwiseFusionPass
           if (stages.size() < 2)
             continue;
 
-          PatternRewriter rewriter(&getContext());
+          IRRewriter rewriter(&getContext());
           sde::SdeSuIterateOp fused = fuseStages(stages, rewriter);
           (void)fused;
           for (const ElementwiseStage &stage : stages)

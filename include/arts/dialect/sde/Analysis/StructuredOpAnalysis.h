@@ -63,6 +63,24 @@ std::optional<StructuredLoopSummary> analyzeStructuredLoop(SdeSuIterateOp op);
 std::optional<StructuredNeighborhoodInfo>
 extractNeighborhoodSummary(const StructuredLoopSummary &summary);
 
+//===----------------------------------------------------------------------===//
+// Shared affine decomposition utilities
+//===----------------------------------------------------------------------===//
+
+/// Affine expression normalized to one loop dim plus a constant offset.
+struct AffineDimOffset {
+  std::optional<unsigned> dim;
+  int64_t offset = 0;
+};
+
+/// Extract a single-dim + constant form from an affine expression.
+/// Recursively decomposes through Add expressions.
+std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr);
+
+/// Check whether an indexing map contains any non-zero constant stencil
+/// offsets of the form `dim + c` where c != 0.
+bool hasConstantOffsets(AffineMap map);
+
 } // namespace mlir::arts::sde
 
 #endif // ARTS_DIALECT_SDE_ANALYSIS_STRUCTUREDMETHODANALYSIS_H
