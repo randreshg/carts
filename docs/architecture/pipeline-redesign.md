@@ -37,7 +37,7 @@ decisions there, and only then does `ConvertSdeToArts` cross into ARTS IR.
 
 ## The `openmp-to-arts` Stage
 
-The current branch has one `openmp-to-arts` stage with 13 passes:
+The current branch has one `openmp-to-arts` stage with 17 passes:
 
 ```text
 ConvertOpenMPToSde
@@ -48,6 +48,10 @@ ConvertOpenMPToSde
   -> RaiseToLinalg
   -> RaiseToTensor
   -> SdeTensorOptimization
+  -> SdeStructuredSummaries
+  -> SdeElementwiseFusion
+  -> SdeDistributionPlanning
+  -> SdeIterationSpaceDecomposition
   -> ConvertSdeToArts
   -> VerifySdeLowered
   -> DeadCodeElimination

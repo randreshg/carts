@@ -29,6 +29,10 @@ ConvertOpenMPToSde
   -> RaiseToLinalg
   -> RaiseToTensor
   -> SdeTensorOptimization
+  -> SdeStructuredSummaries
+  -> SdeElementwiseFusion
+  -> SdeDistributionPlanning
+  -> SdeIterationSpaceDecomposition
   -> ConvertSdeToArts
 ```
 
