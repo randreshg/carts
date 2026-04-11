@@ -21,22 +21,19 @@
 ///
 ///==========================================================================///
 
+#include "arts/dialect/rt/Transforms/Passes.h"
+
+namespace mlir::arts {
 #define GEN_PASS_DEF_SCALARREPLACEMENT
-#include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
+} // namespace mlir::arts
+
+#include "arts/utils/Debug.h"
+#include "arts/utils/LoopInvarianceUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-
-#include "arts/passes/Passes.h"
-#include "arts/utils/Debug.h"
-#include "arts/utils/LoopInvarianceUtils.h"
 #include "polygeist/Ops.h"
 #include "llvm/ADT/SetVector.h"
 
@@ -392,7 +389,7 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
 }
 
 struct ScalarReplacementPass
-    : public impl::ScalarReplacementBase<ScalarReplacementPass> {
+    : public arts::impl::ScalarReplacementBase<ScalarReplacementPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     ARTS_INFO_HEADER(ScalarReplacementPass);

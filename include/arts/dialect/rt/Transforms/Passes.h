@@ -25,6 +25,9 @@ namespace mlir::arts {
 #define GEN_PASS_DECL
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
 
+/// Transform memory-based reductions to register-based iter_args.
+std::unique_ptr<::mlir::Pass> createScalarReplacementPass();
+
 } // namespace mlir::arts
 
 #endif // ARTS_DIALECT_RT_TRANSFORMS_PASSES_H

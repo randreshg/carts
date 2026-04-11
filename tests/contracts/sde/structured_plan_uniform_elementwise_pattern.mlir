@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline pattern-pipeline | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --loop-transforms-enable-elementwise-pipeline --pipeline pattern-pipeline | %FileCheck %s
 
 // Test that a uniform elementwise parallel loop produces elementwise_pipeline
 // dep_pattern at pattern-pipeline. Two sibling EDTs with same-index array
