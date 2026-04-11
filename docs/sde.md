@@ -82,6 +82,7 @@ ConvertOpenMPToSde
   -> SdeStructuredSummaries
   -> SdeElementwiseFusion
   -> SdeDistributionPlanning
+  -> SdeIterationSpaceDecomposition
   -> ConvertSdeToArts
   -> VerifySdeLowered
   -> DCE
@@ -96,7 +97,6 @@ normalization, not as a second semantic-pattern decision layer:
 ```text
 DepTransforms
   -> LoopNormalization
-  -> StencilBoundaryPeeling
   -> LoopReordering
   -> KernelTransforms
   -> CSE

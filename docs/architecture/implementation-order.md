@@ -138,8 +138,7 @@ Phase 3B steps 5-6: Move all pass .cpp files to core/
   - Core transforms (10): Concurrency, CreateDbs, CreateEpochs,
     DbLowering, ParallelEdtLowering, ForLowering, ForOpt,
     DistributedHostLoopOutlining, EdtDistribution, EdtPtrRematerialization
-  - Pattern passes (4): PatternDiscovery, KernelTransforms,
-    StencilBoundaryPeeling, DepTransforms
+  - Pattern passes (3): PatternDiscovery, KernelTransforms, DepTransforms
   - Loop passes (3): LoopFusion, LoopNormalization, LoopReordering
   - General passes (5): Inliner, RaiseMemRefDimensionality, HandleDeps,
     DeadCodeElimination, ScalarReplacement
@@ -172,10 +171,10 @@ Phase 3A: Move core IR to dialect/core/IR/
   135+ consumer files. Generated files appear at build/include/arts/dialect/core/IR/.
 - LoopNormalization/LoopReordering stay in core/ permanently — they operate
   on ARTS IR (ForOp) at Stage 5, after SDE→ARTS conversion (see Phase 2D)
-- Pattern passes (PatternDiscovery, KernelTransforms, StencilBoundaryPeeling,
-  DepTransforms) stay in core/ — investigation found all 4 have ARTS op deps
-  (PatternDiscovery stamps on EdtOp, LoopReordering calls DbPatternMatchers,
-  etc.). Moving to a standalone patterns/ dir requires refactoring.
+- Pattern passes (PatternDiscovery, KernelTransforms, DepTransforms) stay in
+  core/ — investigation found all 3 have ARTS op deps (PatternDiscovery stamps
+  on EdtOp, LoopReordering calls DbPatternMatchers, etc.).
+  StencilBoundaryPeeling was moved to sde/Transforms/SdeIterationSpaceDecomposition.
 ```
 
 ## Decision Log

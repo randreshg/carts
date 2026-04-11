@@ -102,7 +102,6 @@ Pattern refinement still exists after SDE lowering. The current
 ```text
 DepTransforms
   -> LoopNormalization
-  -> StencilBoundaryPeeling
   -> LoopReordering
   -> KernelTransforms
   -> CSE

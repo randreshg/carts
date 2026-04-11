@@ -202,7 +202,7 @@ LLVM conversion patterns. They stay shared.
 | `LoopFusion.cpp` | `lib/arts/dialect/core/Transforms/LoopFusion.cpp` | 3 | Walks EdtOp + BarrierOp — ARTS structural |
 | `LoopNormalization.cpp` | `lib/arts/dialect/core/Transforms/LoopNormalization.cpp` | 3 | ARTS-coupled: ForOp in match/apply, DbPatternMatchers |
 | `LoopReordering.cpp` | `lib/arts/dialect/core/Transforms/LoopReordering.cpp` | 3 | ARTS-coupled: ForOp, DbPatternMatchers auto-detection |
-| `StencilBoundaryPeeling.cpp` | `lib/arts/dialect/core/Transforms/StencilBoundaryPeeling.cpp` | 3 | ARTS-coupled: operates on ForOp loop bounds |
+| `SdeIterationSpaceDecomposition.cpp` | `lib/arts/dialect/sde/Transforms/SdeIterationSpaceDecomposition.cpp` | DONE | Moved to SDE: pattern-agnostic, zero ARTS deps |
 
 ---
 
@@ -837,7 +837,7 @@ lib/arts/
       DepTransforms.cpp                 <- passes/transforms/
       KernelTransforms.cpp              <- passes/opt/kernel/
       PatternDiscovery.cpp              <- passes/transforms/
-      StencilBoundaryPeeling.cpp        <- passes/opt/loop/
+      # StencilBoundaryPeeling -> moved to sde/Transforms/SdeIterationSpaceDecomposition.cpp
       dep/
         JacobiAlternatingBuffersPattern.cpp   <- transforms/dep/
         Seidel2DWavefrontPattern.cpp          <- transforms/dep/

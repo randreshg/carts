@@ -104,7 +104,7 @@ return name == "llvm.mlir.undef" || name == "polygeist.undef" || name == "arts.u
 | `isAccumulationOp` | ScalarReplacement.cpp | Utils.h | 4 | VeryLow |
 | `indicesEqual` | ScalarReplacement.cpp | Utils.h | 8 | VeryLow |
 | `isZeroIndexConstant/isMinusOneConstant` | DataPtrHoistingSupport.cpp | ValueAnalysis.h | 8 | VeryLow |
-| `getConstInt` | StencilBoundaryPeeling.cpp | **DONE** → delegates to `ValueAnalysis::getConstantIndexStripped` | 10 | VeryLow |
+| `getConstInt` | SdeIterationSpaceDecomposition.cpp | **DONE** → delegates to `ValueAnalysis::getConstantIndexStripped` | 10 | VeryLow |
 | `clearReductionLoopFacts` | ForLowering.cpp, MatmulReductionPattern.cpp | LoopUtils.h | 3 | VeryLow |
 | `getOrCreateZero` | MatmulReductionPattern.cpp:81 | Utils.h | 2 | VeryLow |
 | `isZeroIndexList` | DbScratchElimination.cpp:66 | Utils.h or ValueAnalysis.h | 5 | VeryLow |
