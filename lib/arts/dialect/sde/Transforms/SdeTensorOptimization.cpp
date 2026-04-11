@@ -176,7 +176,7 @@ static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op,
                       return type == utils::IteratorType::parallel;
                     }))
     return false;
-  if (tensorGeneric.getNumDpsInputs() == 0 || tensorGeneric.getNumDpsInits() == 0)
+  if (tensorGeneric.getNumDpsInits() == 0)
     return false;
 
   unsigned numLoads = 0;
