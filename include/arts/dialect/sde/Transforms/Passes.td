@@ -9,11 +9,12 @@
 include "mlir/Pass/PassBase.td"
 
 def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
-  let summary = "Compute linalg-style structural classification for loop nests";
+  let summary = "Raise raiseable sde.su_iterate bodies to linalg.generic";
   let description = [{
-    Analyzes loop nests inside arts.for operations and computes linalg-style
-    structural information: indexing maps, iterator types, and pattern
-    classification. Stamps the results as attributes on the arts.for op.
+    Analyzes loop nests inside sde.su_iterate operations and creates
+    linalg.generic ops for raiseable loop bodies. Non-raiseable bodies
+    (indirect indexing, control flow, non-affine) are left as-is for
+    downstream passes to handle via independent IR analysis.
 
     Recognized patterns:
     - elementwise: all parallel iterators, identity/permutation indexing maps
@@ -21,13 +22,13 @@ def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
     - stencil: parallel iterators with constant-offset indexing maps
     - reduction: has reduction iterators with accumulation pattern
 
-    The stamped attributes enable PatternDiscovery to leverage structural
-    classification instead of manual access-pattern heuristics.
+    The linalg.generic ops are consumed by ConvertSdeToArts, which classifies
+    them, stamps pattern contracts on the created arts.for, and lowers them
+    back to loops.
   }];
   let dependentDialects = [
     "::mlir::memref::MemRefDialect", "::mlir::func::FuncDialect",
-    "::mlir::arts::ArtsDialect", "::mlir::arith::ArithDialect",
-    "::mlir::scf::SCFDialect"
+    "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"
   ];
   let constructor = "mlir::arts::sde::createRaiseToLinalgPass()";
 }

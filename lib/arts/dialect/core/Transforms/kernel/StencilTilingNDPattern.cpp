@@ -118,8 +118,8 @@ static bool accumulateLinearTerms(Value value, int64_t scale,
   if (!value)
     return false;
 
-  if (auto constOp = value.getDefiningOp<arith::ConstantIndexOp>()) {
-    constant += scale * constOp.value();
+  if (auto constVal = ValueAnalysis::getConstantValue(value)) {
+    constant += scale * *constVal;
     return true;
   }
 

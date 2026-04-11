@@ -17,6 +17,7 @@
 #include "arts/dialect/core/Analysis/heuristics/StructuredKernelPlanAnalysis.h"
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "arts/utils/costs/SDECostModel.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include <memory>
@@ -68,6 +69,10 @@ public:
   AbstractMachine &getAbstractMachine() { return abstractMachine; }
   const AbstractMachine &getAbstractMachine() const { return abstractMachine; }
 
+  /// Get the runtime-agnostic cost model (SDE passes use this interface).
+  sde::SDECostModel &getCostModel() { return *costModel; }
+  const sde::SDECostModel &getCostModel() const { return *costModel; }
+
   const StringAnalysis &getStringAnalysis() const;
 
   /// Print summary of analysis objects and their graphs
@@ -111,6 +116,7 @@ private:
   std::string configFile;
   std::string metadataFile;
   AbstractMachine abstractMachine;
+  std::unique_ptr<sde::SDECostModel> costModel;
   std::unique_ptr<DbAnalysis> dbAnalysis;
   std::unique_ptr<EdtAnalysis> edtAnalysis;
   std::unique_ptr<EpochAnalysis> epochAnalysis;

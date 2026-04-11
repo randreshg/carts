@@ -286,17 +286,14 @@ static const std::array<llvm::StringLiteral, 8>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 5> kOpenMPToArtsPasses = {
-    "ConvertOpenMPToSde", "ConvertSdeToArts", "VerifySdeLowered",
-    "DeadCodeElimination", "CSE"};
-static const std::array<llvm::StringLiteral, 9> kPatternPipelinePasses = {
-    "RaiseToLinalg",
-    "PatternDiscovery(seed)",
+static const std::array<llvm::StringLiteral, 6> kOpenMPToArtsPasses = {
+    "ConvertOpenMPToSde", "RaiseToLinalg", "ConvertSdeToArts",
+    "VerifySdeLowered", "DeadCodeElimination", "CSE"};
+static const std::array<llvm::StringLiteral, 6> kPatternPipelinePasses = {
     "DepTransforms",
     "LoopNormalization",
     "StencilBoundaryPeeling",
     "LoopReordering",
-    "PatternDiscovery(refine)",
     "KernelTransforms",
     "CSE"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
@@ -683,7 +680,10 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
 /// OpenMP to ARTS conversion pass (via SDE intermediate representation).
 void buildOpenMPToArtsPipeline(PassManager &pm,
                                arts::AnalysisManager *AM = nullptr) {
-  pm.addPass(arts::sde::createConvertOpenMPToSdePass(AM));
+  arts::sde::SDECostModel *costModel =
+      AM ? &AM->getCostModel() : nullptr;
+  pm.addPass(arts::sde::createConvertOpenMPToSdePass(costModel));
+  pm.addPass(arts::sde::createRaiseToLinalgPass());
   pm.addPass(arts::sde::createConvertSdeToArtsPass(AM));
   pm.addPass(arts::createVerifySdeLoweredPass());
   pm.addPass(arts::createDCEPass());
@@ -703,14 +703,14 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 
 /// Dedicated semantic pattern pipeline that teaches ARTS about supported loop
 /// and dependence families before DB creation.
+/// Pattern contracts are now seeded at two points:
+///   1. SDE->ARTS conversion (classifies from linalg.generic for ~60% of loops)
+///   2. DepTransforms/KernelTransforms (independent IR matching for the rest)
 void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
-  pm.addPass(arts::sde::createRaiseToLinalgPass());
-  pm.addPass(arts::createPatternDiscoveryPass(AM, /*refine=*/false));
   pm.addPass(arts::createDepTransformsPass(AM));
   pm.addPass(arts::createLoopNormalizationPass(AM));
   pm.addPass(arts::createStencilBoundaryPeelingPass());
   pm.addPass(arts::createLoopReorderingPass(AM));
-  pm.addPass(arts::createPatternDiscoveryPass(AM, /*refine=*/true));
   pm.addPass(arts::createKernelTransformsPass(
       AM, KernelTransformsEnableElementwisePipeline,
       KernelTransformsEnableMatmul, KernelTransformsEnableTiling,

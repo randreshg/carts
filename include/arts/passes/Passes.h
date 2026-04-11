@@ -36,9 +36,6 @@ std::unique_ptr<Pass> createHandleDepsPass();
 /// Lower OpenMP regions into high-level ARTS dialect operations.
 std::unique_ptr<Pass>
 createConvertOpenMPToArtsPass(AnalysisManager *AM = nullptr);
-/// Discover or refine semantic pattern contracts before DB creation.
-std::unique_ptr<Pass> createPatternDiscoveryPass(AnalysisManager *AM,
-                                                 bool refine = false);
 /// Eliminate dead ARTS operations and dead helper IR.
 std::unique_ptr<Pass> createDCEPass();
 
@@ -125,8 +122,9 @@ std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
 
 /// SDE dialect passes.
 namespace sde {
+class SDECostModel;
 std::unique_ptr<Pass>
-createConvertOpenMPToSdePass(AnalysisManager *AM = nullptr);
+createConvertOpenMPToSdePass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createConvertSdeToArtsPass(AnalysisManager *AM = nullptr);
 /// Compute linalg-style structural classification for loop nests.
 std::unique_ptr<Pass> createRaiseToLinalgPass();

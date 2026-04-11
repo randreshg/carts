@@ -21,6 +21,7 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
@@ -81,6 +82,32 @@ static ArtsMode convertAccessMode(sde::SdeAccessMode mode) {
     return ArtsMode::inout;
   }
   return ArtsMode::inout;
+}
+
+//===----------------------------------------------------------------------===//
+// Linalg classification (attribute-based)
+//===----------------------------------------------------------------------===//
+
+/// Map a linalg classification string to an ArtsDepPattern.
+static std::optional<ArtsDepPattern>
+classifyFromString(StringRef classification) {
+  namespace LC = AttrNames::Operation::LinalgClassification;
+  if (classification == LC::Stencil)
+    return ArtsDepPattern::stencil_tiling_nd;
+  if (classification == LC::Matmul)
+    return ArtsDepPattern::matmul;
+  if (classification == LC::Elementwise)
+    return ArtsDepPattern::uniform;
+  return std::nullopt;
+}
+
+/// Stamp a pattern contract on an arts.for and its parent EdtOp if present.
+static void stampPatternContract(Operation *artsForOp,
+                                 ArtsDepPattern pattern) {
+  SimplePatternContract contract(pattern, /*revision=*/1);
+  contract.stamp(artsForOp);
+  if (auto parentEdt = artsForOp->getParentOfType<EdtOp>())
+    contract.stamp(parentEdt.getOperation());
 }
 
 //===----------------------------------------------------------------------===//
@@ -192,6 +219,8 @@ struct CuTaskToArtsPattern : public OpRewritePattern<sde::SdeCuTaskOp> {
 };
 
 /// sde.su_iterate -> arts.for
+/// If the body contains a linalg.generic (from RaiseToLinalg), classifies the
+/// pattern, stamps a contract, and lowers the generic back to loops.
 struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -231,6 +260,19 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       for (Operation &srcOp : src.without_terminator())
         rewriter.clone(srcOp, mapper);
       YieldOp::create(rewriter, loc);
+    }
+
+    // Read classification from RaiseToLinalg (stamped as attribute on the
+    // sde.su_iterate, propagated through the cloned body).
+    if (auto classAttr =
+            op->getAttrOfType<StringAttr>(AttrNames::Operation::LinalgClassification::AttrName)) {
+      if (auto pattern = classifyFromString(classAttr.getValue())) {
+        ARTS_DEBUG("stamping linalg classification: "
+                   << stringifyArtsDepPattern(*pattern));
+        stampPatternContract(artsFor.getOperation(), *pattern);
+      }
+      // Remove the classification attr — it served its purpose.
+      artsFor->removeAttr(AttrNames::Operation::LinalgClassification::AttrName);
     }
 
     ++numSuIterateConverted;
