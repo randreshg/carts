@@ -38,7 +38,8 @@ struct StructuredLoopSummary {
   SmallVector<MemrefAccessEntry> writes;
   SmallVector<AffineMap> outputMaps;
   SmallVector<utils::IteratorType> iterTypes;
-  SdeLinalgClassification classification = SdeLinalgClassification::elementwise;
+  SdeStructuredClassification classification =
+      SdeStructuredClassification::elementwise;
   bool supportsReductionCarrier = false;
 
   bool supportsLinalgCarrier() const;

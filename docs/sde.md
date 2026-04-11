@@ -307,7 +307,7 @@ arts_sde.su_iterate ... {
 **After**
 
 ```mlir
-arts_sde.su_iterate ... linalg_classification(<elementwise|matmul|stencil|reduction>) {
+arts_sde.su_iterate ... structured_classification(<elementwise|matmul|stencil|reduction>) {
   ... original memref/scalar body remains ...
   linalg.generic ... ins(...) outs(...) { ... }
   arts_sde.yield
@@ -342,7 +342,8 @@ Fallback-only today:
 - broader reduction shapes
 - nested or multi-accumulator reduction cases outside the narrow subset
 
-That fallback is still useful: the pass stamps `linalg_classification` on the
+That fallback is still useful: the pass stamps
+`structured_classification` on the
 SDE loop itself, so `ConvertSdeToArts` can recover the intended contract later
 without depending on ARTS-namespaced strings.
 
@@ -396,7 +397,7 @@ Recent correctness fix:
 
 ```mlir
 arts_sde.su_iterate(%lb) to(%ub) step(%step)
-    linalg_classification(<elementwise|matmul>) {
+    structured_classification(<elementwise|matmul>) {
   ... tensor-backed carrier ...
 }
 ```
@@ -405,7 +406,7 @@ arts_sde.su_iterate(%lb) to(%ub) step(%step)
 
 ```mlir
 arts_sde.su_iterate(%lb) to(%ub) step(%tiled_step)
-    linalg_classification(<elementwise|matmul>) {
+    structured_classification(<elementwise|matmul>) {
   %tile_ub = ...
   scf.for %iv = %tile_base to %tile_ub step %step {
     ... cloned scalar/memref body ...
@@ -516,7 +517,7 @@ Contract recovery at this boundary:
 - If transient `linalg.generic` carriers exist, the pass classifies and stamps
   contracts from them.
 - If no carrier survives, the pass falls back to the SDE-owned
-  `linalg_classification` on the source `arts_sde.su_iterate`.
+  `structured_classification` on the source `arts_sde.su_iterate`.
 - It forwards `reduction_strategy` from SDE onto the lowered `arts.for` and,
   if missing there, also onto the parent `arts.edt`.
 - It erases memref-backed and tensor-backed carriers after consuming them, so

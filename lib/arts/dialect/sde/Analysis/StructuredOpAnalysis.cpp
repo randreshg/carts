@@ -250,7 +250,7 @@ extractNeighborhoodSummary(ArrayRef<MemrefAccessEntry> reads,
   return info;
 }
 
-static SdeLinalgClassification
+static SdeStructuredClassification
 classifyPattern(ArrayRef<MemrefAccessEntry> reads,
                 ArrayRef<AffineMap> outputMaps,
                 ArrayRef<utils::IteratorType> iterTypes, unsigned numDims) {
@@ -266,16 +266,16 @@ classifyPattern(ArrayRef<MemrefAccessEntry> reads,
   if (numReduction == 0) {
     for (const auto &entry : reads) {
       if (hasConstantOffsets(entry.indexingMap))
-        return SdeLinalgClassification::stencil;
+        return SdeStructuredClassification::stencil;
     }
-    return SdeLinalgClassification::elementwise;
+    return SdeStructuredClassification::elementwise;
   }
 
   if (numParallel == 2 && numReduction == 1 && numDims == 3 &&
       reads.size() >= 2 && !outputMaps.empty())
-    return SdeLinalgClassification::matmul;
+    return SdeStructuredClassification::matmul;
 
-  return SdeLinalgClassification::reduction;
+  return SdeStructuredClassification::reduction;
 }
 
 static bool isConstantZeroIndexingMap(AffineMap indexingMap) {
@@ -320,8 +320,8 @@ static bool supportsReductionCarrierSubset(SdeSuIterateOp iterOp,
 } // namespace
 
 bool StructuredLoopSummary::supportsLinalgCarrier() const {
-  return classification != SdeLinalgClassification::stencil &&
-         (classification != SdeLinalgClassification::reduction ||
+  return classification != SdeStructuredClassification::stencil &&
+         (classification != SdeStructuredClassification::reduction ||
           supportsReductionCarrier);
 }
 

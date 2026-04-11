@@ -57,15 +57,15 @@ using namespace mlir::arts;
 
 static std::optional<ArtsDepPattern>
 mapStructuredClassificationToArtsDepPattern(
-    sde::SdeLinalgClassification classification) {
+    sde::SdeStructuredClassification classification) {
   switch (classification) {
-  case sde::SdeLinalgClassification::stencil:
+  case sde::SdeStructuredClassification::stencil:
     return ArtsDepPattern::stencil_tiling_nd;
-  case sde::SdeLinalgClassification::matmul:
+  case sde::SdeStructuredClassification::matmul:
     return ArtsDepPattern::matmul;
-  case sde::SdeLinalgClassification::elementwise:
+  case sde::SdeStructuredClassification::elementwise:
     return ArtsDepPattern::uniform;
-  case sde::SdeLinalgClassification::reduction:
+  case sde::SdeStructuredClassification::reduction:
     break;
   }
   return std::nullopt;
@@ -657,7 +657,7 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
           << stringifyArtsDepPattern(*candidatePattern));
     };
 
-    if (auto classAttr = op.getLinalgClassificationAttr()) {
+    if (auto classAttr = op.getStructuredClassificationAttr()) {
       selectedPattern =
           mapStructuredClassificationToArtsDepPattern(classAttr.getValue());
       selectedRevision = getPatternRevision(op.getOperation()).value_or(1);

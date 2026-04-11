@@ -232,10 +232,10 @@ struct RaiseToLinalgPass
       if (!summary)
         return;
 
-      sde::SdeLinalgClassification pattern = summary->classification;
+      sde::SdeStructuredClassification pattern = summary->classification;
 
-      iterOp.setLinalgClassificationAttr(
-          sde::SdeLinalgClassificationAttr::get(ctx, pattern));
+      iterOp.setStructuredClassificationAttr(
+          sde::SdeStructuredClassificationAttr::get(ctx, pattern));
       ++classified;
       if (summary->supportsLinalgCarrier() &&
           raiseToLinalg(iterOp, summary->nest, summary->reads, summary->writes,
@@ -243,7 +243,7 @@ struct RaiseToLinalgPass
         ++raised;
 
       ARTS_DEBUG("classified sde.su_iterate as '"
-                 << stringifySdeLinalgClassification(pattern) << "' with "
+                 << stringifySdeStructuredClassification(pattern) << "' with "
                  << summary->nest.ivs.size() << " dims ("
                  << summary->reads.size() << " ins, "
                  << summary->outputMaps.size() << " outs)");
