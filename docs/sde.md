@@ -567,14 +567,17 @@ currently handles only the narrow producer-backed case:
 - exactly one preserved reduction kind
 - known non-custom reduction kind
 - annotation-only behavior today
+- nested sequential work forces `local_accumulate`
 
-The pass stamps an SDE-owned `reduction_strategy(<atomic|tree>)` attribute on
-eligible loops. Today it uses `add` as the only atomic-capable reduction kind
-in SDE and keeps validation at the SDE IR layer: contract tests inspect the
-IR dump after `SdeReductionStrategy` rather than inferring the choice back from
-later ARTS IR. `ConvertSdeToArts` now also persists that recommendation onto
-the lowered ARTS loop / EDT as `arts.reduction_strategy`, but there is still no
-lowering consumer for the ARTS attribute yet.
+The pass stamps an SDE-owned
+`reduction_strategy(<atomic|tree|local_accumulate>)` attribute on eligible
+loops. Today it uses `add` as the only atomic-capable reduction kind in SDE,
+chooses `local_accumulate` when the reduction loop already contains nested
+sequential work, and keeps validation at the SDE IR layer: contract tests
+inspect the IR dump after `SdeReductionStrategy` rather than inferring the
+choice back from later ARTS IR. `ConvertSdeToArts` now also persists that
+recommendation onto the lowered ARTS loop / EDT as `arts.reduction_strategy`,
+but there is still no lowering consumer for the ARTS attribute yet.
 
 ### SDE Optimization Decisions Enabled by SDECostModel
 
@@ -599,8 +602,8 @@ decision automatic.
 
 1. **Broaden `SdeReductionStrategy`**: Extend the current annotation-only
    implementation beyond the initial single-reduction `sde.su_iterate` subset,
-   decide whether it should also cover `sde.cu_reduce`, and eventually map the
-   recommendation into downstream lowering when there is a real consumer.
+   especially multi-reduction loops and `sde.cu_reduce`, and eventually map
+   the recommendation into downstream lowering when there is a real consumer.
 
 2. **Broaden `SdeScheduleRefinement`**: Extend the current implementation
    beyond constant-trip `auto` / `runtime` loops. Future work can fold in
@@ -646,7 +649,7 @@ This is the architectural novelty.
 | `lib/arts/dialect/sde/Transforms/SdeScopeSelection.cpp` | **NEW** — limited cost-model-backed scope selection on `sde.cu_region <parallel>` |
 | `lib/arts/dialect/sde/Transforms/SdeScheduleRefinement.cpp` | **NEW** — limited cost-model-backed schedule refinement on eligible `sde.su_iterate` ops |
 | `lib/arts/dialect/sde/Transforms/SdeChunkOptimization.cpp` | **NEW** — limited cost-model-backed chunk synthesis on `sde.su_iterate` |
-| `lib/arts/dialect/sde/Transforms/SdeReductionStrategy.cpp` | **NEW** — limited cost-model-backed reduction strategy annotation on eligible `sde.su_iterate` ops |
+| `lib/arts/dialect/sde/Transforms/SdeReductionStrategy.cpp` | **NEW** — limited cost-model-backed reduction strategy annotation on eligible `sde.su_iterate` ops, including nested-loop `local_accumulate` |
 | `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | Core rewrite: `SdeSuIterateOp`, stamp classification, create transient `linalg.generic` carriers for supported cases |
 | `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect`, declare `SdeScopeSelection`, `SdeChunkOptimization`, and `SdeReductionStrategy` |
 | `include/arts/dialect/sde/Transforms/Passes.h` | Add linalg include |
@@ -702,8 +705,9 @@ This is the architectural novelty.
 12. SDE reduction tests:
     `openmp_to_arts_selects_atomic_reduction_strategy.mlir`,
     `openmp_to_arts_selects_tree_reduction_strategy.mlir`, and
-    `openmp_to_arts_avoids_atomic_for_mul_reduction_strategy.mlir` validate
-    reduction strategy selection on SDE IR, not reconstructed ARTS IR
+    `openmp_to_arts_avoids_atomic_for_mul_reduction_strategy.mlir`, and
+    `openmp_to_arts_selects_local_accumulate_reduction_strategy.mlir`
+    validate reduction strategy selection on SDE IR, not reconstructed ARTS IR
 12. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
    2mm → uniform contract (from linalg), stencil → stencil_tiling_nd (from KernelTransforms)
 
