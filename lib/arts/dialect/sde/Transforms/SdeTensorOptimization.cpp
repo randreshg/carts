@@ -2,11 +2,11 @@
 /// File: SdeTensorOptimization.cpp
 ///
 /// Cost-model-driven tensor optimization in SDE. The current implementation
-/// focuses on the first executable subset: one-dimensional elementwise loops
-/// whose tensor-backed linalg carrier proves that the loop body is safe to
-/// strip-mine. The pass rewrites the surrounding sde.su_iterate so the tiled
-/// loop nest survives SDE->ARTS lowering while tensor carriers remain an
-/// SDE-only concern.
+/// focuses on executable loop nests whose tensor-backed linalg carrier proves
+/// that strip-mining the outer SDE loop preserves a disjoint write set. The
+/// pass rewrites the surrounding sde.su_iterate so the tiled loop nest
+/// survives SDE->ARTS lowering while tensor carriers remain an SDE-only
+/// concern.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
@@ -18,9 +18,11 @@ namespace mlir::arts {
 #include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/costs/SDECostModel.h"
 
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #include <algorithm>
 
@@ -28,6 +30,12 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
+
+static Value stripSimpleMemrefAlias(Value value) {
+  while (auto castOp = value.getDefiningOp<memref::CastOp>())
+    value = castOp.getSource();
+  return value;
+}
 
 static NamedAttrList getRewrittenAttrs(sde::SdeSuIterateOp op) {
   NamedAttrList attrs(op->getAttrs());
@@ -136,6 +144,46 @@ static bool isCarrierOp(Operation &op) {
   return isa<bufferization::ToTensorOp, tensor::EmptyOp, linalg::GenericOp>(op);
 }
 
+static bool isScalarExecutableOp(Operation &op) {
+  if (isa<memref::LoadOp, memref::StoreOp>(op))
+    return true;
+  return op.getNumRegions() == 0 && isMemoryEffectFree(&op);
+}
+
+static bool isExecutableInnermostBody(Block &body) {
+  for (Operation &op : body.without_terminator()) {
+    if (isCarrierOp(op))
+      continue;
+    if (!isScalarExecutableOp(op))
+      return false;
+  }
+  return true;
+}
+
+static bool hasPerfectNestedScalarLoopNest(Block &body, unsigned numLoops) {
+  if (numLoops == 0)
+    return false;
+  if (numLoops == 1)
+    return isExecutableInnermostBody(body);
+
+  Block *current = &body;
+  for (unsigned depth = 1; depth < numLoops; ++depth) {
+    scf::ForOp nestedLoop;
+    for (Operation &op : current->without_terminator()) {
+      if (isCarrierOp(op))
+        continue;
+      if (!isa<scf::ForOp>(op) || nestedLoop)
+        return false;
+      nestedLoop = cast<scf::ForOp>(op);
+    }
+    if (!nestedLoop || !nestedLoop.getInitArgs().empty())
+      return false;
+    current = nestedLoop.getBody();
+  }
+
+  return isExecutableInnermostBody(*current);
+}
+
 static linalg::GenericOp findTensorCarrier(Block &body) {
   linalg::GenericOp tensorGeneric;
   for (Operation &op : body) {
@@ -157,9 +205,38 @@ static linalg::GenericOp findTensorCarrier(Block &body) {
   return tensorGeneric;
 }
 
+static bool hasDisjointWriteSet(Block &body, linalg::GenericOp tensorGeneric) {
+  unsigned loadCount = 0;
+  unsigned storeCount = 0;
+  SmallVector<Value> writtenMemrefs;
+
+  body.walk([&](memref::LoadOp) { ++loadCount; });
+  body.walk([&](memref::StoreOp storeOp) {
+    ++storeCount;
+    Value base = stripSimpleMemrefAlias(storeOp.getMemref());
+    if (!llvm::is_contained(writtenMemrefs, base))
+      writtenMemrefs.push_back(base);
+  });
+
+  if (loadCount != tensorGeneric.getNumDpsInputs() ||
+      storeCount != tensorGeneric.getNumDpsInits() ||
+      writtenMemrefs.size() != static_cast<size_t>(storeCount))
+    return false;
+
+  for (auto [outputIndex, output] : llvm::enumerate(tensorGeneric.getDpsInits())) {
+    AffineMap indexingMap =
+        tensorGeneric.getMatchingIndexingMap(
+            tensorGeneric.getDpsInitOperand(outputIndex));
+    if (!indexingMap.isProjectedPermutation())
+      return false;
+  }
+
+  return true;
+}
+
 static bool isElementwiseTensorCandidate(Block &body,
                                          linalg::GenericOp tensorGeneric) {
-  if (tensorGeneric.getNumLoops() != 1)
+  if (tensorGeneric.getNumLoops() == 0)
     return false;
   if (!llvm::all_of(tensorGeneric.getIteratorTypesArray(),
                     [](utils::IteratorType type) {
@@ -168,19 +245,9 @@ static bool isElementwiseTensorCandidate(Block &body,
     return false;
   if (tensorGeneric.getNumDpsInits() == 0)
     return false;
-
-  unsigned numLoads = 0;
-  unsigned numStores = 0;
-  for (Operation &nested : body.without_terminator()) {
-    if (nested.getNumRegions() != 0 && !isa<linalg::GenericOp>(nested))
-      return false;
-    if (isa<memref::LoadOp>(nested))
-      ++numLoads;
-    if (isa<memref::StoreOp>(nested))
-      ++numStores;
-  }
-  return numLoads == tensorGeneric.getNumDpsInputs() &&
-         numStores == tensorGeneric.getNumDpsInits();
+  if (!hasDisjointWriteSet(body, tensorGeneric))
+    return false;
+  return hasPerfectNestedScalarLoopNest(body, tensorGeneric.getNumLoops());
 }
 
 static bool isMatmulTensorCandidate(Block &body, linalg::GenericOp tensorGeneric) {
