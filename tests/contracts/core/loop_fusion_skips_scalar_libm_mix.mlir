@@ -26,22 +26,22 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vec
 
     arts.edt <parallel> <intranode> route(%c-1_i32) (%ptrInAcq, %ptrOut0Acq, %ptrOut1Acq) : memref<?xmemref<?xf32>>, memref<?xmemref<?xf32>>, memref<?xmemref<?xf32>> {
     ^bb0(%arg0: memref<?xmemref<?xf32>>, %arg1: memref<?xmemref<?xf32>>, %arg2: memref<?xmemref<?xf32>>):
-      arts.for(%c0) to(%c16) step(%c1) {{
+      arts.for(%c0) to(%c16) step(%c1) {
       ^bb0(%iv: index):
         %src = arts.db_ref %arg0[%c0] : memref<?xmemref<?xf32>> -> memref<?xf32>
         %val = memref.load %src[%iv] : memref<?xf32>
         %biased = arith.addf %val, %bias : f32
         %dst = arts.db_ref %arg1[%c0] : memref<?xmemref<?xf32>> -> memref<?xf32>
         memref.store %biased, %dst[%iv] : memref<?xf32>
-      }}
-      arts.for(%c0) to(%c16) step(%c1) {{
+      }
+      arts.for(%c0) to(%c16) step(%c1) {
       ^bb0(%iv: index):
         %src = arts.db_ref %arg0[%c0] : memref<?xmemref<?xf32>> -> memref<?xf32>
         %val = memref.load %src[%iv] : memref<?xf32>
         %exp = math.exp %val : f32
         %dst = arts.db_ref %arg2[%c0] : memref<?xmemref<?xf32>> -> memref<?xf32>
         memref.store %exp, %dst[%iv] : memref<?xf32>
-      }}
+      }
       arts.db_release(%arg0) : memref<?xmemref<?xf32>>
       arts.db_release(%arg1) : memref<?xmemref<?xf32>>
       arts.db_release(%arg2) : memref<?xmemref<?xf32>>

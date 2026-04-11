@@ -12,7 +12,6 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
-#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/costs/SDECostModel.h"
 
@@ -26,6 +25,12 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
+
+static NamedAttrList getRewrittenAttrs(Operation *op) {
+  NamedAttrList attrs(op->getAttrs());
+  attrs.erase("operandSegmentSizes");
+  return attrs;
+}
 
 static bool isChunkOptimizableSchedule(sde::SdeScheduleKindAttr schedule) {
   if (!schedule)
@@ -108,8 +113,8 @@ struct SdeChunkOptimizationPass
           rewrite.op.getScheduleAttr(), chunkSize,
           rewrite.op.getNowaitAttr(), rewrite.op.getReductionAccumulators(),
           rewrite.op.getReductionKindsAttr());
+      newOp->setAttrs(getRewrittenAttrs(rewrite.op.getOperation()));
       newOp.getBody().takeBody(rewrite.op.getBody());
-      copyArtsMetadataAttrs(rewrite.op.getOperation(), newOp.getOperation());
       rewriter.eraseOp(rewrite.op);
     }
   }

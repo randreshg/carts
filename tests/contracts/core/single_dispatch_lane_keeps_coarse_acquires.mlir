@@ -31,14 +31,14 @@ module attributes {arts.runtime_static_workers = true, arts.runtime_total_nodes 
 
     arts.edt <parallel> <intranode> route(%c-1_i32) (%ptrInAcq, %ptrOutAcq) : memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> {
     ^bb0(%arg0: memref<?xmemref<?xf64>>, %arg1: memref<?xmemref<?xf64>>):
-      arts.for(%c0) to(%c16) step(%c1) {{
+      arts.for(%c0) to(%c16) step(%c1) {
       ^bb0(%iv: index):
         %src = arts.db_ref %arg0[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
         %val = memref.load %src[%iv] : memref<?xf64>
         %scaled = arith.mulf %val, %cst : f64
         %dst = arts.db_ref %arg1[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
         memref.store %scaled, %dst[%iv] : memref<?xf64>
-      }}
+      }
       arts.db_release(%arg0) : memref<?xmemref<?xf64>>
       arts.db_release(%arg1) : memref<?xmemref<?xf64>>
     }

@@ -32,8 +32,9 @@ linalg.generic               =  COMPUTATION  (what the math is)
    contracts are seeded during SDE->ARTS conversion and refined later by
    `DepTransforms` / `KernelTransforms`.
 3. `SDECostModel` and `ARTSCostModel` exist and are wired through
-   `AnalysisManager`. `SdeChunkOptimization` now uses that interface in limited
-   form to synthesize missing chunk sizes for eligible `sde.su_iterate` ops.
+   `AnalysisManager`. `SdeScopeSelection` and `SdeChunkOptimization` now use
+   that interface in limited form to stamp parallel region scope and
+   synthesize missing chunk sizes for eligible `sde.su_iterate` ops.
 4. The stabilized carrier design keeps the original loop/memref IR in place;
    transient `linalg.generic` is used only for contract recovery and is erased
    during SDE->ARTS conversion.
@@ -45,6 +46,9 @@ linalg.generic               =  COMPUTATION  (what the math is)
 7. SDE chunk logic is validated at the SDE IR level: tests check
    `arts_sde.su_iterate schedule(..., chunk)` immediately after
    `SdeChunkOptimization`, before SDE->ARTS lowering rewrites the loop.
+8. SDE scope logic is validated at the SDE IR level: tests check
+   `arts_sde.cu_region <parallel> scope(<local|distributed>)` immediately
+   after `SdeScopeSelection`, before SDE->ARTS lowering rewrites the region.
 
 ---
 
@@ -54,6 +58,7 @@ linalg.generic               =  COMPUTATION  (what the math is)
 CURRENT IMPLEMENTATION:
   buildOpenMPToArtsPipeline:
     ConvertOpenMPToSde
+      → SdeScopeSelection
       → SdeChunkOptimization
       → RaiseToLinalg (on sde.su_iterate)
       → ConvertSdeToArts
@@ -253,12 +258,27 @@ from that input today, so this boundary is reduced but not fully eliminated.
 ```cpp
 auto &costModel = AM->getCostModel();
 pm.addPass(sde::createConvertOpenMPToSdePass(&costModel));
+pm.addPass(sde::createSdeScopeSelectionPass(&costModel));
 pm.addPass(sde::createSdeChunkOptimizationPass(&costModel));
 pm.addPass(sde::createRaiseToLinalgPass());
 pm.addPass(sde::createConvertSdeToArtsPass());
 ```
 
-### Step 1E: Limited Cost-Driven SDE Chunk Optimization
+### Step 1E: Limited Cost-Driven SDE Scope Selection
+
+`SdeScopeSelection` is now implemented in a deliberately narrow form and is
+wired into `buildOpenMPToArtsPipeline` immediately after `ConvertOpenMPToSde`.
+Its current contract is:
+
+- It only rewrites `sde.cu_region <parallel>`
+- It uses the active `SDECostModel` topology directly
+- Single-node builds become `scope(<local>)`
+- Multi-node builds become `scope(<distributed>)`
+
+This moves parallel region scope out of the hardcoded OMP->SDE conversion path
+and validates the decision directly on SDE IR.
+
+### Step 1F: Limited Cost-Driven SDE Chunk Optimization
 
 `SdeChunkOptimization` is now implemented in a deliberately narrow form and is
 wired into `buildOpenMPToArtsPipeline` immediately after `ConvertOpenMPToSde`.
@@ -275,7 +295,7 @@ Its current contract is:
 This keeps chunk logic validated at the SDE layer rather than inferring it back
 from lowered `arts.for` IR.
 
-### Step 1F: CMake
+### Step 1G: CMake
 
 **Create**: `lib/arts/utils/costs/CMakeLists.txt` (GLOB pattern)
 **Modify**: `lib/arts/utils/CMakeLists.txt` — add subdirectory
@@ -350,6 +370,7 @@ Status: completed. `RaiseToLinalg` now runs between OMP→SDE and SDE→ARTS:
 ```cpp
 auto &costModel = AM->getCostModel();
 pm.addPass(arts::sde::createConvertOpenMPToSdePass(&costModel));
+pm.addPass(arts::sde::createSdeScopeSelectionPass(&costModel));
 pm.addPass(arts::sde::createSdeChunkOptimizationPass(&costModel));
 pm.addPass(arts::sde::createRaiseToLinalgPass());    // NEW
 pm.addPass(arts::sde::createConvertSdeToArtsPass());
@@ -465,11 +486,21 @@ Stage 7+: Downstream passes read depPattern if present, use fallback if absent
 
 ## Part 5: Cost-Aware SDE Optimization (Limited Implementation + Future Architecture)
 
-This part documents the currently implemented cost-model-backed SDE chunk pass
-and the remaining architecture for broader SDE-level optimization. The
+This part documents the currently implemented cost-model-backed SDE scope/chunk
+passes and the remaining architecture for broader SDE-level optimization. The
 `SDECostModel` interface (Part 1) already supports these use cases.
 
-### Implemented today: `SdeChunkOptimization`
+### Implemented today: `SdeScopeSelection` + `SdeChunkOptimization`
+
+`SdeScopeSelection` is the first cost-driven SDE region pass in the tree. It
+runs on `sde.cu_region <parallel>` before `RaiseToLinalg` / `ConvertSdeToArts`
+and currently maps machine topology directly onto SDE scope:
+
+- single-node cost model -> `scope(<local>)`
+- multi-node cost model -> `scope(<distributed>)`
+
+This keeps concurrency scope as an SDE-owned decision rather than hardcoding it
+inside OMP->SDE conversion.
 
 `SdeChunkOptimization` is the first cost-driven SDE optimization pass in the
 tree. It runs on `sde.su_iterate` before `RaiseToLinalg` / `ConvertSdeToArts`
@@ -520,9 +551,9 @@ decision automatic.
    incorporate richer work estimates, more schedule kinds, and multi-dim loop
    handling while preserving the same SDE-level validation model.
 
-4. **SdeScopeSelection**: Queries `getTaskSyncCost()` for local vs distributed.
-   Stamps `cu_region.concurrency_scope` based on cost (currently hardcoded
-   in ConvertOpenMPToSde.cpp:135-137).
+4. **Broaden `SdeScopeSelection`**: Extend the current topology-based
+   implementation to make richer scope decisions from cost-model tradeoffs
+   instead of only mirroring single-node vs multi-node topology.
 
 ### Multi-Target Vision
 
@@ -550,12 +581,13 @@ This is the architectural novelty.
 | `include/arts/dialect/core/Analysis/AnalysisManager.h` | Add `SDECostModel` member + accessor |
 | `lib/arts/dialect/core/Analysis/AnalysisManager.cpp` | Create `ARTSCostModel` in constructor |
 | `lib/arts/dialect/sde/Transforms/ConvertOpenMPToSde.cpp` | Remove AnalysisManager import, take `SDECostModel*`; still bridges upstream `arts.omp_dep` |
+| `lib/arts/dialect/sde/Transforms/SdeScopeSelection.cpp` | **NEW** — limited cost-model-backed scope selection on `sde.cu_region <parallel>` |
 | `lib/arts/dialect/sde/Transforms/SdeChunkOptimization.cpp` | **NEW** — limited cost-model-backed chunk synthesis on `sde.su_iterate` |
 | `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | Core rewrite: `SdeSuIterateOp`, stamp classification, create transient `linalg.generic` carriers for supported cases |
-| `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect`, declare `SdeChunkOptimization` |
+| `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect`, declare `SdeScopeSelection` and `SdeChunkOptimization` |
 | `include/arts/dialect/sde/Transforms/Passes.h` | Add linalg include |
 | `lib/arts/passes/CMakeLists.txt` | Add `MLIRLinalgDialect`, `MLIRLinalgTransforms` |
-| `tools/compile/Compile.cpp` | Insert `SdeChunkOptimization`, move `RaiseToLinalg`, remove PatternDiscovery, and keep SDE->ARTS independent of `AnalysisManager` |
+| `tools/compile/Compile.cpp` | Insert `SdeScopeSelection` and `SdeChunkOptimization`, move `RaiseToLinalg`, remove PatternDiscovery, and keep SDE->ARTS independent of `AnalysisManager` |
 | `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | `classifyFromLinalg` + stamp + erase transient generics after consumption |
 | `lib/arts/dialect/core/Transforms/PatternDiscovery.cpp` | **DELETE** |
 | `include/arts/passes/Passes.td` | Remove PatternDiscovery pass definition |
@@ -566,13 +598,16 @@ This is the architectural novelty.
 ## Verification
 
 1. `dekk carts build` — must compile cleanly
-2. `dekk carts test` — 163/163 tests pass
+2. `dekk carts test` — 167/167 tests pass
 3. `grep -r "arts::ForOp" lib/arts/dialect/sde/` → **zero results**
 4. `grep -r "PatternDiscovery" lib/ tools/` → **zero results** (fully removed)
 5. `AM->getCostModel()` returns `SDECostModel&` — accessible from any pass
 6. `grep -r "AnalysisManager" lib/arts/dialect/sde/` → **zero results** (SDE pass plumbing fixed; residual `arts.omp_dep` input boundary remains upstream)
 7. `SDECostModel::isDistributed()` returns correct value based on AbstractMachine
 8. Run with `-mlir-print-ir-after-all` to verify:
+   - After `SdeScopeSelection`: `arts_sde.cu_region <parallel>` has
+     `scope(<local>)` on single-node configs and `scope(<distributed>)` on
+     multi-node configs
    - After `SdeChunkOptimization`: eligible dynamic/guided loops have an
      SDE-level `chunkSize` on `arts_sde.su_iterate`; explicit source chunks
      remain unchanged
@@ -582,10 +617,13 @@ This is the architectural novelty.
      transient generics are erased, and pattern contracts are stamped as
      attributes
    - DepTransforms/KernelTransforms still detect and stamp patterns independently
-9. SDE chunk tests: `openmp_to_arts_synthesizes_schedule_chunk.mlir` and
+9. SDE scope tests: `openmp_to_arts_selects_local_scope.mlir` and
+   `openmp_to_arts_selects_distributed_scope.mlir` validate scope behavior on
+   SDE IR, not reconstructed ARTS IR
+10. SDE chunk tests: `openmp_to_arts_synthesizes_schedule_chunk.mlir` and
    `openmp_to_arts_preserves_schedule_chunk.mlir` validate chunk behavior on
    SDE IR, not reconstructed ARTS IR
-10. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
+11. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
    2mm → uniform contract (from linalg), stencil → stencil_tiling_nd (from KernelTransforms)
 
 ---
@@ -657,7 +695,7 @@ Where SdeOpt(tensor) includes:
 
 ## NOT Doing (This Commit)
 
-- **General cost-aware SDE optimization suite** (Part 5): only limited `SdeChunkOptimization` is implemented; broader schedule/scope/reduction decisions remain future work
+- **General cost-aware SDE optimization suite** (Part 5): only limited `SdeScopeSelection` and `SdeChunkOptimization` are implemented; broader schedule/scope/reduction decisions remain future work
 - **Tensor-first path** (Part 6): Architecture documented, requires RaiseToTensor + Bufferization — separate commit after Part 2 proves stable
 - **Replacing hardcoded thresholds**: Future commits consume `CostModel` in existing heuristic files
 - **Metadata removal**: Independent of linalg — separate commit
