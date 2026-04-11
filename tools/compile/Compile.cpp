@@ -286,9 +286,12 @@ static const std::array<llvm::StringLiteral, 8>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 7> kOpenMPToArtsPasses = {
-    "ConvertOpenMPToSde", "RaiseToLinalg", "ConvertSdeToArts",
-    "VerifySdeLowered", "DeadCodeElimination", "CSE", "VerifyEdtCreated"};
+static const std::array<llvm::StringLiteral, 10> kOpenMPToArtsPasses = {
+    "ConvertOpenMPToSde",      "SdeScopeSelection",
+    "SdeChunkOptimization",    "SdeReductionStrategy",
+    "RaiseToLinalg",           "ConvertSdeToArts",
+    "VerifySdeLowered",        "DeadCodeElimination",
+    "CSE",                     "VerifyEdtCreated"};
 static const std::array<llvm::StringLiteral, 6> kPatternPipelinePasses = {
     "DepTransforms",
     "LoopNormalization",
@@ -680,11 +683,11 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
 /// OpenMP to ARTS conversion pass (via SDE intermediate representation).
 void buildOpenMPToArtsPipeline(PassManager &pm,
                                arts::AnalysisManager *AM = nullptr) {
-  arts::sde::SDECostModel *costModel =
-      AM ? &AM->getCostModel() : nullptr;
+  arts::sde::SDECostModel *costModel = AM ? &AM->getCostModel() : nullptr;
   pm.addPass(arts::sde::createConvertOpenMPToSdePass(costModel));
   pm.addPass(arts::sde::createSdeScopeSelectionPass(costModel));
   pm.addPass(arts::sde::createSdeChunkOptimizationPass(costModel));
+  pm.addPass(arts::sde::createSdeReductionStrategyPass(costModel));
   pm.addPass(arts::sde::createRaiseToLinalgPass());
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
   pm.addPass(arts::createVerifySdeLoweredPass());

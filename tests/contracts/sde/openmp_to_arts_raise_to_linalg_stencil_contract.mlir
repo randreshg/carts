@@ -1,19 +1,22 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline openmp-to-arts | %FileCheck %s --check-prefix=OPENMP
+// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=OPENMP
 // RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline create-dbs | %FileCheck %s --check-prefix=DB
 
-// Verify that a raiseable stencil loop lowered through linalg.generic still
-// re-emits loop-based ARTS IR with the downstream-visible stencil contract.
+// Verify that a raiseable stencil loop is classified at the SDE layer during
+// RaiseToLinalg. The downstream DB check still pins the later ARTS contract.
 
-// OPENMP-LABEL: func.func @main
-// OPENMP: arts.edt <parallel> <intranode> route(%{{.*}}) attributes {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<stencil_tiling_nd>, distribution_pattern = #arts.distribution_pattern<stencil>
-// OPENMP: arts.for(%c1) to(%c63) step(%c1)
+// OPENMP-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
+// OPENMP: func.func @main
+// OPENMP: arts_sde.cu_region <parallel> scope(<local>) {
+// OPENMP: arts_sde.su_iterate(%c1) to(%c63) step(%c1) {
+// OPENMP: ^bb0(%[[I:.*]]: index):
 // OPENMP: scf.for %[[J:.*]] = %c1 to %c63 step %c1
-// OPENMP: memref.load %arg0[%0, %[[J]]] : memref<64x64xf64>
-// OPENMP: memref.load %arg0[%arg2, %3] : memref<64x64xf64>
-// OPENMP: memref.store %{{.*}}, %arg1[%arg2, %[[J]]] : memref<64x64xf64>
-// OPENMP: } {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<stencil_tiling_nd>, distribution_pattern = #arts.distribution_pattern<stencil>}
+// OPENMP: memref.load %arg0[%{{.*}}, %[[J]]] : memref<64x64xf64>
+// OPENMP: memref.load %arg0[%[[I]], %{{.*}}] : memref<64x64xf64>
+// OPENMP: memref.store %{{.*}}, %arg1[%[[I]], %[[J]]] : memref<64x64xf64>
+// OPENMP: } {arts.linalg.classification = "stencil"}
 // OPENMP-NOT: linalg.generic
-// OPENMP-NOT: arts_sde.
+// OPENMP-NOT: arts.for
+// OPENMP: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 
 // DB-LABEL: func.func @main
 // DB: arts.edt <parallel> <intranode> route(%{{.*}}) attributes {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<stencil_tiling_nd>, distribution_pattern = #arts.distribution_pattern<stencil>, stencil_max_offsets = [1, 1], stencil_min_offsets = [-1, -1], stencil_owner_dims = [0, 1], stencil_spatial_dims = [0, 1], stencil_supported_block_halo, stencil_write_footprint = [0, 0]

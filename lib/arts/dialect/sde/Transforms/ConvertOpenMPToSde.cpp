@@ -118,6 +118,26 @@ static Block &ensureBlock(Region &region) {
   return region.front();
 }
 
+static void mapWsloopCapturedArgs(omp::WsloopOp op, IRMapping &mapper) {
+  if (op.getRegion().empty())
+    return;
+
+  Block &wrapper = op.getRegion().front();
+  unsigned argIndex = 0;
+
+  for (auto privateVar : op.getPrivateVars()) {
+    if (argIndex >= wrapper.getNumArguments())
+      break;
+    mapper.map(wrapper.getArgument(argIndex++), privateVar);
+  }
+
+  for (auto reductionVar : op.getReductionVars()) {
+    if (argIndex >= wrapper.getNumArguments())
+      break;
+    mapper.map(wrapper.getArgument(argIndex++), reductionVar);
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Conversion Patterns
 //===----------------------------------------------------------------------===//
@@ -223,7 +243,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
       auto reductionVars = op.getReductionVars();
       ModuleOp module = op->getParentOfType<ModuleOp>();
       for (auto [attr, value] : llvm::zip(*reds, reductionVars)) {
-        redAccs.push_back(ValueAnalysis::getUnderlyingValue(value));
+        redAccs.push_back(value);
         if (auto symRef = dyn_cast<SymbolRefAttr>(attr)) {
           auto decl = dyn_cast_or_null<omp::DeclareReductionOp>(
               module.lookupSymbol(symRef.getLeafReference()));
@@ -238,8 +258,8 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     auto suIter = sde::SdeSuIterateOp::create(
         rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{step},
         schedAttr, chunkSize, nowaitAttr(ctx, nw), ValueRange{redAccs},
-        reductionKinds.empty() ? nullptr
-                               : rewriter.getArrayAttr(reductionKinds));
+        reductionKinds.empty() ? nullptr : rewriter.getArrayAttr(reductionKinds),
+        /*reductionStrategy=*/nullptr);
 
     copyArtsMetadataAttrs(op, suIter);
 
@@ -258,6 +278,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     Block &src = loopNest.getRegion().front();
     if (!src.getArguments().empty())
       mapper.map(src.getArgument(0), dst.getArgument(0));
+    mapWsloopCapturedArgs(op, mapper);
     for (Operation &srcOp : src.without_terminator())
       rewriter.clone(srcOp, mapper);
     sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
@@ -365,7 +386,8 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
         /*schedule=*/nullptr, /*chunkSize=*/Value(),
         /*nowait=*/nullptr,
         /*reductionAccumulators=*/ValueRange{},
-        /*reductionKinds=*/nullptr);
+        /*reductionKinds=*/nullptr,
+        /*reductionStrategy=*/nullptr);
 
     copyArtsMetadataAttrs(op, suIter);
 
@@ -419,7 +441,8 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
         /*schedule=*/nullptr, /*chunkSize=*/Value(),
         /*nowait=*/nullptr,
         /*reductionAccumulators=*/ValueRange{},
-        /*reductionKinds=*/nullptr);
+        /*reductionKinds=*/nullptr,
+        /*reductionStrategy=*/nullptr);
 
     copyArtsMetadataAttrs(op, suIter);
 
@@ -591,6 +614,7 @@ struct ConvertOpenMPToSdePass
     patterns.add<TaskwaitToSdePattern>(context);
     patterns.add<TaskToSdePattern>(context, &writerDepSources);
     GreedyRewriteConfig config;
+    config.enableFolding(false);
     (void)applyPatternsGreedily(module, std::move(patterns), config);
 
     ARTS_INFO_FOOTER(ConvertOpenMPToSdePass);
