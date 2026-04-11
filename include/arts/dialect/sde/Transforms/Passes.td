@@ -1,7 +1,8 @@
 ///==========================================================================///
 /// File: Passes.td
 ///
-/// Pass declarations for the SDE (Structured Decomposition Environment) dialect.
+/// Pass declarations for the SDE (Structured Decomposition Environment)
+/// dialect.
 ///==========================================================================///
 #ifndef ARTS_DIALECT_SDE_TRANSFORMS_PASSES
 #define ARTS_DIALECT_SDE_TRANSFORMS_PASSES
@@ -26,10 +27,11 @@ def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
     them, stamps pattern contracts on the created arts.for, and lowers them
     back to loops.
   }];
-  let dependentDialects = [
-    "::mlir::memref::MemRefDialect", "::mlir::func::FuncDialect",
-    "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"
-  ];
+  let dependentDialects = ["::mlir::memref::MemRefDialect",
+                           "::mlir::func::FuncDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::linalg::LinalgDialect",
+                           "::mlir::scf::SCFDialect"];
   let constructor = "mlir::arts::sde::createRaiseToLinalgPass()";
 }
 
@@ -43,11 +45,12 @@ def ConvertOpenMPToSde : Pass<"convert-openmp-to-sde", "mlir::ModuleOp"> {
     - Schedule + chunk size
     - Task completion tokens
   }];
-  let dependentDialects = [
-    "::mlir::memref::MemRefDialect", "::mlir::omp::OpenMPDialect",
-    "::mlir::arts::sde::ArtsSdeDialect", "::mlir::arts::ArtsDialect",
-    "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"
-  ];
+  let dependentDialects = ["::mlir::memref::MemRefDialect",
+                           "::mlir::omp::OpenMPDialect",
+                           "::mlir::arts::sde::ArtsSdeDialect",
+                           "::mlir::arts::ArtsDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::scf::SCFDialect"];
   let constructor = "mlir::arts::sde::createConvertOpenMPToSdePass()";
 }
 
@@ -55,12 +58,17 @@ def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
   let summary = "Convert SDE operations to ARTS operations";
   let description = [{
     Converts SDE dialect ops into ARTS dialect ops, producing the same IR
-    that ConvertOpenMPToArts currently generates.
+    that ConvertOpenMPToArts currently generates. When RaiseToLinalg materializes
+    linalg.generic, this pass classifies the generic, stamps the matching ARTS
+    contract, and lowers the generic back to loop/memref IR for downstream
+    passes. When no linalg op is present, it falls back to RaiseToLinalg's
+    transient classification attribute.
   }];
-  let dependentDialects = [
-    "::mlir::arts::sde::ArtsSdeDialect", "::mlir::arts::ArtsDialect",
-    "::mlir::memref::MemRefDialect", "::mlir::arith::ArithDialect"
-  ];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
+                           "::mlir::arts::ArtsDialect",
+                           "::mlir::memref::MemRefDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::linalg::LinalgDialect"];
   let constructor = "mlir::arts::sde::createConvertSdeToArtsPass()";
 }
 
