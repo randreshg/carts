@@ -112,16 +112,19 @@ convertReductionStrategy(MLIRContext *ctx,
 // Linalg-derived contract classification helpers
 //===----------------------------------------------------------------------===//
 
-/// Map a linalg classification string to an ArtsDepPattern.
+/// Map an SDE loop classification to an ArtsDepPattern.
 static std::optional<ArtsDepPattern>
-classifyFromString(StringRef classification) {
-  namespace LC = AttrNames::Operation::LinalgClassification;
-  if (classification == LC::Stencil)
+classifyFromSde(sde::SdeLinalgClassification classification) {
+  switch (classification) {
+  case sde::SdeLinalgClassification::stencil:
     return ArtsDepPattern::stencil_tiling_nd;
-  if (classification == LC::Matmul)
+  case sde::SdeLinalgClassification::matmul:
     return ArtsDepPattern::matmul;
-  if (classification == LC::Elementwise)
+  case sde::SdeLinalgClassification::elementwise:
     return ArtsDepPattern::uniform;
+  case sde::SdeLinalgClassification::reduction:
+    break;
+  }
   return std::nullopt;
 }
 
@@ -481,11 +484,6 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
         fromExplicitContract = true;
       } else {
         candidatePattern = classifyFromLinalg(generic);
-        if (!candidatePattern) {
-          if (auto classAttr = generic->getAttrOfType<StringAttr>(
-                  AttrNames::Operation::LinalgClassification::AttrName))
-            candidatePattern = classifyFromString(classAttr.getValue());
-        }
       }
 
       if (!candidatePattern)
@@ -562,12 +560,11 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
                                   parentEdt.getOperation());
     }
 
-    // Fallback to RaiseToLinalg's classification-only attribute when no
+    // Fallback to RaiseToLinalg's SDE-owned loop classification when no
     // linalg.generic survived into the cloned body.
     if (!selectedPattern) {
-      if (auto classAttr = op->getAttrOfType<StringAttr>(
-              AttrNames::Operation::LinalgClassification::AttrName))
-        selectedPattern = classifyFromString(classAttr.getValue());
+      if (auto classAttr = op.getLinalgClassificationAttr())
+        selectedPattern = classifyFromSde(classAttr.getValue());
     }
 
     if (selectedPattern) {
@@ -590,9 +587,6 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
     for (linalg::GenericOp generic : llvm::reverse(linalgGenerics)) {
       rewriter.eraseOp(generic);
     }
-
-    // Remove the transient linalg classification marker after stamping.
-    artsFor->removeAttr(AttrNames::Operation::LinalgClassification::AttrName);
 
     ++numSuIterateConverted;
     rewriter.eraseOp(op);

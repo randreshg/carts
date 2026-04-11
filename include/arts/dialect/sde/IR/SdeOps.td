@@ -72,6 +72,17 @@ def SdeReductionStrategy
 def SdeReductionStrategyAttr
     : ArtsSde_I32EnumAttr<"reduction_strategy", SdeReductionStrategy>;
 
+def SdeLinalgClassification
+    : ArtsSde_I32Enum<"SdeLinalgClassification",
+                      "Structured loop classification", [
+      I32EnumAttrCase<"elementwise", 0, "elementwise">,
+      I32EnumAttrCase<"stencil", 1, "stencil">,
+      I32EnumAttrCase<"matmul", 2, "matmul">,
+      I32EnumAttrCase<"reduction", 3, "reduction">
+    ]>;
+def SdeLinalgClassificationAttr
+    : ArtsSde_I32EnumAttr<"linalg_classification", SdeLinalgClassification>;
+
 def SdeScheduleKind
     : ArtsSde_I32Enum<"SdeScheduleKind", "Scheduling policy", [
       I32EnumAttrCase<"static_", 0, "static">,
@@ -225,7 +236,8 @@ def SdeSuIterateOp
     UnitAttr:$nowait,
     Variadic<AnyType>:$reductionAccumulators,
     OptionalAttr<ArrayAttr>:$reductionKinds,
-    OptionalAttr<SdeReductionStrategyAttr>:$reductionStrategy
+    OptionalAttr<SdeReductionStrategyAttr>:$reductionStrategy,
+    OptionalAttr<SdeLinalgClassificationAttr>:$linalgClassification
   );
 
   let regions = (region SizedRegion<1>:$body);
@@ -236,6 +248,7 @@ def SdeSuIterateOp
     (`nowait` $nowait^)?
     (`reduction` `[` $reductionKinds^ `]` `(` $reductionAccumulators `:` type($reductionAccumulators) `)`)?
     (`reduction_strategy` `(` $reductionStrategy^ `)` )?
+    (`classification` `(` $linalgClassification^ `)` )?
     $body attr-dict
   }];
 }

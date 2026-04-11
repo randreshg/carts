@@ -3,9 +3,9 @@
 ///
 /// Raises supported perfectly nested, affine `sde.su_iterate` bodies to
 /// transient `linalg.generic` carriers when the body is structurally
-/// compatible. The pass also stamps `arts.linalg.classification` on the source
-/// loop so `ConvertSdeToArts` can recover contracts for loops that are not
-/// materialized as linalg carriers.
+/// compatible. The pass also stamps an SDE-owned loop classification on the
+/// source op so `ConvertSdeToArts` can recover contracts for loops that still
+/// stay on the classification-only fallback path.
 ///
 /// Recognized patterns:
 ///   - elementwise : all-parallel iterators, identity/permutation maps
@@ -20,8 +20,6 @@ namespace mlir::arts {
 #define GEN_PASS_DEF_RAISETOLINALG
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
-
-#include "arts/utils/OperationAttributes.h"
 
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/AffineExpr.h"
@@ -243,10 +241,10 @@ static bool hasConstantOffsets(AffineMap map) {
   return false;
 }
 
-static StringRef classifyPattern(ArrayRef<MemrefAccessEntry> reads,
-                                 ArrayRef<AffineMap> outputMaps,
-                                 ArrayRef<utils::IteratorType> iterTypes,
-                                 unsigned numDims) {
+static sde::SdeLinalgClassification
+classifyPattern(ArrayRef<MemrefAccessEntry> reads,
+                ArrayRef<AffineMap> outputMaps,
+                ArrayRef<utils::IteratorType> iterTypes, unsigned numDims) {
   unsigned numParallel = 0;
   unsigned numReduction = 0;
   for (utils::IteratorType t : iterTypes) {
@@ -259,16 +257,16 @@ static StringRef classifyPattern(ArrayRef<MemrefAccessEntry> reads,
   if (numReduction == 0) {
     for (auto &entry : reads) {
       if (hasConstantOffsets(entry.indexingMap))
-        return AttrNames::Operation::LinalgClassification::Stencil;
+        return sde::SdeLinalgClassification::stencil;
     }
-    return AttrNames::Operation::LinalgClassification::Elementwise;
+    return sde::SdeLinalgClassification::elementwise;
   }
 
   if (numParallel == 2 && numReduction == 1 && numDims == 3 &&
       reads.size() >= 2 && !outputMaps.empty())
-    return AttrNames::Operation::LinalgClassification::Matmul;
+    return sde::SdeLinalgClassification::matmul;
 
-  return AttrNames::Operation::LinalgClassification::Reduction;
+  return sde::SdeLinalgClassification::reduction;
 }
 
 //===----------------------------------------------------------------------===//
@@ -490,25 +488,23 @@ struct RaiseToLinalgPass
       SmallVector<utils::IteratorType> iterTypes;
       computeIteratorTypes(nest.ivs.size(), outputMaps, iterTypes);
 
-      StringRef pattern =
+      sde::SdeLinalgClassification pattern =
           classifyPattern(reads, outputMaps, iterTypes, nest.ivs.size());
 
-      iterOp->setAttr(AttrNames::Operation::LinalgClassification::AttrName,
-                      StringAttr::get(ctx, pattern));
+      iterOp.setLinalgClassificationAttr(
+          sde::SdeLinalgClassificationAttr::get(ctx, pattern));
       ++classified;
       bool supportsLinalgCarrier =
-          pattern != AttrNames::Operation::LinalgClassification::Stencil &&
-          pattern != AttrNames::Operation::LinalgClassification::Reduction;
+          pattern != sde::SdeLinalgClassification::stencil &&
+          pattern != sde::SdeLinalgClassification::reduction;
       if (supportsLinalgCarrier &&
           raiseToLinalg(iterOp, nest, reads, writes, iterTypes))
         ++raised;
 
-      ARTS_DEBUG("classified sde.su_iterate as '" << pattern << "' with "
-                                                  << nest.ivs.size()
-                                                  << " dims (" << reads.size()
-                                                  << " ins, "
-                                                  << outputMaps.size()
-                                                  << " outs)");
+      ARTS_DEBUG("classified sde.su_iterate as '"
+                 << stringifySdeLinalgClassification(pattern) << "' with "
+                 << nest.ivs.size() << " dims (" << reads.size() << " ins, "
+                 << outputMaps.size() << " outs)");
     });
 
     ARTS_INFO("RaiseToLinalg: analyzed " << analyzed << " loops, classified "

@@ -1,19 +1,21 @@
 // RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=OPENMP
 // RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline create-dbs | %FileCheck %s --check-prefix=DB
 
-// Verify that a raiseable stencil loop is classified at the SDE layer during
-// RaiseToLinalg. The downstream DB check still pins the later ARTS contract.
+// Verify the before/after for the stencil fallback path in RaiseToLinalg:
+// before conversion, the source `arts_sde.su_iterate` carries the loop body;
+// after RaiseToLinalg, the same loop is still fallback-only, but now carries
+// an SDE-owned classification on the SDE op itself. The downstream DB check
+// still pins the later ARTS contract.
 
 // OPENMP-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // OPENMP: func.func @main
 // OPENMP: arts_sde.cu_region <parallel> scope(<local>) {
-// OPENMP: arts_sde.su_iterate(%c1) to(%c63) step(%c1) {
+// OPENMP: arts_sde.su_iterate(%c1) to(%c63) step(%c1) classification(<stencil>) {
 // OPENMP: ^bb0(%[[I:.*]]: index):
 // OPENMP: scf.for %[[J:.*]] = %c1 to %c63 step %c1
 // OPENMP: memref.load %arg0[%{{.*}}, %[[J]]] : memref<64x64xf64>
 // OPENMP: memref.load %arg0[%[[I]], %{{.*}}] : memref<64x64xf64>
 // OPENMP: memref.store %{{.*}}, %arg1[%[[I]], %[[J]]] : memref<64x64xf64>
-// OPENMP: } {arts.linalg.classification = "stencil"}
 // OPENMP-NOT: linalg.generic
 // OPENMP-NOT: arts.for
 // OPENMP: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //

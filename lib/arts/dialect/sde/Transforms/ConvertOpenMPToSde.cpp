@@ -259,7 +259,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
         rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{step},
         schedAttr, chunkSize, nowaitAttr(ctx, nw), ValueRange{redAccs},
         reductionKinds.empty() ? nullptr : rewriter.getArrayAttr(reductionKinds),
-        /*reductionStrategy=*/nullptr);
+        /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
 
     copyArtsMetadataAttrs(op, suIter);
 
@@ -387,7 +387,7 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
         /*nowait=*/nullptr,
         /*reductionAccumulators=*/ValueRange{},
         /*reductionKinds=*/nullptr,
-        /*reductionStrategy=*/nullptr);
+        /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
 
     copyArtsMetadataAttrs(op, suIter);
 
@@ -442,7 +442,7 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
         /*nowait=*/nullptr,
         /*reductionAccumulators=*/ValueRange{},
         /*reductionKinds=*/nullptr,
-        /*reductionStrategy=*/nullptr);
+        /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
 
     copyArtsMetadataAttrs(op, suIter);
 
