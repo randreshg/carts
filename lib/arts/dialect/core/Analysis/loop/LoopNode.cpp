@@ -44,10 +44,94 @@ static Value getWhileInductionVar(scf::WhileOp whileOp) {
   return before.getArgument(0);
 }
 
+static Value getValueFromFoldResult(OpFoldResult ofr) {
+  if (auto value = llvm::dyn_cast<Value>(ofr))
+    return value;
+  return Value();
+}
+
+static std::optional<int64_t> getConstantIndexFromFoldResult(OpFoldResult ofr) {
+  if (auto value = llvm::dyn_cast<Value>(ofr))
+    return ValueAnalysis::tryFoldConstantIndex(value);
+  if (auto attr = llvm::dyn_cast<Attribute>(ofr)) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+      return intAttr.getInt();
+  }
+  return std::nullopt;
+}
+
+static Value getPrimaryLoopInductionVar(LoopLikeOpInterface loopLike) {
+  if (auto ivs = loopLike.getLoopInductionVars(); ivs && !ivs->empty())
+    return ivs->front();
+  return Value();
+}
+
+static Value getPrimaryLoopLowerBound(LoopLikeOpInterface loopLike) {
+  if (auto bounds = loopLike.getLoopLowerBounds(); bounds && !bounds->empty())
+    return getValueFromFoldResult(bounds->front());
+  return Value();
+}
+
+static Value getPrimaryLoopUpperBound(LoopLikeOpInterface loopLike) {
+  if (auto bounds = loopLike.getLoopUpperBounds(); bounds && !bounds->empty())
+    return getValueFromFoldResult(bounds->front());
+  return Value();
+}
+
+static Value getPrimaryLoopStep(LoopLikeOpInterface loopLike) {
+  if (auto steps = loopLike.getLoopSteps(); steps && !steps->empty())
+    return getValueFromFoldResult(steps->front());
+  return Value();
+}
+
+static std::optional<int64_t>
+getPrimaryLoopBoundConstant(LoopLikeOpInterface loopLike, bool upperBound) {
+  auto bounds = upperBound ? loopLike.getLoopUpperBounds()
+                           : loopLike.getLoopLowerBounds();
+  if (!bounds || bounds->empty())
+    return std::nullopt;
+  return getConstantIndexFromFoldResult(bounds->front());
+}
+
+static std::optional<int64_t>
+getPrimaryLoopStepConstant(LoopLikeOpInterface loopLike) {
+  auto steps = loopLike.getLoopSteps();
+  if (!steps || steps->empty())
+    return std::nullopt;
+  return getConstantIndexFromFoldResult(steps->front());
+}
+
+static Region *getPrimaryLoopRegion(Operation *loopOp) {
+  if (!loopOp)
+    return nullptr;
+  if (auto scfFor = dyn_cast<scf::ForOp>(loopOp))
+    return &scfFor.getRegion();
+  if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp))
+    return &affineFor.getRegion();
+  if (auto artsFor = dyn_cast<arts::ForOp>(loopOp))
+    return &artsFor.getRegion();
+  if (auto loopLike = dyn_cast<LoopLikeOpInterface>(loopOp)) {
+    SmallVector<Region *> regions = loopLike.getLoopRegions();
+    if (regions.size() == 1)
+      return regions.front();
+  }
+  return nullptr;
+}
+
+static bool haveEquivalentFoldResults(OpFoldResult lhs, OpFoldResult rhs) {
+  auto lhsValue = llvm::dyn_cast<Value>(lhs);
+  auto rhsValue = llvm::dyn_cast<Value>(rhs);
+  if (lhsValue && rhsValue)
+    return ValueAnalysis::sameValue(lhsValue, rhsValue);
+  auto lhsAttr = llvm::dyn_cast<Attribute>(lhs);
+  auto rhsAttr = llvm::dyn_cast<Attribute>(rhs);
+  return lhsAttr && rhsAttr && lhsAttr == rhsAttr;
+}
+
 static bool isTransparentNestedWorkOp(Operation *op) {
   if (!op || op->hasTrait<OpTrait::IsTerminator>())
     return true;
-  if (isa<scf::ForOp, affine::AffineForOp>(op))
+  if (isa<LoopLikeOpInterface, affine::AffineForOp>(op))
     return true;
   return op->getNumRegions() == 0 && mlir::isPure(op);
 }
@@ -56,14 +140,8 @@ static Operation *getSingleDirectNestedLoop(Operation *loopOp) {
   if (!loopOp)
     return nullptr;
 
-  Region *bodyRegion = nullptr;
-  if (auto scfFor = dyn_cast<scf::ForOp>(loopOp))
-    bodyRegion = &scfFor.getRegion();
-  else if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp))
-    bodyRegion = &affineFor.getRegion();
-  else if (auto artsFor = dyn_cast<arts::ForOp>(loopOp))
-    bodyRegion = &artsFor.getRegion();
-  else
+  Region *bodyRegion = getPrimaryLoopRegion(loopOp);
+  if (!bodyRegion)
     return nullptr;
 
   if (!bodyRegion || bodyRegion->empty())
@@ -71,7 +149,7 @@ static Operation *getSingleDirectNestedLoop(Operation *loopOp) {
 
   Operation *nestedLoop = nullptr;
   for (Operation &op : bodyRegion->front().without_terminator()) {
-    if (isa<scf::ForOp, affine::AffineForOp>(op)) {
+    if (isa<LoopLikeOpInterface, affine::AffineForOp>(op)) {
       if (nestedLoop)
         return nullptr;
       nestedLoop = &op;
@@ -117,7 +195,11 @@ Value LoopNode::getInductionVar() const {
         return body.getNumArguments() == 0 ? Value() : body.getArgument(0);
       })
       .Case<scf::WhileOp>([](auto op) { return getWhileInductionVar(op); })
-      .Default([](Operation *) { return Value(); });
+      .Default([](Operation *op) {
+        if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op))
+          return getPrimaryLoopInductionVar(loopLike);
+        return Value();
+      });
 }
 
 bool LoopNode::dependsOnInductionVar(Value v) {
@@ -158,7 +240,6 @@ bool LoopNode::dependsOnInductionVarNormalized(Value v) {
   return dependsOnInductionVar(ValueAnalysis::stripNumericCasts(v));
 }
 
-
 static bool dependsOnLoopInitImpl(Value value, Value base, unsigned depth) {
   if (!value || !base || depth > 8)
     return false;
@@ -179,6 +260,13 @@ static bool dependsOnLoopInitImpl(Value value, Value base, unsigned depth) {
       auto lbs = artsFor.getLowerBound();
       if (idx < lbs.size())
         return dependsOnLoopInitImpl(lbs[idx], base, depth + 1);
+    } else if (auto loopLike =
+                   dyn_cast_or_null<LoopLikeOpInterface>(parentOp)) {
+      unsigned idx = blockArg.getArgNumber();
+      if (auto lbs = loopLike.getLoopLowerBounds(); lbs && idx < lbs->size()) {
+        if (Value lb = getValueFromFoldResult((*lbs)[idx]))
+          return dependsOnLoopInitImpl(lb, base, depth + 1);
+      }
     } else if (auto parallelOp = dyn_cast_or_null<scf::ParallelOp>(parentOp)) {
       auto ivs = parallelOp.getInductionVars();
       for (auto it : llvm::enumerate(ivs)) {
@@ -361,7 +449,11 @@ std::optional<int64_t> LoopNode::getLowerBoundConstant() const {
         Value init = ValueAnalysis::stripNumericCasts(op.getInits()[argIndex]);
         return ValueAnalysis::getConstantValue(init);
       })
-      .Default([](Operation *) { return std::nullopt; });
+      .Default([](Operation *op) -> std::optional<int64_t> {
+        if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op))
+          return getPrimaryLoopBoundConstant(loopLike, /*upperBound=*/false);
+        return std::nullopt;
+      });
 }
 
 std::optional<int64_t> LoopNode::getUpperBoundConstant() const {
@@ -400,7 +492,11 @@ std::optional<int64_t> LoopNode::getUpperBoundConstant() const {
         }
         return minBound;
       })
-      .Default([](Operation *) { return std::nullopt; });
+      .Default([](Operation *op) -> std::optional<int64_t> {
+        if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op))
+          return getPrimaryLoopBoundConstant(loopLike, /*upperBound=*/true);
+        return std::nullopt;
+      });
 }
 
 std::optional<int64_t> LoopNode::getStepConstant() const {
@@ -420,7 +516,11 @@ std::optional<int64_t> LoopNode::getStepConstant() const {
         }
         return std::nullopt;
       })
-      .Default([](Operation *) { return std::nullopt; });
+      .Default([](Operation *op) -> std::optional<int64_t> {
+        if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op))
+          return getPrimaryLoopStepConstant(loopLike);
+        return std::nullopt;
+      });
 }
 
 std::optional<int64_t>
@@ -456,7 +556,11 @@ Value LoopNode::getLowerBound() const {
         auto lbs = op.getLowerBound();
         return lbs.empty() ? Value() : lbs[0];
       })
-      .Default([](Operation *) { return Value(); });
+      .Default([](Operation *op) {
+        if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op))
+          return getPrimaryLoopLowerBound(loopLike);
+        return Value();
+      });
 }
 
 Value LoopNode::getUpperBound() const {
@@ -466,7 +570,11 @@ Value LoopNode::getUpperBound() const {
         auto ubs = op.getUpperBound();
         return ubs.empty() ? Value() : ubs[0];
       })
-      .Default([](Operation *) { return Value(); });
+      .Default([](Operation *op) {
+        if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op))
+          return getPrimaryLoopUpperBound(loopLike);
+        return Value();
+      });
 }
 
 Value LoopNode::getStep() const {
@@ -476,15 +584,18 @@ Value LoopNode::getStep() const {
         auto steps = op.getStep();
         return steps.empty() ? Value() : steps[0];
       })
-      .Default([](Operation *) { return Value(); });
+      .Default([](Operation *op) {
+        if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op))
+          return getPrimaryLoopStep(loopLike);
+        return Value();
+      });
 }
 
 int LoopNode::getNestingDepth() const {
   int depth = 0;
   for (Operation *parent = loopOp->getParentOp(); parent;
        parent = parent->getParentOp()) {
-    if (isa<scf::ForOp, scf::WhileOp, scf::ParallelOp, affine::AffineForOp,
-            arts::ForOp>(parent))
+    if (isa<LoopLikeOpInterface, scf::WhileOp, affine::AffineForOp>(parent))
       ++depth;
   }
   return depth;
@@ -502,7 +613,7 @@ bool LoopNode::isInnermostLoop() const {
   loopOp->walk([&](Operation *op) {
     if (op == loopOp)
       return;
-    if (isa<scf::ForOp, scf::WhileOp, scf::ParallelOp, arts::ForOp>(op))
+    if (isa<LoopLikeOpInterface, scf::WhileOp>(op))
       hasNested = true;
   });
   return !hasNested;
@@ -576,5 +687,35 @@ bool LoopNode::haveCompatibleBounds(LoopNode *a, LoopNode *b) {
         }
         return true;
       })
-      .Default([](Operation *) { return false; });
+      .Default([&](Operation *genericA) {
+        auto loopA = dyn_cast<LoopLikeOpInterface>(genericA);
+        auto loopB = dyn_cast<LoopLikeOpInterface>(opB);
+        if (!loopA || !loopB)
+          return false;
+
+        auto lbA = loopA.getLoopLowerBounds();
+        auto lbB = loopB.getLoopLowerBounds();
+        auto ubA = loopA.getLoopUpperBounds();
+        auto ubB = loopB.getLoopUpperBounds();
+        auto stepA = loopA.getLoopSteps();
+        auto stepB = loopB.getLoopSteps();
+        if (!lbA || !lbB || !ubA || !ubB || !stepA || !stepB ||
+            lbA->size() != lbB->size() || ubA->size() != ubB->size() ||
+            stepA->size() != stepB->size())
+          return false;
+
+        for (auto [lhs, rhs] : llvm::zip(*lbA, *lbB)) {
+          if (!haveEquivalentFoldResults(lhs, rhs))
+            return false;
+        }
+        for (auto [lhs, rhs] : llvm::zip(*ubA, *ubB)) {
+          if (!haveEquivalentFoldResults(lhs, rhs))
+            return false;
+        }
+        for (auto [lhs, rhs] : llvm::zip(*stepA, *stepB)) {
+          if (!haveEquivalentFoldResults(lhs, rhs))
+            return false;
+        }
+        return true;
+      });
 }

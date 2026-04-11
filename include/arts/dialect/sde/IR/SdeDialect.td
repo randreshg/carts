@@ -27,6 +27,7 @@ def ArtsSdeDialect : Dialect {
     scalar types.
   }];
 
+  let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;
 }
 

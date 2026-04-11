@@ -8,10 +8,20 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
+include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/LoopLikeInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 include "arts/dialect/sde/IR/SdeDialect.td"
+include "arts/dialect/sde/IR/SdeTypes.td"
+
+def SdeDepType
+    : Type<CPred<"::llvm::isa<::mlir::arts::sde::DepType>($_self)">,
+           "SDE dependency token">;
+def SdeCompletionType
+    : Type<CPred<"::llvm::isa<::mlir::arts::sde::CompletionType>($_self)">,
+           "SDE completion token">;
 
 //===----------------------------------------------------------------------===//
 // Enum helpers
@@ -101,6 +111,15 @@ def SdeConcurrencyScope
 def SdeConcurrencyScopeAttr
     : ArtsSde_I32EnumAttr<"concurrency_scope", SdeConcurrencyScope>;
 
+def SdeDistributionKind
+    : ArtsSde_I32Enum<"SdeDistributionKind", "Distribution advisory hint", [
+      I32EnumAttrCase<"owner_compute", 0, "owner_compute">,
+      I32EnumAttrCase<"blocked", 1, "blocked">,
+      I32EnumAttrCase<"cyclic", 2, "cyclic">
+    ]>;
+def SdeDistributionKindAttr
+    : ArtsSde_I32EnumAttr<"distribution_kind", SdeDistributionKind>;
+
 //===----------------------------------------------------------------------===//
 // CU (Compute Unit) Ops
 //===----------------------------------------------------------------------===//
@@ -146,7 +165,7 @@ def SdeCuTaskOp
   }];
 
   let arguments = (ins
-    Variadic<AnyType>:$deps
+    Variadic<SdeDepType>:$deps
   );
 
   let regions = (region SizedRegion<1>:$body);
@@ -215,7 +234,10 @@ def SdeSuIterateOp
     : ArtsSde_Op<"su_iterate", [
       SingleBlock, NoTerminator,
       RecursiveMemoryEffects,
-      AttrSizedOperandSegments
+      AttrSizedOperandSegments,
+      DeclareOpInterfaceMethods<LoopLikeOpInterface,
+        ["getLoopRegions", "getLoopInductionVars", "getLoopLowerBounds",
+         "getLoopUpperBounds", "getLoopSteps"]>
     ]> {
   let summary = "Parallel iteration space";
   let description = [{
@@ -253,6 +275,26 @@ def SdeSuIterateOp
   }];
 }
 
+def SdeSuDistributeOp
+    : ArtsSde_Op<"su_distribute", [
+      SingleBlock, NoTerminator,
+      RecursiveMemoryEffects
+    ]> {
+  let summary = "Distribution advisory wrapper for SDE work";
+  let description = [{
+    Wraps a scheduling-unit region with a runtime-neutral distribution hint.
+    This is an SDE-level advisory carrier only; it does not encode ARTS worker,
+    route, or node identifiers.
+  }];
+
+  let arguments = (ins SdeDistributionKindAttr:$kind);
+  let regions = (region SizedRegion<1>:$body);
+
+  let assemblyFormat = [{
+    $kind $body attr-dict
+  }];
+}
+
 def SdeSuBarrierOp
     : ArtsSde_Op<"su_barrier", [MemoryEffects<[MemWrite]>]> {
   let summary = "Synchronization point";
@@ -261,7 +303,7 @@ def SdeSuBarrierOp
     When tokens are provided, waits only for those specific tasks.
   }];
 
-  let arguments = (ins Variadic<AnyType>:$tokens);
+  let arguments = (ins Variadic<SdeCompletionType>:$tokens);
 
   let assemblyFormat = [{
     (`(` $tokens^ `:` type($tokens) `)`)? attr-dict
@@ -288,11 +330,59 @@ def SdeMuDepOp
     Variadic<Index>:$sizes
   );
 
-  let results = (outs AnyType:$dep);
+  let results = (outs SdeDepType:$dep);
 
   let assemblyFormat = [{
     $mode $source (`[` $offsets^ `]`)? (`size` `[` $sizes^ `]`)?
     `:` type($source) `->` type($dep) attr-dict
+  }];
+}
+
+def SdeMuAccessOp
+    : ArtsSde_Op<"mu_access", [Pure, AttrSizedOperandSegments]> {
+  let summary = "Access-region annotation for memref fallback paths";
+  let description = [{
+    Explicitly records an access slice in the memref fallback path without
+    materializing a dependency token or introducing runtime-specific behavior.
+  }];
+
+  let arguments = (ins
+    SdeAccessModeAttr:$mode,
+    AnyMemRef:$source,
+    Variadic<Index>:$offsets,
+    Variadic<Index>:$sizes
+  );
+
+  let assemblyFormat = [{
+    $mode $source (`[` $offsets^ `]`)? (`size` `[` $sizes^ `]`)?
+    `:` type($source) attr-dict
+  }];
+}
+
+def SdeMuReductionDeclOp
+    : ArtsSde_Op<"mu_reduction_decl", [IsolatedFromAbove, Symbol]> {
+  let summary = "Module-level SDE reduction declaration";
+  let description = [{
+    Declares a named SDE reduction symbol with its element type, reduction
+    classification, optional identity attribute, and an optional combiner
+    region for custom reductions.
+  }];
+
+  let arguments = (ins
+    SymbolNameAttr:$sym_name,
+    TypeAttr:$type,
+    SdeReductionKindAttr:$reduction_kind,
+    OptionalAttr<AnyAttr>:$identity
+  );
+
+  let regions = (region AnyRegion:$combiner);
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $sym_name `:` $type `kind` `(` $reduction_kind `)`
+    (`identity` `(` $identity^ `)` )?
+    ($combiner^)?
+    attr-dict
   }];
 }
 

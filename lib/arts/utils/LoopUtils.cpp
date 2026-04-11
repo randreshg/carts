@@ -22,6 +22,16 @@
 namespace mlir {
 namespace arts {
 
+static std::optional<int64_t> getConstantIndexFromFoldResult(OpFoldResult ofr) {
+  if (auto value = llvm::dyn_cast<Value>(ofr))
+    return ValueAnalysis::tryFoldConstantIndex(value);
+  if (auto attr = llvm::dyn_cast<Attribute>(ofr)) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+      return intAttr.getInt();
+  }
+  return std::nullopt;
+}
+
 Value getLoopInductionVar(Operation *op) {
   if (!op)
     return Value();
@@ -37,6 +47,11 @@ Value getLoopInductionVar(Operation *op) {
 
   if (auto scfFor = dyn_cast<scf::ForOp>(op))
     return scfFor.getInductionVar();
+
+  if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op)) {
+    if (auto ivs = loopLike.getLoopInductionVars(); ivs && !ivs->empty())
+      return ivs->front();
+  }
 
   return Value();
 }
@@ -119,6 +134,24 @@ static std::optional<int64_t> getStaticTripCount(arts::ForOp loop) {
   return (span + *step - 1) / *step;
 }
 
+static std::optional<int64_t> getStaticTripCount(LoopLikeOpInterface loop) {
+  auto lowerBounds = loop.getLoopLowerBounds();
+  auto upperBounds = loop.getLoopUpperBounds();
+  auto steps = loop.getLoopSteps();
+  if (!lowerBounds || !upperBounds || !steps || lowerBounds->size() != 1 ||
+      upperBounds->size() != 1 || steps->size() != 1)
+    return std::nullopt;
+
+  auto lowerBound = getConstantIndexFromFoldResult(lowerBounds->front());
+  auto upperBound = getConstantIndexFromFoldResult(upperBounds->front());
+  auto step = getConstantIndexFromFoldResult(steps->front());
+  if (!lowerBound || !upperBound || !step || *step <= 0)
+    return std::nullopt;
+
+  int64_t span = std::max<int64_t>(0, *upperBound - *lowerBound);
+  return (span + *step - 1) / *step;
+}
+
 static std::optional<int64_t> getStaticTripCount(affine::AffineForOp loop) {
   if (!loop.hasConstantLowerBound() || !loop.hasConstantUpperBound())
     return std::nullopt;
@@ -195,7 +228,8 @@ void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds) {
 bool containsLoop(EdtOp edt) {
   bool found = false;
   edt.getBody().walk([&](Operation *op) {
-    if (isa<scf::ForOp, scf::ParallelOp, affine::AffineForOp>(op)) {
+    if (op != edt.getOperation() &&
+        isa<LoopLikeOpInterface, affine::AffineForOp>(op)) {
       found = true;
       return WalkResult::interrupt();
     }
@@ -215,6 +249,8 @@ std::optional<int64_t> getStaticTripCount(Operation *loopOp) {
     return getStaticTripCount(affineFor);
   if (auto wsloop = dyn_cast<omp::WsloopOp>(loopOp))
     return getStaticTripCount(wsloop);
+  if (auto loopLike = dyn_cast<LoopLikeOpInterface>(loopOp))
+    return getStaticTripCount(loopLike);
   return std::nullopt;
 }
 

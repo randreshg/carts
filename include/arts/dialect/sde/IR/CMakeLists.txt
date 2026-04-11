@@ -5,4 +5,8 @@ mlir_tablegen(SdeOpsAttributes.h.inc -gen-attrdef-decls
               -attrdefs-dialect=arts_sde)
 mlir_tablegen(SdeOpsAttributes.cpp.inc -gen-attrdef-defs
               -attrdefs-dialect=arts_sde)
+mlir_tablegen(SdeOpsTypes.h.inc -gen-typedef-decls
+              -typedefs-dialect=arts_sde)
+mlir_tablegen(SdeOpsTypes.cpp.inc -gen-typedef-defs
+              -typedefs-dialect=arts_sde)
 add_mlir_dialect(SdeOps arts_sde)

@@ -12,11 +12,15 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #include "arts/dialect/sde/IR/SdeOpsDialect.h.inc"
 
 namespace mlir::arts::sde {} // namespace mlir::arts::sde
+
+#define GET_TYPEDEF_CLASSES
+#include "arts/dialect/sde/IR/SdeOpsTypes.h.inc"
 
 #include "arts/dialect/sde/IR/SdeOpsEnums.h.inc"
 

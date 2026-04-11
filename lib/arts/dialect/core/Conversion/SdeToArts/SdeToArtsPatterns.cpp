@@ -458,6 +458,30 @@ struct CuTaskToArtsPattern : public OpRewritePattern<sde::SdeCuTaskOp> {
   }
 };
 
+/// arts_sde.su_distribute -> inline wrapped body
+struct SuDistributeToArtsPattern
+    : public OpRewritePattern<sde::SdeSuDistributeOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(sde::SdeSuDistributeOp op,
+                                PatternRewriter &rewriter) const override {
+    Region &body = op.getBody();
+    if (body.empty())
+      return failure();
+
+    Block &block = body.front();
+    if (block.getNumArguments() != 0)
+      return failure();
+
+    if (auto yield = dyn_cast<sde::SdeYieldOp>(block.getTerminator()))
+      rewriter.eraseOp(yield);
+
+    rewriter.inlineBlockBefore(&block, op, ValueRange{});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// sde.su_iterate -> arts.for
 /// If the body contains transient linalg.generic carriers from RaiseToLinalg,
 /// derive and stamp the matching contract from them. Otherwise, fall back to
@@ -610,10 +634,12 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
         selectedPattern = classifyFromSde(classAttr.getValue());
         selectedRevision = getPatternRevision(op.getOperation()).value_or(1);
         if (selectedPattern && isStencilFamilyDepPattern(*selectedPattern))
-          selectedStencilContract = getStampedStencilContract(op.getOperation());
+          selectedStencilContract =
+              getStampedStencilContract(op.getOperation());
         copySemanticContractAttrs(op.getOperation(), artsFor.getOperation());
         if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
-          copySemanticContractAttrs(op.getOperation(), parentEdt.getOperation());
+          copySemanticContractAttrs(op.getOperation(),
+                                    parentEdt.getOperation());
       }
     }
 
@@ -686,6 +712,17 @@ struct SdeYieldToArtsPattern : public OpRewritePattern<sde::SdeYieldOp> {
   }
 };
 
+/// arts_sde.mu_access -> annotation only
+struct MuAccessToArtsPattern : public OpRewritePattern<sde::SdeMuAccessOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(sde::SdeMuAccessOp op,
+                                PatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// sde.mu_dep (standalone) -> arts.omp_dep
 /// These are mu_deps not consumed by a cu_task — recreate as OmpDepOp
 /// for downstream passes (CreateDbs, etc.) to consume.
@@ -708,6 +745,18 @@ struct MuDepToArtsPattern : public OpRewritePattern<sde::SdeMuDepOp> {
     auto ompDep = OmpDepOp::create(rewriter, op.getLoc(), mode, op.getSource(),
                                    offsets, sizes);
     rewriter.replaceOp(op, ompDep.getResult());
+    return success();
+  }
+};
+
+/// arts_sde.mu_reduction_decl -> semantic declaration only
+struct MuReductionDeclToArtsPattern
+    : public OpRewritePattern<sde::SdeMuReductionDeclOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(sde::SdeMuReductionDeclOp op,
+                                PatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -747,12 +796,15 @@ struct ConvertSdeToArtsPass
     // Process cu_task before mu_dep since cu_task consumes mu_dep results
     patterns.add<CuTaskToArtsPattern>(context);
     patterns.add<CuRegionToArtsPattern>(context);
+    patterns.add<SuDistributeToArtsPattern>(context);
     patterns.add<SuIterateToArtsPattern>(context);
     patterns.add<SuBarrierToArtsPattern>(context);
     patterns.add<CuAtomicToArtsPattern>(context);
     patterns.add<CuReduceToArtsPattern>(context);
     patterns.add<SdeYieldToArtsPattern>(context);
+    patterns.add<MuAccessToArtsPattern>(context);
     patterns.add<MuDepToArtsPattern>(context);
+    patterns.add<MuReductionDeclToArtsPattern>(context);
     GreedyRewriteConfig config;
     (void)applyPatternsGreedily(module, std::move(patterns), config);
 
