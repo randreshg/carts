@@ -550,21 +550,11 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       }
     }
 
-    // Lower cloned linalg.generic ops back to loops so all downstream passes
-    // continue to see the loop/memref IR they already match on.
+    // RaiseToLinalg currently leaves the original loop body in place and uses
+    // linalg.generic as a transient analysis carrier for contract stamping.
+    // Drop the cloned generics after consuming them so downstream passes keep
+    // seeing the original loop/memref IR shape.
     for (linalg::GenericOp generic : llvm::reverse(linalgGenerics)) {
-      if (!generic.hasPureBufferSemantics()) {
-        ARTS_DEBUG("failed to lower non-buffer linalg.generic in SDE->ARTS");
-        rewriter.eraseOp(artsFor);
-        return failure();
-      }
-
-      rewriter.setInsertionPoint(generic);
-      if (failed(linalg::linalgOpToLoops(rewriter, generic))) {
-        ARTS_DEBUG("failed to lower linalg.generic back to loops");
-        rewriter.eraseOp(artsFor);
-        return failure();
-      }
       rewriter.eraseOp(generic);
     }
 
