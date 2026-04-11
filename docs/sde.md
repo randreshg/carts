@@ -646,9 +646,10 @@ decision automatic.
 ### Remaining Future SDE Passes
 
 1. **Broaden `SdeReductionStrategy`**: Extend the current annotation-only
-   implementation beyond the initial single-reduction `sde.su_iterate` subset,
-   especially multi-reduction loops and `sde.cu_reduce`, and eventually map
-   the recommendation into downstream lowering when there is a real consumer.
+   implementation beyond the current loop-uniform `sde.su_iterate` subset,
+   especially `sde.cu_reduce` and any future per-reduction strategy model, and
+   eventually map the recommendation into downstream lowering when there is a
+   real consumer.
 
 2. **Broaden `SdeScheduleRefinement`**: Extend the current implementation
    beyond constant-trip `auto` / `runtime` loops. Future work can fold in
@@ -694,7 +695,7 @@ This is the architectural novelty.
 | `lib/arts/dialect/sde/Transforms/SdeScopeSelection.cpp` | **NEW** — limited cost-model-backed scope selection on `sde.cu_region <parallel>` |
 | `lib/arts/dialect/sde/Transforms/SdeScheduleRefinement.cpp` | **NEW** — limited cost-model-backed schedule refinement on eligible `sde.su_iterate` ops |
 | `lib/arts/dialect/sde/Transforms/SdeChunkOptimization.cpp` | **NEW** — limited cost-model-backed chunk synthesis on `sde.su_iterate` |
-| `lib/arts/dialect/sde/Transforms/SdeReductionStrategy.cpp` | **NEW** — limited cost-model-backed reduction strategy annotation on eligible `sde.su_iterate` ops, including nested-loop `local_accumulate` |
+| `lib/arts/dialect/sde/Transforms/SdeReductionStrategy.cpp` | **NEW** — limited cost-model-backed loop-uniform reduction strategy annotation on eligible `sde.su_iterate` ops, including multi-reduction loops and nested-loop `local_accumulate` |
 | `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | Core rewrite: `SdeSuIterateOp`, stamp classification, create transient `linalg.generic` carriers for supported cases |
 | `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect`, declare `SdeScopeSelection`, `SdeChunkOptimization`, and `SdeReductionStrategy` |
 | `include/arts/dialect/sde/Transforms/Passes.h` | Add linalg include |
@@ -729,10 +730,10 @@ This is the architectural novelty.
    - After `SdeChunkOptimization`: eligible dynamic/guided loops have an
      SDE-level `chunkSize` on `arts_sde.su_iterate`; explicit source chunks
      remain unchanged
-   - After `SdeReductionStrategy`: eligible single-reduction
-     `arts_sde.su_iterate` ops have an SDE-owned
-     `reduction_strategy(<atomic|tree>)` annotation chosen from the active
-     cost model
+   - After `SdeReductionStrategy`: eligible reduction-bearing
+     `arts_sde.su_iterate` ops have an SDE-owned loop-uniform
+     `reduction_strategy(<atomic|tree|local_accumulate>)` annotation chosen
+     from the active cost model
    - After RaiseToLinalg: supported bodies have transient `linalg.generic`
      alongside the original loop/memref body
    - After SDE→ARTS: `arts.for` bodies still contain the loop/memref IR shape,
@@ -752,7 +753,11 @@ This is the architectural novelty.
     `openmp_to_arts_selects_atomic_reduction_strategy.mlir`,
     `openmp_to_arts_selects_tree_reduction_strategy.mlir`, and
     `openmp_to_arts_avoids_atomic_for_mul_reduction_strategy.mlir`, and
-    `openmp_to_arts_selects_local_accumulate_reduction_strategy.mlir`
+    `openmp_to_arts_selects_local_accumulate_reduction_strategy.mlir`, plus
+    direct SDE multi-reduction coverage in
+    `sde_reduction_strategy_selects_atomic_for_multiple_add_reductions.mlir`,
+    `sde_reduction_strategy_selects_tree_for_mixed_reductions.mlir`, and
+    `sde_reduction_strategy_selects_local_accumulate_for_multiple_reductions.mlir`
     validate reduction strategy selection on SDE IR, not reconstructed ARTS IR
 12. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
    2mm → uniform contract (from linalg), stencil → stencil_tiling_nd (from KernelTransforms)

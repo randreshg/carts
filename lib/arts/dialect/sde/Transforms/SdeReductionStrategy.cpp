@@ -2,9 +2,9 @@
 /// File: SdeReductionStrategy.cpp
 ///
 /// Cost-model-backed SDE reduction strategy selection. The current
-/// implementation is deliberately narrow: it annotates single-reduction
-/// sde.su_iterate ops with an SDE-owned recommendation and leaves lowering
-/// behavior unchanged.
+/// implementation stays loop-uniform: it annotates eligible reduction-bearing
+/// sde.su_iterate ops with a single SDE-owned recommendation and leaves
+/// lowering behavior unchanged.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
@@ -38,20 +38,25 @@ static bool hasNestedSequentialLoop(sde::SdeSuIterateOp op) {
   return found;
 }
 
-static std::optional<sde::SdeReductionKind>
-getSingleReductionKind(sde::SdeSuIterateOp op) {
-  if (op.getReductionAccumulators().size() != 1)
+static std::optional<SmallVector<sde::SdeReductionKind>>
+getReductionKinds(sde::SdeSuIterateOp op) {
+  if (op.getReductionAccumulators().empty())
     return std::nullopt;
 
   auto kinds = op.getReductionKindsAttr();
-  if (!kinds || kinds.size() != 1)
+  if (!kinds || kinds.size() != op.getReductionAccumulators().size())
     return std::nullopt;
 
-  auto kindAttr = dyn_cast<sde::SdeReductionKindAttr>(kinds[0]);
-  if (!kindAttr || kindAttr.getValue() == sde::SdeReductionKind::custom)
-    return std::nullopt;
+  SmallVector<sde::SdeReductionKind> parsedKinds;
+  parsedKinds.reserve(kinds.size());
+  for (Attribute attr : kinds) {
+    auto kindAttr = dyn_cast<sde::SdeReductionKindAttr>(attr);
+    if (!kindAttr || kindAttr.getValue() == sde::SdeReductionKind::custom)
+      return std::nullopt;
+    parsedKinds.push_back(kindAttr.getValue());
+  }
 
-  return kindAttr.getValue();
+  return parsedKinds;
 }
 
 struct SdeReductionStrategyPass
@@ -71,15 +76,15 @@ struct SdeReductionStrategyPass
       if (op.getReductionStrategyAttr())
         return;
 
-      std::optional<sde::SdeReductionKind> reductionKind =
-          getSingleReductionKind(op);
-      if (!reductionKind)
+      std::optional<SmallVector<sde::SdeReductionKind>> reductionKinds =
+          getReductionKinds(op);
+      if (!reductionKinds)
         return;
 
       auto strategy = sde::SdeReductionStrategy::tree;
       if (hasNestedSequentialLoop(op)) {
         strategy = sde::SdeReductionStrategy::local_accumulate;
-      } else if (isAtomicCapable(*reductionKind)) {
+      } else if (llvm::all_of(*reductionKinds, isAtomicCapable)) {
         double atomicCost =
             static_cast<double>(workerCount) * costModel->getAtomicUpdateCost();
         double collectiveCost = costModel->getReductionCost(workerCount);
