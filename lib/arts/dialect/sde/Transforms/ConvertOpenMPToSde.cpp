@@ -34,11 +34,11 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
-#include "arts/utils/Utils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/Utils.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -87,6 +87,22 @@ convertScheduleKind(omp::ClauseScheduleKind kind) {
   default:
     return std::nullopt;
   }
+}
+
+static std::optional<sde::SdeAccessMode>
+convertDependMode(omp::ClauseTaskDepend mode) {
+  switch (mode) {
+  case omp::ClauseTaskDepend::taskdependin:
+    return sde::SdeAccessMode::read;
+  case omp::ClauseTaskDepend::taskdependout:
+    return sde::SdeAccessMode::write;
+  case omp::ClauseTaskDepend::taskdependinout:
+    return sde::SdeAccessMode::readwrite;
+  case omp::ClauseTaskDepend::taskdependmutexinoutset:
+  case omp::ClauseTaskDepend::taskdependinoutset:
+    return sde::SdeAccessMode::readwrite;
+  }
+  return std::nullopt;
 }
 
 /// Infer SDE reduction kind from OMP DeclareReductionOp combiner body.
@@ -257,7 +273,8 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     auto suIter = sde::SdeSuIterateOp::create(
         rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{step},
         schedAttr, chunkSize, nowaitAttr(ctx, nw), ValueRange{redAccs},
-        reductionKinds.empty() ? nullptr : rewriter.getArrayAttr(reductionKinds),
+        reductionKinds.empty() ? nullptr
+                               : rewriter.getArrayAttr(reductionKinds),
         /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
 
     copyArtsMetadataAttrs(op, suIter);
@@ -319,23 +336,14 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
         if (!ompDepOp)
           return failure();
 
-        // Map OMP dep mode to SDE access mode
-        sde::SdeAccessMode sdeMode;
-        switch (ompDepOp.getMode()) {
-        case ArtsMode::in:
-          sdeMode = sde::SdeAccessMode::read;
-          break;
-        case ArtsMode::out:
-          sdeMode = sde::SdeAccessMode::write;
-          break;
-        default:
-          sdeMode = sde::SdeAccessMode::readwrite;
-        }
+        auto sdeMode = convertDependMode(depClause.getValue());
+        if (!sdeMode)
+          return failure();
 
         // Skip read-only deps with no writer
         bool hasWriter =
             !writerSources || writerSources->contains(ompDepOp.getSource());
-        if (sdeMode == sde::SdeAccessMode::read && !hasWriter)
+        if (*sdeMode == sde::SdeAccessMode::read && !hasWriter)
           continue;
 
         // Create sde.mu_dep
@@ -346,7 +354,7 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
                                  ompDepOp.getSizes().end());
         auto muDep =
             sde::SdeMuDepOp::create(rewriter, loc, rewriter.getI64Type(),
-                                    sde::SdeAccessModeAttr::get(ctx, sdeMode),
+                                    sde::SdeAccessModeAttr::get(ctx, *sdeMode),
                                     ompDepOp.getSource(), offsets, sizes);
         deps.push_back(muDep.getDep());
       }
@@ -590,11 +598,21 @@ struct ConvertOpenMPToSdePass
     // Pre-scan writer sources for dependency filtering
     llvm::DenseSet<Value> writerDepSources;
     module.walk([&](omp::TaskOp task) {
-      for (Value depVar : task.getDependVars()) {
+      auto dependList = task.getDependKindsAttr();
+      if (!dependList)
+        return;
+      for (auto [attr, depVar] : llvm::zip(dependList, task.getDependVars())) {
+        auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(attr);
+        if (!depClause)
+          continue;
         auto dep = depVar.getDefiningOp<OmpDepOp>();
         if (!dep)
           continue;
-        if (dep.getMode() == ArtsMode::out || dep.getMode() == ArtsMode::inout)
+        if (depClause.getValue() == omp::ClauseTaskDepend::taskdependout ||
+            depClause.getValue() == omp::ClauseTaskDepend::taskdependinout ||
+            depClause.getValue() ==
+                omp::ClauseTaskDepend::taskdependmutexinoutset ||
+            depClause.getValue() == omp::ClauseTaskDepend::taskdependinoutset)
           writerDepSources.insert(dep.getSource());
       }
     });
