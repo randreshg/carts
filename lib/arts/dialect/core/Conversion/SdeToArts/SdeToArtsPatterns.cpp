@@ -20,7 +20,6 @@ namespace mlir::arts {
 #define GEN_PASS_DEF_CONVERTSDETOARTS
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
-#include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
@@ -90,7 +89,7 @@ static ArtsMode convertAccessMode(sde::SdeAccessMode mode) {
 }
 
 //===----------------------------------------------------------------------===//
-// Linalg classification (attribute-based)
+// Linalg-derived contract classification helpers
 //===----------------------------------------------------------------------===//
 
 /// Map a linalg classification string to an ArtsDepPattern.
@@ -382,8 +381,11 @@ struct CuTaskToArtsPattern : public OpRewritePattern<sde::SdeCuTaskOp> {
 };
 
 /// sde.su_iterate -> arts.for
-/// If the body contains a linalg.generic (from RaiseToLinalg), classifies the
-/// pattern, stamps a contract, and lowers the generic back to loops.
+/// If the body contains transient linalg.generic carriers from RaiseToLinalg,
+/// derive and stamp the matching contract from them. Otherwise, fall back to
+/// the classification stamped on the source sde.su_iterate. The transient
+/// carriers are erased after stamping so downstream passes keep the loop/memref
+/// IR shape.
 struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -550,10 +552,10 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       }
     }
 
-    // RaiseToLinalg currently leaves the original loop body in place and uses
-    // linalg.generic as a transient analysis carrier for contract stamping.
-    // Drop the cloned generics after consuming them so downstream passes keep
-    // seeing the original loop/memref IR shape.
+    // RaiseToLinalg leaves the original loop body in place and uses
+    // linalg.generic as a transient carrier for contract stamping. Drop the
+    // cloned generics after consuming them so downstream passes keep seeing
+    // the cloned loop/memref IR shape.
     for (linalg::GenericOp generic : llvm::reverse(linalgGenerics)) {
       rewriter.eraseOp(generic);
     }
@@ -658,18 +660,10 @@ namespace {
 struct ConvertSdeToArtsPass
     : public arts::impl::ConvertSdeToArtsBase<ConvertSdeToArtsPass> {
 
-  explicit ConvertSdeToArtsPass(mlir::arts::AnalysisManager *AM = nullptr)
-      : AM(AM) {}
-
   void runOnOperation() override {
     ModuleOp module = getOperation();
     ARTS_INFO_HEADER(ConvertSdeToArtsPass);
     MLIRContext *context = &getContext();
-    if (!AM) {
-      module.emitError() << "ConvertSdeToArtsPass requires AnalysisManager";
-      signalPassFailure();
-      return;
-    }
     RewritePatternSet patterns(context);
     // Process cu_task before mu_dep since cu_task consumes mu_dep results
     patterns.add<CuTaskToArtsPattern>(context);
@@ -685,9 +679,6 @@ struct ConvertSdeToArtsPass
 
     ARTS_INFO_FOOTER(ConvertSdeToArtsPass);
   }
-
-private:
-  mlir::arts::AnalysisManager *AM = nullptr;
 };
 } // namespace
 
@@ -698,9 +689,8 @@ private:
 namespace mlir {
 namespace arts {
 namespace sde {
-std::unique_ptr<Pass>
-createConvertSdeToArtsPass(mlir::arts::AnalysisManager *AM) {
-  return std::make_unique<ConvertSdeToArtsPass>(AM);
+std::unique_ptr<Pass> createConvertSdeToArtsPass() {
+  return std::make_unique<ConvertSdeToArtsPass>();
 }
 } // namespace sde
 } // namespace arts

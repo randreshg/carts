@@ -125,8 +125,9 @@ namespace sde {
 class SDECostModel;
 std::unique_ptr<Pass>
 createConvertOpenMPToSdePass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass> createConvertSdeToArtsPass(AnalysisManager *AM = nullptr);
-/// Compute linalg-style structural classification for loop nests.
+std::unique_ptr<Pass> createConvertSdeToArtsPass();
+/// Stamp structural classification and raise supported SDE loop nests to
+/// transient linalg carriers.
 std::unique_ptr<Pass> createRaiseToLinalgPass();
 } // namespace sde
 

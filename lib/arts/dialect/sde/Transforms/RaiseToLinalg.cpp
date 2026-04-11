@@ -1,11 +1,11 @@
 ///==========================================================================///
 /// File: RaiseToLinalg.cpp
 ///
-/// Raises perfectly nested, affine `sde.su_iterate` bodies to `linalg.generic`
-/// when the body is structurally compatible. The pass still stamps the legacy
-/// `arts.linalg.classification` attribute so the current SDE->ARTS conversion
-/// can preserve downstream pattern contracts while that path is migrated to
-/// classify from linalg structure directly.
+/// Raises supported perfectly nested, affine `sde.su_iterate` bodies to
+/// transient `linalg.generic` carriers when the body is structurally
+/// compatible. The pass also stamps `arts.linalg.classification` on the source
+/// loop so `ConvertSdeToArts` can recover contracts for loops that are not
+/// materialized as linalg carriers.
 ///
 /// Recognized patterns:
 ///   - elementwise : all-parallel iterators, identity/permutation maps
