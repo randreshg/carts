@@ -21,6 +21,7 @@ LINK_LIBS PUBLIC
   MLIRArithDialect
   MLIRAsyncDialect
   MLIRAffineUtils
+  MLIRBufferizationDialect
   MLIRFuncDialect
   MLIRFuncTransforms
   MLIRLLVMDialect
@@ -37,6 +38,7 @@ LINK_LIBS PUBLIC
   MLIRSideEffectInterfaces
   MLIRSCFToControlFlow
   MLIRTargetLLVMIRImport
+  MLIRTensorDialect
   MLIRTransformUtils
   MLIRControlFlowToLLVM
   MLIRMemRefToLLVM

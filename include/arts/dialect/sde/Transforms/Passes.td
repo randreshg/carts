@@ -44,6 +44,51 @@ def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createRaiseToLinalgPass()";
 }
 
+def RaiseToTensor : Pass<"raise-to-tensor", "mlir::ModuleOp"> {
+  let summary = "Rewrite transient SDE linalg carriers to tensor-backed form";
+  let description = [{
+    Rewrites transient memref-backed linalg.generic carriers produced by
+    RaiseToLinalg into tensor-backed carriers so later SDE passes can apply
+    tensor/linalg transformations without exposing tensor IR to ARTS-lowering
+    passes. The source loop body remains in place and the tensor carriers stay
+    transient: ConvertSdeToArts consumes them for contract recovery and erases
+    the carrier chain afterwards.
+
+    The current implementation keeps the rewrite deliberately narrow and valid:
+    it converts ranked memref carriers only. Elementwise loops use tensor.empty
+    destinations because every iteration fully overwrites the output element;
+    reduction-bearing carriers keep output initialization via
+    bufferization.to_tensor so the transient tensor semantics stay aligned with
+    the source loop body.
+  }];
+  let dependentDialects = ["::mlir::bufferization::BufferizationDialect",
+                           "::mlir::tensor::TensorDialect",
+                           "::mlir::memref::MemRefDialect",
+                           "::mlir::linalg::LinalgDialect"];
+  let constructor = "mlir::arts::sde::createRaiseToTensorPass()";
+}
+
+def SdeTensorOptimization : Pass<"sde-tensor-optimization", "mlir::ModuleOp"> {
+  let summary = "Apply cost-model-driven tensor optimizations in SDE";
+  let description = [{
+    Uses the SDE-owned cost model together with the transient tensor-backed
+    linalg carriers to apply real loop transformations before SDE->ARTS
+    lowering. The current implementation focuses on the first executable
+    subset: one-dimensional elementwise loops are strip-mined into cost-model-
+    sized tiles and the surrounding sde.su_iterate step is rewritten so the
+    transformed loop nest survives into later ARTS lowering without exposing
+    tensor IR past the SDE boundary.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::bufferization::BufferizationDialect",
+                           "::mlir::linalg::LinalgDialect",
+                           "::mlir::memref::MemRefDialect",
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::tensor::TensorDialect"];
+  let constructor = "mlir::arts::sde::createSdeTensorOptimizationPass()";
+}
+
 def ConvertOpenMPToSde : Pass<"convert-openmp-to-sde", "mlir::ModuleOp"> {
   let summary = "Convert OpenMP operations to SDE operations";
   let description = [{
@@ -114,9 +159,11 @@ def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
                            "::mlir::arts::ArtsDialect",
+                           "::mlir::bufferization::BufferizationDialect",
                            "::mlir::memref::MemRefDialect",
                            "::mlir::arith::ArithDialect",
-                           "::mlir::linalg::LinalgDialect"];
+                           "::mlir::linalg::LinalgDialect",
+                           "::mlir::tensor::TensorDialect"];
   let constructor = "mlir::arts::sde::createConvertSdeToArtsPass()";
 }
 
