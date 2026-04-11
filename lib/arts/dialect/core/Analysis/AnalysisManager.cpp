@@ -26,10 +26,15 @@ AnalysisManager::AnalysisManager(ModuleOp module, const std::string &configFile,
     : module(module), configFile(configFile),
       metadataFile(metadataFile.empty() ? ".carts-metadata.json"
                                         : metadataFile),
-      abstractMachine(configFile),
-      costModel(std::make_unique<ARTSCostModel>(abstractMachine)) {}
+      abstractMachine(configFile) {}
 
 AnalysisManager::~AnalysisManager() {}
+
+sde::SDECostModel &AnalysisManager::getCostModel() {
+  if (!costModel)
+    costModel = std::make_unique<ARTSCostModel>(abstractMachine);
+  return *costModel;
+}
 
 void AnalysisManager::invalidate() {
   /// Invalidate dependents before dependencies:

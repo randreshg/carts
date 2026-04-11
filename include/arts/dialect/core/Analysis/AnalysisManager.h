@@ -70,8 +70,7 @@ public:
   const AbstractMachine &getAbstractMachine() const { return abstractMachine; }
 
   /// Get the runtime-agnostic cost model (SDE passes use this interface).
-  sde::SDECostModel &getCostModel() { return *costModel; }
-  const sde::SDECostModel &getCostModel() const { return *costModel; }
+  sde::SDECostModel &getCostModel();
 
   const StringAnalysis &getStringAnalysis() const;
 
