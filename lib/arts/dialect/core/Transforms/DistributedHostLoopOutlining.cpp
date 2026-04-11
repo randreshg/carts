@@ -325,7 +325,8 @@ static void outlineLoop(scf::ForOp loop, const AbstractMachine *machine,
   auto outlinedFor =
       arts::ForOp::create(epochBuilder, loc, ValueRange{loop.getLowerBound()},
                           ValueRange{loop.getUpperBound()},
-                          ValueRange{loop.getStep()}, schedAttr, ValueRange{});
+                          ValueRange{loop.getStep()}, schedAttr, Value(),
+                          ValueRange{});
 
   copyArtsMetadataAttrs(loop.getOperation(), outlinedFor.getOperation());
   cloneScfLoopBodyIntoArtsFor(loop, outlinedFor, epochBuilder);

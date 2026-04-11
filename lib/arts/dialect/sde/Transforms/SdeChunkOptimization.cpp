@@ -1,0 +1,130 @@
+///==========================================================================///
+/// File: SdeChunkOptimization.cpp
+///
+/// Cost-model-backed SDE chunk sizing. Preserves explicit source chunk sizes
+/// and synthesizes chunks only for one-dimensional dynamic/guided loops with
+/// constant trip counts.
+///==========================================================================///
+
+#include "arts/dialect/sde/Transforms/Passes.h"
+namespace mlir::arts {
+#define GEN_PASS_DEF_SDECHUNKOPTIMIZATION
+#include "arts/dialect/sde/Transforms/Passes.h.inc"
+} // namespace mlir::arts
+
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "arts/utils/costs/SDECostModel.h"
+
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/PatternMatch.h"
+
+#include <algorithm>
+
+using namespace mlir;
+using namespace mlir::arts;
+
+namespace {
+
+static bool isChunkOptimizableSchedule(sde::SdeScheduleKindAttr schedule) {
+  if (!schedule)
+    return false;
+  switch (schedule.getValue()) {
+  case sde::SdeScheduleKind::dynamic:
+  case sde::SdeScheduleKind::guided:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static std::optional<int64_t> getConstantTripCount(sde::SdeSuIterateOp op) {
+  if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
+      op.getSteps().size() != 1)
+    return std::nullopt;
+
+  int64_t lb = 0, ub = 0, step = 0;
+  if (!ValueAnalysis::getConstantIndex(op.getLowerBounds().front(), lb) ||
+      !ValueAnalysis::getConstantIndex(op.getUpperBounds().front(), ub) ||
+      !ValueAnalysis::getConstantIndex(op.getSteps().front(), step) ||
+      step <= 0)
+    return std::nullopt;
+
+  if (ub <= lb)
+    return int64_t{0};
+
+  int64_t span = ub - lb;
+  return (span + step - 1) / step;
+}
+
+static int64_t ceilDiv(int64_t lhs, int64_t rhs) {
+  return (lhs + rhs - 1) / rhs;
+}
+
+struct ChunkRewrite {
+  sde::SdeSuIterateOp op;
+  int64_t chunkSize = 0;
+};
+
+struct SdeChunkOptimizationPass
+    : public arts::impl::SdeChunkOptimizationBase<SdeChunkOptimizationPass> {
+  explicit SdeChunkOptimizationPass(sde::SDECostModel *costModel = nullptr)
+      : costModel(costModel) {}
+
+  void runOnOperation() override {
+    if (!costModel)
+      return;
+
+    SmallVector<ChunkRewrite> rewrites;
+    getOperation().walk([&](sde::SdeSuIterateOp op) {
+      if (op.getChunkSize() || !isChunkOptimizableSchedule(op.getScheduleAttr()))
+        return;
+
+      std::optional<int64_t> tripCount = getConstantTripCount(op);
+      if (!tripCount || *tripCount <= 1)
+        return;
+
+      int64_t workerCount = std::max<int64_t>(1, costModel->getWorkerCount());
+      int64_t minIterations = std::max<int64_t>(
+          1, costModel->getMinIterationsPerWorker());
+      int64_t balancedChunk = ceilDiv(*tripCount, workerCount);
+      int64_t chunkSize =
+          std::clamp(std::max(minIterations, balancedChunk), int64_t{1},
+                     *tripCount);
+      rewrites.push_back({op, chunkSize});
+    });
+
+    for (ChunkRewrite &rewrite : rewrites) {
+      IRRewriter rewriter(rewrite.op.getContext());
+      rewriter.setInsertionPoint(rewrite.op);
+
+      Value chunkSize =
+          arith::ConstantIndexOp::create(rewriter, rewrite.op.getLoc(),
+                                         rewrite.chunkSize);
+      auto newOp = sde::SdeSuIterateOp::create(
+          rewriter, rewrite.op.getLoc(), rewrite.op.getLowerBounds(),
+          rewrite.op.getUpperBounds(), rewrite.op.getSteps(),
+          rewrite.op.getScheduleAttr(), chunkSize,
+          rewrite.op.getNowaitAttr(), rewrite.op.getReductionAccumulators(),
+          rewrite.op.getReductionKindsAttr());
+      newOp.getBody().takeBody(rewrite.op.getBody());
+      copyArtsMetadataAttrs(rewrite.op.getOperation(), newOp.getOperation());
+      rewriter.eraseOp(rewrite.op);
+    }
+  }
+
+private:
+  sde::SDECostModel *costModel = nullptr;
+};
+
+} // namespace
+
+namespace mlir::arts::sde {
+
+std::unique_ptr<Pass>
+createSdeChunkOptimizationPass(sde::SDECostModel *costModel) {
+  return std::make_unique<SdeChunkOptimizationPass>(costModel);
+}
+
+} // namespace mlir::arts::sde

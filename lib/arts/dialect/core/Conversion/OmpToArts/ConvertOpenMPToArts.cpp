@@ -140,7 +140,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
 
     auto artsFor = arts::ForOp::create(rewriter, loc, ValueRange{lb},
                                        ValueRange{ub}, ValueRange{st},
-                                       /*schedule*/ nullptr,
+                                       /*schedule*/ nullptr, /*chunkSize=*/Value(),
                                        /*reductionAccumulators*/ ValueRange{});
 
     carryRewriteMetadata(op, artsFor);
@@ -482,8 +482,10 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
 
     /// Create `arts.for` and move `omp.wsloop` body
     auto forOp = arts::ForOp::create(rewriter, loc, ValueRange{lowerBound},
-                                     ValueRange{upperBound}, ValueRange{step},
-                                     schedAttr, ValueRange{redAccs});
+                                     ValueRange{upperBound},
+                                     ValueRange{step}, schedAttr,
+                                     op.getScheduleChunk(),
+                                     ValueRange{redAccs});
 
     carryRewriteMetadata(op, forOp);
 
@@ -702,7 +704,7 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskloopOp> {
     /// Create arts.for and move taskloop body
     auto forOp = arts::ForOp::create(rewriter, loc, ValueRange{lowerBound},
                                      ValueRange{upperBound}, ValueRange{step},
-                                     /*schedule*/ nullptr,
+                                     /*schedule*/ nullptr, /*chunkSize=*/Value(),
                                      /*reductionAccumulators*/ ValueRange{});
 
     carryRewriteMetadata(op, forOp);

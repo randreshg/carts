@@ -59,6 +59,19 @@ def ConvertOpenMPToSde : Pass<"convert-openmp-to-sde", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createConvertOpenMPToSdePass()";
 }
 
+def SdeChunkOptimization : Pass<"sde-chunk-optimization", "mlir::ModuleOp"> {
+  let summary = "Fill missing SDE chunk sizes from the cost model";
+  let description = [{
+    Uses the SDE-owned cost model to synthesize chunk sizes for eligible
+    sde.su_iterate operations when the source program left them unspecified.
+    The current implementation handles one-dimensional dynamic/guided loops
+    with constant trip counts and preserves explicit source chunk sizes.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
+                           "::mlir::arith::ArithDialect"];
+  let constructor = "mlir::arts::sde::createSdeChunkOptimizationPass()";
+}
+
 def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
   let summary = "Convert SDE operations to ARTS operations";
   let description = [{

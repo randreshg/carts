@@ -398,7 +398,8 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
 
     auto artsFor =
         ForOp::create(rewriter, loc, op.getLowerBounds(), op.getUpperBounds(),
-                      op.getSteps(), schedAttr, op.getReductionAccumulators());
+                      op.getSteps(), schedAttr, op.getChunkSize(),
+                      op.getReductionAccumulators());
 
     copyArtsMetadataAttrs(op, artsFor);
 
