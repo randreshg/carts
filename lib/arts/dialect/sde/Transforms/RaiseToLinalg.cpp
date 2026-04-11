@@ -285,6 +285,44 @@ struct OutputOperand {
   Type elementType;
 };
 
+static bool isConstantZeroIndexingMap(AffineMap indexingMap) {
+  if (indexingMap.getNumResults() != 1)
+    return false;
+
+  auto constant = dyn_cast<AffineConstantExpr>(indexingMap.getResult(0));
+  return constant && constant.getValue() == 0;
+}
+
+static bool supportsReductionCarrierSubset(
+    sde::SdeSuIterateOp iterOp, const LoopNestInfo &nest,
+    ArrayRef<MemrefAccessEntry> reads, ArrayRef<MemrefAccessEntry> writes) {
+  if (iterOp.getReductionAccumulators().size() != 1 || nest.ivs.size() != 1)
+    return false;
+  if (writes.size() != 1)
+    return false;
+
+  Value reductionAccumulator = iterOp.getReductionAccumulators().front();
+  auto reductionType = dyn_cast<MemRefType>(reductionAccumulator.getType());
+  if (!reductionType || reductionType.getRank() != 1)
+    return false;
+
+  const MemrefAccessEntry &write = writes.front();
+  if (write.memref != reductionAccumulator ||
+      !isConstantZeroIndexingMap(write.indexingMap))
+    return false;
+
+  unsigned matchingReductionReads = 0;
+  for (const MemrefAccessEntry &read : reads) {
+    if (read.memref != reductionAccumulator)
+      continue;
+    if (!isConstantZeroIndexingMap(read.indexingMap))
+      return false;
+    ++matchingReductionReads;
+  }
+
+  return matchingReductionReads == 1;
+}
+
 static std::optional<unsigned> findOperandIndex(ArrayRef<InputOperand> inputs,
                                                 Value memref,
                                                 AffineMap indexingMap) {
@@ -341,8 +379,6 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp, const LoopNestInfo &nest,
   Block &rootBody = iterOp.getBody().front();
   auto oldYield = dyn_cast<sde::SdeYieldOp>(rootBody.getTerminator());
   if (!oldYield)
-    return false;
-  if (!iterOp.getReductionAccumulators().empty())
     return false;
 
   Location loc = iterOp.getLoc();
@@ -494,9 +530,13 @@ struct RaiseToLinalgPass
       iterOp.setLinalgClassificationAttr(
           sde::SdeLinalgClassificationAttr::get(ctx, pattern));
       ++classified;
+      bool supportsReductionCarrier =
+          pattern == sde::SdeLinalgClassification::reduction &&
+          supportsReductionCarrierSubset(iterOp, nest, reads, writes);
       bool supportsLinalgCarrier =
           pattern != sde::SdeLinalgClassification::stencil &&
-          pattern != sde::SdeLinalgClassification::reduction;
+          (pattern != sde::SdeLinalgClassification::reduction ||
+           supportsReductionCarrier);
       if (supportsLinalgCarrier &&
           raiseToLinalg(iterOp, nest, reads, writes, iterTypes))
         ++raised;
