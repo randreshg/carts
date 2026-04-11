@@ -26,6 +26,18 @@ static bool isAtomicCapable(sde::SdeReductionKind kind) {
   return kind == sde::SdeReductionKind::add;
 }
 
+static bool hasNestedSequentialLoop(sde::SdeSuIterateOp op) {
+  bool found = false;
+  op->walk([&](Operation *nested) {
+    if (isa<scf::ForOp, affine::AffineForOp>(nested)) {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
 static std::optional<sde::SdeReductionKind>
 getSingleReductionKind(sde::SdeSuIterateOp op) {
   if (op.getReductionAccumulators().size() != 1)
@@ -65,7 +77,9 @@ struct SdeReductionStrategyPass
         return;
 
       auto strategy = sde::SdeReductionStrategy::tree;
-      if (isAtomicCapable(*reductionKind)) {
+      if (hasNestedSequentialLoop(op)) {
+        strategy = sde::SdeReductionStrategy::local_accumulate;
+      } else if (isAtomicCapable(*reductionKind)) {
         double atomicCost =
             static_cast<double>(workerCount) * costModel->getAtomicUpdateCost();
         double collectiveCost = costModel->getReductionCost(workerCount);
