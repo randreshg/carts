@@ -29,6 +29,9 @@ top section**, not as the exact current branch status.
 - `SdeTensorOptimization` broadened beyond the original one-dimensional subset:
   - narrow matmul outer-dimension tiling is live
   - 2-D disjoint-write elementwise tiling is now covered
+- `SdeElementwiseFusion` now owns the first executable migration of
+  `elementwise_pipeline` formation on the OpenMP-to-SDE path, so ARTS no
+  longer has to invent that family for converted SDE workloads.
 - `ConvertSdeToArts` now preserves fallback SDE stencil contracts when the loop
   reaches the boundary without a surviving transient carrier.
 - The narrow SDE semantic-surface gaps are no longer completely open:
@@ -309,6 +312,7 @@ RaiseToLinalg
 RaiseToTensor
 SdeTensorOptimization
 SdeStructuredSummaries
+SdeElementwiseFusion
 SdeDistributionPlanning
 ConvertSdeToArts
 VerifySdeLowered

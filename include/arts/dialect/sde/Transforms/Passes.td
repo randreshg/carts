@@ -108,6 +108,22 @@ def SdeStructuredSummaries
   let constructor = "mlir::arts::sde::createSdeStructuredSummariesPass()";
 }
 
+def SdeElementwiseFusion
+    : Pass<"sde-elementwise-fusion", "mlir::ModuleOp"> {
+  let summary = "Fuse consecutive SDE elementwise scheduling units";
+  let description = [{
+    Fuses consecutive sibling `arts_sde.su_iterate` operations that already
+    carry an SDE-owned `classification(<elementwise>)`, share the same
+    iteration space and scheduling policy, and write disjoint destinations.
+    The fused scheduling unit is reclassified as
+    `classification(<elementwise_pipeline>)`, keeping elementwise pipeline
+    ownership on the SDE side of the boundary instead of inventing that family
+    later on ARTS IR.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
+  let constructor = "mlir::arts::sde::createSdeElementwiseFusionPass()";
+}
+
 def SdeDistributionPlanning
     : Pass<"sde-distribution-planning", "mlir::ModuleOp"> {
   let summary = "Derive SDE-owned distribution intent from structured SDE loops";

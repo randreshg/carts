@@ -102,6 +102,7 @@ chooseDistributionKind(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
 
   switch (classificationAttr.getValue()) {
   case sde::SdeStructuredClassification::elementwise:
+  case sde::SdeStructuredClassification::elementwise_pipeline:
     if (*scope == sde::SdeConcurrencyScope::local)
       return sde::SdeDistributionKind::blocked;
     return std::nullopt;
