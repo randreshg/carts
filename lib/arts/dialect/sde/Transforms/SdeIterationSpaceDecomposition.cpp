@@ -1,38 +1,38 @@
 ///==========================================================================///
-/// File: StencilBoundaryPeeling.cpp
+/// File: SdeIterationSpaceDecomposition.cpp
 ///
-/// Peel boundary iterations out of stencil inner loops before DB creation.
-/// This targets loops of the form:
+/// Decompose scheduling-unit iteration spaces into interior and boundary
+/// regions so downstream SDE passes see a branch-free interior loop that
+/// can be tiled, distributed, and classified without control-flow noise.
 ///
-///   for i:
-///     rowFirst = (i == 0)
-///     rowLast = (i == N-1)
-///     for j:
-///       if (rowFirst || rowLast || j == 0 || j == M-1)
-///         boundary(...)
+/// Current decomposition:
+///   Neighborhood boundary peeling — splits an inner loop that guards
+///   boundary rows/columns via if/else into separate boundary loops and a
+///   branch-free interior loop.
+///
+///   Before:
+///     for i:
+///       for j:
+///         if (boundary(i,j)) boundary(...)
+///         else               interior(...)
+///
+///   After:
+///     for i:
+///       if (boundary_row(i))
+///         for j: boundary(...)
 ///       else
-///         stencil(...)
-///
-/// and rewrites them into:
-///
-///   for i:
-///     if (rowFirst || rowLast)
-///       for j: boundary(...)
-///     else {
-///       for j = 0 .. 1: boundary(...)
-///       for j = 1 .. M-1: stencil(...)
-///       for j = M-1 .. M: boundary(...)
-///     }
-///
-/// This removes inner-loop control flow from the interior stencil region and
-/// exposes row-invariant computations to later hoisting passes.
+///         for j = 0..1:       boundary(...)
+///         for j = 1..M-1:     interior(...)   // branch-free
+///         for j = M-1..M:     boundary(...)
 ///==========================================================================///
 
+#include "arts/dialect/sde/Transforms/Passes.h"
+namespace mlir::arts {
+#define GEN_PASS_DEF_SDEITERATIONSPACEDECOMPOSITION
+#include "arts/dialect/sde/Transforms/Passes.h.inc"
+} // namespace mlir::arts
+
 #include "arts/utils/ValueAnalysis.h"
-#define GEN_PASS_DEF_STENCILBOUNDARYPEELING
-#include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
 #include "arts/utils/Debug.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -46,7 +46,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 
-ARTS_DEBUG_SETUP(stencil_boundary_peeling);
+ARTS_DEBUG_SETUP(sde_iteration_space_decomposition);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -120,7 +120,7 @@ static bool branchHasBoundaryBody(Block &block) {
 
 static bool matchBoundaryPattern(scf::ForOp loop, BoundaryPeelingMatch &match) {
   auto fail = [&](llvm::StringRef reason) {
-    ARTS_DEBUG("StencilBoundaryPeeling no-match: " << reason);
+    ARTS_DEBUG("SdeIterationSpaceDecomposition no-match:" << reason);
     return false;
   };
   match = {};
@@ -318,8 +318,9 @@ static bool peelBoundaryLoop(BoundaryPeelingMatch &match) {
   return true;
 }
 
-struct StencilBoundaryPeelingPass
-    : public impl::StencilBoundaryPeelingBase<StencilBoundaryPeelingPass> {
+struct SdeIterationSpaceDecompositionPass
+    : public arts::impl::SdeIterationSpaceDecompositionBase<
+          SdeIterationSpaceDecompositionPass> {
   using Base::Base;
 
   void runOnOperation() override {
@@ -336,23 +337,21 @@ struct StencilBoundaryPeelingPass
         continue;
       if (peelBoundaryLoop(match)) {
         rewrites++;
-        ARTS_INFO("Applied stencil boundary peeling");
+        ARTS_INFO("Applied iteration space decomposition");
       }
     }
 
-    ARTS_INFO("StencilBoundaryPeelingPass: applied " << rewrites
-                                                     << " rewrite(s)");
+    ARTS_INFO("SdeIterationSpaceDecomposition: applied " << rewrites
+                                                       << " rewrite(s)");
   }
 };
 
 } // namespace
 
-namespace mlir {
-namespace arts {
+namespace mlir::arts::sde {
 
-std::unique_ptr<Pass> createStencilBoundaryPeelingPass() {
-  return std::make_unique<StencilBoundaryPeelingPass>();
+std::unique_ptr<Pass> createSdeIterationSpaceDecompositionPass() {
+  return std::make_unique<SdeIterationSpaceDecompositionPass>();
 }
 
-} // namespace arts
-} // namespace mlir
+} // namespace mlir::arts::sde

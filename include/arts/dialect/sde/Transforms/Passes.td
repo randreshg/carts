@@ -214,6 +214,27 @@ def SdeScopeSelection : Pass<"sde-scope-selection", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createSdeScopeSelectionPass()";
 }
 
+def SdeIterationSpaceDecomposition
+    : Pass<"sde-iteration-space-decomposition", "mlir::ModuleOp"> {
+  let summary = "Decompose scheduling-unit iteration spaces into interior and boundary regions";
+  let description = [{
+    Splits scheduling-unit inner loops that mix interior and boundary
+    computations behind control flow into separate loops: a branch-free
+    interior loop suitable for tiling and distribution, plus dedicated
+    boundary loops that preserve the original edge behavior.
+
+    The current implementation handles the neighborhood boundary pattern
+    where row/column boundary checks guard stencil-like inner loops.
+    Future decompositions (e.g., triangular peeling, remainder splitting)
+    can be added as additional matchers within this pass.
+  }];
+  let dependentDialects = ["::mlir::func::FuncDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor = "mlir::arts::sde::createSdeIterationSpaceDecompositionPass()";
+}
+
 def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
   let summary = "Convert SDE operations to ARTS operations";
   let description = [{

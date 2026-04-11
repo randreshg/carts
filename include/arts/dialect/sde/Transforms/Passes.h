@@ -67,6 +67,7 @@ std::unique_ptr<Pass> createSdeStructuredSummariesPass();
 std::unique_ptr<Pass>
 createSdeDistributionPlanningPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createSdeElementwiseFusionPass();
+std::unique_ptr<Pass> createSdeIterationSpaceDecompositionPass();
 std::unique_ptr<Pass> createConvertSdeToArtsPass();
 std::unique_ptr<Pass> createVerifySdeLoweredPass();
 std::unique_ptr<Pass> createRaiseToLinalgPass();

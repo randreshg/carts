@@ -281,17 +281,18 @@ static const std::array<llvm::StringLiteral, 8>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 15> kOpenMPToArtsPasses = {
-    "ConvertOpenMPToSde",     "SdeScopeSelection",
-    "SdeScheduleRefinement",  "SdeChunkOptimization",
-    "SdeReductionStrategy",   "RaiseToLinalg",
-    "RaiseToTensor",          "SdeTensorOptimization",
-    "SdeStructuredSummaries", "SdeDistributionPlanning",
-    "ConvertSdeToArts",       "VerifySdeLowered",
-    "DeadCodeElimination",    "CSE",
+static const std::array<llvm::StringLiteral, 17> kOpenMPToArtsPasses = {
+    "ConvertOpenMPToSde",       "SdeScopeSelection",
+    "SdeScheduleRefinement",    "SdeChunkOptimization",
+    "SdeReductionStrategy",     "RaiseToLinalg",
+    "RaiseToTensor",            "SdeTensorOptimization",
+    "SdeStructuredSummaries",   "SdeElementwiseFusion",
+    "SdeDistributionPlanning",  "SdeIterationSpaceDecomposition",
+    "ConvertSdeToArts",         "VerifySdeLowered",
+    "DeadCodeElimination",      "CSE",
     "VerifyEdtCreated"};
-static const std::array<llvm::StringLiteral, 6> kPatternPipelinePasses = {
-    "DepTransforms",  "LoopNormalization", "StencilBoundaryPeeling",
+static const std::array<llvm::StringLiteral, 5> kPatternPipelinePasses = {
+    "DepTransforms",  "LoopNormalization",
     "LoopReordering", "KernelTransforms",  "CSE"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
     "EdtStructuralOpt(runAnalysis=false)",
@@ -691,6 +692,7 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createSdeStructuredSummariesPass());
   pm.addPass(arts::sde::createSdeElementwiseFusionPass());
   pm.addPass(arts::sde::createSdeDistributionPlanningPass(costModel));
+  pm.addPass(arts::sde::createSdeIterationSpaceDecompositionPass());
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
   pm.addPass(arts::sde::createVerifySdeLoweredPass());
   pm.addPass(arts::createDCEPass());
@@ -718,7 +720,6 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createDepTransformsPass(AM));
   pm.addPass(arts::createLoopNormalizationPass(AM));
-  pm.addPass(arts::createStencilBoundaryPeelingPass());
   pm.addPass(arts::createLoopReorderingPass(AM));
   pm.addPass(arts::createKernelTransformsPass(
       AM, KernelTransformsEnableMatmul, KernelTransformsEnableTiling,
