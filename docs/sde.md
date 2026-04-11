@@ -39,11 +39,12 @@ linalg.generic               =  COMPUTATION  (what the math is)
    contracts are seeded during SDE->ARTS conversion and refined later by
    `DepTransforms` / `KernelTransforms`.
 5. `SDECostModel` and `ARTSCostModel` exist and are wired through
-   `AnalysisManager`. `SdeScopeSelection`, `SdeChunkOptimization`, and
-   `SdeReductionStrategy` now use that interface in limited form to stamp
-   parallel region scope, synthesize missing chunk sizes, and annotate
-   eligible reduction-bearing `sde.su_iterate` ops with a strategy
-   recommendation.
+   `AnalysisManager`. `SdeScopeSelection`, `SdeScheduleRefinement`,
+   `SdeChunkOptimization`, and `SdeReductionStrategy` now use that interface
+   in limited form to stamp parallel region scope, refine abstract
+   `auto` / `runtime` schedule hints into concrete SDE schedules, synthesize
+   missing chunk sizes, and annotate eligible reduction-bearing
+   `sde.su_iterate` ops with a strategy recommendation.
 6. The stabilized carrier design keeps the original loop/memref IR in place;
    transient `linalg.generic`, `bufferization.to_tensor`, and `tensor.empty`
    are used only for contract recovery and are erased during SDE->ARTS
@@ -76,6 +77,7 @@ CURRENT IMPLEMENTATION:
  buildOpenMPToArtsPipeline:
     ConvertOpenMPToSde
       → SdeScopeSelection
+      → SdeScheduleRefinement
       → SdeChunkOptimization
       → SdeReductionStrategy
       → RaiseToLinalg (on sde.su_iterate)
@@ -279,6 +281,7 @@ from that input today, so this boundary is reduced but not fully eliminated.
 auto &costModel = AM->getCostModel();
 pm.addPass(sde::createConvertOpenMPToSdePass(&costModel));
 pm.addPass(sde::createSdeScopeSelectionPass(&costModel));
+pm.addPass(sde::createSdeScheduleRefinementPass(&costModel));
 pm.addPass(sde::createSdeChunkOptimizationPass(&costModel));
 pm.addPass(sde::createSdeReductionStrategyPass(&costModel));
 pm.addPass(sde::createRaiseToLinalgPass());
@@ -512,7 +515,7 @@ This part documents the currently implemented cost-model-backed SDE scope/chunk
 passes and the remaining architecture for broader SDE-level optimization. The
 `SDECostModel` interface (Part 1) already supports these use cases.
 
-### Implemented today: `SdeScopeSelection` + `SdeChunkOptimization` + `SdeReductionStrategy`
+### Implemented today: `SdeScopeSelection` + `SdeScheduleRefinement` + `SdeChunkOptimization` + `SdeReductionStrategy`
 
 `SdeScopeSelection` is the first cost-driven SDE region pass in the tree. It
 runs on `sde.cu_region <parallel>` before `RaiseToLinalg` / `ConvertSdeToArts`
@@ -523,6 +526,21 @@ and currently maps machine topology directly onto SDE scope:
 
 This keeps concurrency scope as an SDE-owned decision rather than hardcoding it
 inside OMP->SDE conversion.
+
+`SdeScheduleRefinement` now runs immediately after `SdeScopeSelection` and
+before chunk synthesis. Its current executable subset is intentionally narrow:
+
+- one-dimensional loops only
+- constant trip count only
+- `auto` / `runtime` schedules only
+- no chunk rewrite of its own
+
+The pass queries `getSchedulingOverhead(kind, trip)` across the concrete
+`static`, `dynamic`, and `guided` choices, then rewrites the eligible
+`sde.su_iterate` with the lowest-overhead concrete SDE schedule before later
+passes see it. Today that means abstract OpenMP schedule hints become explicit
+SDE schedule decisions directly in the SDE IR dump, instead of staying opaque
+until ARTS lowering.
 
 `SdeChunkOptimization` is the first cost-driven SDE optimization pass in the
 tree. It runs on `sde.su_iterate` before `RaiseToLinalg` / `ConvertSdeToArts`
@@ -584,9 +602,10 @@ decision automatic.
    decide whether it should also cover `sde.cu_reduce`, and eventually map the
    recommendation into downstream lowering when there is a real consumer.
 
-2. **SdeScheduleRefinement**: Queries `getSchedulingOverhead(kind, trip)`.
-   Overrides OMP schedule hint when cost model disagrees (e.g., static→dynamic
-   for irregular work).
+2. **Broaden `SdeScheduleRefinement`**: Extend the current implementation
+   beyond constant-trip `auto` / `runtime` loops. Future work can fold in
+   symbolic trip counts, richer work estimates, and safe overrides for
+   already-concrete schedules when the cost model has enough evidence.
 
 3. **Broaden `SdeChunkOptimization`**: Extend the current implementation
    beyond the current one-dimensional dynamic/guided subset. Future work can
@@ -625,12 +644,13 @@ This is the architectural novelty.
 | `include/arts/dialect/sde/IR/SdeOps.td` | Add SDE-owned `reduction_strategy` enum/attr on `sde.su_iterate` |
 | `lib/arts/dialect/sde/Transforms/ConvertOpenMPToSde.cpp` | Remove AnalysisManager import, take `SDECostModel*`; still bridges upstream `arts.omp_dep` |
 | `lib/arts/dialect/sde/Transforms/SdeScopeSelection.cpp` | **NEW** — limited cost-model-backed scope selection on `sde.cu_region <parallel>` |
+| `lib/arts/dialect/sde/Transforms/SdeScheduleRefinement.cpp` | **NEW** — limited cost-model-backed schedule refinement on eligible `sde.su_iterate` ops |
 | `lib/arts/dialect/sde/Transforms/SdeChunkOptimization.cpp` | **NEW** — limited cost-model-backed chunk synthesis on `sde.su_iterate` |
 | `lib/arts/dialect/sde/Transforms/SdeReductionStrategy.cpp` | **NEW** — limited cost-model-backed reduction strategy annotation on eligible `sde.su_iterate` ops |
 | `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | Core rewrite: `SdeSuIterateOp`, stamp classification, create transient `linalg.generic` carriers for supported cases |
 | `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect`, declare `SdeScopeSelection`, `SdeChunkOptimization`, and `SdeReductionStrategy` |
 | `include/arts/dialect/sde/Transforms/Passes.h` | Add linalg include |
-| `include/arts/passes/Passes.h` | Add SDE reduction strategy pass factory declaration |
+| `include/arts/passes/Passes.h` | Add SDE schedule/chunk/reduction/tensor pass factory declarations |
 | `lib/arts/passes/CMakeLists.txt` | Add `MLIRLinalgDialect`, `MLIRLinalgTransforms` |
 | `tools/compile/Compile.cpp` | Insert `SdeScopeSelection`, `SdeChunkOptimization`, and `SdeReductionStrategy`, move `RaiseToLinalg`, remove PatternDiscovery, and keep SDE->ARTS independent of `AnalysisManager` |
 | `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | `classifyFromLinalg` + stamp + erase transient generics after consumption, and persist SDE reduction strategy onto lowered ARTS ops |
@@ -655,6 +675,8 @@ This is the architectural novelty.
    - After `SdeScopeSelection`: `arts_sde.cu_region <parallel>` has
      `scope(<local>)` on single-node configs and `scope(<distributed>)` on
      multi-node configs
+   - After `SdeScheduleRefinement`: eligible `auto` / `runtime` loops have a
+     concrete SDE schedule chosen directly in the SDE IR
    - After `SdeChunkOptimization`: eligible dynamic/guided loops have an
      SDE-level `chunkSize` on `arts_sde.su_iterate`; explicit source chunks
      remain unchanged
@@ -671,10 +693,13 @@ This is the architectural novelty.
 9. SDE scope tests: `openmp_to_arts_selects_local_scope.mlir` and
    `openmp_to_arts_selects_distributed_scope.mlir` validate scope behavior on
    SDE IR, not reconstructed ARTS IR
-10. SDE chunk tests: `openmp_to_arts_synthesizes_schedule_chunk.mlir` and
+10. SDE schedule tests: `openmp_to_arts_refines_auto_schedule.mlir` and
+    `openmp_to_arts_refines_runtime_schedule.mlir` validate schedule
+    refinement on SDE IR, not reconstructed ARTS IR
+11. SDE chunk tests: `openmp_to_arts_synthesizes_schedule_chunk.mlir` and
    `openmp_to_arts_preserves_schedule_chunk.mlir` validate chunk behavior on
    SDE IR, not reconstructed ARTS IR
-11. SDE reduction tests:
+12. SDE reduction tests:
     `openmp_to_arts_selects_atomic_reduction_strategy.mlir`,
     `openmp_to_arts_selects_tree_reduction_strategy.mlir`, and
     `openmp_to_arts_avoids_atomic_for_mul_reduction_strategy.mlir` validate
@@ -770,7 +795,7 @@ Where SdeOpt(tensor) includes:
 
 ## NOT Doing (This Commit)
 
-- **General cost-aware SDE optimization suite** (Part 5): only limited `SdeScopeSelection`, `SdeChunkOptimization`, and a narrow `SdeReductionStrategy` are implemented; broader schedule/scope/reduction work remains future work
+- **General cost-aware SDE optimization suite** (Part 5): limited `SdeScopeSelection`, `SdeScheduleRefinement`, `SdeChunkOptimization`, and a narrow `SdeReductionStrategy` are implemented; broader schedule/scope/reduction work remains future work
 - **Full tensor-first path** (Part 6): initial `RaiseToTensor` carrier rewrite is implemented, but tensor optimization + bufferization back to loops is still future work
 - **Replacing hardcoded thresholds**: Future commits consume `CostModel` in existing heuristic files
 - **Metadata removal**: Independent of linalg — separate commit

@@ -121,6 +121,21 @@ def SdeChunkOptimization : Pass<"sde-chunk-optimization", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createSdeChunkOptimizationPass()";
 }
 
+def SdeScheduleRefinement
+    : Pass<"sde-schedule-refinement", "mlir::ModuleOp"> {
+  let summary = "Refine abstract SDE schedule hints into concrete schedules";
+  let description = [{
+    Uses the SDE-owned cost model to refine eligible `sde.su_iterate`
+    schedule hints before later SDE optimizations run. The current
+    implementation is deliberately narrow: it only handles one-dimensional
+    loops with constant trip counts, only rewrites `auto` / `runtime`
+    schedules, and chooses the lowest-overhead concrete policy among
+    `static`, `dynamic`, and `guided`.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
+  let constructor = "mlir::arts::sde::createSdeScheduleRefinementPass()";
+}
+
 def SdeReductionStrategy : Pass<"sde-reduction-strategy", "mlir::ModuleOp"> {
   let summary = "Select an SDE reduction strategy from the active cost model";
   let description = [{

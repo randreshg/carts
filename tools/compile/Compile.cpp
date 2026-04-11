@@ -117,7 +117,6 @@ static cl::opt<std::string> MetadataFile("metadata-file",
                                          cl::value_desc("filename"),
                                          cl::init(kDefaultMetadataFile));
 
-
 static cl::opt<uint64_t>
     ArtsIdStride("arts-id-stride",
                  cl::desc("Stride multiplier for arts ids (EDTs/DBs)"),
@@ -127,7 +126,6 @@ static cl::opt<bool>
     Diagnose("diagnose",
              cl::desc("Export diagnostic information about compilation"),
              cl::init(false));
-
 
 static cl::opt<std::string> DiagnoseOutput(
     "diagnose-output", cl::desc("Output file for diagnostic JSON export"),
@@ -288,21 +286,15 @@ static const std::array<llvm::StringLiteral, 8>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 12> kOpenMPToArtsPasses = {
-    "ConvertOpenMPToSde",      "SdeScopeSelection",
-    "SdeChunkOptimization",    "SdeReductionStrategy",
-    "RaiseToLinalg",           "RaiseToTensor",
-    "SdeTensorOptimization",   "ConvertSdeToArts",
-    "VerifySdeLowered",
-    "DeadCodeElimination",     "CSE",
+static const std::array<llvm::StringLiteral, 13> kOpenMPToArtsPasses = {
+    "ConvertOpenMPToSde",   "SdeScopeSelection",     "SdeScheduleRefinement",
+    "SdeChunkOptimization", "SdeReductionStrategy",  "RaiseToLinalg",
+    "RaiseToTensor",        "SdeTensorOptimization", "ConvertSdeToArts",
+    "VerifySdeLowered",     "DeadCodeElimination",   "CSE",
     "VerifyEdtCreated"};
 static const std::array<llvm::StringLiteral, 6> kPatternPipelinePasses = {
-    "DepTransforms",
-    "LoopNormalization",
-    "StencilBoundaryPeeling",
-    "LoopReordering",
-    "KernelTransforms",
-    "CSE"};
+    "DepTransforms",  "LoopNormalization", "StencilBoundaryPeeling",
+    "LoopReordering", "KernelTransforms",  "CSE"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
     "EdtStructuralOpt(runAnalysis=false)",
     "EdtICM",
@@ -692,6 +684,7 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   arts::sde::SDECostModel *costModel = AM ? &AM->getCostModel() : nullptr;
   pm.addPass(arts::sde::createConvertOpenMPToSdePass(costModel));
   pm.addPass(arts::sde::createSdeScopeSelectionPass(costModel));
+  pm.addPass(arts::sde::createSdeScheduleRefinementPass(costModel));
   pm.addPass(arts::sde::createSdeChunkOptimizationPass(costModel));
   pm.addPass(arts::sde::createSdeReductionStrategyPass(costModel));
   pm.addPass(arts::sde::createRaiseToLinalgPass());
