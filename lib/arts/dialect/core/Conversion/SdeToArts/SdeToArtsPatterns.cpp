@@ -132,8 +132,9 @@ convertReductionStrategy(MLIRContext *ctx,
 // Linalg-derived contract classification helpers
 //===----------------------------------------------------------------------===//
 
-/// Structured stencil footprint recovered from a linalg.generic indexing map.
-struct LinalgStencilContractInfo {
+/// Runtime-neutral structured neighborhood summary recovered at the
+/// SDE-to-ARTS boundary.
+struct StructuredNeighborhoodSummary {
   SmallVector<int64_t, 4> ownerDims;
   SmallVector<int64_t, 4> spatialDims;
   SmallVector<int64_t, 4> minOffsets;
@@ -185,15 +186,15 @@ static bool hasConstantOffsets(AffineMap map) {
   return false;
 }
 
-/// Recover a stencil footprint from the linalg.generic read maps.
-static std::optional<LinalgStencilContractInfo>
-extractStencilContract(linalg::GenericOp generic) {
+/// Recover a structured neighborhood summary from linalg.generic read maps.
+static std::optional<StructuredNeighborhoodSummary>
+extractNeighborhoodSummaryFromLinalg(linalg::GenericOp generic) {
   unsigned numLoops = generic.getNumLoops();
   if (numLoops == 0)
     return std::nullopt;
 
   auto maps = generic.getIndexingMapsArray();
-  LinalgStencilContractInfo info;
+  StructuredNeighborhoodSummary info;
   info.minOffsets.assign(numLoops, 0);
   info.maxOffsets.assign(numLoops, 0);
   info.writeFootprint.assign(numLoops, 1);
@@ -202,7 +203,7 @@ extractStencilContract(linalg::GenericOp generic) {
     info.spatialDims.push_back(dim);
   }
 
-  bool sawStencilOffset = false;
+  bool sawNeighborhoodOffset = false;
   for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs();
        ++inputIdx) {
     AffineMap map = maps[inputIdx];
@@ -217,18 +218,18 @@ extractStencilContract(linalg::GenericOp generic) {
 
       info.minOffsets[dim] = std::min(info.minOffsets[dim], dimOffset->offset);
       info.maxOffsets[dim] = std::max(info.maxOffsets[dim], dimOffset->offset);
-      sawStencilOffset |= dimOffset->offset != 0;
+      sawNeighborhoodOffset |= dimOffset->offset != 0;
     }
   }
 
-  if (!sawStencilOffset)
+  if (!sawNeighborhoodOffset)
     return std::nullopt;
   return info;
 }
 
-/// Merge two stencil summaries across multiple linalg.generic ops.
-static void mergeStencilContract(LinalgStencilContractInfo &dst,
-                                 const LinalgStencilContractInfo &src) {
+/// Merge two neighborhood summaries across multiple linalg.generic ops.
+static void mergeNeighborhoodSummary(StructuredNeighborhoodSummary &dst,
+                                     const StructuredNeighborhoodSummary &src) {
   if (dst.minOffsets.empty()) {
     dst = src;
     return;
@@ -243,16 +244,16 @@ static void mergeStencilContract(LinalgStencilContractInfo &dst,
     dst.maxOffsets[idx] = std::max(dst.maxOffsets[idx], maxOffset);
 }
 
-/// Recover an already-stamped stencil contract from an op.
-static std::optional<LinalgStencilContractInfo>
-getStampedStencilContract(Operation *op) {
+/// Recover an already-materialized neighborhood summary from an op.
+static std::optional<StructuredNeighborhoodSummary>
+getStampedNeighborhoodSummary(Operation *op) {
   if (!op)
     return std::nullopt;
   if (!getStencilMinOffsets(op) || !getStencilMaxOffsets(op) ||
       !getStencilOwnerDims(op) || !getStencilWriteFootprint(op))
     return std::nullopt;
 
-  LinalgStencilContractInfo info;
+  StructuredNeighborhoodSummary info;
   info.ownerDims = *getStencilOwnerDims(op);
   info.spatialDims = getStencilSpatialDims(op).value_or(info.ownerDims);
   info.minOffsets = *getStencilMinOffsets(op);
@@ -261,7 +262,7 @@ getStampedStencilContract(Operation *op) {
   return info;
 }
 
-static std::optional<LinalgStencilContractInfo>
+static std::optional<StructuredNeighborhoodSummary>
 getSdeNeighborhoodSummary(sde::SdeSuIterateOp op) {
   if (!op.getAccessMinOffsetsAttr() || !op.getAccessMaxOffsetsAttr() ||
       !op.getOwnerDimsAttr() || !op.getWriteFootprintAttr())
@@ -289,7 +290,7 @@ getSdeNeighborhoodSummary(sde::SdeSuIterateOp op) {
   if (!minOffsets || !maxOffsets || !ownerDims || !writeFootprint)
     return std::nullopt;
 
-  LinalgStencilContractInfo info;
+  StructuredNeighborhoodSummary info;
   info.minOffsets = std::move(*minOffsets);
   info.maxOffsets = std::move(*maxOffsets);
   info.ownerDims = std::move(*ownerDims);
@@ -345,13 +346,23 @@ static void stampPatternContract(Operation *artsForOp, ArtsDepPattern pattern,
     contract.stamp(parentEdt.getOperation());
 }
 
-/// Stamp a recovered stencil contract on an arts.for and its parent EdtOp.
+static StencilNDPatternContract
+materializeStencilContract(ArtsDepPattern pattern,
+                           const StructuredNeighborhoodSummary &info,
+                           int64_t revision = 1) {
+  return StencilNDPatternContract(pattern, info.ownerDims, info.minOffsets,
+                                  info.maxOffsets, info.writeFootprint,
+                                  revision, /*blockShape=*/{},
+                                  info.spatialDims);
+}
+
+/// Stamp a recovered stencil-family contract on an arts.for and its parent
+/// EdtOp.
 static void stampStencilContract(Operation *artsForOp, ArtsDepPattern pattern,
-                                 const LinalgStencilContractInfo &info,
+                                 const StructuredNeighborhoodSummary &info,
                                  int64_t revision = 1) {
-  StencilNDPatternContract contract(
-      pattern, info.ownerDims, info.minOffsets, info.maxOffsets,
-      info.writeFootprint, revision, /*blockShape=*/{}, info.spatialDims);
+  StencilNDPatternContract contract =
+      materializeStencilContract(pattern, info, revision);
   contract.stamp(artsForOp);
   if (auto parentEdt = artsForOp->getParentOfType<EdtOp>())
     contract.stamp(parentEdt.getOperation());
@@ -588,7 +599,7 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
 
     linalg::GenericOp contractSource;
     std::optional<ArtsDepPattern> selectedPattern;
-    std::optional<LinalgStencilContractInfo> selectedStencilContract;
+    std::optional<StructuredNeighborhoodSummary> selectedStencilContract;
     int64_t selectedRevision = 1;
     bool selectedFromExplicitContract = false;
 
@@ -607,11 +618,12 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       if (!candidatePattern)
         return;
 
-      std::optional<LinalgStencilContractInfo> candidateStencil;
+      std::optional<StructuredNeighborhoodSummary> candidateStencil;
       if (isStencilFamilyDepPattern(*candidatePattern)) {
-        candidateStencil = extractStencilContract(generic);
+        candidateStencil = extractNeighborhoodSummaryFromLinalg(generic);
         if (!candidateStencil)
-          candidateStencil = getStampedStencilContract(generic.getOperation());
+          candidateStencil =
+              getStampedNeighborhoodSummary(generic.getOperation());
       }
 
       if (!selectedPattern) {
@@ -627,7 +639,8 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       if (*selectedPattern == *candidatePattern) {
         if (candidateStencil) {
           if (selectedStencilContract)
-            mergeStencilContract(*selectedStencilContract, *candidateStencil);
+            mergeNeighborhoodSummary(*selectedStencilContract,
+                                     *candidateStencil);
           else
             selectedStencilContract = candidateStencil;
         }
