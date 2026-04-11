@@ -39,8 +39,8 @@ namespace mlir::arts {
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(convert_sde_to_arts);
 
-#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Statistic.h"
 static llvm::Statistic numCuRegionConverted{
     "convert_sde_to_arts", "NumCuRegionConverted",
     "Number of sde.cu_region converted to arts.edt"};
@@ -202,7 +202,8 @@ extractStencilContract(linalg::GenericOp generic) {
   }
 
   bool sawStencilOffset = false;
-  for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs(); ++inputIdx) {
+  for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs();
+       ++inputIdx) {
     AffineMap map = maps[inputIdx];
     for (AffineExpr result : map.getResults()) {
       auto dimOffset = extractDimOffset(result);
@@ -213,10 +214,8 @@ extractStencilContract(linalg::GenericOp generic) {
       if (dim >= numLoops)
         continue;
 
-      info.minOffsets[dim] =
-          std::min(info.minOffsets[dim], dimOffset->offset);
-      info.maxOffsets[dim] =
-          std::max(info.maxOffsets[dim], dimOffset->offset);
+      info.minOffsets[dim] = std::min(info.minOffsets[dim], dimOffset->offset);
+      info.maxOffsets[dim] = std::max(info.maxOffsets[dim], dimOffset->offset);
       sawStencilOffset |= dimOffset->offset != 0;
     }
   }
@@ -255,7 +254,8 @@ classifyFromLinalg(linalg::GenericOp generic) {
   });
   if (allParallel) {
     auto maps = generic.getIndexingMapsArray();
-    for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs(); ++inputIdx) {
+    for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs();
+         ++inputIdx) {
       if (hasConstantOffsets(maps[inputIdx]))
         return ArtsDepPattern::stencil_tiling_nd;
     }
@@ -298,19 +298,38 @@ static void stampStencilContract(Operation *artsForOp, ArtsDepPattern pattern,
     contract.stamp(parentEdt.getOperation());
 }
 
-/// Drop dead transient tensor carriers after their linalg.generic owner has
-/// been consumed for contract stamping.
-static void eraseDeadTensorCarriers(ForOp artsFor, PatternRewriter &rewriter) {
-  SmallVector<Operation *> deadCarriers;
-  artsFor.getRegion().walk([&](Operation *nestedOp) {
-    if (!isa<bufferization::ToTensorOp, tensor::EmptyOp>(nestedOp))
-      return;
-    if (isOpTriviallyDead(nestedOp))
-      deadCarriers.push_back(nestedOp);
-  });
+static bool isTensorCarrierOp(Operation *op) {
+  if (!op)
+    return false;
+  if (isa<bufferization::ToTensorOp>(op))
+    return true;
+  if (isa<tensor::TensorDialect>(op->getDialect()))
+    return true;
+  if (auto linalgOp = dyn_cast<linalg::LinalgOp>(op))
+    return linalgOp.hasPureTensorSemantics();
+  return false;
+}
 
-  for (Operation *deadCarrier : llvm::reverse(deadCarriers))
-    rewriter.eraseOp(deadCarrier);
+/// Drop dead transient tensor carriers after their linalg owner has been
+/// consumed for contract stamping.
+static void eraseDeadTensorCarriers(ForOp artsFor, PatternRewriter &rewriter) {
+  bool changed = true;
+  while (changed) {
+    changed = false;
+
+    SmallVector<Operation *> deadCarriers;
+    artsFor.getRegion().walk([&](Operation *nestedOp) {
+      if (!isTensorCarrierOp(nestedOp))
+        return;
+      if (isOpTriviallyDead(nestedOp))
+        deadCarriers.push_back(nestedOp);
+    });
+
+    for (Operation *deadCarrier : llvm::reverse(deadCarriers)) {
+      rewriter.eraseOp(deadCarrier);
+      changed = true;
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -437,10 +456,9 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
 
     auto schedAttr = convertSchedule(ctx, op.getScheduleAttr());
 
-    auto artsFor =
-        ForOp::create(rewriter, loc, op.getLowerBounds(), op.getUpperBounds(),
-                      op.getSteps(), schedAttr, op.getChunkSize(),
-                      op.getReductionAccumulators());
+    auto artsFor = ForOp::create(
+        rewriter, loc, op.getLowerBounds(), op.getUpperBounds(), op.getSteps(),
+        schedAttr, op.getChunkSize(), op.getReductionAccumulators());
 
     copyArtsMetadataAttrs(op, artsFor);
     if (auto strategyAttr =
@@ -448,8 +466,8 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       artsFor->setAttr(AttrNames::Operation::Contract::ReductionStrategy,
                        strategyAttr);
       if (auto parentEdt = artsFor->getParentOfType<EdtOp>();
-          parentEdt &&
-          !parentEdt->hasAttr(AttrNames::Operation::Contract::ReductionStrategy))
+          parentEdt && !parentEdt->hasAttr(
+                           AttrNames::Operation::Contract::ReductionStrategy))
         parentEdt->setAttr(AttrNames::Operation::Contract::ReductionStrategy,
                            strategyAttr);
     }
@@ -470,8 +488,8 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
 
       // Map block args and clone body
       IRMapping mapper;
-      for (auto [srcArg, dstArg] : llvm::zip(src.getArguments(),
-                                             dst.getArguments()))
+      for (auto [srcArg, dstArg] :
+           llvm::zip(src.getArguments(), dst.getArguments()))
         mapper.map(srcArg, dstArg);
 
       OpBuilder::InsertionGuard IG(rewriter);
@@ -482,9 +500,8 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
     }
 
     SmallVector<linalg::GenericOp> linalgGenerics;
-    artsFor.getRegion().walk([&](linalg::GenericOp generic) {
-      linalgGenerics.push_back(generic);
-    });
+    artsFor.getRegion().walk(
+        [&](linalg::GenericOp generic) { linalgGenerics.push_back(generic); });
 
     linalg::GenericOp contractSource;
     std::optional<ArtsDepPattern> selectedPattern;
@@ -516,9 +533,8 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
             getStencilWriteFootprint(generic.getOperation())) {
           LinalgStencilContractInfo info;
           info.ownerDims = *getStencilOwnerDims(generic.getOperation());
-          info.spatialDims =
-              getStencilSpatialDims(generic.getOperation()).value_or(
-                  info.ownerDims);
+          info.spatialDims = getStencilSpatialDims(generic.getOperation())
+                                 .value_or(info.ownerDims);
           info.minOffsets = *getStencilMinOffsets(generic.getOperation());
           info.maxOffsets = *getStencilMaxOffsets(generic.getOperation());
           info.writeFootprint =
@@ -530,7 +546,8 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       if (!selectedPattern) {
         selectedPattern = candidatePattern;
         selectedStencilContract = candidateStencil;
-        selectedRevision = getPatternRevision(generic.getOperation()).value_or(1);
+        selectedRevision =
+            getPatternRevision(generic.getOperation()).value_or(1);
         selectedFromExplicitContract = fromExplicitContract;
         contractSource = generic;
         return;
@@ -556,15 +573,17 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       if (fromExplicitContract && !selectedFromExplicitContract) {
         selectedPattern = candidatePattern;
         selectedStencilContract = candidateStencil;
-        selectedRevision = getPatternRevision(generic.getOperation()).value_or(1);
+        selectedRevision =
+            getPatternRevision(generic.getOperation()).value_or(1);
         selectedFromExplicitContract = true;
         contractSource = generic;
         return;
       }
 
-      ARTS_DEBUG("conflicting linalg.generic contracts in arts.for body: keeping "
-                 << stringifyArtsDepPattern(*selectedPattern)
-                 << ", ignoring " << stringifyArtsDepPattern(*candidatePattern));
+      ARTS_DEBUG(
+          "conflicting linalg.generic contracts in arts.for body: keeping "
+          << stringifyArtsDepPattern(*selectedPattern) << ", ignoring "
+          << stringifyArtsDepPattern(*candidatePattern));
     };
 
     for (linalg::GenericOp generic : linalgGenerics)
@@ -600,9 +619,12 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
 
     // RaiseToLinalg leaves the original loop body in place and uses
     // linalg.generic as a transient carrier for contract stamping. Drop the
-    // cloned generics after consuming them so downstream passes keep seeing
-    // the cloned loop/memref IR shape.
+    // cloned memref-backed carriers directly; tensor-backed carriers are
+    // removed by the dead-carrier sweep below so any dead tensor chain rooted
+    // at their results disappears without teaching ARTS about tensor IR.
     for (linalg::GenericOp generic : llvm::reverse(linalgGenerics)) {
+      if (generic.hasPureTensorSemantics())
+        continue;
       rewriter.eraseOp(generic);
     }
     eraseDeadTensorCarriers(artsFor, rewriter);
