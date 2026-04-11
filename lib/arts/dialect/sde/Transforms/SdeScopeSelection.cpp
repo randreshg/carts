@@ -2,9 +2,9 @@
 /// File: SdeScopeSelection.cpp
 ///
 /// Cost-model-backed SDE concurrency scope selection. The current
-/// implementation fills in missing scope on parallel sde.cu_region ops from
-/// the active machine topology while preserving any explicit SDE scope that is
-/// already present.
+/// implementation preserves explicit scope, lets nested parallel SDE regions
+/// inherit the nearest enclosing parallel scope, and otherwise fills missing
+/// scope from the active machine topology.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
@@ -22,6 +22,25 @@ using namespace mlir::arts;
 
 namespace {
 
+static void assignParallelScopes(Operation *operation,
+                                 sde::SdeConcurrencyScopeAttr inheritedScope,
+                                 sde::SdeConcurrencyScopeAttr defaultScope) {
+  auto currentScope = inheritedScope;
+  if (auto cuRegion = dyn_cast<sde::SdeCuRegionOp>(operation);
+      cuRegion && cuRegion.getKind() == sde::SdeCuKind::parallel) {
+    currentScope = cuRegion.getConcurrencyScopeAttr();
+    if (!currentScope) {
+      currentScope = inheritedScope ? inheritedScope : defaultScope;
+      cuRegion.setConcurrencyScopeAttr(currentScope);
+    }
+  }
+
+  for (Region &region : operation->getRegions())
+    for (Block &block : region)
+      for (Operation &nestedOp : block)
+        assignParallelScopes(&nestedOp, currentScope, defaultScope);
+}
+
 struct SdeScopeSelectionPass
     : public arts::impl::SdeScopeSelectionBase<SdeScopeSelectionPass> {
   explicit SdeScopeSelectionPass(sde::SDECostModel *costModel = nullptr)
@@ -36,13 +55,7 @@ struct SdeScopeSelectionPass
                            ? sde::SdeConcurrencyScope::distributed
                            : sde::SdeConcurrencyScope::local);
 
-    getOperation().walk([&](sde::SdeCuRegionOp op) {
-      if (op.getKind() != sde::SdeCuKind::parallel)
-        return;
-      if (op.getConcurrencyScopeAttr())
-        return;
-      op.setConcurrencyScopeAttr(desiredScope);
-    });
+    assignParallelScopes(getOperation(), {}, desiredScope);
   }
 
 private:
