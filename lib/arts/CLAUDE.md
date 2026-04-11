@@ -18,7 +18,7 @@ dialect/                 MLIR dialects (IREE-style per-dialect structure)
     IR/                  arts_rt dialect (RtDialect.cpp, RtOps.cpp)
     Conversion/
       RtToLLVM/          arts_rt → LLVM conversion patterns
-    Transforms/          DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt, ScalarReplacement
+    Transforms/          DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt, ScalarReplacement, LoopVectorizationHints
   sde/                   SEMANTIC — OMP conversion + linalg raising
     IR/                  sde dialect (SdeDialect.cpp, SdeOps.cpp)
     Transforms/          ConvertOpenMPToSde, RaiseToLinalg

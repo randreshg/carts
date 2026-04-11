@@ -65,7 +65,6 @@ std::unique_ptr<Pass> createDataPtrHoistingPass();
 std::unique_ptr<Pass> createGuidRangCallOptPass();
 std::unique_ptr<Pass> createRuntimeCallOptPass();
 std::unique_ptr<Pass> createAliasScopeGenPass();
-std::unique_ptr<Pass> createLoopVectorizationHintsPass();
 std::unique_ptr<Pass> createEdtPtrRematerializationPass();
 std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEpochLoweringPass();

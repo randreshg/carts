@@ -25,6 +25,8 @@ namespace mlir::arts {
 #define GEN_PASS_DECL
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
 
+/// Attach LLVM loop vectorization hints to EDT function loops.
+std::unique_ptr<::mlir::Pass> createLoopVectorizationHintsPass();
 /// Transform memory-based reductions to register-based iter_args.
 std::unique_ptr<::mlir::Pass> createScalarReplacementPass();
 

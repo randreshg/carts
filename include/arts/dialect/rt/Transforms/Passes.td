@@ -134,6 +134,18 @@ def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEpochLoweringPass()";
 }
 
+def LoopVectorizationHints
+    : Pass<"arts-loop-vectorization-hints", "mlir::ModuleOp"> {
+  let summary = "Attach LLVM loop vectorization hints to EDT function loops";
+  let description = [{
+    This pass attaches LLVM loop optimization hints to loop backedges in EDT
+    functions. It uses MLIR's native LoopAnnotationAttr, which automatically
+    translates to !llvm.loop metadata during LLVM IR emission.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+  let constructor = "mlir::arts::createLoopVectorizationHintsPass()";
+}
+
 def ScalarReplacement
     : Pass<"arts-scalar-replacement", "mlir::ModuleOp"> {
   let summary = "Transform memory-based reductions to register-based iter_args";
