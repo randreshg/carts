@@ -694,6 +694,7 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createRaiseToTensorPass());
   pm.addPass(arts::sde::createSdeTensorOptimizationPass(costModel));
   pm.addPass(arts::sde::createSdeStructuredSummariesPass());
+  pm.addPass(arts::sde::createSdeElementwiseFusionPass());
   pm.addPass(arts::sde::createSdeDistributionPlanningPass(costModel));
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
   pm.addPass(arts::sde::createVerifySdeLoweredPass());
@@ -712,12 +713,13 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createEdtPtrRematerializationPass());
 }
 
-/// Dedicated semantic pattern pipeline that teaches ARTS about supported loop
-/// and dependence families before DB creation.
-/// Pattern contracts are now seeded at two points:
-///   1. SDE->ARTS conversion (classifies from linalg.generic when present,
-///      otherwise falling back to RaiseToLinalg's transient classification)
-///   2. DepTransforms/KernelTransforms (independent IR matching for the rest)
+/// Transitional ARTS-side fallback pipeline for semantic families that are not
+/// yet fully planned in SDE before DB creation.
+/// Authoritative contracts are seeded at the SDE boundary first:
+///   1. SDE->ARTS conversion (structured summaries, elementwise fusion,
+///      distribution intent, and linalg/tensor-backed fallback classification)
+///   2. DepTransforms/KernelTransforms only for the remaining unmigrated
+///      ARTS-side semantic rewrites and fallback inference
 void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createDepTransformsPass(AM));
   pm.addPass(arts::createLoopNormalizationPass(AM));

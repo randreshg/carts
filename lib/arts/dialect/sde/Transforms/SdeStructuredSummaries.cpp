@@ -39,11 +39,21 @@ struct SdeStructuredSummariesPass
       if (!summary)
         return;
 
+      sde::SdeStructuredClassification classification =
+          summary->classification;
+      if (auto existingClassification = op.getStructuredClassification();
+          existingClassification &&
+          *existingClassification ==
+              sde::SdeStructuredClassification::elementwise_pipeline &&
+          classification == sde::SdeStructuredClassification::elementwise) {
+        classification = sde::SdeStructuredClassification::elementwise_pipeline;
+      }
+
       op.setStructuredClassificationAttr(
           sde::SdeStructuredClassificationAttr::get(&getContext(),
-                                                    summary->classification));
+                                                    classification));
 
-      if (summary->classification ==
+      if (classification ==
           sde::SdeStructuredClassification::stencil) {
         std::optional<sde::StructuredNeighborhoodInfo> neighborhoodSummary =
             sde::extractNeighborhoodSummary(*summary);

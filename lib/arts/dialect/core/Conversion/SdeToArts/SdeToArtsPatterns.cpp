@@ -65,6 +65,8 @@ mapStructuredClassificationToArtsDepPattern(
     return ArtsDepPattern::matmul;
   case sde::SdeStructuredClassification::elementwise:
     return ArtsDepPattern::uniform;
+  case sde::SdeStructuredClassification::elementwise_pipeline:
+    return ArtsDepPattern::elementwise_pipeline;
   case sde::SdeStructuredClassification::reduction:
     break;
   }

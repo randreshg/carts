@@ -80,6 +80,7 @@ ConvertOpenMPToSde
   -> RaiseToTensor
   -> SdeTensorOptimization
   -> SdeStructuredSummaries
+  -> SdeElementwiseFusion
   -> SdeDistributionPlanning
   -> ConvertSdeToArts
   -> VerifySdeLowered
@@ -469,6 +470,8 @@ Current behavior:
 
 - Refreshes the SDE-owned `classification(<...>)` attribute from the current
   structured loop analysis.
+- Preserves a previously-authored `classification(<elementwise_pipeline>)`
+  when the current loop body still proves the underlying elementwise shape.
 - Stamps only runtime-neutral neighborhood summaries on eligible
   `arts_sde.su_iterate` ops.
 - Keeps ARTS-specific contract materialization out of SDE. No
@@ -477,6 +480,45 @@ Current behavior:
 - Gives `ConvertSdeToArts` enough information to materialize the runtime
   contract at the boundary without re-deriving the semantic summary from ARTS
   IR.
+
+### `SdeElementwiseFusion`
+
+**Before**
+
+```mlir
+arts_sde.cu_region <parallel> scope(<local>) {
+  arts_sde.su_iterate(%c0) to(%c128) step(%tile) nowait classification(<elementwise>) {
+    ... stage 0 ...
+  }
+  arts_sde.su_iterate(%c0) to(%c128) step(%tile) nowait classification(<elementwise>) {
+    ... stage 1 ...
+  }
+}
+```
+
+**After**
+
+```mlir
+arts_sde.cu_region <parallel> scope(<local>) {
+  arts_sde.su_iterate(%c0) to(%c128) step(%tile) nowait classification(<elementwise_pipeline>) {
+    ... stage 0 ...
+    ... stage 1 ...
+  }
+}
+```
+
+Current behavior:
+
+- Fuses consecutive sibling `arts_sde.su_iterate` ops that already carry an
+  SDE-owned `classification(<elementwise>)`.
+- Requires the same iteration space and schedule, preserves `nowait`, and
+  requires disjoint write roots across the fused stages.
+- Accepts the current tiled SDE loop form produced by `SdeTensorOptimization`,
+  so elementwise pipeline ownership stays in SDE even after tensor-driven
+  strip-mining.
+- Keeps the result runtime-neutral: the fused SDE loop carries only
+  `classification(<elementwise_pipeline>)`; `ConvertSdeToArts` materializes the
+  corresponding ARTS contract later.
 
 ### `SdeDistributionPlanning`
 
@@ -507,7 +549,8 @@ Current behavior:
 - Uses only SDE-side information: structured classification, selected
   concurrency scope, and the active `SDECostModel`.
 - Authors a narrow first distribution layer in SDE IR:
-  - local `elementwise` loops get `arts_sde.su_distribute <blocked>`
+  - local `elementwise` and `elementwise_pipeline` loops get
+    `arts_sde.su_distribute <blocked>`
   - distributed `stencil` loops with enough work get
     `arts_sde.su_distribute <owner_compute>`
 - Leaves broader policy such as wavefront tile geometry, distributed matmul

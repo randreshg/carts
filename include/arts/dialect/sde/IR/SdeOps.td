@@ -88,7 +88,8 @@ def SdeStructuredClassification
       I32EnumAttrCase<"elementwise", 0, "elementwise">,
       I32EnumAttrCase<"stencil", 1, "stencil">,
       I32EnumAttrCase<"matmul", 2, "matmul">,
-      I32EnumAttrCase<"reduction", 3, "reduction">
+      I32EnumAttrCase<"reduction", 3, "reduction">,
+      I32EnumAttrCase<"elementwise_pipeline", 4, "elementwise_pipeline">
     ]>;
 def SdeStructuredClassificationAttr
     : ArtsSde_I32EnumAttr<"structured_classification",

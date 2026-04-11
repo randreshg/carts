@@ -1,0 +1,255 @@
+///==========================================================================///
+/// File: SdeElementwiseFusion.cpp
+///
+/// Fuse consecutive sibling SDE elementwise scheduling units before crossing
+/// into ARTS IR.
+///==========================================================================///
+
+#include "arts/dialect/sde/Transforms/Passes.h"
+namespace mlir::arts {
+#define GEN_PASS_DEF_SDEELEMENTWISEFUSION
+#include "arts/dialect/sde/Transforms/Passes.h.inc"
+} // namespace mlir::arts
+
+#include "arts/utils/ValueAnalysis.h"
+
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/DenseSet.h"
+
+using namespace mlir;
+using namespace mlir::arts;
+
+namespace {
+
+struct ElementwiseStage {
+  sde::SdeSuIterateOp op;
+  SmallVector<Value, 4> writes;
+};
+
+static Block &ensureBlock(Region &region) {
+  if (region.empty())
+    region.push_back(new Block());
+  return region.front();
+}
+
+static NamedAttrList getRewrittenAttrs(sde::SdeSuIterateOp op) {
+  NamedAttrList attrs(op->getAttrs());
+  attrs.erase(op.getOperandSegmentSizesAttrName().getValue());
+  return attrs;
+}
+
+static bool haveEquivalentIndexValue(Value lhs, Value rhs) {
+  if (ValueAnalysis::sameValue(lhs, rhs))
+    return true;
+
+  int64_t lhsConstant = 0;
+  int64_t rhsConstant = 0;
+  return ValueAnalysis::getConstantIndex(lhs, lhsConstant) &&
+         ValueAnalysis::getConstantIndex(rhs, rhsConstant) &&
+         lhsConstant == rhsConstant;
+}
+
+static bool haveSameIterationSpace(sde::SdeSuIterateOp lhs,
+                                   sde::SdeSuIterateOp rhs) {
+  if (lhs.getLowerBounds().size() != rhs.getLowerBounds().size() ||
+      lhs.getUpperBounds().size() != rhs.getUpperBounds().size() ||
+      lhs.getSteps().size() != rhs.getSteps().size())
+    return false;
+
+  for (auto [a, b] : llvm::zip(lhs.getLowerBounds(), rhs.getLowerBounds())) {
+    if (!haveEquivalentIndexValue(a, b))
+      return false;
+  }
+  for (auto [a, b] : llvm::zip(lhs.getUpperBounds(), rhs.getUpperBounds())) {
+    if (!haveEquivalentIndexValue(a, b))
+      return false;
+  }
+  for (auto [a, b] : llvm::zip(lhs.getSteps(), rhs.getSteps())) {
+    if (!haveEquivalentIndexValue(a, b))
+      return false;
+  }
+  return true;
+}
+
+static bool haveCompatibleSchedule(sde::SdeSuIterateOp lhs,
+                                   sde::SdeSuIterateOp rhs) {
+  if (lhs.getScheduleAttr() != rhs.getScheduleAttr())
+    return false;
+  if (lhs.getNowaitAttr() != rhs.getNowaitAttr())
+    return false;
+
+  Value lhsChunk = lhs.getChunkSize();
+  Value rhsChunk = rhs.getChunkSize();
+  if (!lhsChunk || !rhsChunk)
+    return lhsChunk == rhsChunk;
+  return haveEquivalentIndexValue(lhsChunk, rhsChunk);
+}
+
+static Value getWriteRoot(Value value) {
+  return ValueAnalysis::stripMemrefViewOps(value);
+}
+
+static bool hasDisjointWrites(ArrayRef<ElementwiseStage> stages) {
+  llvm::DenseSet<Value> writtenTargets;
+  for (const ElementwiseStage &stage : stages) {
+    for (Value target : stage.writes) {
+      if (!target || !writtenTargets.insert(target).second)
+        return false;
+    }
+  }
+  return true;
+}
+
+static bool isElementwiseStage(sde::SdeSuIterateOp op, ElementwiseStage &stage) {
+  if (!op || !op.getStructuredClassificationAttr() ||
+      *op.getStructuredClassification() !=
+          sde::SdeStructuredClassification::elementwise)
+    return false;
+  if (!op.getReductionAccumulators().empty())
+    return false;
+
+  llvm::DenseSet<Value> seenWrites;
+  SmallVector<Value, 4> writes;
+  bool hasDuplicateWrite = false;
+  op.getBody().walk([&](memref::StoreOp storeOp) {
+    Value target = getWriteRoot(storeOp.getMemref());
+    if (!target)
+      return;
+    if (!seenWrites.insert(target).second) {
+      hasDuplicateWrite = true;
+      return;
+    }
+    writes.push_back(target);
+  });
+  if (writes.empty() || hasDuplicateWrite)
+    return false;
+
+  stage = {op, std::move(writes)};
+  return true;
+}
+
+static bool isSkippableInterStageOp(Operation *op) {
+  return op && op->getNumRegions() == 0 && isMemoryEffectFree(op);
+}
+
+static sde::SdeSuIterateOp
+fuseStages(MutableArrayRef<ElementwiseStage> stages, PatternRewriter &rewriter) {
+  assert(stages.size() >= 2 && "expected at least two stages");
+
+  sde::SdeSuIterateOp first = stages.front().op;
+  Location loc = first.getLoc();
+  rewriter.setInsertionPoint(stages.back().op);
+
+  auto fused = sde::SdeSuIterateOp::create(
+      rewriter, loc, first.getLowerBounds(), first.getUpperBounds(),
+      first.getSteps(), first.getScheduleAttr(), first.getChunkSize(),
+      first.getNowaitAttr(), first.getReductionAccumulators(),
+      first.getReductionKindsAttr(), first.getReductionStrategyAttr(),
+      sde::SdeStructuredClassificationAttr::get(
+          first.getContext(),
+          sde::SdeStructuredClassification::elementwise_pipeline),
+      first.getAccessMinOffsetsAttr(), first.getAccessMaxOffsetsAttr(),
+      first.getOwnerDimsAttr(), first.getSpatialDimsAttr(),
+      first.getWriteFootprintAttr());
+  fused->setAttrs(getRewrittenAttrs(first));
+  fused.setStructuredClassificationAttr(
+      sde::SdeStructuredClassificationAttr::get(
+          first.getContext(),
+          sde::SdeStructuredClassification::elementwise_pipeline));
+
+  Block &dst = ensureBlock(fused.getBody());
+  if (dst.getNumArguments() == 0) {
+    for (BlockArgument arg : stages.front().op.getBody().front().getArguments())
+      dst.addArgument(arg.getType(), loc);
+  }
+
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(&dst);
+  for (ElementwiseStage &stage : stages) {
+    IRMapping mapper;
+    for (auto [srcArg, dstArg] :
+         llvm::zip(stage.op.getBody().front().getArguments(), dst.getArguments()))
+      mapper.map(srcArg, dstArg);
+    for (Operation &nested : stage.op.getBody().front().without_terminator())
+      rewriter.clone(nested, mapper);
+  }
+  sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
+  return fused;
+}
+
+struct SdeElementwiseFusionPass
+    : public arts::impl::SdeElementwiseFusionBase<SdeElementwiseFusionPass> {
+  void runOnOperation() override {
+    bool changed = true;
+    while (changed) {
+      changed = false;
+
+      SmallVector<Block *> blocks;
+      getOperation().walk([&](Operation *op) {
+        for (Region &region : op->getRegions())
+          for (Block &block : region)
+            blocks.push_back(&block);
+      });
+
+      for (Block *block : blocks) {
+        if (!block)
+          continue;
+
+        for (auto it = block->begin(), e = block->end(); it != e; ++it) {
+          auto first = dyn_cast<sde::SdeSuIterateOp>(&*it);
+          ElementwiseStage firstStage;
+          if (!first || !isElementwiseStage(first, firstStage))
+            continue;
+
+          SmallVector<ElementwiseStage, 4> stages;
+          stages.push_back(std::move(firstStage));
+          for (auto nextIt = std::next(it); nextIt != e; ++nextIt) {
+            if (isSkippableInterStageOp(&*nextIt))
+              continue;
+
+            auto next = dyn_cast<sde::SdeSuIterateOp>(&*nextIt);
+            ElementwiseStage nextStage;
+            if (!next || !isElementwiseStage(next, nextStage) ||
+                !haveSameIterationSpace(first, next) ||
+                !haveCompatibleSchedule(first, next))
+              break;
+
+            stages.push_back(std::move(nextStage));
+            if (!hasDisjointWrites(stages)) {
+              stages.pop_back();
+              break;
+            }
+          }
+
+          if (stages.size() < 2)
+            continue;
+
+          PatternRewriter rewriter(&getContext());
+          sde::SdeSuIterateOp fused = fuseStages(stages, rewriter);
+          (void)fused;
+          for (const ElementwiseStage &stage : stages)
+            rewriter.eraseOp(stage.op);
+          changed = true;
+          break;
+        }
+
+        if (changed)
+          break;
+      }
+    }
+  }
+};
+
+} // namespace
+
+namespace mlir::arts::sde {
+
+std::unique_ptr<Pass> createSdeElementwiseFusionPass() {
+  return std::make_unique<SdeElementwiseFusionPass>();
+}
+
+} // namespace mlir::arts::sde
