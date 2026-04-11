@@ -556,14 +556,16 @@ inside OMP->SDE conversion.
 before chunk synthesis. Its current executable subset is intentionally narrow:
 
 - one-dimensional loops only
-- constant trip count only
+- constant or symbolic trip count only
 - `auto` / `runtime` schedules only
 - no chunk rewrite of its own
 
 The pass queries `getSchedulingOverhead(kind, trip)` across the concrete
 `static`, `dynamic`, and `guided` choices, then rewrites the eligible
 `sde.su_iterate` with the lowest-overhead concrete SDE schedule before later
-passes see it.
+passes see it. Constant-trip loops are refined directly; symbolic-trip loops
+refine only when the same schedule wins across a conservative set of SDE-level
+probe trip counts derived from the active cost model.
 
 Before:
 - Eligible loops preserved abstract `auto` / `runtime` schedule hints into
@@ -572,6 +574,8 @@ Before:
 After:
 - Eligible one-dimensional constant-trip loops are rewritten in place to a
   concrete SDE schedule before chunk synthesis runs.
+- Eligible one-dimensional symbolic-trip loops are also rewritten in place
+  when the winning schedule stays stable across the pass's probe trip counts.
 - Loops that already carry a concrete schedule or an explicit chunk are left
   unchanged.
 - With the current `ARTSCostModel`, the implemented cases refine to
@@ -599,8 +603,8 @@ lowering.
 runs on `sde.su_iterate` before `RaiseToLinalg` / `ConvertSdeToArts` and
 currently handles only the narrow producer-backed case:
 
-- exactly one preserved reduction accumulator
-- exactly one preserved reduction kind
+- one or more preserved reduction accumulators
+- one matching preserved reduction kind per accumulator
 - known non-custom reduction kind
 - annotation-only behavior today
 - nested sequential work forces `local_accumulate`
@@ -615,9 +619,10 @@ Before:
 After:
 - Nested sequential work inside the reduction loop forces
   `reduction_strategy(<local_accumulate>)`.
-- Otherwise, `add` reductions compare `getAtomicUpdateCost() * workerCount`
-  against `getReductionCost(workerCount)` and choose `atomic` or `tree`.
-- Non-atomic-capable preserved kinds fall back to `tree`.
+- Otherwise, all-`add` reduction sets compare
+  `getAtomicUpdateCost() * workerCount` against
+  `getReductionCost(workerCount)` and choose `atomic` or `tree`.
+- Mixed or non-atomic-capable preserved reduction kinds fall back to `tree`.
 - Validation stays at the SDE IR layer: contract tests inspect the IR dump
   after `SdeReductionStrategy` rather than inferring the choice back from
   later ARTS IR. `ConvertSdeToArts` also forwards the recommendation onto the
@@ -697,11 +702,11 @@ This is the architectural novelty.
 | `lib/arts/dialect/sde/Transforms/SdeChunkOptimization.cpp` | **NEW** — limited cost-model-backed chunk synthesis on `sde.su_iterate` |
 | `lib/arts/dialect/sde/Transforms/SdeReductionStrategy.cpp` | **NEW** — limited cost-model-backed loop-uniform reduction strategy annotation on eligible `sde.su_iterate` ops, including multi-reduction loops and nested-loop `local_accumulate` |
 | `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | Core rewrite: `SdeSuIterateOp`, stamp classification, create transient `linalg.generic` carriers for supported cases |
-| `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect`, declare `SdeScopeSelection`, `SdeChunkOptimization`, and `SdeReductionStrategy` |
+| `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect`, declare `SdeScopeSelection`, `SdeScheduleRefinement`, `SdeChunkOptimization`, `SdeReductionStrategy`, `RaiseToTensor`, and `SdeTensorOptimization` |
 | `include/arts/dialect/sde/Transforms/Passes.h` | Add linalg include |
 | `include/arts/passes/Passes.h` | Add SDE schedule/chunk/reduction/tensor pass factory declarations |
 | `lib/arts/passes/CMakeLists.txt` | Add `MLIRLinalgDialect`, `MLIRLinalgTransforms` |
-| `tools/compile/Compile.cpp` | Insert `SdeScopeSelection`, `SdeChunkOptimization`, and `SdeReductionStrategy`, move `RaiseToLinalg`, remove PatternDiscovery, and keep SDE->ARTS independent of `AnalysisManager` |
+| `tools/compile/Compile.cpp` | Insert `SdeScopeSelection`, `SdeScheduleRefinement`, `SdeChunkOptimization`, `SdeReductionStrategy`, `RaiseToTensor`, and `SdeTensorOptimization`, move `RaiseToLinalg`, remove PatternDiscovery, and keep SDE->ARTS independent of `AnalysisManager` |
 | `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | `classifyFromLinalg` + stamp + erase transient generics after consumption, and persist SDE reduction strategy onto lowered ARTS ops |
 | `lib/arts/dialect/core/Transforms/EdtTransformsPass.cpp` | Preserve an existing `arts.reduction_strategy` from SDE instead of recomputing over it, and use centralized reduction-strategy value constants |
 | `include/arts/utils/OperationAttributes.h` | Centralize `arts.reduction_strategy` value strings alongside the attribute name |
@@ -744,8 +749,10 @@ This is the architectural novelty.
    `openmp_to_arts_selects_distributed_scope.mlir` validate scope behavior on
    SDE IR, not reconstructed ARTS IR
 10. SDE schedule tests: `openmp_to_arts_refines_auto_schedule.mlir` and
-    `openmp_to_arts_refines_runtime_schedule.mlir` validate schedule
-    refinement on SDE IR, not reconstructed ARTS IR
+    `openmp_to_arts_refines_runtime_schedule.mlir`, plus symbolic-trip
+    coverage in `openmp_to_arts_refines_symbolic_auto_schedule.mlir` and
+    `openmp_to_arts_refines_symbolic_runtime_schedule.mlir`, validate
+    schedule refinement on SDE IR, not reconstructed ARTS IR
 11. SDE chunk tests: `openmp_to_arts_synthesizes_schedule_chunk.mlir` and
    `openmp_to_arts_preserves_schedule_chunk.mlir` validate chunk behavior on
    SDE IR, not reconstructed ARTS IR
@@ -759,7 +766,16 @@ This is the architectural novelty.
     `sde_reduction_strategy_selects_tree_for_mixed_reductions.mlir`, and
     `sde_reduction_strategy_selects_local_accumulate_for_multiple_reductions.mlir`
     validate reduction strategy selection on SDE IR, not reconstructed ARTS IR
-12. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
+13. SDE tensor tests:
+    `openmp_to_arts_raise_to_tensor_uniform_contract.mlir`,
+    `openmp_to_arts_raise_to_tensor_multi_output_uniform_contract.mlir`,
+    `openmp_to_arts_tensor_optimization_tiles_uniform_loop.mlir`,
+    `openmp_to_arts_tensor_optimization_tiles_binary_uniform_loop.mlir`,
+    `openmp_to_arts_tensor_optimization_tiles_multi_output_uniform_loop.mlir`,
+    `openmp_to_arts_tensor_optimization_tiles_symbolic_uniform_loop.mlir`, and
+    `sde_to_arts_erases_dead_tensor_carrier_chain.mlir` validate the
+    RaiseToTensor, executable tiling, and post-conversion carrier cleanup flow
+14. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
    2mm → uniform contract (from linalg), stencil → stencil_tiling_nd (from KernelTransforms)
 
 ---
@@ -859,6 +875,7 @@ After:
   - no explicit chunk
   - `schedule(<static>)` or no schedule attr
   - one or more tensor outputs and one or more tensor inputs
+  - constant or symbolic trip count
 - For those loops, the pass uses `SDECostModel` to choose a tile width from
   worker count and minimum iterations per worker, multiplies the outer
   `sde.su_iterate` step by that tile width, and clones the original scalar body
@@ -870,8 +887,8 @@ After:
 
 - `ConvertSdeToArts` consumes any remaining transient tensor/linalg carriers
   for contract recovery.
-- It then erases dead `bufferization.to_tensor`, `tensor.empty`, and carrier
-  `linalg.generic` ops so downstream ARTS passes stay loop/memref-based.
+- It then repeatedly erases trivially dead tensor-carrier chains rooted in
+  transient tensor/linalg ops so downstream ARTS passes stay loop/memref-based.
 - Validation stays at the pass boundary: contract tests inspect IR dumps after
   `RaiseToTensor`, `SdeTensorOptimization`, and `ConvertSdeToArts`.
 
