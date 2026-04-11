@@ -361,6 +361,7 @@ Practical principles adopted from systems like Halide/Legion/Chapel/HPF/GSPMD/Ch
 
 In CARTS, this maps to:
 - SDE-owned pattern/distribution planning first, with `EdtDistributionPass`
-  reduced over time toward materialization/backfill
+  now acting as fallback-only backfill when SDE did not already author
+  distribution attrs at the boundary
 - specialized task/acquire lowering components for execution
 - DB/EDT analysis APIs as single pattern source of truth

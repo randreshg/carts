@@ -80,6 +80,7 @@ ConvertOpenMPToSde
   -> RaiseToTensor
   -> SdeTensorOptimization
   -> SdeStructuredSummaries
+  -> SdeDistributionPlanning
   -> ConvertSdeToArts
   -> VerifySdeLowered
   -> DCE
@@ -437,7 +438,8 @@ What it does not do yet:
 
 - no tensor-side transform for stencil loops
 - no tensor-side transform for general reductions
-- no multidimensional non-matmul strip-mining at the SDE level
+- no general multidimensional non-matmul strip-mining beyond the current
+  narrow 2-D disjoint-write elementwise slice
 
 ### `SdeStructuredSummaries`
 
@@ -476,6 +478,45 @@ Current behavior:
   contract at the boundary without re-deriving the semantic summary from ARTS
   IR.
 
+### `SdeDistributionPlanning`
+
+**Before**
+
+```mlir
+arts_sde.cu_region <parallel> scope(<local>) {
+  arts_sde.su_iterate(%c0) to(%c128) step(%tile) classification(<elementwise>) {
+    ...
+  }
+}
+```
+
+**After**
+
+```mlir
+arts_sde.cu_region <parallel> scope(<local>) {
+  arts_sde.su_distribute <blocked> {
+    arts_sde.su_iterate(%c0) to(%c128) step(%tile) classification(<elementwise>) {
+      ...
+    }
+  }
+}
+```
+
+Current behavior:
+
+- Uses only SDE-side information: structured classification, selected
+  concurrency scope, and the active `SDECostModel`.
+- Authors a narrow first distribution layer in SDE IR:
+  - local `elementwise` loops get `arts_sde.su_distribute <blocked>`
+  - distributed `stencil` loops with enough work get
+    `arts_sde.su_distribute <owner_compute>`
+- Leaves broader policy such as wavefront tile geometry, distributed matmul
+  decomposition, and other higher-order distribution families as remaining
+  migration work.
+- Keeps SDE runtime-neutral: no `distribution_kind`,
+  `distribution_pattern`, `depPattern`, or other `arts.*` attrs are stamped on
+  SDE IR here.
+
 ### `ConvertSdeToArts`
 
 **Before**
@@ -503,6 +544,8 @@ Current behavior:
 - This is the only intended boundary where SDE lowering becomes ARTS-aware.
 - Converts:
   - `arts_sde.cu_region` to `arts.edt`
+  - `arts_sde.su_distribute` by materializing its advisory on the lowered
+    `arts.for`
   - `arts_sde.su_iterate` to `arts.for`
   - `arts_sde.cu_task` to `arts.edt <task>` plus `arts.db_control`
   - `arts_sde.su_barrier` to `arts.barrier`
@@ -518,6 +561,9 @@ Contract recovery at this boundary:
   contracts from them.
 - If no carrier survives, the pass falls back to the SDE-owned
   `structured_classification` on the source `arts_sde.su_iterate`.
+- If the source loop sits under `arts_sde.su_distribute`, the pass converts
+  that SDE advisory into the matching ARTS `distribution_kind` at the
+  boundary.
 - It forwards `reduction_strategy` from SDE onto the lowered `arts.for` and,
   if missing there, also onto the parent `arts.edt`.
 - It erases memref-backed and tensor-backed carriers after consuming them, so

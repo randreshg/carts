@@ -140,7 +140,7 @@ loop/schedule shell.
 
 | Op | Current role | Current status |
 |---|---|---|
-| `sde.su_distribute` | Runtime-neutral advisory wrapper for distribution intent | Implemented as an advisory region op; current lowering inlines it away |
+| `sde.su_distribute` | Runtime-neutral advisory wrapper for distribution intent | Implemented; `SdeDistributionPlanning` authors it and `ConvertSdeToArts` materializes the advisory at the ARTS boundary |
 | `sde.mu_access` | In-body access-region annotation for memref fallback | Implemented as an annotation op; current lowering erases it |
 | `sde.mu_reduction_decl` | Module-level reduction symbol with type, kind, optional identity, optional custom combiner | Implemented; current lowering erases it after the SDE phase |
 

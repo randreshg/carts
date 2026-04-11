@@ -100,7 +100,7 @@ architecture docs.
 
 | Op                     | Purpose                                        | Status          |
 |------------------------|-------------------------------------------------|-----------------|
-| `sde.su_distribute`    | Advisory distribution hint for work mapping     | Implemented as a narrow advisory wrapper; current lowering inlines it away |
+| `sde.su_distribute`    | Advisory distribution hint for work mapping     | Implemented; `SdeDistributionPlanning` now authors a narrow first advisory layer and `ConvertSdeToArts` materializes it |
 | `sde.mu_access`        | In-body access region annotation (memref fallback) | Implemented as an annotation op; current lowering erases it |
 | `sde.mu_reduction_decl`| Module-level reduction symbol with identity + combiner | Implemented as a narrow declaration op; current lowering erases it |
 
@@ -308,6 +308,8 @@ SdeReductionStrategy
 RaiseToLinalg
 RaiseToTensor
 SdeTensorOptimization
+SdeStructuredSummaries
+SdeDistributionPlanning
 ConvertSdeToArts
 VerifySdeLowered
 DeadCodeElimination
@@ -443,7 +445,7 @@ Removal is comprehensive and accurate:
 | Action | Effort | Impact |
 |--------|--------|--------|
 | Implement `sde.mu_access` | 3-4h | In-body region annotation |
-| Implement `sde.su_distribute` | 3-4h | Advisory distribution hints |
+| Broaden `sde.su_distribute` beyond the first local-elementwise / distributed-stencil slice | 3-4h | SDE-owned distribution policy |
 | Create `patterns/`, `verify/`, `general/` dirs + move files | 4-6h | Complete Phase 3 |
 | Add `LoopLikeOpInterface` to su_iterate | 3-4h | MLIR loop transform compat |
 
