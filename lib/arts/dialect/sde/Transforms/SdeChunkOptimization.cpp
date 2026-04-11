@@ -87,18 +87,28 @@ static Value buildTripCountValue(OpBuilder &builder, Location loc,
   Value one = getConstantIndex(builder, loc, 1);
 
   Value span = arith::SubIOp::create(builder, loc, upperBound, lowerBound);
-  Value nonNegativeSpan = arith::MaxUIOp::create(builder, loc, span, zero);
 
   int64_t constantStep = 0;
   Value safeStep = step;
   if (ValueAnalysis::getConstantIndex(step, constantStep)) {
     if (constantStep <= 0)
       return Value();
-  } else {
-    safeStep = arith::MaxUIOp::create(builder, loc, step, one);
   }
 
-  return arith::CeilDivUIOp::create(builder, loc, nonNegativeSpan, safeStep);
+  // Keep symbolic trip-count computation signed-safe so negative runtime
+  // spans clamp to zero even when the lower bound is zero.
+  Value spanIsNegative = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::slt, span, zero);
+  Value nonNegativeSpan =
+      arith::SelectOp::create(builder, loc, spanIsNegative, zero, span);
+
+  if (!ValueAnalysis::getConstantIndex(step, constantStep)) {
+    Value stepIsTooSmall = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::sle, step, zero);
+    safeStep = arith::SelectOp::create(builder, loc, stepIsTooSmall, one, step);
+  }
+
+  return arith::CeilDivSIOp::create(builder, loc, nonNegativeSpan, safeStep);
 }
 
 static Value buildSymbolicChunkValue(OpBuilder &builder, Location loc,
@@ -116,11 +126,10 @@ static Value buildSymbolicChunkValue(OpBuilder &builder, Location loc,
       getConstantIndex(builder, loc, std::max<int64_t>(1, minIterations));
 
   Value clampedTripCount = arith::MaxUIOp::create(builder, loc, tripCount, one);
-  Value balancedChunk =
-      arith::CeilDivUIOp::create(builder, loc, clampedTripCount,
-                                 workerCountValue);
-  Value preferredChunk = arith::MaxUIOp::create(builder, loc, balancedChunk,
-                                                minIterationsValue);
+  Value balancedChunk = arith::CeilDivUIOp::create(
+      builder, loc, clampedTripCount, workerCountValue);
+  Value preferredChunk =
+      arith::MaxUIOp::create(builder, loc, balancedChunk, minIterationsValue);
   return arith::MinUIOp::create(builder, loc, preferredChunk, clampedTripCount);
 }
 
@@ -140,7 +149,8 @@ struct SdeChunkOptimizationPass
 
     SmallVector<ChunkRewrite> rewrites;
     getOperation().walk([&](sde::SdeSuIterateOp op) {
-      if (op.getChunkSize() || !isChunkOptimizableSchedule(op.getScheduleAttr()))
+      if (op.getChunkSize() ||
+          !isChunkOptimizableSchedule(op.getScheduleAttr()))
         return;
 
       std::optional<int64_t> tripCount = getConstantTripCount(op);
@@ -149,12 +159,11 @@ struct SdeChunkOptimizationPass
 
       if (tripCount) {
         int64_t workerCount = std::max<int64_t>(1, costModel->getWorkerCount());
-        int64_t minIterations = std::max<int64_t>(
-            1, costModel->getMinIterationsPerWorker());
+        int64_t minIterations =
+            std::max<int64_t>(1, costModel->getMinIterationsPerWorker());
         int64_t balancedChunk = ceilDiv(*tripCount, workerCount);
-        int64_t chunkSize =
-            std::clamp(std::max(minIterations, balancedChunk), int64_t{1},
-                       *tripCount);
+        int64_t chunkSize = std::clamp(std::max(minIterations, balancedChunk),
+                                       int64_t{1}, *tripCount);
         rewrites.push_back({op, chunkSize});
         return;
       }
@@ -172,8 +181,8 @@ struct SdeChunkOptimizationPass
 
       Value chunkSize;
       if (rewrite.chunkSize) {
-        chunkSize = getConstantIndex(rewriter, rewrite.op.getLoc(),
-                                     *rewrite.chunkSize);
+        chunkSize =
+            getConstantIndex(rewriter, rewrite.op.getLoc(), *rewrite.chunkSize);
       } else {
         chunkSize = buildSymbolicChunkValue(
             rewriter, rewrite.op.getLoc(), rewrite.op,
@@ -186,8 +195,8 @@ struct SdeChunkOptimizationPass
       auto newOp = sde::SdeSuIterateOp::create(
           rewriter, rewrite.op.getLoc(), rewrite.op.getLowerBounds(),
           rewrite.op.getUpperBounds(), rewrite.op.getSteps(),
-          rewrite.op.getScheduleAttr(), chunkSize,
-          rewrite.op.getNowaitAttr(), rewrite.op.getReductionAccumulators(),
+          rewrite.op.getScheduleAttr(), chunkSize, rewrite.op.getNowaitAttr(),
+          rewrite.op.getReductionAccumulators(),
           rewrite.op.getReductionKindsAttr(),
           rewrite.op.getReductionStrategyAttr(),
           rewrite.op.getLinalgClassificationAttr());

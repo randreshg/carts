@@ -21,8 +21,9 @@
 // OPT: arts_sde.cu_region <parallel> scope(<local>) {
 // OPT: = arith.constant 0 : index
 // OPT: = arith.subi %arg2, %c0 : index
-// OPT: = arith.maxui
-// OPT: = arith.ceildivui
+// OPT: = arith.cmpi slt
+// OPT: = arith.select
+// OPT: = arith.ceildivsi
 // OPT: = arith.constant 1 : index
 // OPT: = arith.constant 8 : index
 // OPT: = arith.constant 3 : index

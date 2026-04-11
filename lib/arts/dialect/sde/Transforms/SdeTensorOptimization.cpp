@@ -90,7 +90,6 @@ static Value buildTripCountValue(OpBuilder &builder, Location loc,
   Value one = getConstantIndex(builder, loc, 1);
 
   Value span = arith::SubIOp::create(builder, loc, upperBound, lowerBound);
-  Value nonNegativeSpan = arith::MaxUIOp::create(builder, loc, span, zero);
 
   int64_t constantStep = 0;
   Value safeStep = step;
@@ -98,10 +97,16 @@ static Value buildTripCountValue(OpBuilder &builder, Location loc,
     if (constantStep <= 0)
       return Value();
   } else {
-    safeStep = arith::MaxUIOp::create(builder, loc, step, one);
+    Value stepIsTooSmall = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::sle, step, zero);
+    safeStep = arith::SelectOp::create(builder, loc, stepIsTooSmall, one, step);
   }
 
-  return arith::CeilDivUIOp::create(builder, loc, nonNegativeSpan, safeStep);
+  Value spanIsNegative = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::slt, span, zero);
+  Value nonNegativeSpan =
+      arith::SelectOp::create(builder, loc, spanIsNegative, zero, span);
+  return arith::CeilDivSIOp::create(builder, loc, nonNegativeSpan, safeStep);
 }
 
 static Value buildTileIterationValue(OpBuilder &builder, Location loc,
@@ -152,23 +157,8 @@ static linalg::GenericOp findTensorCarrier(Block &body) {
   return tensorGeneric;
 }
 
-static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op,
-                                          Block &body,
-                                          linalg::GenericOp tensorGeneric) {
-  if (!tensorGeneric)
-    return false;
-  if (op.getChunkSize() || !isTensorOptimizationSchedule(op.getScheduleAttr()))
-    return false;
-  if (op.getReductionAccumulators().size() != 0)
-    return false;
-  if (op->getParentOfType<scf::ForOp>())
-    return false;
-  if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
-      op.getSteps().size() != 1)
-    return false;
-  if (!op.getLinalgClassificationAttr() ||
-      op.getLinalgClassification() != sde::SdeLinalgClassification::elementwise)
-    return false;
+static bool isElementwiseTensorCandidate(Block &body,
+                                         linalg::GenericOp tensorGeneric) {
   if (tensorGeneric.getNumLoops() != 1)
     return false;
   if (!llvm::all_of(tensorGeneric.getIteratorTypesArray(),
@@ -191,6 +181,59 @@ static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op,
   }
   return numLoads == tensorGeneric.getNumDpsInputs() &&
          numStores == tensorGeneric.getNumDpsInits();
+}
+
+static bool isMatmulTensorCandidate(Block &body, linalg::GenericOp tensorGeneric) {
+  if (tensorGeneric.getNumLoops() != 3 || tensorGeneric.getNumDpsInits() != 1)
+    return false;
+
+  unsigned numParallel = 0;
+  unsigned numReduction = 0;
+  for (utils::IteratorType type : tensorGeneric.getIteratorTypesArray()) {
+    if (type == utils::IteratorType::parallel)
+      ++numParallel;
+    else if (type == utils::IteratorType::reduction)
+      ++numReduction;
+  }
+  if (numParallel != 2 || numReduction != 1)
+    return false;
+
+  unsigned nonCarrierOps = 0;
+  for (Operation &nested : body.without_terminator()) {
+    if (isCarrierOp(nested))
+      continue;
+    if (!isa<scf::ForOp>(nested))
+      return false;
+    ++nonCarrierOps;
+  }
+  return nonCarrierOps == 1;
+}
+
+static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op,
+                                          Block &body,
+                                          linalg::GenericOp tensorGeneric) {
+  if (!tensorGeneric)
+    return false;
+  if (op.getChunkSize() || !isTensorOptimizationSchedule(op.getScheduleAttr()))
+    return false;
+  if (op.getReductionAccumulators().size() != 0)
+    return false;
+  if (op->getParentOfType<scf::ForOp>())
+    return false;
+  if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
+      op.getSteps().size() != 1)
+    return false;
+  if (!op.getLinalgClassificationAttr())
+    return false;
+
+  switch (*op.getLinalgClassification()) {
+  case sde::SdeLinalgClassification::elementwise:
+    return isElementwiseTensorCandidate(body, tensorGeneric);
+  case sde::SdeLinalgClassification::matmul:
+    return isMatmulTensorCandidate(body, tensorGeneric);
+  default:
+    return false;
+  }
 }
 
 static void cloneScalarBodyIntoTileLoop(Block &srcBody, scf::ForOp tileLoop,
