@@ -14,6 +14,8 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "llvm/ADT/DenseMap.h"
+
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 
@@ -27,56 +29,96 @@ static RankedTensorType getRankedTensorType(Value memref) {
       memref::getTensorTypeFromMemRefType(memref.getType()));
 }
 
+static Value getOrCreateTensorValue(OpBuilder &builder, Location loc,
+                                    DenseMap<Value, Value> &tensorValues,
+                                    Value memref) {
+  if (Value tensor = tensorValues.lookup(memref))
+    return tensor;
+
+  RankedTensorType tensorType = getRankedTensorType(memref);
+  if (!tensorType)
+    return Value();
+
+  Value tensor =
+      bufferization::ToTensorOp::create(builder, loc, tensorType, memref);
+  tensorValues[memref] = tensor;
+  return tensor;
+}
+
 static SmallVector<Value>
-buildTensorInputs(OpBuilder &builder, Location loc, ValueRange memrefInputs) {
+buildTensorInputs(OpBuilder &builder, Location loc, ValueRange memrefInputs,
+                  DenseMap<Value, Value> &tensorValues) {
   SmallVector<Value> tensorInputs;
   tensorInputs.reserve(memrefInputs.size());
   for (Value input : memrefInputs) {
-    RankedTensorType tensorType = getRankedTensorType(input);
-    if (!tensorType)
+    Value tensor = getOrCreateTensorValue(builder, loc, tensorValues, input);
+    if (!tensor)
       return {};
-    tensorInputs.push_back(
-        bufferization::ToTensorOp::create(builder, loc, tensorType, input));
+    tensorInputs.push_back(tensor);
   }
   return tensorInputs;
 }
 
-static SmallVector<Value> buildTensorOutputs(OpBuilder &builder, Location loc,
-                                             ValueRange memrefOutputs,
-                                             bool useEmptyTensorInit) {
+static bool shouldUseEmptyTensorInit(linalg::GenericOp generic,
+                                     unsigned outputIndex) {
+  auto iterOp = generic->getParentOfType<sde::SdeSuIterateOp>();
+  if (!iterOp || iterOp.getLinalgClassification() !=
+                     sde::SdeLinalgClassification::elementwise)
+    return false;
+
+  Value output = generic.getDpsInits()[outputIndex];
+  AffineMap outputMap =
+      generic.getMatchingIndexingMap(generic.getDpsInitOperand(outputIndex));
+  for (auto [inputIndex, input] : llvm::enumerate(generic.getDpsInputs())) {
+    if (input != output)
+      continue;
+    AffineMap inputMap =
+        generic.getMatchingIndexingMap(generic.getDpsInputOperand(inputIndex));
+    if (inputMap == outputMap)
+      return false;
+  }
+
+  return true;
+}
+
+static SmallVector<Value>
+buildTensorOutputs(OpBuilder &builder, Location loc,
+                   linalg::GenericOp oldGeneric,
+                   DenseMap<Value, Value> &tensorValues) {
   SmallVector<Value> tensorOutputs;
-  tensorOutputs.reserve(memrefOutputs.size());
-  for (Value output : memrefOutputs) {
+  tensorOutputs.reserve(oldGeneric.getNumDpsInits());
+  for (auto [outputIndex, output] : llvm::enumerate(oldGeneric.getDpsInits())) {
     RankedTensorType tensorType = getRankedTensorType(output);
     if (!tensorType)
       return {};
 
-    if (useEmptyTensorInit) {
+    if (shouldUseEmptyTensorInit(oldGeneric, outputIndex)) {
       tensorOutputs.push_back(tensor::EmptyOp::create(
           builder, loc, memref::getMixedSizes(builder, loc, output),
           tensorType.getElementType()));
       continue;
     }
 
-    tensorOutputs.push_back(
-        bufferization::ToTensorOp::create(builder, loc, tensorType, output));
+    Value tensor = getOrCreateTensorValue(builder, loc, tensorValues, output);
+    if (!tensor)
+      return {};
+    tensorOutputs.push_back(tensor);
   }
   return tensorOutputs;
 }
 
-static linalg::GenericOp rewriteGenericToTensor(linalg::GenericOp oldGeneric,
-                                                bool useEmptyTensorInit) {
+static linalg::GenericOp rewriteGenericToTensor(linalg::GenericOp oldGeneric) {
   OpBuilder builder(oldGeneric);
   Location loc = oldGeneric.getLoc();
+  DenseMap<Value, Value> tensorValues;
 
   SmallVector<Value> tensorInputs =
-      buildTensorInputs(builder, loc, oldGeneric.getDpsInputs());
-  SmallVector<Value> tensorOutputs = buildTensorOutputs(
-      builder, loc, oldGeneric.getDpsInits(), useEmptyTensorInit);
+      buildTensorInputs(builder, loc, oldGeneric.getDpsInputs(), tensorValues);
+  SmallVector<Value> tensorOutputs =
+      buildTensorOutputs(builder, loc, oldGeneric, tensorValues);
   if (tensorInputs.size() !=
           static_cast<size_t>(oldGeneric.getNumDpsInputs()) ||
-      tensorOutputs.size() !=
-          static_cast<size_t>(oldGeneric.getNumDpsInits()))
+      tensorOutputs.size() != static_cast<size_t>(oldGeneric.getNumDpsInits()))
     return nullptr;
 
   SmallVector<Type> resultTensorTypes;
@@ -90,7 +132,8 @@ static linalg::GenericOp rewriteGenericToTensor(linalg::GenericOp oldGeneric,
       oldGeneric.getIndexingMapsArray(), oldGeneric.getIteratorTypesArray(),
       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
         IRMapping mapper;
-        for (auto [oldArg, newArg] : llvm::zip(oldBody.getArguments(), blockArgs))
+        for (auto [oldArg, newArg] :
+             llvm::zip(oldBody.getArguments(), blockArgs))
           mapper.map(oldArg, newArg);
 
         for (Operation &op : oldBody.without_terminator())
@@ -127,13 +170,7 @@ struct RaiseToTensorPass
           }))
         continue;
 
-      auto iterOp = generic->getParentOfType<sde::SdeSuIterateOp>();
-      bool useEmptyTensorInit =
-          iterOp && iterOp.getLinalgClassification() ==
-                        sde::SdeLinalgClassification::elementwise;
-
-      linalg::GenericOp tensorGeneric =
-          rewriteGenericToTensor(generic, useEmptyTensorInit);
+      linalg::GenericOp tensorGeneric = rewriteGenericToTensor(generic);
       if (!tensorGeneric)
         continue;
 
