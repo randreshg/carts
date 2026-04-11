@@ -24,6 +24,10 @@ def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
     - stencil: parallel iterators with constant-offset indexing maps
     - reduction: has reduction iterators with accumulation pattern
 
+    The pass also stamps an SDE-owned classification on the source loop so
+    SDE->ARTS can recover contracts even when the loop stays on the fallback
+    path.
+
     Today, only the elementwise/matmul-style subset is materialized as a
     linalg.generic carrier. Stencil/reduction bodies currently stay on the
     stamped-attribute fallback path.
@@ -106,7 +110,7 @@ def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
     matching ARTS contract from them, copies semantic contract attributes, and
     erases the carriers so downstream passes continue on loop/memref IR. When
     no linalg carrier is present, it falls back to RaiseToLinalg's stamped
-    classification attribute.
+    SDE classification attribute.
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
                            "::mlir::arts::ArtsDialect",

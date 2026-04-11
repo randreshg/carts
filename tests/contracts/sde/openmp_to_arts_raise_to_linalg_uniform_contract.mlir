@@ -6,13 +6,12 @@
 // CHECK-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // CHECK: func.func @main
 // CHECK: arts_sde.cu_region <parallel> scope(<local>) {
-// CHECK: arts_sde.su_iterate(%c0) to(%c128) step(%c1) {
+// CHECK: arts_sde.su_iterate(%c0) to(%c128) step(%c1) classification(<elementwise>) {
 // CHECK: %[[VAL:.+]] = memref.load %arg0[%[[IV:.*]]] : memref<128xf64>
 // CHECK: %[[MUL:.+]] = arith.mulf %[[VAL]], %cst : f64
 // CHECK: memref.store %[[MUL]], %arg1[%[[IV]]] : memref<128xf64>
 // CHECK: linalg.generic
 // CHECK-SAME: iterator_types = ["parallel"]
-// CHECK: } {arts.linalg.classification = "elementwise"}
 // CHECK-NOT: arts.for
 // CHECK: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 

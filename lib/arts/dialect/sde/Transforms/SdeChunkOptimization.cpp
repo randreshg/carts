@@ -189,7 +189,8 @@ struct SdeChunkOptimizationPass
           rewrite.op.getScheduleAttr(), chunkSize,
           rewrite.op.getNowaitAttr(), rewrite.op.getReductionAccumulators(),
           rewrite.op.getReductionKindsAttr(),
-          rewrite.op.getReductionStrategyAttr());
+          rewrite.op.getReductionStrategyAttr(),
+          rewrite.op.getLinalgClassificationAttr());
       newOp->setAttrs(getRewrittenAttrs(rewrite.op.getOperation()));
       newOp.getBody().takeBody(rewrite.op.getBody());
       rewriter.eraseOp(rewrite.op);

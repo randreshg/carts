@@ -44,7 +44,9 @@ linalg.generic               =  COMPUTATION  (what the math is)
    carriers created before SDE. Removing that residual ARTS-core boundary needs
    a separate upstream dependency-carrier redesign.
 6. Reduction and stencil raising are not fully implemented. Those cases stay on
-   the fallback path today.
+   the fallback path today, but `RaiseToLinalg` now stamps an SDE-owned
+   classification directly on `sde.su_iterate` so SDE->ARTS can still recover
+   the intended contract without relying on ARTS-namespaced strings.
 7. SDE chunk logic is validated at the SDE IR level: tests check
    `arts_sde.su_iterate schedule(..., chunk)` immediately after
    `SdeChunkOptimization`, before SDE->ARTS lowering rewrites the loop.
@@ -422,8 +424,8 @@ reductions are not converted into `ArtsDepPattern::reduction` here.
 - If found: prefer any explicit contract already present on the generic;
   otherwise classify from linalg structure, then stamp `depPattern` and
   stencil offsets via `StencilNDPatternContract`
-- If no carrier is present: fall back to `arts.linalg.classification` stamped
-  on the source `sde.su_iterate`
+- If no carrier is present: fall back to the SDE-owned
+  `classification(<...>)` stamped on the source `sde.su_iterate`
 - After stamping: erase the transient cloned generics
 
 This is intentionally **not** `linalgOpToLoops`. `RaiseToLinalg` leaves the
