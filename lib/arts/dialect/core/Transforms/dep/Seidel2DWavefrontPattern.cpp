@@ -386,11 +386,9 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
                           /*schedule=*/nullptr, /*chunkSize=*/Value(),
                           /*reductionAccumulators=*/ValueRange{});
   /// This frontier loop is synthetic. It preserves the stencil contract, but
-  /// it does not preserve the source row-loop trip count or other loop
-  /// metadata, so restamp only the contract attrs below.
+  /// it does not preserve the source row-loop trip count, so restamp only the
+  /// contract attrs below.
   wavefrontContract.stamp(tileFor.getOperation());
-  tileFor->setAttr(AttrNames::Operation::SkipLoopMetadataRecovery,
-                   tileBuilder.getUnitAttr());
   if (tilingPlan.taskChunkHint)
     setPartitioningHint(tileFor.getOperation(),
                         PartitioningHint::block(*tilingPlan.taskChunkHint));
