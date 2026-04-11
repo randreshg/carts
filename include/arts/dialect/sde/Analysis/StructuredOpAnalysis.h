@@ -38,17 +38,29 @@ struct StructuredLoopSummary {
   SmallVector<MemrefAccessEntry> writes;
   SmallVector<AffineMap> outputMaps;
   SmallVector<utils::IteratorType> iterTypes;
-  SdeLinalgClassification classification =
-      SdeLinalgClassification::elementwise;
+  SdeLinalgClassification classification = SdeLinalgClassification::elementwise;
   bool supportsReductionCarrier = false;
 
   bool supportsLinalgCarrier() const;
+};
+
+struct StructuredNeighborhoodInfo {
+  SmallVector<int64_t, 4> ownerDims;
+  SmallVector<int64_t, 4> spatialDims;
+  SmallVector<int64_t, 4> minOffsets;
+  SmallVector<int64_t, 4> maxOffsets;
+  SmallVector<int64_t, 4> writeFootprint;
 };
 
 /// Analyze one `arts_sde.su_iterate` nest and recover the structural facts
 /// needed by higher SDE passes. Returns nullopt when the loop is not a
 /// supported perfectly nested memref-based structured loop.
 std::optional<StructuredLoopSummary> analyzeStructuredLoop(SdeSuIterateOp op);
+
+/// Recover a runtime-neutral structured neighborhood summary directly from SDE
+/// loop-access analysis.
+std::optional<StructuredNeighborhoodInfo>
+extractNeighborhoodSummary(const StructuredLoopSummary &summary);
 
 } // namespace mlir::arts::sde
 

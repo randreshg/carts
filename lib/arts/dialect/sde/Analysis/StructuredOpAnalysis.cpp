@@ -134,8 +134,8 @@ static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
       auto map = tryBuildIndexingMap(storeOp.getIndices(), ivs, ctx);
       if (!map)
         return false;
-      writes.push_back(
-          {storeOp.getMemref(), *map, storeOp.getOperation(), /*isRead=*/false});
+      writes.push_back({storeOp.getMemref(), *map, storeOp.getOperation(),
+                        /*isRead=*/false});
       continue;
     }
 
@@ -148,8 +148,9 @@ static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
   return !reads.empty() || !writes.empty();
 }
 
-static void computeIteratorTypes(unsigned numDims, ArrayRef<AffineMap> outputMaps,
-                                 SmallVectorImpl<utils::IteratorType> &iterTypes) {
+static void
+computeIteratorTypes(unsigned numDims, ArrayRef<AffineMap> outputMaps,
+                     SmallVectorImpl<utils::IteratorType> &iterTypes) {
   llvm::SmallBitVector dimsInOutputs(numDims, false);
   for (AffineMap map : outputMaps) {
     for (unsigned i = 0; i < map.getNumResults(); ++i) {
@@ -181,8 +182,77 @@ static bool hasConstantOffsets(AffineMap map) {
   return false;
 }
 
+struct AffineDimOffset {
+  std::optional<unsigned> dim;
+  int64_t offset = 0;
+};
+
+static std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr) {
+  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr))
+    return AffineDimOffset{dimExpr.getPosition(), 0};
+  if (auto cstExpr = dyn_cast<AffineConstantExpr>(expr))
+    return AffineDimOffset{std::nullopt, cstExpr.getValue()};
+
+  auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr);
+  if (!binExpr)
+    return std::nullopt;
+
+  auto lhs = extractDimOffset(binExpr.getLHS());
+  auto rhs = extractDimOffset(binExpr.getRHS());
+  if (!lhs || !rhs)
+    return std::nullopt;
+
+  switch (binExpr.getKind()) {
+  case AffineExprKind::Add:
+    if (lhs->dim && rhs->dim)
+      return std::nullopt;
+    return AffineDimOffset{lhs->dim ? lhs->dim : rhs->dim,
+                           lhs->offset + rhs->offset};
+  default:
+    return std::nullopt;
+  }
+}
+
+static std::optional<StructuredNeighborhoodInfo>
+extractNeighborhoodSummary(ArrayRef<MemrefAccessEntry> reads,
+                           unsigned numLoops) {
+  if (numLoops == 0)
+    return std::nullopt;
+
+  StructuredNeighborhoodInfo info;
+  info.minOffsets.assign(numLoops, 0);
+  info.maxOffsets.assign(numLoops, 0);
+  info.writeFootprint.assign(numLoops, 0);
+  for (unsigned dim = 0; dim < numLoops; ++dim) {
+    info.ownerDims.push_back(dim);
+    info.spatialDims.push_back(dim);
+  }
+
+  bool sawNeighborhoodOffset = false;
+  for (const MemrefAccessEntry &entry : reads) {
+    for (AffineExpr result : entry.indexingMap.getResults()) {
+      auto dimOffset = extractDimOffset(result);
+      if (!dimOffset || !dimOffset->dim)
+        continue;
+
+      unsigned dim = *dimOffset->dim;
+      if (dim >= numLoops)
+        continue;
+
+      info.minOffsets[dim] = std::min(info.minOffsets[dim], dimOffset->offset);
+      info.maxOffsets[dim] = std::max(info.maxOffsets[dim], dimOffset->offset);
+      sawNeighborhoodOffset |= dimOffset->offset != 0;
+    }
+  }
+
+  if (!sawNeighborhoodOffset)
+    return std::nullopt;
+  return info;
+}
+
 static SdeLinalgClassification
-classifyPattern(ArrayRef<MemrefAccessEntry> reads, ArrayRef<AffineMap> outputMaps,
+classifyPattern(ArrayRef<MemrefAccessEntry> reads,
+                ArrayRef<AffineMap> outputMaps,
                 ArrayRef<utils::IteratorType> iterTypes, unsigned numDims) {
   unsigned numParallel = 0;
   unsigned numReduction = 0;
@@ -281,12 +351,17 @@ analyzeStructuredLoop(SdeSuIterateOp iterOp) {
 
   computeIteratorTypes(summary.nest.ivs.size(), summary.outputMaps,
                        summary.iterTypes);
-  summary.classification = classifyPattern(summary.reads, summary.outputMaps,
-                                           summary.iterTypes,
-                                           summary.nest.ivs.size());
+  summary.classification =
+      classifyPattern(summary.reads, summary.outputMaps, summary.iterTypes,
+                      summary.nest.ivs.size());
   summary.supportsReductionCarrier = supportsReductionCarrierSubset(
       iterOp, summary.nest, summary.reads, summary.writes);
   return summary;
+}
+
+std::optional<StructuredNeighborhoodInfo>
+extractNeighborhoodSummary(const StructuredLoopSummary &summary) {
+  return extractNeighborhoodSummary(summary.reads, summary.nest.ivs.size());
 }
 
 } // namespace mlir::arts::sde

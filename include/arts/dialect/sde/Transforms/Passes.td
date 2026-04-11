@@ -89,6 +89,25 @@ def SdeTensorOptimization : Pass<"sde-tensor-optimization", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createSdeTensorOptimizationPass()";
 }
 
+def SdeStructuredSummaries
+    : Pass<"sde-structured-summaries", "mlir::ModuleOp"> {
+  let summary = "Stamp SDE-owned structured summaries";
+  let description = [{
+    Uses the SDE structured loop/access analysis to refresh reusable,
+    runtime-neutral summaries on eligible `arts_sde.su_iterate` operations
+    before `ConvertSdeToArts`. This keeps SDE responsible for structured loop
+    semantics without stamping ARTS- or lowering-specific attributes on SDE IR.
+
+    The current implementation refreshes:
+    - `classification(<...>)` from the current SDE structured analysis
+    - generic access/owner/footprint summaries for recognized neighborhood
+      loops so the SDE->ARTS boundary can materialize the runtime-specific
+      contract later
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
+  let constructor = "mlir::arts::sde::createSdeStructuredSummariesPass()";
+}
+
 def ConvertOpenMPToSde : Pass<"convert-openmp-to-sde", "mlir::ModuleOp"> {
   let summary = "Convert OpenMP operations to SDE operations";
   let description = [{
@@ -169,8 +188,9 @@ def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
     materializes transient linalg.generic carriers, this pass derives the
     matching ARTS contract from them, copies semantic contract attributes, and
     erases the carriers so downstream passes continue on loop/memref IR. When
-    no linalg carrier is present, it falls back to RaiseToLinalg's stamped
-    SDE classification attribute.
+    no transient carrier is authoritative, it prefers any explicit SDE-owned
+    semantic contract already stamped on `arts_sde.su_iterate`, then falls
+    back to the structural SDE classification attribute.
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
                            "::mlir::arts::ArtsDialect",

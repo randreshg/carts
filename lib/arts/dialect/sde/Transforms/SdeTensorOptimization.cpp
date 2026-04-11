@@ -374,7 +374,9 @@ struct SdeTensorOptimizationPass
           ValueRange{tiledStep}, op.getScheduleAttr(), op.getChunkSize(),
           op.getNowaitAttr(), op.getReductionAccumulators(),
           op.getReductionKindsAttr(), op.getReductionStrategyAttr(),
-          op.getLinalgClassificationAttr());
+          op.getLinalgClassificationAttr(), op.getAccessMinOffsetsAttr(),
+          op.getAccessMaxOffsetsAttr(), op.getOwnerDimsAttr(),
+          op.getSpatialDimsAttr(), op.getWriteFootprintAttr());
       newOp->setAttrs(getRewrittenAttrs(op));
 
       Block &newBody = ensureBlock(newOp.getBody());

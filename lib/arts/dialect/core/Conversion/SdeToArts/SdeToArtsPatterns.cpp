@@ -15,6 +15,7 @@
 ///   sde.yield               ->  arts.yield
 ///==========================================================================///
 
+#include "arts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "arts/dialect/sde/Transforms/Passes.h"
 namespace mlir::arts {
 #define GEN_PASS_DEF_CONVERTSDETOARTS
@@ -53,6 +54,22 @@ static llvm::Statistic numCuTaskConverted{
 
 using namespace mlir;
 using namespace mlir::arts;
+
+static std::optional<ArtsDepPattern>
+mapStructuredClassificationToArtsDepPattern(
+    sde::SdeLinalgClassification classification) {
+  switch (classification) {
+  case sde::SdeLinalgClassification::stencil:
+    return ArtsDepPattern::stencil_tiling_nd;
+  case sde::SdeLinalgClassification::matmul:
+    return ArtsDepPattern::matmul;
+  case sde::SdeLinalgClassification::elementwise:
+    return ArtsDepPattern::uniform;
+  case sde::SdeLinalgClassification::reduction:
+    break;
+  }
+  return std::nullopt;
+}
 
 //===----------------------------------------------------------------------===//
 // Helpers
@@ -114,22 +131,6 @@ convertReductionStrategy(MLIRContext *ctx,
 //===----------------------------------------------------------------------===//
 // Linalg-derived contract classification helpers
 //===----------------------------------------------------------------------===//
-
-/// Map an SDE loop classification to an ArtsDepPattern.
-static std::optional<ArtsDepPattern>
-classifyFromSde(sde::SdeLinalgClassification classification) {
-  switch (classification) {
-  case sde::SdeLinalgClassification::stencil:
-    return ArtsDepPattern::stencil_tiling_nd;
-  case sde::SdeLinalgClassification::matmul:
-    return ArtsDepPattern::matmul;
-  case sde::SdeLinalgClassification::elementwise:
-    return ArtsDepPattern::uniform;
-  case sde::SdeLinalgClassification::reduction:
-    break;
-  }
-  return std::nullopt;
-}
 
 /// Structured stencil footprint recovered from a linalg.generic indexing map.
 struct LinalgStencilContractInfo {
@@ -257,6 +258,46 @@ getStampedStencilContract(Operation *op) {
   info.minOffsets = *getStencilMinOffsets(op);
   info.maxOffsets = *getStencilMaxOffsets(op);
   info.writeFootprint = *getStencilWriteFootprint(op);
+  return info;
+}
+
+static std::optional<LinalgStencilContractInfo>
+getSdeNeighborhoodSummary(sde::SdeSuIterateOp op) {
+  if (!op.getAccessMinOffsetsAttr() || !op.getAccessMaxOffsetsAttr() ||
+      !op.getOwnerDimsAttr() || !op.getWriteFootprintAttr())
+    return std::nullopt;
+
+  auto readArrayAttr =
+      [](ArrayAttr attr) -> std::optional<SmallVector<int64_t, 4>> {
+    if (!attr)
+      return std::nullopt;
+    SmallVector<int64_t, 4> values;
+    values.reserve(attr.size());
+    for (Attribute element : attr) {
+      auto intAttr = dyn_cast<IntegerAttr>(element);
+      if (!intAttr)
+        return std::nullopt;
+      values.push_back(intAttr.getInt());
+    }
+    return values;
+  };
+
+  auto minOffsets = readArrayAttr(op.getAccessMinOffsetsAttr());
+  auto maxOffsets = readArrayAttr(op.getAccessMaxOffsetsAttr());
+  auto ownerDims = readArrayAttr(op.getOwnerDimsAttr());
+  auto writeFootprint = readArrayAttr(op.getWriteFootprintAttr());
+  if (!minOffsets || !maxOffsets || !ownerDims || !writeFootprint)
+    return std::nullopt;
+
+  LinalgStencilContractInfo info;
+  info.minOffsets = std::move(*minOffsets);
+  info.maxOffsets = std::move(*maxOffsets);
+  info.ownerDims = std::move(*ownerDims);
+  info.writeFootprint = std::move(*writeFootprint);
+  if (auto spatialDims = readArrayAttr(op.getSpatialDimsAttr()))
+    info.spatialDims = std::move(*spatialDims);
+  else
+    info.spatialDims = info.ownerDims;
   return info;
 }
 
@@ -616,29 +657,24 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
           << stringifyArtsDepPattern(*candidatePattern));
     };
 
-    for (linalg::GenericOp generic : linalgGenerics)
-      considerLinalgContract(generic);
-
-    if (contractSource) {
-      copySemanticContractAttrs(contractSource.getOperation(),
-                                artsFor.getOperation());
-      if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
-        copySemanticContractAttrs(contractSource.getOperation(),
-                                  parentEdt.getOperation());
+    if (auto classAttr = op.getLinalgClassificationAttr()) {
+      selectedPattern =
+          mapStructuredClassificationToArtsDepPattern(classAttr.getValue());
+      selectedRevision = getPatternRevision(op.getOperation()).value_or(1);
+      if (selectedPattern && isStencilFamilyDepPattern(*selectedPattern))
+        selectedStencilContract = getSdeNeighborhoodSummary(op);
     }
 
-    // Fallback to RaiseToLinalg's SDE-owned loop classification when no
-    // linalg.generic survived into the cloned body.
+    // Fallback to transient carrier inference when no SDE-owned structured
+    // classification or summary exists on the source loop.
     if (!selectedPattern) {
-      if (auto classAttr = op.getLinalgClassificationAttr()) {
-        selectedPattern = classifyFromSde(classAttr.getValue());
-        selectedRevision = getPatternRevision(op.getOperation()).value_or(1);
-        if (selectedPattern && isStencilFamilyDepPattern(*selectedPattern))
-          selectedStencilContract =
-              getStampedStencilContract(op.getOperation());
-        copySemanticContractAttrs(op.getOperation(), artsFor.getOperation());
+      for (linalg::GenericOp generic : linalgGenerics)
+        considerLinalgContract(generic);
+      if (contractSource) {
+        copySemanticContractAttrs(contractSource.getOperation(),
+                                  artsFor.getOperation());
         if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
-          copySemanticContractAttrs(op.getOperation(),
+          copySemanticContractAttrs(contractSource.getOperation(),
                                     parentEdt.getOperation());
       }
     }

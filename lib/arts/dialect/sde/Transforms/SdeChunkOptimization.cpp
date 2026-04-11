@@ -199,7 +199,10 @@ struct SdeChunkOptimizationPass
           rewrite.op.getReductionAccumulators(),
           rewrite.op.getReductionKindsAttr(),
           rewrite.op.getReductionStrategyAttr(),
-          rewrite.op.getLinalgClassificationAttr());
+          rewrite.op.getLinalgClassificationAttr(),
+          rewrite.op.getAccessMinOffsetsAttr(),
+          rewrite.op.getAccessMaxOffsetsAttr(), rewrite.op.getOwnerDimsAttr(),
+          rewrite.op.getSpatialDimsAttr(), rewrite.op.getWriteFootprintAttr());
       newOp->setAttrs(getRewrittenAttrs(rewrite.op));
       newOp.getBody().takeBody(rewrite.op.getBody());
       rewriter.eraseOp(rewrite.op);

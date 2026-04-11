@@ -79,6 +79,7 @@ ConvertOpenMPToSde
   -> RaiseToLinalg
   -> RaiseToTensor
   -> SdeTensorOptimization
+  -> SdeStructuredSummaries
   -> ConvertSdeToArts
   -> VerifySdeLowered
   -> DCE
@@ -436,6 +437,43 @@ What it does not do yet:
 - no tensor-side transform for stencil loops
 - no tensor-side transform for general reductions
 - no multidimensional non-matmul strip-mining at the SDE level
+
+### `SdeStructuredSummaries`
+
+**Before**
+
+```mlir
+arts_sde.su_iterate(%c1) to(%c63) step(%c1) classification(<stencil>) {
+  ... loop body ...
+}
+```
+
+**After**
+
+```mlir
+arts_sde.su_iterate(%c1) to(%c63) step(%c1) classification(<stencil>) {
+  ... loop body ...
+} {
+  accessMinOffsets = [-1, -1],
+  accessMaxOffsets = [1, 1],
+  ownerDims = [0, 1],
+  spatialDims = [0, 1],
+  writeFootprint = [0, 0]
+}
+```
+
+Current behavior:
+
+- Refreshes the SDE-owned `classification(<...>)` attribute from the current
+  structured loop analysis.
+- Stamps only runtime-neutral neighborhood summaries on eligible
+  `arts_sde.su_iterate` ops.
+- Keeps ARTS-specific contract materialization out of SDE. No
+  `distribution_pattern`, `depPattern`, `stencil_*`, or other `arts.*`
+  lowering attrs are authored here.
+- Gives `ConvertSdeToArts` enough information to materialize the runtime
+  contract at the boundary without re-deriving the semantic summary from ARTS
+  IR.
 
 ### `ConvertSdeToArts`
 
