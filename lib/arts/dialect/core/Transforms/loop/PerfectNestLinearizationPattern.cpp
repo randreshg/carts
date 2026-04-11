@@ -266,8 +266,7 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
 
 } // namespace
 
-std::unique_ptr<LoopPattern>
-createPerfectNestLinearizationPattern() {
+std::unique_ptr<LoopPattern> createPerfectNestLinearizationPattern() {
   return std::make_unique<PerfectNestLinearizationPattern>();
 }
 

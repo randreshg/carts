@@ -35,9 +35,9 @@ namespace mlir::arts {
 #include "arts/codegen/Codegen.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/passes/Passes.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
@@ -90,7 +90,8 @@ using namespace mlir::arts::rt;
 ///===----------------------------------------------------------------------===///
 /// Epoch Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
-struct EpochLoweringPass : public arts::impl::EpochLoweringBase<EpochLoweringPass> {
+struct EpochLoweringPass
+    : public arts::impl::EpochLoweringBase<EpochLoweringPass> {
   explicit EpochLoweringPass(bool debug = false) : debugMode(debug) {}
 
   void runOnOperation() override;

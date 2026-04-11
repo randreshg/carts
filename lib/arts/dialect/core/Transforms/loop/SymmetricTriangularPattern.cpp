@@ -156,8 +156,7 @@ LogicalResult SymmetricTriangularPattern::apply(OpBuilder &builder) {
 }
 
 /// Factory function — called from LoopNormalization pass
-std::unique_ptr<LoopPattern>
-createSymmetricTriangularPattern() {
+std::unique_ptr<LoopPattern> createSymmetricTriangularPattern() {
   return std::make_unique<SymmetricTriangularPattern>();
 }
 

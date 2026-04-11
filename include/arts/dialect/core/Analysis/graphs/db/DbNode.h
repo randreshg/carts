@@ -58,8 +58,7 @@ struct DbPartitionEntryFact {
 /// rewrite-plan object.
 struct DbDimPartitionFact {
   unsigned dim = 0;
-  DimAccessPatternType accessPattern =
-      DimAccessPatternType::Unknown;
+  DimAccessPatternType accessPattern = DimAccessPatternType::Unknown;
   bool isLeadingDynamic = false;
   bool selectedByPartitionEntry = false;
   bool needsFullRange = false;

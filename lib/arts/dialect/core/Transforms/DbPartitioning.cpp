@@ -2022,7 +2022,8 @@ FailureOr<DbAllocOp> DbPartitioningPass::assembleAndApplyRewritePlan(
       break;
     }
 
-    copyArtsMetadataAttrs(allocOp.getOperation(), result.value().getOperation());
+    copyArtsMetadataAttrs(allocOp.getOperation(),
+                          result.value().getOperation());
 
     /// EXT-PART-5: Write resolved partition decisions back to the
     /// LoweringContractOp on the alloc's ptr so downstream passes can read

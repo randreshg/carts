@@ -15,6 +15,15 @@ Related guide:
 - `docs/heuristics/partitioning.md`
 - `docs/compiler/pipeline.md`
 
+Transitional note:
+
+- This document still describes the current ARTS-side distribution machinery.
+- Architecturally, semantic distribution family, wavefront classification, and
+  cost-model-driven wavefront tile policy belong to SDE.
+- Any ARTS-side classification or attr stamping described below should be read
+  as current implementation debt, fallback behavior, or contract
+  materialization after `ConvertSdeToArts`.
+
 ## 0. Motivation: Bridging AMT, OpenMP, and MPI
 
 CARTS bridges three major parallel programming models, combining the strengths
@@ -108,8 +117,10 @@ Cannon and SUMMA remain viable future paths once collective-like orchestration i
 
 ## 3. Strategy Selection Policy (H2)
 
-Current policy is implemented in
-`DistributionHeuristics::selectDistributionKind` (`lib/arts/dialect/core/Analysis/heuristics/DistributionHeuristics.cpp`).
+Current core fallback/materialization policy is implemented in
+`DistributionHeuristics::selectDistributionKind`
+(`lib/arts/dialect/core/Analysis/heuristics/DistributionHeuristics.cpp`).
+The intended source of truth is still SDE-selected distribution intent.
 
 Selection order matters:
 
@@ -132,9 +143,11 @@ Operational note:
   still outperform `tiling_2d`; treat this as a performance-tuning axis, not a
   correctness requirement.
 
-## 4. Pattern Detection Ownership
+## 4. Current ARTS-Side Analysis Inputs (Transitional)
 
-Pattern detection is centralized in analysis APIs, not in lowering passes.
+Current ARTS-side pattern inputs are centralized in analysis APIs, not in
+lowering passes. After the SDE boundary, these analyses should consume or
+validate SDE contracts rather than redefine semantic pattern family.
 
 ### 4.1 DB-backed source of truth
 
@@ -161,7 +174,8 @@ Pattern detection is centralized in analysis APIs, not in lowering passes.
 Distribution is now a dedicated pipeline step:
 
 - `concurrency`: prepares parallel structure
-- `edt-distribution`: runs `EdtDistributionPass`, annotates distribution attrs, then `ForLowering`
+- `edt-distribution`: runs `EdtDistributionPass`, backfills or materializes
+  distribution attrs when needed, then `ForLowering`
 - `post-distribution-cleanup`: structural cleanup after loop lowering
 - `db-partitioning`: DB partition planning and ownership materialization
 - `post-db-refinement`: DB mode tightening, EDT transforms, and contract validation
@@ -233,13 +247,15 @@ Future work:
 
 ## 7. IR Contract
 
-`EdtDistributionPass` annotates top-level `arts.for` in parallel EDT regions with:
+Today, `EdtDistributionPass` may stamp or backfill top-level `arts.for` attrs
+in parallel EDT regions:
 
 - `distribution_kind` (`#arts.distribution_kind<...>`)
 - `distribution_pattern` (`#arts.distribution_pattern<...>`)
 - `distribution_version = 1`
 
-These attributes are consumed by `ForLowering` and propagated to generated epoch/task EDT operations.
+Architecturally, these attributes should represent SDE-forwarded contracts
+consumed by `ForLowering`, not ARTS-owned semantic planning.
 
 ## 8. Loop Transform Compatibility (R8)
 
@@ -307,6 +323,12 @@ This coupling is what keeps data ownership and routed work aligned for
 
 Passes consume the API; they do not duplicate these heuristics.
 
+Wavefront note:
+
+- Wavefront tile shape, frontier budget, and per-task work thresholds are
+  semantic planning choices and should migrate behind the SDE contract
+  boundary. ARTS-side heuristics should eventually only consume them.
+
 ## 11. Validation Checklist
 
 ```bash
@@ -338,6 +360,7 @@ Practical principles adopted from systems like Halide/Legion/Chapel/HPF/GSPMD/Ch
 - Prefer analysis-backed decisions over pass-local ad-hoc classification.
 
 In CARTS, this maps to:
-- `EdtDistributionPass` for policy annotation
+- SDE-owned pattern/distribution planning first, with `EdtDistributionPass`
+  reduced over time toward materialization/backfill
 - specialized task/acquire lowering components for execution
 - DB/EDT analysis APIs as single pattern source of truth

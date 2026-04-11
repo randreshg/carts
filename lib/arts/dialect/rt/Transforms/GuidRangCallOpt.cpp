@@ -29,9 +29,9 @@
 
 #include "arts/codegen/Codegen.h"
 #include "arts/codegen/Types.h"
+#include "arts/dialect/rt/Transforms/Passes.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "arts/dialect/rt/Transforms/Passes.h"
 namespace mlir::arts {
 #define GEN_PASS_DEF_GUIDRANGCALLOPT
 #include "arts/dialect/rt/Transforms/Passes.h.inc"

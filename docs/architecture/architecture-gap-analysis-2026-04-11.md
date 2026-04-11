@@ -57,6 +57,13 @@ top section**, not as the exact current branch status.
   destination-style tensor-native operands, `RegionBranchOpInterface`, and
   broader backend-neutral semantics are still missing, but the basic typed
   dep/completion surface and the previously missing SDE ops are now present.
+- Wavefront and distribution planning ownership is still inconsistent with the
+  refreshed SDE boundary. `Seidel2DWavefrontPattern`,
+  `DistributionHeuristics::chooseWavefront2DTilingPlan`,
+  `StructuredKernelPlan*`, and `EdtDistribution` still synthesize semantic
+  policy on ARTS IR. Treat this as remaining boundary debt: SDE should own
+  wavefront-family selection, tile geometry, and contract formation; ARTS
+  should only realize and optimize the resulting structure.
 - The broader cost-model integration gaps are still real: the SDE-facing cost
   model exists and is used by SDE passes, and one core ET-5 threshold cluster
   now uses cost-model-derived atomic-vs-tree selection, but the larger core
@@ -207,6 +214,9 @@ Additional stale areas after the audit snapshot:
 
 - This file itself now understates the current branch state in tensor
   integration, reduction-strategy lowering, and SDE boundary cleanup.
+- This file also understates the current architectural priority: the major
+  remaining ownership gap is not just missing APIs, but ARTS-side semantic
+  planning that should migrate into SDE tensor/linalg analyses.
 
 ---
 

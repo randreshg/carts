@@ -7,10 +7,10 @@
 
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtGraph.h"
-#include "arts/utils/OperationAttributes.h"
-#include "arts/utils/costs/ARTSCostModel.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtNode.h"
 #include "arts/dialect/core/Analysis/loop/LoopNode.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/costs/ARTSCostModel.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"

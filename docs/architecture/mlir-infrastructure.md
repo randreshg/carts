@@ -37,13 +37,15 @@ linalg.generic.
 | `linalg-to-loops` | Custom ForLowering (partially) | Battle-tested |
 | TilingInterface | BlockLoopStripMining | Generic tiling |
 
-### New CARTS-specific linalg passes
+### New CARTS-specific SDE passes and analyses
 
 | Pass | Purpose |
 |---|---|
 | `RaiseToLinalg` | scf.for+memref -> linalg.generic recognition |
-| `ClassifyLinalgPatterns` | Read iterator_types -> stamp PatternAttr |
-| `LinalgDistributionPlanning` | Use TilingInterface for ARTS worker mapping |
+| `StructuredOpAnalysis` | Reusable SDE structural loop/access classification |
+| `SdeDistributionPlanning` | Derive SDE-owned distribution or wavefront intent from structured carriers |
+
+ARTS worker mapping happens later when those SDE contracts are materialized.
 
 ### Example: Matmul recognition
 
@@ -96,12 +98,11 @@ Pattern = stencil (non-identity indexing maps with offsets).
 
 ## Tensor + Bufferization: Core Analysis Layer (Stages 3.7-3.9)
 
-Tensor space is the core analysis representation. SDE raises to tensor,
-analyzes in tensor space (alias-free, SSA deps), then bufferizes back to
-memref before ARTS.
-
-See [pipeline-redesign.md](pipeline-redesign.md) for the full
-raise/analyze/lower cycle.
+Tensor space is the core analysis and transformation representation on this
+branch. SDE raises to tensor, analyzes and transforms there, and then
+`ConvertSdeToArts` consumes the transient tensor/linalg carriers while the
+original loop/memref body remains authoritative. There is no standalone
+bufferize-back stage in the active branch-local path.
 
 | Concept | Tensor Form | CARTS Equivalent |
 |---|---|---|

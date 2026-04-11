@@ -158,10 +158,10 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     Value ub = op.getUpperBound().front();
     Value st = op.getStep().front();
 
-    auto artsFor = arts::ForOp::create(rewriter, loc, ValueRange{lb},
-                                       ValueRange{ub}, ValueRange{st},
-                                       /*schedule*/ nullptr, /*chunkSize=*/Value(),
-                                       /*reductionAccumulators*/ ValueRange{});
+    auto artsFor = arts::ForOp::create(
+        rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{st},
+        /*schedule*/ nullptr, /*chunkSize=*/Value(),
+        /*reductionAccumulators*/ ValueRange{});
 
     carryRewriteMetadata(op, artsFor);
 
@@ -501,11 +501,10 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
     collectReductionMetadata(op, rewriter, redAccs, reductionDecls);
 
     /// Create `arts.for` and move `omp.wsloop` body
-    auto forOp = arts::ForOp::create(rewriter, loc, ValueRange{lowerBound},
-                                     ValueRange{upperBound},
-                                     ValueRange{step}, schedAttr,
-                                     op.getScheduleChunk(),
-                                     ValueRange{redAccs});
+    auto forOp =
+        arts::ForOp::create(rewriter, loc, ValueRange{lowerBound},
+                            ValueRange{upperBound}, ValueRange{step}, schedAttr,
+                            op.getScheduleChunk(), ValueRange{redAccs});
 
     carryRewriteMetadata(op, forOp);
 
@@ -723,10 +722,11 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskloopOp> {
     auto step = loopNest.getLoopSteps()[0];
 
     /// Create arts.for and move taskloop body
-    auto forOp = arts::ForOp::create(rewriter, loc, ValueRange{lowerBound},
-                                     ValueRange{upperBound}, ValueRange{step},
-                                     /*schedule*/ nullptr, /*chunkSize=*/Value(),
-                                     /*reductionAccumulators*/ ValueRange{});
+    auto forOp =
+        arts::ForOp::create(rewriter, loc, ValueRange{lowerBound},
+                            ValueRange{upperBound}, ValueRange{step},
+                            /*schedule*/ nullptr, /*chunkSize=*/Value(),
+                            /*reductionAccumulators*/ ValueRange{});
 
     carryRewriteMetadata(op, forOp);
 
@@ -801,8 +801,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
   MLIRContext *context = &getContext();
   if (!AM) {
-    module.emitError()
-        << "ConvertOpenMPToArtsPass requires AnalysisManager";
+    module.emitError() << "ConvertOpenMPToArtsPass requires AnalysisManager";
     signalPassFailure();
     return;
   }

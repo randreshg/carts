@@ -4,9 +4,9 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Analysis/graphs/edt/EdtNode.h"
+#include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/edt/EdtAnalysis.h"
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
-#include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/loop/LoopNode.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 

@@ -21,11 +21,7 @@
 namespace mlir {
 namespace arts {
 
-enum class ReductionLoweringStrategy {
-  localAccumulate,
-  tree,
-  atomic
-};
+enum class ReductionLoweringStrategy { localAccumulate, tree, atomic };
 
 struct ReductionLoweringInfo {
   SmallVector<Value> reductionVars;

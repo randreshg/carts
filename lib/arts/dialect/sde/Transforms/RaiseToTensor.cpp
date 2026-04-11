@@ -81,7 +81,8 @@ static bool hasSimpleAliasWithOtherOperands(linalg::GenericOp generic,
       return true;
   }
 
-  for (auto [otherIndex, otherOutput] : llvm::enumerate(generic.getDpsInits())) {
+  for (auto [otherIndex, otherOutput] :
+       llvm::enumerate(generic.getDpsInits())) {
     if (otherIndex == outputIndex)
       continue;
     if (stripSimpleMemrefAlias(otherOutput) == output)

@@ -102,6 +102,13 @@ Phase 2D: Migrate general passes to SDE (complete — remaining items deferred)
   21-22. N/A (no further moves needed)
 ```
 
+Placement note:
+
+- Passes that still live in core because they rewrite `arts::ForOp` should not
+  be read as proof that ARTS owns the semantic planning. The intended
+  ownership remains: SDE classifies and plans structured patterns first; ARTS
+  only materializes or cleans up those decisions afterward.
+
 ## Phase 3: Full Folder Reorganization -- COMPLETE
 
 ### Completed Steps

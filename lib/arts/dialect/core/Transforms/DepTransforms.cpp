@@ -26,8 +26,8 @@ ARTS_DEBUG_SETUP(dep_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-[[maybe_unused]] static const AnalysisDependencyInfo kDepTransforms_deps = {
-    {}, {}};
+[[maybe_unused]] static const AnalysisDependencyInfo kDepTransforms_deps = {{},
+                                                                            {}};
 
 namespace {
 

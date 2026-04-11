@@ -50,7 +50,8 @@ Current branch note:
        |
   =====|=====================================================
   ||   v   ARTS CORE (arts.*)   Stages 6-16               ||
-  ||   "Create EDT with 3 deps, partition as block-stencil"||
+  ||   "materialize EDT/DB/epoch structure from SDE-selected ||
+  ||    contracts, then run ARTS-native cleanup"            ||
   ==========================================================
        |
        |  core/Transforms: EdtStructuralOpt, DbPartitioning,
@@ -144,10 +145,12 @@ lib/arts/
   dialect/
     sde/                   "this computation reads A, writes C with neighbor deps"
       IR/                  SdeDialect.cpp, SdeOps.cpp
-      Transforms/          ConvertOpenMPToSde, CollectMetadata
+      Analysis/            structured loop/access analysis, tensor/linalg-facing summaries
+      Transforms/          ConvertOpenMPToSde, RaiseToLinalg, RaiseToTensor,
+                           SdeTensorOptimization, SDE policy passes
       Conversion/SdeToArts/ SdeToArtsPatterns
 
-    core/                  "create an EDT with 3 deps partitioned as block-stencil"
+    core/                  "materialize and optimize ARTS runtime structure"
       IR/                  Dialect.cpp
       Transforms/          47 passes: EdtStructuralOpt, DbPartitioning, CreateDbs,
                            Concurrency, EdtDistribution, ForLowering, CreateEpochs,
@@ -172,7 +175,8 @@ lib/arts/
 ### Current SDE Tensor/Linalg Window
 
 ```
-lib/arts/dialect/sde/Transforms/ will add:
+lib/arts/dialect/sde/ contains:
+  Analysis/StructuredOpAnalysis.cpp reusable structured loop/access analysis
   RaiseToLinalg.cpp        supported scf.for+memref -> linalg.generic carriers
   RaiseToTensor.cpp        supported memref linalg -> tensor carriers
   SdeTensorOptimization.cpp tensor/linalg transformations on the supported subset

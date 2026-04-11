@@ -916,9 +916,8 @@ void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,
 ReductionInfo ForLoweringPass::allocatePartialAccumulators(
     ArtsCodegen *AC, ForOp forOp, EdtOp parallelEdt, Location loc,
     bool splitMode, Value workerCountOverride) {
-  return mlir::arts::allocatePartialAccumulators(AC, forOp, parallelEdt, loc,
-                                                   splitMode,
-                                                   workerCountOverride);
+  return mlir::arts::allocatePartialAccumulators(
+      AC, forOp, parallelEdt, loc, splitMode, workerCountOverride);
 }
 
 void ForLoweringPass::createResultEdt(ArtsCodegen *AC, ReductionInfo &redInfo,

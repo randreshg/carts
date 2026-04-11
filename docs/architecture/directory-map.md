@@ -75,9 +75,9 @@ LLVM conversion patterns. They stay shared.
 | `CreateDbs.cpp` | `lib/arts/dialect/core/Transforms/CreateDbs.cpp` | 3 | Creates arts.db_alloc from memref analysis |
 | `CreateEpochs.cpp` | `lib/arts/dialect/core/Transforms/CreateEpochs.cpp` | 3 | Creates arts.epoch regions |
 | `DbLowering.cpp` | `lib/arts/dialect/core/Transforms/DbLowering.cpp` | 3 | arts.db_alloc -> arts.db_acquire (core->core, NOT rt) |
-| `DepTransforms.cpp` | `lib/arts/dialect/core/Transforms/DepTransforms.cpp` | 3 | Dependency transforms; has ARTS EdtOp deps |
+| `DepTransforms.cpp` | `lib/arts/dialect/core/Transforms/DepTransforms.cpp` | 3 | Transitional ARTS-side realization of selected dependence shapes; should shrink as SDE planning expands |
 | `DistributedHostLoopOutlining.cpp` | `lib/arts/dialect/core/Transforms/DistributedHostLoopOutlining.cpp` | 3 | ARTS structural |
-| `EdtDistribution.cpp` | `lib/arts/dialect/core/Transforms/EdtDistribution.cpp` | 3 | ARTS structural |
+| `EdtDistribution.cpp` | `lib/arts/dialect/core/Transforms/EdtDistribution.cpp` | 3 | Transitional ARTS-side distribution materialization/backfill, not desired long-term semantic ownership |
 | `EdtLowering.cpp` | `lib/arts/dialect/core/Conversion/ArtsToRt/EdtLowering.cpp` | 3 | arts.edt -> arts_rt.edt_create; Phase 1: add using decls |
 | `EdtLoweringSupport.cpp` | `lib/arts/dialect/core/Conversion/ArtsToRt/EdtLoweringSupport.cpp` | 3 | Support for EdtLowering; Phase 1: add using decls |
 | `EdtPtrRematerialization.cpp` | `lib/arts/dialect/core/Transforms/EdtPtrRematerialization.cpp` | 3 | ARTS structural |
@@ -162,7 +162,7 @@ LLVM conversion patterns. They stay shared.
 | `EdtStructuralOpt.cpp` | `lib/arts/dialect/core/Transforms/EdtStructuralOpt.cpp` | 3 | ARTS structural |
 | `EdtTransformsPass.cpp` | `lib/arts/dialect/core/Transforms/EdtTransformsPass.cpp` | 3 | ARTS structural |
 | `PersistentStructuredRegion.cpp` | `lib/arts/dialect/core/Transforms/PersistentStructuredRegion.cpp` | 3 | ARTS structural |
-| `StructuredKernelPlanPass.cpp` | `lib/arts/dialect/core/Transforms/StructuredKernelPlanPass.cpp` | 3 | ARTS structural |
+| `StructuredKernelPlanPass.cpp` | `lib/arts/dialect/core/Transforms/StructuredKernelPlanPass.cpp` | 3 | Transitional ARTS-side semantic-plan stamping; not the desired end-state ownership |
 
 #### Internal Headers: `include/arts/passes/opt/epoch/`
 
