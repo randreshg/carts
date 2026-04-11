@@ -131,10 +131,14 @@ std::unique_ptr<Pass>
 createSdeReductionStrategyPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createSdeScopeSelectionPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createSdeTensorOptimizationPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createConvertSdeToArtsPass();
 /// Stamp structural classification and raise supported SDE loop nests to
 /// transient linalg carriers.
 std::unique_ptr<Pass> createRaiseToLinalgPass();
+/// Rewrite transient linalg carriers to tensor-backed form inside SDE.
+std::unique_ptr<Pass> createRaiseToTensorPass();
 } // namespace sde
 
 /// Validation passes for lowering contracts.

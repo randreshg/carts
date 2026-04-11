@@ -9,6 +9,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/Async/IR/Async.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -21,6 +22,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
@@ -286,12 +288,14 @@ static const std::array<llvm::StringLiteral, 8>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 10> kOpenMPToArtsPasses = {
+static const std::array<llvm::StringLiteral, 12> kOpenMPToArtsPasses = {
     "ConvertOpenMPToSde",      "SdeScopeSelection",
     "SdeChunkOptimization",    "SdeReductionStrategy",
-    "RaiseToLinalg",           "ConvertSdeToArts",
-    "VerifySdeLowered",        "DeadCodeElimination",
-    "CSE",                     "VerifyEdtCreated"};
+    "RaiseToLinalg",           "RaiseToTensor",
+    "SdeTensorOptimization",   "ConvertSdeToArts",
+    "VerifySdeLowered",
+    "DeadCodeElimination",     "CSE",
+    "VerifyEdtCreated"};
 static const std::array<llvm::StringLiteral, 6> kPatternPipelinePasses = {
     "DepTransforms",
     "LoopNormalization",
@@ -624,6 +628,8 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<math::MathDialect>();
   context.getOrLoadDialect<memref::MemRefDialect>();
   context.getOrLoadDialect<linalg::LinalgDialect>();
+  context.getOrLoadDialect<tensor::TensorDialect>();
+  context.getOrLoadDialect<bufferization::BufferizationDialect>();
   context.getOrLoadDialect<polygeist::PolygeistDialect>();
   context.getOrLoadDialect<arts::ArtsDialect>();
   context.getOrLoadDialect<arts::rt::ArtsRtDialect>();
@@ -689,6 +695,8 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createSdeChunkOptimizationPass(costModel));
   pm.addPass(arts::sde::createSdeReductionStrategyPass(costModel));
   pm.addPass(arts::sde::createRaiseToLinalgPass());
+  pm.addPass(arts::sde::createRaiseToTensorPass());
+  pm.addPass(arts::sde::createSdeTensorOptimizationPass(costModel));
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
   pm.addPass(arts::createVerifySdeLoweredPass());
   pm.addPass(arts::createDCEPass());

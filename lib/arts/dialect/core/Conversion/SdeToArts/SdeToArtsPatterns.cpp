@@ -25,12 +25,15 @@ namespace mlir::arts {
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
 
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "arts/utils/Debug.h"
@@ -293,6 +296,21 @@ static void stampStencilContract(Operation *artsForOp, ArtsDepPattern pattern,
   contract.stamp(artsForOp);
   if (auto parentEdt = artsForOp->getParentOfType<EdtOp>())
     contract.stamp(parentEdt.getOperation());
+}
+
+/// Drop dead transient tensor carriers after their linalg.generic owner has
+/// been consumed for contract stamping.
+static void eraseDeadTensorCarriers(ForOp artsFor, PatternRewriter &rewriter) {
+  SmallVector<Operation *> deadCarriers;
+  artsFor.getRegion().walk([&](Operation *nestedOp) {
+    if (!isa<bufferization::ToTensorOp, tensor::EmptyOp>(nestedOp))
+      return;
+    if (isOpTriviallyDead(nestedOp))
+      deadCarriers.push_back(nestedOp);
+  });
+
+  for (Operation *deadCarrier : llvm::reverse(deadCarriers))
+    rewriter.eraseOp(deadCarrier);
 }
 
 //===----------------------------------------------------------------------===//
@@ -587,6 +605,7 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
     for (linalg::GenericOp generic : llvm::reverse(linalgGenerics)) {
       rewriter.eraseOp(generic);
     }
+    eraseDeadTensorCarriers(artsFor, rewriter);
 
     ++numSuIterateConverted;
     rewriter.eraseOp(op);

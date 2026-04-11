@@ -28,31 +28,44 @@ linalg.generic               =  COMPUTATION  (what the math is)
 **Current state on this branch**:
 1. `RaiseToLinalg` now walks `sde.su_iterate`, stamps structural classification,
    and materializes transient `linalg.generic` carriers for the supported subset.
-2. `PatternDiscovery` has been removed from executable pipeline paths; early
+2. `RaiseToTensor` now rewrites the supported transient carriers into
+   tensor-backed `linalg.generic` form inside SDE, keeping the original
+   loop/memref body authoritative and ARTS-unaware.
+3. `SdeTensorOptimization` now performs the first real tensor-driven SDE
+   transformation: eligible one-dimensional elementwise loops are strip-mined
+   into cost-model-sized tiles, and the surrounding `sde.su_iterate` is
+   rewritten so the tiled shape survives into `arts.for`.
+4. `PatternDiscovery` has been removed from executable pipeline paths; early
    contracts are seeded during SDE->ARTS conversion and refined later by
    `DepTransforms` / `KernelTransforms`.
-3. `SDECostModel` and `ARTSCostModel` exist and are wired through
+5. `SDECostModel` and `ARTSCostModel` exist and are wired through
    `AnalysisManager`. `SdeScopeSelection`, `SdeChunkOptimization`, and
    `SdeReductionStrategy` now use that interface in limited form to stamp
    parallel region scope, synthesize missing chunk sizes, and annotate
    eligible reduction-bearing `sde.su_iterate` ops with a strategy
    recommendation.
-4. The stabilized carrier design keeps the original loop/memref IR in place;
-   transient `linalg.generic` is used only for contract recovery and is erased
-   during SDE->ARTS conversion.
-5. Task-dependency ingestion still bridges from upstream `arts.omp_dep`
+6. The stabilized carrier design keeps the original loop/memref IR in place;
+   transient `linalg.generic`, `bufferization.to_tensor`, and `tensor.empty`
+   are used only for contract recovery and are erased during SDE->ARTS
+   conversion.
+7. Task-dependency ingestion still bridges from upstream `arts.omp_dep`
    carriers created before SDE. Removing that residual ARTS-core boundary needs
    a separate upstream dependency-carrier redesign.
-6. Reduction and stencil raising are not fully implemented. Those cases stay on
+8. Reduction and stencil raising are not fully implemented. Those cases stay on
    the fallback path today, but `RaiseToLinalg` now stamps an SDE-owned
    classification directly on `sde.su_iterate` so SDE->ARTS can still recover
    the intended contract without relying on ARTS-namespaced strings.
-7. SDE chunk logic is validated at the SDE IR level: tests check
+9. SDE chunk logic is validated at the SDE IR level: tests check
    `arts_sde.su_iterate schedule(..., chunk)` immediately after
    `SdeChunkOptimization`, before SDE->ARTS lowering rewrites the loop.
-8. SDE scope logic is validated at the SDE IR level: tests check
+10. SDE scope logic is validated at the SDE IR level: tests check
    `arts_sde.cu_region <parallel> scope(<local|distributed>)` immediately
    after `SdeScopeSelection`, before SDE->ARTS lowering rewrites the region.
+11. The first tensor path is validated at the SDE IR level: tests check the
+    memref-backed carrier after `RaiseToLinalg`, the tensor-backed carrier
+    after `RaiseToTensor`, the tiled `sde.su_iterate` after
+    `SdeTensorOptimization`, and a clean carrier-free `arts.for` body after
+    `ConvertSdeToArts`.
 
 ---
 
@@ -66,6 +79,8 @@ CURRENT IMPLEMENTATION:
       → SdeChunkOptimization
       → SdeReductionStrategy
       → RaiseToLinalg (on sde.su_iterate)
+      → RaiseToTensor (tensor-backed transient carrier rewrite)
+      → SdeTensorOptimization (cost-model-driven tensor tiling)
       → ConvertSdeToArts
       → VerifySdeLowered
       → DCE
@@ -669,11 +684,14 @@ This is the architectural novelty.
 
 ---
 
-## Part 6: Future — Tensor-First Optimization Path (Architecture Only)
+## Part 6: Tensor-Backed SDE Carriers (Initial Implementation + Future Path)
 
-Investigation of upstream MLIR tensor infrastructure revealed significant
-optimization opportunities. This documents the architecture for a future
-tensor-first path that would replace much of the current metadata pipeline.
+The first tensor step is now live: after `RaiseToLinalg` materializes a
+transient memref-backed `linalg.generic`, `RaiseToTensor` rewrites the same
+carrier into tensor-backed form inside SDE. This keeps tensor IR fully on the
+SDE side of the boundary: `ConvertSdeToArts` still lowers from the original
+loop/memref body, recovers contracts from the transient carrier, and erases
+the carrier chain before downstream ARTS passes run.
 
 ### Why Tensors (SSA Immutability = Free Dependency Analysis)
 
@@ -690,11 +708,13 @@ pre-computes alias analysis. Key advantages:
 - **scf.forall**: MLIR's parallel loop with `mapping` attribute for
   thread/block/node distribution — natural mapping to SDE concepts.
 
-### Proposed Future Pipeline Extension
+### Current Tensor Carrier Pipeline
 
 ```
 CURRENT (this commit):
-  OMP→SDE → RaiseToLinalg(memref) → SDE→ARTS → [18 stages]
+  OMP→SDE → RaiseToLinalg(memref) → RaiseToTensor(transient tensor carrier) →
+  SdeTensorOptimization(tiled executable SDE loop rewrite) → SDE→ARTS →
+  [18 stages]
 
 FUTURE (separate commit):
   OMP→SDE → RaiseToLinalg(memref) → RaiseToTensor → SdeOpt(tensor) →
@@ -724,7 +744,21 @@ Where SdeOpt(tensor) includes:
 | FoldTensorSubset | Yes | Manual reshape |
 | PadOpVectorizationPattern | Dual | Manual vectorization |
 
-### Why Not Now
+### What Is Implemented Now
+
+- `RaiseToTensor` rewrites ranked memref-backed transient carriers only.
+- `SdeTensorOptimization` uses `SDECostModel` to choose a tile width from the
+  worker count and minimum useful work, then strip-mines eligible 1-D
+  elementwise `sde.su_iterate` loops so the transformation survives lowering.
+- The first concrete subset is the currently supported `RaiseToLinalg` carrier
+  subset. Elementwise loops use `tensor.empty` destinations; the pass stays
+  conservative for the rest.
+- `ConvertSdeToArts` now drops dead `bufferization.to_tensor` /
+  `tensor.empty` carrier ops after consuming the transient `linalg.generic`.
+- Validation stays at the pass boundary: contract tests inspect IR dumps after
+  both `RaiseToTensor` and `ConvertSdeToArts`.
+
+### Why The Full Tensor Path Is Not Done Yet
 
 - All 18 downstream stages expect `scf.for + memref.load/store` in `arts.for`
 - Tensor path requires One-Shot Bufferization BEFORE SDE→ARTS conversion
@@ -737,7 +771,7 @@ Where SdeOpt(tensor) includes:
 ## NOT Doing (This Commit)
 
 - **General cost-aware SDE optimization suite** (Part 5): only limited `SdeScopeSelection`, `SdeChunkOptimization`, and a narrow `SdeReductionStrategy` are implemented; broader schedule/scope/reduction work remains future work
-- **Tensor-first path** (Part 6): Architecture documented, requires RaiseToTensor + Bufferization — separate commit after Part 2 proves stable
+- **Full tensor-first path** (Part 6): initial `RaiseToTensor` carrier rewrite is implemented, but tensor optimization + bufferization back to loops is still future work
 - **Replacing hardcoded thresholds**: Future commits consume `CostModel` in existing heuristic files
 - **Metadata removal**: Independent of linalg — separate commit
 - **Machine calibration**: `dekk carts install --calibrate` — future
