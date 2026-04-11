@@ -1,126 +1,63 @@
-# Techniques Adopted from External Projects
+# External Techniques and Their Real Status
 
-Survey of 15+ compiler/runtime systems. Organized by what SDE adopts NOW
-(Phase 2) vs what informs architecture decisions.
+This document tracks which outside compiler and runtime ideas are actually
+visible in the current CARTS SDE work, which ones only influence the design,
+and which ones remain future work.
 
-## Core Adoptions (Phase 2)
+The status labels below are intentionally strict:
 
-### 1. Algorithm-Schedule Separation (Halide)
+- `Implemented`: concrete behavior or structure exists in the current branch
+- `Partial`: some ideas are reflected in the implementation, but only in a
+  narrower form
+- `Planned`: discussed in architecture, not implemented in code
+- `Reference only`: useful comparison, but not currently adopted
 
-Separate WHAT to compute from HOW to compute it. The algorithm is fixed;
-the schedule (tiling, parallelism, vectorization, storage) is composable.
+## Current Status Matrix
 
-**SDE adoption**: `sde.cu_*` = algorithm (WHAT), `sde.su_*` = schedule (HOW).
-SDE attributes cleanly separate:
-```
-#sde.algorithm { pattern = "stencil", deps = [...], access = [...] }
-#sde.schedule  { tile = [32,32], parallel = [0,1], vectorize = 2 }
-```
-
-### 2. MLIR Transform Dialect for Schedule Composition
-
-Encode scheduling decisions AS IR operations, not pass parameters. Schedules
-become composable, serializable, and debuggable.
-
-**SDE adoption**: The `patterns/` layer could emit transform dialect sequences
-as "recommended schedules" that SDE applies.
-
-### 3. Open Earth Compiler's Stencil Hierarchy (ETH Zurich)
-
-Two-level stencil representation: high-level data-flow graphs with explicit
-producer-consumer and boundary conditions, low-level parallel execution.
-
-**SDE adoption**: SDE's three-layer analysis (linalg + SCF + indirect)
-mirrors this. Explicit boundary modeling via `tensor.pad` instead of
-separate stencil boundary peeling.
-
-### 4. Flang HLFIR's Deferred Buffering
-
-`hlfir.elemental` represents array operations without committing to buffer
-allocation. Decision of inline/fuse/materialize is deferred.
-
-**SDE adoption**: SDE should NOT immediately lower `sde.cu_region` to
-concrete allocations. Keep computation abstract; let SDE->ARTS conversion
-decide DB allocation strategy.
-
-### 5. Legion's Logical Regions (Stanford)
-
-Hierarchically partitionable data abstractions with privilege tracking
-(read/write/reduce) per subregion per task.
-
-**SDE adoption**: `SdeMemAccessAttr` encodes which dimensions are
-partitionable and what partition types are valid. SDE analysis determines
-partitionability; ARTS core's `DbPartitioning` applies it.
-
-### 6. Chapel's Domain Map Standard Interface (HPE)
-
-Distribution is an EXTENSIBLE INTERFACE, not hardcoded strategies.
-
-**SDE adoption**: Interface-based distribution hints:
-```
-#sde.distribution<strategy = @block_stencil, params = {halo = 1}>
-```
-
-### 7. PaRSEC's Parameterized Task Graphs (UTK ICL)
-
-Express task graphs as parameterized functions, not enumerated instances.
-Symbolic dependencies, lazy instantiation.
-
-**SDE adoption**: `sde.su_iterate` = parameterized task family.
-Dependency expressions are SYMBOLIC: "task(i,j) depends on task(i-1,j)".
-
-## Architecture Informers
-
-### Lift/RISE Functional Patterns (Edinburgh)
-
-Functional combinators like `slide(size, stride)` for stencil access.
-CARTS achieves similar declarative access via linalg's `indexing_maps`.
-
-### TPP-MLIR Tensor Processing Primitives (Intel)
-
-Micro-kernel abstractions (BRGEMM, fused GEMM+bias+ReLU) on top of linalg.
-Validates linalg as the right substrate. CARTS's `KernelTransforms` could
-adopt TPP's approach of fused kernel named ops.
-
-### CIRCT's Dialect Progression (MLIR for hardware)
-
-`hw -> comb -> seq -> sv` progression validates sde -> arts -> arts_rt
-and confirms verification barriers between levels are essential.
-
-### StarPU's Data Handle Model (INRIA)
-
-Data handles with automatic coherency. Validates that SDE should describe
-data access intent, with runtime binding (DB creation, mode selection)
-at conversion time.
-
-### Devito's Temporal Blocking (Imperial College)
-
-Automatic temporal blocking (diamond/parallelogram tiling). SDE could
-express temporal reuse opportunities as metadata:
-```
-#sde.temporal_reuse { depth = 2, wavefront_valid = true }
-```
-
-### Charm++ SDAG When-Clauses (UIUC)
-
-`when` clauses declare data dependencies declaratively; runtime handles
-message ordering. Parallels how SDE declares dependencies and ARTS core
-materializes them as EDT dep slots.
-
-## Integration Map
-
-| Technique | Source | SDE Component | Phase |
+| Technique | Source | Status | Real status in CARTS |
 |---|---|---|---|
-| Algorithm-schedule separation | Halide | SDE attributes split | Phase 2 |
-| Schedule as IR | MLIR Transform | patterns/ schedule emission | Phase 2+ |
-| Two-level stencil model | Open Earth | Three-layer analysis | Phase 2 |
-| Deferred buffering | Flang HLFIR | SDE->ARTS late materialization | Phase 2 |
-| Hierarchical data regions | Legion | MemrefMetadataAttr partitioning | Phase 2 |
-| Extensible distribution | Chapel DSI | SDE distribution hints | Phase 2 |
-| Parameterized task graphs | PaRSEC PTG | Symbolic dependencies in SDE | Phase 2 |
-| Functional stencil patterns | Lift/RISE | linalg indexing_maps | Phase 2 |
-| Micro-kernel abstractions | TPP-MLIR | KernelTransforms on linalg | Phase 2+ |
-| Dialect progression | CIRCT | sde->arts->arts_rt verified | Phase 1-3 |
-| Data handle coherency | StarPU | SDE access intent -> DB modes | Phase 2 |
-| Temporal blocking metadata | Devito | SDE temporal reuse attrs | Phase 2+ |
-| Declarative dependencies | Charm++ SDAG | SDE dependency attributes | Phase 2 |
+| Progressive dialect staging | IREE, CIRCT | Implemented | CARTS now has a real SDE optimization boundary ahead of ARTS lowering, with explicit verification boundaries after lowering stages. |
+| Algorithm/schedule separation | Halide | Partial | The branch separates compute-region and scheduling concepts in SDE, but there is not yet a first-class schedule language or transform-IR schedule program. |
+| Schedule as IR | MLIR Transform dialect | Planned | No transform-dialect schedule emission or application exists in the current SDE pipeline. |
+| Parameterized task-family style | PaRSEC PTG | Partial | `arts_sde.su_iterate` captures parameterized loop families and supports symbolic loop reasoning, but CARTS does not yet materialize a first-class symbolic task-graph language. |
+| Deferred structural raising before lowering | Flang HLFIR | Partial | The branch uses transient linalg and tensor carriers to defer some structural decisions, but there is no full HLFIR-style abstract array layer or standalone bufferization phase in the SDE pipeline. |
+| Stencil-oriented structured analysis | Open Earth Compiler | Partial | Stencil structure is recognized and carried as classification, and some tensor/linalg staging exists, but there is no dedicated high-level stencil dialect or full stencil-specific execution model in SDE. |
+| Declarative dependency intent | Charm++ SDAG, StarPU data handles | Partial | Task dependencies are expressed explicitly through `arts_sde.mu_dep` and `arts_sde.cu_task`, but CARTS does not yet have a general declarative dependency language or a StarPU-like coherence handle system. |
+| Tensor/linalg as optimization substrate | MLIR linalg/tensor ecosystem | Implemented | `RaiseToLinalg`, `RaiseToTensor`, and `SdeTensorOptimization` now perform real SDE-stage transformations on supported subsets rather than only classification. |
+| Runtime-calibrated scheduling decisions | Cost-model-driven systems broadly | Partial | SDE schedule refinement, chunk selection, scope selection, and tensor tiling use the SDE cost-model interface, but broader core heuristics are still not consistently driven by the same model. |
+| Logical regions and privileges | Legion | Planned | CARTS does not currently implement Legion-style logical regions, privilege sets, or hierarchical partition objects in SDE. |
+| Extensible distribution interface | Chapel DSI | Planned | There is no implemented `sde.su_distribute` op or domain-map-like interface in the current dialect. |
+| Functional array combinators | Lift/RISE | Reference only | Useful conceptual comparison for structured tensor computation, but not an implemented substrate in CARTS. |
+| Tensor micro-kernel named ops | TPP-MLIR | Reference only | CARTS does not currently define TPP-style named micro-kernel ops or a fused micro-kernel layer. |
+| Temporal blocking metadata | Devito | Planned | No temporal-reuse metadata or temporal blocking transform exists in current SDE passes. |
+
+## What Is Implemented Now
+
+These external ideas are concretely reflected in the current branch:
+
+- staged dialect progression as an architectural pattern
+- tensor/linalg as a temporary but real optimization substrate inside SDE
+- partial algorithm/schedule separation through SDE compute and scheduling ops
+- partial parameterized-task-family reasoning through `arts_sde.su_iterate`
+- partial cost-model-guided decisions inside SDE passes
+
+## What Is Still Only Planned
+
+These techniques should not be described as adopted in current docs:
+
+- transform-dialect schedule programs
+- Chapel-style extensible distribution interfaces
+- Legion-style logical regions
+- Devito-style temporal blocking metadata
+- standalone backend-neutral distribution semantics
+- TPP-style named micro-kernel layers
+
+## Notes on Honest Positioning
+
+Two corrections matter for architecture accuracy:
+
+- CARTS should not claim that Legion regions or Chapel DSI are already adopted.
+  They are design references, not implemented features.
+- CARTS can honestly claim that tensor/linalg techniques are now used for real
+  SDE-stage transformations on supported subsets, but not that the entire SDE
+  layer is fully tensor-native.
