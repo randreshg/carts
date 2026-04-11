@@ -1,19 +1,20 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline openmp-to-arts | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Verify that a raiseable elementwise OpenMP loop is classified during the
-// openmp-to-arts stage, before the later pattern pipeline runs. If these
-// attrs appear here, they came from RaiseToLinalg + ConvertSdeToArts.
+// Verify that a raiseable elementwise OpenMP loop is classified and gets a
+// transient linalg.generic carrier at the SDE layer during RaiseToLinalg.
 
-// CHECK-LABEL: func.func @main
-// CHECK: arts.edt <parallel> <intranode> route(%{{.*}}) attributes {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_pattern = #arts.distribution_pattern<uniform>
-// CHECK: arts.for(%c0) to(%c128) step(%c1)
-// CHECK: ^bb0(%[[IV:.*]]: index):
-// CHECK: %[[VAL:.+]] = memref.load %arg0[%[[IV]]] : memref<128xf64>
+// CHECK-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
+// CHECK: func.func @main
+// CHECK: arts_sde.cu_region <parallel> scope(<local>) {
+// CHECK: arts_sde.su_iterate(%c0) to(%c128) step(%c1) {
+// CHECK: %[[VAL:.+]] = memref.load %arg0[%[[IV:.*]]] : memref<128xf64>
 // CHECK: %[[MUL:.+]] = arith.mulf %[[VAL]], %cst : f64
 // CHECK: memref.store %[[MUL]], %arg1[%[[IV]]] : memref<128xf64>
-// CHECK: } {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_pattern = #arts.distribution_pattern<uniform>}
-// CHECK-NOT: linalg.generic
-// CHECK-NOT: arts_sde.
+// CHECK: linalg.generic
+// CHECK-SAME: iterator_types = ["parallel"]
+// CHECK: } {arts.linalg.classification = "elementwise"}
+// CHECK-NOT: arts.for
+// CHECK: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @main(%A: memref<128xf64>, %B: memref<128xf64>) {

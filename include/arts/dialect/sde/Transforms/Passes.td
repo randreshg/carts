@@ -72,6 +72,19 @@ def SdeChunkOptimization : Pass<"sde-chunk-optimization", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createSdeChunkOptimizationPass()";
 }
 
+def SdeReductionStrategy : Pass<"sde-reduction-strategy", "mlir::ModuleOp"> {
+  let summary = "Select an SDE reduction strategy from the active cost model";
+  let description = [{
+    Uses the SDE-owned cost model to annotate eligible reduction-bearing
+    sde.su_iterate operations with a reduction strategy recommendation.
+    The current implementation is deliberately narrow: it only handles
+    single-reduction loops with preserved reduction kinds, chooses between
+    `atomic` and `tree`, and leaves lowering behavior unchanged.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
+  let constructor = "mlir::arts::sde::createSdeReductionStrategyPass()";
+}
+
 def SdeScopeSelection : Pass<"sde-scope-selection", "mlir::ModuleOp"> {
   let summary = "Select SDE concurrency scope from the active cost model";
   let description = [{

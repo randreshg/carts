@@ -82,6 +82,26 @@ static void carryRewriteMetadata(Operation *sourceOp, Operation *targetOp) {
     return;
   copyArtsMetadataAttrs(sourceOp, targetOp);
 }
+
+static void mapWsloopCapturedArgs(omp::WsloopOp op, IRMapping &mapper) {
+  if (op.getRegion().empty())
+    return;
+
+  Block &wrapper = op.getRegion().front();
+  unsigned argIndex = 0;
+
+  for (auto privateVar : op.getPrivateVars()) {
+    if (argIndex >= wrapper.getNumArguments())
+      break;
+    mapper.map(wrapper.getArgument(argIndex++), privateVar);
+  }
+
+  for (auto reductionVar : op.getReductionVars()) {
+    if (argIndex >= wrapper.getNumArguments())
+      break;
+    mapper.map(wrapper.getArgument(argIndex++), reductionVar);
+  }
+}
 ///===----------------------------------------------------------------------===///
 /// Conversion Patterns
 ///===----------------------------------------------------------------------===///
@@ -510,6 +530,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsloopOp> {
     Block &src = loopNest.getRegion().front();
     if (!src.getArguments().empty())
       mapper.map(src.getArgument(0), dst.getArgument(0));
+    mapWsloopCapturedArgs(op, mapper);
     moveOps(src, dst, rewriter, mapper, reductionDecls);
     arts::YieldOp::create(rewriter, loc);
 
@@ -542,7 +563,7 @@ private:
     assert(module && "Module is required");
 
     for (auto [attr, value] : llvm::zip(*reds, reductionVars)) {
-      redAccs.push_back(ValueAnalysis::getUnderlyingValue(value));
+      redAccs.push_back(value);
       if (auto symRef = dyn_cast<SymbolRefAttr>(attr)) {
         auto decl = dyn_cast_or_null<omp::DeclareReductionOp>(
             module.lookupSymbol(symRef.getLeafReference()));

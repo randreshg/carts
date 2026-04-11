@@ -62,6 +62,16 @@ def SdeReductionKind
     ]>;
 def SdeReductionKindAttr : ArtsSde_I32EnumAttr<"reduction_kind", SdeReductionKind>;
 
+def SdeReductionStrategy
+    : ArtsSde_I32Enum<"SdeReductionStrategy",
+                      "Reduction execution strategy", [
+      I32EnumAttrCase<"atomic", 0, "atomic">,
+      I32EnumAttrCase<"tree", 1, "tree">,
+      I32EnumAttrCase<"local_accumulate", 2, "local_accumulate">
+    ]>;
+def SdeReductionStrategyAttr
+    : ArtsSde_I32EnumAttr<"reduction_strategy", SdeReductionStrategy>;
+
 def SdeScheduleKind
     : ArtsSde_I32Enum<"SdeScheduleKind", "Scheduling policy", [
       I32EnumAttrCase<"static_", 0, "static">,
@@ -214,7 +224,8 @@ def SdeSuIterateOp
     Optional<Index>:$chunkSize,
     UnitAttr:$nowait,
     Variadic<AnyType>:$reductionAccumulators,
-    OptionalAttr<ArrayAttr>:$reductionKinds
+    OptionalAttr<ArrayAttr>:$reductionKinds,
+    OptionalAttr<SdeReductionStrategyAttr>:$reductionStrategy
   );
 
   let regions = (region SizedRegion<1>:$body);
@@ -224,6 +235,7 @@ def SdeSuIterateOp
     (`schedule` `(` $schedule^ (`,` $chunkSize^)? `)` )?
     (`nowait` $nowait^)?
     (`reduction` `[` $reductionKinds^ `]` `(` $reductionAccumulators `:` type($reductionAccumulators) `)`)?
+    (`reduction_strategy` `(` $reductionStrategy^ `)` )?
     $body attr-dict
   }];
 }

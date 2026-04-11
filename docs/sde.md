@@ -32,9 +32,11 @@ linalg.generic               =  COMPUTATION  (what the math is)
    contracts are seeded during SDE->ARTS conversion and refined later by
    `DepTransforms` / `KernelTransforms`.
 3. `SDECostModel` and `ARTSCostModel` exist and are wired through
-   `AnalysisManager`. `SdeScopeSelection` and `SdeChunkOptimization` now use
-   that interface in limited form to stamp parallel region scope and
-   synthesize missing chunk sizes for eligible `sde.su_iterate` ops.
+   `AnalysisManager`. `SdeScopeSelection`, `SdeChunkOptimization`, and
+   `SdeReductionStrategy` now use that interface in limited form to stamp
+   parallel region scope, synthesize missing chunk sizes, and annotate
+   eligible reduction-bearing `sde.su_iterate` ops with a strategy
+   recommendation.
 4. The stabilized carrier design keeps the original loop/memref IR in place;
    transient `linalg.generic` is used only for contract recovery and is erased
    during SDE->ARTS conversion.
@@ -56,10 +58,11 @@ linalg.generic               =  COMPUTATION  (what the math is)
 
 ```
 CURRENT IMPLEMENTATION:
-  buildOpenMPToArtsPipeline:
+ buildOpenMPToArtsPipeline:
     ConvertOpenMPToSde
       → SdeScopeSelection
       → SdeChunkOptimization
+      → SdeReductionStrategy
       → RaiseToLinalg (on sde.su_iterate)
       → ConvertSdeToArts
       → VerifySdeLowered
@@ -260,6 +263,7 @@ auto &costModel = AM->getCostModel();
 pm.addPass(sde::createConvertOpenMPToSdePass(&costModel));
 pm.addPass(sde::createSdeScopeSelectionPass(&costModel));
 pm.addPass(sde::createSdeChunkOptimizationPass(&costModel));
+pm.addPass(sde::createSdeReductionStrategyPass(&costModel));
 pm.addPass(sde::createRaiseToLinalgPass());
 pm.addPass(sde::createConvertSdeToArtsPass());
 ```
@@ -372,6 +376,7 @@ auto &costModel = AM->getCostModel();
 pm.addPass(arts::sde::createConvertOpenMPToSdePass(&costModel));
 pm.addPass(arts::sde::createSdeScopeSelectionPass(&costModel));
 pm.addPass(arts::sde::createSdeChunkOptimizationPass(&costModel));
+pm.addPass(arts::sde::createSdeReductionStrategyPass(&costModel));
 pm.addPass(arts::sde::createRaiseToLinalgPass());    // NEW
 pm.addPass(arts::sde::createConvertSdeToArtsPass());
 ```
@@ -490,7 +495,7 @@ This part documents the currently implemented cost-model-backed SDE scope/chunk
 passes and the remaining architecture for broader SDE-level optimization. The
 `SDECostModel` interface (Part 1) already supports these use cases.
 
-### Implemented today: `SdeScopeSelection` + `SdeChunkOptimization`
+### Implemented today: `SdeScopeSelection` + `SdeChunkOptimization` + `SdeReductionStrategy`
 
 `SdeScopeSelection` is the first cost-driven SDE region pass in the tree. It
 runs on `sde.cu_region <parallel>` before `RaiseToLinalg` / `ConvertSdeToArts`
@@ -517,6 +522,21 @@ layer: contract tests inspect the IR dump after `SdeChunkOptimization` and
 check the resulting `arts_sde.su_iterate(... schedule(<kind>, %chunk))`
 directly, before ARTS lowering.
 
+`SdeReductionStrategy` is a limited cost-driven SDE reduction pass. It also
+runs on `sde.su_iterate` before `RaiseToLinalg` / `ConvertSdeToArts` and
+currently handles only the narrow producer-backed case:
+
+- exactly one preserved reduction accumulator
+- exactly one preserved reduction kind
+- known non-custom reduction kind
+- annotation-only behavior today
+
+The pass stamps an SDE-owned `reduction_strategy(<atomic|tree>)` attribute on
+eligible loops. Today it uses `add` as the only atomic-capable reduction kind
+in SDE and keeps validation at the SDE IR layer: contract tests inspect the
+IR dump after `SdeReductionStrategy` rather than inferring the choice back from
+later ARTS IR.
+
 ### SDE Optimization Decisions Enabled by SDECostModel
 
 Each decision uses SDE-level concepts and queries the abstract cost model.
@@ -524,7 +544,7 @@ The ARTS costs change dramatically by topology:
 
 | Decision | SDE Op | Cost Query | Local Cost | Distributed Cost | Ratio |
 |----------|--------|-----------|------------|-----------------|-------|
-| Reduction strategy | cu_reduce | `getReductionCost(N)` vs `getAtomicUpdateCost()*N` | tree@16+ | tree@4+ | 4x sync |
+| Reduction strategy | su_iterate.reduction_strategy | `getReductionCost(N)` vs `getAtomicUpdateCost()*N` | atomic/tree crossover | earlier tree crossover | 5x atomic |
 | Chunk sizing | su_iterate.chunkSize | `getTaskCreationCost()` vs work/chunk | 1800 cy | 2500 cy | 1.4x |
 | Distribution scope | cu_region.scope | `getTaskSyncCost()` distributed vs local | 3000 cy | 5000 cy | 1.7x |
 | Halo width | mu_dep offsets | `getHaloExchangeCostPerByte()` * bytes | 0.01/B | 0.5/B | **50x** |
@@ -538,9 +558,10 @@ decision automatic.
 
 ### Remaining Future SDE Passes
 
-1. **SdeReductionStrategy**: Queries `getReductionCost(workerCount)` vs
-   `getAtomicUpdateCost() * workerCount`. Stamps
-   `sde.reduction_strategy = tree|linear|atomic` on `cu_reduce`/`su_iterate`.
+1. **Broaden `SdeReductionStrategy`**: Extend the current annotation-only
+   implementation beyond the initial single-reduction `sde.su_iterate` subset,
+   decide whether it should also cover `sde.cu_reduce`, and eventually map the
+   recommendation into downstream lowering when there is a real consumer.
 
 2. **SdeScheduleRefinement**: Queries `getSchedulingOverhead(kind, trip)`.
    Overrides OMP schedule hint when cost model disagrees (e.g., static→dynamic
@@ -580,14 +601,17 @@ This is the architectural novelty.
 | `lib/arts/utils/CMakeLists.txt` | Add costs/ subdirectory |
 | `include/arts/dialect/core/Analysis/AnalysisManager.h` | Add `SDECostModel` member + accessor |
 | `lib/arts/dialect/core/Analysis/AnalysisManager.cpp` | Create `ARTSCostModel` in constructor |
+| `include/arts/dialect/sde/IR/SdeOps.td` | Add SDE-owned `reduction_strategy` enum/attr on `sde.su_iterate` |
 | `lib/arts/dialect/sde/Transforms/ConvertOpenMPToSde.cpp` | Remove AnalysisManager import, take `SDECostModel*`; still bridges upstream `arts.omp_dep` |
 | `lib/arts/dialect/sde/Transforms/SdeScopeSelection.cpp` | **NEW** — limited cost-model-backed scope selection on `sde.cu_region <parallel>` |
 | `lib/arts/dialect/sde/Transforms/SdeChunkOptimization.cpp` | **NEW** — limited cost-model-backed chunk synthesis on `sde.su_iterate` |
+| `lib/arts/dialect/sde/Transforms/SdeReductionStrategy.cpp` | **NEW** — limited cost-model-backed reduction strategy annotation on eligible `sde.su_iterate` ops |
 | `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | Core rewrite: `SdeSuIterateOp`, stamp classification, create transient `linalg.generic` carriers for supported cases |
-| `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect`, declare `SdeScopeSelection` and `SdeChunkOptimization` |
+| `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect`, declare `SdeScopeSelection`, `SdeChunkOptimization`, and `SdeReductionStrategy` |
 | `include/arts/dialect/sde/Transforms/Passes.h` | Add linalg include |
+| `include/arts/passes/Passes.h` | Add SDE reduction strategy pass factory declaration |
 | `lib/arts/passes/CMakeLists.txt` | Add `MLIRLinalgDialect`, `MLIRLinalgTransforms` |
-| `tools/compile/Compile.cpp` | Insert `SdeScopeSelection` and `SdeChunkOptimization`, move `RaiseToLinalg`, remove PatternDiscovery, and keep SDE->ARTS independent of `AnalysisManager` |
+| `tools/compile/Compile.cpp` | Insert `SdeScopeSelection`, `SdeChunkOptimization`, and `SdeReductionStrategy`, move `RaiseToLinalg`, remove PatternDiscovery, and keep SDE->ARTS independent of `AnalysisManager` |
 | `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | `classifyFromLinalg` + stamp + erase transient generics after consumption |
 | `lib/arts/dialect/core/Transforms/PatternDiscovery.cpp` | **DELETE** |
 | `include/arts/passes/Passes.td` | Remove PatternDiscovery pass definition |
@@ -611,6 +635,10 @@ This is the architectural novelty.
    - After `SdeChunkOptimization`: eligible dynamic/guided loops have an
      SDE-level `chunkSize` on `arts_sde.su_iterate`; explicit source chunks
      remain unchanged
+   - After `SdeReductionStrategy`: eligible single-reduction
+     `arts_sde.su_iterate` ops have an SDE-owned
+     `reduction_strategy(<atomic|tree>)` annotation chosen from the active
+     cost model
    - After RaiseToLinalg: supported bodies have transient `linalg.generic`
      alongside the original loop/memref body
    - After SDE→ARTS: `arts.for` bodies still contain the loop/memref IR shape,
@@ -623,7 +651,12 @@ This is the architectural novelty.
 10. SDE chunk tests: `openmp_to_arts_synthesizes_schedule_chunk.mlir` and
    `openmp_to_arts_preserves_schedule_chunk.mlir` validate chunk behavior on
    SDE IR, not reconstructed ARTS IR
-11. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
+11. SDE reduction tests:
+    `openmp_to_arts_selects_atomic_reduction_strategy.mlir`,
+    `openmp_to_arts_selects_tree_reduction_strategy.mlir`, and
+    `openmp_to_arts_avoids_atomic_for_mul_reduction_strategy.mlir` validate
+    reduction strategy selection on SDE IR, not reconstructed ARTS IR
+12. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
    2mm → uniform contract (from linalg), stencil → stencil_tiling_nd (from KernelTransforms)
 
 ---
@@ -695,7 +728,7 @@ Where SdeOpt(tensor) includes:
 
 ## NOT Doing (This Commit)
 
-- **General cost-aware SDE optimization suite** (Part 5): only limited `SdeScopeSelection` and `SdeChunkOptimization` are implemented; broader schedule/scope/reduction decisions remain future work
+- **General cost-aware SDE optimization suite** (Part 5): only limited `SdeScopeSelection`, `SdeChunkOptimization`, and annotation-only `SdeReductionStrategy` are implemented; broader schedule/scope/reduction work remains future work
 - **Tensor-first path** (Part 6): Architecture documented, requires RaiseToTensor + Bufferization — separate commit after Part 2 proves stable
 - **Replacing hardcoded thresholds**: Future commits consume `CostModel` in existing heuristic files
 - **Metadata removal**: Independent of linalg — separate commit
