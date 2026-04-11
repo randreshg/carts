@@ -128,6 +128,21 @@ convertReductionStrategy(MLIRContext *ctx,
   return nullptr;
 }
 
+static std::optional<EdtDistributionKind>
+convertDistributionKind(sde::SdeDistributionKindAttr kind) {
+  if (!kind)
+    return std::nullopt;
+
+  switch (kind.getValue()) {
+  case sde::SdeDistributionKind::owner_compute:
+  case sde::SdeDistributionKind::blocked:
+    return EdtDistributionKind::block;
+  case sde::SdeDistributionKind::cyclic:
+    return EdtDistributionKind::block_cyclic;
+  }
+  return std::nullopt;
+}
+
 //===----------------------------------------------------------------------===//
 // Linalg-derived contract classification helpers
 //===----------------------------------------------------------------------===//
@@ -350,10 +365,9 @@ static StencilNDPatternContract
 materializeStencilContract(ArtsDepPattern pattern,
                            const StructuredNeighborhoodSummary &info,
                            int64_t revision = 1) {
-  return StencilNDPatternContract(pattern, info.ownerDims, info.minOffsets,
-                                  info.maxOffsets, info.writeFootprint,
-                                  revision, /*blockShape=*/{},
-                                  info.spatialDims);
+  return StencilNDPatternContract(
+      pattern, info.ownerDims, info.minOffsets, info.maxOffsets,
+      info.writeFootprint, revision, /*blockShape=*/{}, info.spatialDims);
 }
 
 /// Stamp a recovered stencil-family contract on an arts.for and its parent
@@ -366,6 +380,17 @@ static void stampStencilContract(Operation *artsForOp, ArtsDepPattern pattern,
   contract.stamp(artsForOp);
   if (auto parentEdt = artsForOp->getParentOfType<EdtOp>())
     contract.stamp(parentEdt.getOperation());
+}
+
+static void stampDistributionKind(Operation *op, EdtDistributionKind kind,
+                                  int64_t version = 1) {
+  if (!op)
+    return;
+
+  setEdtDistributionKind(op, kind);
+  op->setAttr(
+      AttrNames::Operation::DistributionVersion,
+      IntegerAttr::get(IntegerType::get(op->getContext(), 32), version));
 }
 
 static bool isTensorCarrierOp(Operation *op) {
@@ -521,12 +546,21 @@ struct SuDistributeToArtsPattern
     if (body.empty())
       return failure();
 
+    bool hasNestedSdeIterate = false;
+    body.walk([&](sde::SdeSuIterateOp) -> WalkResult {
+      hasNestedSdeIterate = true;
+      return WalkResult::interrupt();
+    });
+    if (hasNestedSdeIterate)
+      return failure();
+
     Block &block = body.front();
     if (block.getNumArguments() != 0)
       return failure();
 
-    if (auto yield = dyn_cast<sde::SdeYieldOp>(block.getTerminator()))
-      rewriter.eraseOp(yield);
+    if (!block.empty())
+      if (auto yield = dyn_cast<sde::SdeYieldOp>(&block.back()))
+        rewriter.eraseOp(yield);
 
     rewriter.inlineBlockBefore(&block, op, ValueRange{});
     rewriter.eraseOp(op);
@@ -549,6 +583,9 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
     auto *ctx = rewriter.getContext();
 
     auto schedAttr = convertSchedule(ctx, op.getScheduleAttr());
+    auto enclosingDistributeOp = op->getParentOfType<sde::SdeSuDistributeOp>();
+    auto enclosingDistribution =
+        enclosingDistributeOp ? enclosingDistributeOp.getKindAttr() : nullptr;
 
     auto artsFor = ForOp::create(
         rewriter, loc, op.getLowerBounds(), op.getUpperBounds(), op.getSteps(),
@@ -703,6 +740,13 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
         stampPatternContract(artsFor.getOperation(), *selectedPattern,
                              selectedRevision);
       }
+    }
+
+    if (auto distributionKind =
+            convertDistributionKind(enclosingDistribution)) {
+      stampDistributionKind(artsFor.getOperation(), *distributionKind);
+      if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
+        stampDistributionKind(parentEdt.getOperation(), *distributionKind);
     }
 
     // RaiseToLinalg leaves the original loop body in place and uses

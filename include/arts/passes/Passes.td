@@ -682,12 +682,6 @@ def AliasScopeGen : Pass<"arts-alias-scope-gen", "mlir::ModuleOp"> {
 /// Verification Passes
 ///===----------------------------------------------------------------------===///
 
-def VerifySdeLowered : Pass<"verify-sde-lowered", "mlir::ModuleOp"> {
-  let summary = "Verify no SDE operations survive past SDE-to-ARTS conversion";
-  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
-  let constructor = "mlir::arts::createVerifySdeLoweredPass()";
-}
-
 def VerifyEdtCreated : Pass<"verify-edt-created", "mlir::ModuleOp"> {
   let summary = "Verify EDT operations exist after OpenMP conversion";
   let dependentDialects = ["::mlir::arts::ArtsDialect"];

@@ -99,40 +99,54 @@ struct EdtDistributionPass
         if (forOp->getParentOfType<EdtOp>() != edt)
           return;
 
+        auto existingKind = getEdtDistributionKind(forOp.getOperation());
+        auto existingPattern = getEdtDistributionPattern(forOp.getOperation());
+        if (existingKind && existingPattern) {
+          if (!forOp->hasAttr(AttrNames::Operation::DistributionVersion)) {
+            forOp->setAttr(
+                AttrNames::Operation::DistributionVersion,
+                IntegerAttr::get(IntegerType::get(forOp.getContext(), 32), 1));
+          }
+          return;
+        }
+
         /// Plan-driven path: if the structured kernel plan stamped a family,
         /// use it to inform the distribution pattern selection.
-        EdtDistributionPattern pattern = EdtDistributionPattern::unknown;
-        if (auto familyAttr = forOp->getAttrOfType<StringAttr>(
-                AttrNames::Operation::Plan::KernelFamily)) {
-          auto family = parseKernelFamily(familyAttr.getValue());
-          if (family) {
-            switch (*family) {
-            case KernelFamily::Stencil:
-            case KernelFamily::Wavefront:
-            case KernelFamily::TimestepChain:
-              pattern = EdtDistributionPattern::stencil;
-              break;
-            case KernelFamily::Uniform:
-              pattern = EdtDistributionPattern::uniform;
-              break;
-            case KernelFamily::ReductionMixed:
-              pattern = EdtDistributionPattern::matmul;
-              break;
-            case KernelFamily::Unknown:
-              break;
+        EdtDistributionPattern pattern =
+            existingPattern.value_or(EdtDistributionPattern::unknown);
+        if (pattern == EdtDistributionPattern::unknown)
+          if (auto familyAttr = forOp->getAttrOfType<StringAttr>(
+                  AttrNames::Operation::Plan::KernelFamily)) {
+            auto family = parseKernelFamily(familyAttr.getValue());
+            if (family) {
+              switch (*family) {
+              case KernelFamily::Stencil:
+              case KernelFamily::Wavefront:
+              case KernelFamily::TimestepChain:
+                pattern = EdtDistributionPattern::stencil;
+                break;
+              case KernelFamily::Uniform:
+                pattern = EdtDistributionPattern::uniform;
+                break;
+              case KernelFamily::ReductionMixed:
+                pattern = EdtDistributionPattern::matmul;
+                break;
+              case KernelFamily::Unknown:
+                break;
+              }
+              ++numPlanDrivenAnnotations;
+              ARTS_DEBUG("Using plan-driven distribution pattern for family="
+                         << familyAttr.getValue());
             }
-            ++numPlanDrivenAnnotations;
-            ARTS_DEBUG("Using plan-driven distribution pattern for family="
-                       << familyAttr.getValue());
           }
-        }
         /// Fallback: use heuristic analysis when no plan is present.
         if (pattern == EdtDistributionPattern::unknown) {
           if (auto analyzedPattern =
                   heuristics.resolveDistributionPattern(forOp, edt))
             pattern = *analyzedPattern;
         }
-        EdtDistributionKind kind = heuristics.chooseKind(strategy, pattern);
+        EdtDistributionKind kind =
+            existingKind.value_or(heuristics.chooseKind(strategy, pattern));
         /// Keep distribution_kind focused on execution decomposition.
         /// 2-D stencil owner semantics already flow through the
         /// stencil/lowering contract attrs (owner dims, halo, block shape).
@@ -140,8 +154,10 @@ struct EdtDistributionPass
         /// through the matmul-oriented Tile2DTaskLoopLowering path even when
         /// they only need block-style task distribution with N-D ownership
         /// preserved.
-        setEdtDistributionKind(forOp.getOperation(), kind);
-        setEdtDistributionPattern(forOp.getOperation(), pattern);
+        if (!existingKind)
+          setEdtDistributionKind(forOp.getOperation(), kind);
+        if (!existingPattern && pattern != EdtDistributionPattern::unknown)
+          setEdtDistributionPattern(forOp.getOperation(), pattern);
         ++numLoopsAnnotated;
         if (kind == EdtDistributionKind::block)
           ++numBlockStrategiesSelected;

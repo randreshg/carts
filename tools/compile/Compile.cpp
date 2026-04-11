@@ -286,20 +286,14 @@ static const std::array<llvm::StringLiteral, 8>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 14> kOpenMPToArtsPasses = {
-    "ConvertOpenMPToSde",
-    "SdeScopeSelection",
-    "SdeScheduleRefinement",
-    "SdeChunkOptimization",
-    "SdeReductionStrategy",
-    "RaiseToLinalg",
-    "RaiseToTensor",
-    "SdeTensorOptimization",
-    "SdeStructuredSummaries",
-    "ConvertSdeToArts",
-    "VerifySdeLowered",
-    "DeadCodeElimination",
-    "CSE",
+static const std::array<llvm::StringLiteral, 15> kOpenMPToArtsPasses = {
+    "ConvertOpenMPToSde",     "SdeScopeSelection",
+    "SdeScheduleRefinement",  "SdeChunkOptimization",
+    "SdeReductionStrategy",   "RaiseToLinalg",
+    "RaiseToTensor",          "SdeTensorOptimization",
+    "SdeStructuredSummaries", "SdeDistributionPlanning",
+    "ConvertSdeToArts",       "VerifySdeLowered",
+    "DeadCodeElimination",    "CSE",
     "VerifyEdtCreated"};
 static const std::array<llvm::StringLiteral, 6> kPatternPipelinePasses = {
     "DepTransforms",  "LoopNormalization", "StencilBoundaryPeeling",
@@ -700,8 +694,9 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createRaiseToTensorPass());
   pm.addPass(arts::sde::createSdeTensorOptimizationPass(costModel));
   pm.addPass(arts::sde::createSdeStructuredSummariesPass());
+  pm.addPass(arts::sde::createSdeDistributionPlanningPass(costModel));
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
-  pm.addPass(arts::createVerifySdeLoweredPass());
+  pm.addPass(arts::sde::createVerifySdeLoweredPass());
   pm.addPass(arts::createDCEPass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createVerifyEdtCreatedPass());
