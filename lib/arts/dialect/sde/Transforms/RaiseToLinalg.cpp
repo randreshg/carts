@@ -285,8 +285,6 @@ struct OutputOperand {
   Value memref;
   AffineMap indexingMap;
   Type elementType;
-  bool isReduction = false;
-  Value reductionAccumulator;
 };
 
 static std::optional<unsigned> findOperandIndex(ArrayRef<InputOperand> inputs,
@@ -307,20 +305,6 @@ static std::optional<unsigned> findOperandIndex(ArrayRef<OutputOperand> outputs,
       return idx;
   }
   return std::nullopt;
-}
-
-static std::optional<Value>
-materializeReductionInit(OpBuilder &builder, Location loc, Value accumulator) {
-  if (!accumulator)
-    return std::nullopt;
-
-  if (auto memrefTy = dyn_cast<MemRefType>(accumulator.getType())) {
-    if (memrefTy.getRank() != 0)
-      return std::nullopt;
-    return memref::LoadOp::create(builder, loc, accumulator, ValueRange{});
-  }
-
-  return accumulator;
 }
 
 static Value cloneScalarValueIntoRegion(Value value, Block &body,
@@ -360,10 +344,10 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp, const LoopNestInfo &nest,
   auto oldYield = dyn_cast<sde::SdeYieldOp>(rootBody.getTerminator());
   if (!oldYield)
     return false;
+  if (!iterOp.getReductionAccumulators().empty())
+    return false;
 
   Location loc = iterOp.getLoc();
-  MLIRContext *ctx = iterOp.getContext();
-  SmallVector<Operation *> oldRootOps = getBodyOps(rootBody);
 
   SmallVector<InputOperand> inputs;
   for (const MemrefAccessEntry &read : reads) {
@@ -394,19 +378,8 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp, const LoopNestInfo &nest,
       return false;
 
     outputs.push_back({write.memref, write.indexingMap,
-                       memrefTy.getElementType(),
-                       /*isReduction=*/false, Value()});
+                       memrefTy.getElementType()});
     storeOperandIndex[write.op] = outputs.size() - 1;
-  }
-
-  for (Value accumulator : iterOp.getReductionAccumulators()) {
-    Type elementType = accumulator.getType();
-    if (auto memrefTy = dyn_cast<MemRefType>(accumulator.getType()))
-      elementType = memrefTy.getElementType();
-
-    outputs.push_back({Value(), AffineMap::get(nest.ivs.size(), 0, {}, ctx),
-                       elementType,
-                       /*isReduction=*/true, accumulator});
   }
 
   if (outputs.empty())
@@ -416,7 +389,6 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp, const LoopNestInfo &nest,
 
   SmallVector<Value> inputMemrefs;
   SmallVector<Value> outputMemrefs;
-  SmallVector<Value> reductionResults;
   SmallVector<AffineMap> indexingMaps;
   inputMemrefs.reserve(inputs.size());
   outputMemrefs.reserve(outputs.size());
@@ -427,18 +399,7 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp, const LoopNestInfo &nest,
     indexingMaps.push_back(input.indexingMap);
   }
 
-  for (auto &output : outputs) {
-    if (output.isReduction) {
-      auto bufferType = MemRefType::get({}, output.elementType);
-      auto buffer = memref::AllocaOp::create(builder, loc, bufferType);
-      auto init =
-          materializeReductionInit(builder, loc, output.reductionAccumulator);
-      if (!init)
-        return false;
-      memref::StoreOp::create(builder, loc, *init, buffer, ValueRange{});
-      output.memref = buffer;
-    }
-
+  for (const auto &output : outputs) {
     outputMemrefs.push_back(output.memref);
     indexingMaps.push_back(output.indexingMap);
   }
@@ -455,25 +416,6 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp, const LoopNestInfo &nest,
         SmallVector<Value> yielded(outputs.size());
         SmallVector<bool> hasYield(outputs.size(), false);
         unsigned outputArgOffset = inputs.size();
-        unsigned reductionOffset =
-            outputs.size() - iterOp.getReductionAccumulators().size();
-        if (isa_and_present<scf::ForOp>(nest.innermostBody->getParentOp())) {
-          if (nest.innermostBody->getNumArguments() ==
-              1 + iterOp.getReductionAccumulators().size()) {
-            for (auto [idx, arg] : llvm::enumerate(
-                     nest.innermostBody->getArguments().drop_front())) {
-              mapper.map(arg,
-                         blockArgs[outputArgOffset + reductionOffset + idx]);
-            }
-          }
-        }
-
-        for (auto [outputIdx, output] : llvm::enumerate(outputs)) {
-          if (!output.isReduction)
-            continue;
-          yielded[outputIdx] = blockArgs[outputArgOffset + outputIdx];
-          hasYield[outputIdx] = true;
-        }
 
         for (const MemrefAccessEntry &write : writes) {
           auto storeOp = cast<memref::StoreOp>(write.op);
@@ -489,20 +431,6 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp, const LoopNestInfo &nest,
           hasYield[storeIt->second] = true;
         }
 
-        if (auto scfYield =
-                dyn_cast<scf::YieldOp>(nest.innermostBody->getTerminator())) {
-          for (auto [idx, operand] : llvm::enumerate(scfYield.getOperands())) {
-            if (idx >= iterOp.getReductionAccumulators().size())
-              break;
-            Value mappedValue = cloneScalarValueIntoRegion(
-                operand, *nest.innermostBody, nestedBuilder, mapper);
-            if (!mappedValue)
-              continue;
-            yielded[reductionOffset + idx] = mappedValue;
-            hasYield[reductionOffset + idx] = true;
-          }
-        }
-
         for (auto [outputIdx, output] : llvm::enumerate(outputs)) {
           if (hasYield[outputIdx])
             continue;
@@ -511,20 +439,6 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp, const LoopNestInfo &nest,
 
         linalg::YieldOp::create(nestedBuilder, nestedLoc, yielded);
       });
-
-  for (const OutputOperand &output : outputs) {
-    if (!output.isReduction)
-      continue;
-    reductionResults.push_back(
-        memref::LoadOp::create(builder, loc, output.memref, ValueRange{}));
-  }
-
-  oldYield.erase();
-  builder.setInsertionPointToEnd(&rootBody);
-  sde::SdeYieldOp::create(builder, loc, reductionResults);
-
-  for (Operation *op : llvm::reverse(oldRootOps))
-    op->erase();
 
   ARTS_DEBUG("  raised sde.su_iterate body to linalg.generic with "
              << inputs.size() << " inputs and " << outputs.size()
@@ -579,17 +493,22 @@ struct RaiseToLinalgPass
       StringRef pattern =
           classifyPattern(reads, outputMaps, iterTypes, nest.ivs.size());
 
-      if (!raiseToLinalg(iterOp, nest, reads, writes, iterTypes))
-        return;
-
       iterOp->setAttr(AttrNames::Operation::LinalgClassification::AttrName,
                       StringAttr::get(ctx, pattern));
       ++classified;
-      ++raised;
+      bool supportsLinalgCarrier =
+          pattern != AttrNames::Operation::LinalgClassification::Stencil &&
+          pattern != AttrNames::Operation::LinalgClassification::Reduction;
+      if (supportsLinalgCarrier &&
+          raiseToLinalg(iterOp, nest, reads, writes, iterTypes))
+        ++raised;
 
-      ARTS_DEBUG("classified and raised sde.su_iterate as '"
-                 << pattern << "' with " << nest.ivs.size() << " dims ("
-                 << reads.size() << " ins, " << outputMaps.size() << " outs)");
+      ARTS_DEBUG("classified sde.su_iterate as '" << pattern << "' with "
+                                                  << nest.ivs.size()
+                                                  << " dims (" << reads.size()
+                                                  << " ins, "
+                                                  << outputMaps.size()
+                                                  << " outs)");
     });
 
     ARTS_INFO("RaiseToLinalg: analyzed " << analyzed << " loops, classified "

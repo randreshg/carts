@@ -286,9 +286,9 @@ static const std::array<llvm::StringLiteral, 8>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 6> kOpenMPToArtsPasses = {
+static const std::array<llvm::StringLiteral, 7> kOpenMPToArtsPasses = {
     "ConvertOpenMPToSde", "RaiseToLinalg", "ConvertSdeToArts",
-    "VerifySdeLowered", "DeadCodeElimination", "CSE"};
+    "VerifySdeLowered", "DeadCodeElimination", "CSE", "VerifyEdtCreated"};
 static const std::array<llvm::StringLiteral, 6> kPatternPipelinePasses = {
     "DepTransforms",
     "LoopNormalization",
@@ -704,7 +704,8 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 /// Dedicated semantic pattern pipeline that teaches ARTS about supported loop
 /// and dependence families before DB creation.
 /// Pattern contracts are now seeded at two points:
-///   1. SDE->ARTS conversion (classifies from linalg.generic for ~60% of loops)
+///   1. SDE->ARTS conversion (classifies from linalg.generic when present,
+///      otherwise falling back to RaiseToLinalg's transient classification)
 ///   2. DepTransforms/KernelTransforms (independent IR matching for the rest)
 void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createDepTransformsPass(AM));
