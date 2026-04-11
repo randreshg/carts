@@ -226,7 +226,7 @@ LogicalResult PerfectNestLinearizationPattern::apply(OpBuilder &builder) {
 
   auto linearFor =
       ForOp::create(builder, loc, ValueRange{zero}, ValueRange{totalTrip},
-                    ValueRange{one}, nullptr, ValueRange{});
+                    ValueRange{one}, nullptr, Value(), ValueRange{});
 
   Region &dstRegion = linearFor.getRegion();
   if (dstRegion.empty())

@@ -10,7 +10,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f128, dense<128> 
     "arts.for"(%c0, %c4, %c1) ({
     ^bb0(%iv: index):
       arts.yield
-    }) {operandSegmentSizes = array<i32: 1, 1, 1, 0>} : (index, index, index) -> ()
+    }) {operandSegmentSizes = array<i32: 1, 1, 1, 0, 0>} : (index, index, index) -> ()
     return
   }
 }

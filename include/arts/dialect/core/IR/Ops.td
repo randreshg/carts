@@ -922,15 +922,16 @@ def ForOp : Arts_Op<"for", [
                       Variadic<Index>:$upperBound, 
                       Variadic<Index>:$step,
                       OptionalAttr<ForScheduleKindAttr>:$schedule,
+                      Optional<Index>:$chunkSize,
                       Variadic<AnyType>:$reductionAccumulators);
   let results = (outs);
   let regions = (region AnyRegion : $region);
 
   let assemblyFormat = [{
     `(` $lowerBound `)` `to` `(` $upperBound `)` `step` `(` $step `)`
-    ( `schedule` `(` $schedule^ `)` )?
+    ( `schedule` `(` $schedule^ (`,` $chunkSize^)? `)` )?
     ( `reduction` `(` $reductionAccumulators^ `:` type($reductionAccumulators) `)` )?
-    `{` $region `}` attr-dict
+    $region attr-dict
   }];
 
   let hasCanonicalizer = true;
