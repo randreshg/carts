@@ -31,23 +31,36 @@ top section**, not as the exact current branch status.
   - 2-D disjoint-write elementwise tiling is now covered
 - `ConvertSdeToArts` now preserves fallback SDE stencil contracts when the loop
   reaches the boundary without a surviving transient carrier.
+- The narrow SDE semantic-surface gaps are no longer completely open:
+  - `!arts_sde.dep` and `!arts_sde.completion` now exist as real typedefs
+  - `arts_sde.mu_dep`, `arts_sde.cu_task`, and `arts_sde.su_barrier` use the
+    typed dep/completion surface instead of generic placeholders
+  - `arts_sde.mu_access`, `arts_sde.mu_reduction_decl`, and
+    `arts_sde.su_distribute` now exist as narrow semantic carriers
+  - `arts_sde.su_iterate` now implements `LoopLikeOpInterface`
 - `arts.reduction_strategy` is no longer annotation-only:
   - `ConvertSdeToArts` forwards it
   - core lowering now materially consumes it
   - `local_accumulate`, `atomic`, and `tree` produce distinct result-combine
     paths
   - odd-worker tree coverage is now present
+- One core hardcoded-threshold cluster was closed:
+  - `EdtTransformsPass::selectReductionStrategies()` now compares
+    cost-model-derived atomic-vs-tree costs instead of using a fixed worker
+    cutoff
 - `docs/sde.md` has already been rewritten to match the current branch state,
   so any documentation score that implicitly counts it as stale is now too low.
 
 ### Still Real After the Audit
 
-- The SDE semantic-design gaps are still the biggest true architectural gaps:
-  missing SDE types, missing interfaces, and missing documented ops such as
-  `sde.su_distribute`, `sde.mu_access`, and `sde.mu_reduction_decl`.
+- The remaining SDE semantic-design gaps are narrower than at audit time:
+  destination-style tensor-native operands, `RegionBranchOpInterface`, and
+  broader backend-neutral semantics are still missing, but the basic typed
+  dep/completion surface and the previously missing SDE ops are now present.
 - The broader cost-model integration gaps are still real: the SDE-facing cost
-  model exists and is used by SDE passes, but the core heuristic files still
-  rely heavily on hardcoded thresholds.
+  model exists and is used by SDE passes, and one core ET-5 threshold cluster
+  now uses cost-model-derived atomic-vs-tree selection, but the larger core
+  heuristic files still rely heavily on hardcoded thresholds.
 - The directory-reorganization and cleanup work is still largely open.
 - The architecture docs under `docs/architecture/` were still stale at audit
   time and several remain stale until updated individually.
@@ -57,9 +70,9 @@ top section**, not as the exact current branch status.
 | Structural layout    | 100%       | All 3 dialects, IREE-style dirs           |
 | RT dialect           | 100%       | 14 ops, ArtsToRt, RtToLLVM, VerifyLowered |
 | SDE pipeline         | 90%        | OMP->SDE->ARTS working, 9 passes          |
-| SDE op design        | 45%        | 3 ops missing, 0 interfaces, 0 types      |
+| SDE op design        | 70%        | Typed dep/completion, LoopLike, and the previously missing narrow ops now exist; destination-style and region-branch semantics still absent |
 | Tensor integration   | 60%        | Audit-time snapshot; branch has since added broader tensor/linalg coverage |
-| Cost model           | 30%        | Exists but disconnected from heuristics   |
+| Cost model           | 40%        | SDE passes use it and ET-5 now consumes it for atomic-vs-tree selection, but broader core heuristics still hardcode many thresholds |
 | Directory moves      | 85%        | patterns/, verify/, general/ never created |
 | Documentation        | 70%        | Audit-time snapshot; `docs/sde.md` has since been refreshed |
 | Test architecture    | 85%        | Audit-time snapshot; targeted downstream reduction coverage has since improved |
@@ -70,26 +83,26 @@ top section**, not as the exact current branch status.
 
 ## Tier 1: Critical Gaps
 
-### 1.1 SDE Dialect Is a Shell, Not the Documented Design
+### 1.1 SDE Dialect Is Still Narrower Than the Original Documented Design
 
-The SDE dialect has 8 ops and 9 working passes, but the documented
-interfaces, types, and operand schema that would make it tensor-native
-and MLIR-composable are entirely absent.
+The SDE dialect is no longer missing its basic typed semantic surface, but it
+is still narrower than the original tensor-native design sketched in the
+architecture docs.
 
 **Missing ops (documented in sde-dialect.md, not in SdeOps.td):**
 
 | Op                     | Purpose                                        | Status          |
 |------------------------|-------------------------------------------------|-----------------|
-| `sde.su_distribute`    | Advisory distribution hint for work mapping     | Not implemented |
-| `sde.mu_access`        | In-body access region annotation (memref fallback) | Not implemented |
-| `sde.mu_reduction_decl`| Module-level reduction symbol with identity + combiner | Not implemented |
+| `sde.su_distribute`    | Advisory distribution hint for work mapping     | Implemented as a narrow advisory wrapper; current lowering inlines it away |
+| `sde.mu_access`        | In-body access region annotation (memref fallback) | Implemented as an annotation op; current lowering erases it |
+| `sde.mu_reduction_decl`| Module-level reduction symbol with identity + combiner | Implemented as a narrow declaration op; current lowering erases it |
 
 **Missing interfaces:**
 
 | Interface                      | Documented On          | Status              | Impact                              |
 |--------------------------------|------------------------|----------------------|--------------------------------------|
 | `DestinationStyleOpInterface`  | cu_region, cu_task, cu_reduce | Zero occurrences | Cannot compose with linalg tile-and-fuse |
-| `LoopLikeOpInterface`          | su_iterate             | Not implemented      | Cannot use MLIR loop transform passes |
+| `LoopLikeOpInterface`          | su_iterate             | Implemented          | Generic loop utilities can now recognize `arts_sde.su_iterate` |
 | `RegionBranchOpInterface`      | cu_region, cu_task     | Not implemented      | No proper CF semantics               |
 | `MemoryEffectsOpInterface`     | All CU/SU/MU           | Only RecursiveMemoryEffects | Partial                          |
 
@@ -97,10 +110,8 @@ and MLIR-composable are entirely absent.
 
 | Type             | Mnemonic         | Documented Purpose                      | Actual          |
 |------------------|------------------|-----------------------------------------|-----------------|
-| `CompletionType` | `sde.completion` | Opaque token signaling CU completion    | Using `AnyType` |
-| `DepType`        | `sde.dep`        | Typed dependency handle with mode+region | Using `i64`     |
-
-No `SdeTypes.td` file exists.
+| `CompletionType` | `sde.completion` | Opaque token signaling CU completion    | Implemented as `!arts_sde.completion` |
+| `DepType`        | `sde.dep`        | Typed dependency handle with mode+region | Implemented as `!arts_sde.dep` |
 
 **Missing operand schema (ins/outs):**
 
@@ -108,7 +119,7 @@ All CU ops are documented with `DestinationStyleOpInterface` and `ins`/`outs`
 operands (like `linalg.generic`). Actual signatures:
 
 - `sde.cu_region`: Zero data operands -- just attributes (`kind`, `concurrency_scope`, `nowait`)
-- `sde.cu_task`: Only `Variadic<AnyType>:$deps` -- dependency tokens, no data
+- `sde.cu_task`: Only typed dependency operands (`Variadic<DepType>:$deps`) -- no data operands
 - `sde.cu_reduce`: Raw `AnyType` arguments, not `ins`/`outs` form
 - `sde.su_iterate`: Only bounds/steps, no data operands
 
@@ -124,7 +135,7 @@ GPU)." In practice:
 - Schedule kinds map directly to ARTS ForOp
 - No abstraction layer for alternative runtime targets
 
-### 1.2 Cost Model Exists But Is Disconnected From Decisions
+### 1.2 Cost Model Still Has Major Gaps In Core Heuristics
 
 `ARTSCostModel` (include/arts/utils/costs/ARTSCostModel.h) has calibrated
 cycle counts:
@@ -139,8 +150,10 @@ Atomic updates: 100 cycles (local), 500 (distributed)
 At audit time this was effectively true for the core heuristic files. Since
 then, the branch has also grown SDE-side consumers (`SdeScopeSelection`,
 `SdeScheduleRefinement`, `SdeChunkOptimization`, `SdeReductionStrategy`,
-`SdeTensorOptimization`), but the broader **core** heuristic files still rely
-on hardcoded if-else cascades.
+`SdeTensorOptimization`), and `EdtTransformsPass::selectReductionStrategies()`
+now compares cost-model-derived atomic-vs-tree costs instead of using a fixed
+worker cutoff. The broader **core** heuristic files still rely heavily on
+hardcoded if-else cascades.
 
 **20 hardcoded thresholds found across 4 files:**
 
