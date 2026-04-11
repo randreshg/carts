@@ -12,9 +12,6 @@
 /// Current ownership:
 ///   - StencilTilingNDPattern
 ///   - MatmulReductionPattern
-///
-/// Retired (SDE handles):
-///   - elementwise_pipeline → SdeElementwiseFusion in sde/Transforms/
 ///==========================================================================///
 
 #include "arts/Dialect.h"
@@ -40,12 +37,10 @@ namespace {
 
 struct KernelTransformsPass
     : public ::impl::KernelTransformsBase<KernelTransformsPass> {
-  KernelTransformsPass(mlir::arts::AnalysisManager *AM,
-                       bool enableElementwisePipeline, bool enableMatmul,
+  KernelTransformsPass(mlir::arts::AnalysisManager *AM, bool enableMatmul,
                        bool enableTiling, int64_t tileJ, int64_t minTripCount)
       : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
-    this->enableElementwisePipeline = enableElementwisePipeline;
     this->enableMatmul = enableMatmul;
     this->enableTiling = enableTiling;
     this->tileJ = tileJ;
@@ -57,8 +52,6 @@ struct KernelTransformsPass
     ARTS_INFO_HEADER(KernelTransformsPass);
 
     int rewrites = 0;
-    if (enableElementwisePipeline)
-      rewrites += applyElementwisePipelineTransform(module);
 
     SmallVector<std::unique_ptr<KernelPatternTransform>> patterns;
     patterns.push_back(createStencilTilingNDPattern());
@@ -94,9 +87,8 @@ private:
 } // namespace
 
 std::unique_ptr<Pass> mlir::arts::createKernelTransformsPass(
-    mlir::arts::AnalysisManager *AM, bool enableElementwisePipeline,
-    bool enableMatmul, bool enableTiling, int64_t tileJ, int64_t minTripCount) {
-  return std::make_unique<KernelTransformsPass>(AM, enableElementwisePipeline,
-                                                enableMatmul, enableTiling,
+    mlir::arts::AnalysisManager *AM, bool enableMatmul, bool enableTiling,
+    int64_t tileJ, int64_t minTripCount) {
+  return std::make_unique<KernelTransformsPass>(AM, enableMatmul, enableTiling,
                                                 tileJ, minTripCount);
 }

@@ -113,10 +113,9 @@ std::unique_ptr<Pass> createStencilBoundaryPeelingPass();
 std::unique_ptr<Pass> createLoopNormalizationPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createLoopReorderingPass(AnalysisManager *AM);
 std::unique_ptr<Pass>
-createKernelTransformsPass(AnalysisManager *AM,
-                           bool enableElementwisePipeline = true,
-                           bool enableMatmul = true, bool enableTiling = true,
-                           int64_t tileJ = 64, int64_t minTripCount = 128);
+createKernelTransformsPass(AnalysisManager *AM, bool enableMatmul = true,
+                           bool enableTiling = true, int64_t tileJ = 64,
+                           int64_t minTripCount = 128);
 std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
 
 /// Validation passes for lowering contracts.
