@@ -27,10 +27,258 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 ARTS_DEBUG_SETUP(edt_reduction_lowering);
 
 using namespace mlir;
 using namespace mlir::arts;
+
+namespace {
+
+static Block &ensureBlock(Region &region) {
+  if (region.empty())
+    region.push_back(new Block());
+  return region.front();
+}
+
+static bool isScalarReductionCarrierType(MemRefType memrefType) {
+  if (!memrefType)
+    return false;
+  if (memrefType.getRank() == 0)
+    return true;
+  return memrefType.getRank() == 1;
+}
+
+static ReductionLoweringStrategy
+resolveReductionStrategy(ForOp forOp, EdtOp parallelEdt) {
+  auto getStrategy = [](Operation *op) -> std::optional<ReductionLoweringStrategy> {
+    if (!op)
+      return std::nullopt;
+
+    auto attr = op->getAttrOfType<StringAttr>(
+        AttrNames::Operation::Contract::ReductionStrategy);
+    if (!attr)
+      return std::nullopt;
+
+    StringRef value = attr.getValue();
+    namespace ReductionStrategyValue =
+        AttrNames::Operation::Contract::ReductionStrategyValue;
+    if (value == ReductionStrategyValue::Atomic)
+      return ReductionLoweringStrategy::atomic;
+    if (value == ReductionStrategyValue::Tree)
+      return ReductionLoweringStrategy::tree;
+    if (value == ReductionStrategyValue::LocalAccumulate)
+      return ReductionLoweringStrategy::localAccumulate;
+    return std::nullopt;
+  };
+
+  if (auto strategy = getStrategy(forOp.getOperation()))
+    return *strategy;
+  if (auto strategy = getStrategy(parallelEdt.getOperation()))
+    return *strategy;
+  return ReductionLoweringStrategy::localAccumulate;
+}
+
+static SmallVector<Value>
+detectPrivateReductionAccumulators(ForOp forOp) {
+  SmallVector<Value> privateAccums(forOp.getReductionAccumulators().size(),
+                                   Value());
+  if (forOp.getReductionAccumulators().size() != 1)
+    return privateAccums;
+
+  Value reductionAccum = ValueAnalysis::stripMemrefViewOps(
+      forOp.getReductionAccumulators().front());
+  auto reductionType = dyn_cast<MemRefType>(reductionAccum.getType());
+  if (!isScalarReductionCarrierType(reductionType))
+    return privateAccums;
+
+  struct AccessInfo {
+    bool hasLoad = false;
+    bool hasStore = false;
+  };
+
+  DenseMap<Value, AccessInfo> candidateAccesses;
+  auto recordCandidate = [&](Value memref, bool isStore) {
+    Value base = ValueAnalysis::stripMemrefViewOps(memref);
+    if (!base || base == reductionAccum)
+      return;
+
+    auto allocaOp = base.getDefiningOp<memref::AllocaOp>();
+    if (!allocaOp || forOp->isAncestor(allocaOp))
+      return;
+
+    auto memrefType = dyn_cast<MemRefType>(base.getType());
+    if (!isScalarReductionCarrierType(memrefType) ||
+        memrefType.getElementType() != reductionType.getElementType())
+      return;
+
+    AccessInfo &access = candidateAccesses[base];
+    if (isStore)
+      access.hasStore = true;
+    else
+      access.hasLoad = true;
+  };
+
+  forOp.walk([&](memref::LoadOp loadOp) {
+    recordCandidate(loadOp.getMemref(), /*isStore=*/false);
+  });
+  forOp.walk([&](memref::StoreOp storeOp) {
+    recordCandidate(storeOp.getMemRef(), /*isStore=*/true);
+  });
+
+  SmallVector<Value> candidates;
+  for (const auto &entry : candidateAccesses) {
+    if (entry.second.hasLoad && entry.second.hasStore)
+      candidates.push_back(entry.first);
+  }
+
+  if (candidates.size() == 1)
+    privateAccums[0] = candidates.front();
+
+  return privateAccums;
+}
+
+static SmallVector<Value, 1> getScalarIndices(ArtsCodegen *AC, Value memref,
+                                              Location loc) {
+  SmallVector<Value, 1> indices;
+  auto memrefType = dyn_cast<MemRefType>(memref.getType());
+  if (!memrefType || memrefType.getRank() == 0)
+    return indices;
+  indices.push_back(AC->createIndexConstant(0, loc));
+  return indices;
+}
+
+static Value loadScalarValue(ArtsCodegen *AC, Location loc, Value memref) {
+  SmallVector<Value, 1> indices = getScalarIndices(AC, memref, loc);
+  return AC->create<memref::LoadOp>(loc, memref, indices);
+}
+
+static void storeScalarValue(ArtsCodegen *AC, Location loc, Value value,
+                             Value memref) {
+  SmallVector<Value, 1> indices = getScalarIndices(AC, memref, loc);
+  AC->create<memref::StoreOp>(loc, value, memref, indices);
+}
+
+static Value createReductionAdd(ArtsCodegen *AC, Location loc, Type elemType,
+                                Value lhs, Value rhs) {
+  if (isa<FloatType>(elemType))
+    return AC->create<arith::AddFOp>(loc, lhs, rhs);
+  return AC->create<arith::AddIOp>(loc, lhs, rhs);
+}
+
+static void lowerLinearResultCombine(ArtsCodegen *AC, Location loc,
+                                     Value partialArg, Value finalMemRef,
+                                     Type elemType, Value zeroIndex,
+                                     Value oneIndex, Value numWorkers,
+                                     bool isSingleWorker) {
+  if (isSingleWorker) {
+    Value workerSlot =
+        AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIndex});
+    Value partialValue = loadScalarValue(AC, loc, workerSlot);
+    storeScalarValue(AC, loc, partialValue, finalMemRef);
+    return;
+  }
+
+  Value identity = AC->createZeroValue(elemType, loc);
+  auto combineLoop = AC->create<scf::ForOp>(loc, zeroIndex, numWorkers,
+                                            oneIndex, ValueRange{identity});
+  AC->setInsertionPointToStart(combineLoop.getBody());
+  Value workerIdx = combineLoop.getInductionVar();
+  Value accumulator = combineLoop.getRegionIterArg(0);
+
+  Value workerSlot =
+      AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{workerIdx});
+  Value partialValue = loadScalarValue(AC, loc, workerSlot);
+  Value combined =
+      createReductionAdd(AC, loc, elemType, accumulator, partialValue);
+  AC->create<scf::YieldOp>(loc, combined);
+
+  AC->setInsertionPointAfter(combineLoop);
+  storeScalarValue(AC, loc, combineLoop.getResult(0), finalMemRef);
+}
+
+static void lowerAtomicResultCombine(ArtsCodegen *AC, Location loc,
+                                     Value partialArg, Value finalMemRef,
+                                     Type elemType, Value zeroIndex,
+                                     Value oneIndex, Value numWorkers,
+                                     bool isSingleWorker) {
+  if (!isa<IntegerType>(elemType)) {
+    lowerLinearResultCombine(AC, loc, partialArg, finalMemRef, elemType,
+                             zeroIndex, oneIndex, numWorkers, isSingleWorker);
+    return;
+  }
+
+  Value identity = AC->createZeroValue(elemType, loc);
+  storeScalarValue(AC, loc, identity, finalMemRef);
+
+  if (isSingleWorker) {
+    Value workerSlot =
+        AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIndex});
+    Value partialValue = loadScalarValue(AC, loc, workerSlot);
+    (void)AC->create<AtomicAddOp>(loc, finalMemRef, partialValue);
+    return;
+  }
+
+  auto combineLoop =
+      AC->create<scf::ForOp>(loc, zeroIndex, numWorkers, oneIndex);
+  AC->setInsertionPointToStart(combineLoop.getBody());
+  Value workerIdx = combineLoop.getInductionVar();
+  Value workerSlot =
+      AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{workerIdx});
+  Value partialValue = loadScalarValue(AC, loc, workerSlot);
+  (void)AC->create<AtomicAddOp>(loc, finalMemRef, partialValue);
+  AC->setInsertionPointAfter(combineLoop);
+}
+
+static void lowerTreeResultCombine(ArtsCodegen *AC, Location loc,
+                                   Value partialArg, Value finalMemRef,
+                                   Type elemType, Value zeroIndex,
+                                   Value oneIndex, Value numWorkers,
+                                   bool isSingleWorker) {
+  if (isSingleWorker) {
+    Value workerSlot =
+        AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIndex});
+    Value partialValue = loadScalarValue(AC, loc, workerSlot);
+    storeScalarValue(AC, loc, partialValue, finalMemRef);
+    return;
+  }
+
+  Value twoIndex = AC->createIndexConstant(2, loc);
+  Value identity = AC->createZeroValue(elemType, loc);
+  auto pairLoop = AC->create<scf::ForOp>(loc, zeroIndex, numWorkers, twoIndex,
+                                         ValueRange{identity});
+  AC->setInsertionPointToStart(pairLoop.getBody());
+  Value pairIdx = pairLoop.getInductionVar();
+  Value accumulator = pairLoop.getRegionIterArg(0);
+  Value rhsIdx = AC->create<arith::AddIOp>(loc, pairIdx, oneIndex);
+  Value hasRhs = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
+                                           rhsIdx, numWorkers);
+
+  Value lhsSlot =
+      AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{pairIdx});
+  Value lhsValue = loadScalarValue(AC, loc, lhsSlot);
+  auto rhsIf = AC->create<scf::IfOp>(loc, TypeRange{lhsValue.getType()}, hasRhs,
+                                     /*withElseRegion=*/true);
+  AC->setInsertionPointToStart(&ensureBlock(rhsIf.getThenRegion()));
+  Value rhsSlot =
+      AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{rhsIdx});
+  Value rhsValue = loadScalarValue(AC, loc, rhsSlot);
+  AC->create<scf::YieldOp>(loc, rhsValue);
+  AC->setInsertionPointToStart(&ensureBlock(rhsIf.getElseRegion()));
+  AC->create<scf::YieldOp>(loc, identity);
+
+  AC->setInsertionPointToEnd(pairLoop.getBody());
+  Value pairValue =
+      createReductionAdd(AC, loc, elemType, lhsValue, rhsIf.getResult(0));
+  Value combined =
+      createReductionAdd(AC, loc, elemType, accumulator, pairValue);
+  AC->create<scf::YieldOp>(loc, combined);
+
+  AC->setInsertionPointAfter(pairLoop);
+  storeScalarValue(AC, loc, pairLoop.getResult(0), finalMemRef);
+}
+
+} // namespace
 
 DenseSet<Value> mlir::arts::detectReductionBlockArgs(ForOp forOp) {
   DenseSet<Value> result;
@@ -94,9 +342,12 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
   ReductionLoweringInfo redInfo;
   redInfo.loopLocation = forOp.getLoc();
   redInfo.parentConcurrency = parallelEdt.getConcurrency();
+  redInfo.strategy = resolveReductionStrategy(forOp, parallelEdt);
   ValueRange reductionAccums = forOp.getReductionAccumulators();
   if (reductionAccums.empty())
     return redInfo;
+  SmallVector<Value> privateReductionAccums =
+      detectPrivateReductionAccumulators(forOp);
 
   /// Try to find a stack-allocated DB sink in the parent block to mirror the
   /// final reduction result (used by host prints).
@@ -164,6 +415,9 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
 
   for (auto [idx, redVar] : llvm::enumerate(reductionAccums)) {
     redInfo.reductionVars.push_back(redVar);
+    redInfo.privateReductionAccums.push_back(
+        idx < privateReductionAccums.size() ? privateReductionAccums[idx]
+                                            : Value());
 
     auto redMemRef = dyn_cast<MemRefType>(redVar.getType());
     Type elementType =
@@ -364,8 +618,12 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
       continue;
     }
 
+    ArtsMode finalMode =
+        redInfo.strategy == ReductionLoweringStrategy::atomic
+            ? ArtsMode::inout
+            : ArtsMode::out;
     auto acqOp = AC->create<DbAcquireOp>(
-        loc, ArtsMode::out, finalGuid, finalPtr, PartitionMode::coarse,
+        loc, finalMode, finalGuid, finalPtr, PartitionMode::coarse,
         /*indices=*/SmallVector<Value>{},
         /*offsets=*/SmallVector<Value>{zeroIndex},
         /*sizes=*/SmallVector<Value>{sizeOne},
@@ -424,37 +682,19 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
       return;
     }
 
-    /// When numWorkers is a compile-time constant 1, emit straight-line
-    /// combine instead of a loop.  A loop from 0 to 1 would use its IV as a
-    /// db_ref index, which the verifier rejects for coarse-grained DBs.
-    if (isSingleWorker) {
-      Value workerSlot =
-          AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIndex});
-      Value partialValue =
-          AC->create<memref::LoadOp>(loc, workerSlot, zeroIndices);
-      AC->create<memref::StoreOp>(loc, partialValue, finalMemRef, zeroIndices);
-    } else {
-      auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers,
-                                                sizeOne, ValueRange{identity});
-      AC->setInsertionPointToStart(combineLoop.getBody());
-      Value workerIdx = combineLoop.getInductionVar();
-      Value accumulator = combineLoop.getRegionIterArg(0);
-
-      Value workerSlot =
-          AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{workerIdx});
-      Value partialValue =
-          AC->create<memref::LoadOp>(loc, workerSlot, zeroIndices);
-
-      Value combined;
-      if (isa<FloatType>(elemType))
-        combined = AC->create<arith::AddFOp>(loc, accumulator, partialValue);
-      else
-        combined = AC->create<arith::AddIOp>(loc, accumulator, partialValue);
-      AC->create<scf::YieldOp>(loc, combined);
-
-      AC->setInsertionPointAfter(combineLoop);
-      AC->create<memref::StoreOp>(loc, combineLoop.getResult(0), finalMemRef,
-                                  zeroIndices);
+    switch (redInfo.strategy) {
+    case ReductionLoweringStrategy::localAccumulate:
+      lowerLinearResultCombine(AC, loopLoc, partialArg, finalMemRef, elemType,
+                               zeroIndex, sizeOne, numWorkers, isSingleWorker);
+      break;
+    case ReductionLoweringStrategy::atomic:
+      lowerAtomicResultCombine(AC, loopLoc, partialArg, finalMemRef, elemType,
+                               zeroIndex, sizeOne, numWorkers, isSingleWorker);
+      break;
+    case ReductionLoweringStrategy::tree:
+      lowerTreeResultCombine(AC, loopLoc, partialArg, finalMemRef, elemType,
+                             zeroIndex, sizeOne, numWorkers, isSingleWorker);
+      break;
     }
   }
 
@@ -487,7 +727,21 @@ void mlir::arts::finalizeReductionAfterEpoch(ArtsCodegen *AC,
     Value finalRef = AC->create<DbRefOp>(loc, finalHandle, zeroIndices);
     Value loaded = AC->create<memref::LoadOp>(loc, finalRef, zeroIndices);
     Value casted = AC->castParameter(redMemRefTy.getElementType(), loaded, loc);
-    AC->create<memref::StoreOp>(loc, casted, redVar, zeroIndices);
+
+    bool canStoreToReductionVar = true;
+    if (auto blockArg = dyn_cast<BlockArgument>(redVar)) {
+      Region *ownerRegion = blockArg.getOwner()->getParent();
+      Region *currentRegion = AC->getBuilder().getBlock()->getParent();
+      canStoreToReductionVar =
+          ownerRegion && currentRegion && ownerRegion->isAncestor(currentRegion);
+    } else if (Operation *defOp = redVar.getDefiningOp()) {
+      Region *defRegion = defOp->getParentRegion();
+      Region *currentRegion = AC->getBuilder().getBlock()->getParent();
+      canStoreToReductionVar =
+          defRegion && currentRegion && defRegion->isAncestor(currentRegion);
+    }
+    if (canStoreToReductionVar)
+      AC->create<memref::StoreOp>(loc, casted, redVar, zeroIndices);
 
     if (idx < redInfo.hostResultPtrs.size()) {
       Value hostPtr = redInfo.hostResultPtrs[idx];
