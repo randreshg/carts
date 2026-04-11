@@ -58,6 +58,7 @@
 /// Debug
 #include "arts/utils/Debug.h"
 #include <algorithm>
+#include <cmath>
 
 using namespace mlir;
 using namespace mlir::func;
@@ -100,11 +101,6 @@ static constexpr int64_t kSmallTaskThreshold = 64;
 /// Weight multiplier for loop-nested operations.  Each level of loop nesting
 /// multiplies the effective cost of operations inside that loop.
 static constexpr int64_t kLoopDepthMultiplier = 8;
-
-/// ET-5: Worker count threshold for choosing atomic vs tree reduction.
-/// Below this threshold, atomic updates are preferred; above, tree reduction
-/// avoids excessive contention on shared cache lines.
-static constexpr int64_t kAtomicWorkerThreshold = 16;
 
 struct EdtTransformsPass : public ::impl::EdtTransformsBase<EdtTransformsPass> {
   EdtTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
@@ -535,6 +531,7 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
 
   /// Retrieve worker count from module attributes (set by runtime config).
   int64_t workerCount = getRuntimeTotalWorkers(module).value_or(0);
+  auto &costModel = AM->getCostModel();
 
   module.walk([&](func::FuncOp func) {
     auto &edtGraph = AM->getEdtAnalysis().getOrCreateEdtGraph(func);
@@ -614,16 +611,20 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
         if (isLoopNested) {
           /// Inside a loop nest: accumulate locally, then single atomic at end.
           strategy = ReductionStrategyValue::LocalAccumulate;
-        } else if (workerCount > 0 && workerCount < kAtomicWorkerThreshold &&
-                   EdtAnalysis::isAtomicCapable(*reductionKind)) {
-          /// Small worker count and op maps to ARTS atomic intrinsic.
-          strategy = ReductionStrategyValue::Atomic;
-        } else if (workerCount >= kAtomicWorkerThreshold) {
-          /// Large worker count: binary tree reduction avoids contention.
-          strategy = ReductionStrategyValue::Tree;
         } else if (EdtAnalysis::isAtomicCapable(*reductionKind)) {
-          /// Worker count unknown but op atomic-capable: default to atomic.
-          strategy = ReductionStrategyValue::Atomic;
+          if (workerCount > 0) {
+            double atomicCost = static_cast<double>(workerCount) *
+                                costModel.getAtomicUpdateCost();
+            double treeLevels = std::ceil(std::log2(
+                static_cast<double>(std::max<int64_t>(workerCount, 1))));
+            double treeCost = treeLevels * costModel.getTaskSyncCost();
+
+            strategy = atomicCost <= treeCost ? ReductionStrategyValue::Atomic
+                                              : ReductionStrategyValue::Tree;
+          } else {
+            /// Worker count unknown but op atomic-capable: default to atomic.
+            strategy = ReductionStrategyValue::Atomic;
+          }
         } else {
           /// Non-atomic-capable with unknown worker count: tree is safe
           /// default.
