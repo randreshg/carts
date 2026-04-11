@@ -35,23 +35,22 @@
 /// at function entry for LLVM to recognize the alias scopes.
 ///==========================================================================///
 
+#include "arts/dialect/rt/Transforms/Passes.h"
+
+namespace mlir::arts {
 #define GEN_PASS_DEF_ALIASSCOPEGEN
-#include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
+#include "arts/dialect/rt/Transforms/Passes.h.inc"
+} // namespace mlir::arts
+
+#include "arts/utils/Debug.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMInterfaces.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
-
-#include "arts/Dialect.h"
-#include "arts/passes/Passes.h"
-#include "arts/utils/ValueAnalysis.h"
-
-#include "arts/utils/Debug.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 ARTS_DEBUG_SETUP(alias_scope_gen);
@@ -383,7 +382,8 @@ static int processMemoryAccesses(LLVM::LLVMFuncOp funcOp,
   return count;
 }
 
-struct AliasScopeGenPass : public impl::AliasScopeGenBase<AliasScopeGenPass> {
+struct AliasScopeGenPass
+    : public arts::impl::AliasScopeGenBase<AliasScopeGenPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
