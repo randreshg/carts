@@ -94,10 +94,14 @@ sde/Transforms:
   RaiseToLinalg
   RaiseToTensor
   SdeTensorOptimization
-  VerifySdeLowered
+  SdeStructuredSummaries
+  SdeElementwiseFusion
+  SdeDistributionPlanning
+  SdeIterationSpaceDecomposition
 
 core/Conversion/SdeToArts:
   ConvertSdeToArts
+  VerifySdeLowered
 
 core/Transforms:
   VerifyEdtCreated
@@ -113,7 +117,6 @@ shared / utility:
 core/Transforms:
   DepTransforms
   LoopNormalization
-  StencilBoundaryPeeling
   LoopReordering
   KernelTransforms
 

@@ -71,15 +71,28 @@ this pipeline, see [`optimization-patterns.md`](./optimization-patterns.md).
 - `PolygeistCanonicalizeFor` (nested func)
 
 ### 4) openmp-to-arts
-- `ConvertOpenMPToArts`
+- `ConvertOpenMPToSde`
+- `SdeScopeSelection`
+- `SdeScheduleRefinement`
+- `SdeChunkOptimization`
+- `SdeReductionStrategy`
+- `RaiseToLinalg`
+- `RaiseToTensor`
+- `SdeTensorOptimization`
+- `SdeStructuredSummaries`
+- `SdeElementwiseFusion`
+- `SdeDistributionPlanning`
+- `SdeIterationSpaceDecomposition`
+- `ConvertSdeToArts`
+- `VerifySdeLowered`
 - `DeadCodeElimination`
 - `CSE`
+- `VerifyEdtCreated`
 
 ### 5) pattern-pipeline
 - `PatternDiscovery(seed)`
 - `DepTransforms`
 - `LoopNormalization`
-- `StencilBoundaryPeeling`
 - `LoopReordering`
 - `PatternDiscovery(refine)`
 - `KernelTransforms`

@@ -54,7 +54,6 @@ pattern-pipeline
   |- PD(seed)
   |- DT
   |- LN
-  |- StencilBoundaryPeeling
   |- LoopReordering
   |- PD(refine)
   |- KT
@@ -278,7 +277,7 @@ PD(seed)
   -> generic stencil evidence
   |
   v
-StencilBoundaryPeeling
+SdeIterationSpaceDecomposition (in openmp-to-arts stage)
   -> isolate interior from boundary handling
   |
   v
