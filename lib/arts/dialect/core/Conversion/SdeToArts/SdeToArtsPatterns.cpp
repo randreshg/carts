@@ -242,6 +242,24 @@ static void mergeStencilContract(LinalgStencilContractInfo &dst,
     dst.maxOffsets[idx] = std::max(dst.maxOffsets[idx], maxOffset);
 }
 
+/// Recover an already-stamped stencil contract from an op.
+static std::optional<LinalgStencilContractInfo>
+getStampedStencilContract(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (!getStencilMinOffsets(op) || !getStencilMaxOffsets(op) ||
+      !getStencilOwnerDims(op) || !getStencilWriteFootprint(op))
+    return std::nullopt;
+
+  LinalgStencilContractInfo info;
+  info.ownerDims = *getStencilOwnerDims(op);
+  info.spatialDims = getStencilSpatialDims(op).value_or(info.ownerDims);
+  info.minOffsets = *getStencilMinOffsets(op);
+  info.maxOffsets = *getStencilMaxOffsets(op);
+  info.writeFootprint = *getStencilWriteFootprint(op);
+  return info;
+}
+
 /// Classify a linalg.generic directly from its iterator structure.
 static std::optional<ArtsDepPattern>
 classifyFromLinalg(linalg::GenericOp generic) {
@@ -527,20 +545,8 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       std::optional<LinalgStencilContractInfo> candidateStencil;
       if (isStencilFamilyDepPattern(*candidatePattern)) {
         candidateStencil = extractStencilContract(generic);
-        if (!candidateStencil && getStencilMinOffsets(generic.getOperation()) &&
-            getStencilMaxOffsets(generic.getOperation()) &&
-            getStencilOwnerDims(generic.getOperation()) &&
-            getStencilWriteFootprint(generic.getOperation())) {
-          LinalgStencilContractInfo info;
-          info.ownerDims = *getStencilOwnerDims(generic.getOperation());
-          info.spatialDims = getStencilSpatialDims(generic.getOperation())
-                                 .value_or(info.ownerDims);
-          info.minOffsets = *getStencilMinOffsets(generic.getOperation());
-          info.maxOffsets = *getStencilMaxOffsets(generic.getOperation());
-          info.writeFootprint =
-              *getStencilWriteFootprint(generic.getOperation());
-          candidateStencil = std::move(info);
-        }
+        if (!candidateStencil)
+          candidateStencil = getStampedStencilContract(generic.getOperation());
       }
 
       if (!selectedPattern) {
@@ -600,8 +606,15 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
     // Fallback to RaiseToLinalg's SDE-owned loop classification when no
     // linalg.generic survived into the cloned body.
     if (!selectedPattern) {
-      if (auto classAttr = op.getLinalgClassificationAttr())
+      if (auto classAttr = op.getLinalgClassificationAttr()) {
         selectedPattern = classifyFromSde(classAttr.getValue());
+        selectedRevision = getPatternRevision(op.getOperation()).value_or(1);
+        if (selectedPattern && isStencilFamilyDepPattern(*selectedPattern))
+          selectedStencilContract = getStampedStencilContract(op.getOperation());
+        copySemanticContractAttrs(op.getOperation(), artsFor.getOperation());
+        if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
+          copySemanticContractAttrs(op.getOperation(), parentEdt.getOperation());
+      }
     }
 
     if (selectedPattern) {
