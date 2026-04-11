@@ -26,6 +26,10 @@ namespace mlir::arts {
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
 
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -34,6 +38,7 @@ namespace mlir::arts {
 ARTS_DEBUG_SETUP(convert_sde_to_arts);
 
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/STLExtras.h"
 static llvm::Statistic numCuRegionConverted{
     "convert_sde_to_arts", "NumCuRegionConverted",
     "Number of sde.cu_region converted to arts.edt"};
@@ -101,10 +106,168 @@ classifyFromString(StringRef classification) {
   return std::nullopt;
 }
 
+/// Structured stencil footprint recovered from a linalg.generic indexing map.
+struct LinalgStencilContractInfo {
+  SmallVector<int64_t, 4> ownerDims;
+  SmallVector<int64_t, 4> spatialDims;
+  SmallVector<int64_t, 4> minOffsets;
+  SmallVector<int64_t, 4> maxOffsets;
+  SmallVector<int64_t, 4> writeFootprint;
+};
+
+/// Affine expression normalized to one loop dim plus a constant offset.
+struct AffineDimOffset {
+  std::optional<unsigned> dim;
+  int64_t offset = 0;
+};
+
+/// Extract a single-dim + constant form from an affine expression.
+static std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr) {
+  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr))
+    return AffineDimOffset{dimExpr.getPosition(), 0};
+  if (auto cstExpr = dyn_cast<AffineConstantExpr>(expr))
+    return AffineDimOffset{std::nullopt, cstExpr.getValue()};
+
+  auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr);
+  if (!binExpr)
+    return std::nullopt;
+
+  auto lhs = extractDimOffset(binExpr.getLHS());
+  auto rhs = extractDimOffset(binExpr.getRHS());
+  if (!lhs || !rhs)
+    return std::nullopt;
+
+  switch (binExpr.getKind()) {
+  case AffineExprKind::Add: {
+    if (lhs->dim && rhs->dim)
+      return std::nullopt;
+    return AffineDimOffset{lhs->dim ? lhs->dim : rhs->dim,
+                           lhs->offset + rhs->offset};
+  }
+  default:
+    return std::nullopt;
+  }
+}
+
+/// Check whether an indexing map contains any constant stencil offsets.
+static bool hasConstantOffsets(AffineMap map) {
+  for (AffineExpr result : map.getResults()) {
+    auto dimOffset = extractDimOffset(result);
+    if (dimOffset && dimOffset->dim && dimOffset->offset != 0)
+      return true;
+  }
+  return false;
+}
+
+/// Recover a stencil footprint from the linalg.generic read maps.
+static std::optional<LinalgStencilContractInfo>
+extractStencilContract(linalg::GenericOp generic) {
+  unsigned numLoops = generic.getNumLoops();
+  if (numLoops == 0)
+    return std::nullopt;
+
+  auto maps = generic.getIndexingMapsArray();
+  LinalgStencilContractInfo info;
+  info.minOffsets.assign(numLoops, 0);
+  info.maxOffsets.assign(numLoops, 0);
+  info.writeFootprint.assign(numLoops, 1);
+  for (unsigned dim = 0; dim < numLoops; ++dim) {
+    info.ownerDims.push_back(dim);
+    info.spatialDims.push_back(dim);
+  }
+
+  bool sawStencilOffset = false;
+  for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs(); ++inputIdx) {
+    AffineMap map = maps[inputIdx];
+    for (AffineExpr result : map.getResults()) {
+      auto dimOffset = extractDimOffset(result);
+      if (!dimOffset || !dimOffset->dim)
+        continue;
+
+      unsigned dim = *dimOffset->dim;
+      if (dim >= numLoops)
+        continue;
+
+      info.minOffsets[dim] =
+          std::min(info.minOffsets[dim], dimOffset->offset);
+      info.maxOffsets[dim] =
+          std::max(info.maxOffsets[dim], dimOffset->offset);
+      sawStencilOffset |= dimOffset->offset != 0;
+    }
+  }
+
+  if (!sawStencilOffset)
+    return std::nullopt;
+  return info;
+}
+
+/// Merge two stencil summaries across multiple linalg.generic ops.
+static void mergeStencilContract(LinalgStencilContractInfo &dst,
+                                 const LinalgStencilContractInfo &src) {
+  if (dst.minOffsets.empty()) {
+    dst = src;
+    return;
+  }
+
+  if (dst.minOffsets.size() != src.minOffsets.size())
+    return;
+
+  for (auto [idx, minOffset] : llvm::enumerate(src.minOffsets))
+    dst.minOffsets[idx] = std::min(dst.minOffsets[idx], minOffset);
+  for (auto [idx, maxOffset] : llvm::enumerate(src.maxOffsets))
+    dst.maxOffsets[idx] = std::max(dst.maxOffsets[idx], maxOffset);
+}
+
+/// Classify a linalg.generic directly from its iterator structure.
+static std::optional<ArtsDepPattern>
+classifyFromLinalg(linalg::GenericOp generic) {
+  auto iterTypes = generic.getIteratorTypesArray();
+  if (iterTypes.empty())
+    return std::nullopt;
+
+  bool allParallel = llvm::all_of(iterTypes, [](utils::IteratorType type) {
+    return type == utils::IteratorType::parallel;
+  });
+  if (allParallel) {
+    auto maps = generic.getIndexingMapsArray();
+    for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs(); ++inputIdx) {
+      if (hasConstantOffsets(maps[inputIdx]))
+        return ArtsDepPattern::stencil_tiling_nd;
+    }
+    return ArtsDepPattern::uniform;
+  }
+
+  unsigned numParallel = 0, numReduction = 0;
+  for (utils::IteratorType type : iterTypes) {
+    if (type == utils::IteratorType::parallel)
+      ++numParallel;
+    else
+      ++numReduction;
+  }
+
+  if (numParallel == 2 && numReduction == 1 && iterTypes.size() == 3 &&
+      generic.getNumDpsInputs() >= 2 && generic.getNumDpsInits() >= 1)
+    return ArtsDepPattern::matmul;
+
+  return std::nullopt;
+}
+
 /// Stamp a pattern contract on an arts.for and its parent EdtOp if present.
-static void stampPatternContract(Operation *artsForOp,
-                                 ArtsDepPattern pattern) {
-  SimplePatternContract contract(pattern, /*revision=*/1);
+static void stampPatternContract(Operation *artsForOp, ArtsDepPattern pattern,
+                                 int64_t revision = 1) {
+  SimplePatternContract contract(pattern, revision);
+  contract.stamp(artsForOp);
+  if (auto parentEdt = artsForOp->getParentOfType<EdtOp>())
+    contract.stamp(parentEdt.getOperation());
+}
+
+/// Stamp a recovered stencil contract on an arts.for and its parent EdtOp.
+static void stampStencilContract(Operation *artsForOp, ArtsDepPattern pattern,
+                                 const LinalgStencilContractInfo &info,
+                                 int64_t revision = 1) {
+  StencilNDPatternContract contract(
+      pattern, info.ownerDims, info.minOffsets, info.maxOffsets,
+      info.writeFootprint, revision, /*blockShape=*/{}, info.spatialDims);
   contract.stamp(artsForOp);
   if (auto parentEdt = artsForOp->getParentOfType<EdtOp>())
     contract.stamp(parentEdt.getOperation());
@@ -246,14 +409,16 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       Block &dst = dstRegion.front();
       Block &src = srcRegion.front();
 
-      // Add IV arg if needed
-      if (dst.getNumArguments() == 0 && src.getNumArguments() > 0)
+      // Mirror the source IV list so cloned linalg/scf bodies keep using the
+      // same induction variable ordering after SDE->ARTS conversion.
+      while (dst.getNumArguments() < src.getNumArguments())
         dst.addArgument(rewriter.getIndexType(), loc);
 
       // Map block args and clone body
       IRMapping mapper;
-      if (!src.getArguments().empty() && !dst.getArguments().empty())
-        mapper.map(src.getArgument(0), dst.getArgument(0));
+      for (auto [srcArg, dstArg] : llvm::zip(src.getArguments(),
+                                             dst.getArguments()))
+        mapper.map(srcArg, dstArg);
 
       OpBuilder::InsertionGuard IG(rewriter);
       rewriter.setInsertionPointToStart(&dst);
@@ -262,18 +427,149 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       YieldOp::create(rewriter, loc);
     }
 
-    // Read classification from RaiseToLinalg (stamped as attribute on the
-    // sde.su_iterate, propagated through the cloned body).
-    if (auto classAttr =
-            op->getAttrOfType<StringAttr>(AttrNames::Operation::LinalgClassification::AttrName)) {
-      if (auto pattern = classifyFromString(classAttr.getValue())) {
-        ARTS_DEBUG("stamping linalg classification: "
-                   << stringifyArtsDepPattern(*pattern));
-        stampPatternContract(artsFor.getOperation(), *pattern);
+    SmallVector<linalg::GenericOp> linalgGenerics;
+    artsFor.getRegion().walk([&](linalg::GenericOp generic) {
+      linalgGenerics.push_back(generic);
+    });
+
+    linalg::GenericOp contractSource;
+    std::optional<ArtsDepPattern> selectedPattern;
+    std::optional<LinalgStencilContractInfo> selectedStencilContract;
+    int64_t selectedRevision = 1;
+    bool selectedFromExplicitContract = false;
+
+    auto considerLinalgContract = [&](linalg::GenericOp generic) {
+      std::optional<ArtsDepPattern> candidatePattern;
+      bool fromExplicitContract = false;
+
+      if (auto depPattern = getDepPattern(generic.getOperation());
+          depPattern && *depPattern != ArtsDepPattern::unknown) {
+        candidatePattern = *depPattern;
+        fromExplicitContract = true;
+      } else {
+        candidatePattern = classifyFromLinalg(generic);
+        if (!candidatePattern) {
+          if (auto classAttr = generic->getAttrOfType<StringAttr>(
+                  AttrNames::Operation::LinalgClassification::AttrName))
+            candidatePattern = classifyFromString(classAttr.getValue());
+        }
       }
-      // Remove the classification attr — it served its purpose.
-      artsFor->removeAttr(AttrNames::Operation::LinalgClassification::AttrName);
+
+      if (!candidatePattern)
+        return;
+
+      std::optional<LinalgStencilContractInfo> candidateStencil;
+      if (isStencilFamilyDepPattern(*candidatePattern)) {
+        candidateStencil = extractStencilContract(generic);
+        if (!candidateStencil && getStencilMinOffsets(generic.getOperation()) &&
+            getStencilMaxOffsets(generic.getOperation()) &&
+            getStencilOwnerDims(generic.getOperation()) &&
+            getStencilWriteFootprint(generic.getOperation())) {
+          LinalgStencilContractInfo info;
+          info.ownerDims = *getStencilOwnerDims(generic.getOperation());
+          info.spatialDims =
+              getStencilSpatialDims(generic.getOperation()).value_or(
+                  info.ownerDims);
+          info.minOffsets = *getStencilMinOffsets(generic.getOperation());
+          info.maxOffsets = *getStencilMaxOffsets(generic.getOperation());
+          info.writeFootprint =
+              *getStencilWriteFootprint(generic.getOperation());
+          candidateStencil = std::move(info);
+        }
+      }
+
+      if (!selectedPattern) {
+        selectedPattern = candidatePattern;
+        selectedStencilContract = candidateStencil;
+        selectedRevision = getPatternRevision(generic.getOperation()).value_or(1);
+        selectedFromExplicitContract = fromExplicitContract;
+        contractSource = generic;
+        return;
+      }
+
+      if (*selectedPattern == *candidatePattern) {
+        if (candidateStencil) {
+          if (selectedStencilContract)
+            mergeStencilContract(*selectedStencilContract, *candidateStencil);
+          else
+            selectedStencilContract = candidateStencil;
+        }
+
+        if (fromExplicitContract && !selectedFromExplicitContract) {
+          selectedRevision =
+              getPatternRevision(generic.getOperation()).value_or(1);
+          selectedFromExplicitContract = true;
+          contractSource = generic;
+        }
+        return;
+      }
+
+      if (fromExplicitContract && !selectedFromExplicitContract) {
+        selectedPattern = candidatePattern;
+        selectedStencilContract = candidateStencil;
+        selectedRevision = getPatternRevision(generic.getOperation()).value_or(1);
+        selectedFromExplicitContract = true;
+        contractSource = generic;
+        return;
+      }
+
+      ARTS_DEBUG("conflicting linalg.generic contracts in arts.for body: keeping "
+                 << stringifyArtsDepPattern(*selectedPattern)
+                 << ", ignoring " << stringifyArtsDepPattern(*candidatePattern));
+    };
+
+    for (linalg::GenericOp generic : linalgGenerics)
+      considerLinalgContract(generic);
+
+    if (contractSource) {
+      copySemanticContractAttrs(contractSource.getOperation(),
+                                artsFor.getOperation());
+      if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
+        copySemanticContractAttrs(contractSource.getOperation(),
+                                  parentEdt.getOperation());
     }
+
+    // Fallback to RaiseToLinalg's classification-only attribute when no
+    // linalg.generic survived into the cloned body.
+    if (!selectedPattern) {
+      if (auto classAttr = op->getAttrOfType<StringAttr>(
+              AttrNames::Operation::LinalgClassification::AttrName))
+        selectedPattern = classifyFromString(classAttr.getValue());
+    }
+
+    if (selectedPattern) {
+      ARTS_DEBUG("stamping linalg-derived contract: "
+                 << stringifyArtsDepPattern(*selectedPattern));
+      if (selectedStencilContract &&
+          isStencilFamilyDepPattern(*selectedPattern)) {
+        stampStencilContract(artsFor.getOperation(), *selectedPattern,
+                             *selectedStencilContract, selectedRevision);
+      } else {
+        stampPatternContract(artsFor.getOperation(), *selectedPattern,
+                             selectedRevision);
+      }
+    }
+
+    // Lower cloned linalg.generic ops back to loops so all downstream passes
+    // continue to see the loop/memref IR they already match on.
+    for (linalg::GenericOp generic : llvm::reverse(linalgGenerics)) {
+      if (!generic.hasPureBufferSemantics()) {
+        ARTS_DEBUG("failed to lower non-buffer linalg.generic in SDE->ARTS");
+        rewriter.eraseOp(artsFor);
+        return failure();
+      }
+
+      rewriter.setInsertionPoint(generic);
+      if (failed(linalg::linalgOpToLoops(rewriter, generic))) {
+        ARTS_DEBUG("failed to lower linalg.generic back to loops");
+        rewriter.eraseOp(artsFor);
+        return failure();
+      }
+      rewriter.eraseOp(generic);
+    }
+
+    // Remove the transient linalg classification marker after stamping.
+    artsFor->removeAttr(AttrNames::Operation::LinalgClassification::AttrName);
 
     ++numSuIterateConverted;
     rewriter.eraseOp(op);
@@ -358,8 +654,7 @@ struct CuReduceToArtsPattern : public OpRewritePattern<sde::SdeCuReduceOp> {
     if (!isa<MemRefType>(acc.getType()))
       return failure();
 
-    auto atomicAdd =
-        AtomicAddOp::create(rewriter, op.getLoc(), acc, op.getPartial());
+    (void)AtomicAddOp::create(rewriter, op.getLoc(), acc, op.getPartial());
     rewriter.eraseOp(op);
     return success();
   }
