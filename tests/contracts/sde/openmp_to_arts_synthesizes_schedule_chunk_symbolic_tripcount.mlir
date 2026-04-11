@@ -6,8 +6,9 @@
 // CHECK-LABEL: // -----// IR Dump After SdeChunkOptimization (sde-chunk-optimization) //----- //
 // CHECK: func.func @main(%[[N:.*]]: index, %[[A:.*]]: memref<?xf64>, %[[B:.*]]: memref<?xf64>)
 // CHECK: %[[SPAN:.*]] = arith.subi %[[N]], %{{.*}} : index
-// CHECK: %[[NONNEG:.*]] = arith.maxui %[[SPAN]], %{{.*}} : index
-// CHECK: %[[TRIP:.*]] = arith.ceildivui %[[NONNEG]], %{{.*}} : index
+// CHECK: %[[SPAN_NEG:.*]] = arith.cmpi slt, %[[SPAN]], %{{.*}} : index
+// CHECK: %[[NONNEG:.*]] = arith.select %[[SPAN_NEG]], %{{.*}}, %[[SPAN]] : index
+// CHECK: %[[TRIP:.*]] = arith.ceildivsi %[[NONNEG]], %{{.*}} : index
 // CHECK: %[[CLAMPED_TRIP:.*]] = arith.maxui %[[TRIP]], %{{.*}} : index
 // CHECK: %[[BALANCED:.*]] = arith.ceildivui %[[CLAMPED_TRIP]], %{{.*}} : index
 // CHECK: %[[PREFERRED:.*]] = arith.maxui %[[BALANCED]], %{{.*}} : index
