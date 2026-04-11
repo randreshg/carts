@@ -2,8 +2,9 @@
 /// File: SdeScopeSelection.cpp
 ///
 /// Cost-model-backed SDE concurrency scope selection. The current
-/// implementation maps the active machine topology directly onto
-/// sde.cu_region <parallel> scope selection.
+/// implementation fills in missing scope on parallel sde.cu_region ops from
+/// the active machine topology while preserving any explicit SDE scope that is
+/// already present.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
@@ -38,7 +39,7 @@ struct SdeScopeSelectionPass
     getOperation().walk([&](sde::SdeCuRegionOp op) {
       if (op.getKind() != sde::SdeCuKind::parallel)
         return;
-      if (op.getConcurrencyScopeAttr() == desiredScope)
+      if (op.getConcurrencyScopeAttr())
         return;
       op.setConcurrencyScopeAttr(desiredScope);
     });

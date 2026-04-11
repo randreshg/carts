@@ -26,9 +26,9 @@ using namespace mlir::arts;
 
 namespace {
 
-static NamedAttrList getRewrittenAttrs(Operation *op) {
+static NamedAttrList getRewrittenAttrs(sde::SdeSuIterateOp op) {
   NamedAttrList attrs(op->getAttrs());
-  attrs.erase("operandSegmentSizes");
+  attrs.erase(op.getOperandSegmentSizesAttrName().getValue());
   return attrs;
 }
 
@@ -191,7 +191,7 @@ struct SdeChunkOptimizationPass
           rewrite.op.getReductionKindsAttr(),
           rewrite.op.getReductionStrategyAttr(),
           rewrite.op.getLinalgClassificationAttr());
-      newOp->setAttrs(getRewrittenAttrs(rewrite.op.getOperation()));
+      newOp->setAttrs(getRewrittenAttrs(rewrite.op));
       newOp.getBody().takeBody(rewrite.op.getBody());
       rewriter.eraseOp(rewrite.op);
     }
