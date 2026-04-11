@@ -12,7 +12,8 @@ That split matters for layering:
 - SDE optimization passes do not create `arts.for`, `arts.edt`, or other ARTS
   runtime ops.
 - SDE passes operate on SDE concepts: concurrency regions, iteration spaces,
-  barriers, reductions, and tensor/linalg carriers.
+  barriers, typed dependencies/completions, reductions, semantic access
+  annotations, and tensor/linalg carriers.
 - The cost model interface is SDE-owned (`SDECostModel`), with
   `ARTSCostModel` as one implementation injected through `AnalysisManager`.
 - The original loop and memref body stays authoritative through the SDE phase.
@@ -95,6 +96,9 @@ Current behavior:
   reduction accumulator list, and reduction kind.
 - Converts task dependency access modes from the OpenMP `depend(...)` clause
   itself into `arts_sde.mu_dep <read|write|readwrite>`.
+- Uses typed SDE dependency handles at the boundary: `arts_sde.mu_dep`
+  produces `!arts_sde.dep`, and `arts_sde.cu_task` consumes those typed
+  dependency tokens.
 - Does not copy generic ARTS bookkeeping metadata onto newly created SDE loop
   ops. At the SDE boundary, the IR is expected to contain `arts_sde.*` ops, not
   leaked `arts.*` loop metadata.

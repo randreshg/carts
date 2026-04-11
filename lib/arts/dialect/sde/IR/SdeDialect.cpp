@@ -16,6 +16,11 @@ void ArtsSdeDialect::initialize() {
 #include "arts/dialect/sde/IR/SdeOps.cpp.inc"
       >();
 
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "arts/dialect/sde/IR/SdeOpsTypes.cpp.inc"
+      >();
+
   addAttributes<
 #define GET_ATTRDEF_LIST
 #include "arts/dialect/sde/IR/SdeOpsAttributes.cpp.inc"
@@ -26,5 +31,8 @@ void ArtsSdeDialect::initialize() {
 
 #define GET_ATTRDEF_CLASSES
 #include "arts/dialect/sde/IR/SdeOpsAttributes.cpp.inc"
+
+#define GET_TYPEDEF_CLASSES
+#include "arts/dialect/sde/IR/SdeOpsTypes.cpp.inc"
 
 #include "arts/dialect/sde/IR/SdeOpsEnums.cpp.inc"

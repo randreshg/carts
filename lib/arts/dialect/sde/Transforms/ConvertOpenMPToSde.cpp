@@ -365,7 +365,7 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
         // Create sde.mu_dep
         rewriter.setInsertionPoint(op);
         auto muDep = sde::SdeMuDepOp::create(
-            rewriter, loc, rewriter.getI64Type(),
+            rewriter, loc, sde::DepType::get(ctx),
             sde::SdeAccessModeAttr::get(ctx, *sdeMode), depSlice->source,
             depSlice->offsets, depSlice->sizes);
         deps.push_back(muDep.getDep());

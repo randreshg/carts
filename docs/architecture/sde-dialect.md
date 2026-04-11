@@ -128,38 +128,45 @@ Honest current state:
   internally before SDE IR is cleaned up.
 - No alternate backend exists for the same SDE IR.
 
-## Planned Semantics
+## Current Semantic Surface
 
-The items below remain design goals, not implemented features.
+The branch now ships a narrow but real SDE semantic surface beyond the original
+loop/schedule shell.
 
-### Planned But Not Implemented Ops
+### Implemented SDE Ops
 
-| Planned op | Intended purpose | Current status |
+| Op | Current role | Current status |
 |---|---|---|
-| `sde.su_distribute` | Distribution and placement hinting above runtime lowering | Not implemented |
-| `sde.mu_access` | In-body access-region annotation for memref fallback | Not implemented |
-| `sde.mu_reduction_decl` | Module-level reduction symbol and combiner declaration | Not implemented |
+| `sde.su_distribute` | Runtime-neutral advisory wrapper for distribution intent | Implemented as an advisory region op; current lowering inlines it away |
+| `sde.mu_access` | In-body access-region annotation for memref fallback | Implemented as an annotation op; current lowering erases it |
+| `sde.mu_reduction_decl` | Module-level reduction symbol with type, kind, optional identity, optional custom combiner | Implemented; current lowering erases it after the SDE phase |
 
-### Planned But Not Implemented Types
+### Implemented SDE Types
 
-| Planned type | Intended purpose | Current status |
+| Type | Intended purpose | Current status |
 |---|---|---|
-| `sde.completion` | Typed completion token for task completion and waits | Not implemented as a dedicated type |
-| `sde.dep` | Typed dependency handle for explicit region dependencies | Not implemented as a dedicated type |
+| `sde.completion` | Typed completion token for waits and completion surfaces | Implemented as `!arts_sde.completion` |
+| `sde.dep` | Typed dependency handle for explicit region dependencies | Implemented as `!arts_sde.dep` |
 
-The current IR uses generic operand and result types instead of a dedicated
-type system for these concepts.
+The branch no longer uses generic `AnyType`/`i64` placeholders for the core
+SDE dependency surface:
 
-### Planned But Not Implemented MLIR Interfaces
+- `arts_sde.mu_dep` produces `!arts_sde.dep`
+- `arts_sde.cu_task` consumes `!arts_sde.dep`
+- `arts_sde.su_barrier` accepts `!arts_sde.completion`
 
-These remain part of the long-term dialect direction, but they are not present
-in the current implementation:
+### Implemented MLIR Interfaces
+
+- `LoopLikeOpInterface` is now implemented on `arts_sde.su_iterate`
+
+### Still Planned But Not Implemented Interfaces
+
+These remain part of the longer-term dialect direction:
 
 - `DestinationStyleOpInterface`
-- `LoopLikeOpInterface`
 - `RegionBranchOpInterface`
 
-The current ops primarily rely on region structure plus the limited memory
+The current ops still rely mainly on region structure plus the existing memory
 effect traits defined in `SdeOps.td`.
 
 ### Planned But Not Implemented Tensor-Native Semantics
