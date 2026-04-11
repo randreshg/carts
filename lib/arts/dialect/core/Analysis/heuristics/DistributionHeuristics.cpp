@@ -220,18 +220,19 @@ DistributionHeuristics::chooseWavefront2DTilingPlan(
 
 std::optional<StencilStripCostModelResult>
 DistributionHeuristics::evaluateStencilStripCostModel(
-    const StencilStripCostModelInput &input) {
+    const StencilStripCostModelInput &input, sde::SDECostModel &costModel) {
   if (input.tripCount <= 0 || input.stencilIterationWork <= 0 ||
       input.totalWorkers <= 0)
     return std::nullopt;
 
-  constexpr int64_t kMinOwnedOuterItersFloor = 8;
+  int64_t minOwnedOuterItersFloor =
+      std::max<int64_t>(1, costModel.getMinIterationsPerWorker());
   constexpr int64_t kAmortizationPressureStride = 8;
   constexpr int64_t kOwnedSpanStridePenalty = 2;
   constexpr int64_t kMaxAmortizationMultiplier = 4;
 
   int64_t baselineOwnedOuterIters =
-      std::max<int64_t>(kMinOwnedOuterItersFloor,
+      std::max<int64_t>(minOwnedOuterItersFloor,
                         ceilDivPositive(input.tripCount, input.totalWorkers));
   int64_t baselineOwnedCells = saturatingMulPositive(
       baselineOwnedOuterIters, input.stencilIterationWork);
@@ -277,7 +278,8 @@ DistributionHeuristics::evaluateStencilStripCostModel(
 }
 
 LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
-    ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg) {
+    ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg,
+    sde::SDECostModel &costModel) {
   auto estimateNestedLoopWork = [&](ForOp loop, int64_t cap) {
     if (!loop)
       return int64_t{1};
@@ -388,7 +390,8 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
     stencilIterationWork =
         estimateStencilIterationWork(forOp, kStencilIterationWorkEstimateCap);
   }
-  int64_t minItersPerWorker = 8;
+  int64_t minItersPerWorker =
+      std::max<int64_t>(1, costModel.getMinIterationsPerWorker());
   if (auto parentEdt = forOp->getParentOfType<EdtOp>()) {
     int64_t depCount = static_cast<int64_t>(parentEdt.getDependencies().size());
     if (depCount > 0)
@@ -403,7 +406,7 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
     input.stencilIterationWork = std::max<int64_t>(1, stencilIterationWork);
     input.repeatedTripProduct = std::max<int64_t>(1, repeatedTripProduct);
     input.totalWorkers = workerCfg.totalWorkers;
-    stencilStripPlan = evaluateStencilStripCostModel(input);
+    stencilStripPlan = evaluateStencilStripCostModel(input, costModel);
 
     if (stencilStripPlan && !isWavefrontPattern && !workerCfg.internode)
       minItersPerWorker = std::max<int64_t>(
@@ -488,8 +491,10 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
 }
 
 std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
-    ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg) {
-  return computeLoopCoarseningDecision(forOp, loopAnalysis, workerCfg)
+    ForOp forOp, LoopAnalysis &loopAnalysis, const WorkerConfig &workerCfg,
+    sde::SDECostModel &costModel) {
+  return computeLoopCoarseningDecision(forOp, loopAnalysis, workerCfg,
+                                       costModel)
       .blockSize;
 }
 

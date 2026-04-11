@@ -1,10 +1,17 @@
 # MLIR Infrastructure Integration
 
-All four MLIR infrastructure dialects are **native to SDE from Phase 2**,
-not a future roadmap. SDE ops are type-polymorphic — they accept tensor,
-memref, and scalar operands. Linalg, tensor, and bufferization aren't
-separate analysis tools; they compose directly with SDE CU ops via
-`DestinationStyleOpInterface` (same pattern as IREE's Flow dialect).
+Current branch note:
+- This file mixes current branch state with a broader planned SDE design.
+- What is implemented today is a transient linalg/tensor carrier window inside
+  SDE, not a fully destination-style tensor-native SDE surface.
+- Use [docs/sde.md](/home/raherrer/projects/carts/docs/sde.md) and
+  [sde-dialect.md](sde-dialect.md) as the source of truth for current
+  ownership: SDE owns semantic decisions, and ARTS consumes those decisions
+  later as runtime-structural contracts.
+
+The MLIR infrastructure pieces are already active in the SDE window, but the
+current branch does not yet provide type-polymorphic destination-style SDE ops
+or a tensor-authoritative executable SDE form.
 
 ## Linalg: Core Structured Computation (Stages 3.6-3.9)
 
@@ -145,15 +152,20 @@ Replaces current `LoopVectorizationHints` approach (LLVM metadata).
 
 ---
 
-## MLIR Interfaces SDE Implements
+## MLIR Interfaces
+
+Current branch status:
+- `LoopLikeOpInterface` is implemented on `arts_sde.su_iterate`.
+- `DestinationStyleOpInterface` and `RegionBranchOpInterface` are still planned,
+  not implemented on current SDE ops.
 
 | Interface | On Which Ops | Purpose |
 |---|---|---|
-| `DestinationStyleOpInterface` | `sde.cu_region`, `sde.cu_task`, `sde.cu_reduce` | ins/outs notation on SDE CU ops themselves (not just linalg inside bodies); enables tile-and-fuse composition; outs are bufferization destinations |
+| `DestinationStyleOpInterface` | Planned, not current | Future ins/outs notation on SDE CU ops themselves |
 | `MemoryEffectsOpInterface` | All CU/SU/MU ops | Per-op effect declarations |
 | `LoopLikeOpInterface` | `sde.su_iterate` | iter_args state flow (tensor or memref values) |
 | `RecursiveMemoryEffects` | `sde.cu_region`, `sde.cu_task` | Propagate body effects |
-| `RegionBranchOpInterface` | `sde.cu_region`, `sde.cu_task`, `sde.su_iterate` | Control flow into/out of SDE regions |
+| `RegionBranchOpInterface` | Planned, not current | Future control-flow modeling for SDE regions |
 
 ---
 

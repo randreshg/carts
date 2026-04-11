@@ -5,10 +5,8 @@
 // worker counts should coarsen the strip; low worker counts should keep the
 // natural block shape instead of forcing an extra partition hint.
 
-// CHECK-64: %c12 = arith.constant 12 : index
-// CHECK-64: %c9 = arith.constant 9 : index
 // CHECK-64-NOT: arts.runtime_query <total_workers>
-// CHECK-64: arts.db_acquire[<in>] {{.*}} {arts.partition_hint = {blockSize = 9 : i64, mode = 1 : i8},
+// CHECK-64: arts.db_acquire[<in>] {{.*}} {arts.partition_hint = {blockSize = 4 : i64, mode = 1 : i8},
 
 // CHECK-2: arts.runtime_query <total_workers>
 // CHECK-2: arts.db_alloc[<inout>, <heap>, <write>, <coarse>, <stencil>] route(%c-1_i32 : i32) sizes[%{{.+}}] elementType(f64) elementSizes[%{{.+}}, %c100]

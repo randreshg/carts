@@ -49,7 +49,10 @@ The current dialect surface is the one defined in
 | `arts_sde.cu_atomic` | Yes | Represents atomic updates in the supported narrow forms. |
 | `arts_sde.su_iterate` | Yes | Models parallel iteration spaces and carries schedule, chunk, reductions, reduction strategy, and linalg classification. |
 | `arts_sde.su_barrier` | Yes | Represents synchronization points, including taskwait-style token use. |
+| `arts_sde.su_distribute` | Yes | Advisory distribution wrapper for SDE-owned distribution intent. |
 | `arts_sde.mu_dep` | Yes | Represents explicit memref-based dependency declarations. |
+| `arts_sde.mu_access` | Yes | Represents in-body access-region annotations in the memref fallback path. |
+| `arts_sde.mu_reduction_decl` | Yes | Represents module-level reduction declarations for the SDE surface. |
 | `arts_sde.yield` | Yes | Terminator for SDE regions. |
 
 ### Implemented Attributes and Enums
@@ -125,7 +128,7 @@ Honest current state:
   ARTS lowering.
 - The dialect name, namespace, and only lowering target are still ARTS-owned.
 - OpenMP task dependence slicing still uses a legacy `arts.omp_dep` bridge
-  internally before SDE IR is cleaned up.
+  internally at frontend ingress before SDE IR is cleaned up.
 - No alternate backend exists for the same SDE IR.
 
 ## Current Semantic Surface

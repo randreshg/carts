@@ -54,14 +54,16 @@ EdtHeuristics::resolveDistributionPattern(ForOp forOp,
 LoopCoarseningDecision EdtHeuristics::computeLoopCoarseningDecision(
     ForOp forOp, const WorkerConfig &workerCfg) const {
   return DistributionHeuristics::computeLoopCoarseningDecision(
-      forOp, getAnalysisManager().getLoopAnalysis(), workerCfg);
+      forOp, getAnalysisManager().getLoopAnalysis(), workerCfg,
+      getAnalysisManager().getCostModel());
 }
 
 std::optional<int64_t>
 EdtHeuristics::computeCoarsenedBlockHint(ForOp forOp,
                                          const WorkerConfig &workerCfg) const {
   return DistributionHeuristics::computeCoarsenedBlockHint(
-      forOp, getAnalysisManager().getLoopAnalysis(), workerCfg);
+      forOp, getAnalysisManager().getLoopAnalysis(), workerCfg,
+      getAnalysisManager().getCostModel());
 }
 
 ParallelEdtFusionDecision

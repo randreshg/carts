@@ -3,6 +3,14 @@
 Progressive lowering from runtime-agnostic intent to ARTS runtime calls,
 following IREE's proven multi-dialect pattern.
 
+Current branch note:
+- OpenMP belongs only at ingress via `ConvertOpenMPToSde`.
+- SDE owns semantic pattern reasoning, cost-model-driven schedule/distribution/
+  reduction choices, and transient tensor/linalg transforms.
+- ARTS consumes the resulting contracts and then performs ARTS-native
+  structural/runtime optimizations such as barrier cleanup, DB/EDT shaping, and
+  lowering-oriented simplification.
+
 ```
   C/C++ + OpenMP
   +----------+
@@ -12,7 +20,8 @@ following IREE's proven multi-dialect pattern.
   =====|=====================================================
   ||   v   SDE DIALECT (sde.*)  Stages 1-5                ||
   ||   CU: what runs  SU: how/when  MU: data access       ||
-  ||   Type-polymorphic: tensor + memref native            ||
+  ||   Semantic optimization boundary with transient       ||
+  ||   linalg/tensor carriers on the supported subset      ||
   ==========================================================
        |
        |  +------------------------------------------------+
@@ -31,11 +40,11 @@ following IREE's proven multi-dialect pattern.
        |  +------------------------------------------------+
        |
        |  CU: sde.cu_region, sde.cu_task, sde.cu_reduce, sde.cu_atomic
-       |    (ins/outs accept tensor OR memref via DestinationStyleOpInterface)
+       |    (current branch: region-based SDE ops, not yet destination-style)
        |  SU: sde.su_iterate, sde.su_barrier, sde.su_distribute
-       |    (iter_args carry tensor values for SSA-tracked state)
+       |    (current branch: loop semantics + transient carrier recovery)
        |  MU: sde.mu_dep, sde.mu_access, sde.mu_reduction_decl
-       |    (memref fallback only; tensor path uses tensor.extract/insert_slice)
+       |    (typed dep/completion surface plus narrow semantic annotations)
        |
   -----+--- SdeToArts Conversion ----------------------------
        |
@@ -105,10 +114,14 @@ enables:
 
 - **CU/SU/MU separation**: Compute Units (what), Scheduling Units (how/when), Memory Units (data)
 - **STATE, DEPENDENCY, EFFECT are first-class** in every CU op
-- **Tensor-native ops**: SDE CU ops are type-polymorphic (tensor + memref) with `DestinationStyleOpInterface`; in tensor space, SSA def-use chains ARE the dependency graph -- no custom analysis needed
-- **Compose with MLIR**: linalg/tensor/bufferization are native to SDE, not separate; affine for analysis
+- **Transient structured carriers**: the current branch raises supported SDE
+  loop bodies to transient linalg/tensor carriers, optimizes there, and then
+  consumes those carriers at `ConvertSdeToArts`
+- **Compose with MLIR**: linalg/tensor/bufferization/affine integrate into the
+  SDE pipeline, but not yet as destination-style tensor-native SDE ops
 - **Lossless from OMP**: Preserve reduction combiners, nowait, collapse, schedule
-- **Runtime-agnostic SDE**: Could target ARTS, Legion, StarPU, or GPU runtimes
+- **Runtime-agnostic aspiration**: the current branch is more runtime-decoupled
+  than raw ARTS IR, but still lowers only to ARTS today
 
 ## Directory Layout (Current — Phase 3 Complete)
 
@@ -156,11 +169,11 @@ lib/arts/
   utils/                   shared utilities
 ```
 
-### Deferred Structure (Phase 2C, when tensor integration implemented)
+### Current SDE Tensor/Linalg Window
 
 ```
 lib/arts/dialect/sde/Transforms/ will add:
-  RaiseToLinalg.cpp        scf.for+memref -> linalg.generic
-  RaiseToTensor.cpp        linalg memref -> linalg tensor
-  SdeOpt.cpp               tensor-space analysis + optimization
+  RaiseToLinalg.cpp        supported scf.for+memref -> linalg.generic carriers
+  RaiseToTensor.cpp        supported memref linalg -> tensor carriers
+  SdeTensorOptimization.cpp tensor/linalg transformations on the supported subset
 ```
