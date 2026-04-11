@@ -131,6 +131,11 @@ constexpr StringLiteral PostDbRefined = "post_db_refined";
 constexpr StringLiteral CriticalPathDistance = "critical_path_distance";
 constexpr StringLiteral AffinityDb = "affinity_db";
 constexpr StringLiteral ReductionStrategy = "arts.reduction_strategy";
+namespace ReductionStrategyValue {
+constexpr StringLiteral Atomic = "atomic";
+constexpr StringLiteral Tree = "tree";
+constexpr StringLiteral LocalAccumulate = "local_accumulate";
+} // namespace ReductionStrategyValue
 constexpr StringLiteral SpatialDims = "spatial_dims";
 constexpr StringLiteral NarrowableDep = "narrowable_dep";
 constexpr StringLiteral ContractKindKey = "contract_kind";
