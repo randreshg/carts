@@ -641,12 +641,6 @@ def ContractValidation : Pass<"contract-validation", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createContractValidationPass()";
 }
 
-def AliasScopeGen : Pass<"arts-alias-scope-gen", "mlir::ModuleOp"> {
-  let summary = "Generate LLVM alias scope metadata for ARTS data pointers";
-  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
-  let constructor = "mlir::arts::createAliasScopeGenPass()";
-}
-
 ///===----------------------------------------------------------------------===///
 /// Verification Passes
 ///===----------------------------------------------------------------------===///

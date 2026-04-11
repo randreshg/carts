@@ -134,6 +134,12 @@ def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEpochLoweringPass()";
 }
 
+def AliasScopeGen : Pass<"arts-alias-scope-gen", "mlir::ModuleOp"> {
+  let summary = "Generate LLVM alias scope metadata for ARTS data pointers";
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+  let constructor = "mlir::arts::createAliasScopeGenPass()";
+}
+
 def LoopVectorizationHints
     : Pass<"arts-loop-vectorization-hints", "mlir::ModuleOp"> {
   let summary = "Attach LLVM loop vectorization hints to EDT function loops";
