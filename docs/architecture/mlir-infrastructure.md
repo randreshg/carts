@@ -43,7 +43,7 @@ linalg.generic.
 |---|---|
 | `RaiseToLinalg` | scf.for+memref -> linalg.generic recognition |
 | `StructuredOpAnalysis` | Reusable SDE structural loop/access classification |
-| `SdeDistributionPlanning` | Derive SDE-owned distribution or wavefront intent from structured carriers |
+| `SdeDistributionPlanning` | Derive the first live SDE-owned distribution intent from structured carriers; broader wavefront policy still migrates later |
 
 ARTS worker mapping happens later when those SDE contracts are materialized.
 
