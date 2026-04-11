@@ -176,7 +176,7 @@ static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op,
                       return type == utils::IteratorType::parallel;
                     }))
     return false;
-  if (tensorGeneric.getNumDpsInputs() != 1 || tensorGeneric.getNumDpsInits() != 1)
+  if (tensorGeneric.getNumDpsInputs() == 0 || tensorGeneric.getNumDpsInits() != 1)
     return false;
 
   unsigned numLoads = 0;
@@ -189,7 +189,7 @@ static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op,
     if (isa<memref::StoreOp>(nested))
       ++numStores;
   }
-  return numLoads == 1 && numStores == 1;
+  return numLoads == tensorGeneric.getNumDpsInputs() && numStores == 1;
 }
 
 static void cloneScalarBodyIntoTileLoop(Block &srcBody, scf::ForOp tileLoop,
