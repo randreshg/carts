@@ -30,11 +30,15 @@ linalg.generic               =  COMPUTATION  (what the math is)
    and materializes transient `linalg.generic` carriers for the supported subset.
 2. `RaiseToTensor` now rewrites the supported transient carriers into
    tensor-backed `linalg.generic` form inside SDE, keeping the original
-   loop/memref body authoritative and ARTS-unaware.
+   loop/memref body authoritative and ARTS-unaware. Output initialization is
+   chosen per output: overwrite-safe elementwise destinations use
+   `tensor.empty`, while preserved-value destinations reuse
+   `bufferization.to_tensor`.
 3. `SdeTensorOptimization` now performs the first real tensor-driven SDE
-   transformation: eligible one-dimensional elementwise loops are strip-mined
-   into cost-model-sized tiles, and the surrounding `sde.su_iterate` is
-   rewritten so the tiled shape survives into `arts.for`.
+   transformations: eligible one-dimensional elementwise loops are strip-mined
+   into cost-model-sized tiles, and a narrow matmul subset can now be tiled on
+   the outer parallel dimension so the rewritten `sde.su_iterate` shape
+   survives into `arts.for`.
 4. `PatternDiscovery` has been removed from executable pipeline paths; early
    contracts are seeded during SDE->ARTS conversion and refined later by
    `DepTransforms` / `KernelTransforms`.
@@ -50,23 +54,30 @@ linalg.generic               =  COMPUTATION  (what the math is)
    are used only for contract recovery and are erased during SDE->ARTS
    conversion.
 7. Task-dependency ingestion still bridges from upstream `arts.omp_dep`
-   carriers created before SDE. Removing that residual ARTS-core boundary needs
-   a separate upstream dependency-carrier redesign.
+   carriers created before SDE, but SDE dependency access modes are now
+   derived from the OpenMP `depend(...)` clause rather than the upstream
+   carrier mode. Removing the residual ARTS-core dependency carrier entirely
+   still needs a separate upstream redesign.
 8. Reduction and stencil raising are not fully implemented. Those cases stay on
    the fallback path today, but `RaiseToLinalg` now stamps an SDE-owned
    classification directly on `sde.su_iterate` so SDE->ARTS can still recover
    the intended contract without relying on ARTS-namespaced strings.
 9. SDE chunk logic is validated at the SDE IR level: tests check
    `arts_sde.su_iterate schedule(..., chunk)` immediately after
-   `SdeChunkOptimization`, before SDE->ARTS lowering rewrites the loop.
+   `SdeChunkOptimization`, before SDE->ARTS lowering rewrites the loop. The
+   symbolic trip-count path now clamps spans with signed-safe IR before
+   choosing the chunk at the SDE layer.
 10. SDE scope logic is validated at the SDE IR level: tests check
    `arts_sde.cu_region <parallel> scope(<local|distributed>)` immediately
    after `SdeScopeSelection`, before SDE->ARTS lowering rewrites the region.
+   Explicit scope remains authoritative and missing nested parallel scopes
+   inherit the nearest enclosing parallel scope.
 11. The first tensor path is validated at the SDE IR level: tests check the
     memref-backed carrier after `RaiseToLinalg`, the tensor-backed carrier
     after `RaiseToTensor`, the tiled `sde.su_iterate` after
     `SdeTensorOptimization`, and a clean carrier-free `arts.for` body after
-    `ConvertSdeToArts`.
+    `ConvertSdeToArts`. Current coverage includes fill, unary, binary,
+    in-place binary, multi-output, symbolic-trip, and narrow matmul cases.
 
 ---
 
@@ -542,12 +553,14 @@ passes and the remaining architecture for broader SDE-level optimization. The
 
 `SdeScopeSelection` is the first cost-driven SDE region pass in the tree. It
 runs on `sde.cu_region <parallel>` before `RaiseToLinalg` / `ConvertSdeToArts`
-and currently fills in missing SDE scope from machine topology while
-preserving any explicit SDE scope already present:
+and currently fills in missing SDE scope from machine topology, preserves any
+explicit SDE scope already present, and lets nested parallel regions inherit
+the nearest enclosing parallel scope:
 
 - missing scope on single-node cost model -> `scope(<local>)`
 - missing scope on multi-node cost model -> `scope(<distributed>)`
 - explicit `scope(...)` remains authoritative
+- missing nested parallel scope inherits the nearest enclosing parallel scope
 
 This keeps concurrency scope as an SDE-owned decision rather than hardcoding it
 inside OMP->SDE conversion.
@@ -593,8 +606,9 @@ and currently handles only a narrow but real synthesis subset:
 
 It preserves explicit source chunk sizes and rewrites the SDE op in place with
 a synthesized `chunkSize` operand. For symbolic trip counts, the pass
-materializes the chunk computation as `arith` SSA directly in the SDE IR. This
-is intentionally validated at the SDE layer: contract tests inspect the IR dump
+materializes the chunk computation as signed-safe `arith` SSA directly in the
+SDE IR so negative runtime spans clamp to zero before chunk sizing. This is
+intentionally validated at the SDE layer: contract tests inspect the IR dump
 after `SdeChunkOptimization` and check the resulting
 `arts_sde.su_iterate(... schedule(<kind>, %chunk))` directly, before ARTS
 lowering.
@@ -729,7 +743,8 @@ This is the architectural novelty.
    - After `SdeScopeSelection`: `arts_sde.cu_region <parallel>` has
      `scope(<local>)` on single-node configs and `scope(<distributed>)` on
      multi-node configs when scope is absent, and preserves explicit
-     `scope(<local|distributed>)` when already present
+     `scope(<local|distributed>)` when already present; missing nested parallel
+     scope inherits the nearest enclosing parallel scope
    - After `SdeScheduleRefinement`: eligible `auto` / `runtime` loops have a
      concrete SDE schedule chosen directly in the SDE IR
    - After `SdeChunkOptimization`: eligible dynamic/guided loops have an
@@ -753,9 +768,13 @@ This is the architectural novelty.
     coverage in `openmp_to_arts_refines_symbolic_auto_schedule.mlir` and
     `openmp_to_arts_refines_symbolic_runtime_schedule.mlir`, validate
     schedule refinement on SDE IR, not reconstructed ARTS IR
-11. SDE chunk tests: `openmp_to_arts_synthesizes_schedule_chunk.mlir` and
-   `openmp_to_arts_preserves_schedule_chunk.mlir` validate chunk behavior on
-   SDE IR, not reconstructed ARTS IR
+11. SDE chunk tests: `openmp_to_arts_synthesizes_schedule_chunk.mlir`,
+   `openmp_to_arts_preserves_schedule_chunk.mlir`,
+   `openmp_to_arts_synthesizes_schedule_chunk_symbolic_tripcount.mlir`,
+   `openmp_to_arts_synthesizes_guided_schedule_chunk_symbolic_tripcount.mlir`,
+   `openmp_to_arts_synthesizes_schedule_chunk_symbolic_offset_tripcount.mlir`,
+   and `openmp_to_arts_synthesizes_guided_schedule_chunk_symbolic_offset_tripcount.mlir`
+   validate chunk behavior on SDE IR, not reconstructed ARTS IR
 12. SDE reduction tests:
     `openmp_to_arts_selects_atomic_reduction_strategy.mlir`,
     `openmp_to_arts_selects_tree_reduction_strategy.mlir`, and
@@ -769,12 +788,16 @@ This is the architectural novelty.
 13. SDE tensor tests:
     `openmp_to_arts_raise_to_tensor_fill_uniform_contract.mlir`,
     `openmp_to_arts_raise_to_tensor_uniform_contract.mlir`,
+    `openmp_to_arts_raise_to_tensor_inplace_binary_uniform_contract.mlir`,
     `openmp_to_arts_raise_to_tensor_multi_output_uniform_contract.mlir`,
+    `openmp_to_arts_raise_to_tensor_matmul_contract.mlir`,
     `openmp_to_arts_tensor_optimization_tiles_fill_uniform_loop.mlir`,
     `openmp_to_arts_tensor_optimization_tiles_uniform_loop.mlir`,
     `openmp_to_arts_tensor_optimization_tiles_binary_uniform_loop.mlir`,
+    `openmp_to_arts_tensor_optimization_tiles_inplace_binary_uniform_loop.mlir`,
     `openmp_to_arts_tensor_optimization_tiles_multi_output_uniform_loop.mlir`,
-    `openmp_to_arts_tensor_optimization_tiles_symbolic_uniform_loop.mlir`, and
+    `openmp_to_arts_tensor_optimization_tiles_symbolic_uniform_loop.mlir`,
+    `openmp_to_arts_tensor_optimization_tiles_matmul_loop.mlir`, and
     `sde_to_arts_erases_dead_tensor_carrier_chain.mlir` validate the
     RaiseToTensor, executable tiling, and post-conversion carrier cleanup flow
 14. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
@@ -853,9 +876,9 @@ Before:
 After:
 - Ranked memref-backed transient carriers are rewritten in place to
   tensor-backed `linalg.generic` carriers inside SDE.
-- `elementwise` carriers use `tensor.empty` destinations because the source
-  loop fully overwrites each output element.
-- Other currently raiseable carriers keep output initialization through
+- Output initialization is chosen per output:
+  overwrite-safe elementwise destinations use `tensor.empty`, while
+  preserved-value destinations keep initialization through
   `bufferization.to_tensor`.
 - The original loop/memref body remains authoritative; ARTS still never sees
   tensor IR as executable input.
@@ -872,7 +895,8 @@ After:
 - The current legality gate is intentionally narrow:
   - top-level `sde.su_iterate` only
   - one-dimensional loops only
-  - `classification(<elementwise>)` only
+  - `classification(<elementwise>)` for pointwise strip-mining
+  - narrow `classification(<matmul>)` subset for outer-dimension tiling
   - no reductions
   - no explicit chunk
   - `schedule(<static>)` or no schedule attr
@@ -882,6 +906,11 @@ After:
   worker count and minimum iterations per worker, multiplies the outer
   `sde.su_iterate` step by that tile width, and clones the original scalar body
   into a new inner `scf.for`.
+- The currently implemented pointwise subset covers fill/write-only, unary,
+  binary, in-place binary, multi-output, and symbolic-trip loops.
+- The currently implemented matmul subset tiles the leading parallel dimension
+  of the authoritative loop nest while keeping the original scalarized `j/k`
+  work inside the new tile loop.
 - Carrier ops are intentionally dropped from the rewritten loop body so
   `ConvertSdeToArts` still lowers plain loop/memref IR.
 
@@ -904,10 +933,10 @@ After:
 
 ---
 
-## NOT Doing (This Commit)
+## Still Not Implemented
 
 - **General cost-aware SDE optimization suite** (Part 5): limited `SdeScopeSelection`, `SdeScheduleRefinement`, `SdeChunkOptimization`, and a narrow `SdeReductionStrategy` are implemented; broader schedule/scope/reduction work remains future work
-- **Full tensor-first path** (Part 6): `RaiseToTensor` plus executable 1-D pointwise tiling is implemented, but broader tensor transformation coverage and carrier composition after tiling remain future work
+- **Full tensor-first path** (Part 6): `RaiseToTensor` plus executable pointwise tiling and narrow matmul tiling are implemented, but broader tensor transformation coverage, reduction/stencil carriers, and carrier composition after tiling remain future work
 - **Replacing hardcoded thresholds**: Future commits consume `CostModel` in existing heuristic files
 - **Metadata removal**: Independent of linalg — separate commit
 - **Machine calibration**: `dekk carts install --calibrate` — future
