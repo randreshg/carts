@@ -767,8 +767,10 @@ This is the architectural novelty.
     `sde_reduction_strategy_selects_local_accumulate_for_multiple_reductions.mlir`
     validate reduction strategy selection on SDE IR, not reconstructed ARTS IR
 13. SDE tensor tests:
+    `openmp_to_arts_raise_to_tensor_fill_uniform_contract.mlir`,
     `openmp_to_arts_raise_to_tensor_uniform_contract.mlir`,
     `openmp_to_arts_raise_to_tensor_multi_output_uniform_contract.mlir`,
+    `openmp_to_arts_tensor_optimization_tiles_fill_uniform_loop.mlir`,
     `openmp_to_arts_tensor_optimization_tiles_uniform_loop.mlir`,
     `openmp_to_arts_tensor_optimization_tiles_binary_uniform_loop.mlir`,
     `openmp_to_arts_tensor_optimization_tiles_multi_output_uniform_loop.mlir`,
@@ -874,7 +876,7 @@ After:
   - no reductions
   - no explicit chunk
   - `schedule(<static>)` or no schedule attr
-  - one or more tensor outputs and one or more tensor inputs
+  - one or more tensor outputs and zero or more tensor inputs
   - constant or symbolic trip count
 - For those loops, the pass uses `SDECostModel` to choose a tile width from
   worker count and minimum iterations per worker, multiplies the outer
