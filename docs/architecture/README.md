@@ -93,6 +93,9 @@ Current branch note:
 | [op-classification.md](op-classification.md) | Complete op/attribute classification table, IREE patterns, operation lifecycle |
 | [directory-map.md](directory-map.md) | Every source file mapped from current to target location across all 3 phases |
 | [test-architecture.md](test-architecture.md) | Test decoupling from benchmarks: audit, industry conventions, migration strategy |
+| [architecture-gap-analysis-2026-04-11.md](architecture-gap-analysis-2026-04-11.md) | First architecture audit (scored 78%) |
+| [architecture-reaudit-2026-04-11.md](architecture-reaudit-2026-04-11.md) | Second architecture audit (scored 82.3%) |
+| [pass-placement-investigation-2026-04-11.md](pass-placement-investigation-2026-04-11.md) | Deep pass placement investigation: 9-agent analysis of placement, pipeline ordering, affine re-raising |
 
 ## Why Three Dialects?
 
