@@ -127,6 +127,8 @@ std::unique_ptr<Pass>
 createConvertOpenMPToSdePass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createSdeChunkOptimizationPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createSdeScopeSelectionPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createConvertSdeToArtsPass();
 /// Stamp structural classification and raise supported SDE loop nests to
 /// transient linalg carriers.

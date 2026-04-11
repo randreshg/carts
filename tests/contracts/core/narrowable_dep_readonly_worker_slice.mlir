@@ -24,14 +24,14 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
     %guid_4, %ptr_5 = arts.db_acquire[<out>] (%guid_0 : memref<?xi64>, %ptr_1 : memref<?xmemref<?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?xf64>>)
     arts.edt <parallel> <intranode> route(%c-1_i32) (%ptr_3, %ptr_5) : memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> attributes {arts.id = 82 : i64, workers = #arts.workers<8>} {
     ^bb0(%arg0: memref<?xmemref<?xf64>>, %arg1: memref<?xmemref<?xf64>>):
-      arts.for(%c0) to(%c1024) step(%c1) {{
+      arts.for(%c0) to(%c1024) step(%c1) {
       ^bb0(%arg2: index):
         %0 = arts.db_ref %arg0[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
         %1 = memref.load %0[%arg2] : memref<?xf64>
         %2 = arith.mulf %1, %cst : f64
         %3 = arts.db_ref %arg1[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
         memref.store %2, %3[%arg2] : memref<?xf64>
-      }}
+      }
       arts.db_release(%arg0) : memref<?xmemref<?xf64>>
       arts.db_release(%arg1) : memref<?xmemref<?xf64>>
     }

@@ -683,6 +683,7 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   arts::sde::SDECostModel *costModel =
       AM ? &AM->getCostModel() : nullptr;
   pm.addPass(arts::sde::createConvertOpenMPToSdePass(costModel));
+  pm.addPass(arts::sde::createSdeScopeSelectionPass(costModel));
   pm.addPass(arts::sde::createSdeChunkOptimizationPass(costModel));
   pm.addPass(arts::sde::createRaiseToLinalgPass());
   pm.addPass(arts::sde::createConvertSdeToArtsPass());

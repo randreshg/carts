@@ -21,7 +21,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vec
     %zero = arith.constant 0.000000e+00 : f64
 
     arts.edt <parallel> <internode> route(%c0_i32) {
-      arts.for(%c0) to(%c64) step(%c1) {{
+      arts.for(%c0) to(%c64) step(%c1) {
       ^bb0(%iv: index):
         %sum = scf.for %k = %c0 to %c16 step %c1 iter_args(%acc = %zero) -> (f64) {
           %val = memref.load %arg0[%iv] : memref<64xf64>
@@ -30,12 +30,12 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vec
         }
         memref.store %sum, %arg1[%iv] : memref<64xf64>
         arts.yield
-      }}
+      }
       arts.yield
     }
 
     arts.edt <parallel> <internode> route(%c0_i32) {
-      arts.for(%c0) to(%c64) step(%c1) {{
+      arts.for(%c0) to(%c64) step(%c1) {
       ^bb0(%iv: index):
         %sum = scf.for %k = %c0 to %c16 step %c1 iter_args(%acc = %zero) -> (f64) {
           %val = memref.load %arg0[%iv] : memref<64xf64>
@@ -44,7 +44,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<!llvm.ptr<270> = dense<32> : vec
         }
         memref.store %sum, %arg2[%iv] : memref<64xf64>
         arts.yield
-      }}
+      }
       arts.yield
     }
 

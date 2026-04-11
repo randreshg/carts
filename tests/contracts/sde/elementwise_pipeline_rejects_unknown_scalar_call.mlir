@@ -15,20 +15,20 @@ module {
     %c1 = arith.constant 1 : index
     %c128 = arith.constant 128 : index
     arts.edt <parallel> <internode> route(%c0_i32) {
-      arts.for(%c0) to(%c128) step(%c1) {{
+      arts.for(%c0) to(%c128) step(%c1) {
       ^bb0(%iv: index):
         %0 = memref.load %arg0[%iv] : memref<128xf32>
         %1 = func.call @impure_scalar(%0) : (f32) -> f32
         memref.store %1, %arg1[%iv] : memref<128xf32>
         arts.yield
-      }}
-      arts.for(%c0) to(%c128) step(%c1) {{
+      }
+      arts.for(%c0) to(%c128) step(%c1) {
       ^bb0(%iv: index):
         %0 = memref.load %arg0[%iv] : memref<128xf32>
         %1 = arith.negf %0 : f32
         memref.store %1, %arg2[%iv] : memref<128xf32>
         arts.yield
-      }}
+      }
       arts.yield
     }
     return

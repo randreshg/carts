@@ -20,20 +20,20 @@ module {
     %c256 = arith.constant 256 : index
 
     arts.edt <parallel> <internode> route(%c0_i32) {
-      arts.for(%c0) to(%c256) step(%c1) {{
+      arts.for(%c0) to(%c256) step(%c1) {
       ^bb0(%iv: index):
         %0 = memref.load %arg0[%iv] : memref<256xf64>
         %1 = arith.addf %0, %0 : f64
         memref.store %1, %arg1[%iv] : memref<256xf64>
         arts.yield
-      }}
-      arts.for(%c0) to(%c256) step(%c1) {{
+      }
+      arts.for(%c0) to(%c256) step(%c1) {
       ^bb0(%iv: index):
         %0 = memref.load %arg0[%iv] : memref<256xf64>
         %1 = arith.mulf %0, %0 : f64
         memref.store %1, %arg2[%iv] : memref<256xf64>
         arts.yield
-      }}
+      }
       arts.yield
     }
     return

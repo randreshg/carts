@@ -72,6 +72,18 @@ def SdeChunkOptimization : Pass<"sde-chunk-optimization", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createSdeChunkOptimizationPass()";
 }
 
+def SdeScopeSelection : Pass<"sde-scope-selection", "mlir::ModuleOp"> {
+  let summary = "Select SDE concurrency scope from the active cost model";
+  let description = [{
+    Uses the SDE-owned cost model to choose the concurrency scope for
+    sde.cu_region <parallel> operations. The current implementation maps the
+    active machine topology directly: single-node builds become `scope(<local>)`
+    and multi-node builds become `scope(<distributed>)`.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
+  let constructor = "mlir::arts::sde::createSdeScopeSelectionPass()";
+}
+
 def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
   let summary = "Convert SDE operations to ARTS operations";
   let description = [{

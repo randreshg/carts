@@ -5,13 +5,13 @@
 // attrs appear here, they came from RaiseToLinalg + ConvertSdeToArts.
 
 // CHECK-LABEL: func.func @main
-// CHECK: arts.edt <parallel> <internode> route(%{{.*}}) attributes {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_pattern = #arts.distribution_pattern<uniform>
+// CHECK: arts.edt <parallel> <intranode> route(%{{.*}}) attributes {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_pattern = #arts.distribution_pattern<uniform>
 // CHECK: arts.for(%c0) to(%c128) step(%c1)
 // CHECK: ^bb0(%[[IV:.*]]: index):
 // CHECK: %[[VAL:.+]] = memref.load %arg0[%[[IV]]] : memref<128xf64>
 // CHECK: %[[MUL:.+]] = arith.mulf %[[VAL]], %cst : f64
 // CHECK: memref.store %[[MUL]], %arg1[%[[IV]]] : memref<128xf64>
-// CHECK: }} {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_pattern = #arts.distribution_pattern<uniform>}
+// CHECK: } {arts.pattern_revision = 1 : i64, depPattern = #arts.dep_pattern<uniform>, distribution_pattern = #arts.distribution_pattern<uniform>}
 // CHECK-NOT: linalg.generic
 // CHECK-NOT: arts_sde.
 

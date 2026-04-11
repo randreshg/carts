@@ -7,7 +7,7 @@
 // CHECK-LABEL: // -----// IR Dump After SdeChunkOptimization (sde-chunk-optimization) //----- //
 // CHECK: func.func @main
 // CHECK: %c4 = arith.constant 4 : index
-// CHECK: arts_sde.cu_region <parallel> scope(<distributed>) {
+// CHECK: arts_sde.cu_region <parallel> scope(<local>) {
 // CHECK: arts_sde.su_iterate(%c0) to(%c128) step(%c1) schedule(<dynamic>, %c4)
 // CHECK-NOT: arts.for
 // CHECK: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //

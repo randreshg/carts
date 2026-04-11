@@ -17,14 +17,14 @@ module attributes {arts.runtime_config_data = "[ARTS]\0A# Default ARTS configura
     %guid_1, %ptr_2 = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?xf64>>)
     arts.edt <parallel> <intranode> route(%c-1_i32) (%ptr_2) : memref<?xmemref<?xf64>> attributes {arts.id = 72 : i64, workers = #arts.workers<8>} {
     ^bb0(%arg0: memref<?xmemref<?xf64>>):
-      arts.for(%c0) to(%c1024) step(%c1) {{
+      arts.for(%c0) to(%c1024) step(%c1) {
       ^bb0(%arg1: index):
         %2 = arith.index_cast %arg1 : index to i32
         %3 = arith.sitofp %2 : i32 to f64
         %4 = arith.mulf %3, %cst_0 : f64
         %5 = arts.db_ref %arg0[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
         memref.store %4, %5[%arg1] : memref<?xf64>
-      }}
+      }
       arts.db_release(%arg0) : memref<?xmemref<?xf64>>
     }
     %0 = scf.for %arg0 = %c0 to %c1024 step %c1 iter_args(%arg1 = %cst) -> (f64) {
