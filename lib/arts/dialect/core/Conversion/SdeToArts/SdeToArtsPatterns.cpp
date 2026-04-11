@@ -149,59 +149,9 @@ convertDistributionKind(sde::SdeDistributionKindAttr kind) {
 // Linalg-derived contract classification helpers
 //===----------------------------------------------------------------------===//
 
-/// Runtime-neutral structured neighborhood summary recovered at the
-/// SDE-to-ARTS boundary.
-struct StructuredNeighborhoodSummary {
-  SmallVector<int64_t, 4> ownerDims;
-  SmallVector<int64_t, 4> spatialDims;
-  SmallVector<int64_t, 4> minOffsets;
-  SmallVector<int64_t, 4> maxOffsets;
-  SmallVector<int64_t, 4> writeFootprint;
-};
-
-/// Affine expression normalized to one loop dim plus a constant offset.
-struct AffineDimOffset {
-  std::optional<unsigned> dim;
-  int64_t offset = 0;
-};
-
-/// Extract a single-dim + constant form from an affine expression.
-static std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr) {
-  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr))
-    return AffineDimOffset{dimExpr.getPosition(), 0};
-  if (auto cstExpr = dyn_cast<AffineConstantExpr>(expr))
-    return AffineDimOffset{std::nullopt, cstExpr.getValue()};
-
-  auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr);
-  if (!binExpr)
-    return std::nullopt;
-
-  auto lhs = extractDimOffset(binExpr.getLHS());
-  auto rhs = extractDimOffset(binExpr.getRHS());
-  if (!lhs || !rhs)
-    return std::nullopt;
-
-  switch (binExpr.getKind()) {
-  case AffineExprKind::Add: {
-    if (lhs->dim && rhs->dim)
-      return std::nullopt;
-    return AffineDimOffset{lhs->dim ? lhs->dim : rhs->dim,
-                           lhs->offset + rhs->offset};
-  }
-  default:
-    return std::nullopt;
-  }
-}
-
-/// Check whether an indexing map contains any constant stencil offsets.
-static bool hasConstantOffsets(AffineMap map) {
-  for (AffineExpr result : map.getResults()) {
-    auto dimOffset = extractDimOffset(result);
-    if (dimOffset && dimOffset->dim && dimOffset->offset != 0)
-      return true;
-  }
-  return false;
-}
+// StructuredNeighborhoodSummary, AffineDimOffset, extractDimOffset, and
+// hasConstantOffsets are provided by StructuredOpAnalysis.h.
+using StructuredNeighborhoodSummary = sde::StructuredNeighborhoodInfo;
 
 /// Recover a structured neighborhood summary from linalg.generic read maps.
 static std::optional<StructuredNeighborhoodSummary>
@@ -225,7 +175,7 @@ extractNeighborhoodSummaryFromLinalg(linalg::GenericOp generic) {
        ++inputIdx) {
     AffineMap map = maps[inputIdx];
     for (AffineExpr result : map.getResults()) {
-      auto dimOffset = extractDimOffset(result);
+      auto dimOffset = sde::extractDimOffset(result);
       if (!dimOffset || !dimOffset->dim)
         continue;
 
@@ -333,7 +283,7 @@ classifyFromLinalg(linalg::GenericOp generic) {
     auto maps = generic.getIndexingMapsArray();
     for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs();
          ++inputIdx) {
-      if (hasConstantOffsets(maps[inputIdx]))
+      if (sde::hasConstantOffsets(maps[inputIdx]))
         return ArtsDepPattern::stencil_tiling_nd;
     }
     return ArtsDepPattern::uniform;

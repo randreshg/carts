@@ -16,6 +16,6 @@
 // (memref<?xi64> GUIDs). Verify that *data array* DBs are not coarse.
 // STENCIL-PRE-NOT: arts.db_acquire[<inout>]{{.*}}partitioning(<coarse>)
 
-// UNIFORM-PRE: arts.db_acquire[<out>] {{.*}}partitioning(<block>
+// UNIFORM-PRE: arts.db_acquire[<inout>] {{.*}}partitioning(<block>
 // UNIFORM-PRE-NOT: arts.db_acquire[<out>]{{.*}}partitioning(<coarse>)
 // UNIFORM-PRE-NOT: arts.db_acquire[<inout>]{{.*}}partitioning(<coarse>)

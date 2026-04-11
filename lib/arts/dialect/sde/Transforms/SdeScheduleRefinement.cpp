@@ -16,6 +16,7 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/costs/SDECostModel.h"
 
@@ -48,28 +49,6 @@ static bool hasPositiveConstantStep(sde::SdeSuIterateOp op) {
   int64_t step = 0;
   return ValueAnalysis::getConstantIndex(op.getSteps().front(), step) &&
          step > 0;
-}
-
-static std::optional<int64_t> getConstantTripCount(sde::SdeSuIterateOp op) {
-  if (!isOneDimensionalLoop(op))
-    return std::nullopt;
-
-  int64_t lowerBound = 0;
-  int64_t upperBound = 0;
-  int64_t step = 0;
-  if (!ValueAnalysis::getConstantIndex(op.getLowerBounds().front(),
-                                       lowerBound) ||
-      !ValueAnalysis::getConstantIndex(op.getUpperBounds().front(),
-                                       upperBound) ||
-      !ValueAnalysis::getConstantIndex(op.getSteps().front(), step) ||
-      step <= 0)
-    return std::nullopt;
-
-  if (upperBound <= lowerBound)
-    return int64_t{0};
-
-  int64_t span = upperBound - lowerBound;
-  return (span + step - 1) / step;
 }
 
 static sde::SdeScheduleKind selectSchedule(sde::SDECostModel &costModel,
@@ -138,7 +117,7 @@ struct SdeScheduleRefinementPass
           !isOneDimensionalLoop(op))
         return;
 
-      std::optional<int64_t> tripCount = getConstantTripCount(op);
+      std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
       std::optional<sde::SdeScheduleKind> refinedScheduleKind;
       if (tripCount) {
         refinedScheduleKind = selectSchedule(*costModel, *tripCount);

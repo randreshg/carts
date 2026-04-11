@@ -124,14 +124,6 @@ static UnitAttr nowaitAttr(MLIRContext *ctx, bool nowait) {
   return nowait ? UnitAttr::get(ctx) : nullptr;
 }
 
-/// Ensure an op's region has at least one block (SDE ops with SizedRegion
-/// don't auto-create blocks in their builder, only in the parser).
-static Block &ensureBlock(Region &region) {
-  if (region.empty())
-    region.emplaceBlock();
-  return region.front();
-}
-
 struct OmpDependSlice {
   Value source;
   SmallVector<Value> offsets;
@@ -193,7 +185,7 @@ struct OMPParallelToSdePattern : public OpRewritePattern<omp::ParallelOp> {
         /*nowait=*/nullptr);
 
     Block &old = op.getRegion().front();
-    Block &blk = ensureBlock(cuRegion.getBody());
+    Block &blk = sde::ensureBlock(cuRegion.getBody());
     blk.getOperations().splice(blk.end(), old.getOperations());
 
     ++numParallelConverted;
@@ -215,7 +207,7 @@ struct MasterToSdePattern : public OpRewritePattern<omp::MasterOp> {
         sde::SdeConcurrencyScopeAttr::get(ctx, sde::SdeConcurrencyScope::local),
         /*nowait=*/nullptr);
     Block &old = op.getRegion().front();
-    Block &blk = ensureBlock(cuRegion.getBody());
+    Block &blk = sde::ensureBlock(cuRegion.getBody());
     blk.getOperations().splice(blk.end(), old.getOperations());
     rewriter.eraseOp(op);
     return success();
@@ -234,7 +226,7 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
         sde::SdeConcurrencyScopeAttr::get(ctx, sde::SdeConcurrencyScope::local),
         nowaitAttr(ctx, op.getNowait()));
     Block &old = op.getRegion().front();
-    Block &blk = ensureBlock(cuRegion.getBody());
+    Block &blk = sde::ensureBlock(cuRegion.getBody());
     blk.getOperations().splice(blk.end(), old.getOperations());
     rewriter.eraseOp(op);
     return success();
@@ -376,7 +368,7 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
     }
 
     auto cuTask = sde::SdeCuTaskOp::create(rewriter, loc, deps);
-    Block &blk = ensureBlock(cuTask.getBody());
+    Block &blk = sde::ensureBlock(cuTask.getBody());
 
     Block &old = op.getRegion().front();
     blk.getOperations().splice(blk.end(), old.getOperations());
@@ -451,7 +443,7 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
         rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
         /*concurrency_scope=*/nullptr,
         /*nowait=*/nullptr);
-    Block &parBlk = ensureBlock(cuRegion.getBody());
+    Block &parBlk = sde::ensureBlock(cuRegion.getBody());
 
     rewriter.setInsertionPointToStart(&parBlk);
     Value lb = op.getLowerBound().front();

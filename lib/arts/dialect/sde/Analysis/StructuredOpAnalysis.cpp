@@ -167,51 +167,8 @@ computeIteratorTypes(unsigned numDims, ArrayRef<AffineMap> outputMaps,
   }
 }
 
-static bool hasConstantOffsets(AffineMap map) {
-  for (auto result : map.getResults()) {
-    auto binOp = dyn_cast<AffineBinaryOpExpr>(result);
-    if (!binOp || binOp.getKind() != AffineExprKind::Add)
-      continue;
-    bool lhsDim = isa<AffineDimExpr>(binOp.getLHS());
-    bool rhsDim = isa<AffineDimExpr>(binOp.getRHS());
-    bool lhsCst = isa<AffineConstantExpr>(binOp.getLHS());
-    bool rhsCst = isa<AffineConstantExpr>(binOp.getRHS());
-    if ((lhsDim && rhsCst) || (lhsCst && rhsDim))
-      return true;
-  }
-  return false;
-}
-
-struct AffineDimOffset {
-  std::optional<unsigned> dim;
-  int64_t offset = 0;
-};
-
-static std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr) {
-  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr))
-    return AffineDimOffset{dimExpr.getPosition(), 0};
-  if (auto cstExpr = dyn_cast<AffineConstantExpr>(expr))
-    return AffineDimOffset{std::nullopt, cstExpr.getValue()};
-
-  auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr);
-  if (!binExpr)
-    return std::nullopt;
-
-  auto lhs = extractDimOffset(binExpr.getLHS());
-  auto rhs = extractDimOffset(binExpr.getRHS());
-  if (!lhs || !rhs)
-    return std::nullopt;
-
-  switch (binExpr.getKind()) {
-  case AffineExprKind::Add:
-    if (lhs->dim && rhs->dim)
-      return std::nullopt;
-    return AffineDimOffset{lhs->dim ? lhs->dim : rhs->dim,
-                           lhs->offset + rhs->offset};
-  default:
-    return std::nullopt;
-  }
-}
+// AffineDimOffset and extractDimOffset are defined below the anonymous
+// namespace as public functions declared in StructuredOpAnalysis.h.
 
 static std::optional<StructuredNeighborhoodInfo>
 extractNeighborhoodSummary(ArrayRef<MemrefAccessEntry> reads,
@@ -222,7 +179,7 @@ extractNeighborhoodSummary(ArrayRef<MemrefAccessEntry> reads,
   StructuredNeighborhoodInfo info;
   info.minOffsets.assign(numLoops, 0);
   info.maxOffsets.assign(numLoops, 0);
-  info.writeFootprint.assign(numLoops, 0);
+  info.writeFootprint.assign(numLoops, 1);
   for (unsigned dim = 0; dim < numLoops; ++dim) {
     info.ownerDims.push_back(dim);
     info.spatialDims.push_back(dim);
@@ -318,6 +275,41 @@ static bool supportsReductionCarrierSubset(SdeSuIterateOp iterOp,
 }
 
 } // namespace
+
+std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr) {
+  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr))
+    return AffineDimOffset{dimExpr.getPosition(), 0};
+  if (auto cstExpr = dyn_cast<AffineConstantExpr>(expr))
+    return AffineDimOffset{std::nullopt, cstExpr.getValue()};
+
+  auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr);
+  if (!binExpr)
+    return std::nullopt;
+
+  auto lhs = extractDimOffset(binExpr.getLHS());
+  auto rhs = extractDimOffset(binExpr.getRHS());
+  if (!lhs || !rhs)
+    return std::nullopt;
+
+  switch (binExpr.getKind()) {
+  case AffineExprKind::Add:
+    if (lhs->dim && rhs->dim)
+      return std::nullopt;
+    return AffineDimOffset{lhs->dim ? lhs->dim : rhs->dim,
+                           lhs->offset + rhs->offset};
+  default:
+    return std::nullopt;
+  }
+}
+
+bool hasConstantOffsets(AffineMap map) {
+  for (AffineExpr result : map.getResults()) {
+    auto dimOffset = extractDimOffset(result);
+    if (dimOffset && dimOffset->dim && dimOffset->offset != 0)
+      return true;
+  }
+  return false;
+}
 
 bool StructuredLoopSummary::supportsLinalgCarrier() const {
   return classification != SdeStructuredClassification::stencil &&

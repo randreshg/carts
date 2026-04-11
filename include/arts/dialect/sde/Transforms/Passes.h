@@ -34,6 +34,21 @@ namespace mlir::arts {
 
 namespace mlir::arts::sde {
 
+/// Ensure a region has at least one block, creating an empty one if needed.
+inline Block &ensureBlock(Region &region) {
+  if (region.empty())
+    region.push_back(new Block());
+  return region.front();
+}
+
+/// Strip the operand segment sizes attribute when cloning/recreating an
+/// SdeSuIterateOp so that the builder can recompute it from operands.
+inline NamedAttrList getRewrittenAttrs(SdeSuIterateOp op) {
+  NamedAttrList attrs(op->getAttrs());
+  attrs.erase(op.getOperandSegmentSizesAttrName().getValue());
+  return attrs;
+}
+
 class SDECostModel;
 
 std::unique_ptr<Pass>

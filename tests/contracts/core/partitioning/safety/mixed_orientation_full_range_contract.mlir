@@ -6,9 +6,9 @@
 // CHECK: %[[GUID0:.*]], %[[PTR0:.*]] = arts.db_alloc[<inout>, <heap>, <write>, <coarse>, <uniform>]
 // CHECK-SAME: : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
 // CHECK: arts.db_acquire[<inout>] ({{.*}}) partitioning(<block>, offsets[
-// CHECK-SAME: stencil_owner_dims = [1]
+// CHECK-SAME: stencil_owner_dims = [0]
 // CHECK: arts.lowering_contract(%{{.*}} : memref<?xmemref<?x?xf64>>)
-// CHECK-SAME: contract(<ownerDims = [1], postDbRefined = true>)
+// CHECK-SAME: contract(<ownerDims = [0], postDbRefined = true>)
 // CHECK: arts.db_acquire[<inout>] ({{.*}}) partitioning(<block>, offsets[
 // CHECK-SAME: stencil_owner_dims = [0]
 // CHECK: arts.lowering_contract(%{{.*}} : memref<?xmemref<?x?xf64>>)
