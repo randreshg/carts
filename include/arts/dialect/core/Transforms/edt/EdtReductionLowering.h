@@ -21,8 +21,15 @@
 namespace mlir {
 namespace arts {
 
+enum class ReductionLoweringStrategy {
+  localAccumulate,
+  tree,
+  atomic
+};
+
 struct ReductionLoweringInfo {
   SmallVector<Value> reductionVars;
+  SmallVector<Value> privateReductionAccums;
   std::optional<Location> loopLocation;
 
   /// Partial accumulators: array[num_workers] for intermediate results
@@ -39,6 +46,8 @@ struct ReductionLoweringInfo {
   Value numWorkers;
   bool combineDirectlyInTask = false;
   EdtConcurrency parentConcurrency = EdtConcurrency::intranode;
+  ReductionLoweringStrategy strategy =
+      ReductionLoweringStrategy::localAccumulate;
 };
 
 /// Detect block arguments used for reduction stores in the loop body.

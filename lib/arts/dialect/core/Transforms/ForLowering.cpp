@@ -1840,6 +1840,64 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   cloneExternalAllocasIntoEdt(taskEdtRegion, taskBlock, redMapper,
                               AC->getBuilder());
 
+  if (!reductionVarIndex.empty()) {
+    auto scalarIndices = [&](Value memref) {
+      SmallVector<Value> indices;
+      auto memrefType = dyn_cast<MemRefType>(memref.getType());
+      if (!memrefType || memrefType.getRank() == 0)
+        return indices;
+      indices.push_back(AC->createIndexConstant(0, loc));
+      return indices;
+    };
+
+    auto loadScalar = [&](Value memref) {
+      SmallVector<Value> indices = scalarIndices(memref);
+      return AC->create<memref::LoadOp>(loc, memref, indices);
+    };
+
+    auto storeScalar = [&](Value value, Value memref) {
+      SmallVector<Value> indices = scalarIndices(memref);
+      AC->create<memref::StoreOp>(loc, value, memref, indices);
+    };
+
+    for (auto [redVar, idx] : reductionVarIndex) {
+      if (idx >= redInfo.privateReductionAccums.size())
+        continue;
+
+      Value privateAccum =
+          redMapper.lookupOrDefault(redInfo.privateReductionAccums[idx]);
+      auto privateType = dyn_cast_or_null<MemRefType>(privateAccum.getType());
+      if (!privateAccum || !privateType ||
+          !taskEdtRegion->isAncestor(privateAccum.getParentRegion())) {
+        ARTS_WARN("Skipping private reduction carrier rewrite for " << redVar);
+        continue;
+      }
+
+      AC->setInsertionPoint(iterLoop);
+      Type elemType = privateType.getElementType();
+      Value identity = AC->createZeroValue(elemType, loc);
+      if (!identity) {
+        ARTS_WARN("Skipping reduction accumulator initialization for "
+                  << redVar);
+        continue;
+      }
+
+      storeScalar(identity, privateAccum);
+
+      uint64_t argIndex = reductionArgStart + idx;
+      if (argIndex >= taskBlock.getNumArguments())
+        continue;
+
+      BlockArgument partialArg = taskBlock.getArgument(argIndex);
+      Value workerSlot = AC->create<DbRefOp>(
+          loc, partialArg, SmallVector<Value>{AC->createIndexConstant(0, loc)});
+
+      AC->setInsertionPointToEnd(&taskBlock);
+      Value privateValue = loadScalar(privateAccum);
+      storeScalar(privateValue, workerSlot);
+    }
+  }
+
   /// Add yield terminator
   AC->setInsertionPointToEnd(&taskBlock);
   if (taskBlock.empty() || !taskBlock.back().hasTrait<OpTrait::IsTerminator>())

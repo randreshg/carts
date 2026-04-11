@@ -525,10 +525,11 @@ unsigned EdtTransformsPass::placeEdtsByAffinity() {
 ///===----------------------------------------------------------------------===///
 
 unsigned EdtTransformsPass::selectReductionStrategies() {
-  /// TODO: arts.reduction_strategy is annotation-only — no lowering pass
-  /// currently reads this attribute. When lowering is implemented, it must
-  /// handle atomic (via artsAtomicAddInArrayDb), tree (binary tree
-  /// reduction EDT topology), and local_accumulate (per-worker accumulators).
+  /// ForLowering now consumes this attribute for the current narrow subset.
+  /// Atomic uses an atomic result combine for integer add reductions, tree
+  /// uses a pairwise combine loop, and local_accumulate keeps the existing
+  /// linear per-worker combine path. Broader parity across reduction kinds
+  /// and topologies is still future work.
   ModuleOp module = getOperation();
   unsigned count = 0;
 

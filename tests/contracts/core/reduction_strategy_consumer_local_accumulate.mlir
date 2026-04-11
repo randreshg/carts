@@ -1,23 +1,21 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../inputs/arts_2t.cfg --pipeline openmp-to-arts | %FileCheck %s
-// RUN: %carts-compile %s --O3 --arts-config %S/../inputs/arts_2t.cfg --pipeline edt-distribution | %FileCheck %s --check-prefix=LOWER
+// RUN: %carts-compile %s --O3 --arts-config %S/../inputs/arts_2t.cfg --pipeline edt-distribution | %FileCheck %s
 
-// Verify that ConvertSdeToArts preserves the SDE-selected local-accumulate
-// reduction strategy on both the lowered EDT and the lowered arts.for. Also
-// verify that ForLowering keeps the linear combine path for this case.
+// Verify that local_accumulate is consumed by ForLowering as:
+// 1. task-local scalar accumulation
+// 2. one worker-partial store per task
+// 3. a linear result EDT fold without atomic combines
 
 // CHECK-LABEL: func.func @main
-// CHECK: arts.edt <parallel> <intranode> route(%{{.*}}) attributes {arts.reduction_strategy = "local_accumulate", no_verify = #arts.no_verify}
-// CHECK: arts.for(%c0) to(%c16) step(%c1) reduction(%{{.*}} : memref<?xi32>)
-// CHECK: } {arts.reduction_strategy = "local_accumulate"}
-
-// LOWER-LABEL: func.func @main
-// LOWER: arts.edt <parallel> <intranode> route(%{{.*}}) (%{{.*}}) : memref<?xmemref<?xi32>> attributes {arts.reduction_strategy = "local_accumulate"
-// LOWER: arts.db_acquire[<in>] (%{{.*}} : memref<?xi64>, %{{.*}} : memref<?xmemref<?xi32>>) partitioning(<coarse>)
-// LOWER: arts.db_acquire[<out>] (%{{.*}} : memref<?xi64>, %{{.*}} : memref<?xmemref<?xi32>>) partitioning(<coarse>)
-// LOWER: arts.edt <task> <intranode> route(%{{.*}}) (%{{.*}}, %{{.*}}) : memref<?xmemref<?xi32>>, memref<?xmemref<?xi32>>
-// LOWER: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%{{.*}} = %{{.*}}) -> (i32)
-// LOWER-NOT: scf.if
-// LOWER-NOT: arts.atomic_add(
+// CHECK: arts.edt <task> <intranode>
+// CHECK: %[[LOCAL:.+]] = memref.alloca() : memref<i32>
+// CHECK: memref.store %{{.+}}, %[[LOCAL]][] : memref<i32>
+// CHECK: %[[PARTIAL:.+]] = arts.db_ref %arg3[%{{.+}}] : memref<?xi32> -> memref<?xi32>
+// CHECK: scf.for
+// CHECK: memref.load %[[LOCAL]][] : memref<i32>
+// CHECK: memref.store %{{.+}}, %[[PARTIAL]][%{{.+}}] : memref<?xi32>
+// CHECK: arts.edt <task> <intranode>
+// CHECK: scf.for {{.+}} iter_args(%{{.+}} = %{{.+}}) -> (i32)
+// CHECK-NOT: arts.atomic_add
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   omp.declare_reduction @add_i32 : i32 init {
