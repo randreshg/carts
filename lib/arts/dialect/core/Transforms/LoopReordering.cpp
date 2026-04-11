@@ -186,20 +186,19 @@ private:
 
     if (needsInitLoop) {
       /// STEP 1: Create the init loop (for j: init_ops)
-      scf::ForOp::create(
-          builder, firstInner.getLoc(), lb1, ub1, step1, ValueRange{},
-          [&](OpBuilder &nestedBuilder, Location loc, Value initLoopIV,
-              ValueRange iterArgs) {
-            /// Clone init ops, mapping original j IV to new IV
-            IRMapping mapping;
-            mapping.map(iv1, initLoopIV);
+      scf::ForOp::create(builder, firstInner.getLoc(), lb1, ub1, step1,
+                         ValueRange{},
+                         [&](OpBuilder &nestedBuilder, Location loc,
+                             Value initLoopIV, ValueRange iterArgs) {
+                           /// Clone init ops, mapping original j IV to new IV
+                           IRMapping mapping;
+                           mapping.map(iv1, initLoopIV);
 
-            for (Operation *op : initOps)
-              nestedBuilder.clone(*op, mapping);
+                           for (Operation *op : initOps)
+                             nestedBuilder.clone(*op, mapping);
 
-            scf::YieldOp::create(nestedBuilder, loc);
-          });
-
+                           scf::YieldOp::create(nestedBuilder, loc);
+                         });
     }
 
     /// STEP 2: Create the interchanged reduction loop (for k: for j: reduce)

@@ -24,10 +24,10 @@
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 ARTS_DEBUG_SETUP(edt_reduction_lowering);
 
 using namespace mlir;
@@ -49,9 +49,10 @@ static bool isScalarReductionCarrierType(MemRefType memrefType) {
   return memrefType.getRank() == 1;
 }
 
-static ReductionLoweringStrategy
-resolveReductionStrategy(ForOp forOp, EdtOp parallelEdt) {
-  auto getStrategy = [](Operation *op) -> std::optional<ReductionLoweringStrategy> {
+static ReductionLoweringStrategy resolveReductionStrategy(ForOp forOp,
+                                                          EdtOp parallelEdt) {
+  auto getStrategy =
+      [](Operation *op) -> std::optional<ReductionLoweringStrategy> {
     if (!op)
       return std::nullopt;
 
@@ -79,8 +80,7 @@ resolveReductionStrategy(ForOp forOp, EdtOp parallelEdt) {
   return ReductionLoweringStrategy::localAccumulate;
 }
 
-static SmallVector<Value>
-detectPrivateReductionAccumulators(ForOp forOp) {
+static SmallVector<Value> detectPrivateReductionAccumulators(ForOp forOp) {
   SmallVector<Value> privateAccums(forOp.getReductionAccumulators().size(),
                                    Value());
   if (forOp.getReductionAccumulators().size() != 1)
@@ -415,9 +415,9 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
 
   for (auto [idx, redVar] : llvm::enumerate(reductionAccums)) {
     redInfo.reductionVars.push_back(redVar);
-    redInfo.privateReductionAccums.push_back(
-        idx < privateReductionAccums.size() ? privateReductionAccums[idx]
-                                            : Value());
+    redInfo.privateReductionAccums.push_back(idx < privateReductionAccums.size()
+                                                 ? privateReductionAccums[idx]
+                                                 : Value());
 
     auto redMemRef = dyn_cast<MemRefType>(redVar.getType());
     Type elementType =
@@ -618,10 +618,9 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
       continue;
     }
 
-    ArtsMode finalMode =
-        redInfo.strategy == ReductionLoweringStrategy::atomic
-            ? ArtsMode::inout
-            : ArtsMode::out;
+    ArtsMode finalMode = redInfo.strategy == ReductionLoweringStrategy::atomic
+                             ? ArtsMode::inout
+                             : ArtsMode::out;
     auto acqOp = AC->create<DbAcquireOp>(
         loc, finalMode, finalGuid, finalPtr, PartitionMode::coarse,
         /*indices=*/SmallVector<Value>{},
@@ -732,8 +731,8 @@ void mlir::arts::finalizeReductionAfterEpoch(ArtsCodegen *AC,
     if (auto blockArg = dyn_cast<BlockArgument>(redVar)) {
       Region *ownerRegion = blockArg.getOwner()->getParent();
       Region *currentRegion = AC->getBuilder().getBlock()->getParent();
-      canStoreToReductionVar =
-          ownerRegion && currentRegion && ownerRegion->isAncestor(currentRegion);
+      canStoreToReductionVar = ownerRegion && currentRegion &&
+                               ownerRegion->isAncestor(currentRegion);
     } else if (Operation *defOp = redVar.getDefiningOp()) {
       Region *defRegion = defOp->getParentRegion();
       Region *currentRegion = AC->getBuilder().getBlock()->getParent();

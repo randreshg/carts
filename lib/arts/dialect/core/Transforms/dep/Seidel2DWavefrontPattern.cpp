@@ -277,8 +277,7 @@ static void rewriteSeidelSequential(SeidelWavefrontMatch &match) {
   auto seqRowFor = scf::ForOp::create(
       builder, match.rowFor.getLoc(), match.rowFor.getLowerBound().front(),
       match.rowFor.getUpperBound().front(), match.rowFor.getStep().front());
-  copyArtsMetadataAttrs(match.rowFor.getOperation(),
-                        seqRowFor.getOperation());
+  copyArtsMetadataAttrs(match.rowFor.getOperation(), seqRowFor.getOperation());
   copyPatternAttrs(match.rowFor.getOperation(), seqRowFor.getOperation());
 
   OpBuilder rowBuilder = OpBuilder::atBlockBegin(seqRowFor.getBody());
@@ -381,11 +380,11 @@ static void rewriteSeidelWavefront(SeidelWavefrontMatch &match,
   Value tileRowUb =
       arith::MulIOp::create(tileBuilder, loc, biMaxExclusive, tileRows);
 
-  auto tileFor = arts::ForOp::create(
-      tileBuilder, syntheticLoopLoc, ValueRange{tileRowLb},
-      ValueRange{tileRowUb}, ValueRange{tileRows},
-      /*schedule=*/nullptr, /*chunkSize=*/Value(),
-      /*reductionAccumulators=*/ValueRange{});
+  auto tileFor =
+      arts::ForOp::create(tileBuilder, syntheticLoopLoc, ValueRange{tileRowLb},
+                          ValueRange{tileRowUb}, ValueRange{tileRows},
+                          /*schedule=*/nullptr, /*chunkSize=*/Value(),
+                          /*reductionAccumulators=*/ValueRange{});
   /// This frontier loop is synthetic. It preserves the stencil contract, but
   /// it does not preserve the source row-loop trip count or other loop
   /// metadata, so restamp only the contract attrs below.
@@ -479,13 +478,11 @@ public:
     return ArtsDepPattern::wavefront_2d;
   }
   int64_t getRevision() const override { return 1; }
-
 };
 
 } // namespace
 
-std::unique_ptr<DepPatternTransform>
-createSeidel2DWavefrontPattern() {
+std::unique_ptr<DepPatternTransform> createSeidel2DWavefrontPattern() {
   return std::make_unique<Seidel2DWavefrontPattern>();
 }
 

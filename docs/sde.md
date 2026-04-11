@@ -46,6 +46,26 @@ The branch-local layering rule is:
   while `ARTSCostModel` is the current runtime-specific implementation hidden
   behind that interface.
 
+## Wavefront Ownership
+
+Wavefront is a semantic dependence-pattern family, not an ARTS runtime concept.
+Detecting that a loop should use a wavefront schedule, choosing tile geometry
+or frontier granularity, and selecting any related distribution intent belong
+to SDE and the `SDECostModel` interface.
+
+That same rule applies to the other structured pattern families as well:
+elementwise, stencil, matmul, reduction-mixed, and future tensor/linalg-native
+dependence patterns should be classified and planned in SDE. ARTS may
+materialize those contracts as `arts.*` structure later, but it should not be
+the semantic source of truth for those choices.
+
+The reusable analysis direction for this branch is therefore:
+
+- structural loop and access classification in SDE
+- tensor/linalg analyses and transforms in SDE
+- contract forwarding at `ConvertSdeToArts`
+- ARTS-native cleanup and runtime-shaping after the boundary
+
 ## Current OpenMP-to-ARTS Pipeline
 
 As of this branch, `buildOpenMPToArtsPipeline` is:
@@ -78,6 +98,13 @@ DepTransforms
   -> KernelTransforms
   -> CSE
 ```
+
+Current implementation note:
+
+- Some ARTS-side passes still contain transitional semantic planning debt,
+  especially around wavefront/distribution shaping. The architectural target
+  remains that those passes consume SDE-authored contracts rather than invent
+  new semantic policy after the boundary.
 
 ## Pass Boundaries
 

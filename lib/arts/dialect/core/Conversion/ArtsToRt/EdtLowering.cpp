@@ -33,18 +33,18 @@ namespace mlir::arts {
 #include "arts/codegen/Codegen.h"
 #include "arts/dialect/core/Analysis/AnalysisDependencies.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
-#include "arts/utils/IdRegistry.h"
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
 #include "arts/dialect/core/Conversion/ArtsToRt/EdtLoweringInternal.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/passes/Passes.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"
+#include "arts/utils/IdRegistry.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/PartitionPredicates.h"
 #include "arts/utils/Utils.h"
+#include "arts/utils/ValueAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
@@ -187,9 +187,10 @@ struct EdtLoweringPass : public arts::impl::EdtLoweringBase<EdtLoweringPass> {
                            uint64_t idStride = IdRegistry::DefaultStride)
       : idStride(idStride), AM(AM) {}
   EdtLoweringPass(const EdtLoweringPass &other)
-      : arts::impl::EdtLoweringBase<EdtLoweringPass>(other), idStride(other.idStride),
-        functionCounter(other.functionCounter), module(other.module),
-        AM(other.AM), AC(other.AC), idRegistry(other.idRegistry) {}
+      : arts::impl::EdtLoweringBase<EdtLoweringPass>(other),
+        idStride(other.idStride), functionCounter(other.functionCounter),
+        module(other.module), AM(other.AM), AC(other.AC),
+        idRegistry(other.idRegistry) {}
   void runOnOperation() override;
 
 private:
@@ -1369,11 +1370,11 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
 
     const bool hasDbGepUsers = llvm::any_of(
         users, [](Operation *op) { return isa<arts::DbGepOp>(op); });
-    const bool useInvariantSingleDepView = indicesAlreadySliceRelative &&
-                                           (depSizes.empty() ||
-                                            llvm::all_of(depSizes,
-                                                         ValueAnalysis::isOneLikeValue)) &&
-                                           !hasDbGepUsers;
+    const bool useInvariantSingleDepView =
+        indicesAlreadySliceRelative &&
+        (depSizes.empty() ||
+         llvm::all_of(depSizes, ValueAnalysis::isOneLikeValue)) &&
+        !hasDbGepUsers;
 
     const bool accessIndicesAlreadySliceRelative =
         indicesAlreadySliceRelative || usePayloadIndexing;

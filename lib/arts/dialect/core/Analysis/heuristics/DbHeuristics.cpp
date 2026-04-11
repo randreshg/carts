@@ -32,8 +32,7 @@ static std::string extractHeuristicId(llvm::StringRef rationale) {
 
 } // namespace
 
-DbHeuristics::DbHeuristics(const AbstractMachine &machine)
-    : machine(machine) {}
+DbHeuristics::DbHeuristics(const AbstractMachine &machine) : machine(machine) {}
 
 bool DbHeuristics::isSingleNode() const { return machine.isSingleNode(); }
 

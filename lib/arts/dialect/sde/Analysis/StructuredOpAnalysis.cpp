@@ -1,0 +1,292 @@
+///==========================================================================///
+/// File: StructuredOpAnalysis.cpp
+///
+/// Reusable structural analysis for SDE scheduling-unit loops.
+///==========================================================================///
+
+#include "arts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/SmallBitVector.h"
+
+using namespace mlir;
+
+namespace mlir::arts::sde {
+namespace {
+
+static SmallVector<Operation *> getBodyOps(Block &body) {
+  SmallVector<Operation *> ops;
+  for (auto &op : body) {
+    if (op.hasTrait<OpTrait::IsTerminator>())
+      continue;
+    if (isa<SdeYieldOp>(op))
+      continue;
+    ops.push_back(&op);
+  }
+  return ops;
+}
+
+static bool collectInner(Block &body, LoopNestInfo &info) {
+  SmallVector<Operation *> ops = getBodyOps(body);
+
+  if (ops.size() == 1) {
+    if (auto innerFor = dyn_cast<scf::ForOp>(ops.front())) {
+      info.ivs.push_back(innerFor.getInductionVar());
+      return collectInner(*innerFor.getBody(), info);
+    }
+  }
+
+  info.innermostBody = &body;
+  return true;
+}
+
+static bool collectPerfectNest(SdeSuIterateOp iterOp, LoopNestInfo &info) {
+  info.rootIterOp = iterOp;
+
+  Region &region = iterOp.getBody();
+  if (region.empty() || region.front().getNumArguments() == 0)
+    return false;
+
+  llvm::append_range(info.ivs, region.front().getArguments());
+  return collectInner(region.front(), info);
+}
+
+static std::optional<AffineExpr>
+tryGetAffineExpr(Value value, ArrayRef<Value> ivs, MLIRContext *ctx) {
+  for (auto [idx, iv] : llvm::enumerate(ivs)) {
+    if (value == iv)
+      return getAffineDimExpr(idx, ctx);
+  }
+
+  auto *defOp = value.getDefiningOp();
+  if (!defOp)
+    return std::nullopt;
+
+  if (auto cst = dyn_cast<arith::ConstantOp>(defOp)) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
+      return getAffineConstantExpr(intAttr.getInt(), ctx);
+    return std::nullopt;
+  }
+
+  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+    auto lhs = tryGetAffineExpr(addOp.getLhs(), ivs, ctx);
+    auto rhs = tryGetAffineExpr(addOp.getRhs(), ivs, ctx);
+    if (lhs && rhs)
+      return *lhs + *rhs;
+  }
+
+  if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
+    auto lhs = tryGetAffineExpr(subOp.getLhs(), ivs, ctx);
+    auto rhs = tryGetAffineExpr(subOp.getRhs(), ivs, ctx);
+    if (lhs && rhs)
+      return *lhs - *rhs;
+  }
+
+  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
+    auto lhs = tryGetAffineExpr(mulOp.getLhs(), ivs, ctx);
+    auto rhs = tryGetAffineExpr(mulOp.getRhs(), ivs, ctx);
+    if (lhs && rhs &&
+        (isa<AffineConstantExpr>(*lhs) || isa<AffineConstantExpr>(*rhs)))
+      return *lhs * *rhs;
+  }
+
+  if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp))
+    return tryGetAffineExpr(castOp.getIn(), ivs, ctx);
+
+  return std::nullopt;
+}
+
+static std::optional<AffineMap> tryBuildIndexingMap(OperandRange indices,
+                                                    ArrayRef<Value> ivs,
+                                                    MLIRContext *ctx) {
+  SmallVector<AffineExpr> exprs;
+  exprs.reserve(indices.size());
+  for (Value idx : indices) {
+    auto expr = tryGetAffineExpr(idx, ivs, ctx);
+    if (!expr)
+      return std::nullopt;
+    exprs.push_back(*expr);
+  }
+  return AffineMap::get(/*dimCount=*/ivs.size(), /*symbolCount=*/0, exprs, ctx);
+}
+
+static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
+                                  SmallVectorImpl<MemrefAccessEntry> &reads,
+                                  SmallVectorImpl<MemrefAccessEntry> &writes,
+                                  MLIRContext *ctx) {
+  for (auto &op : body) {
+    if (op.hasTrait<OpTrait::IsTerminator>())
+      continue;
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
+      auto map = tryBuildIndexingMap(loadOp.getIndices(), ivs, ctx);
+      if (!map)
+        return false;
+      reads.push_back(
+          {loadOp.getMemref(), *map, loadOp.getOperation(), /*isRead=*/true});
+      continue;
+    }
+
+    if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
+      auto map = tryBuildIndexingMap(storeOp.getIndices(), ivs, ctx);
+      if (!map)
+        return false;
+      writes.push_back(
+          {storeOp.getMemref(), *map, storeOp.getOperation(), /*isRead=*/false});
+      continue;
+    }
+
+    if (isMemoryEffectFree(&op))
+      continue;
+
+    return false;
+  }
+
+  return !reads.empty() || !writes.empty();
+}
+
+static void computeIteratorTypes(unsigned numDims, ArrayRef<AffineMap> outputMaps,
+                                 SmallVectorImpl<utils::IteratorType> &iterTypes) {
+  llvm::SmallBitVector dimsInOutputs(numDims, false);
+  for (AffineMap map : outputMaps) {
+    for (unsigned i = 0; i < map.getNumResults(); ++i) {
+      map.getResult(i).walk([&](AffineExpr expr) {
+        if (auto dimExpr = dyn_cast<AffineDimExpr>(expr))
+          dimsInOutputs.set(dimExpr.getPosition());
+      });
+    }
+  }
+
+  for (unsigned d = 0; d < numDims; ++d) {
+    iterTypes.push_back(dimsInOutputs.test(d) ? utils::IteratorType::parallel
+                                              : utils::IteratorType::reduction);
+  }
+}
+
+static bool hasConstantOffsets(AffineMap map) {
+  for (auto result : map.getResults()) {
+    auto binOp = dyn_cast<AffineBinaryOpExpr>(result);
+    if (!binOp || binOp.getKind() != AffineExprKind::Add)
+      continue;
+    bool lhsDim = isa<AffineDimExpr>(binOp.getLHS());
+    bool rhsDim = isa<AffineDimExpr>(binOp.getRHS());
+    bool lhsCst = isa<AffineConstantExpr>(binOp.getLHS());
+    bool rhsCst = isa<AffineConstantExpr>(binOp.getRHS());
+    if ((lhsDim && rhsCst) || (lhsCst && rhsDim))
+      return true;
+  }
+  return false;
+}
+
+static SdeLinalgClassification
+classifyPattern(ArrayRef<MemrefAccessEntry> reads, ArrayRef<AffineMap> outputMaps,
+                ArrayRef<utils::IteratorType> iterTypes, unsigned numDims) {
+  unsigned numParallel = 0;
+  unsigned numReduction = 0;
+  for (utils::IteratorType t : iterTypes) {
+    if (t == utils::IteratorType::parallel)
+      ++numParallel;
+    else
+      ++numReduction;
+  }
+
+  if (numReduction == 0) {
+    for (const auto &entry : reads) {
+      if (hasConstantOffsets(entry.indexingMap))
+        return SdeLinalgClassification::stencil;
+    }
+    return SdeLinalgClassification::elementwise;
+  }
+
+  if (numParallel == 2 && numReduction == 1 && numDims == 3 &&
+      reads.size() >= 2 && !outputMaps.empty())
+    return SdeLinalgClassification::matmul;
+
+  return SdeLinalgClassification::reduction;
+}
+
+static bool isConstantZeroIndexingMap(AffineMap indexingMap) {
+  if (indexingMap.getNumResults() != 1)
+    return false;
+
+  auto constant = dyn_cast<AffineConstantExpr>(indexingMap.getResult(0));
+  return constant && constant.getValue() == 0;
+}
+
+static bool supportsReductionCarrierSubset(SdeSuIterateOp iterOp,
+                                           const LoopNestInfo &nest,
+                                           ArrayRef<MemrefAccessEntry> reads,
+                                           ArrayRef<MemrefAccessEntry> writes) {
+  if (iterOp.getReductionAccumulators().size() != 1 || nest.ivs.size() != 1)
+    return false;
+  if (writes.size() != 1)
+    return false;
+
+  Value reductionAccumulator = iterOp.getReductionAccumulators().front();
+  auto reductionType = dyn_cast<MemRefType>(reductionAccumulator.getType());
+  if (!reductionType || reductionType.getRank() != 1)
+    return false;
+
+  const MemrefAccessEntry &write = writes.front();
+  if (write.memref != reductionAccumulator ||
+      !isConstantZeroIndexingMap(write.indexingMap))
+    return false;
+
+  unsigned matchingReductionReads = 0;
+  for (const MemrefAccessEntry &read : reads) {
+    if (read.memref != reductionAccumulator)
+      continue;
+    if (!isConstantZeroIndexingMap(read.indexingMap))
+      return false;
+    ++matchingReductionReads;
+  }
+
+  return matchingReductionReads == 1;
+}
+
+} // namespace
+
+bool StructuredLoopSummary::supportsLinalgCarrier() const {
+  return classification != SdeLinalgClassification::stencil &&
+         (classification != SdeLinalgClassification::reduction ||
+          supportsReductionCarrier);
+}
+
+std::optional<StructuredLoopSummary>
+analyzeStructuredLoop(SdeSuIterateOp iterOp) {
+  MLIRContext *ctx = iterOp.getContext();
+  StructuredLoopSummary summary;
+  if (!collectPerfectNest(iterOp, summary.nest))
+    return std::nullopt;
+  if (!summary.nest.innermostBody || summary.nest.ivs.empty())
+    return std::nullopt;
+
+  if (!collectMemrefAccesses(*summary.nest.innermostBody, summary.nest.ivs,
+                             summary.reads, summary.writes, ctx))
+    return std::nullopt;
+
+  summary.outputMaps.reserve(summary.writes.size() +
+                             iterOp.getReductionAccumulators().size());
+  for (const MemrefAccessEntry &write : summary.writes)
+    summary.outputMaps.push_back(write.indexingMap);
+  for (size_t i = 0; i < iterOp.getReductionAccumulators().size(); ++i)
+    summary.outputMaps.push_back(
+        AffineMap::get(summary.nest.ivs.size(), 0, {}, ctx));
+
+  if (summary.outputMaps.empty())
+    return std::nullopt;
+
+  computeIteratorTypes(summary.nest.ivs.size(), summary.outputMaps,
+                       summary.iterTypes);
+  summary.classification = classifyPattern(summary.reads, summary.outputMaps,
+                                           summary.iterTypes,
+                                           summary.nest.ivs.size());
+  summary.supportsReductionCarrier = supportsReductionCarrierSubset(
+      iterOp, summary.nest, summary.reads, summary.writes);
+  return summary;
+}
+
+} // namespace mlir::arts::sde

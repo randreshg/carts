@@ -127,16 +127,15 @@ static Value buildTileIterationValue(OpBuilder &builder, Location loc,
   Value one = getConstantIndex(builder, loc, 1);
   Value workerCountValue = getConstantIndex(
       builder, loc, std::max<int64_t>(1, costModel.getWorkerCount()));
-  Value minIterationsValue =
-      getConstantIndex(builder, loc,
-                       std::max<int64_t>(1, costModel.getMinIterationsPerWorker()));
+  Value minIterationsValue = getConstantIndex(
+      builder, loc,
+      std::max<int64_t>(1, costModel.getMinIterationsPerWorker()));
 
   Value clampedTripCount = arith::MaxUIOp::create(builder, loc, tripCount, one);
-  Value balancedTile =
-      arith::CeilDivUIOp::create(builder, loc, clampedTripCount,
-                                 workerCountValue);
-  Value preferredTile = arith::MaxUIOp::create(builder, loc, balancedTile,
-                                               minIterationsValue);
+  Value balancedTile = arith::CeilDivUIOp::create(
+      builder, loc, clampedTripCount, workerCountValue);
+  Value preferredTile =
+      arith::MaxUIOp::create(builder, loc, balancedTile, minIterationsValue);
   return arith::MinUIOp::create(builder, loc, preferredTile, clampedTripCount);
 }
 
@@ -223,10 +222,10 @@ static bool hasDisjointWriteSet(Block &body, linalg::GenericOp tensorGeneric) {
       writtenMemrefs.size() != static_cast<size_t>(storeCount))
     return false;
 
-  for (auto [outputIndex, output] : llvm::enumerate(tensorGeneric.getDpsInits())) {
-    AffineMap indexingMap =
-        tensorGeneric.getMatchingIndexingMap(
-            tensorGeneric.getDpsInitOperand(outputIndex));
+  for (auto [outputIndex, output] :
+       llvm::enumerate(tensorGeneric.getDpsInits())) {
+    AffineMap indexingMap = tensorGeneric.getMatchingIndexingMap(
+        tensorGeneric.getDpsInitOperand(outputIndex));
     if (!indexingMap.isProjectedPermutation())
       return false;
   }
@@ -250,7 +249,8 @@ static bool isElementwiseTensorCandidate(Block &body,
   return hasPerfectNestedScalarLoopNest(body, tensorGeneric.getNumLoops());
 }
 
-static bool isMatmulTensorCandidate(Block &body, linalg::GenericOp tensorGeneric) {
+static bool isMatmulTensorCandidate(Block &body,
+                                    linalg::GenericOp tensorGeneric) {
   if (tensorGeneric.getNumLoops() != 3 || tensorGeneric.getNumDpsInits() != 1)
     return false;
 
@@ -276,8 +276,7 @@ static bool isMatmulTensorCandidate(Block &body, linalg::GenericOp tensorGeneric
   return nonCarrierOps == 1;
 }
 
-static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op,
-                                          Block &body,
+static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op, Block &body,
                                           linalg::GenericOp tensorGeneric) {
   if (!tensorGeneric)
     return false;
@@ -346,17 +345,17 @@ struct SdeTensorOptimizationPass
 
       Value tileIterations;
       if (std::optional<int64_t> tripCount = getConstantTripCount(op)) {
-        int64_t balancedTile =
-            ceilDiv(*tripCount, std::max<int64_t>(1, costModel->getWorkerCount()));
+        int64_t balancedTile = ceilDiv(
+            *tripCount, std::max<int64_t>(1, costModel->getWorkerCount()));
         int64_t tileCount = std::clamp(
-            std::max<int64_t>(balancedTile, costModel->getMinIterationsPerWorker()),
+            std::max<int64_t>(balancedTile,
+                              costModel->getMinIterationsPerWorker()),
             int64_t{1}, *tripCount);
         if (tileCount <= 1)
           continue;
         tileIterations = getConstantIndex(rewriter, loc, tileCount);
       } else {
-        tileIterations =
-            buildTileIterationValue(rewriter, loc, op, *costModel);
+        tileIterations = buildTileIterationValue(rewriter, loc, op, *costModel);
       }
       if (!tileIterations)
         continue;
@@ -385,10 +384,10 @@ struct SdeTensorOptimizationPass
 
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(&newBody);
-      Value tileLimit = arith::AddIOp::create(rewriter, loc, tileBase, tiledStep);
-      Value tileUpper =
-          arith::MinUIOp::create(rewriter, loc, tileLimit,
-                                 op.getUpperBounds().front());
+      Value tileLimit =
+          arith::AddIOp::create(rewriter, loc, tileBase, tiledStep);
+      Value tileUpper = arith::MinUIOp::create(rewriter, loc, tileLimit,
+                                               op.getUpperBounds().front());
       auto tileLoop =
           scf::ForOp::create(rewriter, loc, tileBase, tileUpper, originalStep);
       cloneScalarBodyIntoTileLoop(op.getBody().front(), tileLoop, rewriter);
