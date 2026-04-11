@@ -33,21 +33,22 @@ namespace mlir::arts {
 #define GEN_PASS_DEF_CONVERTOPENMPTOSDE
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
-#include "arts/utils/costs/SDECostModel.h"
-#include "arts/passes/Passes.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "arts/utils/OperationAttributes.h"
-#include "arts/utils/Utils.h"
-#include "arts/utils/ValueAnalysis.h"
 
+#include "arts/utils/Utils.h"
+#include "arts/utils/OperationAttributes.h"
+#include "arts/utils/ValueAnalysis.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(convert_openmp_to_sde);
 
+#include <optional>
+
+#include "arts/utils/costs/SDECostModel.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Statistic.h"
 static llvm::Statistic numParallelConverted{
     "convert_openmp_to_sde", "NumParallelConverted",
@@ -555,12 +556,16 @@ namespace {
 struct ConvertOpenMPToSdePass
     : public arts::impl::ConvertOpenMPToSdeBase<ConvertOpenMPToSdePass> {
 
-  explicit ConvertOpenMPToSdePass(sde::SDECostModel * /*costModel*/ = nullptr) {}
+  explicit ConvertOpenMPToSdePass(sde::SDECostModel *costModel = nullptr)
+      : costModel(costModel) {}
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
     ARTS_INFO_HEADER(ConvertOpenMPToSdePass);
     MLIRContext *context = &getContext();
+    // Conversion stays structural today, but the pass keeps the SDE-owned
+    // model wired through so callers do not depend on ARTS analysis plumbing.
+    (void)costModel;
     // Pre-scan writer sources for dependency filtering
     llvm::DenseSet<Value> writerDepSources;
     module.walk([&](omp::TaskOp task) {
@@ -591,6 +596,10 @@ struct ConvertOpenMPToSdePass
     ARTS_INFO_FOOTER(ConvertOpenMPToSdePass);
   }
 
+private:
+  // Keep the pass wired to the SDE-owned cost-model interface without
+  // reintroducing AnalysisManager or other ARTS-layer plumbing here.
+  sde::SDECostModel *costModel = nullptr;
 };
 } // namespace
 
