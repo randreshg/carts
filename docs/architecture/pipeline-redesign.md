@@ -1,211 +1,149 @@
-# Pipeline Redesign with Tensor Integration
+# Current Pipeline Layout
 
-## Pipeline Overview
+This document describes the pipeline that the current branch actually builds in
+`tools/compile/Compile.cpp`. Earlier redesign notes in this file described a
+more granular staged rollout with a separate `collect-metadata` phase and a
+discrete tensor bufferization stage. That is not what the branch runs today.
 
-```
-Stages 1-2:   Normalization    [NormalizeMemrefs, CollectMetadata]
-Stage 3:      Cleanup           [LowerAffine, CSE]
-Stage 3.5:    OMP->SDE          [ConvertOpenMPToSde]
-Stage 3.6:    RaiseToLinalg     [scf.for+memref -> linalg.generic]
-Stage 3.7:    RaiseToTensor     [linalg on memref -> linalg on tensor]
-Stage 3.8:    SDE analysis+opt  [tensor-space analysis, tile-and-fuse]
-Stage 3.9:    Bufferize         [one-shot bufferize: tensor -> memref]
-Stage 4:      SDE->ARTS         [ConvertSdeToArts + linalg-to-loops]
-Stage 5:      pattern-pipeline  [PatternDiscovery, KernelTransforms]
-Stages 6-16:  arts.* optimization
-Stage 17:     arts.* -> arts_rt.*  [pre-lowering]
-Stage 18:     arts_rt.* -> llvm.*  [final codegen]
-```
+## Current Stage Layout
 
-## The Tensor Window (Stages 3.7-3.9)
+The active compilation pipeline is:
 
-This is where SDE gets maximum leverage from MLIR infrastructure. SDE ops
-are **type-polymorphic** — they natively accept both tensor and memref
-operands via `DestinationStyleOpInterface` (like `linalg.generic`). After
-RaiseToTensor, SDE CU ops carry tensor `ins/outs` where SSA def-use chains
-ARE the dependency graph. No custom analysis needed.
-
-### Problem
-
-CARTS currently works entirely in memref space. Memrefs are mutable pointers.
-To determine data dependencies, the compiler must:
-- Run expensive alias analysis
-- Track all possible load/store interferences
-- Conservatively assume dependencies when analysis fails
-
-### Solution: Raise to Tensor Space
-
-In tensor IR:
-- Every value is **immutable** -- no aliasing, no side effects
-- SSA def-use chains ARE the complete dependency graph
-- `tensor.extract_slice` = reading a subregion = DB acquire(READ)
-- `tensor.insert_slice` = writing a subregion = DB acquire(WRITE)
-- One-shot bufferization decides in-place vs copy = DB mode optimization
-
-### The Raise/Analyze/Lower Cycle
-
-```
-memref-based IR (from Polygeist)
-  |
-  v RaiseToLinalg: scf.for+memref -> linalg.generic on memref
-  |   WHERE patterns are recognized (best-effort)
-  |
-  v RaiseToTensor: linalg.generic on memref -> linalg.generic on tensor
-  |   Unrecognized memref ops stay as memref (graceful fallback)
-  |
-  v SDE Analysis (in tensor space):
-  |   - SSA dataflow = dependency graph (free, exact)
-  |   - tensor.extract_slice = DB acquire region
-  |   - No alias analysis needed for tensor ops
-  |   - Linalg tile-and-fuse in tensor space
-  |   - Pattern classification from iterator_types
-  |
-  v Bufferize: one-shot bufferization -> linalg.generic on memref
-  |   Optimal in-place decisions (replaces manual DB alias analysis)
-  |   MLIR upstream pass -- battle-tested
-  |
-  v linalg-to-loops: linalg on memref -> scf.for (upstream MLIR)
-  |
-  v SDE->ARTS conversion (scf.for based, as today)
+```text
+raise-memref-dimensionality
+  -> initial-cleanup
+  -> openmp-to-arts
+  -> pattern-pipeline
+  -> edt-transforms
+  -> create-dbs
+  -> db-opt
+  -> edt-opt
+  -> concurrency
+  -> edt-distribution
+  -> post-distribution-cleanup
+  -> db-partitioning
+  -> post-db-refinement
+  -> late-concurrency-cleanup
+  -> epochs
+  -> pre-lowering
+  -> arts-to-llvm
+  -> post-o3-opt
+  -> llvm-ir-emission
 ```
 
-**Key**: Each raising pass is **best-effort**. Code that can't be raised to
-linalg stays as scf.for+memref. Code that can't be raised to tensor stays
-as linalg on memref.
+The key redesign point is concentrated in `openmp-to-arts`: OpenMP lowers into
+SDE, SDE-owned passes make scope/schedule/chunk/reduction and linalg/tensor
+decisions there, and only then does `ConvertSdeToArts` cross into ARTS IR.
 
-### What Tensor Space Replaces
+## The `openmp-to-arts` Stage
 
-| CARTS Current | Tensor Space Equivalent |
-|---|---|
-| `DependenceAnalyzer` (wraps affine) | SSA def-use chains on tensor values |
-| `DbAliasAnalysis` (custom) | No aliasing by construction |
-| `AccessAnalyzer` (custom) | `tensor.extract_slice` offsets/sizes |
-| `DbPartitionState` (custom) | Bufferization in-place analysis |
-| CreateDbs memref walk | `tensor.extract_slice` -> `arts.db_acquire` |
+The current branch has one `openmp-to-arts` stage with 13 passes:
 
-### Example: Jacobi Stencil in Tensor Space
-
-```mlir
-// After RaiseToTensor:
-%A_tensor = bufferization.to_tensor %A : memref<?xf64>
-
-%result = linalg.generic {
-  indexing_maps = [
-    affine_map<(i) -> (i - 1)>,
-    affine_map<(i) -> (i + 1)>,
-    affine_map<(i) -> (i)>
-  ],
-  iterator_types = ["parallel"]
-} ins(%A_tensor, %A_tensor : tensor<?xf64>, tensor<?xf64>)
-  outs(%B_tensor : tensor<?xf64>) {
-^bb0(%a_left: f64, %a_right: f64, %b: f64):
-  %sum = arith.addf %a_left, %a_right : f64
-  %val = arith.mulf %half, %sum : f64
-  linalg.yield %val : f64
-} -> tensor<?xf64>
-
-// Dependencies are VISIBLE in SSA: %result depends on %A_tensor
-// Access pattern is VISIBLE in indexing_maps: stencil +/- 1 offset
-// No alias analysis needed -- tensor values are immutable
-
-// After one-shot bufferization -> back to memref for ARTS
-bufferization.materialize_in_destination %result in %B : ...
+```text
+ConvertOpenMPToSde
+  -> SdeScopeSelection
+  -> SdeScheduleRefinement
+  -> SdeChunkOptimization
+  -> SdeReductionStrategy
+  -> RaiseToLinalg
+  -> RaiseToTensor
+  -> SdeTensorOptimization
+  -> ConvertSdeToArts
+  -> VerifySdeLowered
+  -> DeadCodeElimination
+  -> CSE
+  -> VerifyEdtCreated
 ```
 
-## Three-Layered Analysis Strategy
+This is the current SDE window. There is no separate front-end
+`collect-metadata` stage before it.
 
-```
-+------------------------------------------------------------+
-|  Layer 1: Linalg + Affine (structured, precise)            |
-|  ~60% of benchmarks                                        |
-|  scf.for+memref -> linalg.generic -> tensor (SSA deps)     |
-+------------------------------------------------------------+
-|  Layer 2: SCF + Metadata (conservative, annotated)         |
-|  ~25% of benchmarks                                        |
-|  scf.for/while -> LoopMetadata (conservative deps)         |
-+------------------------------------------------------------+
-|  Layer 3: Indirect/Sparse (pattern-based, full-range)      |
-|  ~15% of benchmarks                                        |
-|  A[B[i]] -> classify as indirect, full-range acquire       |
-+------------------------------------------------------------+
-```
+## What the SDE Window Does
 
-## Verification Barriers
+Within `openmp-to-arts`, the branch currently does the following:
 
-11 verification passes form 6 barrier points:
+- `ConvertOpenMPToSde` builds `arts_sde.*` regions, loops, tasks, deps, and
+  reductions from OpenMP and supported SCF forms.
+- `SdeScopeSelection`, `SdeScheduleRefinement`, `SdeChunkOptimization`, and
+  `SdeReductionStrategy` stamp SDE-owned decisions before ARTS IR exists.
+- `RaiseToLinalg` and `RaiseToTensor` build transient structured carriers
+  inside SDE when the loop body matches the supported subsets.
+- `SdeTensorOptimization` performs SDE-level tensor/linalg transforms on those
+  transient carriers, guided by the active `SDECostModel`.
+- `ConvertSdeToArts` consumes the SDE loop plus any transient carrier state,
+  recovers contracts, lowers to ARTS IR, and erases the SDE-only carriers.
 
-```
-[Stage 2]  VerifyMetadata + VerifyMetadataIntegrity
-              -> SDE metadata is complete and consistent
+The original memref/loop body remains authoritative throughout the SDE phase.
+The linalg/tensor carriers are transient analysis and transformation vehicles,
+not a separate long-lived IR layer that survives beyond `ConvertSdeToArts`.
 
-[Stage 4]  VerifyEdtCreated
-              -> All OMP/SDE constructs converted to arts.edt/for/epoch
+## No Discrete Bufferization Stage
 
-[Stage 7]  VerifyDbCreated
-              -> All data dependencies materialized as DB ops
+The older redesign notes in this file described a separate stage that ran
+one-shot bufferization and `linalg-to-loops` after tensor optimization. The
+current branch does not schedule a discrete stage like that.
 
-[Stage 11] VerifyForLowered
-              -> All arts.for lowered to EDT + epoch structure
+What is true today:
 
-[Stage 16] VerifyEpochCreated
-              -> All epoch synchronization points created
+- `RaiseToTensor` introduces transient tensor-backed carriers inside SDE.
+- `SdeTensorOptimization` rewrites those carriers while the surrounding SDE
+  loop stays executable in memref/SCF form.
+- `ConvertSdeToArts` consumes the transient carrier information and erases the
+  carrier chain when crossing into ARTS IR.
 
-[Stage 17] VerifyEdtLowered + VerifyPreLowered
-              -> All arts.edt lowered to arts_rt ops; no SDE ops survive
+So the branch has a real tensor/linalg optimization window in SDE, but not a
+named pipeline stage that runs one-shot bufferize as a standalone boundary.
 
-[Stage 18] VerifyDbLowered + VerifyLowered
-              -> All DB ops converted; no arts/arts_rt ops survive
-```
+## Relationship to the ARTS Pattern Pipeline
 
-New barriers for 3-dialect architecture:
-- **VerifySdeLowered** (after SDE->Arts): no `sde.*` ops survive
-- **VerifyPreLowered**: also check no `arts_rt.*` ops exist prematurely
-- **VerifyLowered**: also check no `arts_rt.*` ops survive
+Pattern refinement still exists after SDE lowering. The current
+`pattern-pipeline` stage is:
 
-## Stage-by-Stage Detail
-
-### Stages 1-3: Pre-Dialect (general/ + sde/)
-
-```
-Stage 1 (raise-memref):
-  general/:  LowerAffine, CSE, ArtsInliner, PolygeistCanonicalize,
-             RaiseMemRefDimensionality, HandleDeps, DCE
-
-Stage 2 (collect-metadata):
-  sde/:      CollectMetadata
-  general/:  replaceAffineCFG, RaiseSCFToAffine, CSE
-  verify/:   VerifyMetadata, VerifyMetadataIntegrity
-
-Stage 3 (initial-cleanup):
-  general/:  LowerAffine, CSE, PolygeistCanonicalizeFor
+```text
+DepTransforms
+  -> LoopNormalization
+  -> StencilBoundaryPeeling
+  -> LoopReordering
+  -> KernelTransforms
+  -> CSE
 ```
 
-### Stage 3.5-4: SDE Pipeline (NEW)
+This means the branch now seeds early structural information in SDE, lowers to
+ARTS, and then lets the existing ARTS pattern passes refine or consume those
+contracts later. Pattern discovery is not a separate executable pass ahead of
+SDE conversion.
 
+## Front-End Stages Before SDE
+
+Before `openmp-to-arts`, the pipeline runs only two front-end stages:
+
+```text
+raise-memref-dimensionality:
+  LowerAffine(func)
+  -> CSE
+  -> ArtsInliner
+  -> PolygeistCanonicalize
+  -> RaiseMemRefDimensionality
+  -> HandleDeps
+  -> DeadCodeElimination
+  -> CSE
+
+initial-cleanup:
+  LowerAffine(func)
+  -> CSE(func)
+  -> PolygeistCanonicalizeFor(func)
 ```
-Stage 3.5 (omp-to-sde):
-  sde/:      ConvertOpenMPToSde (12 patterns)
-  general/:  DCE, CSE
 
-Stage 3.6 (raise-to-linalg):
-  sde/:      RaiseToLinalg (scf.for+memref -> linalg.generic)
+There is no scheduled `collect-metadata` stage between these and
+`openmp-to-arts`.
 
-Stage 3.7 (raise-to-tensor):
-  sde/:      RaiseToTensor (linalg memref -> linalg tensor)
+## Design Consequences
 
-Stage 3.8 (sde-analysis-opt):
-  sde/:      SdeOpt (tensor-space tile-and-fuse, dep analysis)
-
-Stage 3.9 (bufferize):
-  upstream:  one-shot-bufferize (tensor -> memref)
-  upstream:  linalg-to-loops (linalg -> scf.for)
-
-Stage 4 (sde-to-arts):
-  core/:     ConvertSdeToArts
-  general/:  DCE, CSE
-  verify/:   VerifyEdtCreated, VerifySdeLowered
-```
-
-### Stages 5-18: Unchanged from Current Pipeline
-
-See [pass-placement.md](pass-placement.md) for complete per-stage pass list.
+- The main optimization boundary moved up to SDE, not all the way down to
+  ARTS.
+- SDE decisions are made before `arts.for`, `arts.edt`, and DB structure are
+  created.
+- Verification at the SDE boundary is explicit: `VerifySdeLowered` and then
+  `VerifyEdtCreated` close the `openmp-to-arts` stage.
+- Any future redesign work should start from this single-stage SDE window,
+  not from the older staged `collect-metadata -> raise -> bufferize` plan.
