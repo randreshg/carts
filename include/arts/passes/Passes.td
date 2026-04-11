@@ -543,27 +543,6 @@ def DepTransforms : Pass<"arts-dep-transforms", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createDepTransformsPass()";
 }
 
-def StencilBoundaryPeeling : Pass<"stencil-boundary-peeling",
-                                  "mlir::ModuleOp"> {
-  let summary = "Peel boundary iterations out of stencil inner loops";
-  let description = [{
-    Pattern-pipeline pass.
-    Detects row-boundary plus column-boundary guard patterns inside inner
-    stencil loops and rewrites them into:
-    - a boundary-row loop that preserves the original boundary behavior
-    - an interior-row path with peeled first/last iterations and a branch-free
-      interior loop
-
-    This reduces inner-loop control flow and exposes row-invariant stencil
-    accesses to later hoisting and partitioning passes.
-  }];
-  let dependentDialects = [
-    "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect", "::mlir::arith::ArithDialect",
-    "::mlir::scf::SCFDialect", "::mlir::memref::MemRefDialect"
-  ];
-  let constructor = "mlir::arts::createStencilBoundaryPeelingPass()";
-}
-
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let summary = "Reorder inner loops for cache-optimal access patterns";
   let description = [{
