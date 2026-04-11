@@ -188,6 +188,17 @@ constexpr StringLiteral RelaunchStateSoundness =
     "arts.proof.relaunch_state_soundness";
 } // namespace Proof
 
+/// Linalg classification attribute stamped by RaiseToLinalg on sde.su_iterate,
+/// read by ConvertSdeToArts to stamp pattern contracts.
+namespace LinalgClassification {
+using namespace llvm;
+constexpr StringLiteral AttrName = "arts.linalg.classification";
+constexpr StringLiteral Elementwise = "elementwise";
+constexpr StringLiteral Stencil = "stencil";
+constexpr StringLiteral Matmul = "matmul";
+constexpr StringLiteral Reduction = "reduction";
+} // namespace LinalgClassification
+
 /// Persistent structured region attribute.
 constexpr llvm::StringLiteral PersistentRegion = "arts.persistent_region";
 

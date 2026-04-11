@@ -33,7 +33,7 @@ namespace mlir::arts {
 #define GEN_PASS_DEF_CONVERTOPENMPTOSDE
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
-#include "arts/dialect/core/Analysis/AnalysisManager.h"
+#include "arts/utils/costs/SDECostModel.h"
 #include "arts/passes/Passes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "arts/utils/OperationAttributes.h"
@@ -555,18 +555,12 @@ namespace {
 struct ConvertOpenMPToSdePass
     : public arts::impl::ConvertOpenMPToSdeBase<ConvertOpenMPToSdePass> {
 
-  explicit ConvertOpenMPToSdePass(mlir::arts::AnalysisManager *AM = nullptr)
-      : AM(AM) {}
+  explicit ConvertOpenMPToSdePass(sde::SDECostModel * /*costModel*/ = nullptr) {}
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
     ARTS_INFO_HEADER(ConvertOpenMPToSdePass);
     MLIRContext *context = &getContext();
-    if (!AM) {
-      module.emitError() << "ConvertOpenMPToSdePass requires AnalysisManager";
-      signalPassFailure();
-      return;
-    }
     // Pre-scan writer sources for dependency filtering
     llvm::DenseSet<Value> writerDepSources;
     module.walk([&](omp::TaskOp task) {
@@ -597,8 +591,6 @@ struct ConvertOpenMPToSdePass
     ARTS_INFO_FOOTER(ConvertOpenMPToSdePass);
   }
 
-private:
-  mlir::arts::AnalysisManager *AM = nullptr;
 };
 } // namespace
 
@@ -610,8 +602,8 @@ namespace mlir {
 namespace arts {
 namespace sde {
 std::unique_ptr<Pass>
-createConvertOpenMPToSdePass(mlir::arts::AnalysisManager *AM) {
-  return std::make_unique<ConvertOpenMPToSdePass>(AM);
+createConvertOpenMPToSdePass(sde::SDECostModel *costModel) {
+  return std::make_unique<ConvertOpenMPToSdePass>(costModel);
 }
 } // namespace sde
 } // namespace arts

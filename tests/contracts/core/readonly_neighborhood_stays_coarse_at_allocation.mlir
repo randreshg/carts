@@ -6,6 +6,6 @@
 // coarse-allocated with block-partitioned acquires.
 // CHECK: arts.db_alloc[<in>, <heap>, <read>, <coarse>, <stencil>]
 // CHECK-NOT: arts.db_acquire[<in>] {{.*}} arts.partition_hint = {blockSize =
-// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <coarse>, <uniform>]
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <coarse>, <stencil>]
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>
 // CHECK: arts.db_acquire[<inout>] {{.*}} partitioning(<block>

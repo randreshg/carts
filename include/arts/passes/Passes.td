@@ -56,31 +56,6 @@ def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createConvertOpenMPToArtsPass()";
 }
 
-def PatternDiscovery : Pass<"arts-pattern-discovery", "mlir::ModuleOp"> {
-  let summary = "Seed or refine reusable pre-DB pattern contracts";
-  let description = [{
-    Runs metadata-guided pattern discovery on ARTS IR before DB creation.
-    This pass does not perform the full schedule/kernel rewrite itself.
-    Instead it:
-    - seeds candidate pattern contracts after OpenMP-to-ARTS conversion
-    - refines those contracts after structural cleanup exposes cleaner shapes
-    - normalizes shared contract revision/family metadata for downstream
-      DepTransforms and KernelTransforms
-
-    The pass is intended to run multiple times inside the dedicated pattern
-    pipeline, typically once in seed mode and once in refine mode.
-  }];
-  let dependentDialects = [
-    "::mlir::memref::MemRefDialect", "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect",
-    "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"
-  ];
-  let options = [
-    Option<"refine", "refine", "bool", /*default=*/"false",
-           "Run in refine mode instead of seed mode.">
-  ];
-  let constructor = "mlir::arts::createPatternDiscoveryPass(nullptr)";
-}
-
 def DeadCodeElimination : Pass<"arts-dce", "mlir::ModuleOp"> {
   let summary = "Remove dead loads, stores, allocas, and symbols";
   let description = [{

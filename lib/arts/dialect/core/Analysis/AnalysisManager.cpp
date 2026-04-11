@@ -8,6 +8,7 @@
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtGraph.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/costs/ARTSCostModel.h"
 #include "arts/dialect/core/Analysis/graphs/edt/EdtNode.h"
 #include "arts/dialect/core/Analysis/loop/LoopNode.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -25,7 +26,8 @@ AnalysisManager::AnalysisManager(ModuleOp module, const std::string &configFile,
     : module(module), configFile(configFile),
       metadataFile(metadataFile.empty() ? ".carts-metadata.json"
                                         : metadataFile),
-      abstractMachine(configFile) {}
+      abstractMachine(configFile),
+      costModel(std::make_unique<ARTSCostModel>(abstractMachine)) {}
 
 AnalysisManager::~AnalysisManager() {}
 

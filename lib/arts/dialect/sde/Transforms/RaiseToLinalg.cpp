@@ -1,11 +1,13 @@
 ///==========================================================================///
 /// File: RaiseToLinalg.cpp
 ///
-/// Analyzes loop nests inside arts.for operations and computes linalg-style
-/// structural information: indexing maps, iterator types, and pattern
-/// classification.  Currently a diagnostic-only pass (logs classifications
-/// but does not modify IR).  The analysis infrastructure here is the
-/// foundation for future linalg.generic raising.
+/// Analyzes loop nests inside sde.su_iterate operations and computes
+/// linalg-style structural classification: indexing maps, iterator types,
+/// and pattern classification.
+///
+/// The pass stamps an "arts.linalg.classification" attribute on the
+/// sde.su_iterate op. ConvertSdeToArts reads this classification and stamps
+/// the corresponding ARTS pattern contract on the arts.for it creates.
 ///
 /// Recognized patterns:
 ///   - elementwise : all-parallel iterators, identity/permutation maps
@@ -21,6 +23,7 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 #include "arts/passes/Passes.h"
+#include "arts/utils/OperationAttributes.h"
 
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
@@ -36,16 +39,6 @@ using namespace mlir::arts;
 
 namespace {
 
-/// Iterator type classification values (analogous to linalg iterator types).
-constexpr llvm::StringLiteral kIterParallel = "parallel";
-constexpr llvm::StringLiteral kIterReduction = "reduction";
-
-/// Pattern classification values.
-constexpr llvm::StringLiteral kPatternElementwise = "elementwise";
-constexpr llvm::StringLiteral kPatternStencil = "stencil";
-constexpr llvm::StringLiteral kPatternMatmul = "matmul";
-constexpr llvm::StringLiteral kPatternReduction = "reduction";
-
 //===----------------------------------------------------------------------===//
 // Loop nest collection
 //===----------------------------------------------------------------------===//
@@ -53,21 +46,20 @@ constexpr llvm::StringLiteral kPatternReduction = "reduction";
 struct LoopNestInfo {
   SmallVector<Value> ivs;
   Block *innermostBody = nullptr;
-  arts::ForOp rootForOp;
+  sde::SdeSuIterateOp rootIterOp;
 };
 
 /// Recursively collect a perfectly nested scf.for chain from a body block.
-/// A block is "perfectly nested" if its only non-terminator op is a single
-/// scf.for (with no iter_args — we skip reduction-carrying loops for now).
 static bool collectInner(Block &body, LoopNestInfo &info) {
   SmallVector<Operation *> ops;
   for (auto &op : body) {
     if (op.hasTrait<OpTrait::IsTerminator>())
       continue;
+    if (isa<sde::SdeYieldOp>(op))
+      continue;
     ops.push_back(&op);
   }
 
-  // If the only op is a simple scf.for, descend into it.
   if (ops.size() == 1) {
     if (auto innerFor = dyn_cast<scf::ForOp>(ops[0])) {
       if (innerFor.getInitArgs().empty()) {
@@ -77,20 +69,19 @@ static bool collectInner(Block &body, LoopNestInfo &info) {
     }
   }
 
-  // Otherwise this block IS the innermost body.
   info.innermostBody = &body;
   return true;
 }
 
-/// Collect the full perfectly-nested loop structure starting from an arts.for.
-static bool collectPerfectNest(arts::ForOp forOp, LoopNestInfo &info) {
-  info.rootForOp = forOp;
+/// Collect the full perfectly-nested loop structure from an sde.su_iterate.
+static bool collectPerfectNest(sde::SdeSuIterateOp iterOp,
+                               LoopNestInfo &info) {
+  info.rootIterOp = iterOp;
 
-  // Only handle single-dimension arts.for for now.
-  if (forOp.getLowerBound().size() != 1)
+  if (iterOp.getLowerBounds().size() != 1)
     return false;
 
-  Region &region = forOp.getRegion();
+  Region &region = iterOp.getBody();
   if (region.empty() || region.front().getNumArguments() < 1)
     return false;
 
@@ -102,11 +93,8 @@ static bool collectPerfectNest(arts::ForOp forOp, LoopNestInfo &info) {
 // Affine expression analysis
 //===----------------------------------------------------------------------===//
 
-/// Try to express @p value as an affine expression of @p ivs.
-/// Returns nullopt when the value cannot be expressed as an affine function.
 static std::optional<AffineExpr>
 tryGetAffineExpr(Value value, ArrayRef<Value> ivs, MLIRContext *ctx) {
-  // Check if value is one of the induction variables.
   for (auto [idx, iv] : llvm::enumerate(ivs)) {
     if (value == iv)
       return getAffineDimExpr(idx, ctx);
@@ -116,14 +104,12 @@ tryGetAffineExpr(Value value, ArrayRef<Value> ivs, MLIRContext *ctx) {
   if (!defOp)
     return std::nullopt;
 
-  // Constant.
   if (auto cst = dyn_cast<arith::ConstantOp>(defOp)) {
     if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
       return getAffineConstantExpr(intAttr.getInt(), ctx);
     return std::nullopt;
   }
 
-  // Addition.
   if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
     auto lhs = tryGetAffineExpr(addOp.getLhs(), ivs, ctx);
     auto rhs = tryGetAffineExpr(addOp.getRhs(), ivs, ctx);
@@ -131,7 +117,6 @@ tryGetAffineExpr(Value value, ArrayRef<Value> ivs, MLIRContext *ctx) {
       return *lhs + *rhs;
   }
 
-  // Subtraction.
   if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
     auto lhs = tryGetAffineExpr(subOp.getLhs(), ivs, ctx);
     auto rhs = tryGetAffineExpr(subOp.getRhs(), ivs, ctx);
@@ -139,7 +124,6 @@ tryGetAffineExpr(Value value, ArrayRef<Value> ivs, MLIRContext *ctx) {
       return *lhs - *rhs;
   }
 
-  // Multiplication (at least one side must be constant for affine).
   if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
     auto lhs = tryGetAffineExpr(mulOp.getLhs(), ivs, ctx);
     auto rhs = tryGetAffineExpr(mulOp.getRhs(), ivs, ctx);
@@ -149,14 +133,12 @@ tryGetAffineExpr(Value value, ArrayRef<Value> ivs, MLIRContext *ctx) {
     }
   }
 
-  // Index cast — pass through.
   if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp))
     return tryGetAffineExpr(castOp.getIn(), ivs, ctx);
 
   return std::nullopt;
 }
 
-/// Build an AffineMap mapping loop IVs to a memref's access indices.
 static std::optional<AffineMap> tryBuildIndexingMap(OperandRange indices,
                                                     ArrayRef<Value> ivs,
                                                     MLIRContext *ctx) {
@@ -177,12 +159,9 @@ static std::optional<AffineMap> tryBuildIndexingMap(OperandRange indices,
 struct MemrefAccessEntry {
   Value memref;
   AffineMap indexingMap;
-  bool isRead; // true = memref.load, false = memref.store
+  bool isRead;
 };
 
-/// Collect all memref.load / memref.store ops in @p body and build their
-/// indexing maps.  Returns false if any access cannot be expressed as an affine
-/// function of @p ivs or if the body contains an op with unknown side effects.
 static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
                                   SmallVectorImpl<MemrefAccessEntry> &reads,
                                   SmallVectorImpl<MemrefAccessEntry> &writes,
@@ -207,11 +186,9 @@ static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
       continue;
     }
 
-    // Any pure (side-effect-free) op is safe — arithmetic, math, index casts.
     if (isMemoryEffectFree(&op))
       continue;
 
-    // Unknown op with potential side effects — bail.
     ARTS_DEBUG("  bail: unknown op in body: " << op.getName());
     return false;
   }
@@ -223,13 +200,9 @@ static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
 // Iterator type determination
 //===----------------------------------------------------------------------===//
 
-/// Determine whether each loop dimension is "parallel" or "reduction".
-/// A dimension is parallel if it appears in at least one output (write) map;
-/// otherwise it is a reduction dimension.
 static void computeIteratorTypes(unsigned numDims,
                                  ArrayRef<MemrefAccessEntry> writes,
-                                 SmallVectorImpl<Attribute> &iterTypes,
-                                 MLIRContext *ctx) {
+                                 SmallVectorImpl<StringRef> &iterTypes) {
   llvm::SmallBitVector dimsInOutputs(numDims, false);
   for (auto &entry : writes) {
     for (unsigned i = 0; i < entry.indexingMap.getNumResults(); ++i) {
@@ -240,18 +213,14 @@ static void computeIteratorTypes(unsigned numDims,
     }
   }
 
-  auto parallel = StringAttr::get(ctx, kIterParallel);
-  auto reduction = StringAttr::get(ctx, kIterReduction);
   for (unsigned d = 0; d < numDims; ++d)
-    iterTypes.push_back(dimsInOutputs.test(d) ? parallel : reduction);
+    iterTypes.push_back(dimsInOutputs.test(d) ? "parallel" : "reduction");
 }
 
 //===----------------------------------------------------------------------===//
 // Pattern classification
 //===----------------------------------------------------------------------===//
 
-/// Return true if @p map contains any result with a constant additive offset
-/// on a dimension (e.g. d0 + 1, d1 - 2).
 static bool hasConstantOffsets(AffineMap map) {
   for (auto result : map.getResults()) {
     auto binOp = dyn_cast<AffineBinaryOpExpr>(result);
@@ -267,61 +236,56 @@ static bool hasConstantOffsets(AffineMap map) {
   return false;
 }
 
-/// Classify the access pattern from collected reads, writes, and iterator
-/// types.
 static StringRef classifyPattern(ArrayRef<MemrefAccessEntry> reads,
                                  ArrayRef<MemrefAccessEntry> writes,
-                                 ArrayRef<Attribute> iterTypes,
+                                 ArrayRef<StringRef> iterTypes,
                                  unsigned numDims) {
   unsigned numParallel = 0, numReduction = 0;
-  for (auto attr : iterTypes) {
-    if (cast<StringAttr>(attr).getValue() == kIterParallel)
+  for (auto t : iterTypes) {
+    if (t == "parallel")
       ++numParallel;
     else
       ++numReduction;
   }
 
-  // All-parallel case: elementwise or stencil.
   if (numReduction == 0) {
     for (auto &entry : reads) {
       if (hasConstantOffsets(entry.indexingMap))
-        return kPatternStencil;
+        return AttrNames::Operation::LinalgClassification::Stencil;
     }
-    return kPatternElementwise;
+    return AttrNames::Operation::LinalgClassification::Elementwise;
   }
 
-  // 2 parallel + 1 reduction in 3D → potential matmul.
   if (numParallel == 2 && numReduction == 1 && numDims == 3 &&
       reads.size() >= 2 && writes.size() >= 1)
-    return kPatternMatmul;
+    return AttrNames::Operation::LinalgClassification::Matmul;
 
-  return kPatternReduction;
+  return AttrNames::Operation::LinalgClassification::Reduction;
 }
 
 //===----------------------------------------------------------------------===//
 // Pass implementation
 //===----------------------------------------------------------------------===//
 
-struct RaiseToLinalgPass : public arts::impl::RaiseToLinalgBase<RaiseToLinalgPass> {
+struct RaiseToLinalgPass
+    : public arts::impl::RaiseToLinalgBase<RaiseToLinalgPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
     MLIRContext *ctx = &getContext();
     unsigned analyzed = 0, classified = 0;
 
-    module.walk([&](arts::ForOp forOp) {
+    module.walk([&](sde::SdeSuIterateOp iterOp) {
       ++analyzed;
 
-      // 1. Collect the perfectly nested loop structure.
       LoopNestInfo nest;
-      if (!collectPerfectNest(forOp, nest))
+      if (!collectPerfectNest(iterOp, nest))
         return;
       if (!nest.innermostBody || nest.ivs.empty())
         return;
 
       unsigned numDims = nest.ivs.size();
 
-      // 2. Collect memref accesses and build indexing maps.
       SmallVector<MemrefAccessEntry> reads, writes;
       if (!collectMemrefAccesses(*nest.innermostBody, nest.ivs, reads, writes,
                                  ctx))
@@ -330,17 +294,19 @@ struct RaiseToLinalgPass : public arts::impl::RaiseToLinalgBase<RaiseToLinalgPas
       if (writes.empty())
         return;
 
-      // 3. Compute iterator types.
-      SmallVector<Attribute> iterTypes;
-      computeIteratorTypes(numDims, writes, iterTypes, ctx);
+      SmallVector<StringRef> iterTypes;
+      computeIteratorTypes(numDims, writes, iterTypes);
 
-      // 4. Classify.
       StringRef pattern = classifyPattern(reads, writes, iterTypes, numDims);
 
-      ARTS_DEBUG("classified arts.for as '"
+      // Stamp classification for ConvertSdeToArts to read.
+      iterOp->setAttr(AttrNames::Operation::LinalgClassification::AttrName,
+                      StringAttr::get(ctx, pattern));
+      ++classified;
+
+      ARTS_DEBUG("classified sde.su_iterate as '"
                  << pattern << "' with " << numDims << " dims ("
                  << reads.size() << " ins, " << writes.size() << " outs)");
-      ++classified;
     });
 
     ARTS_INFO("RaiseToLinalg: analyzed " << analyzed << " loops, classified "
