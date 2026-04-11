@@ -66,26 +66,37 @@ static Value stripSimpleMemrefAlias(Value value) {
   return value;
 }
 
-static bool shouldUseEmptyTensorInit(linalg::GenericOp generic,
-                                     unsigned outputIndex) {
-  auto iterOp = generic->getParentOfType<sde::SdeSuIterateOp>();
-  if (!iterOp || iterOp.getLinalgClassification() !=
-                     sde::SdeLinalgClassification::elementwise)
-    return false;
+static BlockArgument getOutputBlockArgument(linalg::GenericOp generic,
+                                            unsigned outputIndex) {
+  return generic.getRegion().front().getArgument(generic.getNumDpsInputs() +
+                                                 outputIndex);
+}
 
+static bool hasSimpleAliasWithOtherOperands(linalg::GenericOp generic,
+                                            unsigned outputIndex) {
   Value output = stripSimpleMemrefAlias(generic.getDpsInits()[outputIndex]);
-  AffineMap outputMap =
-      generic.getMatchingIndexingMap(generic.getDpsInitOperand(outputIndex));
-  for (auto [inputIndex, input] : llvm::enumerate(generic.getDpsInputs())) {
-    if (stripSimpleMemrefAlias(input) != output)
-      continue;
-    AffineMap inputMap =
-        generic.getMatchingIndexingMap(generic.getDpsInputOperand(inputIndex));
-    if (inputMap == outputMap)
-      return false;
+
+  for (Value input : generic.getDpsInputs()) {
+    if (stripSimpleMemrefAlias(input) == output)
+      return true;
   }
 
-  return true;
+  for (auto [otherIndex, otherOutput] : llvm::enumerate(generic.getDpsInits())) {
+    if (otherIndex == outputIndex)
+      continue;
+    if (stripSimpleMemrefAlias(otherOutput) == output)
+      return true;
+  }
+
+  return false;
+}
+
+static bool shouldUseEmptyTensorInit(linalg::GenericOp generic,
+                                     unsigned outputIndex) {
+  if (!getOutputBlockArgument(generic, outputIndex).use_empty())
+    return false;
+
+  return !hasSimpleAliasWithOtherOperands(generic, outputIndex);
 }
 
 static SmallVector<Value>
