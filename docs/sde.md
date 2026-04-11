@@ -11,6 +11,9 @@ That split matters for layering:
 
 - SDE optimization passes do not create `arts.for`, `arts.edt`, or other ARTS
   runtime ops.
+- SDE may reason about semantic pattern families, dependence shapes, and
+  distribution/reduction/tensor structure, but those remain SDE concepts rather
+  than OpenMP syntax or ARTS runtime objects.
 - SDE passes operate on SDE concepts: concurrency regions, iteration spaces,
   barriers, typed dependencies/completions, reductions, semantic access
   annotations, and tensor/linalg carriers.
@@ -22,9 +25,26 @@ That split matters for layering:
   erased at the SDE to ARTS boundary.
 
 Pattern discovery is no longer an executable pass in the OpenMP-to-ARTS path.
-The current pipeline derives early structural contracts in SDE, lowers to ARTS,
-and then lets the existing ARTS pattern passes refine or consume those
-contracts later.
+The current pipeline derives semantic structure and optimization decisions in
+SDE, lowers to ARTS, and then runs ARTS-native structural/runtime transforms on
+the resulting contracts later.
+
+## Boundary Rule
+
+The branch-local layering rule is:
+
+- OpenMP belongs only at ingress. `ConvertOpenMPToSde` translates frontend
+  constructs into SDE semantics and then the SDE pipeline stops talking in
+  OpenMP terms.
+- SDE owns optimization decisions. Scope, schedule, chunk, reduction strategy,
+  linalg structure, tensor carriers, and supported semantic pattern choices are
+  decided in SDE IR.
+- ARTS belongs only at lowering. `ConvertSdeToArts` materializes the chosen SDE
+  semantics as `arts.*` IR.
+- The way this branch "optimizes to ARTS" is through the SDE cost-model
+  interface: SDE and cost-model-aware core heuristics query `SDECostModel`,
+  while `ARTSCostModel` is the current runtime-specific implementation hidden
+  behind that interface.
 
 ## Current OpenMP-to-ARTS Pipeline
 
@@ -46,7 +66,9 @@ ConvertOpenMPToSde
   -> VerifyEdtCreated
 ```
 
-The later ARTS-side pattern pipeline still exists separately:
+The later ARTS-side pipeline still exists separately. Despite the historical
+stage name, it should be read as ARTS-native structural cleanup and
+normalization, not as a second semantic-pattern decision layer:
 
 ```text
 DepTransforms

@@ -335,7 +335,9 @@ shared / utility:
 - The tensor/linalg window is transient and SDE-owned. `ConvertSdeToArts`
   consumes it directly instead of handing off to a separately scheduled
   bufferization stage.
-- The ARTS pattern pipeline still runs after SDE lowering. It is placed in
-  `core/Transforms/`, not in `sde/Transforms/`.
+- The historically named ARTS `pattern-pipeline` still runs after SDE lowering,
+  but at that point it should only perform ARTS-native structural/runtime
+  transforms and cleanup. Semantic pattern choice, semantic cost modeling, and
+  schedule/distribution/reduction-strategy decisions belong to SDE.
 - `ParallelEdtLowering`, `DbLowering`, and `LoweringContractCleanup` are core
   ownership passes even though they sit near the late lowering boundary.

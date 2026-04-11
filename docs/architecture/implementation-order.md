@@ -53,7 +53,7 @@ Phase 1D: Verification updates (in 1C commit)
   separate library) to avoid circular ArtsCodegen dependency
 - No circular dependencies -- rt ops use only standard MLIR types
 
-## Phase 2: Create SDE Dialect -- COMPLETE (2C tensor integration deferred)
+## Phase 2: Create SDE Dialect -- COMPLETE
 
 See [sde-dialect.md](sde-dialect.md) and [pipeline-redesign.md](pipeline-redesign.md).
 
@@ -76,33 +76,17 @@ Phase 2B: OMP-to-SDE-to-ARTS pipeline (cd75cf2a)
   - 159/168 tests pass (same baseline)
 ```
 
-### Deferred Sub-Phases
+### Branch-Local Status Refresh
 
 ```
-Phase 2C: Tensor integration — DEFERRED (decision: 2026-04-10)
-  Rationale: RaiseToLinalg requires inverse pattern recognition (scf.for+memref
-  -> linalg.generic), which is fundamentally harder than forward conversion.
-  No MLIR upstream equivalent exists. RaiseToTensor requires proving alias
-  freedom for memref->tensor conversion. Both introduce new IR forms that all
-  18 downstream passes must handle — high risk of miscompilation.
-
-  The existing metadata pipeline (CollectMetadata + PatternDiscovery) covers
-  ~80% of cases. The tensor window (stages 3.6-3.9) should be implemented
-  AFTER the structural reorganization stabilizes and when a clear benchmark
-  gap demonstrates the need.
-
-  CMake readiness: linalg/tensor/bufferization dialects are already registered
-  (registerAllDialects in Compile.cpp) and linked via ${dialect_libs}. When
-  implementing, add MLIRLinalgDialect, MLIRLinalgTransforms, MLIRTensorDialect,
-  MLIRBufferizationTransforms to lib/arts/passes/CMakeLists.txt LINK_LIBS.
-
-  Steps when ready:
-  12. Write RaiseToLinalg.cpp (scf.for+memref -> linalg.generic)
-  13. Write RaiseToTensor.cpp (linalg memref -> linalg tensor)
-  14. Integrate one-shot-bufferize into pipeline
-  15. Write SdeOpt.cpp (tensor-space analysis)
-  16. Integrate linalg-to-loops into pipeline
-  17. Build, test, verify identical output
+Phase 2C: Tensor/linalg window — IMPLEMENTED ON THIS BRANCH
+  - RaiseToLinalg, RaiseToTensor, and SdeTensorOptimization now exist in the
+    active OpenMP-to-SDE-to-ARTS path.
+  - The branch uses transient linalg/tensor carriers inside SDE rather than a
+    separately scheduled one-shot bufferization stage.
+  - Semantic pattern choice and tensor/linalg optimization happen in SDE; ARTS
+    consumes the selected contracts later without becoming a second semantic
+    optimization layer.
 
 Phase 2D: Migrate general passes to SDE (complete — remaining items deferred)
   18. Move CollectMetadata to sde/Transforms/ -- DONE (4d62f756)

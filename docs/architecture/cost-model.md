@@ -266,12 +266,19 @@ EpochHeuristics (850 LOC) -> Readers: EpochOpt
 
 ## ARTS Runtime Awareness Gaps
 
-The compiler has zero cost model for ARTS runtime behavior:
+The current branch no longer has zero cost modeling for runtime behavior.
+There is now an SDE-facing `SDECostModel` interface plus an `ARTSCostModel`
+implementation, and SDE passes already use that interface for scope, schedule,
+chunk, reduction-strategy, and tensor/linalg decisions. The gap that remains is
+that many core ARTS heuristics still rely on hardcoded thresholds instead of
+consuming that same interface consistently.
+
+What is still missing in the broader ARTS/core heuristic layer:
 
 | Decision | Compiler Status | What ARTS Actually Does |
 |---|---|---|
-| EDT creation cost | Not modeled; `cappedWork=1024` hardcoded | ~2000 cycles per EDT + queue insert |
-| DB acquire cost | Not modeled | ~500 cycles local, ~5000 cycles remote |
+| EDT creation cost | Partially modeled in SDE-facing heuristics, but many core thresholds still hardcoded | ~2000 cycles per EDT + queue insert |
+| DB acquire cost | Not modeled consistently across core heuristics | ~500 cycles local, ~5000 cycles remote |
 | Epoch creation | Not modeled | ~1500 cycles + TD counter setup |
 | `arts_wait_on_handle` | Treated as free | Blocking wait -- suspends worker thread |
 | Frontier progression | Not modeled | ~100 cycles per frontier advance |

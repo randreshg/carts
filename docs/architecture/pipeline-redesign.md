@@ -108,10 +108,11 @@ DepTransforms
   -> CSE
 ```
 
-This means the branch now seeds early structural information in SDE, lowers to
-ARTS, and then lets the existing ARTS pattern passes refine or consume those
-contracts later. Pattern discovery is not a separate executable pass ahead of
-SDE conversion.
+This means the branch now seeds semantic structure and optimization decisions
+in SDE, lowers to ARTS, and then runs ARTS-native structural/runtime cleanup
+on the resulting contracts later. Pattern discovery is not a separate
+executable pass ahead of SDE conversion, and the post-SDE ARTS stages should
+not be read as a second semantic optimization layer.
 
 ## Front-End Stages Before SDE
 

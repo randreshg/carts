@@ -111,6 +111,7 @@
 
 #include "arts/Dialect.h"
 #include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "arts/utils/costs/SDECostModel.h"
 #include <optional>
 
 namespace mlir {
@@ -229,17 +230,20 @@ public:
   /// report the chosen worker topology.
   static LoopCoarseningDecision
   computeLoopCoarseningDecision(ForOp forOp, LoopAnalysis &loopAnalysis,
-                                const WorkerConfig &workerCfg);
+                                const WorkerConfig &workerCfg,
+                                sde::SDECostModel &costModel);
 
   /// Convenience wrapper for callers that only need the block hint.
   /// Returns nullopt when coarsening should be skipped.
   static std::optional<int64_t>
   computeCoarsenedBlockHint(ForOp forOp, LoopAnalysis &loopAnalysis,
-                            const WorkerConfig &workerCfg);
+                            const WorkerConfig &workerCfg,
+                            sde::SDECostModel &costModel);
 
   /// Size intranode stencil owned strips from loop work and repetition.
   static std::optional<StencilStripCostModelResult>
-  evaluateStencilStripCostModel(const StencilStripCostModelInput &input);
+  evaluateStencilStripCostModel(const StencilStripCostModelInput &input,
+                                sde::SDECostModel &costModel);
 
   /// Choose a shared tiling/chunking plan for weighted 2-D wavefronts.
   /// The plan balances worker saturation against per-task granularity.

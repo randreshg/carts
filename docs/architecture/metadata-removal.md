@@ -1,5 +1,12 @@
 # Metadata Pipeline Removal: Architecture Analysis
 
+Current branch note:
+- This document is largely a historical analysis of the legacy metadata and
+  ARTS-side pattern pipeline.
+- The active branch now places the first semantic optimization boundary in SDE,
+  so references below to ARTS-side semantic contract creation should be read as
+  legacy-path analysis, not as the intended end-state ownership model.
+
 ## The Problem: Dual Execution
 
 The metadata pipeline (6,477 LOC, 30 files) is a **caching layer** that

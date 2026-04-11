@@ -3,7 +3,14 @@
 Complete classification of all current ARTS ops and attributes into the
 three-dialect architecture: `sde.*`, `arts.*`, `arts_rt.*`.
 
-## Op Classification (32 current + 4 new -> 3 dialects)
+Current branch note:
+- The active frontend path is `ConvertOpenMPToSde -> ... -> ConvertSdeToArts`.
+- SDE owns semantic pattern reasoning and semantic cost-model-driven decisions.
+- After `ConvertSdeToArts`, ARTS consumes those contracts and performs
+  ARTS-native structural/runtime optimization rather than a second semantic
+  optimization pass.
+
+## Op Classification
 
 ### Complete Classification Table
 
@@ -18,18 +25,18 @@ three-dialect architecture: `sde.*`, `arts.*`, `arts_rt.*`.
 | `arts.db_release` | `arts` | (unchanged) | CreateDbs, ForLowering | ConvertToLLVM |
 | `arts.db_free` | `arts` | (unchanged) | CreateDbs, DbLowering | ConvertToLLVM |
 | `arts.db_num_elements` | `arts` | (unchanged) | EdtLowering | ConvertToLLVM |
-| `arts.edt` | `arts` | (unchanged) | ConvertOmpToArts, ForLowering | EdtLowering |
+| `arts.edt` | `arts` | (unchanged) | ConvertSdeToArts, ForLowering | EdtLowering |
 | `arts.epoch` | `arts` | (unchanged) | CreateEpochs, ForLowering | EpochLowering |
-| `arts.for` | `arts` | (unchanged) | ConvertOmpToArts | ForLowering |
+| `arts.for` | `arts` | (unchanged) | ConvertSdeToArts | ForLowering |
 | `arts.yield` | `arts` | (unchanged) | (all region creators) | (implicit) |
-| `arts.barrier` | `arts` | (unchanged) | ConvertOmpToArts | ConvertToLLVM |
-| `arts.atomic_add` | `arts` | (unchanged) | ConvertOmpToArts | ConvertToLLVM |
+| `arts.barrier` | `arts` | (unchanged) | ConvertSdeToArts | ConvertToLLVM |
+| `arts.atomic_add` | `arts` | (unchanged) | ConvertSdeToArts | ConvertToLLVM |
 | `arts.runtime_query` | `arts` | (unchanged) | Concurrency, ForLowering | ConvertToLLVM |
 | `arts.get_edt_epoch_guid` | `arts` | (unchanged) | EpochLowering | ConvertToLLVM |
 | `arts.cps_advance` | `arts` | (unchanged) | EpochOptCpsChain | EpochLowering |
 | `arts.lowering_contract` | **`sde`** | lowered to SDE metadata | PatternPipeline | ForLowering, DbPartitioning |
-| `arts.omp_dep` | **`sde`** | `sde.mu_dep` | ConvertOmpToSde | SdeToArts |
-| `arts.db_control` | **`sde`** | `sde.mu_dep` | ConvertOmpToSde | SdeToArts |
+| `arts.omp_dep` | **`sde`** | `sde.mu_dep` | legacy ingress and narrow fallback bridge | SdeToArts |
+| `arts.db_control` | **`sde`** | `sde.mu_dep` | ConvertOpenMPToSde, ConvertSdeToArts | SdeToArts |
 | `arts.edt_create` | **`arts_rt`** | `arts_rt.edt_create` | EdtLowering, EpochLowering | ConvertToLLVM |
 | `arts.edt_param_pack` | **`arts_rt`** | `arts_rt.edt_param_pack` | EdtLowering, EpochLowering | ConvertToLLVM |
 | `arts.edt_param_unpack` | **`arts_rt`** | `arts_rt.edt_param_unpack` | EdtLowering, EpochLowering | ConvertToLLVM |
@@ -47,7 +54,7 @@ three-dialect architecture: `sde.*`, `arts.*`, `arts_rt.*`.
 
 **Final count:**
 - `arts` core: 18 ops (structural, stable -- includes cross-boundary DB ops)
-- `sde`: 10 ops (CU/SU/MU ops replacing 3 migrated + 7 new)
+- `sde`: 11 ops (current CU/SU/MU surface plus `yield`)
 - `arts_rt`: 14 ops (all migrated -- clean boundary, created only in pre-lowering)
 
 ### Key Classification Decisions
@@ -113,6 +120,11 @@ architecture, SDE defines its own runtime-agnostic enums (`SdeAccessMode`,
 ## Operation Lifecycle Map
 
 Shows when each op is created and destroyed across pipeline stages:
+
+Current branch note:
+- `sde.*` ops are created in `openmp-to-arts` before `ConvertSdeToArts`.
+- `arts.*` ops for the semantic path begin at `ConvertSdeToArts`, not at the
+  legacy `ConvertOpenMPToArts` path.
 
 ```
 PHASE:         Prep  Pattern  Structure  SDE-Opt  Validate  Cleanup  Lowering  LLVM
