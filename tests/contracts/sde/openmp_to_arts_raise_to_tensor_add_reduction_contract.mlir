@@ -1,9 +1,12 @@
 // RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=TENSOR
+// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline edt-distribution | %FileCheck %s --check-prefix=LOWER
 
 // Verify that RaiseToTensor preserves the new narrow reduction carrier as a
 // read-modify-write tensor-backed linalg.generic. The reduction accumulator is
 // still both an input and an output, so the pass must reuse
-// bufferization.to_tensor instead of inventing tensor.empty.
+// bufferization.to_tensor instead of inventing tensor.empty. Also verify that
+// the same SDE-selected atomic reduction contract survives through
+// ConvertSdeToArts and is still consumed by the later edt-distribution lowering.
 
 // TENSOR-LABEL: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
 // TENSOR: func.func @main
@@ -17,6 +20,14 @@
 // TENSOR-SAME: ins(%[[VALS]], %[[ACC]] : tensor<128xi32>, tensor<?xi32>)
 // TENSOR-SAME: outs(%[[ACC]] : tensor<?xi32>)
 // TENSOR-NOT: tensor.empty
+
+// LOWER-LABEL: func.func @main
+// LOWER: arts.edt <parallel> <intranode> route(%c-1_i32)
+// LOWER-SAME: attributes {arts.reduction_strategy = "atomic"
+// LOWER: arts.edt <task> <intranode>
+// LOWER: arts.atomic_add(%{{.+}}, %{{.+}} : memref<?xi32>, i32)
+// LOWER-NOT: linalg.generic
+// LOWER-NOT: bufferization.to_tensor
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   omp.declare_reduction @add_i32 : i32 init {
