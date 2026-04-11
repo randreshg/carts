@@ -16,6 +16,7 @@ namespace mlir::arts {
 
 #include "llvm/ADT/DenseMap.h"
 
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 
@@ -59,6 +60,12 @@ buildTensorInputs(OpBuilder &builder, Location loc, ValueRange memrefInputs,
   return tensorInputs;
 }
 
+static Value stripSimpleMemrefAlias(Value value) {
+  while (auto castOp = value.getDefiningOp<memref::CastOp>())
+    value = castOp.getSource();
+  return value;
+}
+
 static bool shouldUseEmptyTensorInit(linalg::GenericOp generic,
                                      unsigned outputIndex) {
   auto iterOp = generic->getParentOfType<sde::SdeSuIterateOp>();
@@ -66,11 +73,11 @@ static bool shouldUseEmptyTensorInit(linalg::GenericOp generic,
                      sde::SdeLinalgClassification::elementwise)
     return false;
 
-  Value output = generic.getDpsInits()[outputIndex];
+  Value output = stripSimpleMemrefAlias(generic.getDpsInits()[outputIndex]);
   AffineMap outputMap =
       generic.getMatchingIndexingMap(generic.getDpsInitOperand(outputIndex));
   for (auto [inputIndex, input] : llvm::enumerate(generic.getDpsInputs())) {
-    if (input != output)
+    if (stripSimpleMemrefAlias(input) != output)
       continue;
     AffineMap inputMap =
         generic.getMatchingIndexingMap(generic.getDpsInputOperand(inputIndex));
