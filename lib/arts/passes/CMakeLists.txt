@@ -24,6 +24,8 @@ LINK_LIBS PUBLIC
   MLIRFuncDialect
   MLIRFuncTransforms
   MLIRLLVMDialect
+  MLIRLinalgDialect
+  MLIRLinalgTransforms
   MLIRMathDialect
   MLIRMathToLLVM
   MLIRMemRefDialect
