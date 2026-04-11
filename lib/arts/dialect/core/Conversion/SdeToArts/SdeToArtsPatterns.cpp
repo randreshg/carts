@@ -88,6 +88,26 @@ static ArtsMode convertAccessMode(sde::SdeAccessMode mode) {
   return ArtsMode::inout;
 }
 
+/// Map an SDE reduction strategy to the persisted ARTS contract string.
+static StringAttr
+convertReductionStrategy(MLIRContext *ctx,
+                         sde::SdeReductionStrategyAttr strategy) {
+  if (!strategy)
+    return nullptr;
+
+  namespace ReductionStrategyValue =
+      AttrNames::Operation::Contract::ReductionStrategyValue;
+  switch (strategy.getValue()) {
+  case sde::SdeReductionStrategy::atomic:
+    return StringAttr::get(ctx, ReductionStrategyValue::Atomic);
+  case sde::SdeReductionStrategy::tree:
+    return StringAttr::get(ctx, ReductionStrategyValue::Tree);
+  case sde::SdeReductionStrategy::local_accumulate:
+    return StringAttr::get(ctx, ReductionStrategyValue::LocalAccumulate);
+  }
+  return nullptr;
+}
+
 //===----------------------------------------------------------------------===//
 // Linalg-derived contract classification helpers
 //===----------------------------------------------------------------------===//
@@ -402,6 +422,16 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
                       op.getReductionAccumulators());
 
     copyArtsMetadataAttrs(op, artsFor);
+    if (auto strategyAttr =
+            convertReductionStrategy(ctx, op.getReductionStrategyAttr())) {
+      artsFor->setAttr(AttrNames::Operation::Contract::ReductionStrategy,
+                       strategyAttr);
+      if (auto parentEdt = artsFor->getParentOfType<EdtOp>();
+          parentEdt &&
+          !parentEdt->hasAttr(AttrNames::Operation::Contract::ReductionStrategy))
+        parentEdt->setAttr(AttrNames::Operation::Contract::ReductionStrategy,
+                           strategyAttr);
+    }
 
     // Move the body
     Region &dstRegion = artsFor.getRegion();

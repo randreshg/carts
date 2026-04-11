@@ -535,7 +535,9 @@ The pass stamps an SDE-owned `reduction_strategy(<atomic|tree>)` attribute on
 eligible loops. Today it uses `add` as the only atomic-capable reduction kind
 in SDE and keeps validation at the SDE IR layer: contract tests inspect the
 IR dump after `SdeReductionStrategy` rather than inferring the choice back from
-later ARTS IR.
+later ARTS IR. `ConvertSdeToArts` now also persists that recommendation onto
+the lowered ARTS loop / EDT as `arts.reduction_strategy`, but there is still no
+lowering consumer for the ARTS attribute yet.
 
 ### SDE Optimization Decisions Enabled by SDECostModel
 
@@ -612,7 +614,9 @@ This is the architectural novelty.
 | `include/arts/passes/Passes.h` | Add SDE reduction strategy pass factory declaration |
 | `lib/arts/passes/CMakeLists.txt` | Add `MLIRLinalgDialect`, `MLIRLinalgTransforms` |
 | `tools/compile/Compile.cpp` | Insert `SdeScopeSelection`, `SdeChunkOptimization`, and `SdeReductionStrategy`, move `RaiseToLinalg`, remove PatternDiscovery, and keep SDE->ARTS independent of `AnalysisManager` |
-| `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | `classifyFromLinalg` + stamp + erase transient generics after consumption |
+| `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | `classifyFromLinalg` + stamp + erase transient generics after consumption, and persist SDE reduction strategy onto lowered ARTS ops |
+| `lib/arts/dialect/core/Transforms/EdtTransformsPass.cpp` | Preserve an existing `arts.reduction_strategy` from SDE instead of recomputing over it, and use centralized reduction-strategy value constants |
+| `include/arts/utils/OperationAttributes.h` | Centralize `arts.reduction_strategy` value strings alongside the attribute name |
 | `lib/arts/dialect/core/Transforms/PatternDiscovery.cpp` | **DELETE** |
 | `include/arts/passes/Passes.td` | Remove PatternDiscovery pass definition |
 | `include/arts/passes/Passes.h` | Remove `createPatternDiscoveryPass()` declaration |
@@ -728,7 +732,7 @@ Where SdeOpt(tensor) includes:
 
 ## NOT Doing (This Commit)
 
-- **General cost-aware SDE optimization suite** (Part 5): only limited `SdeScopeSelection`, `SdeChunkOptimization`, and annotation-only `SdeReductionStrategy` are implemented; broader schedule/scope/reduction work remains future work
+- **General cost-aware SDE optimization suite** (Part 5): only limited `SdeScopeSelection`, `SdeChunkOptimization`, and a narrow `SdeReductionStrategy` are implemented; broader schedule/scope/reduction work remains future work
 - **Tensor-first path** (Part 6): Architecture documented, requires RaiseToTensor + Bufferization — separate commit after Part 2 proves stable
 - **Replacing hardcoded thresholds**: Future commits consume `CostModel` in existing heuristic files
 - **Metadata removal**: Independent of linalg — separate commit

@@ -106,16 +106,6 @@ static constexpr int64_t kLoopDepthMultiplier = 8;
 /// avoids excessive contention on shared cache lines.
 static constexpr int64_t kAtomicWorkerThreshold = 16;
 
-/// ET-5: Reduction strategy name constants.
-/// TODO(QUALITY): When a lowering consumer for arts.reduction_strategy is
-/// implemented, replace these string constants with a proper MLIR enum
-/// attribute (defined in Attributes.td) for full type safety.
-namespace ReductionStrategyNames {
-constexpr llvm::StringLiteral Atomic = "atomic";
-constexpr llvm::StringLiteral Tree = "tree";
-constexpr llvm::StringLiteral LocalAccumulate = "local_accumulate";
-} // namespace ReductionStrategyNames
-
 struct EdtTransformsPass : public ::impl::EdtTransformsBase<EdtTransformsPass> {
   EdtTransformsPass(mlir::arts::AnalysisManager *AM) : AM(AM) {
     assert(AM && "AnalysisManager must be provided externally");
@@ -286,6 +276,9 @@ EdtTransformsPass::ModuleEdtMetrics EdtTransformsPass::gatherModuleEdtFacts() {
     ARTS_DEBUG("Processing function: " << func.getName());
 
     func.walk([&](EdtOp edt) {
+      if (edt->hasAttr(AttrNames::Operation::Contract::ReductionStrategy))
+        return;
+
       EdtNode *node = edtGraph.getEdtNode(edt);
       if (!node)
         return;
@@ -614,24 +607,26 @@ unsigned EdtTransformsPass::selectReductionStrategies() {
         /// Select reduction strategy.
         StringRef strategy;
         bool isLoopNested = containsLoop(edt);
+        namespace ReductionStrategyValue =
+            AttrNames::Operation::Contract::ReductionStrategyValue;
 
         if (isLoopNested) {
           /// Inside a loop nest: accumulate locally, then single atomic at end.
-          strategy = ReductionStrategyNames::LocalAccumulate;
+          strategy = ReductionStrategyValue::LocalAccumulate;
         } else if (workerCount > 0 && workerCount < kAtomicWorkerThreshold &&
                    EdtAnalysis::isAtomicCapable(*reductionKind)) {
           /// Small worker count and op maps to ARTS atomic intrinsic.
-          strategy = ReductionStrategyNames::Atomic;
+          strategy = ReductionStrategyValue::Atomic;
         } else if (workerCount >= kAtomicWorkerThreshold) {
           /// Large worker count: binary tree reduction avoids contention.
-          strategy = ReductionStrategyNames::Tree;
+          strategy = ReductionStrategyValue::Tree;
         } else if (EdtAnalysis::isAtomicCapable(*reductionKind)) {
           /// Worker count unknown but op atomic-capable: default to atomic.
-          strategy = ReductionStrategyNames::Atomic;
+          strategy = ReductionStrategyValue::Atomic;
         } else {
           /// Non-atomic-capable with unknown worker count: tree is safe
           /// default.
-          strategy = ReductionStrategyNames::Tree;
+          strategy = ReductionStrategyValue::Tree;
         }
 
         /// Stamp the attribute on the EdtOp.
