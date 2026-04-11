@@ -780,8 +780,9 @@ Where SdeOpt(tensor) includes:
   worker count and minimum useful work, then strip-mines eligible 1-D
   elementwise `sde.su_iterate` loops so the transformation survives lowering.
 - The first concrete subset is the currently supported `RaiseToLinalg` carrier
-  subset. Elementwise loops use `tensor.empty` destinations; the pass stays
-  conservative for the rest.
+  subset. Elementwise loops use `tensor.empty` destinations; the current
+  executable tiler now handles multi-input / single-output 1-D pointwise loops
+  in addition to the original unary case, and stays conservative for the rest.
 - `ConvertSdeToArts` now drops dead `bufferization.to_tensor` /
   `tensor.empty` carrier ops after consuming the transient `linalg.generic`.
 - Validation stays at the pass boundary: contract tests inspect IR dumps after
