@@ -134,4 +134,18 @@ def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEpochLoweringPass()";
 }
 
+def ScalarReplacement
+    : Pass<"arts-scalar-replacement", "mlir::ModuleOp"> {
+  let summary = "Transform memory-based reductions to register-based iter_args";
+  let description = [{
+    This pass transforms memory-based reduction patterns in scf.for loops
+    to register-based iter_args patterns to enable LLVM vectorization.
+  }];
+  let dependentDialects = [
+    "::mlir::scf::SCFDialect", "::mlir::memref::MemRefDialect", "::mlir::arith::ArithDialect",
+    "::mlir::polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createScalarReplacementPass()";
+}
+
 #endif // ARTS_DIALECT_RT_TRANSFORMS_PASSES

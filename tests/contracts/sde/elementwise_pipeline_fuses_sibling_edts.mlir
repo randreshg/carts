@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline pattern-pipeline | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --loop-transforms-enable-elementwise-pipeline --pipeline pattern-pipeline | %FileCheck %s
 
 // Two sibling single-loop EDTs should collapse all the way to one EDT with one
 // fused loop in the pattern pipeline.

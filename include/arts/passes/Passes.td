@@ -607,8 +607,8 @@ def KernelTransforms : Pass<"arts-kernel-transforms", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createKernelTransformsPass(nullptr)";
   let options = [
     Option<"enableElementwisePipeline", "enable-elementwise-pipeline", "bool",
-           /*default=*/"true",
-           "Enable pointwise pipeline fusion for sibling loops over the same iteration space.">,
+           /*default=*/"false",
+           "Enable ARTS-side pointwise pipeline fusion (retired: SdeElementwiseFusion handles this).">,
     Option<"enableMatmul", "enable-matmul", "bool", /*default=*/"true",
            "Enable reduction distribution for matmul-like patterns.">,
     Option<"enableTiling", "enable-tiling", "bool", /*default=*/"true",
@@ -618,19 +618,6 @@ def KernelTransforms : Pass<"arts-kernel-transforms", "mlir::ModuleOp"> {
     Option<"minTripCount", "min-trip-count", "int64_t", /*default=*/"128",
            "Minimum constant trip count required to apply tiling.">
   ];
-}
-
-def ScalarReplacement : Pass<"arts-scalar-replacement", "mlir::ModuleOp"> {
-  let summary = "Transform memory-based reductions to register-based iter_args";
-  let description = [{
-    This pass transforms memory-based reduction patterns in scf.for loops
-    to register-based iter_args patterns to enable LLVM vectorization.
-  }];
-  let dependentDialects = [
-    "::mlir::scf::SCFDialect", "::mlir::memref::MemRefDialect", "::mlir::arith::ArithDialect",
-    "::mlir::polygeist::PolygeistDialect"
-  ];
-  let constructor = "mlir::arts::createScalarReplacementPass()";
 }
 
 def LoopVectorizationHints

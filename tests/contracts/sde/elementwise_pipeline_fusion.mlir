@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline pattern-pipeline | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --loop-transforms-enable-elementwise-pipeline --pipeline pattern-pipeline | %FileCheck %s
 
 // CHECK-LABEL: func.func @main
 // CHECK: arts.edt <parallel>

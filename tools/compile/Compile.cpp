@@ -155,8 +155,9 @@ static cl::opt<bool> RuntimeStaticWorkers(
 /// Kernel transform options (Pipeline step: pattern-pipeline)
 static cl::opt<bool> KernelTransformsEnableElementwisePipeline(
     "loop-transforms-enable-elementwise-pipeline",
-    cl::desc("Enable semantic fusion of sibling pointwise loop pipelines"),
-    cl::init(true));
+    cl::desc("Enable ARTS-side pointwise pipeline fusion (retired: "
+             "SdeElementwiseFusion handles this)"),
+    cl::init(false));
 
 static cl::opt<bool> KernelTransformsEnableMatmul(
     "loop-transforms-enable-matmul",

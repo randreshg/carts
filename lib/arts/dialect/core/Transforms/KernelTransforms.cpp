@@ -10,9 +10,11 @@
 ///   - BlockLoopStripMining: late DB-aware cleanup after partitioning
 ///
 /// Current ownership:
-///   - elementwise_pipeline
 ///   - StencilTilingNDPattern
 ///   - MatmulReductionPattern
+///
+/// Retired (SDE handles):
+///   - elementwise_pipeline → SdeElementwiseFusion in sde/Transforms/
 ///==========================================================================///
 
 #include "arts/Dialect.h"
