@@ -289,13 +289,13 @@ static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op, Block &body,
   if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
       op.getSteps().size() != 1)
     return false;
-  if (!op.getLinalgClassificationAttr())
+  if (!op.getStructuredClassificationAttr())
     return false;
 
-  switch (*op.getLinalgClassification()) {
-  case sde::SdeLinalgClassification::elementwise:
+  switch (*op.getStructuredClassification()) {
+  case sde::SdeStructuredClassification::elementwise:
     return isElementwiseTensorCandidate(body, tensorGeneric);
-  case sde::SdeLinalgClassification::matmul:
+  case sde::SdeStructuredClassification::matmul:
     return isMatmulTensorCandidate(body, tensorGeneric);
   default:
     return false;
@@ -374,7 +374,7 @@ struct SdeTensorOptimizationPass
           ValueRange{tiledStep}, op.getScheduleAttr(), op.getChunkSize(),
           op.getNowaitAttr(), op.getReductionAccumulators(),
           op.getReductionKindsAttr(), op.getReductionStrategyAttr(),
-          op.getLinalgClassificationAttr(), op.getAccessMinOffsetsAttr(),
+          op.getStructuredClassificationAttr(), op.getAccessMinOffsetsAttr(),
           op.getAccessMaxOffsetsAttr(), op.getOwnerDimsAttr(),
           op.getSpatialDimsAttr(), op.getWriteFootprintAttr());
       newOp->setAttrs(getRewrittenAttrs(op));

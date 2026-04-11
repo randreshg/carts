@@ -82,16 +82,17 @@ def SdeReductionStrategy
 def SdeReductionStrategyAttr
     : ArtsSde_I32EnumAttr<"reduction_strategy", SdeReductionStrategy>;
 
-def SdeLinalgClassification
-    : ArtsSde_I32Enum<"SdeLinalgClassification",
+def SdeStructuredClassification
+    : ArtsSde_I32Enum<"SdeStructuredClassification",
                       "Structured loop classification", [
       I32EnumAttrCase<"elementwise", 0, "elementwise">,
       I32EnumAttrCase<"stencil", 1, "stencil">,
       I32EnumAttrCase<"matmul", 2, "matmul">,
       I32EnumAttrCase<"reduction", 3, "reduction">
     ]>;
-def SdeLinalgClassificationAttr
-    : ArtsSde_I32EnumAttr<"linalg_classification", SdeLinalgClassification>;
+def SdeStructuredClassificationAttr
+    : ArtsSde_I32EnumAttr<"structured_classification",
+                          SdeStructuredClassification>;
 
 def SdeScheduleKind
     : ArtsSde_I32Enum<"SdeScheduleKind", "Scheduling policy", [
@@ -259,7 +260,7 @@ def SdeSuIterateOp
     Variadic<AnyType>:$reductionAccumulators,
     OptionalAttr<ArrayAttr>:$reductionKinds,
     OptionalAttr<SdeReductionStrategyAttr>:$reductionStrategy,
-    OptionalAttr<SdeLinalgClassificationAttr>:$linalgClassification,
+    OptionalAttr<SdeStructuredClassificationAttr>:$structuredClassification,
     OptionalAttr<ArrayAttr>:$accessMinOffsets,
     OptionalAttr<ArrayAttr>:$accessMaxOffsets,
     OptionalAttr<ArrayAttr>:$ownerDims,
@@ -275,7 +276,7 @@ def SdeSuIterateOp
     (`nowait` $nowait^)?
     (`reduction` `[` $reductionKinds^ `]` `(` $reductionAccumulators `:` type($reductionAccumulators) `)`)?
     (`reduction_strategy` `(` $reductionStrategy^ `)` )?
-    (`classification` `(` $linalgClassification^ `)` )?
+    (`classification` `(` $structuredClassification^ `)` )?
     $body attr-dict
   }];
 }

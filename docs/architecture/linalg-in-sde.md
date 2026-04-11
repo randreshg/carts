@@ -63,7 +63,7 @@ This is why the current design preserves both properties at once:
 
 `RaiseToLinalg` is no longer a diagnostic pass. It walks
 `arts_sde.su_iterate`, classifies structurally recognizable loop bodies, stamps
-`linalg_classification` on the SDE loop, and materializes a transient
+`structured_classification` on the SDE loop, and materializes a transient
 memref-backed `linalg.generic` carrier for the currently supported subset.
 
 ### What it raises today
@@ -85,7 +85,7 @@ memref-backed `linalg.generic` carrier for the currently supported subset.
 - Bodies that do not admit the required structured memref or loop pattern
 
 The fallback path is still meaningful. Even when it does not build a carrier,
-the pass stamps `linalg_classification` on the SDE loop so that
+the pass stamps `structured_classification` on the SDE loop so that
 `ConvertSdeToArts` can recover the intended contract family later without
 depending on ARTS-only names during the SDE phase.
 
@@ -108,7 +108,7 @@ After:
 
 ```mlir
 arts_sde.su_iterate(%lb) to(%ub) step(%step)
-    linalg_classification(<elementwise>) {
+    structured_classification(<elementwise>) {
 ^bb0(%i: index):
   ... original memref body remains ...
   linalg.generic ins(%A, %B : memref<?xf32>, memref<?xf32>)
@@ -216,7 +216,7 @@ Before:
 
 ```mlir
 arts_sde.su_iterate(%lb) to(%ub) step(%step)
-    linalg_classification(<elementwise>) {
+    structured_classification(<elementwise>) {
   ... tensor-backed carrier ...
 }
 ```
@@ -225,7 +225,7 @@ After:
 
 ```mlir
 arts_sde.su_iterate(%lb) to(%ub) step(%tiledStep)
-    linalg_classification(<elementwise>) {
+    structured_classification(<elementwise>) {
   %tileUb = ...
   scf.for %iv = %tileBase to %tileUb step %step {
     ... rebuilt executable body ...
@@ -253,7 +253,7 @@ At this boundary:
 - if a transient `linalg.generic` carrier exists, the pass reads it and stamps
   contracts onto the lowered ARTS ops
 - if no carrier survives, the pass falls back to the SDE-owned
-  `linalg_classification`
+  `structured_classification`
 - fallback stencil contract data is preserved from the SDE loop itself, so a
   classification-only path does not lose persisted stencil payloads
 - `reduction_strategy` is forwarded from SDE onto the lowered `arts.for` and,

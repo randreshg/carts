@@ -63,7 +63,7 @@ The implemented enum set is also concrete today:
 - `SdeAccessMode`
 - `SdeReductionKind`
 - `SdeReductionStrategy`
-- `SdeLinalgClassification`
+- `SdeStructuredClassification`
 - `SdeScheduleKind`
 - `SdeConcurrencyScope`
 

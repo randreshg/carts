@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// File: SdeSemanticContracts.cpp
+/// File: SdeStructuredSummaries.cpp
 ///
 /// Stamp SDE-owned structured summaries before crossing into ARTS IR.
 ///==========================================================================///
@@ -39,10 +39,12 @@ struct SdeStructuredSummariesPass
       if (!summary)
         return;
 
-      op.setLinalgClassificationAttr(sde::SdeLinalgClassificationAttr::get(
-          &getContext(), summary->classification));
+      op.setStructuredClassificationAttr(
+          sde::SdeStructuredClassificationAttr::get(&getContext(),
+                                                    summary->classification));
 
-      if (summary->classification == sde::SdeLinalgClassification::stencil) {
+      if (summary->classification ==
+          sde::SdeStructuredClassification::stencil) {
         std::optional<sde::StructuredNeighborhoodInfo> neighborhoodSummary =
             sde::extractNeighborhoodSummary(*summary);
         if (!neighborhoodSummary)
