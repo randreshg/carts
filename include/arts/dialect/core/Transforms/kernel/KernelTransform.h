@@ -29,10 +29,6 @@ std::unique_ptr<KernelPatternTransform>
 createMatmulReductionPattern(bool enableTiling, int64_t tileJ,
                              int64_t minTripCount);
 
-/// Fuse consecutive sibling pointwise loops over the same iteration space into
-/// a single pipeline loop so downstream passes see one uniform kernel family.
-int applyElementwisePipelineTransform(ModuleOp module);
-
 /// Create an N-D stencil contract matcher for out-of-place affine stencils.
 std::unique_ptr<KernelPatternTransform> createStencilTilingNDPattern();
 

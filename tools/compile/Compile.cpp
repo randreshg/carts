@@ -153,12 +153,6 @@ static cl::opt<bool> RuntimeStaticWorkers(
     cl::init(false));
 
 /// Kernel transform options (Pipeline step: pattern-pipeline)
-static cl::opt<bool> KernelTransformsEnableElementwisePipeline(
-    "loop-transforms-enable-elementwise-pipeline",
-    cl::desc("Enable ARTS-side pointwise pipeline fusion (retired: "
-             "SdeElementwiseFusion handles this)"),
-    cl::init(false));
-
 static cl::opt<bool> KernelTransformsEnableMatmul(
     "loop-transforms-enable-matmul",
     cl::desc("Enable reduction-aware matmul transforms (dot -> update form)"),
@@ -727,8 +721,7 @@ void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createStencilBoundaryPeelingPass());
   pm.addPass(arts::createLoopReorderingPass(AM));
   pm.addPass(arts::createKernelTransformsPass(
-      AM, KernelTransformsEnableElementwisePipeline,
-      KernelTransformsEnableMatmul, KernelTransformsEnableTiling,
+      AM, KernelTransformsEnableMatmul, KernelTransformsEnableTiling,
       KernelTransformsTileJ, KernelTransformsMinTripCount));
   pm.addPass(createCSEPass());
 }
