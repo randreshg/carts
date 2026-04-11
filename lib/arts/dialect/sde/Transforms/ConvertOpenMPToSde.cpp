@@ -34,9 +34,7 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
-#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/ValueAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
@@ -132,6 +130,27 @@ static Block &ensureBlock(Region &region) {
   if (region.empty())
     region.emplaceBlock();
   return region.front();
+}
+
+struct OmpDependSlice {
+  Value source;
+  SmallVector<Value> offsets;
+  SmallVector<Value> sizes;
+};
+
+/// OpenMP task-depend lowering still ingests the legacy arts.omp_dep carrier
+/// created upstream, but SDE only consumes the memref slice it describes.
+static std::optional<OmpDependSlice> extractDependSlice(Value depVar) {
+  auto ompDepOp = depVar.getDefiningOp<OmpDepOp>();
+  if (!ompDepOp)
+    return std::nullopt;
+
+  OmpDependSlice slice;
+  slice.source = ompDepOp.getSource();
+  slice.offsets.assign(ompDepOp.getIndices().begin(),
+                       ompDepOp.getIndices().end());
+  slice.sizes.assign(ompDepOp.getSizes().begin(), ompDepOp.getSizes().end());
+  return slice;
 }
 
 static void mapWsloopCapturedArgs(omp::WsloopOp op, IRMapping &mapper) {
@@ -277,8 +296,6 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
                                : rewriter.getArrayAttr(reductionKinds),
         /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
 
-    copyArtsMetadataAttrs(op, suIter);
-
     // Create body
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
@@ -331,9 +348,8 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
         if (!depClause)
           return failure();
 
-        Value depVar = op.getDependVars()[i];
-        auto ompDepOp = depVar.getDefiningOp<OmpDepOp>();
-        if (!ompDepOp)
+        auto depSlice = extractDependSlice(op.getDependVars()[i]);
+        if (!depSlice)
           return failure();
 
         auto sdeMode = convertDependMode(depClause.getValue());
@@ -342,20 +358,16 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
 
         // Skip read-only deps with no writer
         bool hasWriter =
-            !writerSources || writerSources->contains(ompDepOp.getSource());
+            !writerSources || writerSources->contains(depSlice->source);
         if (*sdeMode == sde::SdeAccessMode::read && !hasWriter)
           continue;
 
         // Create sde.mu_dep
         rewriter.setInsertionPoint(op);
-        SmallVector<Value> offsets(ompDepOp.getIndices().begin(),
-                                   ompDepOp.getIndices().end());
-        SmallVector<Value> sizes(ompDepOp.getSizes().begin(),
-                                 ompDepOp.getSizes().end());
-        auto muDep =
-            sde::SdeMuDepOp::create(rewriter, loc, rewriter.getI64Type(),
-                                    sde::SdeAccessModeAttr::get(ctx, *sdeMode),
-                                    ompDepOp.getSource(), offsets, sizes);
+        auto muDep = sde::SdeMuDepOp::create(
+            rewriter, loc, rewriter.getI64Type(),
+            sde::SdeAccessModeAttr::get(ctx, *sdeMode), depSlice->source,
+            depSlice->offsets, depSlice->sizes);
         deps.push_back(muDep.getDep());
       }
     }
@@ -395,8 +407,6 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
         /*reductionAccumulators=*/ValueRange{},
         /*reductionKinds=*/nullptr,
         /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
-
-    copyArtsMetadataAttrs(op, suIter);
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
@@ -449,8 +459,6 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
         /*reductionAccumulators=*/ValueRange{},
         /*reductionKinds=*/nullptr,
         /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
-
-    copyArtsMetadataAttrs(op, suIter);
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
@@ -605,15 +613,15 @@ struct ConvertOpenMPToSdePass
         auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(attr);
         if (!depClause)
           continue;
-        auto dep = depVar.getDefiningOp<OmpDepOp>();
-        if (!dep)
+        auto depSlice = extractDependSlice(depVar);
+        if (!depSlice)
           continue;
         if (depClause.getValue() == omp::ClauseTaskDepend::taskdependout ||
             depClause.getValue() == omp::ClauseTaskDepend::taskdependinout ||
             depClause.getValue() ==
                 omp::ClauseTaskDepend::taskdependmutexinoutset ||
             depClause.getValue() == omp::ClauseTaskDepend::taskdependinoutset)
-          writerDepSources.insert(dep.getSource());
+          writerDepSources.insert(depSlice->source);
       }
     });
 

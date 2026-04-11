@@ -7,6 +7,7 @@
 // CHECK-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //
 // CHECK: func.func @main
 // CHECK: arts_sde.cu_region <parallel> {
+// CHECK-NOT: arts.omp_dep
 // CHECK: %[[WRITEDEP:.+]] = arts_sde.mu_dep <write> %arg0 : memref<1xi32> -> i64
 // CHECK: arts_sde.cu_task deps(%[[WRITEDEP]] : i64) {
 // CHECK: %[[READDEP:.+]] = arts_sde.mu_dep <read> %arg0 : memref<1xi32> -> i64
