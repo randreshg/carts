@@ -120,29 +120,6 @@ createKernelTransformsPass(AnalysisManager *AM,
                            int64_t tileJ = 64, int64_t minTripCount = 128);
 std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
 
-/// SDE dialect passes.
-namespace sde {
-class SDECostModel;
-std::unique_ptr<Pass>
-createConvertOpenMPToSdePass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createSdeChunkOptimizationPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createSdeScheduleRefinementPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createSdeReductionStrategyPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createSdeScopeSelectionPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createSdeTensorOptimizationPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass> createConvertSdeToArtsPass();
-/// Stamp structural classification and raise supported SDE loop nests to
-/// transient linalg carriers.
-std::unique_ptr<Pass> createRaiseToLinalgPass();
-/// Rewrite transient linalg carriers to tensor-backed form inside SDE.
-std::unique_ptr<Pass> createRaiseToTensorPass();
-} // namespace sde
-
 /// Validation passes for lowering contracts.
 std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
 

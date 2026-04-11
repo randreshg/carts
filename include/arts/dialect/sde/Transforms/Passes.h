@@ -32,4 +32,27 @@ namespace mlir::arts {
 
 } // namespace mlir::arts
 
+namespace mlir::arts::sde {
+
+class SDECostModel;
+
+std::unique_ptr<Pass>
+createConvertOpenMPToSdePass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createSdeChunkOptimizationPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createSdeScheduleRefinementPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createSdeReductionStrategyPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createSdeScopeSelectionPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createSdeTensorOptimizationPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass> createSdeStructuredSummariesPass();
+std::unique_ptr<Pass> createConvertSdeToArtsPass();
+std::unique_ptr<Pass> createRaiseToLinalgPass();
+std::unique_ptr<Pass> createRaiseToTensorPass();
+
+} // namespace mlir::arts::sde
+
 #endif // ARTS_DIALECT_SDE_TRANSFORMS_PASSES_H

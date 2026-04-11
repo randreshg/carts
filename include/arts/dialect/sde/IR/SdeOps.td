@@ -259,7 +259,12 @@ def SdeSuIterateOp
     Variadic<AnyType>:$reductionAccumulators,
     OptionalAttr<ArrayAttr>:$reductionKinds,
     OptionalAttr<SdeReductionStrategyAttr>:$reductionStrategy,
-    OptionalAttr<SdeLinalgClassificationAttr>:$linalgClassification
+    OptionalAttr<SdeLinalgClassificationAttr>:$linalgClassification,
+    OptionalAttr<ArrayAttr>:$accessMinOffsets,
+    OptionalAttr<ArrayAttr>:$accessMaxOffsets,
+    OptionalAttr<ArrayAttr>:$ownerDims,
+    OptionalAttr<ArrayAttr>:$spatialDims,
+    OptionalAttr<ArrayAttr>:$writeFootprint
   );
 
   let regions = (region SizedRegion<1>:$body);

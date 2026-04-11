@@ -294,7 +294,10 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
         schedAttr, chunkSize, nowaitAttr(ctx, nw), ValueRange{redAccs},
         reductionKinds.empty() ? nullptr
                                : rewriter.getArrayAttr(reductionKinds),
-        /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
+        /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr,
+        /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
+        /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
+        /*writeFootprint=*/nullptr);
 
     // Create body
     Region &dstRegion = suIter.getBody();
@@ -406,7 +409,10 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
         /*nowait=*/nullptr,
         /*reductionAccumulators=*/ValueRange{},
         /*reductionKinds=*/nullptr,
-        /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
+        /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr,
+        /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
+        /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
+        /*writeFootprint=*/nullptr);
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
@@ -458,7 +464,10 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
         /*nowait=*/nullptr,
         /*reductionAccumulators=*/ValueRange{},
         /*reductionKinds=*/nullptr,
-        /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr);
+        /*reductionStrategy=*/nullptr, /*linalgClassification=*/nullptr,
+        /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
+        /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
+        /*writeFootprint=*/nullptr);
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
