@@ -2,11 +2,11 @@
 
 ## Context
 
-CARTS has a layering problem: optimization decisions (tiling, buffer strategy,
-reduction strategy, distribution) are made deep inside ARTS-specific passes
-using 21 hardcoded thresholds. SDE — designed as the runtime-agnostic layer —
-is currently a pass-through: it captures OpenMP semantics and immediately
-converts to ARTS.
+CARTS had a layering problem: optimization decisions (tiling, buffer strategy,
+reduction strategy, distribution) were made deep inside ARTS-specific passes
+using 21 hardcoded thresholds. This branch moves the first part of that work
+up into SDE: OpenMP now lowers into SDE, SDE classifies loop structure, and
+SDE->ARTS stamps early contracts before the rest of the ARTS pipeline runs.
 
 **Key insight**: SDE CAN know about computation patterns (stencil, matmul,
 reduction) — these are mathematical structures, not runtime-specific. SDE
@@ -25,30 +25,45 @@ sde.su_iterate               =  SCHEDULING   (how iterations are distributed)
 linalg.generic               =  COMPUTATION  (what the math is)
 ```
 
-**Current problems**:
-1. `RaiseToLinalg.cpp` walks `arts::ForOp` (layering violation), is diagnostic-only
-2. No cost model — 21 hardcoded thresholds across 8 files
-3. Pattern contracts stamped at Stage 5 (PatternDiscovery) on `arts.for` — too late
-4. SDE-captured metadata (reduction combiner, schedule kind) is LOST during conversion
-5. No SDE-level optimization pass — purely semantic capture
+**Current state on this branch**:
+1. `RaiseToLinalg` now walks `sde.su_iterate`, stamps structural classification,
+   and materializes transient `linalg.generic` carriers for the supported subset.
+2. `PatternDiscovery` has been removed from executable pipeline paths; early
+   contracts are seeded during SDE->ARTS conversion and refined later by
+   `DepTransforms` / `KernelTransforms`.
+3. `SDECostModel` and `ARTSCostModel` exist and are wired through
+   `AnalysisManager`, but no cost-driven SDE optimization pass uses them yet.
+4. The stabilized carrier design keeps the original loop/memref IR in place;
+   transient `linalg.generic` is used only for contract recovery and is erased
+   during SDE->ARTS conversion.
+5. Task-dependency ingestion still bridges from upstream `arts.omp_dep`
+   carriers created before SDE. Removing that residual ARTS-core boundary needs
+   a separate upstream dependency-carrier redesign.
+6. Reduction and stencil raising are not fully implemented. Those cases stay on
+   the fallback path today.
 
 ---
 
 ## Pipeline Change
 
 ```
-CURRENT:
+CURRENT IMPLEMENTATION:
   buildOpenMPToArtsPipeline:
-    ConvertOpenMPToSde → ConvertSdeToArts → VerifySdeLowered → ...
-  buildPatternPipeline:
-    RaiseToLinalg (diagnostic, on arts::ForOp) → PatternDiscovery(seed) → ...
+    ConvertOpenMPToSde
+      → RaiseToLinalg (on sde.su_iterate)
+      → ConvertSdeToArts
+      → VerifySdeLowered
+      → DCE
+      → CSE
+      → VerifyEdtCreated
 
-PROPOSED:
-  buildOpenMPToArtsPipeline:
-    ConvertOpenMPToSde → RaiseToLinalg (on sde.su_iterate) → ConvertSdeToArts → ...
   buildPatternPipeline:
-    DepTransforms → LoopNormalization → ... → KernelTransforms → ...
-    (PatternDiscovery REMOVED — linalg contracts + independent detection suffice)
+    DepTransforms
+      → LoopNormalization
+      → StencilBoundaryPeeling
+      → LoopReordering
+      → KernelTransforms
+      → CSE
 ```
 
 ---
@@ -217,18 +232,24 @@ Constructor creates `ARTSCostModel(abstractMachine)` by default.
 
 ### Step 1D: Fix SDE Layering Violations
 
-**ConvertOpenMPToSde.cpp** currently includes `AnalysisManager.h` but
-NEVER USES IT (verified — AM is stored but never accessed). Fix:
+`ConvertOpenMPToSde.cpp` no longer depends on `AnalysisManager`. It now
+receives `SDECostModel *` directly so SDE passes do not depend on ARTS analysis
+plumbing for cost access.
 - Remove `#include "arts/dialect/core/Analysis/AnalysisManager.h"`
 - Change constructor param from `AnalysisManager*` to `SDECostModel*`
-- SDE passes now receive `SDECostModel*`, never see ARTS types
+- SDE passes now receive `SDECostModel*`, never see `AnalysisManager`
+
+Residual layering note: task dependencies still arrive as `arts.omp_dep`
+because upstream preprocessing (`RaiseMemRefDimensionality` / `HandleDeps`)
+materializes that carrier before SDE conversion. `ConvertOpenMPToSde` bridges
+from that input today, so this boundary is reduced but not fully eliminated.
 
 **Compile.cpp** injection:
 ```cpp
 auto &costModel = AM->getCostModel();
 pm.addPass(sde::createConvertOpenMPToSdePass(&costModel));
 pm.addPass(sde::createRaiseToLinalgPass());
-pm.addPass(sde::createConvertSdeToArtsPass(AM));
+pm.addPass(sde::createConvertSdeToArtsPass());
 ```
 
 ### Step 1E: CMake
@@ -268,7 +289,7 @@ Remove `#include "arts/passes/Passes.h"` and all ARTS core includes.
 **Modify** `lib/arts/passes/CMakeLists.txt`:
 - Add `MLIRLinalgDialect`, `MLIRLinalgTransforms` to LINK_LIBS
 
-### Step 2C: Create `linalg.generic` from Loop Body
+### Step 2C: Create Transient `linalg.generic` Carriers
 
 **File**: `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp`
 
@@ -283,8 +304,9 @@ After existing analysis (collect nest, build indexing maps, classify):
 3. **Op creation**: `builder.create<linalg::GenericOp>(loc, TypeRange{},
    inputMemrefs, outputMemrefs, allMaps, linalgIterTypes, bodyBuilder)`
 
-4. **Erase original body**: Remove memref.load/store, inner scf.for ops.
-   Keep `sde.yield` terminator.
+4. **Keep original loop body in place**: insert the `linalg.generic` carrier
+   next to the original loop/memref body instead of replacing it. SDE->ARTS
+   consumes the carrier later and erases it after stamping contracts.
 
 Best-effort: non-raiseable bodies (indirect indexing, control flow, non-affine)
 stay as memref.load/store — downstream passes (DepTransforms, KernelTransforms,
@@ -292,33 +314,32 @@ DbAnalysis) handle them via independent IR analysis and graceful fallback.
 
 ### Step 2D: Reduction Raising
 
-Handle `sde.su_iterate` with `reductionAccumulators`:
-- Remove `iter_args` bailout in `collectInner`
-- Accumulator becomes 0-D `memref.alloca()` outs operand
-- Iterator type = `reduction` for dims not in output maps
-- Load result after generic, feed to `sde.yield`
+This is still future work. The current implementation bails out when
+`sde.su_iterate` has `reductionAccumulators`, stamps only structural
+classification on the source loop, and does not materialize a transient
+`linalg.generic` carrier for reductions.
 
 ### Step 2E: Move Pass in Pipeline
 
 **File**: `tools/compile/Compile.cpp`
 
-Remove from `buildPatternPipeline` (line 707).
-Add to `buildOpenMPToArtsPipeline` between OMP→SDE and SDE→ARTS:
+Status: completed. `RaiseToLinalg` now runs between OMP→SDE and SDE→ARTS:
 ```cpp
-pm.addPass(arts::sde::createConvertOpenMPToSdePass(AM));
+auto &costModel = AM->getCostModel();
+pm.addPass(arts::sde::createConvertOpenMPToSdePass(&costModel));
 pm.addPass(arts::sde::createRaiseToLinalgPass());    // NEW
-pm.addPass(arts::sde::createConvertSdeToArtsPass(AM));
+pm.addPass(arts::sde::createConvertSdeToArtsPass());
 ```
 
 ---
 
-## Part 3: SDE→ARTS Contract Stamping + Linalg Lowering
+## Part 3: SDE→ARTS Contract Stamping + Transient Carrier Consumption
 
 **File**: `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp`
 
 In `SuIterateToArtsPattern::matchAndRewrite()`, after creating `arts.for`:
 
-### Step 3A: Classify from linalg structure
+### Step 3A: Classify from linalg structure when a carrier is present
 
 ```cpp
 static std::optional<ArtsDepPattern>
@@ -337,37 +358,36 @@ classifyFromLinalg(linalg::GenericOp generic) {
     t == utils::IteratorType::parallel ? ++nPar : ++nRed;
   if (nPar == 2 && nRed == 1 && iterTypes.size() == 3)
     return ArtsDepPattern::matmul;
-  if (nRed > 0) return ArtsDepPattern::reduction;
   return std::nullopt;
 }
 ```
 
+Important current limitation: the stabilized path only relies on direct
+`linalg.generic` classification for the currently supported subset. Generic
+reductions are not converted into `ArtsDepPattern::reduction` here.
+
 ### Step 3B: Stamp contracts
 
-- Walk cloned body for `linalg::GenericOp`
-- If found: classify → stamp `depPattern`, `distributionPattern`, stencil
-  offsets via `StencilNDPatternContract` (from `PatternTransform.h`)
-- If not found: no stamp — DepTransforms/KernelTransforms detect independently,
-    DbAnalysis falls back to `classifyDistributionPattern()` graph analysis
+- Walk the cloned `arts.for` body for transient `linalg::GenericOp`
+- If found: prefer any explicit contract already present on the generic;
+  otherwise classify from linalg structure, then stamp `depPattern` and
+  stencil offsets via `StencilNDPatternContract`
+- If no carrier is present: fall back to `arts.linalg.classification` stamped
+  on the source `sde.su_iterate`
+- After stamping: erase the transient cloned generics
 
-### Step 3C: Lower linalg back to loops
-
-```cpp
-IRRewriter rewriter(generic.getContext());
-rewriter.setInsertionPoint(generic);
-(void)linalg::linalgOpToLoops(rewriter, generic);
-rewriter.eraseOp(generic);
-```
-
-After this: `arts.for` body has `scf.for + memref.load/store` — exactly
-what all downstream passes (DepTransforms, KernelTransforms, stages 7-18)
-expect. **No linalg.generic survives past SDE→ARTS.**
+This is intentionally **not** `linalgOpToLoops`. `RaiseToLinalg` leaves the
+original loop/memref body in place, so SDE->ARTS consumes transient carriers
+only for contract recovery and then drops them. Downstream passes still see
+the loop/memref IR shape they already expect. **No `linalg.generic` survives
+past SDE→ARTS.**
 
 ---
 
-## Part 4: Remove PatternDiscovery Entirely
+## Part 4: PatternDiscovery Removal
 
-Investigation confirmed PatternDiscovery is a **hint/cache**, not a requirement.
+Investigation confirmed `PatternDiscovery` is a **hint/cache**, not a
+requirement. It has now been removed from executable pipeline paths.
 Every downstream consumer has graceful fallback behavior:
 
 ### Why removal is safe
@@ -388,37 +408,23 @@ They perform their own IR-based pattern matching and stamp contracts themselves:
 - `StencilTilingNDPattern`: full affine index analysis, computes halo offsets
 - `MatmulReductionPattern`: matches k-loop reduction with mul+add chain
 
-### Step 4A: Delete PatternDiscovery.cpp
+Status: completed in executable code paths. The current pattern pipeline is:
 
-**Delete**: `lib/arts/dialect/core/Transforms/PatternDiscovery.cpp`
-**Delete**: `include/arts/dialect/core/Transforms/pattern/PatternDiscovery.h` (if exists)
-
-### Step 4B: Remove from Pipeline
-
-**File**: `tools/compile/Compile.cpp`
-
-Remove BOTH invocations:
-- `PatternDiscovery(seed)` from `buildPatternPipeline` (line ~708)
-- `PatternDiscovery(refine)` from `buildPatternPipeline` (line ~713)
-
-### Step 4C: Remove Pass Registration
-
-**File**: `include/arts/passes/Passes.td`
-- Remove `PatternDiscovery` pass definition
-
-**File**: `include/arts/passes/Passes.h`
-- Remove `createPatternDiscoveryPass()` declaration
-
-### Step 4D: Update ContractValidation (if needed)
-
-Check if `ContractValidation.cpp` expects pre-DB patterns to exist.
-If so, relax the check — patterns are now optional at that stage.
+```cpp
+DepTransforms
+  -> LoopNormalization
+  -> StencilBoundaryPeeling
+  -> LoopReordering
+  -> KernelTransforms
+  -> CSE
+```
 
 ### Pattern contract flow after removal
 
 ```
 Stage 2: ConvertOpenMPToSde → RaiseToLinalg → ConvertSdeToArts
-         (linalg-derived: stamps depPattern for ~60% of loops)
+         (transient linalg-derived contracts for supported cases; stamped
+          attribute fallback for the rest)
 Stage 5: DepTransforms (independent: stamps jacobi/seidel)
          KernelTransforms (independent: stamps stencil_tiling_nd/matmul)
 Stage 6: DbAnalysis (fallback: classifyDistributionPattern() for unstamped loops)
@@ -500,13 +506,13 @@ This is the architectural novelty.
 | `lib/arts/utils/CMakeLists.txt` | Add costs/ subdirectory |
 | `include/arts/dialect/core/Analysis/AnalysisManager.h` | Add `SDECostModel` member + accessor |
 | `lib/arts/dialect/core/Analysis/AnalysisManager.cpp` | Create `ARTSCostModel` in constructor |
-| `lib/arts/dialect/sde/Transforms/ConvertOpenMPToSde.cpp` | Remove AnalysisManager import, take `SDECostModel*` |
-| `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | Core rewrite: `SdeSuIterateOp`, create `linalg.generic`, reductions |
+| `lib/arts/dialect/sde/Transforms/ConvertOpenMPToSde.cpp` | Remove AnalysisManager import, take `SDECostModel*`; still bridges upstream `arts.omp_dep` |
+| `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | Core rewrite: `SdeSuIterateOp`, stamp classification, create transient `linalg.generic` carriers for supported cases |
 | `include/arts/dialect/sde/Transforms/Passes.td` | Add `LinalgDialect`, remove `ArtsDialect` |
 | `include/arts/dialect/sde/Transforms/Passes.h` | Add linalg include |
 | `lib/arts/passes/CMakeLists.txt` | Add `MLIRLinalgDialect`, `MLIRLinalgTransforms` |
-| `tools/compile/Compile.cpp` | Move RaiseToLinalg, remove PatternDiscovery (seed+refine) |
-| `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | `classifyFromLinalg` + stamp + `linalgOpToLoops` |
+| `tools/compile/Compile.cpp` | Move RaiseToLinalg, remove PatternDiscovery, and keep SDE->ARTS independent of `AnalysisManager` |
+| `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | `classifyFromLinalg` + stamp + erase transient generics after consumption |
 | `lib/arts/dialect/core/Transforms/PatternDiscovery.cpp` | **DELETE** |
 | `include/arts/passes/Passes.td` | Remove PatternDiscovery pass definition |
 | `include/arts/passes/Passes.h` | Remove `createPatternDiscoveryPass()` declaration |
@@ -516,16 +522,18 @@ This is the architectural novelty.
 ## Verification
 
 1. `dekk carts build` — must compile cleanly
-2. `dekk carts test` — 161/161 tests pass
+2. `dekk carts test` — 163/163 tests pass
 3. `grep -r "arts::ForOp" lib/arts/dialect/sde/` → **zero results**
 4. `grep -r "PatternDiscovery" lib/ tools/` → **zero results** (fully removed)
 5. `AM->getCostModel()` returns `SDECostModel&` — accessible from any pass
-6. `grep -r "AnalysisManager" lib/arts/dialect/sde/` → **zero results** (layering fixed)
+6. `grep -r "AnalysisManager" lib/arts/dialect/sde/` → **zero results** (SDE pass plumbing fixed; residual `arts.omp_dep` input boundary remains upstream)
 7. `SDECostModel::isDistributed()` returns correct value based on AbstractMachine
 6. Run with `-mlir-print-ir-after-all` to verify:
-   - After RaiseToLinalg: raiseable bodies have `linalg.generic`
-   - After SDE→ARTS: `arts.for` bodies have `scf.for + memref` (lowered back),
-     pattern contracts stamped as attributes
+   - After RaiseToLinalg: supported bodies have transient `linalg.generic`
+     alongside the original loop/memref body
+   - After SDE→ARTS: `arts.for` bodies still contain the loop/memref IR shape,
+     transient generics are erased, and pattern contracts are stamped as
+     attributes
    - DepTransforms/KernelTransforms still detect and stamp patterns independently
 7. Spot-check benchmarks: jacobi → stencil contract (from DepTransforms),
    2mm → uniform contract (from linalg), stencil → stencil_tiling_nd (from KernelTransforms)

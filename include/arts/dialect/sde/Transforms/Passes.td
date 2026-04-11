@@ -10,12 +10,13 @@
 include "mlir/Pass/PassBase.td"
 
 def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
-  let summary = "Raise raiseable sde.su_iterate bodies to linalg.generic";
+  let summary = "Raise supported sde.su_iterate bodies to transient linalg.generic carriers";
   let description = [{
-    Analyzes loop nests inside sde.su_iterate operations and creates
-    linalg.generic ops for raiseable loop bodies. Non-raiseable bodies
-    (indirect indexing, control flow, non-affine) are left as-is for
-    downstream passes to handle via independent IR analysis.
+    Analyzes loop nests inside sde.su_iterate operations, stamps structural
+    classification on the source loop, and materializes transient
+    linalg.generic carriers for the currently supported subset of loop bodies.
+    Unsupported bodies remain in loop form for downstream passes to handle
+    via independent IR analysis.
 
     Recognized patterns:
     - elementwise: all parallel iterators, identity/permutation indexing maps
@@ -23,9 +24,13 @@ def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
     - stencil: parallel iterators with constant-offset indexing maps
     - reduction: has reduction iterators with accumulation pattern
 
-    The linalg.generic ops are consumed by ConvertSdeToArts, which classifies
-    them, stamps pattern contracts on the created arts.for, and lowers them
-    back to loops.
+    Today, only the elementwise/matmul-style subset is materialized as a
+    linalg.generic carrier. Stencil/reduction bodies currently stay on the
+    stamped-attribute fallback path.
+
+    ConvertSdeToArts consumes the transient linalg.generic ops, stamps pattern
+    contracts on the created arts.for, and erases the carriers so downstream
+    passes continue on loop/memref IR.
   }];
   let dependentDialects = ["::mlir::memref::MemRefDialect",
                            "::mlir::func::FuncDialect",
@@ -58,11 +63,12 @@ def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
   let summary = "Convert SDE operations to ARTS operations";
   let description = [{
     Converts SDE dialect ops into ARTS dialect ops, producing the same IR
-    that ConvertOpenMPToArts currently generates. When RaiseToLinalg materializes
-    linalg.generic, this pass classifies the generic, stamps the matching ARTS
-    contract, and lowers the generic back to loop/memref IR for downstream
-    passes. When no linalg op is present, it falls back to RaiseToLinalg's
-    transient classification attribute.
+    that ConvertOpenMPToArts currently generates. When RaiseToLinalg
+    materializes transient linalg.generic carriers, this pass derives the
+    matching ARTS contract from them, copies semantic contract attributes, and
+    erases the carriers so downstream passes continue on loop/memref IR. When
+    no linalg carrier is present, it falls back to RaiseToLinalg's stamped
+    classification attribute.
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
                            "::mlir::arts::ArtsDialect",
