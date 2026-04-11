@@ -1,6 +1,13 @@
 // RUN: %carts-compile %s --O3 --arts-config %S/../inputs/arts_multinode.cfg --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Verify that SdeScopeSelection stamps distributed scope for multi-node configs.
+// Verify the before/after for parallel-region scope ownership:
+// ConvertOpenMPToSde preserves the parallel region without choosing a scope,
+// then SdeScopeSelection stamps the distributed scope for multi-node configs.
+
+// CHECK-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //
+// CHECK: func.func @main
+// CHECK: arts_sde.cu_region <parallel> {
+// CHECK: arts_sde.su_iterate(%c0) to(%c128) step(%c1)
 
 // CHECK-LABEL: // -----// IR Dump After SdeScopeSelection (sde-scope-selection) //----- //
 // CHECK: func.func @main

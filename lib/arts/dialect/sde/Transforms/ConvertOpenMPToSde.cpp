@@ -17,7 +17,7 @@
 ///     }
 ///
 ///   After:
-///     arts_sde.cu_region parallel scope(<distributed>) {
+///     arts_sde.cu_region parallel {
 ///       arts_sde.su_iterate (%c0) to (%N) step (%c1)
 ///           schedule(<static>, %c4)
 ///           reduction [#arts_sde<reduction_kind<add>>] (%sum : f64) {
@@ -154,8 +154,7 @@ struct OMPParallelToSdePattern : public OpRewritePattern<omp::ParallelOp> {
 
     auto cuRegion = sde::SdeCuRegionOp::create(
         rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-        sde::SdeConcurrencyScopeAttr::get(
-            ctx, sde::SdeConcurrencyScope::distributed),
+        /*concurrency_scope=*/nullptr,
         /*nowait=*/nullptr);
 
     Block &old = op.getRegion().front();
@@ -426,8 +425,7 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
 
     auto cuRegion = sde::SdeCuRegionOp::create(
         rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-        sde::SdeConcurrencyScopeAttr::get(
-            ctx, sde::SdeConcurrencyScope::distributed),
+        /*concurrency_scope=*/nullptr,
         /*nowait=*/nullptr);
     Block &parBlk = ensureBlock(cuRegion.getBody());
 
