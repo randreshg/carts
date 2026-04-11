@@ -50,20 +50,16 @@ struct SdeStructuredSummariesPass
         if (!neighborhoodSummary)
           return;
 
-        op.setAccessMinOffsetsAttr(
-            buildI64ArrayAttr(op.getContext(),
-                              neighborhoodSummary->minOffsets));
-        op.setAccessMaxOffsetsAttr(
-            buildI64ArrayAttr(op.getContext(),
-                              neighborhoodSummary->maxOffsets));
+        op.setAccessMinOffsetsAttr(buildI64ArrayAttr(
+            op.getContext(), neighborhoodSummary->minOffsets));
+        op.setAccessMaxOffsetsAttr(buildI64ArrayAttr(
+            op.getContext(), neighborhoodSummary->maxOffsets));
         op.setOwnerDimsAttr(
             buildI64ArrayAttr(op.getContext(), neighborhoodSummary->ownerDims));
-        op.setSpatialDimsAttr(
-            buildI64ArrayAttr(op.getContext(),
-                              neighborhoodSummary->spatialDims));
-        op.setWriteFootprintAttr(
-            buildI64ArrayAttr(op.getContext(),
-                              neighborhoodSummary->writeFootprint));
+        op.setSpatialDimsAttr(buildI64ArrayAttr(
+            op.getContext(), neighborhoodSummary->spatialDims));
+        op.setWriteFootprintAttr(buildI64ArrayAttr(
+            op.getContext(), neighborhoodSummary->writeFootprint));
 
         ARTS_DEBUG("stamped generic SDE structured summary on su_iterate");
         return;

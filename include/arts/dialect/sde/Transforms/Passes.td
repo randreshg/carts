@@ -108,6 +108,24 @@ def SdeStructuredSummaries
   let constructor = "mlir::arts::sde::createSdeStructuredSummariesPass()";
 }
 
+def SdeDistributionPlanning
+    : Pass<"sde-distribution-planning", "mlir::ModuleOp"> {
+  let summary = "Derive SDE-owned distribution intent from structured SDE loops";
+  let description = [{
+    Uses SDE-owned structured classification, concurrency scope, and the active
+    SDE cost model to wrap eligible `arts_sde.su_iterate` operations in
+    `arts_sde.su_distribute`. The current implementation is deliberately
+    narrow: it only authors a blocked advisory for local elementwise loops and
+    an owner-compute advisory for distributed stencil loops with enough work to
+    amortize distribution.
+
+    `ConvertSdeToArts` is responsible for materializing the advisory as ARTS
+    distribution attrs at the lowering boundary.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
+  let constructor = "mlir::arts::sde::createSdeDistributionPlanningPass()";
+}
+
 def ConvertOpenMPToSde : Pass<"convert-openmp-to-sde", "mlir::ModuleOp"> {
   let summary = "Convert OpenMP operations to SDE operations";
   let description = [{
@@ -200,6 +218,12 @@ def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
                            "::mlir::linalg::LinalgDialect",
                            "::mlir::tensor::TensorDialect"];
   let constructor = "mlir::arts::sde::createConvertSdeToArtsPass()";
+}
+
+def VerifySdeLowered : Pass<"verify-sde-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify no SDE operations survive past SDE-to-ARTS conversion";
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
+  let constructor = "mlir::arts::sde::createVerifySdeLoweredPass()";
 }
 
 #endif // ARTS_DIALECT_SDE_TRANSFORMS_PASSES

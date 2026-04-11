@@ -8,16 +8,18 @@
 
 #include "arts/Dialect.h"
 #include "arts/dialect/sde/IR/SdeDialect.h"
+#include "arts/dialect/sde/Transforms/Passes.h"
+namespace mlir::arts {
 #define GEN_PASS_DEF_VERIFYSDELOWERED
-#include "arts/passes/Passes.h"
-#include "arts/passes/Passes.h.inc"
+#include "arts/dialect/sde/Transforms/Passes.h.inc"
+} // namespace mlir::arts
 #include "mlir/Pass/Pass.h"
 
 using namespace mlir;
 
 namespace {
 struct VerifySdeLoweredPass
-    : public impl::VerifySdeLoweredBase<VerifySdeLoweredPass> {
+    : public arts::impl::VerifySdeLoweredBase<VerifySdeLoweredPass> {
   void runOnOperation() override {
     auto *sdeDialect = getOperation()
                            ->getContext()
@@ -38,6 +40,6 @@ struct VerifySdeLoweredPass
 };
 } // namespace
 
-std::unique_ptr<Pass> mlir::arts::createVerifySdeLoweredPass() {
+std::unique_ptr<Pass> mlir::arts::sde::createVerifySdeLoweredPass() {
   return std::make_unique<VerifySdeLoweredPass>();
 }
