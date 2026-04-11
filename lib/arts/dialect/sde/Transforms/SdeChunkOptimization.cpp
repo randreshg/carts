@@ -2,8 +2,8 @@
 /// File: SdeChunkOptimization.cpp
 ///
 /// Cost-model-backed SDE chunk sizing. Preserves explicit source chunk sizes
-/// and synthesizes chunks only for one-dimensional dynamic/guided loops with
-/// constant trip counts.
+/// and synthesizes chunks only for one-dimensional dynamic/guided loops,
+/// using either constant or symbolic trip-count arithmetic.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
@@ -67,9 +67,66 @@ static int64_t ceilDiv(int64_t lhs, int64_t rhs) {
   return (lhs + rhs - 1) / rhs;
 }
 
+static Value getConstantIndex(OpBuilder &builder, Location loc, int64_t value) {
+  return arith::ConstantIndexOp::create(builder, loc, value);
+}
+
+static Value buildTripCountValue(OpBuilder &builder, Location loc,
+                                 sde::SdeSuIterateOp op) {
+  if (std::optional<int64_t> tripCount = getConstantTripCount(op))
+    return getConstantIndex(builder, loc, *tripCount);
+
+  if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
+      op.getSteps().size() != 1)
+    return Value();
+
+  Value lowerBound = op.getLowerBounds().front();
+  Value upperBound = op.getUpperBounds().front();
+  Value step = op.getSteps().front();
+  Value zero = getConstantIndex(builder, loc, 0);
+  Value one = getConstantIndex(builder, loc, 1);
+
+  Value span = arith::SubIOp::create(builder, loc, upperBound, lowerBound);
+  Value nonNegativeSpan = arith::MaxUIOp::create(builder, loc, span, zero);
+
+  int64_t constantStep = 0;
+  Value safeStep = step;
+  if (ValueAnalysis::getConstantIndex(step, constantStep)) {
+    if (constantStep <= 0)
+      return Value();
+  } else {
+    safeStep = arith::MaxUIOp::create(builder, loc, step, one);
+  }
+
+  return arith::CeilDivUIOp::create(builder, loc, nonNegativeSpan, safeStep);
+}
+
+static Value buildSymbolicChunkValue(OpBuilder &builder, Location loc,
+                                     sde::SdeSuIterateOp op,
+                                     int64_t workerCount,
+                                     int64_t minIterations) {
+  Value tripCount = buildTripCountValue(builder, loc, op);
+  if (!tripCount)
+    return Value();
+
+  Value one = getConstantIndex(builder, loc, 1);
+  Value workerCountValue =
+      getConstantIndex(builder, loc, std::max<int64_t>(1, workerCount));
+  Value minIterationsValue =
+      getConstantIndex(builder, loc, std::max<int64_t>(1, minIterations));
+
+  Value clampedTripCount = arith::MaxUIOp::create(builder, loc, tripCount, one);
+  Value balancedChunk =
+      arith::CeilDivUIOp::create(builder, loc, clampedTripCount,
+                                 workerCountValue);
+  Value preferredChunk = arith::MaxUIOp::create(builder, loc, balancedChunk,
+                                                minIterationsValue);
+  return arith::MinUIOp::create(builder, loc, preferredChunk, clampedTripCount);
+}
+
 struct ChunkRewrite {
   sde::SdeSuIterateOp op;
-  int64_t chunkSize = 0;
+  std::optional<int64_t> chunkSize;
 };
 
 struct SdeChunkOptimizationPass
@@ -87,26 +144,45 @@ struct SdeChunkOptimizationPass
         return;
 
       std::optional<int64_t> tripCount = getConstantTripCount(op);
-      if (!tripCount || *tripCount <= 1)
+      if (tripCount && *tripCount <= 1)
         return;
 
-      int64_t workerCount = std::max<int64_t>(1, costModel->getWorkerCount());
-      int64_t minIterations = std::max<int64_t>(
-          1, costModel->getMinIterationsPerWorker());
-      int64_t balancedChunk = ceilDiv(*tripCount, workerCount);
-      int64_t chunkSize =
-          std::clamp(std::max(minIterations, balancedChunk), int64_t{1},
-                     *tripCount);
-      rewrites.push_back({op, chunkSize});
+      if (tripCount) {
+        int64_t workerCount = std::max<int64_t>(1, costModel->getWorkerCount());
+        int64_t minIterations = std::max<int64_t>(
+            1, costModel->getMinIterationsPerWorker());
+        int64_t balancedChunk = ceilDiv(*tripCount, workerCount);
+        int64_t chunkSize =
+            std::clamp(std::max(minIterations, balancedChunk), int64_t{1},
+                       *tripCount);
+        rewrites.push_back({op, chunkSize});
+        return;
+      }
+
+      if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
+          op.getSteps().size() != 1)
+        return;
+
+      rewrites.push_back({op, std::nullopt});
     });
 
     for (ChunkRewrite &rewrite : rewrites) {
       IRRewriter rewriter(rewrite.op.getContext());
       rewriter.setInsertionPoint(rewrite.op);
 
-      Value chunkSize =
-          arith::ConstantIndexOp::create(rewriter, rewrite.op.getLoc(),
-                                         rewrite.chunkSize);
+      Value chunkSize;
+      if (rewrite.chunkSize) {
+        chunkSize = getConstantIndex(rewriter, rewrite.op.getLoc(),
+                                     *rewrite.chunkSize);
+      } else {
+        chunkSize = buildSymbolicChunkValue(
+            rewriter, rewrite.op.getLoc(), rewrite.op,
+            std::max<int64_t>(1, costModel->getWorkerCount()),
+            std::max<int64_t>(1, costModel->getMinIterationsPerWorker()));
+      }
+      if (!chunkSize)
+        continue;
+
       auto newOp = sde::SdeSuIterateOp::create(
           rewriter, rewrite.op.getLoc(), rewrite.op.getLowerBounds(),
           rewrite.op.getUpperBounds(), rewrite.op.getSteps(),

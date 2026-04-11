@@ -509,18 +509,20 @@ inside OMP->SDE conversion.
 
 `SdeChunkOptimization` is the first cost-driven SDE optimization pass in the
 tree. It runs on `sde.su_iterate` before `RaiseToLinalg` / `ConvertSdeToArts`
-and currently handles only the simplest safe synthesis case:
+and currently handles only a narrow but real synthesis subset:
 
 - missing chunk size only
 - one-dimensional loops only
 - `dynamic` / `guided` schedules only
-- constant trip count only
+- constant or symbolic trip count only
 
 It preserves explicit source chunk sizes and rewrites the SDE op in place with
-a synthesized `chunkSize` operand. This is intentionally validated at the SDE
-layer: contract tests inspect the IR dump after `SdeChunkOptimization` and
-check the resulting `arts_sde.su_iterate(... schedule(<kind>, %chunk))`
-directly, before ARTS lowering.
+a synthesized `chunkSize` operand. For symbolic trip counts, the pass
+materializes the chunk computation as `arith` SSA directly in the SDE IR. This
+is intentionally validated at the SDE layer: contract tests inspect the IR dump
+after `SdeChunkOptimization` and check the resulting
+`arts_sde.su_iterate(... schedule(<kind>, %chunk))` directly, before ARTS
+lowering.
 
 `SdeReductionStrategy` is a limited cost-driven SDE reduction pass. It also
 runs on `sde.su_iterate` before `RaiseToLinalg` / `ConvertSdeToArts` and
@@ -570,7 +572,7 @@ decision automatic.
    for irregular work).
 
 3. **Broaden `SdeChunkOptimization`**: Extend the current implementation
-   beyond one-dimensional constant-trip dynamic/guided loops. Future work can
+   beyond the current one-dimensional dynamic/guided subset. Future work can
    incorporate richer work estimates, more schedule kinds, and multi-dim loop
    handling while preserving the same SDE-level validation model.
 
