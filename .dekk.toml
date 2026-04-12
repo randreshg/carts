@@ -77,3 +77,7 @@ bin = [
     "{project}/.install/arts/bin",
     "{project}/.install/polygeist/bin",
 ]
+
+# Wire the managed conda env's lib/ into the dynamic-linker search path
+DYLD_LIBRARY_PATH = ["{project}/.dekk/env/lib"]
+LD_LIBRARY_PATH   = ["{project}/.dekk/env/lib"]
