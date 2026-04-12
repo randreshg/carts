@@ -10,7 +10,10 @@
 // CHECK: %[[SIGMOID_GUID:[^,]+]], %[[SIGMOID_PTR:[^ ]+]] = arts.db_alloc[<inout>, <heap>, <write>, <coarse>
 // CHECK: %[[TANH_GUID:[^,]+]], %[[TANH_PTR:[^ ]+]] = arts.db_alloc[<inout>, <heap>, <write>, <coarse>
 
-// CHECK: arts.db_acquire[<inout>] (%[[RELU_GUID]] : memref<?xi64>, %[[RELU_PTR]] : memref<?xmemref<?xf32>>) partitioning(<coarse>)
+// With SDE-driven classification, DbModeTightening correctly recognizes all
+// activation outputs as pure writes (each reads from a separate input DB and
+// writes to its own output DB), so all tighten to <out>.
+// CHECK: arts.db_acquire[<out>] (%[[RELU_GUID]] : memref<?xi64>, %[[RELU_PTR]] : memref<?xmemref<?xf32>>) partitioning(<coarse>)
 // CHECK: arts.db_acquire[<out>] (%[[GELU_GUID]] : memref<?xi64>, %[[GELU_PTR]] : memref<?xmemref<?xf32>>) partitioning(<coarse>)
-// CHECK: arts.db_acquire[<inout>] (%[[SIGMOID_GUID]] : memref<?xi64>, %[[SIGMOID_PTR]] : memref<?xmemref<?xf32>>) partitioning(<coarse>)
+// CHECK: arts.db_acquire[<out>] (%[[SIGMOID_GUID]] : memref<?xi64>, %[[SIGMOID_PTR]] : memref<?xmemref<?xf32>>) partitioning(<coarse>)
 // CHECK: arts.db_acquire[<out>] (%[[TANH_GUID]] : memref<?xi64>, %[[TANH_PTR]] : memref<?xmemref<?xf32>>) partitioning(<coarse>)
