@@ -23,9 +23,23 @@ namespace arts {
 
 enum class ReductionLoweringStrategy { localAccumulate, tree, atomic };
 
+/// Reduction combiner kind for lowering. Must match SdeReductionKind enum
+/// values so that integer attr values read from arts.reduction_kinds can be
+/// cast directly.
+enum class ReductionCombinerKind : int32_t {
+  add = 0,
+  mul = 1,
+  min = 2,
+  max = 3,
+  land = 4,
+  lor = 5,
+  lxor = 6
+};
+
 struct ReductionLoweringInfo {
   SmallVector<Value> reductionVars;
   SmallVector<Value> privateReductionAccums;
+  SmallVector<ReductionCombinerKind> combinerKinds;
   std::optional<Location> loopLocation;
 
   /// Partial accumulators: array[num_workers] for intermediate results

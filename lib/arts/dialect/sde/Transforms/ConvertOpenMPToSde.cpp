@@ -115,6 +115,12 @@ static sde::SdeReductionKind inferReductionKind(omp::DeclareReductionOp decl) {
       return sde::SdeReductionKind::min;
     if (isa<arith::MaximumFOp, arith::MaxSIOp, arith::MaxUIOp>(op))
       return sde::SdeReductionKind::max;
+    if (isa<arith::AndIOp>(op))
+      return sde::SdeReductionKind::land;
+    if (isa<arith::OrIOp>(op))
+      return sde::SdeReductionKind::lor;
+    if (isa<arith::XOrIOp>(op))
+      return sde::SdeReductionKind::lxor;
   }
   return sde::SdeReductionKind::custom;
 }

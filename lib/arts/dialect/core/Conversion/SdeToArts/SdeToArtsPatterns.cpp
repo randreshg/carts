@@ -554,6 +554,19 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
         parentEdt->setAttr(AttrNames::Operation::Contract::ReductionStrategy,
                            strategyAttr);
     }
+    if (auto reductionKindsAttr = op.getReductionKindsAttr()) {
+      // Convert SDE enum attrs to plain I32 array for consumption by core
+      // passes without introducing an SDE dialect dependency.
+      SmallVector<Attribute> intAttrs;
+      for (auto attr : reductionKindsAttr) {
+        if (auto enumAttr = dyn_cast<sde::SdeReductionKindAttr>(attr))
+          intAttrs.push_back(rewriter.getI32IntegerAttr(
+              static_cast<int32_t>(enumAttr.getValue())));
+      }
+      if (!intAttrs.empty())
+        artsFor->setAttr(AttrNames::Operation::Contract::ReductionKinds,
+                         rewriter.getArrayAttr(intAttrs));
+    }
 
     // Move the body
     Region &dstRegion = artsFor.getRegion();
@@ -696,9 +709,19 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
 
     if (auto distributionKind =
             convertDistributionKind(enclosingDistribution)) {
-      stampDistributionKind(artsFor.getOperation(), *distributionKind);
+      // For internode (distributed scope), don't stamp distribution_kind —
+      // let ARTS DistributionHeuristics pick topology-aware kinds like
+      // two_level based on runtime config. SDE only knows about semantic
+      // distribution (blocked/cyclic/owner_compute), not node topology.
+      bool isInternode = false;
       if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
-        stampDistributionKind(parentEdt.getOperation(), *distributionKind);
+        isInternode =
+            (parentEdt.getConcurrency() == EdtConcurrency::internode);
+      if (!isInternode) {
+        stampDistributionKind(artsFor.getOperation(), *distributionKind);
+        if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
+          stampDistributionKind(parentEdt.getOperation(), *distributionKind);
+      }
     }
 
     // RaiseToLinalg leaves the original loop body in place and uses
@@ -752,17 +775,6 @@ struct SdeYieldToArtsPattern : public OpRewritePattern<sde::SdeYieldOp> {
   LogicalResult matchAndRewrite(sde::SdeYieldOp op,
                                 PatternRewriter &rewriter) const override {
     YieldOp::create(rewriter, op.getLoc());
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
-/// arts_sde.mu_access -> annotation only
-struct MuAccessToArtsPattern : public OpRewritePattern<sde::SdeMuAccessOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(sde::SdeMuAccessOp op,
-                                PatternRewriter &rewriter) const override {
     rewriter.eraseOp(op);
     return success();
   }
@@ -847,7 +859,6 @@ struct ConvertSdeToArtsPass
     patterns.add<CuAtomicToArtsPattern>(context);
     patterns.add<CuReduceToArtsPattern>(context);
     patterns.add<SdeYieldToArtsPattern>(context);
-    patterns.add<MuAccessToArtsPattern>(context);
     patterns.add<MuDepToArtsPattern>(context);
     patterns.add<MuReductionDeclToArtsPattern>(context);
     GreedyRewriteConfig config;
