@@ -47,8 +47,12 @@ Epilogue (conditional, token shown after stage name):
 - `--pipeline=<step>`: run up to and including the selected pipeline step.
 - `--start-from=<step>`: skip all earlier pipeline steps and start at the
   selected pipeline step.
-- `--all-pipelines` (`.mlir` input only): emit one `.mlir` per stage into a
-  directory — the fastest way to bisect a failing pipeline.
+- `--all-pipelines` (`.mlir` input only): emits one `.mlir` per stage
+  (`<stem>_<stage>.mlir`), the final `<stem>_complete.mlir`, `<stem>.ll`,
+  and a `<stem>_passes/<NN>_<stage>/NNN_<PassClass>.mlir` hierarchy with
+  one dump per executed pass. Nested pass managers (e.g. `initial-cleanup`
+  running `LowerAffinePass` once per `func::FuncOp`) are captured as
+  separate files. The fastest way to bisect a failing pipeline.
 - Invalid ranges are rejected: `--start-from` cannot be later than
   `--pipeline`.
 
