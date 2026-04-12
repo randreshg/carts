@@ -305,51 +305,6 @@ private:
   void rewriteUsesInParentEdt(MemrefInfo &memrefInfo);
   void rewriteUsesEverywhereCoarse(Operation *alloc, DbAllocOp dbAlloc);
 
-  ///===----------------------------------------------------------------------===///
-  //// Helper Functions for Heuristic Decisions
-  ///===----------------------------------------------------------------------===///
-
-  /// Computes the number of outer DBs for fine-grained allocation.
-  /// Returns the product of pinned dimensions, or kMaxOuterDBs+1 if dynamic.
-  static int64_t computeOuterDBs(MemRefType memRefType,
-                                 unsigned pinnedDimCount) {
-    int64_t outerDBs = 1;
-    for (unsigned d = 0; d < pinnedDimCount; ++d) {
-      /// Conservative
-      if (memRefType.isDynamicDim(d))
-        return DbHeuristics::kMaxOuterDBs + 1;
-      outerDBs *= memRefType.getDimSize(d);
-    }
-    return outerDBs;
-  }
-
-  /// Computes maximum dependencies per EDT for cost model evaluation.
-  static int64_t computeMaxDepsPerEDT(const MemrefInfo &info) {
-    int64_t maxDeps = 0;
-    for (const auto &[edt, deps] : info.edtToDeps)
-      maxDeps = std::max(maxDeps, static_cast<int64_t>(deps.size()));
-    return maxDeps;
-  }
-
-  /// Computes total inner bytes (product of unpinned dimensions * element
-  /// size).
-  static int64_t computeInnerBytes(MemRefType memRefType,
-                                   unsigned pinnedDimCount) {
-    int64_t innerBytes = 1;
-    Type elementType = memRefType.getElementType();
-    while (auto nested = dyn_cast<MemRefType>(elementType))
-      elementType = nested.getElementType();
-    int64_t elemSize = elementType.isIntOrFloat()
-                           ? (elementType.getIntOrFloatBitWidth() + 7) / 8
-                           : 8;
-
-    for (unsigned d = pinnedDimCount; d < memRefType.getRank(); ++d) {
-      if (memRefType.isDynamicDim(d))
-        return DbHeuristics::kMinInnerBytes + 1; /// Assume large enough
-      innerBytes *= memRefType.getDimSize(d);
-    }
-    return innerBytes * elemSize;
-  }
 };
 } // namespace
 

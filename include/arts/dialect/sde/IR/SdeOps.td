@@ -345,27 +345,6 @@ def SdeMuDepOp
   }];
 }
 
-def SdeMuAccessOp
-    : ArtsSde_Op<"mu_access", [Pure, AttrSizedOperandSegments]> {
-  let summary = "Access-region annotation for memref fallback paths";
-  let description = [{
-    Explicitly records an access slice in the memref fallback path without
-    materializing a dependency token or introducing runtime-specific behavior.
-  }];
-
-  let arguments = (ins
-    SdeAccessModeAttr:$mode,
-    AnyMemRef:$source,
-    Variadic<Index>:$offsets,
-    Variadic<Index>:$sizes
-  );
-
-  let assemblyFormat = [{
-    $mode $source (`[` $offsets^ `]`)? (`size` `[` $sizes^ `]`)?
-    `:` type($source) attr-dict
-  }];
-}
-
 def SdeMuReductionDeclOp
     : ArtsSde_Op<"mu_reduction_decl", [IsolatedFromAbove, Symbol]> {
   let summary = "Module-level SDE reduction declaration";
