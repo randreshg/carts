@@ -708,6 +708,9 @@ public:
 
   bool match(ForOp artsFor) override {
     matchResult = {};
+    if (auto existingPattern = getEffectiveDepPattern(artsFor.getOperation());
+        existingPattern && *existingPattern == ArtsDepPattern::matmul)
+      return false;
     if (!matchMatmulDotInArtsFor(artsFor, matchResult))
       return false;
 

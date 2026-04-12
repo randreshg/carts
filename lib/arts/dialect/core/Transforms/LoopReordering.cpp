@@ -70,6 +70,10 @@ struct LoopReorderingPass
   /// Try to auto-detect matmul-like patterns and apply loop interchange.
   /// Returns true if a transformation was applied.
   bool tryAutoDetectAndReorder(ForOp artsFor) {
+    if (auto depPattern = getEffectiveDepPattern(artsFor.getOperation());
+        depPattern && *depPattern != ArtsDepPattern::unknown)
+      return false;
+
     MatmulInitReductionLoopMatch loopMatch;
     if (!detectMatmulInitReductionLoopNest(artsFor, &AM->getLoopAnalysis(),
                                            loopMatch))

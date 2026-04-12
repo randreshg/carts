@@ -1,0 +1,48 @@
+// RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --start-from openmp-to-arts --pipeline pattern-pipeline --mlir-print-ir-after-all 2>&1 | %FileCheck %s
+
+// Verify that a pre-stamped SDE stencil contract is treated as authoritative
+// by the stage-5 pattern pipeline instead of being re-derived and reset.
+
+// CHECK-LABEL: // -----// IR Dump After KernelTransforms (arts-kernel-transforms) //----- //
+// CHECK: func.func @main
+// CHECK: arts.for(%c1) to(%c15) step(%c1) {
+// CHECK: } {arts.pattern_revision = 7 : i64
+// CHECK-SAME: depPattern = #arts.dep_pattern<stencil_tiling_nd>
+// CHECK-SAME: distribution_pattern = #arts.distribution_pattern<stencil>
+// CHECK-SAME: stencil_max_offsets = [1, 1]
+// CHECK-SAME: stencil_min_offsets = [-1, -1]
+// CHECK-SAME: stencil_owner_dims = [0, 1]
+// CHECK-SAME: stencil_spatial_dims = [0, 1]
+// CHECK-SAME: stencil_supported_block_halo
+// CHECK-SAME: stencil_write_footprint = [1, 1]
+
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
+  func.func @main(%A: memref<16x16xf64>, %B: memref<16x16xf64>) {
+    %c1 = arith.constant 1 : index
+    %c15 = arith.constant 15 : index
+    arts_sde.cu_region <parallel> scope(<local>) {
+      arts_sde.su_iterate(%c1) to(%c15) step(%c1) classification(<stencil>) {
+      ^bb0(%i: index):
+        scf.for %j = %c1 to %c15 step %c1 {
+          %im1 = arith.subi %i, %c1 : index
+          %ip1 = arith.addi %i, %c1 : index
+          %jm1 = arith.subi %j, %c1 : index
+          %jp1 = arith.addi %j, %c1 : index
+          %n = memref.load %A[%im1, %j] : memref<16x16xf64>
+          %s = memref.load %A[%ip1, %j] : memref<16x16xf64>
+          %w = memref.load %A[%i, %jm1] : memref<16x16xf64>
+          %e = memref.load %A[%i, %jp1] : memref<16x16xf64>
+          %c = memref.load %A[%i, %j] : memref<16x16xf64>
+          %s0 = arith.addf %n, %s : f64
+          %s1 = arith.addf %w, %e : f64
+          %s2 = arith.addf %s0, %s1 : f64
+          %sum = arith.addf %s2, %c : f64
+          memref.store %sum, %B[%i, %j] : memref<16x16xf64>
+        }
+        arts_sde.yield
+      } {arts.pattern_revision = 7 : i64, depPattern = #arts.dep_pattern<stencil_tiling_nd>, distribution_pattern = #arts.distribution_pattern<stencil>, stencil_max_offsets = [1, 1], stencil_min_offsets = [-1, -1], stencil_owner_dims = [0, 1], stencil_spatial_dims = [0, 1], stencil_supported_block_halo, stencil_write_footprint = [1, 1]}
+      arts_sde.yield
+    }
+    return
+  }
+}
