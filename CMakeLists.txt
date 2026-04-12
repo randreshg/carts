@@ -53,6 +53,7 @@ list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${CLANG_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(TableGen)
 include(AddLLVM)
 include(AddMLIR)
@@ -144,16 +145,16 @@ if(CARTS_ENABLE_TESTS)
   
   # Create test targets with proper dependencies
   add_custom_target(check
-    COMMAND ${DEKK_EXECUTABLE} carts test
-    COMMENT "Running CARTS test suite"
+    COMMAND ${DEKK_EXECUTABLE} carts test --suite pass
+    COMMENT "Running CARTS pass test suite"
     USES_TERMINAL
     VERBATIM
   )
   
-  # Add convenience target for examples suite.
+  # Add convenience target for samples (end-to-end examples).
   add_custom_target(check-examples
     COMMAND ${DEKK_EXECUTABLE} carts examples run --all
-    COMMENT "Running CARTS examples test suite"
+    COMMENT "Running CARTS examples (samples/) test suite"
     USES_TERMINAL
     VERBATIM
   )
@@ -165,7 +166,33 @@ if(CARTS_ENABLE_TESTS)
     USES_TERMINAL
     VERBATIM
   )
-  
+
+  # E2E tests: compile + run samples
+  add_custom_target(check-e2e
+    COMMAND ${DEKK_EXECUTABLE} carts test --suite e2e
+    COMMENT "Running CARTS E2E test suite (compile + run samples)"
+    USES_TERMINAL
+    VERBATIM
+  )
+
+  # Run both pass and E2E suites
+  add_custom_target(check-all
+    COMMAND ${DEKK_EXECUTABLE} carts test --suite all
+    COMMENT "Running all CARTS test suites"
+    USES_TERMINAL
+    VERBATIM
+  )
+
+  # Generate lit.site.cfg.py from CMake variables for out-of-source test execution.
+  configure_file(
+    ${CMAKE_SOURCE_DIR}/tests/lit.site.cfg.py.in
+    ${CMAKE_BINARY_DIR}/tests/lit.site.cfg.py
+    @ONLY)
+
+  # CTest integration: register co-located pass test suites.
+  enable_testing()
+  add_subdirectory(tests)
+
 else()
   message(STATUS "CARTS tests disabled")
 endif()
@@ -214,7 +241,7 @@ message_blue(" -- Adding tools")
 add_subdirectory(tools)
 
 if(CARTS_ENABLE_TESTS AND CARTS_TESTS_REQUIRE_INSTALLED_RUNNER)
-  foreach(_carts_test_target check check-examples check-verbose)
+  foreach(_carts_test_target check check-examples check-verbose check-e2e check-all)
     if(TARGET ${_carts_test_target} AND TARGET carts-compile)
       add_dependencies(${_carts_test_target} carts-compile)
     endif()

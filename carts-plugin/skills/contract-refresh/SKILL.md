@@ -10,8 +10,8 @@ argument-hint: [<test-pattern> | --all | --changed]
 
 ## Purpose
 
-After any IR-affecting pass change, contract test fixtures in
-`tests/contracts/Output/` become stale. This skill automates the regeneration,
+After any IR-affecting pass change, contract test fixtures in co-located
+`test/Output/` directories become stale. This skill automates the regeneration,
 validation, and commit of updated fixture snapshots.
 
 **This is the #1 most repetitive task** — ~5.5% of all commits are fixture
@@ -20,7 +20,7 @@ refreshes, often touching 10-30 `.mlir` files in a single batch.
 ## When to Use
 
 - Contract tests fail after a legitimate pass change (not a bug)
-- `git status` shows many modified files in `tests/contracts/Output/`
+- `git status` shows many modified files in `*/test/Output/`
 - After adding/modifying/reordering passes in the pipeline
 - After `dekk carts test` reveals stale FileCheck expectations
 
@@ -30,13 +30,13 @@ refreshes, often touching 10-30 `.mlir` files in a single batch.
 
 ```bash
 # See which fixture files changed
-git diff --name-only -- tests/contracts/Output/
+git diff --name-only -- 'lib/arts/dialect/*/test/Output/' 'tests/*/Output/'
 
 # Run full test suite to see failures
 dekk carts test 2>&1 | grep -E "FAIL:|XFAIL:" | head -30
 
 # Run specific subset
-dekk carts lit tests/contracts/<category>/
+dekk carts lit lib/arts/dialect/<dialect>/test/
 ```
 
 ### Phase 2: Regenerate Fixtures
@@ -44,7 +44,7 @@ dekk carts lit tests/contracts/<category>/
 For tests using `CARTS_COMPILE_WORKDIR`:
 ```bash
 # Single test regeneration
-dekk carts lit tests/contracts/<test>.mlir
+dekk carts lit lib/arts/dialect/<dialect>/test/<test>.mlir
 
 # The workdir output is automatically captured in Output/<test>.mlir.tmp.compile/
 ```
@@ -52,7 +52,7 @@ dekk carts lit tests/contracts/<test>.mlir
 For tests with inline CHECK patterns (no Output/ directory):
 ```bash
 # Dump the actual output and compare
-dekk carts compile tests/contracts/<test>.mlir --pipeline=<stage> > /tmp/actual.mlir
+dekk carts compile lib/arts/dialect/<dialect>/test/<test>.mlir --pipeline=<stage> > /tmp/actual.mlir
 # Update CHECK lines in the test file to match actual output
 ```
 
@@ -60,7 +60,7 @@ dekk carts compile tests/contracts/<test>.mlir --pipeline=<stage> > /tmp/actual.
 
 ```bash
 # Re-run affected tests to confirm they pass
-dekk carts lit tests/contracts/<category>/
+dekk carts lit lib/arts/dialect/<dialect>/test/
 
 # Run full suite to catch cascading failures
 dekk carts test
@@ -70,30 +70,31 @@ dekk carts test
 
 ```bash
 # Review changes are legitimate (not hiding bugs)
-git diff -- tests/contracts/Output/ | head -200
+git diff -- 'lib/arts/dialect/*/test/Output/' 'tests/*/Output/' | head -200
 
 # Stage only fixture files
-git add tests/contracts/Output/
+git add 'lib/arts/dialect/*/test/Output/' 'tests/*/Output/'
 ```
 
 ## Key Directories
 
 ```
-tests/contracts/Output/                    # Fixture snapshots
-tests/contracts/core/Output/               # Core dialect fixtures
-tests/contracts/rt/Output/                 # RT dialect fixtures
-tests/contracts/sde/Output/                # SDE dialect fixtures
-tests/contracts/partitioning/safety/Output/ # Partition safety fixtures
+lib/arts/dialect/core/test/Output/                  # Core dialect fixtures
+lib/arts/dialect/rt/test/Output/                    # RT dialect fixtures
+lib/arts/dialect/sde/test/Output/                   # SDE dialect fixtures
+lib/arts/dialect/core/test/partitioning/safety/Output/ # Partition safety fixtures
+tests/verify/Output/                                # Verifier fixtures
+tests/cli/Output/                                   # CLI fixtures
 ```
 
 ## Config Files (for test regeneration)
 
 | Config | When to Use |
 |--------|-------------|
-| `tests/contracts/inputs/arts_1t.cfg` | Single-worker isolation |
-| `tests/contracts/inputs/arts_2t.cfg` | Minimal parallelism |
-| `tests/contracts/inputs/arts_64t.cfg` | Large-scale validation |
-| `tests/examples/arts.cfg` | Integration tests |
+| `tests/inputs/arts_1t.cfg` | Single-worker isolation |
+| `tests/inputs/arts_2t.cfg` | Minimal parallelism |
+| `tests/inputs/arts_64t.cfg` | Large-scale validation |
+| `samples/arts.cfg` | Integration tests |
 
 ## Common Patterns
 
@@ -102,13 +103,13 @@ tests/contracts/partitioning/safety/Output/ # Partition safety fixtures
 dekk carts test 2>&1 | tee /tmp/test-results.txt
 grep "FAIL:" /tmp/test-results.txt | wc -l  # Count failures
 dekk carts test  # Regenerate all (fixtures auto-update on rerun)
-git diff --stat -- tests/contracts/Output/  # Review scope
+git diff --stat -- 'lib/arts/dialect/*/test/Output/' 'tests/*/Output/'  # Review scope
 ```
 
 ### Single-stage fixture refresh
 ```bash
 # Only refresh fixtures for a specific pipeline stage
-dekk carts lit tests/contracts/ -- --filter="<stage-name>"
+dekk carts lit lib/arts/dialect/ -- --filter="<stage-name>"
 ```
 
 ## Instructions

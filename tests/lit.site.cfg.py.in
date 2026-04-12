@@ -1,0 +1,20 @@
+# -*- Python -*-
+"""
+CMake-generated lit site configuration for CARTS tests.
+
+Generated from tests/lit.site.cfg.py.in by CMake's configure_file().
+The values between @...@ are substituted at configure time.
+"""
+import os
+
+config.carts_build_dir = "@CMAKE_BINARY_DIR@"
+config.carts_source_dir = "@CMAKE_SOURCE_DIR@"
+config.carts_compile_tool = "@CMAKE_BINARY_DIR@/bin/carts-compile"
+config.filecheck_tool = "@FILECHECK_EXECUTABLE@"
+config.llvm_tools_dir = "@LLVM_LIT_TOOLS_DIR@"
+config.carts_inputs_dir = os.path.join("@CMAKE_SOURCE_DIR@", "tests", "inputs")
+
+# Chain into the main lit configuration (at project root).
+lit_config.load_config(
+    config, os.path.join("@CMAKE_SOURCE_DIR@", "lit.cfg.py")
+)

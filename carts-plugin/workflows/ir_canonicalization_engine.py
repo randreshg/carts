@@ -123,7 +123,8 @@ def ir_canonicalization_engine(
         "Produce:\n"
         "1. Complete ArtsOps.cpp changes (fold methods + canonicalization patterns)\n"
         "2. Any .td DRR pattern files\n"
-        "3. FileCheck lit tests for each pattern in tests/contracts/\n"
+        "3. FileCheck lit tests for each pattern in the per-dialect test dir "
+        "(e.g. lib/arts/dialect/core/test/)\n"
         "4. A summary table: pattern name, benefit, status (PASS/FAIL)\n\n"
         "Only include patterns that passed verification.",
         agent=codegen_specialist,

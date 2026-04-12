@@ -19,13 +19,13 @@ parameters:
 
 | Stage Range | Directory | Dialect |
 |-------------|-----------|---------|
-| 1-2 (metadata, raise) | `tests/contracts/sde/` | SDE |
-| 3-16 (core transforms) | `tests/contracts/core/` | Core |
-| 13-14 (partitioning) | `tests/contracts/partitioning/safety/` | Core (safety) |
-| 17-18 (lowering) | `tests/contracts/rt/` | RT |
-| Verifiers | `tests/contracts/verify/` | Cross-dialect |
-| CLI flags | `tests/contracts/cli/` | Infrastructure |
-| End-to-end | `tests/examples/` | Integration |
+| 1-2 (metadata, raise) | `lib/arts/dialect/sde/test/` | SDE |
+| 3-16 (core transforms) | `lib/arts/dialect/core/test/` | Core |
+| 13-14 (partitioning) | `lib/arts/dialect/core/test/partitioning/safety/` | Core (safety) |
+| 17-18 (lowering) | `lib/arts/dialect/rt/test/` | RT |
+| Verifiers | `tests/verify/` | Cross-dialect |
+| CLI flags | `tests/cli/` | Infrastructure |
+| End-to-end | `samples/` | Integration |
 
 ## Contract Test Template (Single Stage)
 
@@ -92,7 +92,7 @@ Examples:
 4. **Label anchors** — always start with `CHECK-LABEL: func @name`
 5. **Preserve semantic markers** — keep `arts.dep_pattern`, `arts.partition_mode`,
    `arts.distribution_kind` attributes in test IR
-6. **Use shared inputs** when possible — check `tests/contracts/inputs/` first
+6. **Use shared inputs** when possible — check `tests/inputs/` first
 
 ## Instructions
 

@@ -1,0 +1,125 @@
+# -*- Python -*-
+"""
+Lit configuration for CARTS tests.
+
+Tests are co-located with pass source code under lib/arts/dialect/*/test/,
+with cross-cutting tests (CLI, verify) under tests/. This config discovers
+tests across all these directories.
+
+This file lives at the project root so lit can find it from any test directory
+(lib/arts/dialect/*/test/, tests/cli/, tests/verify/).  When invoked via
+CMake's lit.site.cfg.py, paths come from CMake variables.
+"""
+
+import os
+
+import lit.formats
+import lit.util
+
+import lit.llvm
+lit.llvm.initialize(lit_config, config)
+from lit.llvm import llvm_config
+
+
+config.name = "carts"
+use_lit_shell = True
+lit_shell_env = os.environ.get("LIT_USE_INTERNAL_SHELL")
+if lit_shell_env:
+    use_lit_shell = not lit.util.pythonize_bool(lit_shell_env)
+config.test_format = lit.formats.ShTest(execute_external=not use_lit_shell)
+config.suffixes = [".mlir"]
+
+# --- Path setup ---
+# Detect project root: lit.cfg.py lives at the project root.
+project_root = getattr(config, "carts_source_dir", None) or os.path.dirname(os.path.abspath(__file__))
+tests_dir = os.path.join(project_root, "tests")
+
+# Source root is the project root so lit can discover test/ dirs under lib/.
+config.test_source_root = project_root
+
+# Out-of-source test execution: avoids polluting source tree with Output/ dirs.
+build_dir = getattr(config, "carts_build_dir", None) or os.path.join(project_root, "build")
+config.test_exec_root = os.path.join(build_dir, "tests", "lit-output")
+
+# Tell lit which subdirectories to scan for tests (IREE pattern).
+config.test_subdirs = [
+    os.path.join("lib", "arts", "dialect", "sde", "test"),
+    os.path.join("lib", "arts", "dialect", "core", "test"),
+    os.path.join("lib", "arts", "dialect", "rt", "test"),
+    os.path.join("tests", "cli"),
+    os.path.join("tests", "verify"),
+]
+
+# Keep llvm-lit resilient to interrupted writes or stray blank lines in the
+# per-suite timing cache.
+test_times_path = os.path.join(tests_dir, ".lit_test_times.txt")
+if os.path.exists(test_times_path):
+    with open(test_times_path, "r") as time_file:
+        cleaned_lines = []
+        for line in time_file:
+            fields = line.split(maxsplit=1)
+            if len(fields) != 2:
+                continue
+            try:
+                float(fields[0])
+            except ValueError:
+                continue
+            cleaned_lines.append(line)
+    with open(test_times_path, "w") as time_file:
+        time_file.writelines(cleaned_lines)
+
+# --- Tool paths ---
+install_root = os.path.join(project_root, ".install")
+carts_bin_dir = os.path.join(install_root, "carts", "bin")
+llvm_bin_dir = os.path.join(install_root, "llvm", "bin")
+llvm_lib_dir = os.path.join(install_root, "llvm", "lib")
+build_bin_dir = os.path.join(project_root, "build", "bin")
+
+carts_compile_tool = getattr(config, "carts_compile_tool", None)
+if not carts_compile_tool:
+    carts_compile_tool = os.path.join(build_bin_dir, "carts-compile")
+    if not os.path.exists(carts_compile_tool):
+        carts_compile_tool = os.path.join(install_root, "carts", "bin", "carts-compile")
+
+filecheck_tool = getattr(config, "filecheck_tool", None)
+if not filecheck_tool:
+    filecheck_tool = os.path.join(llvm_bin_dir, "FileCheck")
+
+required_tools = [
+    ("%carts-compile", carts_compile_tool),
+    ("%carts", os.path.join(install_root, "bin", "carts")),
+    ("%FileCheck", filecheck_tool),
+]
+
+for subst, tool in required_tools:
+    if not os.path.exists(tool):
+        lit_config.fatal(
+            f"Required tool '{tool}' was not found. "
+            "Run `dekk carts build` so the toolchain under .install/ is up to date."
+        )
+    config.substitutions.append((subst, tool))
+
+# --- Test data substitutions ---
+inputs_dir = getattr(config, "carts_inputs_dir", None)
+if not inputs_dir:
+    inputs_dir = os.path.join(project_root, "tests", "inputs")
+samples_dir = os.path.join(project_root, "samples")
+arts_config_path = os.path.join(inputs_dir, "arts_8t.cfg")
+
+config.substitutions.append(("%inputs_dir", inputs_dir))
+config.substitutions.append(("%samples_dir", samples_dir))
+config.substitutions.append(("%arts_config", arts_config_path))
+
+# Export a few defaults so standard substitutions such as %S/%T are available.
+config.llvm_tools_dir = llvm_bin_dir
+config.llvm_lib_dir = llvm_lib_dir
+
+# Add our installed bins to PATH for convenience.
+config.environment["PATH"] = os.pathsep.join(
+    [build_bin_dir, carts_bin_dir, llvm_bin_dir, config.environment.get("PATH", "")]
+)
+
+# Directories that should not be treated as test directories.
+config.excludes = ["inputs", "snapshots", "Output", "counters"]
+
+llvm_config.use_default_substitutions()

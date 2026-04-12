@@ -128,7 +128,7 @@ def regression_hunter(g: GraphRecorder, failing_test: str, regression_commit: st
             "Verify:\n"
             "1. The fix resolves the original failing test: {failing_test}\n"
             "2. The fix resolves the minimal reproducer from the reproduction step\n"
-            "3. No new regressions: existing lit tests in tests/contracts/ still pass\n"
+            "3. No new regressions: existing lit tests still pass\n"
             "4. The fix is minimal — no unnecessary refactoring\n"
             "5. LLVM coding style is preserved"
         ),
