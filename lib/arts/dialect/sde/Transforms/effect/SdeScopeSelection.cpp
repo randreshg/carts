@@ -13,8 +13,10 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "arts/utils/LoopUtils.h"
 #include "arts/utils/costs/SDECostModel.h"
 
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 
 using namespace mlir;
@@ -41,6 +43,52 @@ static void assignParallelScopes(Operation *operation,
         assignParallelScopes(&nestedOp, currentScope, defaultScope);
 }
 
+/// For su_iterate ops with distributed scope, check if remote access cost
+/// justifies distribution. If not, override to local.
+static void refineDistributedScope(Operation *operation,
+                                   sde::SDECostModel &costModel) {
+  operation->walk([&](sde::SdeSuIterateOp op) {
+    // Only refine if we're inside a distributed parallel region.
+    for (Operation *parent = op->getParentOp(); parent;
+         parent = parent->getParentOp()) {
+      auto cuRegion = dyn_cast<sde::SdeCuRegionOp>(parent);
+      if (!cuRegion || cuRegion.getKind() != sde::SdeCuKind::parallel)
+        continue;
+      auto scope = cuRegion.getConcurrencyScope();
+      if (!scope || *scope != sde::SdeConcurrencyScope::distributed)
+        continue;
+
+      // Estimate remote access count from the loop body.
+      int64_t memAccessCount = 0;
+      op.getBody().walk([&](memref::LoadOp) { ++memAccessCount; });
+      op.getBody().walk([&](memref::StoreOp) { ++memAccessCount; });
+
+      std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
+      if (!tripCount)
+        break;
+
+      // Distributed cost: only (N-1)/N of accesses are remote.
+      int nodeCount = std::max(1, costModel.getNodeCount());
+      double remoteFraction = (nodeCount - 1.0) / nodeCount;
+      double distributedCost =
+          memAccessCount * *tripCount *
+          (remoteFraction * costModel.getRemoteDataAccessCost() +
+           (1.0 - remoteFraction) * costModel.getLocalDataAccessCost());
+      double localCost =
+          memAccessCount * *tripCount * costModel.getLocalDataAccessCost();
+
+      // If distributed cost exceeds 8x local cost, prefer local.
+      // High threshold because distribution enables parallelism benefits
+      // that outweigh raw data-movement cost for most workloads.
+      if (distributedCost > localCost * 8.0) {
+        cuRegion.setConcurrencyScopeAttr(sde::SdeConcurrencyScopeAttr::get(
+            cuRegion.getContext(), sde::SdeConcurrencyScope::local));
+      }
+      break;
+    }
+  });
+}
+
 struct SdeScopeSelectionPass
     : public arts::impl::SdeScopeSelectionBase<SdeScopeSelectionPass> {
   explicit SdeScopeSelectionPass(sde::SDECostModel *costModel = nullptr)
@@ -56,6 +104,12 @@ struct SdeScopeSelectionPass
                            : sde::SdeConcurrencyScope::local);
 
     assignParallelScopes(getOperation(), {}, desiredScope);
+
+    // Refine: on distributed machines, check if distributed scope is
+    // cost-justified for each loop. Skip on single-node (scope is already
+    // local) to avoid overriding explicitly-set distributed scopes in tests.
+    if (costModel->isDistributed())
+      refineDistributedScope(getOperation(), *costModel);
   }
 
 private:

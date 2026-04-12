@@ -23,8 +23,8 @@
 // OPT: %[[LIMIT:.+]] = arith.addi %[[BASE]], %[[TSTEP]] : index
 // OPT: %[[TILE_UB:.+]] = arith.minui %[[LIMIT]], %c32 : index
 // OPT: scf.for %[[I:.+]] = %[[BASE]] to %[[TILE_UB]] step %c1 {
-// OPT: scf.for %[[J:.+]] = %c0 to %c32 step %c1 {
 // OPT: scf.for %[[K:.+]] = %c0 to %c32 step %c1 {
+// OPT: scf.for %[[J:.+]] = %c0 to %c32 step %c1 {
 // OPT: memref.load %arg0[%[[I]], %[[K]]] : memref<32x32xf32>
 // OPT: memref.load %arg1[%[[K]], %[[J]]] : memref<32x32xf32>
 // OPT: memref.load %arg2[%[[I]], %[[J]]] : memref<32x32xf32>

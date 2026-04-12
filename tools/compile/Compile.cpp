@@ -281,19 +281,20 @@ static const std::array<llvm::StringLiteral, 8>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 17> kOpenMPToArtsPasses = {
+static const std::array<llvm::StringLiteral, 19> kOpenMPToArtsPasses = {
     "ConvertOpenMPToSde",       "SdeScopeSelection",
     "SdeScheduleRefinement",    "SdeChunkOptimization",
     "SdeReductionStrategy",     "RaiseToLinalg",
-    "RaiseToTensor",            "SdeTensorOptimization",
-    "SdeStructuredSummaries",   "SdeElementwiseFusion",
-    "SdeDistributionPlanning",  "SdeIterationSpaceDecomposition",
+    "RaiseToTensor",            "SdeLoopInterchange",
+    "SdeTensorOptimization",    "SdeStructuredSummaries",
+    "SdeElementwiseFusion",     "SdeDistributionPlanning",
+    "SdeIterationSpaceDecomposition", "SdeBarrierElimination",
     "ConvertSdeToArts",         "VerifySdeLowered",
     "DeadCodeElimination",      "CSE",
     "VerifyEdtCreated"};
-static const std::array<llvm::StringLiteral, 5> kPatternPipelinePasses = {
+static const std::array<llvm::StringLiteral, 4> kPatternPipelinePasses = {
     "DepTransforms",  "LoopNormalization",
-    "LoopReordering", "KernelTransforms",  "CSE"};
+    "KernelTransforms",  "CSE"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
     "EdtStructuralOpt(runAnalysis=false)",
     "EdtICM",
@@ -688,11 +689,13 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createSdeReductionStrategyPass(costModel));
   pm.addPass(arts::sde::createRaiseToLinalgPass());
   pm.addPass(arts::sde::createRaiseToTensorPass());
+  pm.addPass(arts::sde::createSdeLoopInterchangePass());
   pm.addPass(arts::sde::createSdeTensorOptimizationPass(costModel));
-  pm.addPass(arts::sde::createSdeStructuredSummariesPass());
+  pm.addPass(arts::sde::createSdeStructuredSummariesPass(costModel));
   pm.addPass(arts::sde::createSdeElementwiseFusionPass());
   pm.addPass(arts::sde::createSdeDistributionPlanningPass(costModel));
   pm.addPass(arts::sde::createSdeIterationSpaceDecompositionPass());
+  pm.addPass(arts::sde::createSdeBarrierEliminationPass(costModel));
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
   pm.addPass(arts::sde::createVerifySdeLoweredPass());
   pm.addPass(arts::createDCEPass());
@@ -720,7 +723,6 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createDepTransformsPass(AM));
   pm.addPass(arts::createLoopNormalizationPass(AM));
-  pm.addPass(arts::createLoopReorderingPass(AM));
   pm.addPass(arts::createKernelTransformsPass(
       AM, KernelTransformsEnableMatmul, KernelTransformsEnableTiling,
       KernelTransformsTileJ, KernelTransformsMinTripCount));

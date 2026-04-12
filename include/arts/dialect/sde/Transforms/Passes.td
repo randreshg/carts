@@ -235,6 +235,39 @@ def SdeIterationSpaceDecomposition
   let constructor = "mlir::arts::sde::createSdeIterationSpaceDecompositionPass()";
 }
 
+def SdeBarrierElimination
+    : Pass<"sde-barrier-elimination", "mlir::ModuleOp"> {
+  let summary = "Eliminate redundant SDE barriers between independent scheduling units";
+  let description = [{
+    Analyzes read and write sets of consecutive sde.su_iterate operations
+    separated by sde.su_barrier ops. When the write-set of the predecessor
+    loop is provably disjoint from the read-set of the successor loop, the
+    barrier is marked for elimination. ConvertSdeToArts skips generating
+    arts.barrier for eliminated barriers.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor = "mlir::arts::sde::createSdeBarrierEliminationPass()";
+}
+
+def SdeLoopInterchange
+    : Pass<"sde-loop-interchange", "mlir::ModuleOp"> {
+  let summary = "Cost-model-driven loop interchange using SDE linalg carriers";
+  let description = [{
+    Analyzes the indexing maps and iterator types of transient linalg.generic
+    carriers to determine optimal loop ordering for cache efficiency. For
+    matmul patterns, moves the reduction dimension outermost so the parallel
+    dimension with stride-1 access on the B operand becomes innermost.
+
+    This pass replaces the ARTS-level LoopReordering pass with a more general
+    solution that operates on structured SDE carriers before ARTS lowering.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
+                           "::mlir::linalg::LinalgDialect",
+                           "::mlir::scf::SCFDialect"];
+  let constructor = "mlir::arts::sde::createSdeLoopInterchangePass()";
+}
+
 def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {
   let summary = "Convert SDE operations to ARTS operations";
   let description = [{

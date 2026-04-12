@@ -534,22 +534,6 @@ def DepTransforms : Pass<"arts-dep-transforms", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createDepTransformsPass()";
 }
 
-def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
-  let summary = "Reorder inner loops for cache-optimal access patterns";
-  let description = [{
-      Pattern-pipeline pass.
-      Applies loop reordering transformations based on metadata collected during
-          the CollectMetadata phase
-              .This pass reads the `reorder_nest_to` field from LoopMetadata(
-                  populated by LoopAnalyzer::analyzeLoopReordering)
-                  which contains the target order as a sequence of arts.ids.}];
-  let dependentDialects = [
-    "::mlir::memref::MemRefDialect", "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect",
-    "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"
-  ];
-  let constructor = "mlir::arts::createLoopReorderingPass(nullptr)";
-}
-
 def KernelTransforms : Pass<"arts-kernel-transforms", "mlir::ModuleOp"> {
   let summary = "ARTS kernel-form transforms that expose better distribution";
   let description = [{

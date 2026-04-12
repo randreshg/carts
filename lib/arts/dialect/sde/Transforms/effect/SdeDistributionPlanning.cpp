@@ -16,6 +16,7 @@ namespace mlir::arts {
 #include "arts/utils/costs/SDECostModel.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -49,9 +50,39 @@ static bool hasEnoughDistributedWork(sde::SdeSuIterateOp op,
   if (!tripCount)
     return true;
 
-  int64_t threshold =
+  int64_t baseThreshold =
       std::max<int64_t>(1, costModel.getMinIterationsPerWorker()) *
       std::max<int64_t>(1, costModel.getNodeCount());
+
+  // For stencils, account for halo exchange overhead.
+  int64_t threshold = baseThreshold;
+  auto classification = op.getStructuredClassification();
+  if (classification &&
+      *classification == sde::SdeStructuredClassification::stencil) {
+    ArrayAttr minArr = op.getAccessMinOffsetsAttr();
+    ArrayAttr maxArr = op.getAccessMaxOffsetsAttr();
+    if (minArr && maxArr && minArr.size() == maxArr.size()) {
+      int64_t haloVolume = 0;
+      unsigned numDims = minArr.size();
+
+      for (unsigned d = 0; d < numDims; ++d) {
+        int64_t lo = cast<IntegerAttr>(minArr[d]).getInt();
+        int64_t hi = cast<IntegerAttr>(maxArr[d]).getInt();
+        int64_t haloWidth = hi - lo;
+        haloVolume += haloWidth;
+      }
+
+      // Scale threshold by estimated halo cost relative to compute cost.
+      double haloCost =
+          haloVolume * costModel.getHaloExchangeCostPerByte() * 8; // assume f64
+      double computeCost = costModel.getLocalDataAccessCost();
+      if (computeCost > 0) {
+        double costRatio = 1.0 + haloCost / computeCost;
+        threshold = static_cast<int64_t>(baseThreshold * costRatio);
+      }
+    }
+  }
+
   return *tripCount >= threshold;
 }
 
