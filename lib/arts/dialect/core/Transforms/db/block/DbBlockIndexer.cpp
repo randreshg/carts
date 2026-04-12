@@ -37,7 +37,7 @@
 ///==========================================================================///
 
 #include "arts/dialect/core/Transforms/db/block/DbBlockIndexer.h"
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "arts/utils/BlockedAccessUtils.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Debug.h"

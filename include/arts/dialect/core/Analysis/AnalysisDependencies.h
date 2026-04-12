@@ -22,7 +22,7 @@ enum class AnalysisKind : uint8_t {
   StringAnalysis,
   DbHeuristics,
   EdtHeuristics,
-  AbstractMachine,
+  RuntimeConfig,
   StructuredKernelPlan,
 };
 

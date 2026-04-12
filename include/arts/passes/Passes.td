@@ -18,7 +18,7 @@ def ArtsInliner : Pass<"arts-inliner", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createArtsInlinerPass()";
 }
 
-def RaiseMemRefDimensionality : Pass<"raise-memref-dimensionality", "mlir::ModuleOp"> {
+def MemrefNormalization : Pass<"memref-normalization", "mlir::ModuleOp"> {
   let summary = "Raise nested pointer allocations to N-dimensional memrefs";
   let description = [{
     This pass raises nested array-of-pointer allocations to multi-dimensional memrefs
@@ -29,14 +29,14 @@ def RaiseMemRefDimensionality : Pass<"raise-memref-dimensionality", "mlir::Modul
     "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect", "::mlir::func::FuncDialect",
     "::mlir::arts::ArtsDialect", "::mlir::arith::ArithDialect", "::mlir::polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createRaiseMemRefDimensionalityPass()";
+  let constructor = "mlir::arts::createMemrefNormalizationPass()";
 }
 
 def HandleDeps : Pass<"handle-deps", "mlir::ModuleOp"> {
   let summary = "Convert residual OMP dependencies to arts.omp_dep";
   let description = [{
     Converts remaining OpenMP task dependency variables that were not handled
-    by RaiseMemRefDimensionality into arts.omp_dep operations. Handles static
+    by MemrefNormalization into arts.omp_dep operations. Handles static
     arrays, token containers, subview chunks, direct allocations, and block
     arguments.
   }];
@@ -202,48 +202,11 @@ def EdtTransforms : Pass<"edt-transforms", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEdtTransformsPass(nullptr)";
 }
 
-def StructuredKernelPlan : Pass<"structured-kernel-plan", "mlir::ModuleOp"> {
-  let summary = "Classify regular kernels and stamp structured execution plans";
-  let description = [{
-    Runs StructuredKernelPlanAnalysis on parallel EDTs. For regular kernels
-    with recognizable dep patterns (stencil, uniform, wavefront, matmul),
-    stamps arts.plan.* attributes encoding the kernel family, iteration
-    topology, async strategy, owner dims, block/halo shape, and cost signals.
-
-    Downstream passes (EdtDistribution, ForLowering, DbPartitioning) consult
-    these plan attrs when present and fall back to existing generic logic
-    when absent.
-  }];
-  let dependentDialects = [
-    "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect", "::mlir::scf::SCFDialect",
-    "::mlir::arith::ArithDialect"
-  ];
-  let constructor = "mlir::arts::createStructuredKernelPlanPass(nullptr)";
-}
-
 def Concurrency : Pass<"concurrency", "mlir::ModuleOp"> {
   let summary =
       "Build EDT concurrency graph and apply concurrency-driven cleanups";
   let dependentDialects = ["::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect"];
   let constructor = "mlir::arts::createConcurrencyPass(nullptr)";
-}
-
-def PersistentStructuredRegion : Pass<"persistent-structured-region", "mlir::ModuleOp"> {
-  let summary = "Mark proven regular epochs for persistent structured region lowering";
-  let description = [{
-    Evaluates ownership proofs and cost model gates for epochs containing
-    structured kernel plans. Epochs that pass both gates are marked with
-    arts.persistent_region = true, enabling downstream EpochLowering to
-    use a persistent owner-strip or owner-tile execution shape.
-
-    This pass runs before EpochOpt in the epochs pipeline. When the gate
-    is not met, the epoch is left unchanged and follows the default
-    per-step lowering path.
-  }];
-  let dependentDialects = [
-    "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect"
-  ];
-  let constructor = "mlir::arts::createPersistentStructuredRegionPass(nullptr)";
 }
 
 def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {
@@ -486,86 +449,6 @@ def BlockLoopStripMining : Pass<"block-stripmine", "mlir::func::FuncOp"> {
     "::mlir::arts::ArtsDialect"
   ];
   let constructor = "mlir::arts::createBlockLoopStripMiningPass()";
-}
-
-///===----------------------------------------------------------------------===///
-/// Pattern Pipeline Passes
-///===----------------------------------------------------------------------===///
-///
-/// These passes together form the dedicated pre-DB semantic pattern pipeline
-/// in the compiler driver. They teach ARTS about kernel/dependence families
-/// before DB creation and before distribution/partitioning lowering.
-
-def LoopNormalization : Pass<"loop-normalization", "mlir::ModuleOp"> {
-  let summary = "Pattern-based loop normalization for partitioning";
-  let description =
-      [{Pattern-pipeline pass. Applies loop normalization patterns to enable downstream
-            DbPartitioning.Registered patterns include symmetric -
-        triangular normalization(
-            converts triangular loops with symmetric writes to rectangular form)
-            and others.}];
-  let dependentDialects = [
-    "::mlir::memref::MemRefDialect", "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect",
-    "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"
-  ];
-  let constructor = "mlir::arts::createLoopNormalizationPass(nullptr)";
-}
-
-def DepTransforms : Pass<"arts-dep-transforms", "mlir::ModuleOp"> {
-  let summary = "Apply dependence-preserving schedule rewrites before DB creation";
-  let description = [{
-    Pattern-pipeline pass.
-    Groups exact dependence-shape transformations that run on ARTS/scf IR after
-    OpenMP-to-ARTS conversion and expose scalable task and DB partitioning
-    opportunities without changing program semantics.
-
-    Current patterns:
-    - Seidel2DWavefrontPattern
-      Rewrites in-place Seidel-style 2D stencils into a tiled weighted
-      wavefront schedule that avoids coarse full-range serialization.
-    - JacobiAlternatingBuffersPattern
-      Detects timestep loops that copy one buffer into another before launching
-      a stencil update, and rewrites them into an alternating-buffer schedule.
-  }];
-  let dependentDialects = [
-    "::mlir::memref::MemRefDialect", "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect",
-    "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect", "::mlir::omp::OpenMPDialect"
-  ];
-  let constructor = "mlir::arts::createDepTransformsPass()";
-}
-
-def KernelTransforms : Pass<"arts-kernel-transforms", "mlir::ModuleOp"> {
-  let summary = "ARTS kernel-form transforms that expose better distribution";
-  let description = [{
-    Pattern-pipeline pass.
-    Applies semantics-preserving kernel-form rewrites that make downstream
-    ARTS distribution, partitioning, and locality optimizations more effective.
-
-    This pass is intentionally separate from:
-    - DepTransforms: exact schedule/dependence rewrites
-    - LoopNormalization: structural cleanup
-    - BlockLoopStripMining: late DB-aware strip-mining after partitioning
-
-    Current patterns:
-    - MatmulReductionPattern
-      Rewrites dot-product matmul kernels into update form so later passes can
-      tile, distribute, and localize them more effectively.
-  }];
-  let dependentDialects = [
-    "::mlir::memref::MemRefDialect", "::mlir::func::FuncDialect", "::mlir::arts::ArtsDialect",
-    "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"
-  ];
-  let constructor = "mlir::arts::createKernelTransformsPass(nullptr)";
-  let options = [
-    Option<"enableMatmul", "enable-matmul", "bool", /*default=*/"true",
-           "Enable reduction distribution for matmul-like patterns.">,
-    Option<"enableTiling", "enable-tiling", "bool", /*default=*/"true",
-           "Enable inner-loop tiling (when patterns match).">,
-    Option<"tileJ", "tile-j", "int64_t", /*default=*/"64",
-           "Tile size for the j dimension (matmul-like inner loops).">,
-    Option<"minTripCount", "min-trip-count", "int64_t", /*default=*/"128",
-           "Minimum constant trip count required to apply tiling.">
-  ];
 }
 
 def ContractValidation : Pass<"contract-validation", "mlir::ModuleOp"> {

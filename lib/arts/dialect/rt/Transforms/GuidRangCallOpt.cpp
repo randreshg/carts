@@ -27,8 +27,8 @@
 /// - else: keep per-iteration reserve semantics
 ///==========================================================================///
 
-#include "arts/codegen/Codegen.h"
-#include "arts/codegen/Types.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/Types.h"
 #include "arts/dialect/rt/Transforms/Passes.h"
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/ValueAnalysis.h"

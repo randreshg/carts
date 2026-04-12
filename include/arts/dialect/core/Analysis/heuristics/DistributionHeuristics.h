@@ -110,7 +110,7 @@
 #define ARTS_DIALECT_CORE_ANALYSIS_HEURISTICS_DISTRIBUTIONHEURISTICS_H
 
 #include "arts/Dialect.h"
-#include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "arts/utils/machine/RuntimeConfig.h"
 #include "arts/utils/costs/SDECostModel.h"
 #include <optional>
 
@@ -195,7 +195,7 @@ public:
   /// Pure analysis, no IR emission.
   static DistributionStrategy
   analyzeStrategy(EdtConcurrency concurrency,
-                  const AbstractMachine *machine = nullptr);
+                  const RuntimeConfig *machine = nullptr);
 
   /// Resolve the effective lowering strategy for one arts.for by combining the
   /// parent EDT topology with any distribution_kind contract stamped on the
@@ -217,13 +217,13 @@ public:
   /// Resolve default EDT parallelism from machine topology.
   /// Used by passes to avoid duplicating node/worker resolution logic.
   static ParallelismDecision
-  resolveParallelismFromMachine(const AbstractMachine *machine);
+  resolveParallelismFromMachine(const RuntimeConfig *machine);
 
   /// Resolve compile-time worker topology for an EDT from attrs + machine.
   /// Returns nullopt when worker count is not computable.
   static std::optional<WorkerConfig>
   resolveWorkerConfig(EdtOp parallelEdt,
-                      const AbstractMachine *machine = nullptr);
+                      const RuntimeConfig *machine = nullptr);
 
   /// Compute an optional coarsened block-size hint for arts.for loops.
   /// Returns the full policy result so passes can stay thin and diagnostics can

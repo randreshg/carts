@@ -30,7 +30,7 @@ namespace mlir::arts {
 #define GEN_PASS_DEF_EDTLOWERING
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
 } // namespace mlir::arts
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "arts/dialect/core/Analysis/AnalysisDependencies.h"
 #include "arts/dialect/core/Analysis/AnalysisManager.h"
 #include "arts/dialect/core/Analysis/db/DbAnalysis.h"
@@ -823,6 +823,32 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
     for (auto [oldRes, newRes] :
          llvm::zip(defOp->getResults(), cloned->getResults()))
       valueMapping.map(oldRes, newRes);
+
+    /// When cloning a memref.alloca, also clone its external initialization
+    /// stores so the outlined copy has the correct initial value. This handles
+    /// Polygeist's pointer-wrapper pattern where `memref.store %alloc,
+    /// %wrapper[]` initializes the wrapper before the EDT body accesses it.
+    if (isa<memref::AllocaOp>(defOp)) {
+      Value allocaResult = defOp->getResult(0);
+      for (Operation *user : allocaResult.getUsers()) {
+        auto storeOp = dyn_cast<memref::StoreOp>(user);
+        if (!storeOp || storeOp->getBlock() != defOp->getBlock())
+          continue;
+        if (storeOp->isBeforeInBlock(defOp))
+          continue;
+        // Only clone stores OUTSIDE the EDT body (init stores)
+        if (edtOp.getBody().isAncestor(storeOp->getParentRegion()))
+          continue;
+        // Ensure the stored value and indices are mapped
+        bool canClone = succeeded(cloneCaptured(storeOp.getValue()));
+        for (Value idx : storeOp.getIndices())
+          canClone &= succeeded(cloneCaptured(idx));
+        if (!canClone)
+          continue;
+        builder.clone(*storeOp, valueMapping);
+      }
+    }
+
     return success();
   };
 
@@ -979,7 +1005,13 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         auto alloc = dyn_cast_or_null<DbAllocOp>(
             DbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
 
-        if (alloc && !alloc.getElementSizes().empty()) {
+        /// ESD slice transport delivers a compacted copy of the requested
+        /// byte range. When the allocation is coarse (single partition),
+        /// the EDT body uses global indices to access the full array, so
+        /// a compacted sub-copy would cause incorrect addressing.
+        bool isCoarseAlloc =
+            alloc && alloc.getPartitionMode() == PartitionMode::coarse;
+        if (alloc && !alloc.getElementSizes().empty() && !isCoarseAlloc) {
           auto elementSizes = alloc.getElementSizes();
           Value useSliceTransport = AC->create<arith::ConstantIntOp>(loc, 1, 1);
           if (!dbAcquireOp.getElementOffsets().empty())

@@ -8,7 +8,7 @@
 #define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTPARALLELSPLITLOWERING_H
 
 #include "arts/Dialect.h"
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "llvm/ADT/SetVector.h"
 
 namespace mlir {

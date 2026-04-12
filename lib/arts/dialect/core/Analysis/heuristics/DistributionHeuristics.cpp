@@ -12,7 +12,6 @@
 #include "arts/utils/LoopUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/PatternSemantics.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -21,7 +20,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
-    const AbstractMachine *machine) {
+    const RuntimeConfig *machine) {
   ParallelismDecision decision;
   if (!machine)
     return decision;
@@ -55,7 +54,7 @@ ParallelismDecision DistributionHeuristics::resolveParallelismFromMachine(
 
 std::optional<WorkerConfig>
 DistributionHeuristics::resolveWorkerConfig(EdtOp parallelEdt,
-                                            const AbstractMachine *machine) {
+                                            const RuntimeConfig *machine) {
   WorkerConfig cfg;
   cfg.internode = parallelEdt.getConcurrency() == EdtConcurrency::internode;
 
@@ -347,11 +346,11 @@ LoopCoarseningDecision DistributionHeuristics::computeLoopCoarseningDecision(
   std::optional<StencilStripCostModelResult> stencilStripPlan;
   std::optional<EdtDistributionPattern> semanticDistributionPattern;
   if (auto depPattern = getEffectiveDepPattern(forOp.getOperation())) {
-    isWavefrontPattern = PatternSemantics::isWavefrontFamily(*depPattern);
+    isWavefrontPattern = *depPattern == ArtsDepPattern::wavefront_2d;
     /// The loop access summary is not always populated yet when ForOpt runs.
     /// Fall back to the semantic dep-pattern contract so stencil-family loops
     /// still take the stencil coarsening path before lowering.
-    isStencilPattern = PatternSemantics::isStencilFamily(*depPattern);
+    isStencilPattern = isStencilFamilyDepPattern(*depPattern);
     if (auto directPattern = getDistributionPatternForDepPattern(*depPattern))
       semanticDistributionPattern = *directPattern;
   }
@@ -500,7 +499,7 @@ std::optional<int64_t> DistributionHeuristics::computeCoarsenedBlockHint(
 
 DistributionStrategy
 DistributionHeuristics::analyzeStrategy(EdtConcurrency concurrency,
-                                        const AbstractMachine *machine) {
+                                        const RuntimeConfig *machine) {
   DistributionStrategy strategy;
 
   if (concurrency == EdtConcurrency::intranode) {
@@ -568,11 +567,7 @@ DistributionHeuristics::resolveDistributionPattern(AnalysisManager *AM,
 
 EdtDistributionKind DistributionHeuristics::selectDistributionKind(
     const DistributionStrategy &strategy, EdtDistributionPattern pattern) {
-  /// First, check if the distribution pattern has a pattern-specific override.
-  /// This handles matmul -> tiling_2d for TwoLevel.
-  /// PatternSemantics::getPreferredDistributionKind currently takes
-  /// ArtsDepPattern, but we don't have access to that here. For now, inline the
-  /// matmul override.
+  /// Matmul override: prefer tiling_2d for TwoLevel, block otherwise.
   if (pattern == EdtDistributionPattern::matmul) {
     if (strategy.kind == DistributionKind::TwoLevel)
       return EdtDistributionKind::tiling_2d;

@@ -12,13 +12,13 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-const AbstractMachine &EdtHeuristics::getMachine() const {
-  return getAnalysisManager().getAbstractMachine();
+const RuntimeConfig &EdtHeuristics::getRuntimeConfig() const {
+  return getAnalysisManager().getRuntimeConfig();
 }
 
 DistributionStrategy
 EdtHeuristics::chooseStrategy(EdtConcurrency concurrency) const {
-  return DistributionHeuristics::analyzeStrategy(concurrency, &getMachine());
+  return DistributionHeuristics::analyzeStrategy(concurrency, &getRuntimeConfig());
 }
 
 EdtDistributionKind
@@ -28,13 +28,13 @@ EdtHeuristics::chooseKind(const DistributionStrategy &strategy,
 }
 
 ParallelismDecision EdtHeuristics::resolveParallelism() const {
-  return DistributionHeuristics::resolveParallelismFromMachine(&getMachine());
+  return DistributionHeuristics::resolveParallelismFromMachine(&getRuntimeConfig());
 }
 
 std::optional<WorkerConfig>
 EdtHeuristics::resolveWorkerConfig(EdtOp parallelEdt) const {
   return DistributionHeuristics::resolveWorkerConfig(parallelEdt,
-                                                     &getMachine());
+                                                     &getRuntimeConfig());
 }
 
 DistributionStrategy

@@ -10,7 +10,7 @@
 #include "arts/dialect/core/Analysis/loop/LoopAnalysis.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/Utils.h"
-#include "arts/utils/metadata/LocationMetadata.h"
+#include "arts/utils/LocationMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/Support/Debug.h"

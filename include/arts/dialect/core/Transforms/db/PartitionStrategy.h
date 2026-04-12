@@ -27,7 +27,7 @@
 #define ARTS_DIALECT_CORE_TRANSFORMS_DB_PARTITIONSTRATEGY_H
 
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "arts/utils/machine/RuntimeConfig.h"
 #include "llvm/ADT/StringRef.h"
 #include <memory>
 #include <optional>
@@ -61,7 +61,7 @@ public:
   ///   - rationale field must identify the specific heuristic (e.g., "H1.C0")
   virtual std::optional<PartitioningDecision>
   evaluate(const PartitioningContext &ctx,
-           const AbstractMachine *machine) const = 0;
+           const RuntimeConfig *machine) const = 0;
 
   /// Returns the strategy name for logging and diagnostics.
   virtual llvm::StringRef getName() const = 0;

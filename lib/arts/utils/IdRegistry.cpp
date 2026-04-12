@@ -5,8 +5,8 @@
 ///==========================================================================///
 #include "arts/utils/IdRegistry.h"
 #include "arts/utils/Debug.h"
-#include "arts/utils/metadata/LocationMetadata.h"
-#include "arts/utils/metadata/MetadataAttrNames.h"
+#include "arts/utils/LocationMetadata.h"
+#include "arts/utils/MetadataAttrNames.h"
 
 #include "mlir/IR/Builders.h"
 #include "llvm/Support/JSON.h"

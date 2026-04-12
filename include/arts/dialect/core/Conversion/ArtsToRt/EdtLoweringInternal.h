@@ -10,7 +10,7 @@
 #define ARTS_DIALECT_RT_CONVERSION_ARTSTORT_EDTLOWERINGINTERNAL_H
 
 #include "arts/Dialect.h"
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/EdtUtils.h"

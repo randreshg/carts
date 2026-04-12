@@ -32,7 +32,7 @@ namespace mlir::arts {
 #define GEN_PASS_DEF_EPOCHLOWERING
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
 } // namespace mlir::arts
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/DbUtils.h"

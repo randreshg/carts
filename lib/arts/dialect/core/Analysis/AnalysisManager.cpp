@@ -26,13 +26,13 @@ AnalysisManager::AnalysisManager(ModuleOp module, const std::string &configFile,
     : module(module), configFile(configFile),
       metadataFile(metadataFile.empty() ? ".carts-metadata.json"
                                         : metadataFile),
-      abstractMachine(configFile) {}
+      runtimeConfig(configFile) {}
 
 AnalysisManager::~AnalysisManager() {}
 
 sde::SDECostModel &AnalysisManager::getCostModel() {
   if (!costModel)
-    costModel = std::make_unique<ARTSCostModel>(abstractMachine);
+    costModel = std::make_unique<ARTSCostModel>(runtimeConfig);
   return *costModel;
 }
 
@@ -97,7 +97,7 @@ const StringAnalysis &AnalysisManager::getStringAnalysis() const {
 
 DbHeuristics &AnalysisManager::getDbHeuristics() {
   if (!dbHeuristics) {
-    dbHeuristics = std::make_unique<DbHeuristics>(abstractMachine);
+    dbHeuristics = std::make_unique<DbHeuristics>(runtimeConfig);
   }
   return *dbHeuristics;
 }
@@ -190,7 +190,7 @@ void AnalysisManager::captureDiagnostics() {
 
   /// Machine configuration (expanded)
   Object machine;
-  const auto &am = getAbstractMachine();
+  const auto &am = getRuntimeConfig();
   machine["node_count"] = am.getNodeCount();
   machine["threads"] = am.getThreads();
 

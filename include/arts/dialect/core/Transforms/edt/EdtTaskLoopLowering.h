@@ -7,7 +7,7 @@
 #ifndef ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H
 #define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTTASKLOOPLOWERING_H
 
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/SetVector.h"

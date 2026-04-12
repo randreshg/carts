@@ -201,7 +201,8 @@ inline bool isKnownNonNegative(Value value, unsigned depth = 0) {
            isKnownNonNegative(rhs, depth + 1);
   }
 
-  if (isa<arith::DivUIOp, arith::RemUIOp>(value.getDefiningOp()))
+  if (value.getDefiningOp() &&
+      isa<arith::DivUIOp, arith::RemUIOp>(value.getDefiningOp()))
     return true;
 
   auto select = value.getDefiningOp<arith::SelectOp>();

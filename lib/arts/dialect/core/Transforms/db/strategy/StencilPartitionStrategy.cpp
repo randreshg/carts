@@ -33,7 +33,7 @@ public:
 
   std::optional<PartitioningDecision>
   evaluate(const PartitioningContext &ctx,
-           const AbstractMachine *machine) const override {
+           const RuntimeConfig *machine) const override {
     const auto &patterns = ctx.accessPatterns;
 
     /// Early exit: only applies to stencil patterns

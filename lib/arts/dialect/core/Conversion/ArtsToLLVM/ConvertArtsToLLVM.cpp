@@ -19,11 +19,11 @@
 #include "arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMInternal.h"
 
 #include "arts/Dialect.h"
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #define GEN_PASS_DEF_CONVERTARTSTOLLVM
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
-#include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "arts/utils/machine/RuntimeConfig.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -46,7 +46,7 @@ struct ConvertArtsToLLVMPass
 
   explicit ConvertArtsToLLVMPass(bool debug = false,
                                  bool distributedInitPerWorker = false,
-                                 const AbstractMachine *machine = nullptr)
+                                 const RuntimeConfig *machine = nullptr)
       : debugMode(debug), distributedInitPerWorker(distributedInitPerWorker),
         machine(machine) {}
 
@@ -56,7 +56,7 @@ private:
   ArtsCodegen *AC = nullptr;
   bool debugMode = false;
   bool distributedInitPerWorker = false;
-  const AbstractMachine *machine = nullptr;
+  const RuntimeConfig *machine = nullptr;
 };
 } // namespace
 
@@ -75,7 +75,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   auto ownedAC = std::make_unique<ArtsCodegen>(module, debugMode);
   AC = ownedAC.get();
   AC->setDistributedInitInWorkers(distributedInitPerWorker);
-  AC->setAbstractMachine(machine);
+  AC->setRuntimeConfig(machine);
   ARTS_DEBUG_TYPE("ArtsCodegen initialized successfully");
 
   //// Apply patterns with greedy rewriter (four runs)
@@ -128,6 +128,19 @@ void ConvertArtsToLLVMPass::runOnOperation() {
       return signalPassFailure();
     }
   }
+
+  /// Run 5: Cleanup — re-apply arts_rt patterns for ops created in Runs 3-4
+  /// (e.g., DbAcquirePattern in Run 3 creates DbGepOp that Run 2 can't see).
+  {
+    ARTS_INFO("Running arts_rt cleanup patterns");
+    RewritePatternSet cleanupPatterns(context);
+    convert_arts_to_llvm::populateRtToLLVMPatterns(cleanupPatterns, AC);
+    if (failed(applyPatternsGreedily(module, std::move(cleanupPatterns),
+                                     config))) {
+      ARTS_ERROR("Failed to apply arts_rt cleanup patterns");
+      return signalPassFailure();
+    }
+  }
   //// Initialize runtime
   AC->initRT(AC->getUnknownLoc());
 
@@ -149,7 +162,7 @@ std::unique_ptr<Pass> createConvertArtsToLLVMPass() {
 
 std::unique_ptr<Pass>
 createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker,
-                            const AbstractMachine *machine) {
+                            const RuntimeConfig *machine) {
   return std::make_unique<ConvertArtsToLLVMPass>(
       debug, distributedInitPerWorker, machine);
 }

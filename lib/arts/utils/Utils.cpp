@@ -4,7 +4,7 @@
 ///==========================================================================///
 #include "arts/utils/Utils.h"
 #include "arts/Dialect.h"
-#include "arts/codegen/Types.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/Types.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"

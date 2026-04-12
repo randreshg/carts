@@ -27,7 +27,7 @@
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/graphs/db/DbAccessPattern.h"
 #include "arts/utils/PartitionPredicates.h"
-#include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "arts/utils/machine/RuntimeConfig.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/SmallVector.h"
@@ -87,7 +87,7 @@ struct AcquireInfo {
 /// DbPartitioning owns construction of this snapshot. H1 heuristics consume it
 /// as read-only policy input and return a decision; they do not mutate IR.
 struct PartitioningContext {
-  const AbstractMachine *machine = nullptr;
+  const RuntimeConfig *machine = nullptr;
 
   /// DB partitioning capabilities
   bool canElementWise = false, canBlock = false;
@@ -279,7 +279,7 @@ struct PartitioningHint {
 /// Evaluate all H1.x heuristics and return partitioning decision
 PartitioningDecision
 evaluatePartitioningHeuristics(const PartitioningContext &ctx,
-                               const AbstractMachine *machine);
+                               const RuntimeConfig *machine);
 
 /// PartitioningHint accessors
 std::optional<PartitioningHint> getPartitioningHint(Operation *op);
