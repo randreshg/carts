@@ -724,6 +724,12 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       }
     }
 
+    // Forward vectorization hints from SDE
+    if (auto vecWidth = op->getAttr("sde.vectorize_width"))
+      artsFor->setAttr("sde.vectorize_width", vecWidth);
+    if (auto unrollFactor = op->getAttr("sde.unroll_factor"))
+      artsFor->setAttr("sde.unroll_factor", unrollFactor);
+
     // RaiseToLinalg leaves the original loop body in place and uses
     // linalg.generic as a transient carrier for contract stamping. Drop the
     // cloned memref-backed carriers directly; tensor-backed carriers are
@@ -748,7 +754,8 @@ struct SuBarrierToArtsPattern : public OpRewritePattern<sde::SdeSuBarrierOp> {
 
   LogicalResult matchAndRewrite(sde::SdeSuBarrierOp op,
                                 PatternRewriter &rewriter) const override {
-    BarrierOp::create(rewriter, op.getLoc());
+    if (!op->hasAttr("barrier_eliminated"))
+      BarrierOp::create(rewriter, op.getLoc());
     rewriter.eraseOp(op);
     return success();
   }

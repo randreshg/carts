@@ -46,6 +46,15 @@ public:
   virtual int getNodeCount() const = 0;
   virtual bool isDistributed() const { return getNodeCount() > 1; }
 
+  // --- Hardware parameters ---
+  virtual int getVectorWidth() const = 0;
+  virtual int getCacheLineSize() const = 0;
+  virtual int64_t getL1CacheSize() const = 0;
+  virtual int64_t getL2CacheSize() const = 0;
+
+  // --- Reduction splitting ---
+  virtual int64_t getReductionSplitFactor(int64_t tripCount) const = 0;
+
   // --- Derived thresholds (computed, not hardcoded) ---
   virtual int64_t getMinIterationsPerWorker() const {
     return std::max<int64_t>(

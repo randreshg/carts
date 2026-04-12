@@ -105,7 +105,6 @@ std::unique_ptr<Pass> createBlockLoopStripMiningPass();
 /// Semantic pattern family passes.
 std::unique_ptr<Pass> createDepTransformsPass(AnalysisManager *AM = nullptr);
 std::unique_ptr<Pass> createLoopNormalizationPass(AnalysisManager *AM);
-std::unique_ptr<Pass> createLoopReorderingPass(AnalysisManager *AM);
 std::unique_ptr<Pass>
 createKernelTransformsPass(AnalysisManager *AM, bool enableMatmul = true,
                            bool enableTiling = true, int64_t tileJ = 64,

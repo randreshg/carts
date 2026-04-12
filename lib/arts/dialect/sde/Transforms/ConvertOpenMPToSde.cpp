@@ -249,9 +249,9 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
     auto loopNest = cast<omp::LoopNestOp>(op.getWrappedLoop());
-    auto lb = loopNest.getLoopLowerBounds()[0];
-    auto ub = loopNest.getLoopUpperBounds()[0];
-    auto step = loopNest.getLoopSteps()[0];
+    auto lbs = loopNest.getLoopLowerBounds();
+    auto ubs = loopNest.getLoopUpperBounds();
+    auto steps = loopNest.getLoopSteps();
 
     // Schedule
     sde::SdeScheduleKindAttr schedAttr;
@@ -288,7 +288,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     }
 
     auto suIter = sde::SdeSuIterateOp::create(
-        rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{step},
+        rewriter, loc, ValueRange{lbs}, ValueRange{ubs}, ValueRange{steps},
         schedAttr, chunkSize, nowaitAttr(ctx, nw), ValueRange{redAccs},
         reductionKinds.empty() ? nullptr
                                : rewriter.getArrayAttr(reductionKinds),
@@ -297,21 +297,23 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
         /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
         /*writeFootprint=*/nullptr);
 
-    // Create body
+    // Create body with one block argument per dimension.
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
       dstRegion.push_back(new Block());
     Block &dst = dstRegion.front();
-    if (dst.getNumArguments() == 0)
+    unsigned numDims = lbs.size();
+    for (unsigned d = dst.getNumArguments(); d < numDims; ++d)
       dst.addArgument(rewriter.getIndexType(), loc);
 
-    // Clone loop body
+    // Clone loop body, mapping all induction variables.
     OpBuilder::InsertionGuard IG(rewriter);
     rewriter.setInsertionPointToStart(&dst);
     IRMapping mapper;
     Block &src = loopNest.getRegion().front();
-    if (!src.getArguments().empty())
-      mapper.map(src.getArgument(0), dst.getArgument(0));
+    for (unsigned d = 0; d < std::min<unsigned>(src.getNumArguments(), numDims);
+         ++d)
+      mapper.map(src.getArgument(d), dst.getArgument(d));
     mapWsloopCapturedArgs(op, mapper);
     for (Operation &srcOp : src.without_terminator())
       rewriter.clone(srcOp, mapper);
