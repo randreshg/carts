@@ -2,7 +2,7 @@
 
 // CHECK-LABEL: func.func @main
 // CHECK: arts.edt <parallel>
-// CHECK: depPattern = #arts.dep_pattern<higher_order_stencil>
+// CHECK: depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK: stencil_max_offsets = [2, 2, 2]
 // CHECK: stencil_min_offsets = [-2, -2, -2]
 // CHECK: stencil_owner_dims = [0, 1, 2]

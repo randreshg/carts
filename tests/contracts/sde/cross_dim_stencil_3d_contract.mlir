@@ -2,7 +2,7 @@
 
 // CHECK-LABEL: func.func @main
 // CHECK: arts.edt <parallel>
-// CHECK: depPattern = #arts.dep_pattern<cross_dim_stencil_3d>
+// CHECK: depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK: stencil_owner_dims = [0, 1, 2]
 // CHECK: stencil_supported_block_halo
 

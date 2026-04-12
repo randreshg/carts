@@ -1,13 +1,13 @@
 // RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline pattern-pipeline | %FileCheck %s --check-prefix=PATTERN
 // RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline edt-distribution | %FileCheck %s --check-prefix=POLICY
 
-// PATTERN: depPattern = #arts.dep_pattern<cross_dim_stencil_3d>
+// PATTERN: depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // PATTERN: distribution_pattern = #arts.distribution_pattern<stencil>
 
-// POLICY-DAG: arts.db_acquire[<in>] {{.*}}partitioning(<coarse>{{.*}}depPattern = #arts.dep_pattern<cross_dim_stencil_3d>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>
-// POLICY-DAG: arts.db_acquire[<inout>] {{.*}}partitioning(<coarse>{{.*}}depPattern = #arts.dep_pattern<cross_dim_stencil_3d>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>
-// POLICY-DAG: arts.epoch attributes {{.*}}depPattern = #arts.dep_pattern<cross_dim_stencil_3d>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
-// POLICY-DAG: arts.edt <task> <intranode> route(%{{.*}}) {{.*}}attributes {{.*}}depPattern = #arts.dep_pattern<cross_dim_stencil_3d>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
+// POLICY-DAG: arts.db_acquire[<in>] {{.*}}partitioning(<coarse>{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>
+// POLICY-DAG: arts.db_acquire[<inout>] {{.*}}partitioning(<coarse>{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>
+// POLICY-DAG: arts.epoch attributes {{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
+// POLICY-DAG: arts.edt <task> <intranode> route(%{{.*}}) {{.*}}attributes {{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<stencil>
 
 module attributes {llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
   func.func @main() -> f64 {

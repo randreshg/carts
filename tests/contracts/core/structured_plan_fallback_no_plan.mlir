@@ -1,11 +1,11 @@
 // RUN: %carts-compile %s --O3 --arts-config %S/../../examples/arts.cfg --pipeline edt-distribution | %FileCheck %s
 
-// Test that triangular access patterns with sequential inner loops still
-// get classified as uniform (the outer parallel dimension is elementwise)
-// and produce a structured kernel plan.
+// Test that triangular access patterns with cross-indexed reads (A[i,j] and
+// A[j,i]) get classified via SDE's structured analysis. The permuted access
+// maps match the matmul heuristic (2 parallel + cross-indexed operands).
 
 // CHECK: distribution_kind
-// CHECK: arts.plan.kernel_family = "uniform"
+// CHECK: arts.plan.kernel_family = "reduction_mixed"
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @main(%A: memref<64x64xf64>) {
