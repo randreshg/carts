@@ -39,6 +39,28 @@ static bool collectInner(Block &body, LoopNestInfo &info) {
     }
   }
 
+  if (ops.size() > 1) {
+    scf::ForOp innerFor = nullptr;
+    for (Operation *op : ops) {
+      if (auto nestedFor = dyn_cast<scf::ForOp>(op)) {
+        if (innerFor) {
+          innerFor = nullptr;
+          break;
+        }
+        innerFor = nestedFor;
+        continue;
+      }
+      if (!isMemoryEffectFree(op)) {
+        innerFor = nullptr;
+        break;
+      }
+    }
+    if (innerFor) {
+      info.ivs.push_back(innerFor.getInductionVar());
+      return collectInner(*innerFor.getBody(), info);
+    }
+  }
+
   info.innermostBody = &body;
   return true;
 }
@@ -113,10 +135,10 @@ static std::optional<AffineMap> tryBuildIndexingMap(OperandRange indices,
   return AffineMap::get(/*dimCount=*/ivs.size(), /*symbolCount=*/0, exprs, ctx);
 }
 
-static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
-                                  SmallVectorImpl<MemrefAccessEntry> &reads,
-                                  SmallVectorImpl<MemrefAccessEntry> &writes,
-                                  MLIRContext *ctx) {
+static bool collectMemrefAccessesImpl(Block &body, ArrayRef<Value> ivs,
+                                      SmallVectorImpl<MemrefAccessEntry> &reads,
+                                      SmallVectorImpl<MemrefAccessEntry> &writes,
+                                      MLIRContext *ctx, bool &sawAccess) {
   for (auto &op : body) {
     if (op.hasTrait<OpTrait::IsTerminator>())
       continue;
@@ -127,6 +149,7 @@ static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
         return false;
       reads.push_back(
           {loadOp.getMemref(), *map, loadOp.getOperation(), /*isRead=*/true});
+      sawAccess = true;
       continue;
     }
 
@@ -136,6 +159,33 @@ static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
         return false;
       writes.push_back({storeOp.getMemref(), *map, storeOp.getOperation(),
                         /*isRead=*/false});
+      sawAccess = true;
+      continue;
+    }
+
+    if (auto ifOp = dyn_cast<scf::IfOp>(&op)) {
+      bool thenSawAccess = false;
+      if (!collectMemrefAccessesImpl(ifOp.getThenRegion().front(), ivs, reads,
+                                     writes, ctx, thenSawAccess))
+        return false;
+      sawAccess |= thenSawAccess;
+
+      if (!ifOp.getElseRegion().empty()) {
+        bool elseSawAccess = false;
+        if (!collectMemrefAccessesImpl(ifOp.getElseRegion().front(), ivs,
+                                       reads, writes, ctx, elseSawAccess))
+          return false;
+        sawAccess |= elseSawAccess;
+      }
+      continue;
+    }
+
+    if (auto nestedFor = dyn_cast<scf::ForOp>(&op)) {
+      bool nestedSawAccess = false;
+      if (!collectMemrefAccessesImpl(*nestedFor.getBody(), ivs, reads, writes,
+                                     ctx, nestedSawAccess))
+        return false;
+      sawAccess |= nestedSawAccess;
       continue;
     }
 
@@ -145,7 +195,17 @@ static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
     return false;
   }
 
-  return !reads.empty() || !writes.empty();
+  return true;
+}
+
+static bool collectMemrefAccesses(Block &body, ArrayRef<Value> ivs,
+                                  SmallVectorImpl<MemrefAccessEntry> &reads,
+                                  SmallVectorImpl<MemrefAccessEntry> &writes,
+                                  MLIRContext *ctx) {
+  bool sawAccess = false;
+  if (!collectMemrefAccessesImpl(body, ivs, reads, writes, ctx, sawAccess))
+    return false;
+  return sawAccess;
 }
 
 static void
