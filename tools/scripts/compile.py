@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from contextlib import contextmanager
 import json
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -1063,6 +1064,35 @@ def _compile_c_pipeline(
     console.print(Panel(files_info, title="Success", border_style=Colors.SUCCESS))
 
 
+# Matches MLIR's --mlir-print-ir-after-all boundary headers, e.g.
+#   // -----// IR Dump After LowerAffinePass (lower-affine) //----- //
+_PASS_DUMP_HEADER_RE = re.compile(
+    r"^// -----// IR Dump After (\S+) \(([^)]+)\) //----- //\s*$",
+    re.MULTILINE,
+)
+
+
+def _split_per_pass_ir(stderr: str, out_dir: Path) -> int:
+    """Split ``--mlir-print-ir-after-all`` stderr into per-pass .mlir files.
+
+    Each block starting with ``// -----// IR Dump After <Class> (<cli>) //-----//``
+    is written to ``out_dir/NNN_<Class>.mlir`` in execution order. Returns the
+    number of blocks written.
+    """
+    headers = list(_PASS_DUMP_HEADER_RE.finditer(stderr))
+    if not headers:
+        return 0
+    for idx, match in enumerate(headers):
+        class_name = match.group(1)
+        header_line = match.group(0)
+        body_start = match.end() + 1  # skip the trailing newline of the header
+        body_end = headers[idx + 1].start() if idx + 1 < len(headers) else len(stderr)
+        body = stderr[body_start:body_end].rstrip()
+        out_file = out_dir / f"{idx + 1:03d}_{class_name}.mlir"
+        out_file.write_text(f"{header_line}\n{body}\n", encoding="utf-8")
+    return len(headers)
+
+
 def _compile_all_pipelines(
     config: CartsConfig,
     source_file: Path,
@@ -1085,7 +1115,8 @@ def _compile_all_pipelines(
     pipeline_steps = manifest.tokens.pipeline_sequence
 
     stem = source_file.stem
-    total_steps = 2 + len(pipeline_steps)
+    # One per stage + complete-mlir + emit-llvm + per-pass dump aggregation.
+    total_steps = 3 + len(pipeline_steps)
 
     print_header("CARTS Pipeline Dump")
 
@@ -1131,6 +1162,65 @@ def _compile_all_pipelines(
         cmd = base_cmd + ["--emit-llvm", FLAG_OUTPUT, str(final_ll)] + extra_args
         rc = run_subprocess(cmd, check=False).returncode
         results.append(("emit-llvm", rc == 0))
+        progress.advance(task)
+
+        # Per-pass IR dumps, organized by stage. For each core pipeline step
+        # we run a tight invocation (`--start-from=<stage> --pipeline=<stage>`)
+        # on the previous stage's output, with MLIR's
+        # --mlir-print-ir-after-all enabled. stderr then contains exactly
+        # that stage's pass dumps, which we split into numbered files under
+        # <stem>_passes/<NN>_<stage>/. This exposes compound stages (e.g.
+        # openmp-to-arts runs 19 SDE passes that the stage-level dump would
+        # otherwise collapse into one file) and correctly handles nested
+        # pass managers, conditional passes, and per-function repeats.
+        progress.update(task, description="Per-pass IR dumps")
+        passes_root = out_dir / f"{stem}_passes"
+        passes_root.mkdir(parents=True, exist_ok=True)
+        total_dumps = 0
+        stages_dumped = 0
+        base_stage_cmd = [str(carts_compile_bin)]
+        stage_cfg_args: List[str] = []
+        if optimize:
+            stage_cfg_args.append("--O3")
+        if arts_cfg:
+            stage_cfg_args.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
+
+        for idx, stage in enumerate(pipeline_steps, start=1):
+            progress.update(
+                task,
+                description=f"Per-pass IR dumps ({idx}/{len(pipeline_steps)}: {stage})",
+            )
+            stage_dir = passes_root / f"{idx:02d}_{stage}"
+            stage_dir.mkdir(exist_ok=True)
+            # Pre-stage input: the original source for stage 1, previous
+            # stage's emitted .mlir thereafter.
+            if idx == 1:
+                stage_input = source_file
+            else:
+                prev_stage = pipeline_steps[idx - 2]
+                stage_input = out_dir / f"{stem}_{prev_stage}.mlir"
+            if not stage_input.exists():
+                continue  # previous stage failed, skip
+            scratch_out = stage_dir / ".discard.mlir"
+            cmd = (base_stage_cmd + [str(stage_input),
+                                     f"--start-from={stage}",
+                                     f"{FLAG_PIPELINE}={stage}",
+                                     "--mlir-print-ir-after-all",
+                                     FLAG_OUTPUT, str(scratch_out)]
+                   + stage_cfg_args + extra_args)
+            proc = run_subprocess(cmd, capture_output=True, check=False)
+            n = _split_per_pass_ir(proc.stderr or "", stage_dir)
+            total_dumps += n
+            if n > 0:
+                stages_dumped += 1
+            try:
+                scratch_out.unlink()
+            except FileNotFoundError:
+                pass
+
+        label = (f"per-pass ({total_dumps} dumps across {stages_dumped}"
+                 f"/{len(pipeline_steps)} stages)")
+        results.append((label, total_dumps > 0))
         progress.advance(task)
 
     # Print summary table
