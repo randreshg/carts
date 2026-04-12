@@ -16,6 +16,7 @@
 // (memref<?xi64> GUIDs). Verify that *data array* DBs are not coarse.
 // STENCIL-PRE-NOT: arts.db_acquire[<inout>]{{.*}}partitioning(<coarse>)
 
-// UNIFORM-PRE: arts.db_acquire[<inout>] {{.*}}partitioning(<block>
-// UNIFORM-PRE-NOT: arts.db_acquire[<out>]{{.*}}partitioning(<coarse>)
+// With SDE-driven classification, the uniform block's pure-write acquire
+// correctly tightens to <out>.
+// UNIFORM-PRE: arts.db_acquire[<out>] {{.*}}partitioning(<block>
 // UNIFORM-PRE-NOT: arts.db_acquire[<inout>]{{.*}}partitioning(<coarse>)

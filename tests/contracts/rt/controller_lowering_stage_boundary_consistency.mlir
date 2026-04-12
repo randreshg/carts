@@ -9,18 +9,18 @@
 // DB-POLICY: arts.lowering_contract(
 // DB-POLICY-SAME: block_shape[
 // DB-POLICY-SAME: contract(<ownerDims = [0], postDbRefined = true>)
-// DB-POLICY: arts.db_acquire[<inout>] {{.*}}partitioning(<block>, offsets[
+// DB-POLICY: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // DB-POLICY-SAME: ), offsets[
 
 // EDT-BND-LABEL: func.func @main
 // EDT-BND: arts.epoch attributes {{.*}}distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32
-// EDT-BND: arts.db_acquire[<inout>] {{.*}}partitioning(<block>, offsets[
+// EDT-BND: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // EDT-BND-SAME: ), offsets[
 // EDT-BND: arts.edt <task> <intranode> route(%{{.*}}) {{.*}}attributes {{.*}}distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32
 
 // EPOCH-BND-LABEL: func.func @main
 // EPOCH-BND: %[[EPOCH:.+]] = arts_rt.create_epoch : i64
-// EPOCH-BND: arts.db_acquire[<inout>] {{.*}}partitioning(<block>, offsets[
+// EPOCH-BND: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // EPOCH-BND-SAME: ), offsets[
 // EPOCH-BND: %[[TASK:.+]] = arts_rt.edt_create({{.*}}) depCount(%{{.*}}) route(%{{.*}}) epoch(%[[EPOCH]] : i64)
 // EPOCH-BND: arts_rt.rec_dep %[[TASK]]
@@ -28,7 +28,7 @@
 // EPOCH-BND-NOT: arts.epoch
 
 // DIST-EDT-LABEL: func.func @main
-// DIST-EDT: arts.db_acquire[<inout>] {{.*}}partitioning(<block>, offsets[
+// DIST-EDT: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // DIST-EDT-SAME: ), offsets[
 // DIST-EDT: %[[NODE:.+]] = arith.divui %arg0, %{{.*}} : index
 // DIST-EDT: %[[ROUTE:.+]] = arith.index_cast %[[NODE]] : index to i32
@@ -36,7 +36,7 @@
 
 // DIST-PRE-LABEL: func.func @main
 // DIST-PRE: %[[EPOCH:.+]] = arts_rt.create_epoch : i64
-// DIST-PRE: arts.db_acquire[<inout>] {{.*}}partitioning(<block>, offsets[
+// DIST-PRE: arts.db_acquire[<out>] {{.*}}partitioning(<block>, offsets[
 // DIST-PRE-SAME: ), offsets[
 // DIST-PRE: %[[ROUTE:.+]] = arith.index_cast %{{.*}} : index to i32
 // DIST-PRE: %[[TASK:.+]] = arts_rt.edt_create({{.*}}) depCount(%{{.*}}) route(%[[ROUTE]]) epoch(%[[EPOCH]] : i64)
