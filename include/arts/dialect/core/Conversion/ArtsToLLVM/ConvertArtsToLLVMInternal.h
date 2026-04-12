@@ -10,7 +10,7 @@
 #define ARTS_DIALECT_CORE_CONVERSION_ARTSTOLLVM_CONVERTARTSTOLLVMINTERNAL_H
 
 #include "arts/Dialect.h"
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "mlir/Conversion/LLVMCommon/StructBuilder.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/PatternMatch.h"

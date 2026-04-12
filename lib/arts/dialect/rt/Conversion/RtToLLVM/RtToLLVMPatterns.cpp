@@ -8,7 +8,7 @@
 
 #include "arts/dialect/core/Conversion/ArtsToLLVM/ConvertArtsToLLVMInternal.h"
 
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "arts/dialect/rt/IR/RtDialect.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
@@ -892,7 +892,19 @@ private:
                                  Location loc) const {
     DepDbInfo result;
 
-    if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
+    /// Resolve the underlying DB operation, tracing through pointer casts
+    /// (polygeist.pointer2memref, memref.cast, etc.) that may wrap the GUID.
+    auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>();
+    auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>();
+    if (!dbAcquireOp && !depDbAcquireOp) {
+      Operation *underlying = DbUtils::getUnderlyingDb(dbGuid);
+      if (underlying) {
+        dbAcquireOp = dyn_cast<DbAcquireOp>(underlying);
+        depDbAcquireOp = dyn_cast<DepDbAcquireOp>(underlying);
+      }
+    }
+
+    if (dbAcquireOp) {
       result.dbInfo = DbUtils::extractDbLoweringInfo(dbAcquireOp);
       result.guidStorage =
           dbAcquireOp.getSourceGuid() ? dbAcquireOp.getSourceGuid() : dbGuid;
@@ -942,14 +954,18 @@ private:
               result.blockOwnerDims.push_back(dim);
         }
       }
-    } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
+    } else if (depDbAcquireOp) {
       result.dbInfo = DbUtils::extractDbLoweringInfo(depDbAcquireOp);
       rebaseDepIterationWindow(result, loc);
       result.guidStorage = depDbAcquireOp.getGuid();
       result.depStruct = depDbAcquireOp.getDepStruct();
       result.baseOffset = depDbAcquireOp.getOffset();
     } else {
-      ARTS_UNREACHABLE("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
+      /// Fallback: the GUID value went through casts/outlining that made
+      /// the original DbAcquireOp unreachable.  Treat as a single-element
+      /// DB with the value itself as guidStorage.
+      result.dbInfo.isSingleElement = true;
+      result.guidStorage = dbGuid;
     }
 
     return result;
@@ -969,7 +985,8 @@ private:
     DepBoundsInfo result;
     result.useDepv = depInfo.depStruct && depInfo.baseOffset &&
                      (accessMode == DepAccessMode::from_depv ||
-                      dbGuid.getDefiningOp<DepDbAcquireOp>());
+                      isa_and_nonnull<DepDbAcquireOp>(
+                          DbUtils::getUnderlyingDb(dbGuid)));
 
     result.totalDBs = result.useDepv
                           ? Value()
@@ -1156,11 +1173,17 @@ private:
       Value readyLocalDepBuffer, Location loc) const {
     const bool useDepv = depStruct && baseOffset &&
                          (accessMode == DepAccessMode::from_depv ||
-                          dbGuid.getDefiningOp<DepDbAcquireOp>());
+                          isa_and_nonnull<DepDbAcquireOp>(
+                              DbUtils::getUnderlyingDb(dbGuid)));
 
-    /// Extend boundsValid with DB index check for stencil cases
+    /// Extend boundsValid with DB index check for stencil cases.
+    /// When the allocation is coarse (totalDBs == 1), all workers bind to the
+    /// single partition — clamp linearIndex to 0 so the bounds check passes
+    /// and all workers receive the dependency.
     Value effectiveBoundsValid = boundsValid;
     if (totalDBs) {
+      if (ValueAnalysis::isOneConstant(totalDBs))
+        linearIndex = AC->createIndexConstant(0, loc);
       Value indexInBounds = AC->create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::ult, linearIndex, totalDBs);
       effectiveBoundsValid =
@@ -1252,10 +1275,10 @@ private:
         effectiveByteOffset && effectiveByteSize &&
         !ValueAnalysis::isZeroConstant(
             ValueAnalysis::stripNumericCasts(effectiveByteSize));
-    if (readyLocalDepBuffer && hasPartialSlice && modeInt != readMode) {
-      /// The ready-local runtime path only safely materializes partial slices
-      /// for read-only slots today. Conservatively widen everything else back
-      /// to a full local DB dependency.
+    if (hasPartialSlice && modeInt != readMode && !isCenterBlock) {
+      /// ARTS runtime only supports arts_add_dependence_at (sliced deps) for
+      /// DB_MODE_RO. For write-mode (EW) deps without stencil center-block
+      /// semantics, fall back to whole-DB dependencies.
       effectiveByteOffset = nullptr;
       effectiveByteSize = nullptr;
       hasPartialSlice = false;

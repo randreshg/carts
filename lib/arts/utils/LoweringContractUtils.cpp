@@ -410,7 +410,13 @@ mlir::arts::getSemanticContract(Operation *op) {
   if (auto spatialDims = getStencilSpatialDims(op))
     info.spatial.spatialDims.assign(spatialDims->begin(), spatialDims->end());
   info.spatial.centerOffset = getStencilCenterOffset(op);
-  info.spatial.supportedBlockHalo = hasSupportedBlockHalo(op);
+  // Only propagate supportedBlockHalo when the depPattern is stencil-family;
+  // otherwise an op that carries mixed attrs (e.g. uniform depPattern +
+  // residual stencil spatial attrs from a sibling loop) would produce an
+  // inconsistent lowering contract that fails verification.
+  info.spatial.supportedBlockHalo =
+      hasSupportedBlockHalo(op) && info.pattern.depPattern &&
+      isStencilFamilyDepPattern(*info.pattern.depPattern);
   info.analysis.narrowableDep =
       op->hasAttr(AttrNames::Operation::Contract::NarrowableDep);
   if (auto contractKind = op->getAttrOfType<IntegerAttr>(
@@ -595,7 +601,12 @@ mlir::arts::mergeLoweringContractInfo(LoweringContractInfo &dest,
     changed = true;
   }
 
-  if (!dest.spatial.supportedBlockHalo && src.spatial.supportedBlockHalo) {
+  // Only merge supportedBlockHalo when the effective depPattern is
+  // stencil-family (either already set in dest or coming from src).
+  auto effectiveDepPattern =
+      dest.pattern.depPattern ? dest.pattern.depPattern : src.pattern.depPattern;
+  if (!dest.spatial.supportedBlockHalo && src.spatial.supportedBlockHalo &&
+      effectiveDepPattern && isStencilFamilyDepPattern(*effectiveDepPattern)) {
     dest.spatial.supportedBlockHalo = true;
     changed = true;
   }

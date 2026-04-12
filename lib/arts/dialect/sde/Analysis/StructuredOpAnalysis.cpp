@@ -144,6 +144,13 @@ static bool collectMemrefAccessesImpl(Block &body, ArrayRef<Value> ivs,
       continue;
 
     if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
+      // Skip pointer-to-memref wrapper loads (e.g., memref.load %wrapper[] :
+      // memref<memref<?xi32>>). These are pointer dereferences, not data
+      // accesses.  Including them would create linalg.generic inputs with
+      // memref-of-memref types, which cannot be raised to tensors.
+      if (isa<MemRefType>(loadOp.getResult().getType()))
+        continue;
+
       auto map = tryBuildIndexingMap(loadOp.getIndices(), ivs, ctx);
       if (!map)
         return false;
@@ -154,6 +161,10 @@ static bool collectMemrefAccessesImpl(Block &body, ArrayRef<Value> ivs,
     }
 
     if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
+      // Skip stores to pointer-to-memref wrappers.
+      if (isa<MemRefType>(storeOp.getValueToStore().getType()))
+        continue;
+
       auto map = tryBuildIndexingMap(storeOp.getIndices(), ivs, ctx);
       if (!map)
         return false;

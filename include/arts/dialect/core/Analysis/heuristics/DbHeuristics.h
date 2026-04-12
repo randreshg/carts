@@ -15,7 +15,7 @@
 #define ARTS_DIALECT_CORE_ANALYSIS_HEURISTICS_DBHEURISTICS_H
 
 #include "arts/dialect/core/Analysis/heuristics/PartitioningHeuristics.h"
-#include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "arts/utils/machine/RuntimeConfig.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -56,7 +56,7 @@ struct AcquirePolicyInput {
 
 class DbHeuristics {
 public:
-  explicit DbHeuristics(const mlir::arts::AbstractMachine &machine);
+  explicit DbHeuristics(const mlir::arts::RuntimeConfig &machine);
 
   bool isSingleNode() const;
   bool isValid() const;
@@ -85,7 +85,7 @@ public:
   void clearDecisions() { decisions.clear(); }
 
 private:
-  const mlir::arts::AbstractMachine &machine;
+  const mlir::arts::RuntimeConfig &machine;
   llvm::SmallVector<HeuristicDecision> decisions;
   int64_t maxOuterDBsOverride = kMaxOuterDBs;
   int64_t maxDepsPerEDTOverride = kMaxDepsPerEDT;

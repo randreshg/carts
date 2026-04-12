@@ -253,6 +253,27 @@ static unsigned forwardScalarScratchLoadsInBlock(Block &block) {
     for (Region &region : op.getRegions())
       for (Block &nestedBlock : region)
         forwardedLoads += forwardScalarScratchLoadsInBlock(nestedBlock);
+
+    // Invalidate any forwarded values for allocas that may be modified
+    // inside the nested regions (e.g., loop-carried accumulators).
+    if (!op.getRegions().empty()) {
+      SmallVector<Value, 4> toErase;
+      for (auto &[allocaVal, _] : availableValueByScratch) {
+        for (Region &region : op.getRegions()) {
+          bool modified = false;
+          region.walk([&](memref::StoreOp store) {
+            if (store.getMemRef() == allocaVal)
+              modified = true;
+          });
+          if (modified) {
+            toErase.push_back(allocaVal);
+            break;
+          }
+        }
+      }
+      for (Value v : toErase)
+        availableValueByScratch.erase(v);
+    }
   }
 
   return forwardedLoads;

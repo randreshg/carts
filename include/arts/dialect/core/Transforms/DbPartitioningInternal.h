@@ -60,7 +60,6 @@
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "arts/utils/OperationAttributes.h"
-#include "arts/utils/PatternSemantics.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/Utils.h"
 

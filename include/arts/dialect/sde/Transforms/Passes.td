@@ -68,7 +68,7 @@ def RaiseToTensor : Pass<"raise-to-tensor", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createRaiseToTensorPass()";
 }
 
-def SdeTensorOptimization : Pass<"sde-tensor-optimization", "mlir::ModuleOp"> {
+def TensorOpt : Pass<"tensor-opt", "mlir::ModuleOp"> {
   let summary = "Apply cost-model-driven tensor optimizations in SDE";
   let description = [{
     Uses the SDE-owned cost model together with the transient tensor-backed
@@ -86,11 +86,11 @@ def SdeTensorOptimization : Pass<"sde-tensor-optimization", "mlir::ModuleOp"> {
                            "::mlir::memref::MemRefDialect",
                            "::mlir::scf::SCFDialect",
                            "::mlir::tensor::TensorDialect"];
-  let constructor = "mlir::arts::sde::createSdeTensorOptimizationPass()";
+  let constructor = "mlir::arts::sde::createTensorOptPass()";
 }
 
-def SdeStructuredSummaries
-    : Pass<"sde-structured-summaries", "mlir::ModuleOp"> {
+def StructuredSummaries
+    : Pass<"structured-summaries", "mlir::ModuleOp"> {
   let summary = "Stamp SDE-owned structured summaries";
   let description = [{
     Uses the SDE structured loop/access analysis to refresh reusable,
@@ -105,11 +105,11 @@ def SdeStructuredSummaries
       contract later
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
-  let constructor = "mlir::arts::sde::createSdeStructuredSummariesPass()";
+  let constructor = "mlir::arts::sde::createStructuredSummariesPass()";
 }
 
-def SdeElementwiseFusion
-    : Pass<"sde-elementwise-fusion", "mlir::ModuleOp"> {
+def ElementwiseFusion
+    : Pass<"elementwise-fusion", "mlir::ModuleOp"> {
   let summary = "Fuse consecutive SDE elementwise scheduling units";
   let description = [{
     Fuses consecutive sibling `arts_sde.su_iterate` operations that already
@@ -121,11 +121,11 @@ def SdeElementwiseFusion
     later on ARTS IR.
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
-  let constructor = "mlir::arts::sde::createSdeElementwiseFusionPass()";
+  let constructor = "mlir::arts::sde::createElementwiseFusionPass()";
 }
 
-def SdeDistributionPlanning
-    : Pass<"sde-distribution-planning", "mlir::ModuleOp"> {
+def DistributionPlanning
+    : Pass<"distribution-planning", "mlir::ModuleOp"> {
   let summary = "Derive SDE-owned distribution intent from structured SDE loops";
   let description = [{
     Uses SDE-owned structured classification, concurrency scope, and the active
@@ -139,7 +139,7 @@ def SdeDistributionPlanning
     distribution attrs at the lowering boundary.
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
-  let constructor = "mlir::arts::sde::createSdeDistributionPlanningPass()";
+  let constructor = "mlir::arts::sde::createDistributionPlanningPass()";
 }
 
 def ConvertOpenMPToSde : Pass<"convert-openmp-to-sde", "mlir::ModuleOp"> {
@@ -161,7 +161,7 @@ def ConvertOpenMPToSde : Pass<"convert-openmp-to-sde", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createConvertOpenMPToSdePass()";
 }
 
-def SdeChunkOptimization : Pass<"sde-chunk-optimization", "mlir::ModuleOp"> {
+def ChunkOpt : Pass<"chunk-opt", "mlir::ModuleOp"> {
   let summary = "Fill missing SDE chunk sizes from the cost model";
   let description = [{
     Uses the SDE-owned cost model to synthesize chunk sizes for eligible
@@ -171,11 +171,11 @@ def SdeChunkOptimization : Pass<"sde-chunk-optimization", "mlir::ModuleOp"> {
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
                            "::mlir::arith::ArithDialect"];
-  let constructor = "mlir::arts::sde::createSdeChunkOptimizationPass()";
+  let constructor = "mlir::arts::sde::createChunkOptPass()";
 }
 
-def SdeScheduleRefinement
-    : Pass<"sde-schedule-refinement", "mlir::ModuleOp"> {
+def ScheduleRefinement
+    : Pass<"schedule-refinement", "mlir::ModuleOp"> {
   let summary = "Refine abstract SDE schedule hints into concrete schedules";
   let description = [{
     Uses the SDE-owned cost model to refine eligible `sde.su_iterate`
@@ -186,10 +186,10 @@ def SdeScheduleRefinement
     `static`, `dynamic`, and `guided`.
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
-  let constructor = "mlir::arts::sde::createSdeScheduleRefinementPass()";
+  let constructor = "mlir::arts::sde::createScheduleRefinementPass()";
 }
 
-def SdeReductionStrategy : Pass<"sde-reduction-strategy", "mlir::ModuleOp"> {
+def ReductionStrategy : Pass<"reduction-strategy", "mlir::ModuleOp"> {
   let summary = "Select an SDE reduction strategy from the active cost model";
   let description = [{
     Uses the SDE-owned cost model to annotate eligible reduction-bearing
@@ -199,10 +199,10 @@ def SdeReductionStrategy : Pass<"sde-reduction-strategy", "mlir::ModuleOp"> {
     `atomic` and `tree`, and leaves lowering behavior unchanged.
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
-  let constructor = "mlir::arts::sde::createSdeReductionStrategyPass()";
+  let constructor = "mlir::arts::sde::createReductionStrategyPass()";
 }
 
-def SdeScopeSelection : Pass<"sde-scope-selection", "mlir::ModuleOp"> {
+def ScopeSelection : Pass<"scope-selection", "mlir::ModuleOp"> {
   let summary = "Select SDE concurrency scope from the active cost model";
   let description = [{
     Uses the SDE-owned cost model to choose the concurrency scope for
@@ -211,11 +211,11 @@ def SdeScopeSelection : Pass<"sde-scope-selection", "mlir::ModuleOp"> {
     and multi-node builds become `scope(<distributed>)`.
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect"];
-  let constructor = "mlir::arts::sde::createSdeScopeSelectionPass()";
+  let constructor = "mlir::arts::sde::createScopeSelectionPass()";
 }
 
-def SdeIterationSpaceDecomposition
-    : Pass<"sde-iteration-space-decomposition", "mlir::ModuleOp"> {
+def IterationSpaceDecomposition
+    : Pass<"iteration-space-decomposition", "mlir::ModuleOp"> {
   let summary = "Decompose scheduling-unit iteration spaces into interior and boundary regions";
   let description = [{
     Splits scheduling-unit inner loops that mix interior and boundary
@@ -232,11 +232,11 @@ def SdeIterationSpaceDecomposition
                            "::mlir::arith::ArithDialect",
                            "::mlir::scf::SCFDialect",
                            "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::arts::sde::createSdeIterationSpaceDecompositionPass()";
+  let constructor = "mlir::arts::sde::createIterationSpaceDecompositionPass()";
 }
 
-def SdeBarrierElimination
-    : Pass<"sde-barrier-elimination", "mlir::ModuleOp"> {
+def BarrierElimination
+    : Pass<"barrier-elimination", "mlir::ModuleOp"> {
   let summary = "Eliminate redundant SDE barriers between independent scheduling units";
   let description = [{
     Analyzes read and write sets of consecutive sde.su_iterate operations
@@ -247,11 +247,11 @@ def SdeBarrierElimination
   }];
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
                            "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::arts::sde::createSdeBarrierEliminationPass()";
+  let constructor = "mlir::arts::sde::createBarrierEliminationPass()";
 }
 
-def SdeLoopInterchange
-    : Pass<"sde-loop-interchange", "mlir::ModuleOp"> {
+def LoopInterchange
+    : Pass<"loop-interchange", "mlir::ModuleOp"> {
   let summary = "Cost-model-driven loop interchange using SDE linalg carriers";
   let description = [{
     Analyzes the indexing maps and iterator types of transient linalg.generic
@@ -265,7 +265,7 @@ def SdeLoopInterchange
   let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
                            "::mlir::linalg::LinalgDialect",
                            "::mlir::scf::SCFDialect"];
-  let constructor = "mlir::arts::sde::createSdeLoopInterchangePass()";
+  let constructor = "mlir::arts::sde::createLoopInterchangePass()";
 }
 
 def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {

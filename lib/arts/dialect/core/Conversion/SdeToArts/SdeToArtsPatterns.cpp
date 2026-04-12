@@ -21,9 +21,9 @@ namespace mlir::arts {
 #define GEN_PASS_DEF_CONVERTSDETOARTS
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
-#include "arts/dialect/core/Transforms/pattern/PatternTransform.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/OperationAttributes.h"
+#include "arts/utils/StencilAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
@@ -304,22 +304,46 @@ classifyFromLinalg(linalg::GenericOp generic) {
   return std::nullopt;
 }
 
+/// Stamp a simple (non-stencil) pattern contract on an op.
+static void stampSimple(Operation *op, ArtsDepPattern family, int64_t rev) {
+  if (!op)
+    return;
+  setDepPattern(op, family);
+  setPatternRevision(op, rev);
+  if (auto dist = getDistributionPatternForDepPattern(family))
+    setEdtDistributionPattern(op, *dist);
+}
+
 /// Stamp a pattern contract on an arts.for and its parent EdtOp if present.
 static void stampPatternContract(Operation *artsForOp, ArtsDepPattern pattern,
                                  int64_t revision = 1) {
-  SimplePatternContract contract(pattern, revision);
-  contract.stamp(artsForOp);
+  stampSimple(artsForOp, pattern, revision);
   if (auto parentEdt = artsForOp->getParentOfType<EdtOp>())
-    contract.stamp(parentEdt.getOperation());
+    stampSimple(parentEdt.getOperation(), pattern, revision);
 }
 
-static StencilNDPatternContract
-materializeStencilContract(ArtsDepPattern pattern,
-                           const StructuredNeighborhoodSummary &info,
-                           int64_t revision = 1) {
-  return StencilNDPatternContract(
-      pattern, info.ownerDims, info.minOffsets, info.maxOffsets,
-      info.writeFootprint, revision, /*blockShape=*/{}, info.spatialDims);
+/// Stamp a stencil-family contract on an op with spatial metadata.
+static void stampStencilOnOp(Operation *op, ArtsDepPattern family,
+                             ArrayRef<int64_t> ownerDims,
+                             ArrayRef<int64_t> minOffsets,
+                             ArrayRef<int64_t> maxOffsets,
+                             ArrayRef<int64_t> writeFootprint,
+                             ArrayRef<int64_t> spatialDims,
+                             ArrayRef<int64_t> blockShape, int64_t rev) {
+  if (!op)
+    return;
+  setDepPattern(op, family);
+  setPatternRevision(op, rev);
+  setEdtDistributionPattern(op, EdtDistributionPattern::stencil);
+  setSupportedBlockHalo(op);
+  ArrayRef<int64_t> dims = spatialDims.empty() ? ownerDims : spatialDims;
+  setStencilSpatialDims(op, dims);
+  setStencilOwnerDims(op, ownerDims);
+  setStencilMinOffsets(op, minOffsets);
+  setStencilMaxOffsets(op, maxOffsets);
+  setStencilWriteFootprint(op, writeFootprint);
+  if (!blockShape.empty())
+    setStencilBlockShape(op, blockShape);
 }
 
 /// Stamp a recovered stencil-family contract on an arts.for and its parent
@@ -327,11 +351,13 @@ materializeStencilContract(ArtsDepPattern pattern,
 static void stampStencilContract(Operation *artsForOp, ArtsDepPattern pattern,
                                  const StructuredNeighborhoodSummary &info,
                                  int64_t revision = 1) {
-  StencilNDPatternContract contract =
-      materializeStencilContract(pattern, info, revision);
-  contract.stamp(artsForOp);
+  stampStencilOnOp(artsForOp, pattern, info.ownerDims, info.minOffsets,
+                   info.maxOffsets, info.writeFootprint, info.spatialDims,
+                   /*blockShape=*/{}, revision);
   if (auto parentEdt = artsForOp->getParentOfType<EdtOp>())
-    contract.stamp(parentEdt.getOperation());
+    stampStencilOnOp(parentEdt.getOperation(), pattern, info.ownerDims,
+                     info.minOffsets, info.maxOffsets, info.writeFootprint,
+                     info.spatialDims, /*blockShape=*/{}, revision);
 }
 
 static void stampDistributionKind(Operation *op, EdtDistributionKind kind,

@@ -72,8 +72,6 @@ namespace {
 constexpr const char *kDefaultMetadataFile = ".carts-metadata.json";
 constexpr const char *kDefaultDiagnoseOutput = ".carts-diagnose.json";
 constexpr uint64_t kDefaultArtsIdStride = 1000;
-constexpr int64_t kDefaultKernelTransformsTileJ = 64;
-constexpr int64_t kDefaultKernelTransformsMinTripCount = 128;
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -152,26 +150,6 @@ static cl::opt<bool> RuntimeStaticWorkers(
              "when the module embeds a valid ARTS config"),
     cl::init(false));
 
-/// Kernel transform options (Pipeline step: pattern-pipeline)
-static cl::opt<bool> KernelTransformsEnableMatmul(
-    "loop-transforms-enable-matmul",
-    cl::desc("Enable reduction-aware matmul transforms (dot -> update form)"),
-    cl::init(true));
-
-static cl::opt<bool> KernelTransformsEnableTiling(
-    "loop-transforms-enable-tiling",
-    cl::desc("Enable tiling for kernel transforms"), cl::init(true));
-
-static cl::opt<int64_t> KernelTransformsTileJ(
-    "loop-transforms-tile-j",
-    cl::desc("Tile size for j-dimension in kernel transforms"),
-    cl::init(kDefaultKernelTransformsTileJ));
-
-static cl::opt<int64_t> KernelTransformsMinTripCount(
-    "loop-transforms-min-trip-count",
-    cl::desc("Minimum constant trip count required to apply tiling"),
-    cl::init(kDefaultKernelTransformsMinTripCount));
-
 /// Distributed DB allocation enablement (after DbPartitioning).
 static cl::opt<bool> DistributedDb(
     "distributed-db",
@@ -199,7 +177,6 @@ enum class StageId {
   RaiseMemRefDimensionality,
   InitialCleanup,
   OpenMPToArts,
-  PatternPipeline,
   EdtTransforms,
   CreateDbs,
   DbOpt,
@@ -223,7 +200,7 @@ struct StageExecutionContext {
   ModuleOp module;
   MLIRContext &context;
   arts::AnalysisManager *analysisManager = nullptr;
-  const arts::AbstractMachine *machine = nullptr;
+  const arts::RuntimeConfig *machine = nullptr;
   bool stopAfterStage = false;
   bool runAdditionalOpt = false;
   bool emitLLVM = false;
@@ -292,9 +269,6 @@ static const std::array<llvm::StringLiteral, 19> kOpenMPToArtsPasses = {
     "ConvertSdeToArts",         "VerifySdeLowered",
     "DeadCodeElimination",      "CSE",
     "VerifyEdtCreated"};
-static const std::array<llvm::StringLiteral, 4> kPatternPipelinePasses = {
-    "DepTransforms",  "LoopNormalization",
-    "KernelTransforms",  "CSE"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
     "EdtStructuralOpt(runAnalysis=false)",
     "EdtICM",
@@ -319,8 +293,8 @@ static const std::array<llvm::StringLiteral, 4> kEdtOptPasses = {
     "CSE"};
 static const std::array<llvm::StringLiteral, 4> kConcurrencyPasses = {
     "PolygeistCanonicalize", "Concurrency", "ForOpt", "PolygeistCanonicalize"};
-static const std::array<llvm::StringLiteral, 5> kEdtDistributionPasses = {
-    "StructuredKernelPlan", "EdtDistribution", "EdtOrchestrationOpt",
+static const std::array<llvm::StringLiteral, 4> kEdtDistributionPasses = {
+    "EdtDistribution", "EdtOrchestrationOpt",
     "ForLowering", "VerifyForLowered"};
 static const std::array<llvm::StringLiteral, 8> kPostDistributionCleanupPasses =
     {"EdtStructuralOpt(runAnalysis=false)",
@@ -349,8 +323,8 @@ static const std::array<llvm::StringLiteral, 7> kLateConcurrencyCleanupPasses =
      "EdtAllocaSinking",
      "DeadCodeElimination",
      "Mem2Reg"};
-static const std::array<llvm::StringLiteral, 5> kEpochsPasses = {
-    "PolygeistCanonicalize", "CreateEpochs", "PersistentStructuredRegion",
+static const std::array<llvm::StringLiteral, 4> kEpochsPasses = {
+    "PolygeistCanonicalize", "CreateEpochs",
     "EpochOpt[scheduling] (conditional)", "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
     "EdtAllocaSinking",
@@ -665,7 +639,7 @@ void buildRaiseMemRefDimensionalityPipeline(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(arts::createArtsInlinerPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(arts::createRaiseMemRefDimensionalityPass());
+  pm.addPass(arts::createMemrefNormalizationPass());
   pm.addPass(arts::createHandleDepsPass());
   pm.addPass(arts::createDCEPass());
   pm.addPass(createCSEPass());
@@ -683,19 +657,19 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
                                arts::AnalysisManager *AM = nullptr) {
   arts::sde::SDECostModel *costModel = AM ? &AM->getCostModel() : nullptr;
   pm.addPass(arts::sde::createConvertOpenMPToSdePass(costModel));
-  pm.addPass(arts::sde::createSdeScopeSelectionPass(costModel));
-  pm.addPass(arts::sde::createSdeScheduleRefinementPass(costModel));
-  pm.addPass(arts::sde::createSdeChunkOptimizationPass(costModel));
-  pm.addPass(arts::sde::createSdeReductionStrategyPass(costModel));
+  pm.addPass(arts::sde::createScopeSelectionPass(costModel));
+  pm.addPass(arts::sde::createScheduleRefinementPass(costModel));
+  pm.addPass(arts::sde::createChunkOptPass(costModel));
+  pm.addPass(arts::sde::createReductionStrategyPass(costModel));
   pm.addPass(arts::sde::createRaiseToLinalgPass());
   pm.addPass(arts::sde::createRaiseToTensorPass());
-  pm.addPass(arts::sde::createSdeLoopInterchangePass());
-  pm.addPass(arts::sde::createSdeTensorOptimizationPass(costModel));
-  pm.addPass(arts::sde::createSdeStructuredSummariesPass(costModel));
-  pm.addPass(arts::sde::createSdeElementwiseFusionPass());
-  pm.addPass(arts::sde::createSdeDistributionPlanningPass(costModel));
-  pm.addPass(arts::sde::createSdeIterationSpaceDecompositionPass());
-  pm.addPass(arts::sde::createSdeBarrierEliminationPass(costModel));
+  pm.addPass(arts::sde::createLoopInterchangePass());
+  pm.addPass(arts::sde::createTensorOptPass(costModel));
+  pm.addPass(arts::sde::createStructuredSummariesPass(costModel));
+  pm.addPass(arts::sde::createElementwiseFusionPass());
+  pm.addPass(arts::sde::createDistributionPlanningPass(costModel));
+  pm.addPass(arts::sde::createIterationSpaceDecompositionPass());
+  pm.addPass(arts::sde::createBarrierEliminationPass(costModel));
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
   pm.addPass(arts::sde::createVerifySdeLoweredPass());
   pm.addPass(arts::createDCEPass());
@@ -713,22 +687,6 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(arts::createEdtPtrRematerializationPass());
 }
 
-/// Transitional ARTS-side fallback pipeline for semantic families that are not
-/// yet fully planned in SDE before DB creation.
-/// Authoritative contracts are seeded at the SDE boundary first:
-///   1. SDE->ARTS conversion (structured summaries, elementwise fusion,
-///      distribution intent, and linalg/tensor-backed fallback classification)
-///   2. DepTransforms/KernelTransforms only for the remaining unmigrated
-///      ARTS-side semantic rewrites and fallback inference
-void buildPatternPipeline(PassManager &pm, arts::AnalysisManager *AM) {
-  pm.addPass(arts::createDepTransformsPass(AM));
-  pm.addPass(arts::createLoopNormalizationPass(AM));
-  pm.addPass(arts::createKernelTransformsPass(
-      AM, KernelTransformsEnableMatmul, KernelTransformsEnableTiling,
-      KernelTransformsTileJ, KernelTransformsMinTripCount));
-  pm.addPass(createCSEPass());
-}
-
 /// Bridge eligible host producer loops into the regular ARTS loop/EDT path
 /// before DB creation without making this outlining part of the semantic
 /// pattern pipeline itself.
@@ -742,7 +700,7 @@ void buildPreCreateDbsBridgingPipeline(PassManager &pm,
   /// block partitioning as well.
   bool enableDistributedHostLoopOutlining = false;
   if (AM) {
-    const auto &machine = AM->getAbstractMachine();
+    const auto &machine = AM->getRuntimeConfig();
     enableDistributedHostLoopOutlining =
         DistributedDb ||
         (machine.hasValidNodeCount() && machine.getNodeCount() > 1);
@@ -791,7 +749,6 @@ void buildConcurrencyPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 
 /// EDT distribution and loop lowering passes.
 void buildEdtDistributionPipeline(PassManager &pm, arts::AnalysisManager *AM) {
-  pm.addPass(arts::createStructuredKernelPlanPass(AM));
   pm.addPass(arts::createEdtDistributionPass(AM));
   pm.addPass(arts::createEdtOrchestrationOptPass());
   pm.addPass(arts::createForLoweringPass(AM));
@@ -856,8 +813,6 @@ void buildEpochsPipeline(PassManager &pm, arts::AnalysisManager *AM,
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(arts::createVerifyEpochCreatedPass());
-  /// Gate proven regular epochs for persistent structured region lowering.
-  pm.addPass(arts::createPersistentStructuredRegionPass(AM));
   /// Run EpochOpt with structural + scheduling optimizations on newly created
   /// epochs. Amortization is always enabled; continuation/CPS opts are gated.
   pm.addPass(arts::createEpochOptPass(AM,
@@ -905,7 +860,7 @@ void buildPreLoweringPipeline(PassManager &pm, arts::AnalysisManager *AM,
 /// ARTS to LLVM conversion passes.
 void buildArtsToLLVMPipeline(PassManager &pm, bool debug,
                              bool distributedInitPerWorker,
-                             const arts::AbstractMachine *machine) {
+                             const arts::RuntimeConfig *machine) {
   pm.addPass(arts::createConvertArtsToLLVMPass(debug, distributedInitPerWorker,
                                                machine));
   /// ConvertArtsToLLVM still consults lowering contracts for late dependency
@@ -976,7 +931,7 @@ static constexpr llvm::StringLiteral kDepPreLowering[] = {
 static constexpr llvm::StringLiteral kDepArtsToLLVM[] = {"pre-lowering"};
 
 static ArrayRef<StageDescriptor> getStageRegistry() {
-  static const std::array<StageDescriptor, 19> kStageRegistry = {{
+  static const std::array<StageDescriptor, 18> kStageRegistry = {{
       {StageId::RaiseMemRefDimensionality, "raise-memref-dimensionality",
        llvm::ArrayRef<llvm::StringLiteral>(), StageKind::Core, true, true,
        false, "Error when raising memref dimensionality",
@@ -1003,15 +958,6 @@ static ArrayRef<StageDescriptor> getStageRegistry() {
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepInitialCleanup},
-      {StageId::PatternPipeline, "pattern-pipeline",
-       llvm::ArrayRef<llvm::StringLiteral>(), StageKind::Core, true, true,
-       false, "Error when applying the semantic pattern pipeline",
-       kPatternPipelinePasses,
-       [](PassManager &pm, const StageExecutionContext &ctx) {
-         buildPatternPipeline(pm, ctx.analysisManager);
-       },
-       isStageEnabledAlways,
-       /*dependsOn=*/kDepOpenMPToArts},
       {StageId::EdtTransforms, "edt-transforms",
        llvm::ArrayRef<llvm::StringLiteral>(), StageKind::Core, true, true,
        false, "Error when running EDT transformations", kEdtTransformsPasses,
@@ -1245,7 +1191,7 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   std::unique_ptr<arts::AnalysisManager> AM =
       std::make_unique<arts::AnalysisManager>(module, ArtsConfig, MetadataFile);
 
-  auto &machine = AM->getAbstractMachine();
+  auto &machine = AM->getRuntimeConfig();
   if (!machine.hasConfigFile() || !machine.isValid()) {
     ARTS_ERROR("Invalid ARTS configuration. Provide a valid --arts-config path "
                "or place a valid arts.cfg in the working directory.");

@@ -19,6 +19,7 @@
 #include "arts/dialect/core/Transforms/edt/EdtParallelSplitLowering.h"
 #include "arts/utils/DbUtils.h"
 #include "arts/utils/OperationAttributes.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_parallel_split_lowering);
@@ -40,6 +41,22 @@ ParallelRegionSplitAnalysis::analyze(EdtOp parallelEdt) {
     } else if (isa<DbReleaseOp>(&op)) {
       /// Skip db_release ops - these are cleanup operations, not real work.
       continue;
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(&op)) {
+      /// Check if this scf.if wraps an arts.for (OpenMP active-thread guard).
+      /// Walk the then-region to find ForOps inside the guard.
+      SmallVector<ForOp, 2> nestedForOps;
+      ifOp.getThenRegion().walk(
+          [&](ForOp nested) { nestedForOps.push_back(nested); });
+      if (!nestedForOps.empty()) {
+        for (ForOp nested : nestedForOps)
+          analysis.forOps.push_back(nested);
+        seenFor = true;
+      } else {
+        if (!seenFor)
+          analysis.opsBeforeFor.push_back(&op);
+        else
+          analysis.opsAfterFor.push_back(&op);
+      }
     } else {
       if (!seenFor)
         analysis.opsBeforeFor.push_back(&op);
@@ -170,10 +187,15 @@ EdtOp mlir::arts::createContinuationParallel(
 void mlir::arts::cleanupOriginalParallel(EdtOp originalParallel,
                                          ParallelRegionSplitAnalysis &analysis,
                                          bool hasPreFor) {
-  for (Operation *op : llvm::reverse(analysis.opsAfterFor))
-    op->erase();
+  /// Erase ForOps first, then erase opsAfterFor only if they have no
+  /// remaining uses (the lowered epoch code may reference values defined
+  /// between ForOps, e.g., upper bound computations).
   for (ForOp forOp : analysis.forOps)
     forOp.erase();
+  for (Operation *op : llvm::reverse(analysis.opsAfterFor)) {
+    if (op->use_empty())
+      op->erase();
+  }
 
   if (hasPreFor) {
     ARTS_INFO(" - Keeping pre-for work in original parallel EDT");

@@ -25,12 +25,12 @@ class DominanceInfo;
 
 namespace arts {
 class AnalysisManager;
-class AbstractMachine;
+class RuntimeConfig;
 
 /// General IR cleanup and canonicalization passes.
 std::unique_ptr<Pass> createArtsInlinerPass();
 /// Raise nested pointer allocations to N-dimensional memrefs.
-std::unique_ptr<Pass> createRaiseMemRefDimensionalityPass();
+std::unique_ptr<Pass> createMemrefNormalizationPass();
 /// Convert residual OMP task dependencies to arts.omp_dep.
 std::unique_ptr<Pass> createHandleDepsPass();
 /// Eliminate dead ARTS operations and dead helper IR.
@@ -53,7 +53,7 @@ std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass>
 createConvertArtsToLLVMPass(bool debug, bool distributedInitPerWorker,
-                            const AbstractMachine *machine);
+                            const RuntimeConfig *machine);
 
 /// EDT-local cleanup and codegen-preparation passes.
 std::unique_ptr<Pass> createEdtICMPass();
@@ -69,11 +69,6 @@ std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEdtLoweringPass(AnalysisManager *AM,
                                             uint64_t idStride = 1000);
 std::unique_ptr<Pass> createLoweringContractCleanupPass();
-
-/// Structured kernel plan analysis pass.
-std::unique_ptr<Pass> createStructuredKernelPlanPass(AnalysisManager *AM);
-/// Persistent structured region gating pass.
-std::unique_ptr<Pass> createPersistentStructuredRegionPass(AnalysisManager *AM);
 
 /// High-level scheduling and distribution passes.
 std::unique_ptr<Pass> createForOptPass(AnalysisManager *AM);
@@ -102,13 +97,6 @@ std::unique_ptr<Pass> createEpochOptSchedulingPass(AnalysisManager *AM,
 std::unique_ptr<Pass> createHoistingPass();
 std::unique_ptr<Pass> createBlockLoopStripMiningPass();
 
-/// Semantic pattern family passes.
-std::unique_ptr<Pass> createDepTransformsPass(AnalysisManager *AM = nullptr);
-std::unique_ptr<Pass> createLoopNormalizationPass(AnalysisManager *AM);
-std::unique_ptr<Pass>
-createKernelTransformsPass(AnalysisManager *AM, bool enableMatmul = true,
-                           bool enableTiling = true, int64_t tileJ = 64,
-                           int64_t minTripCount = 128);
 std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
 
 /// Validation passes for lowering contracts.

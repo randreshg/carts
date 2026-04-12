@@ -218,8 +218,25 @@ void classifyEdtUserValues(ArrayRef<Value> userValues,
       }
     }
 
-    if (val.getType().isIntOrIndexOrFloat())
+    if (val.getType().isIntOrIndexOrFloat()) {
       parameters.insert(val);
+      continue;
+    }
+
+    // Memref values produced by memref.alloc (malloc'd arrays passed to
+    // task bodies) must be packed as handle parameters, not cloned.
+    // Cloning a memref.alloc creates a NEW, SEPARATE allocation which would
+    // not share data with the original. Only handle alloc (heap) values,
+    // NOT alloca (stack) values — stack allocas for loop-local scratch
+    // should remain clonable.
+    if (isa<MemRefType>(val.getType())) {
+      if (auto *defOp = val.getDefiningOp()) {
+        if (isa<memref::AllocOp>(defOp)) {
+          dbHandles.insert(val);
+          continue;
+        }
+      }
+    }
   }
 }
 

@@ -10,7 +10,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "arts/utils/metadata/MetadataAttrNames.h"
+#include "arts/utils/MetadataAttrNames.h"
 #include "mlir/IR/BuiltinAttributes.h"
 
 ARTS_DEBUG_SETUP(partitioning_heuristics)
@@ -226,7 +226,7 @@ shouldPreserveBlockForSmallVectorReadback(const PartitioningContext &ctx) {
 
 PartitioningDecision
 mlir::arts::evaluatePartitioningHeuristics(const PartitioningContext &ctx,
-                                           const AbstractMachine *machine) {
+                                           const RuntimeConfig *machine) {
   ARTS_DEBUG("evaluatePartitioningHeuristics: canElementWise="
              << ctx.canElementWise << ", canBlock=" << ctx.canBlock
              << ", pinnedDimCount=" << ctx.pinnedDimCount

@@ -32,7 +32,7 @@ public:
 
   std::optional<PartitioningDecision>
   evaluate(const PartitioningContext &ctx,
-           const AbstractMachine *machine) const override {
+           const RuntimeConfig *machine) const override {
     if (!ctx.canBlock && !ctx.anyCanBlock())
       return std::nullopt;
 

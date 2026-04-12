@@ -2,7 +2,7 @@
 /// File: ARTSCostModel.h
 ///
 /// ARTS-specific implementation of SDECostModel. Costs change based on
-/// AbstractMachine topology (local vs distributed):
+/// RuntimeConfig topology (local vs distributed):
 ///   - Halo exchange: 0.01/byte local vs 0.5/byte distributed (50x)
 ///   - Task sync: 3000 local vs 5000 distributed (1.7x)
 ///   - Task creation: 1800 local vs 2500 distributed (1.4x)
@@ -11,16 +11,16 @@
 #ifndef ARTS_UTILS_COSTS_ARTSCOSTMODEL_H
 #define ARTS_UTILS_COSTS_ARTSCOSTMODEL_H
 
-#include "arts/utils/abstract_machine/AbstractMachine.h"
+#include "arts/utils/machine/RuntimeConfig.h"
 #include "arts/utils/costs/SDECostModel.h"
 
 namespace mlir::arts {
 
 class ARTSCostModel : public sde::SDECostModel {
-  const AbstractMachine &machine;
+  const RuntimeConfig &machine;
 
 public:
-  explicit ARTSCostModel(const AbstractMachine &am) : machine(am) {}
+  explicit ARTSCostModel(const RuntimeConfig &am) : machine(am) {}
 
   // --- Task lifecycle (maps SDE tasks -> ARTS EDTs) ---
   double getTaskCreationCost() const override {

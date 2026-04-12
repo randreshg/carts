@@ -10,7 +10,7 @@
 #include "arts/Dialect.h"
 #include "arts/dialect/core/Analysis/graphs/base/NodeBase.h"
 #include "arts/dialect/core/Analysis/graphs/db/DbAccessPattern.h"
-#include "arts/utils/metadata/MetadataEnums.h"
+#include "arts/utils/MetadataEnums.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>

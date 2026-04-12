@@ -8,7 +8,7 @@
 #define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTREWRITER_H
 
 #include "arts/Dialect.h"
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "arts/dialect/core/Transforms/edt/WorkDistributionUtils.h"
 #include "arts/utils/LoweringContractUtils.h"
 #include "mlir/IR/BuiltinTypes.h"

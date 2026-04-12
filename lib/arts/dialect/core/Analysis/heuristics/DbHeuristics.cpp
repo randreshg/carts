@@ -11,7 +11,7 @@
 #include "arts/utils/Debug.h"
 #include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
-#include "arts/utils/metadata/LocationMetadata.h"
+#include "arts/utils/LocationMetadata.h"
 #include "mlir/IR/BuiltinAttributes.h"
 
 ARTS_DEBUG_SETUP(db_heuristics)
@@ -32,7 +32,7 @@ static std::string extractHeuristicId(llvm::StringRef rationale) {
 
 } // namespace
 
-DbHeuristics::DbHeuristics(const AbstractMachine &machine) : machine(machine) {}
+DbHeuristics::DbHeuristics(const RuntimeConfig &machine) : machine(machine) {}
 
 bool DbHeuristics::isSingleNode() const { return machine.isSingleNode(); }
 

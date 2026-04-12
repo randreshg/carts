@@ -35,6 +35,8 @@ namespace mlir::arts {
 } // namespace mlir::arts
 
 #include "arts/utils/Utils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
@@ -67,6 +69,22 @@ using namespace mlir::arts;
 //===----------------------------------------------------------------------===//
 // Helpers
 //===----------------------------------------------------------------------===//
+
+/// Ensure a value has index type, inserting arith.index_cast if needed.
+static Value ensureIndex(OpBuilder &b, Location loc, Value v) {
+  if (v.getType().isIndex())
+    return v;
+  return b.create<arith::IndexCastOp>(loc, b.getIndexType(), v);
+}
+
+/// Ensure all values in a range have index type.
+static SmallVector<Value> ensureIndexRange(OpBuilder &b, Location loc,
+                                           ValueRange vals) {
+  SmallVector<Value> result;
+  for (Value v : vals)
+    result.push_back(ensureIndex(b, loc, v));
+  return result;
+}
 
 /// Map OMP schedule kind to SDE schedule kind.
 static std::optional<sde::SdeScheduleKind>
@@ -136,19 +154,41 @@ struct OmpDependSlice {
   SmallVector<Value> sizes;
 };
 
-/// OpenMP task-depend lowering still ingests the legacy arts.omp_dep carrier
-/// created upstream, but SDE only consumes the memref slice it describes.
+/// OpenMP task-depend lowering ingests either the legacy arts.omp_dep carrier
+/// or direct memref values (e.g. memref.subview from Polygeist).
 static std::optional<OmpDependSlice> extractDependSlice(Value depVar) {
-  auto ompDepOp = depVar.getDefiningOp<OmpDepOp>();
-  if (!ompDepOp)
-    return std::nullopt;
+  // Path 1: legacy arts.omp_dep carrier
+  if (auto ompDepOp = depVar.getDefiningOp<OmpDepOp>()) {
+    OmpDependSlice slice;
+    slice.source = ompDepOp.getSource();
+    slice.offsets.assign(ompDepOp.getIndices().begin(),
+                         ompDepOp.getIndices().end());
+    slice.sizes.assign(ompDepOp.getSizes().begin(),
+                       ompDepOp.getSizes().end());
+    return slice;
+  }
 
-  OmpDependSlice slice;
-  slice.source = ompDepOp.getSource();
-  slice.offsets.assign(ompDepOp.getIndices().begin(),
-                       ompDepOp.getIndices().end());
-  slice.sizes.assign(ompDepOp.getSizes().begin(), ompDepOp.getSizes().end());
-  return slice;
+  // Path 2: direct memref.subview — Polygeist generates depend(in: %subview)
+  if (auto subviewOp = depVar.getDefiningOp<memref::SubViewOp>()) {
+    OmpDependSlice slice;
+    slice.source = subviewOp.getSource();
+    // Extract dynamic offsets and sizes (skip static ones — dep matching
+    // in SDE uses source identity, not offset precision).
+    for (Value off : subviewOp.getOffsets())
+      slice.offsets.push_back(off);
+    for (Value sz : subviewOp.getSizes())
+      slice.sizes.push_back(sz);
+    return slice;
+  }
+
+  // Path 3: plain memref — whole-array dependency
+  if (isa<MemRefType>(depVar.getType())) {
+    OmpDependSlice slice;
+    slice.source = depVar;
+    return slice;
+  }
+
+  return std::nullopt;
 }
 
 static void mapWsloopCapturedArgs(omp::WsloopOp op, IRMapping &mapper) {
@@ -249,9 +289,9 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
     auto loopNest = cast<omp::LoopNestOp>(op.getWrappedLoop());
-    auto lbs = loopNest.getLoopLowerBounds();
-    auto ubs = loopNest.getLoopUpperBounds();
-    auto steps = loopNest.getLoopSteps();
+    auto lbs = ensureIndexRange(rewriter, loc, loopNest.getLoopLowerBounds());
+    auto ubs = ensureIndexRange(rewriter, loc, loopNest.getLoopUpperBounds());
+    auto steps = ensureIndexRange(rewriter, loc, loopNest.getLoopSteps());
 
     // Schedule
     sde::SdeScheduleKindAttr schedAttr;
@@ -263,7 +303,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     // Chunk size
     Value chunkSize;
     if (auto chunk = op.getScheduleChunk())
-      chunkSize = chunk;
+      chunkSize = ensureIndex(rewriter, loc, chunk);
 
     // Nowait
     bool nw = op.getNowait();
@@ -312,8 +352,15 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     IRMapping mapper;
     Block &src = loopNest.getRegion().front();
     for (unsigned d = 0; d < std::min<unsigned>(src.getNumArguments(), numDims);
-         ++d)
-      mapper.map(src.getArgument(d), dst.getArgument(d));
+         ++d) {
+      Value newArg = dst.getArgument(d);
+      Value oldArg = src.getArgument(d);
+      // If the source IV was non-index, cast back so cloned body ops match
+      if (!oldArg.getType().isIndex())
+        newArg = rewriter.create<arith::IndexCastOp>(loc, oldArg.getType(),
+                                                      newArg);
+      mapper.map(oldArg, newArg);
+    }
     mapWsloopCapturedArgs(op, mapper);
     for (Operation &srcOp : src.without_terminator())
       rewriter.clone(srcOp, mapper);
@@ -345,25 +392,20 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
     // Collect task dependencies as sde.mu_dep ops
     SmallVector<Value> deps;
     auto dependList = op.getDependKindsAttr();
-    if (dependList) {
+    if (dependList && !dependList.empty() &&
+        dependList.size() == op.getDependVars().size()) {
       for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
         auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(dependList[i]);
         if (!depClause)
-          return failure();
+          continue;
 
         auto depSlice = extractDependSlice(op.getDependVars()[i]);
         if (!depSlice)
-          return failure();
+          continue;
 
         auto sdeMode = convertDependMode(depClause.getValue());
         if (!sdeMode)
           return failure();
-
-        // Skip read-only deps with no writer
-        bool hasWriter =
-            !writerSources || writerSources->contains(depSlice->source);
-        if (*sdeMode == sde::SdeAccessMode::read && !hasWriter)
-          continue;
 
         // Create sde.mu_dep
         rewriter.setInsertionPoint(op);
@@ -399,9 +441,9 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
     ARTS_INFO("Converting omp.taskloop to sde.su_iterate");
     auto loc = op.getLoc();
     auto loopNest = cast<omp::LoopNestOp>(op.getWrappedLoop());
-    auto lb = loopNest.getLoopLowerBounds()[0];
-    auto ub = loopNest.getLoopUpperBounds()[0];
-    auto step = loopNest.getLoopSteps()[0];
+    Value lb = ensureIndex(rewriter, loc, loopNest.getLoopLowerBounds()[0]);
+    Value ub = ensureIndex(rewriter, loc, loopNest.getLoopUpperBounds()[0]);
+    Value step = ensureIndex(rewriter, loc, loopNest.getLoopSteps()[0]);
 
     auto suIter = sde::SdeSuIterateOp::create(
         rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{step},
@@ -425,8 +467,14 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
     rewriter.setInsertionPointToStart(&dst);
     IRMapping mapper;
     Block &src = loopNest.getRegion().front();
-    if (!src.getArguments().empty())
-      mapper.map(src.getArgument(0), dst.getArgument(0));
+    if (!src.getArguments().empty()) {
+      Value newArg = dst.getArgument(0);
+      Value oldArg = src.getArgument(0);
+      if (!oldArg.getType().isIndex())
+        newArg = rewriter.create<arith::IndexCastOp>(loc, oldArg.getType(),
+                                                      newArg);
+      mapper.map(oldArg, newArg);
+    }
     for (Operation &srcOp : src.without_terminator())
       rewriter.clone(srcOp, mapper);
     sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
@@ -454,9 +502,9 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
     Block &parBlk = sde::ensureBlock(cuRegion.getBody());
 
     rewriter.setInsertionPointToStart(&parBlk);
-    Value lb = op.getLowerBound().front();
-    Value ub = op.getUpperBound().front();
-    Value st = op.getStep().front();
+    Value lb = ensureIndex(rewriter, loc, op.getLowerBound().front());
+    Value ub = ensureIndex(rewriter, loc, op.getUpperBound().front());
+    Value st = ensureIndex(rewriter, loc, op.getStep().front());
 
     auto suIter = sde::SdeSuIterateOp::create(
         rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{st},
@@ -649,6 +697,13 @@ struct ConvertOpenMPToSdePass
     GreedyRewriteConfig config;
     config.enableFolding(false);
     (void)applyPatternsGreedily(module, std::move(patterns), config);
+
+    // Erase omp.declare_reduction symbols — they were consumed by
+    // WsloopToSdePattern to infer SDE reduction kinds and are no longer needed.
+    SmallVector<omp::DeclareReductionOp> declReductions;
+    module.walk([&](omp::DeclareReductionOp op) { declReductions.push_back(op); });
+    for (auto op : declReductions)
+      op.erase();
 
     ARTS_INFO_FOOTER(ConvertOpenMPToSdePass);
   }

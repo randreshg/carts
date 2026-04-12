@@ -845,11 +845,14 @@ static bool isDerivedFromPtrImpl(Value value, Value source,
     return false;
 
   if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-    if (auto edt = dyn_cast<EdtOp>(blockArg.getParentBlock()->getParentOp())) {
-      unsigned argIndex = blockArg.getArgNumber();
-      ValueRange deps = edt.getDependencies();
-      if (argIndex < deps.size())
-        return isDerivedFromPtrImpl(deps[argIndex], source, visited, depth + 1);
+    Block *parentBlock = blockArg.getParentBlock();
+    if (parentBlock && parentBlock->getParentOp()) {
+      if (auto edt = dyn_cast<EdtOp>(parentBlock->getParentOp())) {
+        unsigned argIndex = blockArg.getArgNumber();
+        ValueRange deps = edt.getDependencies();
+        if (argIndex < deps.size())
+          return isDerivedFromPtrImpl(deps[argIndex], source, visited, depth + 1);
+      }
     }
     return false;
   }
@@ -1021,17 +1024,26 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
     return nullptr;
 
   if (auto blockArg = dyn_cast<BlockArgument>(v)) {
-    if (auto edt = dyn_cast<EdtOp>(blockArg.getOwner()->getParentOp())) {
-      unsigned argIndex = blockArg.getArgNumber();
-      ValueRange deps = edt.getDependencies();
-      if (argIndex < deps.size())
-        return getUnderlyingValueImpl(deps[argIndex], visited, depth + 1);
+    Block *owner = blockArg.getOwner();
+    if (owner && owner->getParentOp()) {
+      if (auto edt = dyn_cast<EdtOp>(owner->getParentOp())) {
+        unsigned argIndex = blockArg.getArgNumber();
+        ValueRange deps = edt.getDependencies();
+        if (argIndex < deps.size())
+          return getUnderlyingValueImpl(deps[argIndex], visited, depth + 1);
+      }
     }
     return v;
   }
 
   Operation *op = v.getDefiningOp();
   if (!op)
+    return nullptr;
+
+  /// Defensive: reject operations that are detached from any block.  This
+  /// catches dangling Value references to erased operations whose memory has
+  /// not yet been reclaimed — calling isa<> on such a pointer is UB.
+  if (!op->getBlock())
     return nullptr;
 
   /// Terminal allocations
@@ -1251,6 +1263,19 @@ Value ValueAnalysis::traceValueToDominating(Value value,
     builder.setInsertionPoint(insertBefore);
     return polygeist::TypeSizeOp::create(builder, loc, tsOp.getType(),
                                          tsOp.getSourceAttr());
+  }
+
+  /// Handle memref.load from scalar wrappers (rank-0 memref.alloca).
+  /// These appear when Polygeist wraps scalar values in rank-0 allocas.
+  /// We can clone the load at the insertion point as long as the memref source
+  /// dominates it and the loaded value is not a memref type (scalar only).
+  if (auto loadOp = dyn_cast<memref::LoadOp>(defOp)) {
+    auto memType = cast<MemRefType>(loadOp.getMemref().getType());
+    if (memType.getRank() == 0 && !isa<MemRefType>(loadOp.getType()) &&
+        domInfo.properlyDominates(loadOp.getMemref(), insertBefore)) {
+      builder.setInsertionPoint(insertBefore);
+      return memref::LoadOp::create(builder, loc, loadOp.getMemref());
+    }
   }
 
   return nullptr;

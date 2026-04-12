@@ -54,24 +54,24 @@ class SDECostModel;
 std::unique_ptr<Pass>
 createConvertOpenMPToSdePass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
-createSdeChunkOptimizationPass(SDECostModel *costModel = nullptr);
+createChunkOptPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
-createSdeScheduleRefinementPass(SDECostModel *costModel = nullptr);
+createScheduleRefinementPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
-createSdeReductionStrategyPass(SDECostModel *costModel = nullptr);
+createReductionStrategyPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
-createSdeScopeSelectionPass(SDECostModel *costModel = nullptr);
+createScopeSelectionPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
-createSdeTensorOptimizationPass(SDECostModel *costModel = nullptr);
+createTensorOptPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
-createSdeStructuredSummariesPass(SDECostModel *costModel = nullptr);
+createStructuredSummariesPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
-createSdeDistributionPlanningPass(SDECostModel *costModel = nullptr);
+createDistributionPlanningPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
-createSdeBarrierEliminationPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass> createSdeElementwiseFusionPass();
-std::unique_ptr<Pass> createSdeIterationSpaceDecompositionPass();
-std::unique_ptr<Pass> createSdeLoopInterchangePass();
+createBarrierEliminationPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass> createElementwiseFusionPass();
+std::unique_ptr<Pass> createIterationSpaceDecompositionPass();
+std::unique_ptr<Pass> createLoopInterchangePass();
 std::unique_ptr<Pass> createConvertSdeToArtsPass();
 std::unique_ptr<Pass> createVerifySdeLoweredPass();
 std::unique_ptr<Pass> createRaiseToLinalgPass();

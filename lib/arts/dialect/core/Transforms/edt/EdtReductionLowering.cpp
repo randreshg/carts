@@ -377,9 +377,34 @@ DenseSet<Value> mlir::arts::detectReductionBlockArgs(ForOp forOp) {
   forOp.walk([&](memref::StoreOp store) {
     if (auto dbRef = store.getMemRef().getDefiningOp<DbRefOp>()) {
       if (auto blockArg = dyn_cast<BlockArgument>(dbRef.getSource())) {
-        result.insert(blockArg);
-        ARTS_DEBUG(
-            "  - Detected old accumulator block arg in store: " << blockArg);
+        // Only flag as a reduction accumulator if the stored value is derived
+        // from a load of the same memref (accumulation pattern: load → op →
+        // store). Stores of constants or unrelated values (e.g., boolean flags)
+        // are not reduction accumulators.
+        Value storedVal = store.getValueToStore();
+        bool isAccumulation = false;
+        SmallVector<Value, 8> worklist{storedVal};
+        SmallPtrSet<Value, 8> visited;
+        while (!worklist.empty()) {
+          Value v = worklist.pop_back_val();
+          if (!visited.insert(v).second)
+            continue;
+          if (auto load = v.getDefiningOp<memref::LoadOp>()) {
+            if (load.getMemref() == store.getMemRef()) {
+              isAccumulation = true;
+              break;
+            }
+          }
+          if (auto *defOp = v.getDefiningOp()) {
+            for (Value operand : defOp->getOperands())
+              worklist.push_back(operand);
+          }
+        }
+        if (isAccumulation) {
+          result.insert(blockArg);
+          ARTS_DEBUG(
+              "  - Detected old accumulator block arg in store: " << blockArg);
+        }
       }
     }
   });
@@ -617,9 +642,12 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
     }
 
     /// Step 2: Allocate and initialize partial accumulators DB.
+    /// Mark as fine-grained so DbPartitioning does not re-partition it —
+    /// each worker accesses exactly its own slot by workerId index.
     auto allocOp = AC->create<DbAllocOp>(
         loc, ArtsMode::inout, routeZero, DbAllocType::heap, DbMode::write,
         elementType, Value(), ValueRange{numWorkers}, ValueRange{sizeOne});
+    setPartitionMode(allocOp, PartitionMode::fine_grained);
     Value partialGuid = allocOp.getGuid();
     Value partialPtr = allocOp.getPtr();
 
@@ -842,20 +870,75 @@ void mlir::arts::finalizeReductionAfterEpoch(ArtsCodegen *AC,
     Value loaded = AC->create<memref::LoadOp>(loc, finalRef, zeroIndices);
     Value casted = AC->castParameter(redMemRefTy.getElementType(), loaded, loc);
 
-    bool canStoreToReductionVar = true;
-    if (auto blockArg = dyn_cast<BlockArgument>(redVar)) {
-      Region *ownerRegion = blockArg.getOwner()->getParent();
-      Region *currentRegion = AC->getBuilder().getBlock()->getParent();
-      canStoreToReductionVar = ownerRegion && currentRegion &&
-                               ownerRegion->isAncestor(currentRegion);
-    } else if (Operation *defOp = redVar.getDefiningOp()) {
-      Region *defRegion = defOp->getParentRegion();
-      Region *currentRegion = AC->getBuilder().getBlock()->getParent();
-      canStoreToReductionVar =
-          defRegion && currentRegion && defRegion->isAncestor(currentRegion);
+    /// Find a valid store target for the reduction writeback.
+    ///
+    /// `redVar` is often a memref.cast defined inside the parallel EDT body
+    /// which no longer dominates the current insertion point.  Furthermore,
+    /// CreateDbs (stage 6) may have already run and wrapped the underlying
+    /// alloca in a stack DB, redirecting all reads through a db_ref view.
+    /// Storing to the raw alloca would be dead code.
+    ///
+    /// Strategy: (1) try `redVar` directly, (2) strip view ops to find the
+    /// underlying alloca, (3) look for a DbAllocOp wrapping the alloca and
+    /// create a db_ref to store through so the value is visible to host reads.
+    auto canStoreHere = [&](Value v) -> bool {
+      if (auto ba = dyn_cast<BlockArgument>(v)) {
+        Region *owner = ba.getOwner()->getParent();
+        Region *cur = AC->getBuilder().getBlock()->getParent();
+        return owner && cur && owner->isAncestor(cur);
+      }
+      if (Operation *def = v.getDefiningOp()) {
+        Region *defR = def->getParentRegion();
+        Region *cur = AC->getBuilder().getBlock()->getParent();
+        return defR && cur && defR->isAncestor(cur);
+      }
+      return false;
+    };
+
+    Value storeTarget;
+    if (canStoreHere(redVar)) {
+      storeTarget = redVar;
+    } else {
+      /// Strip memref.cast / subview wrappers to find the underlying alloca.
+      Value stripped = ValueAnalysis::stripMemrefViewOps(redVar);
+      if (stripped != redVar && canStoreHere(stripped)) {
+        /// CreateDbs (stage 6) may have already wrapped the alloca in a
+        /// stack DB and redirected reads through db_ref.  Storing to the raw
+        /// alloca would be dead code.  Scan the alloca's parent block for a
+        /// DbAllocOp[stack] with matching element type that was created to
+        /// back this alloca, and store through its db_ref view instead.
+        auto allocaMemTy = dyn_cast<MemRefType>(stripped.getType());
+        if (allocaMemTy) {
+          Operation *defOp = stripped.getDefiningOp();
+          Block *parentBlock = defOp ? defOp->getBlock() : nullptr;
+          if (parentBlock) {
+            bool foundAlloca = false;
+            for (Operation &op : *parentBlock) {
+              if (&op == defOp) {
+                foundAlloca = true;
+                continue;
+              }
+              if (!foundAlloca)
+                continue;
+              if (auto dbAlloc = dyn_cast<DbAllocOp>(&op)) {
+                if (dbAlloc.getAllocType() == DbAllocType::stack &&
+                    dbAlloc.getAllocatedElementType().getElementType() ==
+                        allocaMemTy.getElementType()) {
+                  storeTarget =
+                      AC->create<DbRefOp>(loc, dbAlloc.getPtr(), zeroIndices);
+                  break;
+                }
+              }
+            }
+          }
+          /// Fallback: store to the raw alloca if no DB wrapping was found.
+          if (!storeTarget)
+            storeTarget = stripped;
+        }
+      }
     }
-    if (canStoreToReductionVar)
-      AC->create<memref::StoreOp>(loc, casted, redVar, zeroIndices);
+    if (storeTarget)
+      AC->create<memref::StoreOp>(loc, casted, storeTarget, zeroIndices);
 
     if (idx < redInfo.hostResultPtrs.size()) {
       Value hostPtr = redInfo.hostResultPtrs[idx];

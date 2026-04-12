@@ -13,7 +13,7 @@
 #define ARTS_DIALECT_CORE_TRANSFORMS_EDT_EDTREDUCTIONLOWERING_H
 
 #include "arts/Dialect.h"
-#include "arts/codegen/Codegen.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/CodegenSupport.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/DenseSet.h"
 #include <optional>

@@ -49,7 +49,7 @@ public:
                                                       EdtOp second) const;
 
 private:
-  const AbstractMachine &getMachine() const;
+  const RuntimeConfig &getRuntimeConfig() const;
 };
 
 } // namespace arts

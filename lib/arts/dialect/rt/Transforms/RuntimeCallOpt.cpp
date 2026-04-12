@@ -18,7 +18,7 @@ namespace mlir::arts {
 #define GEN_PASS_DEF_RUNTIMECALLOPT
 #include "arts/dialect/rt/Transforms/Passes.h.inc"
 } // namespace mlir::arts
-#include "arts/codegen/Types.h"
+#include "arts/dialect/core/Conversion/ArtsToLLVM/Types.h"
 #include "arts/passes/Passes.h"
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopInvarianceUtils.h"

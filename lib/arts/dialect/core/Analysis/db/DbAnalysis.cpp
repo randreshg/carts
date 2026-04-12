@@ -1121,23 +1121,26 @@ ArtsMode DbAnalysis::classifyMemrefUserAccessMode(Operation *op,
   bool hasRead = false;
   bool hasWrite = false;
 
+  // Guard against malformed IR where a load/store operand has the wrong type.
+  auto safeGetMemrefUnderlying = [&](Value v) -> Operation * {
+    if (!v || !isa<BaseMemRefType>(v.getType()))
+      return nullptr;
+    return ValueAnalysis::getUnderlyingOperation(v);
+  };
+
   if (auto load = dyn_cast<memref::LoadOp>(op)) {
-    hasRead =
-        ValueAnalysis::getUnderlyingOperation(load.getMemref()) == underlyingOp;
+    hasRead = safeGetMemrefUnderlying(load->getOperand(0)) == underlyingOp;
   } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-    hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemref()) ==
-               underlyingOp;
+    hasWrite = safeGetMemrefUnderlying(store->getOperand(1)) == underlyingOp;
   } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
-    hasRead =
-        ValueAnalysis::getUnderlyingOperation(load.getMemRef()) == underlyingOp;
+    hasRead = safeGetMemrefUnderlying(load->getOperand(0)) == underlyingOp;
   } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
-    hasWrite = ValueAnalysis::getUnderlyingOperation(store.getMemRef()) ==
-               underlyingOp;
+    hasWrite = safeGetMemrefUnderlying(store->getOperand(1)) == underlyingOp;
   } else if (auto copy = dyn_cast<memref::CopyOp>(op)) {
     hasRead =
-        ValueAnalysis::getUnderlyingOperation(copy.getSource()) == underlyingOp;
+        safeGetMemrefUnderlying(copy.getSource()) == underlyingOp;
     hasWrite =
-        ValueAnalysis::getUnderlyingOperation(copy.getTarget()) == underlyingOp;
+        safeGetMemrefUnderlying(copy.getTarget()) == underlyingOp;
   }
 
   if (hasRead && hasWrite)
