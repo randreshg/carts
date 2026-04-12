@@ -611,6 +611,9 @@ class StencilTilingNDPattern final : public KernelPatternTransform {
 public:
   bool match(ForOp artsFor) override {
     matchResult = MatchResult{};
+    if (auto existingPattern = getEffectiveDepPattern(artsFor.getOperation());
+        existingPattern && isStencilFamilyDepPattern(*existingPattern))
+      return false;
     return isOutOfPlaceStencil(artsFor, matchResult);
   }
 

@@ -33,6 +33,7 @@
 #include "arts/passes/Passes.h"
 #include "arts/passes/Passes.h.inc"
 #include "arts/utils/Debug.h"
+#include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 
@@ -74,6 +75,9 @@ struct LoopNormalizationPass
 
       for (ForOp fo : artsFors) {
         if (!fo || !fo->getBlock())
+          continue;
+        if (auto depPattern = getEffectiveDepPattern(fo.getOperation());
+            depPattern && *depPattern != ArtsDepPattern::unknown)
           continue;
 
         OpBuilder builder(fo);
