@@ -46,40 +46,42 @@ for f in /tmp/stages/*.mlir; do
 done
 ```
 
-## 18 Pipeline Stages (Canonical Order)
+## 16 Core Pipeline Stages (Canonical Order)
+
+Canonical source: `tools/compile/Compile.cpp` (`getStageRegistry()` + pass arrays).
+Two additional epilogue stages (`complete-mlir`, `emit-llvm`) run conditionally
+on `--O3` / `--emit-llvm`.
 
 | # | Stage | Primary Question |
 |---|-------|-----------------|
 | 1 | raise-memref-dimensionality | Are memrefs normalized? |
-| 2 | collect-metadata | Is loop/array metadata correct? |
-| 3 | initial-cleanup | Is dead code removed? |
-| 4 | openmp-to-arts | Are OMP regions converted to EDTs? |
-| 5 | pattern-pipeline | Are patterns (stencil, matmul) recognized? |
-| 6 | edt-transforms | Is EDT structure optimized? |
-| 7 | create-dbs | Are DataBlock allocations created? |
-| 8 | db-opt | Are DB access modes correct? |
-| 9 | edt-opt | Are EDTs fused/optimized? |
-| 10 | concurrency | Is the concurrency graph correct? |
-| 11 | edt-distribution | Is distribution strategy assigned? |
-| 12 | post-distribution-cleanup | Are loops lowered correctly? |
-| 13 | db-partitioning | Are DBs partitioned correctly? |
-| 14 | post-db-refinement | Are contracts validated? |
-| 15 | late-concurrency-cleanup | Is hoisting/sinking correct? |
-| 16 | epochs | Are epochs created correctly? |
-| 17 | pre-lowering | Are EDTs/DBs/epochs lowered to RT calls? |
-| 18 | arts-to-llvm | Is final LLVM IR correct? |
+| 2 | initial-cleanup | Is dead code removed? |
+| 3 | openmp-to-arts | OMP → SDE → ARTS conversion correct? (contains the full SDE lifecycle — RaiseToLinalg, LoopInterchange, DistributionPlanning, ConvertSdeToArts, etc.) |
+| 4 | edt-transforms | Is EDT structure optimized? |
+| 5 | create-dbs | Are DataBlock allocations created? |
+| 6 | db-opt | Are DB access modes correct? |
+| 7 | edt-opt | Are EDTs fused/optimized? |
+| 8 | concurrency | Is the concurrency graph correct? |
+| 9 | edt-distribution | Is distribution strategy assigned? |
+| 10 | post-distribution-cleanup | Are loops lowered correctly? |
+| 11 | db-partitioning | Are DBs partitioned correctly? |
+| 12 | post-db-refinement | Are contracts validated? |
+| 13 | late-concurrency-cleanup | Is hoisting/sinking correct? |
+| 14 | epochs | Are epochs created correctly? |
+| 15 | pre-lowering | Are EDTs/DBs/epochs lowered to RT calls? |
+| 16 | arts-to-llvm | Is final LLVM IR correct? |
 
 ## Bisection Strategy by Symptom
 
 | Symptom | Start Checking At |
 |---------|------------------|
-| Wrong array values | db-partitioning (13), then post-db-refinement (14) |
-| Missing parallelism | concurrency (10), then edt-distribution (11) |
-| Deadlock/hang | epochs (16), then pre-lowering (17) |
-| Wrong loop bounds | edt-distribution (11), then post-distribution-cleanup (12) |
-| Missing DB | create-dbs (7), then db-opt (8) |
-| Pattern not applied | pattern-pipeline (5), then collect-metadata (2) |
-| LLVM crash | arts-to-llvm (18), then pre-lowering (17) |
+| Wrong array values | db-partitioning (11), then post-db-refinement (12) |
+| Missing parallelism | concurrency (8), then edt-distribution (9) |
+| Deadlock/hang | epochs (14), then pre-lowering (15) |
+| Wrong loop bounds | edt-distribution (9), then post-distribution-cleanup (10) |
+| Missing DB | create-dbs (5), then db-opt (6) |
+| Pattern/semantic issue | openmp-to-arts (3) — inspect SDE sub-passes via `--arts-debug=<pass>` |
+| LLVM crash | arts-to-llvm (16), then pre-lowering (15) |
 
 ## What to Look for in Diffs
 

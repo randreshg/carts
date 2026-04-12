@@ -106,7 +106,6 @@ std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
 std::unique_ptr<Pass> createVerifyEdtCreatedPass();
 std::unique_ptr<Pass> createVerifyEpochCreatedPass();
 std::unique_ptr<Pass> createVerifyForLoweredPass();
-std::unique_ptr<Pass> createVerifyDbCreatedPass();
 std::unique_ptr<Pass> createVerifyPreLoweredPass();
 std::unique_ptr<Pass> createVerifyLoweredPass();
 std::unique_ptr<Pass> createVerifyEdtLoweredPass();

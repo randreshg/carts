@@ -200,8 +200,9 @@ Phase 3A: Move core IR to dialect/core/IR/
    match(Operation*) would take ~2-3 days and unblock LoopNormalization
    move to sde/. LoopReordering stays in core/ (DbPatternMatchers dep).
 5. **High risk of downstream breakage** — Adding linalg.generic IR between
-   omp-to-sde and pattern-pipeline means all 18 downstream passes must
-   handle the new IR form. One missed case = silent miscompilation.
+   ConvertOpenMPToSde and ConvertSdeToArts (all inside `openmp-to-arts`)
+   means all downstream ARTS-core stages must handle the new IR form. One
+   missed case = silent miscompilation.
 6. **Existing metadata pipeline covers ~80%** — CollectMetadata +
    PatternDiscovery handle most benchmarks without tensor space.
 
@@ -232,7 +233,7 @@ LoopReordering also stays in `core/` (DbPatternMatchers dep).
 dekk carts build --clean
 dekk carts test
 grep -rn 'arts\.\(edt_create\|rec_dep\|dep_gep\)' tests/contracts/*.mlir  # Should be empty
-dekk carts compile tests/examples/jacobi/jacobi-for.c -O3 --pipeline=pre-lowering 2>&1 | grep 'arts_rt\.'
+dekk carts compile samples/jacobi/for/jacobi-for.c -O3 --pipeline=pre-lowering 2>&1 | grep 'arts_rt\.'
 ```
 
 ### Phase 2 Verification
@@ -240,8 +241,8 @@ dekk carts compile tests/examples/jacobi/jacobi-for.c -O3 --pipeline=pre-lowerin
 ```bash
 dekk carts build --clean
 dekk carts test
-dekk carts compile tests/examples/jacobi/jacobi-for.c -O3 --pipeline=pattern-pipeline 2>&1 | grep 'sde\.'
-dekk carts compile tests/examples/jacobi/jacobi-for.c -O3 --pipeline=edt-transforms 2>&1 | grep -c 'sde\.'  # Should be 0
+dekk carts compile samples/jacobi/for/jacobi-for.c -O3 --pipeline=openmp-to-arts 2>&1 | grep -c 'sde\.'  # Should be 0 (SdeToArts completes within stage 3)
+dekk carts compile samples/jacobi/for/jacobi-for.c -O3 --pipeline=edt-transforms 2>&1 | grep -c 'sde\.'  # Should be 0
 ```
 
 ### Phase 3 Verification

@@ -43,7 +43,7 @@ Read these before guessing:
 4. Bisect the pipeline.
    - Use `dekk carts pipeline --json` for the stage list.
    - Use `dekk carts compile <file>.mlir --pipeline=<stage>` and `--all-pipelines -o DIR/`.
-   - Focus on: `openmp-to-arts` -> `pattern-pipeline` -> `create-dbs` -> `edt-distribution` -> `db-partitioning` -> `post-db-refinement` -> `pre-lowering`.
+   - Focus on: `openmp-to-arts` -> `edt-transforms` -> `create-dbs` -> `concurrency` -> `edt-distribution` -> `db-partitioning` -> `post-db-refinement` -> `pre-lowering`.
 5. Inspect semantic contracts before low-level codegen.
    - `dekk carts compile <file> --diagnose --diagnose-output diag.json -O3`
    - Check `LoweringContractInfo`, `distribution_*`, partition modes, full-range vs coarse, and `preserve_access_mode`.

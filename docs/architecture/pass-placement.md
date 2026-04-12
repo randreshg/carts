@@ -10,12 +10,12 @@ separate one-shot bufferization stage inside the SDE pipeline.
 |---|---|
 | `lib/arts/dialect/sde/Transforms/` | SDE boundary construction and SDE-owned optimization passes |
 | `lib/arts/dialect/core/Conversion/SdeToArts/` | SDE-to-ARTS conversion boundary |
-| `lib/arts/dialect/core/Transforms/` | ARTS structural transforms, pattern pipeline, DB creation/refinement, distribution, and core pre-lowering cleanup |
+| `lib/arts/dialect/core/Transforms/` | ARTS structural transforms, DB creation/refinement, distribution, and core pre-lowering cleanup |
 | `lib/arts/dialect/core/Conversion/ArtsToRt/` | Core-to-runtime lowering (`EdtLowering`, `EpochLowering`) |
 | `lib/arts/dialect/core/Conversion/ArtsToLLVM/` | Final ARTS/ARTS-RT to LLVM conversion pass |
 | `lib/arts/dialect/rt/Transforms/` | Runtime-side cleanup and call optimization after lowering begins |
 | shared MLIR / utility passes | `LowerAffine`, `CSE`, `DCE`, `SymbolDCE`, `LICM`, `Mem2Reg`, `ScalarReplacement`, `PolygeistCanonicalize`, and related utility passes |
-| verify passes | Stage-boundary validation such as `VerifySdeLowered`, `VerifyEdtCreated`, `VerifyDbCreated`, `VerifyForLowered`, `VerifyPreLowered`, `VerifyDbLowered`, and `VerifyLowered` |
+| verify passes | Stage-boundary validation such as `VerifySdeLowered`, `VerifyEdtCreated`, `VerifyForLowered`, `VerifyPreLowered`, `VerifyDbLowered`, and `VerifyLowered` |
 
 ## SDE Boundary Placement
 
@@ -25,13 +25,19 @@ uses one `openmp-to-arts` stage, and the pass placement inside it is:
 ```text
 lib/arts/dialect/sde/Transforms/
   ConvertOpenMPToSde
-  SdeScopeSelection
-  SdeScheduleRefinement
-  SdeChunkOptimization
-  SdeReductionStrategy
+  ScopeSelection
+  ScheduleRefinement
+  ChunkOpt
+  ReductionStrategy
   RaiseToLinalg
   RaiseToTensor
-  SdeTensorOptimization
+  LoopInterchange
+  TensorOpt
+  StructuredSummaries
+  ElementwiseFusion
+  DistributionPlanning
+  IterationSpaceDecomposition
+  BarrierElimination
   VerifySdeLowered
 
 lib/arts/dialect/core/Conversion/SdeToArts/
@@ -87,17 +93,19 @@ shared / utility:
 ```text
 sde/Transforms:
   ConvertOpenMPToSde
-  SdeScopeSelection
-  SdeScheduleRefinement
-  SdeChunkOptimization
-  SdeReductionStrategy
+  ScopeSelection
+  ScheduleRefinement
+  ChunkOpt
+  ReductionStrategy
   RaiseToLinalg
   RaiseToTensor
-  SdeTensorOptimization
-  SdeStructuredSummaries
-  SdeElementwiseFusion
-  SdeDistributionPlanning
-  SdeIterationSpaceDecomposition
+  LoopInterchange
+  TensorOpt
+  StructuredSummaries
+  ElementwiseFusion
+  DistributionPlanning
+  IterationSpaceDecomposition
+  BarrierElimination
 
 core/Conversion/SdeToArts:
   ConvertSdeToArts
@@ -111,18 +119,12 @@ shared / utility:
   CSE
 ```
 
-### `pattern-pipeline`
-
-```text
-core/Transforms:
-  DepTransforms
-  LoopNormalization
-  LoopReordering
-  KernelTransforms
-
-shared / utility:
-  CSE
-```
+Note: there is **no** `pattern-pipeline` stage. Earlier drafts listed passes
+like `DepTransforms`, `LoopNormalization`, `LoopReordering`, and
+`KernelTransforms` in a named stage between `openmp-to-arts` and
+`edt-transforms`. The current `tools/compile/Compile.cpp` does not schedule
+such a stage — semantic pattern work now lives inside SDE (during
+`openmp-to-arts`).
 
 ### `edt-transforms`
 
@@ -144,7 +146,6 @@ shared / utility:
 core/Transforms:
   DistributedHostLoopOutlining (conditional)
   CreateDbs
-  VerifyDbCreated
 
 shared / utility:
   CSE (bridge cleanup, conditional)
@@ -338,9 +339,11 @@ shared / utility:
 - The tensor/linalg window is transient and SDE-owned. `ConvertSdeToArts`
   consumes it directly instead of handing off to a separately scheduled
   bufferization stage.
-- The historically named ARTS `pattern-pipeline` still runs after SDE lowering,
-  but at that point it should only perform ARTS-native structural/runtime
-  transforms and cleanup. Semantic pattern choice, semantic cost modeling, and
-  schedule/distribution/reduction-strategy decisions belong to SDE.
+- The historically named ARTS `pattern-pipeline` stage has been removed.
+  Semantic pattern choice, semantic cost modeling, and
+  schedule/distribution/reduction-strategy decisions now live inside SDE
+  (during `openmp-to-arts`). The ARTS-core stages that follow (`edt-transforms`,
+  `create-dbs`, ...) consume SDE-stamped contracts instead of rediscovering
+  them.
 - `ParallelEdtLowering`, `DbLowering`, and `LoweringContractCleanup` are core
   ownership passes even though they sit near the late lowering boundary.

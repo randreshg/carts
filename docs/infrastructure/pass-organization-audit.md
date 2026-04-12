@@ -1,7 +1,15 @@
 # CARTS Pass Infrastructure Audit
 
+> **Historical snapshot — superseded.** Captured before the
+> `architecture/sde-restructuring` physical-layout move. Pass locations,
+> directory names (`lib/arts/passes/` → `lib/arts/dialect/core/Transforms/`),
+> and stage names (`collect-metadata`, `pattern-pipeline`) below describe the
+> pipeline at audit time and no longer match the current tree or
+> `tools/compile/Compile.cpp`. For current pipeline reality see
+> `docs/compiler/pipeline.md` and `docs/architecture/pass-placement.md`.
+
 **Date**: 2026-04-07
-**Scope**: `lib/arts/passes/` (60 files, 35,429 LOC, 56 passes)
+**Scope**: `lib/arts/passes/` (60 files, 35,429 LOC, 56 passes) — pre-restructuring
 
 ## Executive Summary
 
