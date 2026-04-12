@@ -47,15 +47,6 @@ def HandleDeps : Pass<"handle-deps", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createHandleDepsPass()";
 }
 
-def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
-  let summary = "Convert OpenMP functions to ARTS";
-  let dependentDialects = [
-    "::mlir::memref::MemRefDialect", "::mlir::omp::OpenMPDialect", "::mlir::LLVM::LLVMDialect",
-    "::mlir::arts::ArtsDialect", "::mlir::polygeist::PolygeistDialect"
-  ];
-  let constructor = "mlir::arts::createConvertOpenMPToArtsPass()";
-}
-
 def DeadCodeElimination : Pass<"arts-dce", "mlir::ModuleOp"> {
   let summary = "Remove dead loads, stores, allocas, and symbols";
   let description = [{
