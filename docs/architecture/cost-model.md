@@ -175,7 +175,7 @@ Instead of 18 rigid pipeline stages with repeated passes, use bounded
 domain-local convergence with cross-domain contracts:
 
 ```
-Phase A: Compute Domain (pattern-pipeline through edt-opt)
+Phase A: Compute Domain (openmp-to-arts through edt-opt)
   repeat up to K=2:
     1. Discover/refine patterns
     2. Apply compute transforms (reorder, reshape, fuse)

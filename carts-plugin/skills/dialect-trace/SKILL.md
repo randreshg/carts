@@ -22,56 +22,63 @@ and destroyed.
 
 | Dialect | Namespace | Stages | Purpose |
 |---------|-----------|--------|---------|
-| SDE | `sde::` | 1-4 | Semantic contracts, pattern classification |
-| ARTS Core | `arts::` | 3-17 | Structural transforms, partitioning, distribution |
-| ARTS RT | `arts_rt::` / `rt::` | 17-18 | 1:1 runtime call mapping |
+| SDE | `sde::` | 3 (inside openmp-to-arts) | Semantic contracts, pattern classification |
+| ARTS Core | `arts::` | 3-15 | Structural transforms, partitioning, distribution |
+| ARTS RT | `arts_rt::` / `rt::` | 15-16 | 1:1 runtime call mapping |
 
 ## Dialect Boundaries
 
 ```
 C/OMP source
-  → [Stage 1-2] SDE ops created (sde.cu_task, sde.su_access, ...)
-  → [Stage 4]   SDE → Core conversion (SdeToArtsPatterns.cpp)
-  → [Stage 5-16] Core transforms (arts.edt, arts.db_*, arts.for, ...)
-  → [Stage 17]  Core → RT lowering (EdtLowering.cpp, EpochLowering.cpp)
-  → [Stage 18]  RT → LLVM lowering (RtToLLVMPatterns.cpp)
+  → [Stage 3]    inside openmp-to-arts: OMP → SDE (ConvertOpenMPToSde) →
+                 SDE transforms → SDE → Core (ConvertSdeToArts)
+  → [Stage 4-14] Core transforms (arts.edt, arts.db_*, arts.for, ...)
+  → [Stage 15]   Core → RT lowering in pre-lowering
+                 (EdtLowering.cpp, EpochLowering.cpp, DbLowering.cpp)
+  → [Stage 16]   RT → LLVM lowering in arts-to-llvm
+                 (ConvertArtsToLLVM + rt-specific RuntimeCallOpt etc.)
 ```
 
 ## Verification Barriers
 
 | Verifier | After Stage | Checks |
 |----------|-------------|--------|
-| VerifySdeLowered | 4 (openmp-to-arts) | No SDE ops survive |
-| VerifyEdtLowered | 17 (pre-lowering) | No arts.edt/epoch/for survive |
-| VerifyLowered | 18 (arts-to-llvm) | No ARTS ops survive |
+| VerifySdeLowered | 3 (openmp-to-arts) | No SDE ops survive |
+| VerifyEdtCreated | 3 (openmp-to-arts) | EDTs created from OMP regions |
+| VerifyForLowered | 9 (edt-distribution) | arts.for lowered after distribution |
+| VerifyPreLowered | 15 (pre-lowering) | No arts.edt/epoch/for/db_* survive |
+| VerifyLowered | 16 (arts-to-llvm) | No ARTS ops survive |
 
 ## Op Lifecycle Quick Reference
 
-### Core Ops (18 ops)
+### Core Ops
 | Op | Created | Lowered | Stages Active |
 |----|---------|---------|---------------|
-| `arts.edt` | openmp-to-arts (4) | pre-lowering (17) | 4-17 |
-| `arts.db_alloc` | create-dbs (7) | pre-lowering (17) | 7-17 |
-| `arts.db_acquire` | create-dbs (7) | pre-lowering (17) | 7-17 |
-| `arts.db_ref` | create-dbs (7) | pre-lowering (17) | 7-17 |
-| `arts.for` | openmp-to-arts (4) | edt-distribution (11) | 4-11 |
-| `arts.epoch` | epochs (16) | pre-lowering (17) | 16-17 |
-| `arts.barrier` | openmp-to-arts (4) | epochs (16) | 4-16 |
+| `arts.edt` | openmp-to-arts (3) | pre-lowering (15) | 3-15 |
+| `arts.db_alloc` | create-dbs (5) | pre-lowering (15) | 5-15 |
+| `arts.db_acquire` | create-dbs (5) | pre-lowering (15) | 5-15 |
+| `arts.db_ref` | create-dbs (5) | pre-lowering (15) | 5-15 |
+| `arts.for` | openmp-to-arts (3) | edt-distribution (9) | 3-9 |
+| `arts.epoch` | epochs (14) | pre-lowering (15) | 14-15 |
+| `arts.barrier` | openmp-to-arts (3) | epochs (14) | 3-14 |
 
-### RT Ops (14 ops)
+### RT Ops
 | Op | Created | Lowered | Stages Active |
 |----|---------|---------|---------------|
-| `arts_rt.edt_create` | pre-lowering (17) | arts-to-llvm (18) | 17-18 |
-| `arts_rt.create_epoch` | pre-lowering (17) | arts-to-llvm (18) | 17-18 |
-| `arts_rt.db_create` | pre-lowering (17) | arts-to-llvm (18) | 17-18 |
-| `arts_rt.rec_dep` | pre-lowering (17) | arts-to-llvm (18) | 17-18 |
+| `arts_rt.edt_create` | pre-lowering (15) | arts-to-llvm (16) | 15-16 |
+| `arts_rt.create_epoch` | pre-lowering (15) | arts-to-llvm (16) | 15-16 |
+| `arts_rt.db_create` | pre-lowering (15) | arts-to-llvm (16) | 15-16 |
+| `arts_rt.rec_dep` | pre-lowering (15) | arts-to-llvm (16) | 15-16 |
 
-### SDE Ops (8 ops)
-| Op | Created | Lowered | Stages Active |
-|----|---------|---------|---------------|
-| `sde.cu_task` | openmp-to-sde (4) | sde-to-arts (4) | 4 |
-| `sde.su_access` | openmp-to-sde (4) | sde-to-arts (4) | 4 |
-| `sde.mu_reduction` | openmp-to-sde (4) | sde-to-arts (4) | 4 |
+### SDE Ops
+SDE ops have a very short lifetime — they are created and lowered entirely
+within stage 3 (`openmp-to-arts`):
+
+| Op | Created | Lowered |
+|----|---------|---------|
+| `sde.cu_task` | ConvertOpenMPToSde (within stage 3) | ConvertSdeToArts (within stage 3) |
+| `sde.su_access` | ConvertOpenMPToSde (within stage 3) | ConvertSdeToArts (within stage 3) |
+| `sde.mu_reduction` | ConvertOpenMPToSde (within stage 3) | ConvertSdeToArts (within stage 3) |
 
 ## Tracing Commands
 

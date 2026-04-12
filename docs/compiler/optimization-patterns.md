@@ -41,22 +41,21 @@ cgeist
   v
 raise-memref-dimensionality
   |
-  +--> collect-metadata (sequential side path used for metadata/heuristics)
-  |
   v
 initial-cleanup
   |
   v
 openmp-to-arts
-  |
-  v
-pattern-pipeline
-  |- PD(seed)
-  |- DT
-  |- LN
-  |- LoopReordering
-  |- PD(refine)
-  |- KT
+  |- ConvertOpenMPToSde
+  |- ScopeSelection / ScheduleRefinement / ChunkOpt
+  |- ReductionStrategy
+  |- RaiseToLinalg / RaiseToTensor
+  |- LoopInterchange / TensorOpt
+  |- StructuredSummaries / ElementwiseFusion
+  |- DistributionPlanning / IterationSpaceDecomposition
+  |- BarrierElimination
+  |- ConvertSdeToArts
+  |- VerifySdeLowered / VerifyEdtCreated
   |
   v
 edt-transforms

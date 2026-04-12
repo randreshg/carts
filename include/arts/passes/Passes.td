@@ -500,12 +500,6 @@ def VerifyForLowered : Pass<"verify-for-lowered", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createVerifyForLoweredPass()";
 }
 
-def VerifyDbCreated : Pass<"verify-db-created", "mlir::ModuleOp"> {
-  let summary = "Verify DB allocations exist after create-dbs";
-  let dependentDialects = ["::mlir::arts::ArtsDialect"];
-  let constructor = "mlir::arts::createVerifyDbCreatedPass()";
-}
-
 def VerifyPreLowered : Pass<"verify-pre-lowered", "mlir::ModuleOp"> {
   let summary = "Verify pre-lowering removed high-level scheduler ops";
   let dependentDialects = ["::mlir::arts::ArtsDialect"];

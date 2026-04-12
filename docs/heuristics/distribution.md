@@ -264,7 +264,8 @@ Question: do loop normalization/reordering transforms harm multi-node distributi
 Current answer: **no for existing 1D outer-loop distribution path**.
 
 Reason:
-- Pipeline steps 5-6 (`pattern-pipeline`, `edt-transforms`) mostly target inner serial `scf.for` structure.
+- Pipeline step 4 (`edt-transforms`) and the semantic work inside step 3
+  (`openmp-to-arts`) mostly target inner serial `scf.for` structure.
 - The `edt-distribution` pipeline step runs later and preserves top-level `arts.for` distribution contract.
 
 Pass-level summary (current behavior):

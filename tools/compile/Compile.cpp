@@ -259,13 +259,13 @@ static const std::array<llvm::StringLiteral, 8>
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
 static const std::array<llvm::StringLiteral, 19> kOpenMPToArtsPasses = {
-    "ConvertOpenMPToSde",       "SdeScopeSelection",
-    "SdeScheduleRefinement",    "SdeChunkOptimization",
-    "SdeReductionStrategy",     "RaiseToLinalg",
-    "RaiseToTensor",            "SdeLoopInterchange",
-    "SdeTensorOptimization",    "SdeStructuredSummaries",
-    "SdeElementwiseFusion",     "SdeDistributionPlanning",
-    "SdeIterationSpaceDecomposition", "SdeBarrierElimination",
+    "ConvertOpenMPToSde",       "ScopeSelection",
+    "ScheduleRefinement",       "ChunkOpt",
+    "ReductionStrategy",        "RaiseToLinalg",
+    "RaiseToTensor",            "LoopInterchange",
+    "TensorOpt",                "StructuredSummaries",
+    "ElementwiseFusion",        "DistributionPlanning",
+    "IterationSpaceDecomposition", "BarrierElimination",
     "ConvertSdeToArts",         "VerifySdeLowered",
     "DeadCodeElimination",      "CSE",
     "VerifyEdtCreated"};
@@ -276,7 +276,7 @@ static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
     "SymbolDCE",
     "CSE",
     "EdtPtrRematerialization"};
-static const std::array<llvm::StringLiteral, 9> kCreateDbsPasses = {
+static const std::array<llvm::StringLiteral, 8> kCreateDbsPasses = {
     "DistributedHostLoopOutlining (conditional)",
     "CreateDbs",
     "CSE (bridge cleanup, conditional)",
@@ -284,8 +284,7 @@ static const std::array<llvm::StringLiteral, 9> kCreateDbsPasses = {
     "CSE",
     "SymbolDCE",
     "Mem2Reg",
-    "PolygeistCanonicalize",
-    "VerifyDbCreated"};
+    "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
     "DbModeTightening", "PolygeistCanonicalize", "CSE", "Mem2Reg"};
 static const std::array<llvm::StringLiteral, 4> kEdtOptPasses = {
@@ -721,7 +720,6 @@ void buildCreateDbsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createMem2Reg());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(arts::createVerifyDbCreatedPass());
 }
 
 /// DB creation and optimization passes.

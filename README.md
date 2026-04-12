@@ -22,7 +22,7 @@ Use the project through dekk's project runner:
 
 ```bash
 dekk carts doctor                                           # Verify the toolchain
-dekk carts compile tests/examples/dotproduct/dotproduct.c -O3 -o dotproduct
+dekk carts compile samples/dotproduct/dotproduct.c -O3 -o dotproduct
 dekk carts test                                             # Run the test suite
 ```
 
@@ -41,8 +41,8 @@ See **[Getting Started](docs/getting-started.md)** for the full walkthrough.
 | `tools/` | CLI entry point (`carts_cli.py`) and compilation driver |
 | `tools/compile/` | C++ compilation driver (`carts-compile`) |
 | `tools/scripts/` | Python modules backing each CLI subcommand |
-| `tests/contracts/` | Pipeline regression tests (MLIR + FileCheck) |
-| `tests/examples/` | End-to-end C/C++ integration tests |
+| `tests/e2e/` | End-to-end compile+run lit tests (drives `samples/`) |
+| `samples/` | Demo programs (C/C++ with OpenMP) |
 | `external/` | Vendored dependencies (ARTS, Polygeist, LLVM) |
 | `docs/` | Architecture, pipeline, and developer documentation |
 | `docker/` | Container workflows for multi-node execution |

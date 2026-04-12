@@ -12,19 +12,22 @@ Ownership decisions -- which physical dimensions are owned, what partition
 mode to use, and what halo widening is legal -- flow through five pipeline
 stages.
 
-### 1.1 Pattern Discovery (stages 5-6)
+### 1.1 Pattern Discovery (stages 3-4)
 
-**Passes**: `pattern-pipeline`, `edt-transforms`
+**Passes**: SDE passes inside `openmp-to-arts` (stage 3) — especially
+`SdeScopeSelection`, `SdeScheduleRefinement`, `SdeDistributionPlanning`,
+`SdeIterationSpaceDecomposition` — then `edt-transforms` (stage 4) refines
+EDT structure.
 
 **Source files**:
-- `lib/arts/passes/opt/general/` (loop reordering, kernel transforms)
-- `lib/arts/passes/opt/edt/` (EDT structural optimization)
+- `lib/arts/dialect/sde/Transforms/` (SDE semantic pattern classification)
+- `lib/arts/dialect/core/Transforms/edt/` (EDT structural optimization)
 
-**What happens**: Loop and array metadata from `collect-metadata` are analyzed
-to detect dep patterns (`ArtsDepPattern`), distribution kinds, and stencil
-footprints. Results are stamped as `LoweringContractOp` attributes on DB
-source pointers and as `depPattern` / `distribution_*` attributes on EDT and
-loop operations.
+**What happens**: SDE passes analyze the OpenMP/linalg structure to detect
+dep patterns (`ArtsDepPattern`), distribution kinds, and stencil footprints,
+stamping results as `LoweringContractOp` attributes on DB source pointers and
+as `depPattern` / `distribution_*` attributes on EDT and loop operations
+before `ConvertSdeToArts` crosses into ARTS IR.
 
 **Key data produced**:
 - `dep_pattern` on `EdtOp` (e.g., `stencil`, `uniform`, `matmul`)
@@ -76,7 +79,7 @@ it was sound.
 
 **Proof gap**: The pass trusts `ownerDims` from the contract but does not
 verify that the selected owner dims are reachable from the EDT's iteration
-space. A contract stamped in pattern-pipeline may become invalid if
+space. A contract stamped inside `openmp-to-arts` (SDE) may become invalid if
 intermediate passes restructure the iteration topology.
 
 ### 1.4 ForLowering (stage 11)

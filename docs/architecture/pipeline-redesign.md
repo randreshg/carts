@@ -13,7 +13,6 @@ The active compilation pipeline is:
 raise-memref-dimensionality
   -> initial-cleanup
   -> openmp-to-arts
-  -> pattern-pipeline
   -> edt-transforms
   -> create-dbs
   -> db-opt
@@ -27,8 +26,8 @@ raise-memref-dimensionality
   -> epochs
   -> pre-lowering
   -> arts-to-llvm
-  -> post-o3-opt
-  -> llvm-ir-emission
+  -> complete-mlir   (epilogue, --O3 only)
+  -> emit-llvm       (epilogue, --emit-llvm only)
 ```
 
 The key redesign point is concentrated in `openmp-to-arts`: OpenMP lowers into
@@ -37,21 +36,24 @@ decisions there, and only then does `ConvertSdeToArts` cross into ARTS IR.
 
 ## The `openmp-to-arts` Stage
 
-The current branch has one `openmp-to-arts` stage with 17 passes:
+The current branch has one `openmp-to-arts` stage with 19 passes — the entire
+SDE lifecycle lives inside it:
 
 ```text
 ConvertOpenMPToSde
-  -> SdeScopeSelection
-  -> SdeScheduleRefinement
-  -> SdeChunkOptimization
-  -> SdeReductionStrategy
+  -> ScopeSelection
+  -> ScheduleRefinement
+  -> ChunkOpt
+  -> ReductionStrategy
   -> RaiseToLinalg
   -> RaiseToTensor
-  -> SdeTensorOptimization
-  -> SdeStructuredSummaries
-  -> SdeElementwiseFusion
-  -> SdeDistributionPlanning
-  -> SdeIterationSpaceDecomposition
+  -> LoopInterchange
+  -> TensorOpt
+  -> StructuredSummaries
+  -> ElementwiseFusion
+  -> DistributionPlanning
+  -> IterationSpaceDecomposition
+  -> BarrierElimination
   -> ConvertSdeToArts
   -> VerifySdeLowered
   -> DeadCodeElimination
@@ -59,8 +61,8 @@ ConvertOpenMPToSde
   -> VerifyEdtCreated
 ```
 
-This is the current SDE window. There is no separate front-end
-`collect-metadata` stage before it.
+This is the SDE window. There is no separate front-end `collect-metadata`
+stage before it.
 
 ## What the SDE Window Does
 
@@ -98,24 +100,22 @@ What is true today:
 So the branch has a real tensor/linalg optimization window in SDE, but not a
 named pipeline stage that runs one-shot bufferize as a standalone boundary.
 
-## Relationship to the ARTS Pattern Pipeline
+## Relationship to the Former ARTS Pattern Pipeline
 
-Pattern refinement still exists after SDE lowering. The current
-`pattern-pipeline` stage is:
+There is **no `pattern-pipeline` stage** in the current pipeline. Earlier
+redesign drafts placed `PatternDiscovery`, `DepTransforms`, `LoopNormalization`,
+`LoopReordering`, and `KernelTransforms` in a named stage between
+`openmp-to-arts` and `edt-transforms`. That stage has been removed:
 
-```text
-DepTransforms
-  -> LoopNormalization
-  -> LoopReordering
-  -> KernelTransforms
-  -> CSE
-```
+- Semantic structure and optimization decisions now happen inside SDE (during
+  `openmp-to-arts`) via the `Sde*` pass family.
+- Contracts produced by those SDE passes are consumed later by ARTS-core
+  stages (`edt-transforms`, `create-dbs`, `db-partitioning`, ...), which
+  perform structural / runtime transforms — not a second semantic layer.
 
-This means the branch now seeds semantic structure and optimization decisions
-in SDE, lowers to ARTS, and then runs ARTS-native structural/runtime cleanup
-on the resulting contracts later. Pattern discovery is not a separate
-executable pass ahead of SDE conversion, and the post-SDE ARTS stages should
-not be read as a second semantic optimization layer.
+If you are looking at an older doc or skill that references `pattern-pipeline`
+or `collect-metadata`, update it to point at stage 3 (`openmp-to-arts`) or
+stage 4 (`edt-transforms`) as appropriate.
 
 ## Front-End Stages Before SDE
 

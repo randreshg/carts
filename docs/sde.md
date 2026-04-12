@@ -72,17 +72,19 @@ As of this branch, `buildOpenMPToArtsPipeline` is:
 
 ```text
 ConvertOpenMPToSde
-  -> SdeScopeSelection
-  -> SdeScheduleRefinement
-  -> SdeChunkOptimization
-  -> SdeReductionStrategy
+  -> ScopeSelection
+  -> ScheduleRefinement
+  -> ChunkOpt
+  -> ReductionStrategy
   -> RaiseToLinalg
   -> RaiseToTensor
-  -> SdeTensorOptimization
-  -> SdeStructuredSummaries
-  -> SdeElementwiseFusion
-  -> SdeDistributionPlanning
-  -> SdeIterationSpaceDecomposition
+  -> LoopInterchange
+  -> TensorOpt
+  -> StructuredSummaries
+  -> ElementwiseFusion
+  -> DistributionPlanning
+  -> IterationSpaceDecomposition
+  -> BarrierElimination
   -> ConvertSdeToArts
   -> VerifySdeLowered
   -> DCE
@@ -90,17 +92,11 @@ ConvertOpenMPToSde
   -> VerifyEdtCreated
 ```
 
-The later ARTS-side pipeline still exists separately. Despite the historical
-stage name, it should be read as ARTS-native structural cleanup and
-normalization, not as a second semantic-pattern decision layer:
-
-```text
-DepTransforms
-  -> LoopNormalization
-  -> LoopReordering
-  -> KernelTransforms
-  -> CSE
-```
+There is no separately named `pattern-pipeline` stage after SDE on the
+current branch. ARTS-native structural cleanup and normalization happens
+inside the ARTS-core stages that follow (`edt-transforms`, `create-dbs`,
+`db-opt`, ...), which consume SDE-stamped contracts rather than invent new
+semantic policy.
 
 Current implementation note:
 

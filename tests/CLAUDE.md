@@ -10,10 +10,10 @@ inputs/            Shared test input files (configs, snapshots)
 
 Pass-level lit tests are co-located with source code:
 ```
-lib/arts/dialect/sde/test/   SDE dialect tests (stages 1-5)
-lib/arts/dialect/core/test/  Core ARTS dialect tests (stages 6-16)
+lib/arts/dialect/sde/test/   Semantic (SDE) dialect tests (stages 1-3)
+lib/arts/dialect/core/test/  ARTS core dialect tests (stages 4-15)
   partitioning/              DB partitioning contract tests (modes/ + safety/)
-lib/arts/dialect/rt/test/    Runtime dialect tests (stages 17-18)
+lib/arts/dialect/rt/test/    Runtime dialect tests (stage 16 + epilogues)
 ```
 
 Demo programs live at the project root:
@@ -26,22 +26,20 @@ samples/           End-to-end C/C++ demo programs (moved from tests/examples/)
 | Pipeline stage                          | Directory                          |
 | --------------------------------------- | ---------------------------------- |
 | 1 raise-memref-dimensionality           | `lib/arts/dialect/sde/test/`       |
-| 2 collect-metadata                      | `lib/arts/dialect/sde/test/`       |
-| 3 initial-cleanup                       | `lib/arts/dialect/sde/test/`       |
-| 4 openmp-to-arts                        | `lib/arts/dialect/sde/test/`       |
-| 5 pattern-pipeline                      | `lib/arts/dialect/sde/test/`       |
-| 6 edt-transforms                        | `lib/arts/dialect/core/test/`      |
-| 7 create-dbs                            | `lib/arts/dialect/core/test/`      |
-| 8 db-opt                                | `lib/arts/dialect/core/test/`      |
-| 9 edt-opt                               | `lib/arts/dialect/core/test/`      |
-| 10 concurrency                          | `lib/arts/dialect/core/test/`      |
-| 11 edt-distribution                     | `lib/arts/dialect/core/test/`      |
-| 12 post-distribution-cleanup            | `lib/arts/dialect/core/test/`      |
-| 13 db-partitioning                      | `lib/arts/dialect/core/test/partitioning/` |
-| 14 post-db-refinement                   | `lib/arts/dialect/core/test/`      |
-| 15 late-concurrency-cleanup             | `lib/arts/dialect/core/test/`      |
-| 16 epochs                               | `lib/arts/dialect/core/test/`      |
-| 17 pre-lowering                         | `lib/arts/dialect/rt/test/`        |
-| 18 arts-to-llvm                         | `lib/arts/dialect/rt/test/`        |
+| 2 initial-cleanup                       | `lib/arts/dialect/sde/test/`       |
+| 3 openmp-to-arts                        | `lib/arts/dialect/sde/test/`       |
+| 4 edt-transforms                        | `lib/arts/dialect/core/test/`      |
+| 5 create-dbs                            | `lib/arts/dialect/core/test/`      |
+| 6 db-opt                                | `lib/arts/dialect/core/test/`      |
+| 7 edt-opt                               | `lib/arts/dialect/core/test/`      |
+| 8 concurrency                           | `lib/arts/dialect/core/test/`      |
+| 9 edt-distribution                      | `lib/arts/dialect/core/test/`      |
+| 10 post-distribution-cleanup            | `lib/arts/dialect/core/test/`      |
+| 11 db-partitioning                      | `lib/arts/dialect/core/test/partitioning/` |
+| 12 post-db-refinement                   | `lib/arts/dialect/core/test/`      |
+| 13 late-concurrency-cleanup             | `lib/arts/dialect/core/test/`      |
+| 14 epochs                               | `lib/arts/dialect/core/test/`      |
+| 15 pre-lowering                         | `lib/arts/dialect/core/test/`      |
+| 16 arts-to-llvm                         | `lib/arts/dialect/rt/test/`        |
 | Verification passes (VerifyLowered etc) | `tests/verify/`                    |
 | CLI flag/option validation              | `tests/cli/`                       |
