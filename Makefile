@@ -168,8 +168,9 @@ ARTS_LOG_LEVEL ?= 1
 # Counter configuration profile (defaults to timing-only for minimal overhead)
 # Available profiles: profile-none.cfg, profile-timing.cfg, profile-workload.cfg, profile-overhead.cfg, profile-thread-edt.cfg
 COUNTER_CONFIG_PATH ?= external/carts-benchmarks/configs/profiles/profile-timing.cfg
-# jemalloc allocator — built from source in third_party/jemalloc
-ARTS_USE_JEMALLOC ?= ON
+# jemalloc allocator (opt-in). OFF because ARTS's jemalloc uses an empty
+# symbol prefix, which crashes libarts on macOS via cross-allocator free.
+ARTS_USE_JEMALLOC ?= OFF
 
 # Configuration hash file for ARTS build caching
 ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
