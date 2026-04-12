@@ -33,8 +33,8 @@ Read these while shrinking a case:
 
 - C/C++ reproducer: use when the frontend or OpenMP lowering matters
 - MLIR reproducer: use when the failing stage is already known
-- `tests/contracts/*.mlir`: use for compiler IR contracts
-- `tests/examples/*`: use for end-to-end runtime behavior
+- `lib/arts/dialect/{sde,core,rt}/test/*.mlir`: use for compiler IR contracts
+- `samples/*`: use for end-to-end runtime behavior
 
 ## Reduction Order
 

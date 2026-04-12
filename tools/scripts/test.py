@@ -66,23 +66,41 @@ def _setup_lit_pythonpath(config: CartsConfig) -> None:
 
 
 def _resolve_lit_targets(config: CartsConfig, suite: str) -> List[Path]:
-    """Resolve built-in test paths for a named suite."""
-    tests_dir = config.carts_dir / "tests"
-    if not tests_dir.is_dir():
-        print_error(f"Tests directory not found at {tests_dir}")
-        raise Exit(1)
+    """Resolve built-in test paths for a named suite.
 
-    if suite in ("all", "contracts"):
-        test_paths = [tests_dir / "contracts"]
+    Pass tests are co-located with source code under lib/arts/dialect/*/test/.
+    Cross-cutting tests live under tests/{cli,verify}/.
+    E2E tests compile and run samples under tests/e2e/.
+    """
+    carts_dir = config.carts_dir
+
+    # Co-located pass test directories (IREE-style)
+    pass_test_dirs = [
+        carts_dir / "lib" / "arts" / "dialect" / "sde" / "test",
+        carts_dir / "lib" / "arts" / "dialect" / "core" / "test",
+        carts_dir / "lib" / "arts" / "dialect" / "rt" / "test",
+        carts_dir / "tests" / "cli",
+        carts_dir / "tests" / "verify",
+    ]
+
+    e2e_test_dirs = [
+        carts_dir / "tests" / "e2e",
+    ]
+
+    if suite in ("contracts", "pass"):
+        test_paths = [p for p in pass_test_dirs if p.is_dir()]
+    elif suite == "e2e":
+        test_paths = [p for p in e2e_test_dirs if p.is_dir()]
+    elif suite == "all":
+        test_paths = [p for p in pass_test_dirs + e2e_test_dirs if p.is_dir()]
     else:
         print_error(f"Unknown test suite '{suite}'")
-        print_info("Available suites: all, contracts")
+        print_info("Available suites: pass, e2e, all, contracts")
         raise Exit(1)
 
-    for test_path in test_paths:
-        if not test_path.is_dir():
-            print_error(f"Test path not found: {test_path}")
-            raise Exit(1)
+    if not test_paths:
+        print_error("No test directories found")
+        raise Exit(1)
 
     return test_paths
 
@@ -146,8 +164,8 @@ def _run_lit(
 
 
 def test(
-    suite: str = Option("all", "--suite", "-s",
-                              help="Test suite: all, contracts"),
+    suite: str = Option("pass", "--suite", "-s",
+                              help="Test suite: pass (default), e2e, all"),
     verbose_tests: bool = Option(
         False, "-v", help="Verbose test output"),
 ):
@@ -160,10 +178,10 @@ def test(
 def lit(
     ctx: Context,
     suite: str = Option(
-        "contracts",
+        "pass",
         "--suite",
         "-s",
-        help="Default suite when no explicit paths are passed: contracts, all",
+        help="Default suite when no explicit paths are passed: pass, e2e, all",
     ),
     verbose_tests: bool = Option(
         False, "--verbose", "-v", help="Verbose lit output"
@@ -173,9 +191,9 @@ def lit(
 
     Examples:
       carts lit
-      carts lit tests/contracts/for_dispatch_clamp.mlir
-      carts lit -v tests/contracts
-      carts lit -- --filter=for_lowering tests/contracts
+      carts lit lib/arts/dialect/sde/test/openmp_to_arts_preserves_schedule_chunk.mlir
+      carts lit -v lib/arts/dialect/core/test
+      carts lit -- --filter=for_lowering lib/arts/dialect/core/test
     """
     config = get_config()
     raw_args = list(ctx.args)

@@ -31,5 +31,5 @@ dekk carts build --polygeist  # Rebuild Polygeist frontend
 
 ```bash
 dekk carts test
-dekk carts lit tests/contracts/my_test.mlir
+dekk carts lit lib/arts/dialect/core/test/my_test.mlir
 ```

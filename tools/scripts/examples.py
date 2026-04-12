@@ -117,13 +117,13 @@ class ExampleInfo:
 def _get_examples_dir() -> Path:
     """Get the examples directory path."""
     config = get_config()
-    return config.carts_dir / "tests" / "examples"
+    return config.carts_dir / "samples"
 
 
 def _get_default_arts_config() -> Path:
     """Get the default ARTS config file path."""
     config = get_config()
-    return config.carts_dir / "tests" / "examples" / ARTS_CONFIG_FILENAME
+    return config.carts_dir / "samples" / ARTS_CONFIG_FILENAME
 
 
 def discover_examples(examples_dir: Path) -> List[ExampleInfo]:

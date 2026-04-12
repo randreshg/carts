@@ -56,7 +56,7 @@ shared utilities across 13 files. See `/refactor-utils` for the full catalog.
 1. Create source in the appropriate dialect directory (`lib/arts/dialect/{core,rt,sde}/Transforms/`)
 2. Add declaration in `include/arts/passes/Passes.h`
 3. Register in pipeline at appropriate stage in `tools/compile/Compile.cpp`
-4. Add lit test in `tests/contracts/`
+4. Add lit test in the co-located `test/` directory (`lib/arts/dialect/{core,rt,sde}/test/`)
 5. `dekk carts format` then `dekk carts test --suite contracts`
 
 ## Thread Safety
