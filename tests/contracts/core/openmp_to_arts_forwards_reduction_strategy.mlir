@@ -8,14 +8,18 @@
 // strategy materially changes the result-EDT combine path after ForLowering.
 
 // ATOMIC-LABEL: func.func @main
-// ATOMIC: arts.edt <parallel> <intranode> route(%{{.*}}) attributes {arts.reduction_strategy = "atomic", no_verify = #arts.no_verify}
+// ATOMIC: arts.edt <parallel> <intranode> route(%{{.*}}) attributes {arts.reduction_strategy = "atomic"
+// ATOMIC-SAME: distribution_kind = #arts.distribution_kind<block>
+// ATOMIC-SAME: no_verify = #arts.no_verify}
 // ATOMIC: arts.for(%c0) to(%c128) step(%c1) reduction(%{{.*}} : memref<?xi32>)
-// ATOMIC: } {arts.reduction_strategy = "atomic"}
+// ATOMIC: } {arts.reduction_kinds = [0 : i32], arts.reduction_strategy = "atomic"
+// ATOMIC-SAME: distribution_kind = #arts.distribution_kind<block>
 
 // TREE-LABEL: func.func @main
-// TREE: arts.edt <parallel> <internode> route(%{{.*}}) attributes {arts.reduction_strategy = "tree", no_verify = #arts.no_verify}
+// TREE: arts.edt <parallel> <internode> route(%{{.*}}) attributes {arts.reduction_strategy = "tree"
+// TREE-SAME: no_verify = #arts.no_verify}
 // TREE: arts.for(%c0) to(%c128) step(%c1) reduction(%{{.*}} : memref<?xi32>)
-// TREE: } {arts.reduction_strategy = "tree"}
+// TREE: } {arts.reduction_kinds = [0 : i32], arts.reduction_strategy = "tree"
 
 // ATOMIC-LOWER-LABEL: func.func @main
 // ATOMIC-LOWER: arts.edt <parallel> <intranode> route(%{{.*}}) (%{{.*}}) : memref<?xmemref<?xi32>> attributes {arts.reduction_strategy = "atomic"

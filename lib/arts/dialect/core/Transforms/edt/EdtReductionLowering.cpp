@@ -28,6 +28,9 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+
+#include <cassert>
+
 ARTS_DEBUG_SETUP(edt_reduction_lowering);
 
 using namespace mlir;
@@ -159,18 +162,101 @@ static void storeScalarValue(ArtsCodegen *AC, Location loc, Value value,
   AC->create<memref::StoreOp>(loc, value, memref, indices);
 }
 
-static Value createReductionAdd(ArtsCodegen *AC, Location loc, Type elemType,
-                                Value lhs, Value rhs) {
-  if (isa<FloatType>(elemType))
-    return AC->create<arith::AddFOp>(loc, lhs, rhs);
-  return AC->create<arith::AddIOp>(loc, lhs, rhs);
+static Value createReductionCombiner(ArtsCodegen *AC, Location loc,
+                                     Type elemType, Value lhs, Value rhs,
+                                     ReductionCombinerKind kind) {
+  bool isFloat = isa<FloatType>(elemType);
+  switch (kind) {
+  case ReductionCombinerKind::add:
+    return isFloat ? AC->create<arith::AddFOp>(loc, lhs, rhs).getResult()
+                   : AC->create<arith::AddIOp>(loc, lhs, rhs).getResult();
+  case ReductionCombinerKind::mul:
+    return isFloat ? AC->create<arith::MulFOp>(loc, lhs, rhs).getResult()
+                   : AC->create<arith::MulIOp>(loc, lhs, rhs).getResult();
+  case ReductionCombinerKind::min:
+    return isFloat
+               ? AC->create<arith::MinimumFOp>(loc, lhs, rhs).getResult()
+               : AC->create<arith::MinSIOp>(loc, lhs, rhs).getResult();
+  case ReductionCombinerKind::max:
+    return isFloat
+               ? AC->create<arith::MaximumFOp>(loc, lhs, rhs).getResult()
+               : AC->create<arith::MaxSIOp>(loc, lhs, rhs).getResult();
+  case ReductionCombinerKind::land:
+    assert(!isFloat && "bitwise reductions require integer element types");
+    return AC->create<arith::AndIOp>(loc, lhs, rhs).getResult();
+  case ReductionCombinerKind::lor:
+    assert(!isFloat && "bitwise reductions require integer element types");
+    return AC->create<arith::OrIOp>(loc, lhs, rhs).getResult();
+  case ReductionCombinerKind::lxor:
+    assert(!isFloat && "bitwise reductions require integer element types");
+    return AC->create<arith::XOrIOp>(loc, lhs, rhs).getResult();
+  }
+  llvm_unreachable("unknown reduction combiner kind");
+}
+
+/// Create the identity value for a reduction combiner.
+/// add/or/xor: 0, mul: 1, min: max representable, max: min representable,
+/// and: all-ones.
+static Value createReductionIdentity(ArtsCodegen *AC, Type elemType,
+                                     Location loc,
+                                     ReductionCombinerKind kind) {
+  if (kind == ReductionCombinerKind::add)
+    return AC->createZeroValue(elemType, loc);
+
+  if (auto intTy = dyn_cast<IntegerType>(elemType)) {
+    unsigned width = intTy.getWidth();
+    switch (kind) {
+    case ReductionCombinerKind::mul:
+      return AC->create<arith::ConstantIntOp>(loc, 1, width);
+    case ReductionCombinerKind::min: {
+      APInt maxVal = APInt::getSignedMaxValue(width);
+      return AC->create<arith::ConstantIntOp>(loc, maxVal.getSExtValue(),
+                                              width);
+    }
+    case ReductionCombinerKind::max: {
+      APInt minVal = APInt::getSignedMinValue(width);
+      return AC->create<arith::ConstantIntOp>(loc, minVal.getSExtValue(),
+                                              width);
+    }
+    case ReductionCombinerKind::land:
+      return AC->create<arith::ConstantIntOp>(loc, -1, width);
+    case ReductionCombinerKind::lor:
+    case ReductionCombinerKind::lxor:
+      return AC->createZeroValue(elemType, loc);
+    default:
+      return AC->createZeroValue(elemType, loc);
+    }
+  }
+
+  if (auto floatTy = dyn_cast<FloatType>(elemType)) {
+    const auto &sem = floatTy.getFloatSemantics();
+    switch (kind) {
+    case ReductionCombinerKind::mul: {
+      APFloat one(sem, 1);
+      return AC->create<arith::ConstantFloatOp>(loc, floatTy, one);
+    }
+    case ReductionCombinerKind::min: {
+      APFloat posInf = APFloat::getInf(sem, /*Negative=*/false);
+      return AC->create<arith::ConstantFloatOp>(loc, floatTy, posInf);
+    }
+    case ReductionCombinerKind::max: {
+      APFloat negInf = APFloat::getInf(sem, /*Negative=*/true);
+      return AC->create<arith::ConstantFloatOp>(loc, floatTy, negInf);
+    }
+    default:
+      return AC->createZeroValue(elemType, loc);
+    }
+  }
+
+  return AC->createZeroValue(elemType, loc);
 }
 
 static void lowerLinearResultCombine(ArtsCodegen *AC, Location loc,
                                      Value partialArg, Value finalMemRef,
                                      Type elemType, Value zeroIndex,
                                      Value oneIndex, Value numWorkers,
-                                     bool isSingleWorker) {
+                                     bool isSingleWorker,
+                                     ReductionCombinerKind combinerKind) {
   if (isSingleWorker) {
     Value workerSlot =
         AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIndex});
@@ -179,7 +265,7 @@ static void lowerLinearResultCombine(ArtsCodegen *AC, Location loc,
     return;
   }
 
-  Value identity = AC->createZeroValue(elemType, loc);
+  Value identity = createReductionIdentity(AC, elemType, loc, combinerKind);
   auto combineLoop = AC->create<scf::ForOp>(loc, zeroIndex, numWorkers,
                                             oneIndex, ValueRange{identity});
   AC->setInsertionPointToStart(combineLoop.getBody());
@@ -189,8 +275,8 @@ static void lowerLinearResultCombine(ArtsCodegen *AC, Location loc,
   Value workerSlot =
       AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{workerIdx});
   Value partialValue = loadScalarValue(AC, loc, workerSlot);
-  Value combined =
-      createReductionAdd(AC, loc, elemType, accumulator, partialValue);
+  Value combined = createReductionCombiner(AC, loc, elemType, accumulator,
+                                           partialValue, combinerKind);
   AC->create<scf::YieldOp>(loc, combined);
 
   AC->setInsertionPointAfter(combineLoop);
@@ -201,14 +287,19 @@ static void lowerAtomicResultCombine(ArtsCodegen *AC, Location loc,
                                      Value partialArg, Value finalMemRef,
                                      Type elemType, Value zeroIndex,
                                      Value oneIndex, Value numWorkers,
-                                     bool isSingleWorker) {
-  if (!isa<IntegerType>(elemType)) {
+                                     bool isSingleWorker,
+                                     ReductionCombinerKind combinerKind) {
+  // Atomic path only supports integer add via AtomicAddOp; all others
+  // fall back to the linear combine path.
+  if (!isa<IntegerType>(elemType) ||
+      combinerKind != ReductionCombinerKind::add) {
     lowerLinearResultCombine(AC, loc, partialArg, finalMemRef, elemType,
-                             zeroIndex, oneIndex, numWorkers, isSingleWorker);
+                             zeroIndex, oneIndex, numWorkers, isSingleWorker,
+                             combinerKind);
     return;
   }
 
-  Value identity = AC->createZeroValue(elemType, loc);
+  Value identity = createReductionIdentity(AC, elemType, loc, combinerKind);
   storeScalarValue(AC, loc, identity, finalMemRef);
 
   if (isSingleWorker) {
@@ -234,7 +325,8 @@ static void lowerTreeResultCombine(ArtsCodegen *AC, Location loc,
                                    Value partialArg, Value finalMemRef,
                                    Type elemType, Value zeroIndex,
                                    Value oneIndex, Value numWorkers,
-                                   bool isSingleWorker) {
+                                   bool isSingleWorker,
+                                   ReductionCombinerKind combinerKind) {
   if (isSingleWorker) {
     Value workerSlot =
         AC->create<DbRefOp>(loc, partialArg, SmallVector<Value>{zeroIndex});
@@ -244,7 +336,7 @@ static void lowerTreeResultCombine(ArtsCodegen *AC, Location loc,
   }
 
   Value twoIndex = AC->createIndexConstant(2, loc);
-  Value identity = AC->createZeroValue(elemType, loc);
+  Value identity = createReductionIdentity(AC, elemType, loc, combinerKind);
   auto pairLoop = AC->create<scf::ForOp>(loc, zeroIndex, numWorkers, twoIndex,
                                          ValueRange{identity});
   AC->setInsertionPointToStart(pairLoop.getBody());
@@ -268,10 +360,10 @@ static void lowerTreeResultCombine(ArtsCodegen *AC, Location loc,
   AC->create<scf::YieldOp>(loc, identity);
 
   AC->setInsertionPointToEnd(pairLoop.getBody());
-  Value pairValue =
-      createReductionAdd(AC, loc, elemType, lhsValue, rhsIf.getResult(0));
-  Value combined =
-      createReductionAdd(AC, loc, elemType, accumulator, pairValue);
+  Value pairValue = createReductionCombiner(AC, loc, elemType, lhsValue,
+                                            rhsIf.getResult(0), combinerKind);
+  Value combined = createReductionCombiner(AC, loc, elemType, accumulator,
+                                           pairValue, combinerKind);
   AC->create<scf::YieldOp>(loc, combined);
 
   AC->setInsertionPointAfter(pairLoop);
@@ -346,6 +438,27 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
   ValueRange reductionAccums = forOp.getReductionAccumulators();
   if (reductionAccums.empty())
     return redInfo;
+
+  // Resolve combiner kinds from the arts.reduction_kinds attr forwarded by
+  // ConvertSdeToArts.  Fall back to add when the attr is absent or shorter.
+  if (auto kindsAttr = forOp->getAttrOfType<ArrayAttr>(
+          AttrNames::Operation::Contract::ReductionKinds)) {
+    for (auto attr : kindsAttr) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(attr)) {
+        int32_t val = intAttr.getInt();
+        if (val >= 0 && val <= 6)
+          redInfo.combinerKinds.push_back(
+              static_cast<ReductionCombinerKind>(val));
+        else
+          redInfo.combinerKinds.push_back(ReductionCombinerKind::add);
+      } else {
+        redInfo.combinerKinds.push_back(ReductionCombinerKind::add);
+      }
+    }
+  }
+  // Pad with add for any missing entries.
+  while (redInfo.combinerKinds.size() < reductionAccums.size())
+    redInfo.combinerKinds.push_back(ReductionCombinerKind::add);
   SmallVector<Value> privateReductionAccums =
       detectPrivateReductionAccumulators(forOp);
 
@@ -422,7 +535,8 @@ ReductionLoweringInfo mlir::arts::allocatePartialAccumulators(
     auto redMemRef = dyn_cast<MemRefType>(redVar.getType());
     Type elementType =
         redMemRef ? redMemRef.getElementType() : redVar.getType();
-    Value identity = AC->createZeroValue(elementType, loc);
+    ReductionCombinerKind combKind = redInfo.combinerKinds[idx];
+    Value identity = createReductionIdentity(AC, elementType, loc, combKind);
     if (!identity) {
       ARTS_ERROR("Unsupported reduction element type for initialization");
       continue;
@@ -675,24 +789,25 @@ void mlir::arts::createResultEdt(ArtsCodegen *AC,
 
     auto memType = cast<MemRefType>(finalMemRef.getType());
     Type elemType = memType.getElementType();
-    Value identity = AC->createZeroValue(elemType, loc);
-    if (!identity) {
-      ARTS_ERROR("Unsupported reduction element type");
-      return;
-    }
+    ReductionCombinerKind combKind =
+        i < redInfo.combinerKinds.size() ? redInfo.combinerKinds[i]
+                                         : ReductionCombinerKind::add;
 
     switch (redInfo.strategy) {
     case ReductionLoweringStrategy::localAccumulate:
       lowerLinearResultCombine(AC, loopLoc, partialArg, finalMemRef, elemType,
-                               zeroIndex, sizeOne, numWorkers, isSingleWorker);
+                               zeroIndex, sizeOne, numWorkers, isSingleWorker,
+                               combKind);
       break;
     case ReductionLoweringStrategy::atomic:
       lowerAtomicResultCombine(AC, loopLoc, partialArg, finalMemRef, elemType,
-                               zeroIndex, sizeOne, numWorkers, isSingleWorker);
+                               zeroIndex, sizeOne, numWorkers, isSingleWorker,
+                               combKind);
       break;
     case ReductionLoweringStrategy::tree:
       lowerTreeResultCombine(AC, loopLoc, partialArg, finalMemRef, elemType,
-                             zeroIndex, sizeOne, numWorkers, isSingleWorker);
+                             zeroIndex, sizeOne, numWorkers, isSingleWorker,
+                             combKind);
       break;
     }
   }

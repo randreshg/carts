@@ -6,9 +6,12 @@
 // verify that ForLowering keeps the linear combine path for this case.
 
 // CHECK-LABEL: func.func @main
-// CHECK: arts.edt <parallel> <intranode> route(%{{.*}}) attributes {arts.reduction_strategy = "local_accumulate", no_verify = #arts.no_verify}
+// CHECK: arts.edt <parallel> <intranode> route(%{{.*}}) attributes {arts.reduction_strategy = "local_accumulate"
+// CHECK-SAME: distribution_kind = #arts.distribution_kind<block>
+// CHECK-SAME: no_verify = #arts.no_verify}
 // CHECK: arts.for(%c0) to(%c16) step(%c1) reduction(%{{.*}} : memref<?xi32>)
-// CHECK: } {arts.reduction_strategy = "local_accumulate"}
+// CHECK: } {arts.reduction_kinds = [0 : i32], arts.reduction_strategy = "local_accumulate"
+// CHECK-SAME: distribution_kind = #arts.distribution_kind<block>
 
 // LOWER-LABEL: func.func @main
 // LOWER: arts.edt <parallel> <intranode> route(%{{.*}}) (%{{.*}}) : memref<?xmemref<?xi32>> attributes {arts.reduction_strategy = "local_accumulate"

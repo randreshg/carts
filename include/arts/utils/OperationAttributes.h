@@ -134,6 +134,7 @@ constexpr StringLiteral Atomic = "atomic";
 constexpr StringLiteral Tree = "tree";
 constexpr StringLiteral LocalAccumulate = "local_accumulate";
 } // namespace ReductionStrategyValue
+constexpr StringLiteral ReductionKinds = "arts.reduction_kinds";
 constexpr StringLiteral SpatialDims = "spatial_dims";
 constexpr StringLiteral NarrowableDep = "narrowable_dep";
 constexpr StringLiteral ContractKindKey = "contract_kind";
