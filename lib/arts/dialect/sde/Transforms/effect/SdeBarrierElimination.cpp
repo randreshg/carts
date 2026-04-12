@@ -200,8 +200,77 @@ struct SdeBarrierEliminationPass
       }
     });
 
+    // Phase 11b: Elementwise nowait inference — elementwise loops have
+    // disjoint per-iteration write sets by definition, so no implicit barrier
+    // is needed if no subsequent su_iterate reads from the written memrefs.
+    getOperation().walk([&](sde::SdeSuIterateOp op) {
+      if (op.getNowaitAttr())
+        return;
+
+      auto classification = op.getStructuredClassification();
+      if (!classification)
+        return;
+
+      if (*classification != sde::SdeStructuredClassification::elementwise &&
+          *classification !=
+              sde::SdeStructuredClassification::elementwise_pipeline)
+        return;
+
+      // Verify all memory ops are loads/stores — no unknown side effects.
+      DenseSet<Value> writtenBases;
+      bool hasSideEffects = false;
+
+      op.getBody().walk([&](Operation *memOp) -> WalkResult {
+        if (auto storeOp = dyn_cast<memref::StoreOp>(memOp)) {
+          writtenBases.insert(
+              ValueAnalysis::stripMemrefViewOps(storeOp.getMemref()));
+        } else if (isa<memref::LoadOp>(memOp)) {
+          // Loads are fine.
+        } else if (!isMemoryEffectFree(memOp) && !isa<scf::YieldOp>(memOp)) {
+          hasSideEffects = true;
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      });
+
+      if (hasSideEffects || writtenBases.empty())
+        return;
+
+      // Check if the immediate next su_iterate sibling reads from our
+      // write set. If so, the barrier is needed.
+      bool nextReadsOurWrites = false;
+      Operation *nextOp = op->getNextNode();
+      while (nextOp) {
+        if (auto nextSu = dyn_cast<sde::SdeSuIterateOp>(nextOp)) {
+          llvm::DenseSet<Value> nextReadBases;
+          nextSu.getBody().walk([&](memref::LoadOp loadOp) {
+            nextReadBases.insert(
+                ValueAnalysis::stripMemrefViewOps(loadOp.getMemref()));
+          });
+          for (Value wb : writtenBases) {
+            if (nextReadBases.contains(wb)) {
+              nextReadsOurWrites = true;
+              break;
+            }
+          }
+          break; // only check immediate successor
+        }
+        // Skip barriers and memory-effect-free ops.
+        if (!isMemoryEffectFree(nextOp) &&
+            !isa<sde::SdeSuBarrierOp>(nextOp))
+          break;
+        nextOp = nextOp->getNextNode();
+      }
+
+      if (!nextReadsOurWrites) {
+        op.setNowaitAttr(UnitAttr::get(op.getContext()));
+        nowaitInferred++;
+        ARTS_DEBUG("Inferred nowait on elementwise su_iterate");
+      }
+    });
+
     ARTS_INFO("SdeBarrierElimination: inferred nowait on " << nowaitInferred
-                                                           << " reduction(s)");
+                                                           << " op(s)");
   }
 
 private:

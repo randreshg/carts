@@ -474,9 +474,8 @@ struct SdeTensorOptimizationPass
       rewrites.push_back({op, tensorGeneric});
     });
 
-    // Reduction splitting phase: stamp advisory split factor on reduction
-    // candidates with large trip counts. The actual loop splitting is deferred
-    // to ARTS EdtReductionLowering which handles tree/atomic/linear strategies.
+    // Reduction splitting phase: apply linalg::splitReduction() on reduction
+    // carriers to add a parallel dimension from the reduction dim.
     for (auto [op, tensorGeneric] : rewrites) {
       if (!tensorGeneric)
         continue;
@@ -485,7 +484,19 @@ struct SdeTensorOptimizationPass
           *classification != sde::SdeStructuredClassification::reduction)
         continue;
 
-      // Find the reduction scf.for loop inside the su_iterate body.
+      // Find reduction dim index in the carrier.
+      auto iterTypes = tensorGeneric.getIteratorTypesArray();
+      int reductionDimIdx = -1;
+      for (unsigned i = 0; i < iterTypes.size(); ++i) {
+        if (iterTypes[i] == utils::IteratorType::reduction) {
+          reductionDimIdx = i;
+          break;
+        }
+      }
+      if (reductionDimIdx < 0)
+        continue;
+
+      // Find the reduction scf.for loop to get trip count.
       Block &body = op.getBody().front();
       scf::ForOp reductionLoop;
       for (Operation &bodyOp : body.without_terminator()) {
@@ -507,6 +518,30 @@ struct SdeTensorOptimizationPass
       if (splitFactor <= 1)
         continue;
 
+      // Ensure trip count is evenly divisible by split factor.
+      if (*reductionTrip % splitFactor != 0)
+        splitFactor = std::max<int64_t>(1, *reductionTrip / splitFactor);
+      if (splitFactor <= 1)
+        continue;
+
+      IRRewriter rewriter(tensorGeneric->getContext());
+      rewriter.setInsertionPoint(tensorGeneric);
+
+      auto controlFn =
+          [&](linalg::LinalgOp) -> linalg::SplitReductionOptions {
+        return {/*ratio=*/splitFactor,
+                /*index=*/static_cast<unsigned>(reductionDimIdx),
+                /*innerParallel=*/true};
+      };
+
+      auto result =
+          linalg::splitReduction(rewriter,
+                                 cast<linalg::LinalgOp>(*tensorGeneric),
+                                 controlFn);
+      if (failed(result))
+        continue;
+
+      // Stamp the split factor for downstream visibility.
       op->setAttr("sde.reduction_split_factor",
                   IntegerAttr::get(IndexType::get(op.getContext()),
                                    splitFactor));
