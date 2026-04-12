@@ -663,15 +663,19 @@ def compile_cmd(
         raise Exit(1)
 
     if ext in (".c", ".cpp"):
-        if all_pipelines:
-            print_error("--all-pipelines is only supported for .mlir input")
-            raise Exit(1)
         if emit_llvm:
             print_error("--emit-llvm is only supported for .mlir input")
             raise Exit(1)
         if start_from:
             print_error("--start-from is only supported for .mlir input")
             raise Exit(1)
+        if all_pipelines:
+            if pipeline:
+                print_error("--all-pipelines cannot be combined with --pipeline")
+                raise Exit(1)
+            _compile_all_pipelines(get_config(), input_file, output,
+                                   passthrough_args, optimize)
+            return
         _compile_from_c(input_file, output, optimize, debug, pipeline,
                         partition_fallback, diagnose, diagnose_output,
                         normalized_arts_debug, passthrough_args)
@@ -1071,6 +1075,99 @@ _PASS_DUMP_HEADER_RE = re.compile(
     re.MULTILINE,
 )
 
+# The three dialect-conversion boundaries in the ARTS pipeline. Each boundary
+# is presented to users as a folder under 2_arts/boundaries/ containing the
+# input state (before.mlir), the conversion pass dump(s), and the output
+# state (after.mlir) — making the dialect transition directly inspectable.
+#
+# Each entry: (folder_name, [(stage_1based, pass_class_name), ...])
+_DIALECT_BOUNDARIES = [
+    # OMP dialect → SDE dialect (inside the openmp-to-arts stage).
+    ("01_omp_to_sde", [(3, "ConvertOpenMPToSde")]),
+    # SDE dialect → ARTS core dialect (inside the openmp-to-arts stage).
+    ("02_sde_to_arts", [(3, "ConvertSdeToArts")]),
+    # ARTS core → arts_rt runtime dialect (inside the pre-lowering stage).
+    ("03_arts_to_rt", [
+        (15, "ParallelEdtLowering"),
+        (15, "DbLowering"),
+        (15, "EdtLowering"),
+        (15, "EpochLowering"),
+    ]),
+]
+
+
+def _build_boundaries_view(
+    stages_dir: Path,
+    passes_dir: Path,
+    boundaries_dir: Path,
+    pipeline_steps: List[str],
+) -> int:
+    """Populate the boundaries/ view from existing stage + per-pass dumps.
+
+    For each dialect boundary, materialize:
+      - before.mlir: IR state just before the first conversion pass runs
+      - <PassClass>.mlir: IR after each conversion pass (copied from per-pass
+        dumps)
+      - after.mlir: IR state after the last conversion pass runs
+
+    Returns the number of boundaries successfully populated.
+    """
+    boundaries_dir.mkdir(exist_ok=True)
+    populated = 0
+    for bname, entries in _DIALECT_BOUNDARIES:
+        bdir = boundaries_dir / bname
+        bdir.mkdir(exist_ok=True)
+        first_stage_idx = entries[0][0]
+        # "before" = output of the previous stage (or the raw input for
+        # stage 1). Falls back to empty file if missing.
+        before_src: Optional[Path] = None
+        if first_stage_idx > 1:
+            prev_stage_idx = first_stage_idx - 1
+            prev_stage_token = pipeline_steps[prev_stage_idx - 1]
+            before_src = stages_dir / (
+                f"{prev_stage_idx:02d}_{prev_stage_token}.mlir"
+            )
+        if before_src and before_src.exists():
+            (bdir / "before.mlir").write_bytes(before_src.read_bytes())
+
+        copied = 0
+        last_pass_file: Optional[Path] = None
+        for stage_1based, pass_class in entries:
+            stage_token = pipeline_steps[stage_1based - 1]
+            stage_pass_dir = passes_dir / f"{stage_1based:02d}_{stage_token}"
+            matches = sorted(stage_pass_dir.glob(f"*_{pass_class}.mlir"))
+            if not matches:
+                continue
+            # For a class that ran multiple times (nested pass manager),
+            # keep the first dump under its class name and suffix any
+            # additional ones with _2, _3, ... so they all appear.
+            for i, src in enumerate(matches):
+                dst_name = (f"{pass_class}.mlir" if i == 0
+                            else f"{pass_class}_{i + 1}.mlir")
+                dst = bdir / dst_name
+                dst.write_bytes(src.read_bytes())
+                last_pass_file = dst
+                copied += 1
+
+        # "after" = last conversion pass's output, which by --mlir-print-ir-
+        # after-all semantics IS the state right after the conversion ran.
+        if last_pass_file is not None:
+            (bdir / "after.mlir").write_bytes(last_pass_file.read_bytes())
+            populated += 1
+
+        # Drop a short README describing the boundary for reader orientation.
+        passes_listed = ", ".join(f"{p}" for _, p in entries)
+        (bdir / "README.md").write_text(
+            f"# Dialect boundary: `{bname.split('_', 1)[1].replace('_', ' → ')}`\n\n"
+            f"Conversion pass(es): {passes_listed}\n\n"
+            f"- `before.mlir` — module state entering this boundary\n"
+            f"- `<PassClass>.mlir` — module state after that specific pass ran\n"
+            f"- `after.mlir` — module state leaving this boundary\n"
+            f"\n_(file count this run: {copied} conversion pass dump(s))_\n",
+            encoding="utf-8",
+        )
+    return populated
+
 
 def _split_per_pass_ir(stderr: str, out_dir: Path) -> int:
     """Split ``--mlir-print-ir-after-all`` stderr into per-pass .mlir files.
@@ -1100,14 +1197,43 @@ def _compile_all_pipelines(
     extra_args: List[str],
     optimize: bool,
 ) -> None:
-    """Run pipeline and dump all intermediate pipeline steps."""
+    """Run the full compilation and dump artifacts for every phase.
+
+    Layout (under ``output_dir`` or ``source_file.parent``):
+
+    ::
+
+        <out>/
+          1_polygeist/                       # only emitted for .c / .cpp input
+            <stem>.mlir                      # cgeist output (pre-ARTS MLIR)
+          2_arts/                            # ARTS MLIR transformations
+            stages/
+              01_raise-memref-dimensionality.mlir
+              ...
+              16_arts-to-llvm.mlir
+            passes/
+              01_raise-memref-dimensionality/
+                001_LowerAffinePass.mlir
+                ...
+            complete.mlir                    # final MLIR (after --O3 cleanup)
+          3_llvm/
+            <stem>.ll                        # final LLVM IR (--emit-llvm)
+
+    For ``.mlir`` input the ``1_polygeist/`` phase is skipped (caller already
+    has the pre-ARTS MLIR on disk).
+    """
     if not source_file.is_file():
         print_error(f"Input file '{source_file}' not found")
         raise Exit(1)
 
+    ext = source_file.suffix.lower()
+    if ext not in (".c", ".cpp", ".mlir"):
+        print_error(f"--all-pipelines: unsupported input extension '{ext}'. "
+                    f"Expected .c, .cpp, or .mlir.")
+        raise Exit(1)
+
     carts_compile_bin = config.get_carts_tool(TOOL_CARTS_COMPILE)
 
-    # Determine output directory
     out_dir = output_dir if output_dir else source_file.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1115,10 +1241,48 @@ def _compile_all_pipelines(
     pipeline_steps = manifest.tokens.pipeline_sequence
 
     stem = source_file.stem
-    # One per stage + complete-mlir + emit-llvm + per-pass dump aggregation.
-    total_steps = 3 + len(pipeline_steps)
+    results: List[tuple] = []  # List of (pipeline_step, success_bool)
 
     print_header("CARTS Pipeline Dump")
+
+    # Phase 1: Polygeist (C/C++ -> MLIR). Skipped for .mlir input.
+    if ext in (".c", ".cpp"):
+        phase1_dir = out_dir / "1_polygeist"
+        phase1_dir.mkdir(exist_ok=True)
+        mlir_input = phase1_dir / f"{stem}.mlir"
+        print_info(f"Phase 1 (polygeist): {source_file.name} -> "
+                   f"{mlir_input.relative_to(out_dir)}")
+        std_flag = "-std=c++17" if ext == ".cpp" else "-std=c11"
+        cgeist_cmd = _build_cgeist_cmd(
+            config, source_file, std_flag, [], with_openmp=True,
+            with_debug_info=True,
+        )
+        rc = run_command_with_output(cgeist_cmd, mlir_input)
+        results.append(("1_polygeist", rc == 0))
+        if rc != 0:
+            print_error("Phase 1 (polygeist) failed; cannot continue.")
+            _print_summary_table(results, out_dir)
+            raise Exit(1)
+    else:
+        mlir_input = source_file
+
+    # Phase 2 + 3 share a base invocation.
+    phase2_dir = out_dir / "2_arts"
+    phase2_stages_dir = phase2_dir / "stages"
+    phase2_passes_dir = phase2_dir / "passes"
+    phase2_stages_dir.mkdir(parents=True, exist_ok=True)
+    phase2_passes_dir.mkdir(parents=True, exist_ok=True)
+    phase3_dir = out_dir / "3_llvm"
+    phase3_dir.mkdir(exist_ok=True)
+
+    base_cmd = [str(carts_compile_bin), str(mlir_input)]
+    if optimize:
+        base_cmd.append("--O3")
+    arts_cfg = _find_arts_config(mlir_input, extra_args, config)
+    if arts_cfg:
+        base_cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
+
+    total_steps = 3 + len(pipeline_steps)
 
     with Progress(
         SpinnerColumn(),
@@ -1127,58 +1291,44 @@ def _compile_all_pipelines(
         TaskProgressColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Processing pipeline steps...", total=total_steps)
+        task = progress.add_task("Phase 2: ARTS transforms", total=total_steps)
 
-        base_cmd = [str(carts_compile_bin), str(source_file)]
-        if optimize:
-            base_cmd.append("--O3")
-        arts_cfg = _find_arts_config(source_file, extra_args, config)
-        if arts_cfg:
-            base_cmd.extend([FLAG_ARTS_CONFIG, str(arts_cfg)])
-
-        results = []  # List of (pipeline_step, success_bool)
-
-        # Dump each pipeline step
-        for pipeline_step in pipeline_steps:
-            progress.update(task, description=f"Pipeline: {pipeline_step}")
-            out_file = out_dir / f"{stem}_{pipeline_step}.mlir"
+        # Phase 2a: one .mlir per core stage.
+        for idx, pipeline_step in enumerate(pipeline_steps, start=1):
+            progress.update(task, description=f"Phase 2 stage {idx:02d}: {pipeline_step}")
+            out_file = phase2_stages_dir / f"{idx:02d}_{pipeline_step}.mlir"
             cmd = base_cmd + [f"{FLAG_PIPELINE}={pipeline_step}",
                               FLAG_OUTPUT, str(out_file)] + extra_args
             rc = run_subprocess(cmd, check=False).returncode
-            results.append((pipeline_step, rc == 0))
+            results.append((f"2_arts/stages/{idx:02d}_{pipeline_step}", rc == 0))
             progress.advance(task)
 
-        # Final MLIR
-        progress.update(task, description="Exporting complete MLIR")
-        final_mlir = out_dir / f"{stem}_complete.mlir"
-        cmd = base_cmd + [FLAG_OUTPUT, str(final_mlir)] + extra_args
+        # Phase 2b: complete MLIR (all core + epilogue MLIR passes applied).
+        progress.update(task, description="Phase 2: complete MLIR")
+        complete_mlir = phase2_dir / "complete.mlir"
+        cmd = base_cmd + [FLAG_OUTPUT, str(complete_mlir)] + extra_args
         rc = run_subprocess(cmd, check=False).returncode
-        results.append(("complete-mlir", rc == 0))
+        results.append(("2_arts/complete.mlir", rc == 0))
         progress.advance(task)
 
-        # Final LLVM IR
-        progress.update(task, description="Exporting LLVM IR")
-        final_ll = out_dir / f"{stem}.ll"
+        # Phase 3: LLVM IR emission.
+        progress.update(task, description="Phase 3: LLVM IR")
+        final_ll = phase3_dir / f"{stem}.ll"
         cmd = base_cmd + ["--emit-llvm", FLAG_OUTPUT, str(final_ll)] + extra_args
         rc = run_subprocess(cmd, check=False).returncode
-        results.append(("emit-llvm", rc == 0))
+        results.append(("3_llvm/*.ll", rc == 0))
         progress.advance(task)
 
-        # Per-pass IR dumps, organized by stage. For each core pipeline step
-        # we run a tight invocation (`--start-from=<stage> --pipeline=<stage>`)
-        # on the previous stage's output, with MLIR's
-        # --mlir-print-ir-after-all enabled. stderr then contains exactly
-        # that stage's pass dumps, which we split into numbered files under
-        # <stem>_passes/<NN>_<stage>/. This exposes compound stages (e.g.
-        # openmp-to-arts runs 19 SDE passes that the stage-level dump would
-        # otherwise collapse into one file) and correctly handles nested
-        # pass managers, conditional passes, and per-function repeats.
-        progress.update(task, description="Per-pass IR dumps")
-        passes_root = out_dir / f"{stem}_passes"
-        passes_root.mkdir(parents=True, exist_ok=True)
+        # Phase 2c: per-pass IR dumps organized by stage. For each core
+        # pipeline step we run a tight invocation (`--start-from=<stage>
+        # --pipeline=<stage>`) on the previous stage's output with
+        # --mlir-print-ir-after-all enabled, then split stderr on the boundary
+        # markers into numbered files under 2_arts/passes/<NN>_<stage>/.
+        # Correctly handles nested pass managers, conditional passes, and
+        # per-function repeats.
+        progress.update(task, description="Phase 2: per-pass IR dumps")
         total_dumps = 0
         stages_dumped = 0
-        base_stage_cmd = [str(carts_compile_bin)]
         stage_cfg_args: List[str] = []
         if optimize:
             stage_cfg_args.append("--O3")
@@ -1188,25 +1338,25 @@ def _compile_all_pipelines(
         for idx, stage in enumerate(pipeline_steps, start=1):
             progress.update(
                 task,
-                description=f"Per-pass IR dumps ({idx}/{len(pipeline_steps)}: {stage})",
+                description=f"Per-pass ({idx}/{len(pipeline_steps)}: {stage})",
             )
-            stage_dir = passes_root / f"{idx:02d}_{stage}"
+            stage_dir = phase2_passes_dir / f"{idx:02d}_{stage}"
             stage_dir.mkdir(exist_ok=True)
-            # Pre-stage input: the original source for stage 1, previous
+            # Pre-stage input: the MLIR entry point for stage 1, previous
             # stage's emitted .mlir thereafter.
             if idx == 1:
-                stage_input = source_file
+                stage_input = mlir_input
             else:
                 prev_stage = pipeline_steps[idx - 2]
-                stage_input = out_dir / f"{stem}_{prev_stage}.mlir"
+                stage_input = phase2_stages_dir / f"{idx - 1:02d}_{prev_stage}.mlir"
             if not stage_input.exists():
                 continue  # previous stage failed, skip
             scratch_out = stage_dir / ".discard.mlir"
-            cmd = (base_stage_cmd + [str(stage_input),
-                                     f"--start-from={stage}",
-                                     f"{FLAG_PIPELINE}={stage}",
-                                     "--mlir-print-ir-after-all",
-                                     FLAG_OUTPUT, str(scratch_out)]
+            cmd = ([str(carts_compile_bin), str(stage_input),
+                    f"--start-from={stage}",
+                    f"{FLAG_PIPELINE}={stage}",
+                    "--mlir-print-ir-after-all",
+                    FLAG_OUTPUT, str(scratch_out)]
                    + stage_cfg_args + extra_args)
             proc = run_subprocess(cmd, capture_output=True, check=False)
             n = _split_per_pass_ir(proc.stderr or "", stage_dir)
@@ -1218,12 +1368,28 @@ def _compile_all_pipelines(
             except FileNotFoundError:
                 pass
 
-        label = (f"per-pass ({total_dumps} dumps across {stages_dumped}"
-                 f"/{len(pipeline_steps)} stages)")
+        label = (f"2_arts/passes ({total_dumps} dumps, "
+                 f"{stages_dumped}/{len(pipeline_steps)} stages)")
         results.append((label, total_dumps > 0))
         progress.advance(task)
 
-    # Print summary table
+        # Phase 2d: dialect-boundary view (OMP→SDE, SDE→ARTS, ARTS→RT).
+        # Materialized from the per-pass dumps we just wrote.
+        progress.update(task, description="Phase 2: dialect boundaries")
+        boundaries_dir = phase2_dir / "boundaries"
+        populated = _build_boundaries_view(
+            phase2_stages_dir, phase2_passes_dir, boundaries_dir, pipeline_steps,
+        )
+        results.append(
+            (f"2_arts/boundaries ({populated}/{len(_DIALECT_BOUNDARIES)})",
+             populated > 0)
+        )
+
+    _print_summary_table(results, out_dir)
+
+
+def _print_summary_table(results: List[tuple], out_dir: Path) -> None:
+    """Render the pipeline-dump summary + success line."""
     passed = sum(1 for _, ok in results if ok)
     failed = sum(1 for _, ok in results if not ok)
 
@@ -1231,12 +1397,14 @@ def _compile_all_pipelines(
     table.add_column("Pipeline", style=Colors.INFO)
     table.add_column("Status", justify="center")
     for pipeline_name, ok in results:
-        status = f"[{Colors.SUCCESS}]PASS[/{Colors.SUCCESS}]" if ok else f"[{Colors.ERROR}]FAIL[/{Colors.ERROR}]"
+        status = (f"[{Colors.SUCCESS}]PASS[/{Colors.SUCCESS}]" if ok
+                  else f"[{Colors.ERROR}]FAIL[/{Colors.ERROR}]")
         table.add_row(pipeline_name, status)
     console.print(table)
 
     console.print(
-        f"\n[{Colors.SUCCESS}]{passed} passed[/{Colors.SUCCESS}], [{Colors.ERROR}]{failed} failed[/{Colors.ERROR}] "
+        f"\n[{Colors.SUCCESS}]{passed} passed[/{Colors.SUCCESS}], "
+        f"[{Colors.ERROR}]{failed} failed[/{Colors.ERROR}] "
         f"out of {len(results)} pipeline outputs"
     )
     print_success(f"Pipeline dumps written to {out_dir}")
