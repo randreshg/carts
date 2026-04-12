@@ -33,9 +33,6 @@ std::unique_ptr<Pass> createArtsInlinerPass();
 std::unique_ptr<Pass> createRaiseMemRefDimensionalityPass();
 /// Convert residual OMP task dependencies to arts.omp_dep.
 std::unique_ptr<Pass> createHandleDepsPass();
-/// Lower OpenMP regions into high-level ARTS dialect operations.
-std::unique_ptr<Pass>
-createConvertOpenMPToArtsPass(AnalysisManager *AM = nullptr);
 /// Eliminate dead ARTS operations and dead helper IR.
 std::unique_ptr<Pass> createDCEPass();
 
