@@ -47,9 +47,6 @@ public:
   virtual bool isDistributed() const { return getNodeCount() > 1; }
 
   // --- Derived thresholds (computed, not hardcoded) ---
-  virtual int64_t getMinUsefulTaskWork() const {
-    return static_cast<int64_t>(getTaskCreationCost() * 10);
-  }
   virtual int64_t getMinIterationsPerWorker() const {
     return std::max<int64_t>(
         1, static_cast<int64_t>(getTaskCreationCost() /
