@@ -22,6 +22,9 @@ def SdeDepType
 def SdeCompletionType
     : Type<CPred<"::llvm::isa<::mlir::arts::sde::CompletionType>($_self)">,
            "SDE completion token">;
+def SdeTokenType
+    : Type<CPred<"::llvm::isa<::mlir::arts::sde::TokenType>($_self)">,
+           "SDE tensor access token">;
 
 //===----------------------------------------------------------------------===//
 // Enum helpers
@@ -342,6 +345,105 @@ def SdeMuDepOp
   let assemblyFormat = [{
     $mode $source (`[` $offsets^ `]`)? (`size` `[` $sizes^ `]`)?
     `:` type($source) `->` type($dep) attr-dict
+  }];
+}
+
+def SdeMuTokenOp
+    : ArtsSde_Op<"mu_token", [Pure, AttrSizedOperandSegments]> {
+  let summary = "Produce a tensor-path access token (whole or slice).";
+  let description = [{
+    Names a tensor (or a rectangular slice of one) for consumption by a
+    `sde.cu_codelet`, with an explicit access mode. When `offsets` / `sizes`
+    are omitted the token addresses the whole tensor.
+
+    Tokens are the tensor-path analogue of `sde.mu_dep`. At the SDE to ARTS
+    boundary a `mu_token` lowers 1:1 to `arts.db_acquire <mode>`.
+
+    Two tokens with disjoint slices of the same tensor expose slice-
+    parallelism that would be serialized if codelets took raw tensor
+    operands; the SSA dep edge still flows through the parent tensor, but
+    the analyses see the disjointness.
+  }];
+
+  let arguments = (ins
+    SdeAccessModeAttr:$mode,
+    AnyTensor:$source,
+    Variadic<Index>:$offsets,
+    Variadic<Index>:$sizes
+  );
+
+  let results = (outs SdeTokenType:$token);
+
+  let assemblyFormat = [{
+    $mode $source (`[` $offsets^ `]`)? (`size` `[` $sizes^ `]`)?
+    `:` type($source) `->` type($token) attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
+def SdeCuCodeletOp
+    : ArtsSde_Op<"cu_codelet", [
+      IsolatedFromAbove,
+      SingleBlock,
+      RecursiveMemoryEffects
+    ]> {
+  let summary = "Dataflow codelet: all I/O through tokens + yield, no captures.";
+  let description = [{
+    A compute unit whose only communication with the enclosing scope is
+    through `sde.mu_token` operands and yielded tensor results. The name
+    follows OCR's "codelet": a purely asynchronous, pure-dataflow unit of
+    work whose inputs and outputs are entirely explicit.
+
+    Operand shape: every operand is a `!sde.token<tensor<...>>`. The body's
+    block arguments are typed as the token's `slice_type`; the op implicitly
+    unpacks tokens at block entry so the body sees tensor values of the
+    addressed region.
+
+    Result shape: one SSA result per `write` or `readwrite` token, of the
+    same type as the source parent tensor. The op implicitly reconstructs
+    the parent tensor with the slice replaced by the yielded value
+    (destination-passing style, as in linalg-on-tensors).
+
+    `IsolatedFromAbove` guarantees the body references no SSA value from
+    outside its block arguments. Dependencies are SSA-visible via the token
+    operand list; a missing dep is a missing operand, caught by the verifier.
+  }];
+
+  let arguments = (ins Variadic<SdeTokenType>:$tokens);
+  let results   = (outs Variadic<AnyTensor>:$outputs);
+  let regions   = (region SizedRegion<1>:$body);
+
+  let assemblyFormat = [{
+    `(` ($tokens^ `:` type($tokens))? `)`
+    (`->` `(` type($outputs)^ `)`)?
+    $body attr-dict
+  }];
+
+  let hasVerifier = 1;
+}
+
+def SdeMuDataOp : ArtsSde_Op<"mu_data", [Pure]> {
+  let summary = "Declarative SDE shared-data handle.";
+  let description = [{
+    Canonical anchor for data that crosses SDE tasks. Replaces the pattern
+    of inheriting Polygeist `memref.alloca` for OMP-shared variables.
+    Produced by `ConvertOpenMPToSde` for every variable named by an OMP
+    `shared(...)` clause (or otherwise shared across tasks), consumed by
+    `RaiseMemrefToTensor` as an enumeration anchor, lowered by
+    `ConvertSdeToArts` to `arts.db_alloc`.
+  }];
+
+  let arguments = (ins
+    OptionalAttr<AnyAttr>:$init,
+    UnitAttr:$shared
+  );
+
+  let results = (outs AnyType:$handle);
+
+  let assemblyFormat = [{
+    (`shared` $shared^)? (`init` `(` $init^ `)`)?
+    attr-dict `:` type($handle)
   }];
 }
 

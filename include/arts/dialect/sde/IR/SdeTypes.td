@@ -31,4 +31,19 @@ def DepType : ArtsSde_Type<"Dep", "dep"> {
   }];
 }
 
+def TokenType : ArtsSde_Type<"Token", "token"> {
+  let summary = "Handle to a (sub)region of a shared tensor.";
+  let description = [{
+    `!arts_sde.token` names a subset of a tensor's storage with a declared
+    access mode. It is the tensor-world analogue of `!arts_sde.dep`: carries
+    the same "mode + region" information that `arts_sde.mu_dep` carries for
+    memrefs, but with tensor SSA for the underlying value.
+
+    The `slice_type` parameter records the shape of the addressed region so
+    codelet block arguments can be typed directly.
+  }];
+  let parameters = (ins "::mlir::RankedTensorType":$slice_type);
+  let assemblyFormat = "`<` $slice_type `>`";
+}
+
 #endif // ARTS_SDE_TYPES

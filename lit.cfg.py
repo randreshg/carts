@@ -119,6 +119,16 @@ config.environment["PATH"] = os.pathsep.join(
     [build_bin_dir, carts_bin_dir, llvm_bin_dir, config.environment.get("PATH", "")]
 )
 
+# macOS / Linux dyld search path. `carts-compile` is linked with
+# @rpath/libzstd.1.dylib pointing at the dekk-managed conda env's lib/;
+# propagate DYLD_LIBRARY_PATH / LD_LIBRARY_PATH from the outer shell (and
+# fall back to the env's lib/) so lit subprocesses can resolve it.
+_dekk_env_lib = os.path.join(project_root, ".dekk", "env", "lib")
+for _lib_var in ("DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH"):
+    _inherited = os.environ.get(_lib_var, "")
+    _entries = [_dekk_env_lib] + ([_inherited] if _inherited else [])
+    config.environment[_lib_var] = os.pathsep.join(_entries)
+
 # Directories that should not be treated as test directories.
 config.excludes = ["inputs", "snapshots", "Output", "counters"]
 

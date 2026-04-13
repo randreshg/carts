@@ -76,6 +76,7 @@ std::unique_ptr<Pass> createConvertSdeToArtsPass();
 std::unique_ptr<Pass> createVerifySdeLoweredPass();
 std::unique_ptr<Pass> createRaiseToLinalgPass();
 std::unique_ptr<Pass> createRaiseToTensorPass();
+std::unique_ptr<Pass> createRaiseMemrefToTensorPass();
 
 } // namespace mlir::arts::sde
 

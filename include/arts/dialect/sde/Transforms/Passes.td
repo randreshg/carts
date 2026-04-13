@@ -9,6 +9,22 @@
 
 include "mlir/Pass/PassBase.td"
 
+def RaiseMemrefToTensor : Pass<"raise-memref-to-tensor", "mlir::ModuleOp"> {
+  let summary = "Lift SDE memref-fallback tasks into cu_codelet tensor form.";
+  let description = [{
+    See docs/compiler/raise-memref-to-tensor-rfc.md. Converts raisable
+    cu_task ops whose bodies read/write shared memrefs into cu_codelet
+    ops whose bodies consume !sde.token operands, threading the affected
+    memrefs as tensor SSA through the enclosing SDE regions.
+
+    This is a scaffold: v1 implementation is a follow-up.
+  }];
+  let dependentDialects = ["::mlir::tensor::TensorDialect",
+                           "::mlir::bufferization::BufferizationDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor = "mlir::arts::sde::createRaiseMemrefToTensorPass()";
+}
+
 def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
   let summary = "Raise supported sde.su_iterate bodies to transient linalg.generic carriers";
   let description = [{
