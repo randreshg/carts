@@ -52,8 +52,6 @@ namespace mlir::arts {
 
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -574,20 +572,26 @@ struct RaiseMemrefToTensorPass
       }
     }
 
-    // ---- Boundary materialization (Gap C). ---------------------------------
+    // ---- Boundary materialization (Gap C + Gap D). ------------------------
     //
     // For each raised memref, emit `tensor.extract` + `memref.store` for each
     // element of the final tensor value. Placed just before the terminator
     // of the scope block containing the last writing codelet so the scope's
     // non-raised readers observe the updated values.
     //
-    // KNOWN LIMITATION (see report): on the current pipeline, this inline
-    // form can race with the async task EDTs the codelet lowers to. A future
-    // iteration should either (a) place these writes in a successor codelet
-    // that depends on the final writer token, OR (b) teach the outer
-    // single-EDT inlining to wait for nested task-EDTs before returning.
-    // For deps.c this manifests as `A: 0, B: 0` on the post-region printf
-    // even though the task prints show the correct intermediate values.
+    // Gap D (boundary-write race): the cu_codelet ops lower to async EDTs
+    // scheduled by the enclosing single EDT. Without synchronization, the
+    // boundary stores run on the task-creation thread BEFORE the async EDTs
+    // actually execute, so post-region memref readers observe stale data
+    // (deps.c: `A: 0, B: 0`). We close the race by emitting an
+    // `sde.su_barrier` in each block that receives boundary writes, just
+    // before the first write. At ConvertSdeToArts it lowers to `arts.barrier`
+    // which CreateEpochs groups the preceding task EDTs into an `arts.epoch`
+    // that must complete before subsequent ops (the stores) run.
+    //
+    // One barrier is emitted per unique boundary block so multi-memref
+    // programs don't get redundant barriers.
+    DenseSet<Block *> boundaryBlocks;
     for (memref::AllocaOp alloca : candidates) {
       Value memref = alloca.getResult();
       Value finalTensor = currentTensor.lookup(memref);
@@ -600,6 +604,17 @@ struct RaiseMemrefToTensorPass
       if (!producer)
         continue;
       Block *block = producer->getBlock();
+
+      // Emit an sde.su_barrier once per boundary block, just before the
+      // block terminator. This sequences the boundary stores after the
+      // async task EDTs the codelets lower to.
+      if (boundaryBlocks.insert(block).second) {
+        Operation *terminator = block->getTerminator();
+        OpBuilder barrierBuilder(terminator);
+        sde::SdeSuBarrierOp::create(barrierBuilder, alloca.getLoc(),
+                                    ValueRange{});
+      }
+
       Operation *terminator = block->getTerminator();
       OpBuilder boundaryBuilder(terminator);
       Location loc = alloca.getLoc();
@@ -613,6 +628,13 @@ struct RaiseMemrefToTensorPass
         memref::StoreOp::create(boundaryBuilder, loc, extracted, memref,
                                 ValueRange{idx});
       }
+
+      // Tag the alloca so downstream EdtStructuralOpt does not sink it into
+      // the EDT body. The boundary store above is the bridge from the raised
+      // tensor DB back to this user-visible memref; if the alloca were sunk,
+      // the sink would redirect the boundary store to a local EDT-private
+      // alloca and post-region readers would still see the initial contents.
+      alloca->setAttr("arts.preserve", UnitAttr::get(alloca.getContext()));
     }
 
     // ---- Erase mu_dep ops for raised memrefs. ------------------------------

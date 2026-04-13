@@ -114,6 +114,7 @@ static void processBarrierOp(BarrierOp barrier) {
     return;
 
   SmallVector<Operation *, 8> opsToMove;
+  llvm::SmallDenseSet<Operation *, 8> opsToMoveSet;
 
   auto barrierIt = Block::iterator(barrier.getOperation());
   auto segmentBegin = barrierIt;
@@ -124,17 +125,73 @@ static void processBarrierOp(BarrierOp barrier) {
     segmentBegin = prev;
   }
 
+  // First pass: collect ops containing an EDT launch (the primary movers).
   for (auto it = segmentBegin; it != barrierIt; ++it) {
     Operation *op = &*it;
     if (!containsEdtLaunch(op))
       continue;
     opsToMove.push_back(op);
+    opsToMoveSet.insert(op);
   }
 
   if (opsToMove.empty()) {
     barrier.erase();
     return;
   }
+
+  // Second pass: also move interleaved ops in the segment whose every user
+  // is either another segment op being moved or a descendant of one. This
+  // handles patterns like `arts.db_acquire` sitting between task EDTs that
+  // consume its ptr — leaving them behind would break SSA dominance when
+  // the EDTs move into the epoch. We iterate to a fixed point so chains of
+  // such ops are all moved.
+  //
+  // Conservative condition: an op is movable only if ALL of its results'
+  // users live inside an op we're already moving (or inside the segment op
+  // itself). Ops with side-effects outside the SSA world stay put.
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (auto it = segmentBegin; it != barrierIt; ++it) {
+      Operation *op = &*it;
+      if (opsToMoveSet.count(op))
+        continue;
+      if (containsEdtLaunch(op))
+        continue; // already handled
+      // Skip ops with side effects that we cannot safely reorder. db_acquire
+      // is a dep-tracking SSA producer and is safe to move alongside the
+      // EDTs that consume it; restrict the hoist to that specific op for
+      // now to avoid perturbing other patterns.
+      if (!isa<DbAcquireOp, LoweringContractOp>(op))
+        continue;
+      bool allUsersInside = true;
+      for (Value result : op->getResults()) {
+        for (Operation *user : result.getUsers()) {
+          // Walk up until we find an op in the current block.
+          Operation *cur = user;
+          while (cur && cur->getBlock() != block)
+            cur = cur->getParentOp();
+          if (!cur || !opsToMoveSet.count(cur)) {
+            allUsersInside = false;
+            break;
+          }
+        }
+        if (!allUsersInside)
+          break;
+      }
+      if (!allUsersInside)
+        continue;
+      opsToMove.push_back(op);
+      opsToMoveSet.insert(op);
+      changed = true;
+    }
+  }
+
+  // Re-sort opsToMove into program order so the moveBefore sequence in the
+  // epoch block preserves source order.
+  llvm::sort(opsToMove, [](Operation *a, Operation *b) {
+    return a->isBeforeInBlock(b);
+  });
 
   /// Create epoch and move operations into it
   Location loc = barrier.getLoc();
