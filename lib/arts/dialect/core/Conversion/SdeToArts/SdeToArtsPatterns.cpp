@@ -1090,6 +1090,9 @@ static LogicalResult lowerCuCodelet(sde::SdeCuCodeletOp codelet) {
                                         slicedType, view);
         } else {
           // Slice token: carry explicit offsets/sizes through extract_slice.
+          // Offsets/sizes are dynamic SSA values, so ExtractSliceOp infers a
+          // fully dynamic result type. Cast to the codelet block arg's
+          // (possibly static) slice type afterwards.
           SmallVector<OpFoldResult> offsets, sizes, strides;
           offsets.reserve(slicedType.getRank());
           sizes.reserve(slicedType.getRank());
@@ -1100,9 +1103,12 @@ static LogicalResult lowerCuCodelet(sde::SdeCuCodeletOp codelet) {
             sizes.push_back(OpFoldResult(muToken.getSizes()[dim]));
             strides.push_back(OpFoldResult(oneV));
           }
-          view = tensor::ExtractSliceOp::create(rewriter, codelet.getLoc(),
-                                                slicedType, view, offsets,
-                                                sizes, strides);
+          Value sliced = tensor::ExtractSliceOp::create(
+              rewriter, codelet.getLoc(), view, offsets, sizes, strides);
+          if (sliced.getType() != slicedType)
+            sliced = tensor::CastOp::create(rewriter, codelet.getLoc(),
+                                            slicedType, sliced);
+          view = sliced;
         }
       }
       mapper.map(codeletArg, view);
@@ -1222,21 +1228,33 @@ static LogicalResult lowerCuCodelet(sde::SdeCuCodeletOp codelet) {
 /// with the ARTS-side chain.
 static LogicalResult lowerTensorPathOps(ModuleOp module) {
   // Step 1: lower codelets (+ their tokens).
+  //
+  // `lowerMuData` erases its input op and RAUWs the tensor result with a
+  // `bufferization.to_tensor` over the new DB chain. When two codelets (or
+  // two tokens of the same codelet) share a single `sde.mu_data`, the first
+  // lowering erases it and subsequent `muToken.getSource()` lookups see the
+  // replacement `to_tensor` instead of the original `mu_data` — so
+  // `getDefiningOp<SdeMuDataOp>()` naturally returns null. We still guard
+  // with a seen-set to make the intent explicit and to prevent any future
+  // re-entrancy (e.g., if lookup traversal ever changes) from dereferencing
+  // an erased op.
+  DenseSet<sde::SdeMuDataOp> loweredMuData;
   SmallVector<sde::SdeCuCodeletOp> codelets;
   module.walk([&](sde::SdeCuCodeletOp op) { codelets.push_back(op); });
   for (sde::SdeCuCodeletOp codelet : codelets) {
     // Lower mu_data producers feeding this codelet's tokens first so that
     // `findBackingDbAlloc` can see the DB chain when codelet lowering runs.
-    // Collect them lazily (same mu_data may feed multiple codelets).
     for (Value token : codelet.getTokens()) {
       auto muToken = token.getDefiningOp<sde::SdeMuTokenOp>();
       if (!muToken)
         continue;
-      if (auto muData =
-              muToken.getSource().getDefiningOp<sde::SdeMuDataOp>()) {
-        if (failed(lowerMuData(muData)))
-          return failure();
-      }
+      auto muData = muToken.getSource().getDefiningOp<sde::SdeMuDataOp>();
+      if (!muData)
+        continue;
+      if (!loweredMuData.insert(muData).second)
+        continue;
+      if (failed(lowerMuData(muData)))
+        return failure();
     }
     if (failed(lowerCuCodelet(codelet)))
       return failure();

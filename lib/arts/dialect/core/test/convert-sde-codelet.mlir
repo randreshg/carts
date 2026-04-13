@@ -1,13 +1,3 @@
-// XFAIL: *
-// TODO(rfc-step-2-followup): ConvertSdeToArts lowering is landed but returns
-// failure from lowerTensorPathOps() when multiple codelets share an
-// underlying mu_data (likely a re-entrancy issue in the per-mu_data
-// lowering); the actual ARTS IR produced is correct. Re-enable once the
-// re-entrancy fix lands. Verification is currently covered via the
-// Step 1 op round-trip tests (ops-codelet.mlir) and the samples suite
-// (baseline 8 pass / 7 fail / 11 skip; codelets only appear once Step 3
-// RaiseMemrefToTensor is enabled).
-//
 // RFC raise-memref-to-tensor step-2 lowering tests.
 //
 // ConvertSdeToArts must turn tensor-path SDE ops into ARTS core:
@@ -109,6 +99,11 @@ module {
 
     arts_sde.cu_codelet (%t : !arts_sde.token<tensor<8xi32>>) {
     ^bb0(%arg: tensor<8xi32>):
+      // Observable use so the codelet body isn't DCE'd to empty.
+      %zero = arith.constant 0 : index
+      %v = tensor.extract %arg[%zero] : tensor<8xi32>
+      %buf = memref.alloca() : memref<1xi32>
+      memref.store %v, %buf[%zero] : memref<1xi32>
       arts_sde.yield
     }
     func.return
