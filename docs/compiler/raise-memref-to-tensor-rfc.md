@@ -470,16 +470,112 @@ is entirely an SDE-side concern; by the time we reach ARTS core, DBs
 and EDTs look the same as today — just produced by a more principled
 front-end for raised code.
 
-## 7. Interactions with existing passes
+## 7. Pipeline role — `cu_task` vs `cu_codelet`
+
+### 7.1 Today's pipeline is loop-centric
+
+Audit of every pass body in `lib/arts/dialect/sde/Transforms/`: the
+SDE analysis and transform passes walk `sde.su_iterate` only. None
+of them traverse `sde.cu_task` bodies or `sde.mu_dep` ops for
+transformation purposes.
+
+| Pass | Walks `cu_task`? | Walks `su_iterate`? |
+| --- | --- | --- |
+| `ConvertOpenMPToSde` | emits it | emits it |
+| `ScopeSelection` | only the enclosing `cu_region` | yes |
+| `ScheduleRefinement` | no | yes |
+| `ChunkOpt` | no | yes |
+| `ReductionStrategy` | no (future: via `cu_reduce`) | yes |
+| `RaiseToLinalg` | no | yes |
+| `RaiseToTensor` | no | yes (linalg inside) |
+| `LoopInterchange` | no | yes |
+| `TensorOpt` | no | yes |
+| `StructuredSummaries` | no | yes |
+| `ElementwiseFusion` | no | yes |
+| `DistributionPlanning` | no | yes |
+| `IterationSpaceDecomposition` | no | yes |
+| `BarrierElimination` | no (reads `mu_dep` side-effect scope only) | yes |
+
+This means a task-centric program like `samples/deps/deps.c` passes
+through 13 SDE analysis passes and emerges structurally unchanged.
+The only work the current SDE pipeline does on pure task graphs is
+`ScopeSelection` annotating the enclosing `cu_region`. Everything
+else runs blind to the task structure.
+
+The `cu_task → cu_codelet` raise is the lever that puts tasks
+**into the same regime** as loops. Once a task body is in codelet
+form, its access pattern is token-visible and its data flow is
+SSA-visible — which is exactly the shape the existing
+`su_iterate`-centric passes already know how to analyze.
+
+### 7.2 What belongs on each side of the raise
+
+**Stays on `cu_task` (memref fallback) side, before the raise:**
+
+| Concern | Why | Pass |
+| --- | --- | --- |
+| OMP → SDE conversion | Task shape is the natural IR for `omp.task` | `ConvertOpenMPToSde` |
+| Region-scope annotation | Looks at `cu_region`, not task bodies | `ScopeSelection` |
+| Schedule / chunk / reduction strategy on loops | Pure `su_iterate` concerns | `ScheduleRefinement`, `ChunkOpt`, `ReductionStrategy` |
+| Loop raise and tensor transforms on loops | `su_iterate` path — already covered | `RaiseToLinalg`, `RaiseToTensor`, `LoopInterchange`, `TensorOpt`, `StructuredSummaries`, `ElementwiseFusion` |
+
+**Moves to `cu_codelet` (tokenized tensor) side, after the raise:**
+
+| Concern | Why tokens help | Pass (today → extended) |
+| --- | --- | --- |
+| Distribution of task work | Token slices are the distribution unit: codelets with disjoint slices of the same tensor are independent | `DistributionPlanning` extended to walk codelets |
+| Dependency graph construction | SSA use-def edge through tokens is the dep graph; nothing to reconstruct from addresses | `ConvertSdeToArts` lowering, future task-graph analyses |
+| Access-pattern summarization | Codelet operand modes + slice shapes already state the contract | `StructuredSummaries` extended |
+| Codelet fusion | Elementwise codelets forming a use-def chain are fusable | `ElementwiseFusion` extended |
+| Bufferization at the SDE→ARTS boundary | Tokens map 1:1 to `arts.db_acquire`; one-shot bufferization fits naturally | New boundary step inside `ConvertSdeToArts` |
+
+**Runs unchanged (loop path stays exactly as today):**
+
+- Every `su_iterate`-centric pass. The raise targets `cu_task`
+  only; `su_iterate` bodies and their linalg carriers are not
+  touched. There is no regression risk on the loop-centric samples.
+
+### 7.3 Pass-by-pass adaptation
 
 | Pass | Today | After this RFC |
 | --- | --- | --- |
 | `RaiseToLinalg` | Walks `su_iterate` bodies, emits `linalg.generic(memref)` when the pattern matches. | Walks `su_iterate` bodies, emits `linalg.generic(tensor)` directly — no memref middle step. |
 | `RaiseToTensor` | Rewrites emitted `linalg.generic(memref)` → `linalg.generic(tensor)`. | Becomes a narrow cleanup for cases that escaped the main raise. Retires when v3 lands. |
-| `ScopeSelection`, `ScheduleRefinement`, `ChunkOpt`, `ReductionStrategy` | Annotate SDE ops. | Unchanged. Run before the raise, so SDE ops still carry memref form at annotation time. |
-| `LoopInterchange`, `TensorOpt`, `StructuredSummaries`, `ElementwiseFusion`, `DistributionPlanning`, `IterationSpaceDecomposition` | Mixed memref/tensor. | Uniform tensor — cleaner cost models, fewer special cases. |
-| `BarrierElimination` | Inspects `mu_dep` / `su_barrier`. | `mu_dep` count drops for raised memrefs; tensor SSA makes the dep graph directly visible. |
-| `ConvertSdeToArts` | Memref path via `mu_dep`. | Adds isolated-task branch (SSA operands → `db_acquire`, tensor results → `db_alloc` + `db_acquire`). Fallback memref branch unchanged. |
+| `ScopeSelection`, `ScheduleRefinement`, `ChunkOpt`, `ReductionStrategy` | Annotate SDE ops (loops + region scopes). | Unchanged. Run before the raise, so SDE ops still carry memref form at annotation time. |
+| `LoopInterchange`, `TensorOpt`, `StructuredSummaries`, `ElementwiseFusion`, `IterationSpaceDecomposition` | Walk `su_iterate` in mixed memref/tensor. | Unchanged on loops. Optionally extended to walk `cu_codelet` bodies as a follow-up. |
+| `DistributionPlanning` | Walks `su_iterate` only — chooses distribution kind per loop. | Extended to also walk `cu_codelet` — token slices become distribution units for task graphs. |
+| `BarrierElimination` | Inspects `mu_dep` / `su_barrier` on loops. | `mu_dep` count drops for raised memrefs; tensor SSA makes the dep graph directly visible. Unchanged on loops. |
+| `ConvertSdeToArts` | Memref path via `mu_dep`. | Adds codelet branch (token operands → `db_acquire`, tensor results → `db_alloc` + `db_acquire`). Fallback memref branch unchanged. |
+
+### 7.4 Comparative trace — `parallel_for` vs `deps`
+
+Two reference samples, two very different paths:
+
+**`samples/parallel_for/loops/parallel_for.c` (loop-centric).** After
+`ConvertOpenMPToSde`: `sde.cu_region <parallel> { sde.su_iterate ... }`
+with `schedule(<static>, %c4)`. Every subsequent pass fires:
+`ScopeSelection` annotates scope, `ScheduleRefinement` / `ChunkOpt` /
+`ReductionStrategy` annotate the loop, `RaiseToLinalg` emits a
+`linalg.generic` carrier, `RaiseToTensor` converts it to tensor form,
+and the remaining passes reshape the loop body. **Nothing is gained
+by the raise here** — there are no `cu_task`s to convert, and
+`su_iterate` already has the full tensor path. The pass is a no-op
+on this sample.
+
+**`samples/deps/deps.c` (task-centric).** After `ConvertOpenMPToSde`:
+`sde.cu_region <parallel> { sde.cu_region <single> { cu_task ...;
+mu_dep ...; cu_task ... } }` — purely tasks + deps, no
+`su_iterate`. `ScopeSelection` annotates the region; **every other
+SDE pass is a no-op**. The program reaches `ConvertSdeToArts`
+unprocessed. **The raise is what unlocks this sample**: after it
+runs, the three tasks become `cu_codelet` ops with explicit
+`!sde.token<tensor<i32>>` operands, the dep graph is SSA-visible,
+and `ConvertSdeToArts` has concrete token-based lowering instead
+of address-tracked `mu_dep` reconstruction.
+
+The raise is **neutral on loops and transformative on tasks** —
+exactly the leverage we want. That is the one-sentence answer to
+"what belongs on which side of the raise".
 
 ## 8. Rollout
 
