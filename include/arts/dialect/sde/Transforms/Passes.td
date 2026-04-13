@@ -18,12 +18,10 @@ def RaiseMemrefToTensor : Pass<"raise-memref-to-tensor", "mlir::ModuleOp"> {
     memrefs as tensor SSA through the enclosing SDE regions.
 
     v1 scope: memref<KxT> with small constant K and constant-indexed
-    accesses inside task bodies only.  The transform is opt-in via
-    `--raise-memref-to-tensor=enabled=true` because the downstream
-    CreateDbs / DbPartitioning passes need follow-up support for
-    DbAllocOp-backed memrefs before the tensor-path lowering can go
-    all the way to a runnable executable; with the gate off, the pass
-    is a no-op and the sample suite is unaffected.
+    accesses inside task bodies only. Enabled by default: the tensor-path
+    lowering fixes the cross-task dep race that the memref-fallback path
+    hit on samples like `deps.c`. Gate can be flipped off with
+    `--raise-memref-to-tensor=enabled=false` for A/B comparison.
   }];
   let dependentDialects = ["::mlir::tensor::TensorDialect",
                            "::mlir::bufferization::BufferizationDialect",
@@ -32,10 +30,10 @@ def RaiseMemrefToTensor : Pass<"raise-memref-to-tensor", "mlir::ModuleOp"> {
                            "::mlir::arith::ArithDialect",
                            "::mlir::arts::sde::ArtsSdeDialect"];
   let options = [
-    Option<"enabled", "enabled", "bool", "false",
-           "Enable the v1 raise transform. Off by default while downstream "
-           "CreateDbs / DbPartitioning land the DbAlloc-backed memref support "
-           "the tensor-path lowering requires.">
+    Option<"enabled", "enabled", "bool", "true",
+           "Enable the v1 raise transform. On by default; closes the Gap D "
+           "boundary-write race on deps.c and unblocks the tensor path for "
+           "the full v1 scope.">
   ];
   let constructor = "mlir::arts::sde::createRaiseMemrefToTensorPass()";
 }
