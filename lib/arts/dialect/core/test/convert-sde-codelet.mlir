@@ -29,7 +29,7 @@ module {
   // CHECK: arts.db_alloc
   // CHECK: arts.db_acquire[<out>]
   // CHECK: arts.edt <task> <intranode>
-  // CHECK: bufferization.materialize_in_destination
+  // CHECK: memref.store
   func.func @codelet_write_only() -> tensor<8xi32> {
     %d = arts_sde.mu_data shared : tensor<8xi32>
 
@@ -58,7 +58,7 @@ module {
   // CHECK-DAG: arts.db_acquire[<in>]
   // CHECK-DAG: arts.db_acquire[<out>]
   // CHECK: arts.edt <task> <intranode>
-  // CHECK: bufferization.materialize_in_destination
+  // CHECK: memref.store
   func.func @codelet_read_write() -> tensor<8xi32> {
     %src = arts_sde.mu_data shared : tensor<8xi32>
     %dst = arts_sde.mu_data shared : tensor<8xi32>
@@ -90,7 +90,7 @@ module {
   // CHECK: arts.db_alloc
   // CHECK: arts.db_acquire[<in>]
   // CHECK: arts.edt <task> <intranode>
-  // CHECK-NOT: bufferization.materialize_in_destination
+  // CHECK-NOT: arts_sde.
   func.func @codelet_read_only() {
     %d = arts_sde.mu_data shared : tensor<8xi32>
 
@@ -118,7 +118,7 @@ module {
   // CHECK: arts.db_alloc
   // CHECK: arts.db_acquire[<inout>]
   // CHECK: arts.edt <task> <intranode>
-  // CHECK: bufferization.materialize_in_destination
+  // CHECK: memref.store
   func.func @codelet_readwrite() -> tensor<8xi32> {
     %d = arts_sde.mu_data shared : tensor<8xi32>
 
