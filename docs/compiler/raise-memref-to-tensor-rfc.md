@@ -56,81 +56,272 @@ and `scf.for` / `scf.if` iter_args for control flow.
 
 ## 3. Design overview
 
-Two task forms, one transform between them:
+Two task forms, one tokenized access contract between them, and one
+transform pass that ties them together:
 
 1. `sde.cu_task` — **permissive**. Existing op, unchanged. Allows
    external values: captures enclosing SSA inside its body, references
-   memrefs from outer scope, makes direct `memref.load` / `memref.store`
-   calls on them. Matches today's OMP-lowering output from
-   `ConvertOpenMPToSde`.
+   memrefs from outer scope, makes direct `memref.load` /
+   `memref.store` calls on them. Matches today's OMP-lowering output
+   from `ConvertOpenMPToSde`.
 2. `sde.cu_codelet` — **forces dataflow style**. New op carrying
-   `IsolatedFromAbove` plus a `NoHiddenSideEffects` contract. The body
-   cannot reference any SSA value outside its own block arguments. All
-   inputs come in as operands, all outputs flow out through
-   `sde.yield`. Name follows OCR's "codelet" — a pure-dataflow unit of
+   `IsolatedFromAbove` plus a `NoHiddenSideEffects` contract. Operands
+   are **`!sde.token` values**, not raw tensors; each token names a
+   (sub)region of a tensor with an explicit access mode (`read` /
+   `write` / `readwrite`). All outputs flow out through `sde.yield`.
+   The name follows OCR's "codelet" — a pure-dataflow unit of
    asynchronous work.
-3. `RaiseMemrefToTensor` — transform pass. Converts `cu_task` →
-   `cu_codelet` by threading every external value the body reads into
-   operands, every external write into results, and raising the
-   relevant memrefs to tensor SSA along the way. Runs inside the
+3. `!sde.token` + `sde.mu_token` — **tensor-path access contract**.
+   The token is a handle to a whole tensor or a rectangular slice,
+   carrying a mode attribute. It is the tensor-world analogue of the
+   existing `sde.mu_dep` on memrefs, and lowers 1:1 to
+   `arts.db_acquire` at the SDE→ARTS boundary.
+4. `RaiseMemrefToTensor` — transform pass. Converts `cu_task` →
+   `cu_codelet` by raising the relevant memrefs to tensors, cutting
+   the access surface of the body into `sde.mu_token` operands, and
+   yielding updated parent tensors via `sde.yield`. Runs inside the
    `openmp-to-arts` stage.
 
 The split lets front-end lowering stay simple (keep emitting
-`cu_task`) while giving the middle-end a strong target form where
-correctness is type-checked.
+`cu_task` and `mu_dep`) while giving the middle-end a strong target
+form where correctness and parallelism granularity are both
+type-checked.
+
+### 3.1 Naming conventions
+
+All new ops follow the existing SDE scheme, which segregates ops by
+structural role via the second identifier:
+
+| Prefix | Role | Existing members | New members |
+| --- | --- | --- | --- |
+| `cu_` | Compute unit — does work | `cu_region`, `cu_task`, `cu_reduce`, `cu_atomic` | `cu_codelet` |
+| `su_` | Scheduling unit — controls iteration | `su_iterate`, `su_distribute`, `su_barrier` | — |
+| `mu_` | Memory unit — describes data or access | `mu_dep`, `mu_reduction_decl` | `mu_data`, `mu_token` |
+
+Types are plain nouns under the dialect namespace, matching existing
+precedent:
+
+| Type | Role | Parallel to |
+| --- | --- | --- |
+| `!sde.dep` | Result of `mu_dep` — memref access handle | (existing) |
+| `!sde.token` | Result of `mu_token` — tensor access handle with `slice_type` parameter | tensor-world analogue of `!sde.dep` |
+
+Name-by-name rationale:
+
+- **`cu_codelet`.** OCR lineage — ARTS inherits OCR's asynchronous
+  model, and "codelet" is OCR's established term for a purely
+  dataflow unit of work. Reads naturally against `cu_task`
+  (permissive) without the awkward double-barrel of `cu_iso_task` or
+  the misleading generality of `cu_pure`. Distinct from `sde.cu_task`
+  at a glance.
+- **`mu_token`.** Mirrors `mu_dep` exactly — same shape (`<mode>
+  source [offsets] size [sizes]`), same role (declarative access
+  contract), different domain (tensor vs memref). Anyone who has read
+  `mu_dep` understands `mu_token` in one pass. The common `mu_` prefix
+  makes the memref / tensor duality obvious across the dialect.
+- **`!sde.token`.** `async.token` in upstream MLIR denotes an async
+  future, not a data handle; the `sde.` dialect prefix in the printed
+  form (`!arts_sde.token`) is enough separation. Keeping the plain
+  noun matches `!sde.dep` and reads fluidly: "produce a token for
+  this slice, consume it in a codelet".
+- **`mu_data`.** Declarative anchor for SDE-owned data, following
+  `mu_reduction_decl`'s pattern of declaring MU-scoped entities. Drop
+  the `_decl` suffix because `mu_data` is a value-producing op, not a
+  module-level symbol (`mu_reduction_decl` is an `IsolatedFromAbove`
+  `Symbol`, structurally different).
+- **`RaiseMemrefToTensor`.** Matches the existing `Raise*` family
+  (`RaiseToLinalg`, `RaiseToTensor`, `RaiseMemRefDimensionality`). TD
+  record name is unprefixed like its siblings; pass CLI is
+  `-arts-sde-raise-memref-to-tensor`.
+
+Dialect-prefix rendering:
+
+- **MLIR printed form:** `arts_sde.X` (full dialect id).
+- **Prose shorthand:** `sde.X` (brief, consistent with `docs/sde.md`
+  and `docs/architecture/pass-placement.md`).
+- **C++ namespace:** `mlir::arts::sde`.
+
+Best-practices checklist applied:
+
+- Snake_case op names, nouns or noun-phrases.
+- Variadic operand lists use `Variadic<T>` with `AttrSizedOperandSegments`
+  only when multiple variadic groups coexist.
+- Traits match semantics (`IsolatedFromAbove`, `Pure`,
+  `RecursiveMemoryEffects`) — no ad-hoc correctness attributes.
+- Verifier rules are stated in the op description, implemented in the
+  verifier, and listed in §4.4 as explicit invariants (V1–V13).
 
 ## 4. IR additions
 
-### 4.1 `sde.cu_codelet` — dataflow-isolated compute unit
+### 4.1 `!sde.token` type
+
+```tablegen
+def SdeTokenType : ArtsSde_Type<"Token", "token"> {
+  let summary = "Handle to a (sub)region of a shared tensor.";
+  let description = [{
+    A token names a subset of a tensor's storage with a declared access
+    mode. It is the tensor-world analogue of `!sde.dep`: carries the
+    same "mode + region" information that `sde.mu_dep` carries for
+    memrefs, but with tensor SSA for the underlying value.
+
+    The `slice_type` parameter records the shape of the addressed
+    region so codelet block arguments can be typed directly.
+  }];
+  let parameters = (ins "RankedTensorType":$slice_type);
+  let assemblyFormat = "`<` $slice_type `>`";
+}
+```
+
+### 4.2 `sde.mu_token` — access token producer
+
+```tablegen
+def SdeMuTokenOp : ArtsSde_Op<"mu_token", [Pure, AttrSizedOperandSegments]> {
+  let summary = "Produce a tensor-path access token (whole or slice).";
+  let description = [{
+    Names a tensor (or a rectangular slice of one) for consumption by a
+    `sde.cu_codelet`, with an explicit access mode. When `offsets`/
+    `sizes` are omitted the token addresses the whole tensor.
+
+    Tokens are the tensor-path analogue of `sde.mu_dep`. At the SDE→
+    ARTS boundary a `mu_token` lowers 1:1 to `arts.db_acquire <mode>`.
+
+    Two tokens with disjoint slices of the same tensor expose
+    slice-parallelism that would be serialized if codelets took raw
+    tensor operands — the SSA dep edge still flows through the parent
+    tensor, but the analyses see the disjointness.
+  }];
+  let arguments = (ins
+    SdeAccessModeAttr:$mode,
+    AnyTensor:$source,
+    Variadic<Index>:$offsets,
+    Variadic<Index>:$sizes
+  );
+  let results = (outs SdeTokenType:$token);
+  let assemblyFormat = [{
+    $mode $source (`[` $offsets^ `]`)? (`size` `[` $sizes^ `]`)?
+    `:` type($source) `->` type($token) attr-dict
+  }];
+}
+```
+
+### 4.3 `sde.cu_codelet` — dataflow-isolated compute unit
 
 ```tablegen
 def SdeCuCodeletOp : ArtsSde_Op<"cu_codelet", [
       IsolatedFromAbove,
       SingleBlock,
-      RecursiveMemoryEffects,
-      AttrSizedOperandSegments
+      RecursiveMemoryEffects
     ]> {
-  let summary = "Dataflow codelet: all I/O through operands/results, no captures.";
+  let summary = "Dataflow codelet: all I/O through tokens + yield, no captures.";
   let description = [{
     A compute unit whose only communication with the enclosing scope is
-    through its operands and yielded results. The name follows OCR's
-    "codelet" — a purely asynchronous, pure-dataflow unit of work whose
-    inputs and outputs are entirely explicit.
+    through `sde.mu_token` operands and yielded tensor results. The
+    name follows OCR's "codelet" — a purely asynchronous, pure-dataflow
+    unit of work whose inputs and outputs are entirely explicit.
 
-    `IsolatedFromAbove` guarantees the body references no SSA value from
-    outside its block arguments. Any external memref the source task
-    read becomes a tensor operand; any external memref it wrote becomes
-    a tensor result. Effects that are observable to the surrounding
-    program flow through `sde.yield`.
+    Operand shape: every operand is a `!sde.token<tensor<...>>`. The
+    body's block arguments are typed as the token's `slice_type` — the
+    op implicitly unpacks tokens at block entry so the body sees
+    tensor values of the addressed region.
+
+    Result shape: one SSA result per `write` or `readwrite` token, of
+    the same type as the source parent tensor. The op implicitly
+    reconstructs the parent tensor with the slice replaced by the
+    yielded value — destination-passing style, as in linalg-on-tensors.
+
+    `IsolatedFromAbove` guarantees the body references no SSA value
+    from outside its block arguments. Any external memref the source
+    task read becomes a `<read>` token; any external memref it wrote
+    becomes a `<write>` or `<readwrite>` token. Effects observable to
+    the surrounding program flow through `sde.yield`.
 
     Differences from `sde.cu_task`:
     - No implicit captures of enclosing SSA values.
-    - No hidden side effects on shared memrefs; observable effects are
-      expressed through `sde.yield` results.
-    - Dependencies are SSA-visible: a missing dep is a missing operand,
-      caught by the verifier.
+    - No hidden side effects on shared memrefs; observable effects flow
+      through `sde.yield` per writable token.
+    - Dependencies are SSA-visible via the token operand list: a
+      missing dep is a missing operand, caught by the verifier.
+    - Slice-granularity parallelism is expressed on the tokens, not
+      buried in the body.
   }];
 
-  let arguments = (ins
-    Variadic<AnyType>:$operands,
-    Variadic<SdeDepType>:$deps        // kept for backward-compat bridging
-  );
-  let results   = (outs Variadic<AnyType>:$outputs);
+  let arguments = (ins Variadic<SdeTokenType>:$tokens);
+  let results   = (outs Variadic<AnyTensor>:$outputs);
   let regions   = (region SizedRegion<1>:$body);
 
   let assemblyFormat = [{
-    (`deps` `(` $deps^ `:` type($deps) `)`)?
-    `(` ($operands^ `:` type($operands))? `)`
-    `->` `(` type($outputs) `)`
+    `(` ($tokens^ `:` type($tokens))? `)`
+    (`->` `(` type($outputs)^ `)`)?
     $body attr-dict
   }];
 }
 ```
 
-Block arguments match `$operands` 1:1 by type. The terminator is
-`sde.yield` with values bound to `$outputs` by position.
+Block-argument invariants:
 
-### 4.2 `sde.mu_data` — declarative SDE data handle
+- One block arg per token, typed as the token's `slice_type`.
+- At block entry the op unpacks tokens to slice-typed tensors (readable
+  slices for `<read>` and `<readwrite>` tokens; zero-initialized slices
+  for `<write>` tokens when no prior content is meaningful).
+- `sde.yield` yields one tensor per **writable** token, matching the
+  token's slice type; the op's result is the reconstructed parent
+  tensor.
+
+### 4.4 Token validation rules (verifiers)
+
+The token design turns correctness-of-deps into a static property
+checked by the verifier. The rules below are enforced at IR
+construction time — invalid programs never reach downstream passes.
+
+On `sde.mu_token`:
+
+- **V1** `source` is an `AnyTensor` (by operand constraint).
+- **V2** If `offsets` / `sizes` are specified, their counts equal the
+  source tensor's rank.
+- **V3** Static `sizes` are non-negative; when `sizes` + `offsets` are
+  constant, `offset + size <= source_dim` for each dimension.
+
+On `sde.cu_codelet`:
+
+- **V4** Each operand is `!sde.token<Ti>` for a ranked tensor `Ti`.
+- **V5** Body has exactly one block.
+- **V6** Block-arg count = operand count; block-arg types match each
+  token's `slice_type` 1:1.
+- **V7** Result count = count of **writable** tokens (`<write>` +
+  `<readwrite>`).
+- **V8** `sde.yield`'s operand count = result count; each yielded type
+  equals the matching writable token's `slice_type` (destination-
+  passing style).
+- **V9** Each result's type equals the parent tensor type of the
+  corresponding writable token (the op reconstructs the parent tensor
+  with the yielded slice inserted).
+- **V10** **A `<read>`-mode token cannot have a yielded counterpart.**
+  Reading a token does not produce an output. Trying to "yield an
+  input token" is the archetype of an invalid codelet — a `<read>`
+  token is a pure acquire with no slot in the destination-passing
+  results list. Verifier rejects.
+- **V11** Tokens sourced from the same tensor within one codelet's
+  operand list must not have conflicting modes on overlapping slices
+  (static check when slices are constant; skipped otherwise and
+  delegated to runtime analysis).
+- **V12** Each token is consumed by exactly one codelet (single-use,
+  analogous to `arts.db_acquire` / `db_release` pairing). Enforced by
+  a dedicated pattern rather than a trait so that static assertions
+  can be relaxed for later peephole passes that split/merge tokens.
+
+Body isolation (from `IsolatedFromAbove`):
+
+- **V13** No SSA value from outside the codelet body appears as an
+  operand of any op inside the body. This is a free consequence of
+  the trait — no extra verifier code needed.
+
+Together these rules eliminate the entire dep-drop bug class. To lose
+a dependency a transform must either (a) drop an SSA operand, which
+breaks use-def validity, or (b) turn a readwrite token into a read
+token, which fails V7/V8/V10, or (c) yield through a read token,
+which fails V10 directly.
+
+### 4.5 `sde.mu_data` — declarative SDE data handle
 
 ```tablegen
 def SdeMuDataOp : ArtsSde_Op<"mu_data", [Pure]> {
@@ -315,34 +506,54 @@ See `samples/deps/pipelines/2_arts/boundaries/01_omp_to_sde/after.mlir`
 for the current form. After `RaiseMemrefToTensor` (expected shape):
 
 ```mlir
-%a_init = tensor.from_elements %c0_i32 : tensor<i32>
-%b_init = tensor.from_elements %c0_i32 : tensor<i32>
+%a0 = arts_sde.mu_data : tensor<i32>  {init = 0 : i32}
+%b0 = arts_sde.mu_data : tensor<i32>  {init = 0 : i32}
 
 %a_final, %b_final = arts_sde.cu_region <parallel>
-    (%a_in = %a_init, %b_in = %b_init : tensor<i32>, tensor<i32>)
+    (%a_in = %a0, %b_in = %b0 : tensor<i32>, tensor<i32>)
     -> (tensor<i32>, tensor<i32>) {
   %a_s, %b_s = arts_sde.cu_region <single> scope(<local>)
       (%as = %a_in, %bs = %b_in : tensor<i32>, tensor<i32>)
       -> (tensor<i32>, tensor<i32>) {
 
-    %a_t1 = arts_sde.cu_codelet() -> (tensor<i32>) {
+    // Task 1: produces `a`. One <write> token -> one result.
+    %tok_a_w = arts_sde.mu_token <write> %as
+             : tensor<i32> -> !arts_sde.token<tensor<i32>>
+    %a_t1 = arts_sde.cu_codelet(%tok_a_w
+                                : !arts_sde.token<tensor<i32>>)
+            -> (tensor<i32>) {
+    ^bb0(%a_init : tensor<i32>):
       %r = func.call @rand() : () -> i32
       %v = arith.remsi %r, %c100_i32 : i32
       %t = tensor.from_elements %v : tensor<i32>
       arts_sde.yield %t : tensor<i32>
     }
 
-    %b_t2 = arts_sde.cu_codelet(%a_t1 : tensor<i32>) -> (tensor<i32>) {
-    ^bb0(%ai : tensor<i32>):
-      %va = tensor.extract %ai[] : tensor<i32>
+    // Task 2: reads `a`, produces `b`. One <read> token + one <write> token.
+    // The <read> token has NO yielded counterpart (V10).
+    %tok_a_r = arts_sde.mu_token <read>  %a_t1
+             : tensor<i32> -> !arts_sde.token<tensor<i32>>
+    %tok_b_w = arts_sde.mu_token <write> %bs
+             : tensor<i32> -> !arts_sde.token<tensor<i32>>
+    %b_t2 = arts_sde.cu_codelet(%tok_a_r, %tok_b_w
+                                : !arts_sde.token<tensor<i32>>,
+                                  !arts_sde.token<tensor<i32>>)
+            -> (tensor<i32>) {
+    ^bb0(%a_view : tensor<i32>, %b_init : tensor<i32>):
+      %va = tensor.extract %a_view[] : tensor<i32>
       %nb = arith.addi %va, %c5_i32 : i32
       %t  = tensor.from_elements %nb : tensor<i32>
       arts_sde.yield %t : tensor<i32>
+      // yields one tensor == one <write> token; V10 holds (we did not
+      // yield the %a_view input).
     }
 
-    arts_sde.cu_codelet(%b_t2 : tensor<i32>) -> () {
-    ^bb0(%bi : tensor<i32>):
-      %vb = tensor.extract %bi[] : tensor<i32>
+    // Task 3: read-only. Zero writable tokens -> zero codelet results.
+    %tok_b_r = arts_sde.mu_token <read> %b_t2
+             : tensor<i32> -> !arts_sde.token<tensor<i32>>
+    arts_sde.cu_codelet(%tok_b_r : !arts_sde.token<tensor<i32>>) -> () {
+    ^bb0(%b_view : tensor<i32>):
+      %vb = tensor.extract %b_view[] : tensor<i32>
       // … printf …
       arts_sde.yield
     }
@@ -352,6 +563,7 @@ for the current form. After `RaiseMemrefToTensor` (expected shape):
   arts_sde.yield %a_s, %b_s : tensor<i32>, tensor<i32>
 }
 
+// Boundary materialization: tensor -> memref for post-parallel scalar reads.
 %a_final_scalar = tensor.extract %a_final[] : tensor<i32>
 %b_final_scalar = tensor.extract %b_final[] : tensor<i32>
 memref.store %a_final_scalar, %alloca_0[%c0] : memref<1xi32>
@@ -359,9 +571,11 @@ memref.store %b_final_scalar, %alloca[%c0]   : memref<1xi32>
 ```
 
 Every task is `cu_codelet`. Task 2's dep on Task 1 is the SSA operand
-`%a_t1`. No `mu_dep` remains. Task 1 no longer has a hidden write —
-its output is an SSA result the verifier tracks. Dropping any dep
-requires detaching a use-def edge, which the verifier refuses.
+chain `%a_t1 → %tok_a_r → cu_codelet`. No `mu_dep` remains. Task 1 no
+longer has a hidden write — its output is an SSA result the verifier
+tracks. Dropping any dep requires detaching a use-def edge, which the
+verifier refuses. Trying to yield the `%a_view` input of Task 2 would
+fail V10 at verification time.
 
 ## 10. Open questions
 
