@@ -365,6 +365,8 @@ void CreateDbsPass::reconcileExternalDepAccessModes() {
           ValueAnalysis::getUnderlyingOperation(externalDep);
       if (!underlyingOp)
         continue;
+      if (isa<DbAllocOp>(underlyingOp))
+        continue; // already a DB
 
       MemrefInfo &info = memrefInfo[underlyingOp];
       bool hasControlDb = !info.edtToDeps[edt].empty();
@@ -494,6 +496,14 @@ void CreateDbsPass::collectMemrefs() {
           return;
         }
 
+        /// Skip allocations that are already a DB (e.g. produced directly by
+        /// the tensor-path lowering in SDE->ARTS, which materializes
+        /// `arts.db_alloc` + `arts.db_acquire` with `bufferization.to_tensor`
+        /// views up front). Those handles are already first-class DBs; only
+        /// the memref->DB conversion below needs to run on non-DB allocs.
+        if (isa<DbAllocOp>(underlyingOp))
+          continue;
+
         /// If it is found, check the parent edt
         EdtOp parentEdt = underlyingOp->getParentOfType<EdtOp>();
 
@@ -534,6 +544,8 @@ void CreateDbsPass::collectControlDbOps() {
     Operation *underlyingOp = ValueAnalysis::getUnderlyingOperation(ptr);
     if (!underlyingOp)
       return;
+    if (isa<DbAllocOp>(underlyingOp))
+      return; // already a DB, no DbControl conversion required
 
     ARTS_DEBUG(" - Found DbControlOp for "
                << *underlyingOp << " with mode: " << mode << ", "
@@ -615,8 +627,28 @@ void CreateDbsPass::collectControlDbOps() {
   /// Clear all existing EDT dependencies and block args that are not used
   /// within the block.  We must also remove any about-to-be-erased block
   /// arguments from edtExternalValues to avoid dangling Value references.
+  ///
+  /// EDTs whose dependencies are already fully wired to DbAllocOp-backed
+  /// `arts.db_acquire` ops (produced up-front by the tensor-path SDE->ARTS
+  /// lowering) are left untouched: createDbAcquireOps would not re-wire them
+  /// (they never enter `edtExternalValues` since their underlying ops are
+  /// already DbAlloc), so stripping their operands would leave the verifier
+  /// with more block arguments than dependencies.
   module.walk([&](EdtOp edt) {
     Block &block = edt.getBody().front();
+
+    /// If every EDT dependency comes from a DbAllocOp-backed acquire already,
+    /// skip the clear step — the acquires ARE the deps.
+    bool allDepsArePreWiredAcquires = edt.getDependencies().size() > 0;
+    for (Value dep : edt.getDependencies()) {
+      Operation *underlying = ValueAnalysis::getUnderlyingOperation(dep);
+      if (!underlying || !isa<DbAllocOp>(underlying)) {
+        allDepsArePreWiredAcquires = false;
+        break;
+      }
+    }
+    if (allDepsArePreWiredAcquires)
+      return;
 
     /// Collect unused block arguments so we can scrub them from
     /// edtExternalValues BEFORE the actual erasure invalidates them.
@@ -1042,6 +1074,8 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       signalPassFailure();
       return;
     }
+    if (isa<DbAllocOp>(underlyingOp))
+      continue; // already a DB, no DbAlloc wiring required
 
     /// Get the memref info for the underlying operation
     MemrefInfo &info = memrefInfo[underlyingOp];

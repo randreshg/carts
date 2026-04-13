@@ -879,7 +879,16 @@ struct MuReductionDeclToArtsPattern
 ///   `%tensor = bufferization.to_tensor %elem`
 /// Returns nullptr when the tensor is not backed by a DbAllocOp chain.
 static DbAllocOp findBackingDbAlloc(Value tensor) {
-  auto toTensor = tensor.getDefiningOp<bufferization::ToTensorOp>();
+  // Walk past any intervening tensor.cast ops. The raise / codelet lowering
+  // chain inserts these to reconcile dynamic-shape DB tensors with the
+  // (static) codelet operand / yielded types, so a token whose source is a
+  // codelet result typically has the chain:
+  //   `%cast = tensor.cast %to_tensor : tensor<?xT> to tensor<SHAPExT>`
+  //   `%to_tensor = bufferization.to_tensor %db_ref`.
+  Value cur = tensor;
+  while (auto cast = cur.getDefiningOp<tensor::CastOp>())
+    cur = cast.getSource();
+  auto toTensor = cur.getDefiningOp<bufferization::ToTensorOp>();
   if (!toTensor)
     return nullptr;
   Value buffer = toTensor.getBuffer();
@@ -1217,10 +1226,124 @@ static LogicalResult lowerCuCodelet(sde::SdeCuCodeletOp codelet) {
   return success();
 }
 
+/// Trace `tensor` back through `tensor.cast` / `tensor.extract_slice` /
+/// `tensor.insert` ops to the underlying memref that backs the tensor view.
+/// Returns nullptr if the tensor is not backed by a memref-view chain we
+/// can lower (e.g., it came from a non-tensor-path producer).
+static Value traceTensorToBackingMemref(Value tensor) {
+  Value cur = tensor;
+  for (;;) {
+    if (auto cast = cur.getDefiningOp<tensor::CastOp>()) {
+      cur = cast.getSource();
+      continue;
+    }
+    if (auto insert = cur.getDefiningOp<tensor::InsertOp>()) {
+      cur = insert.getDest();
+      continue;
+    }
+    if (auto toTensor = cur.getDefiningOp<bufferization::ToTensorOp>())
+      return toTensor.getBuffer();
+    return nullptr;
+  }
+}
+
+/// Fold the tensor-path ops introduced by codelet lowering down to memref
+/// load/store semantics. See `lowerTensorPathOps` Step 4 for context.
+///
+/// We walk the module in program order and transform each op in place:
+///   - `tensor.extract %t[idx]` becomes `memref.load %m[idx]` when %t
+///     traces to a memref view.
+///   - `tensor.insert %val into %t[idx]` becomes `memref.store %val, %m[idx]`
+///     and the insert's SSA result is RAUW'd with its dest (so downstream
+///     extracts re-trace to the SAME backing memref, reading the store we
+///     just emitted).
+///   - `bufferization.materialize_in_destination` whose source tensor traces
+///     back to the same memref is a no-op (the stores already happened).
+///   - Dead tensor.cast / tensor.extract_slice / bufferization.to_tensor are
+///     erased.
+///
+/// Walk order matters: a later `tensor.extract` on a value produced by an
+/// earlier `tensor.insert` must be translated AFTER that insert has become a
+/// memref.store, so the emitted `memref.load` is placed AFTER the store and
+/// reads the fresh value.
+static void foldTensorPathToMemref(ModuleOp module) {
+  // Collect target ops in IR pre-order so we can process them as they
+  // appear in the instruction stream. We intentionally do not use
+  // `module.walk` inline because we mutate the IR.
+  SmallVector<Operation *> ordered;
+  module.walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (isa<tensor::ExtractOp, tensor::InsertOp,
+            bufferization::MaterializeInDestinationOp>(op))
+      ordered.push_back(op);
+  });
+
+  for (Operation *op : ordered) {
+    if (auto extract = dyn_cast<tensor::ExtractOp>(op)) {
+      Value memref = traceTensorToBackingMemref(extract.getTensor());
+      if (!memref)
+        continue;
+      auto mrType = dyn_cast<MemRefType>(memref.getType());
+      if (!mrType)
+        continue;
+      if (static_cast<int64_t>(extract.getIndices().size()) !=
+          mrType.getRank())
+        continue;
+      OpBuilder builder(extract);
+      Value loaded = memref::LoadOp::create(builder, extract.getLoc(), memref,
+                                            extract.getIndices());
+      extract.getResult().replaceAllUsesWith(loaded);
+      extract.erase();
+    } else if (auto insert = dyn_cast<tensor::InsertOp>(op)) {
+      Value memref = traceTensorToBackingMemref(insert.getDest());
+      if (!memref)
+        continue;
+      auto mrType = dyn_cast<MemRefType>(memref.getType());
+      if (!mrType)
+        continue;
+      if (static_cast<int64_t>(insert.getIndices().size()) != mrType.getRank())
+        continue;
+      OpBuilder builder(insert);
+      memref::StoreOp::create(builder, insert.getLoc(), insert.getScalar(),
+                              memref, insert.getIndices());
+      insert.getResult().replaceAllUsesWith(insert.getDest());
+      insert.erase();
+    } else if (auto mat =
+                   dyn_cast<bufferization::MaterializeInDestinationOp>(op)) {
+      if (!traceTensorToBackingMemref(mat.getSource()))
+        continue;
+      mat.erase();
+    }
+  }
+
+  // Dead cleanup for view / cast / slice / extract_slice ops left over.
+  SmallVector<Operation *> pending;
+  module.walk([&](Operation *op) {
+    if (isa<bufferization::ToTensorOp, tensor::CastOp,
+            tensor::ExtractSliceOp, tensor::InsertSliceOp>(op))
+      pending.push_back(op);
+  });
+  // Iterate a couple of times to propagate dead-ness up a chain.
+  for (int i = 0; i < 4; ++i) {
+    bool anyErased = false;
+    for (Operation *&op : pending) {
+      if (!op)
+        continue;
+      if (op->use_empty()) {
+        op->erase();
+        op = nullptr;
+        anyErased = true;
+      }
+    }
+    if (!anyErased)
+      break;
+  }
+}
+
 /// Drive the tensor-path lowerings ahead of the greedy rewriter. Order:
 ///   1. `sde.cu_codelet`  ->  arts.edt (acquires + body + materialize).
 ///   2. `sde.mu_token` leftovers (orphan or producer-less) -> erase.
 ///   3. `sde.mu_data`     ->  arts.db_alloc + db_ref + to_tensor chain.
+///   4. Fold tensor-path ops to memref ops.
 ///
 /// Steps 1/2 before step 3 ensures that when we tear down a codelet, all of
 /// its `sde.mu_token` operands are still resolvable back to their originating
@@ -1279,6 +1402,18 @@ static LogicalResult lowerTensorPathOps(ModuleOp module) {
     if (failed(lowerMuData(op)))
       return failure();
   }
+
+  // Step 4: fold the tensor-op chain produced by codelet lowering down to
+  // pure memref loads/stores. ConvertArtsToLLVM does not know how to
+  // consume `bufferization.to_tensor` / `materialize_in_destination` /
+  // `tensor.insert` / `tensor.extract`, so we translate each of them to
+  // the equivalent memref.load / memref.store against the backing DB
+  // memref. The folds are only valid for the tensor-path pattern
+  // RaiseMemrefToTensor emits (to_tensor of a db_ref, scalar extract /
+  // insert, final materialize_in_destination on the same memref); other
+  // tensor IR in the module is left untouched.
+  foldTensorPathToMemref(module);
+
   return success();
 }
 
