@@ -598,7 +598,7 @@ Each step is self-contained:
 
 ## 9. Worked example — `samples/deps/deps.c`
 
-See `samples/deps/pipelines/2_arts/boundaries/01_omp_to_sde/after.mlir`
+See `samples/deps/pipelines/boundaries/01_omp_to_sde/after.mlir`
 for the current form. After `RaiseMemrefToTensor` (expected shape):
 
 ```mlir
