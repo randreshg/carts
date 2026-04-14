@@ -226,9 +226,11 @@ struct OMPParallelToSdePattern : public OpRewritePattern<omp::ParallelOp> {
     auto *ctx = rewriter.getContext();
 
     auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
+        rewriter, loc, /*resultTypes=*/TypeRange{},
+        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
         /*concurrency_scope=*/nullptr,
-        /*nowait=*/nullptr);
+        /*nowait=*/nullptr,
+        /*iterArgs=*/ValueRange{});
 
     Block &old = op.getRegion().front();
     Block &blk = sde::ensureBlock(cuRegion.getBody());
@@ -249,12 +251,17 @@ struct MasterToSdePattern : public OpRewritePattern<omp::MasterOp> {
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
     auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
+        rewriter, loc, /*resultTypes=*/TypeRange{},
+        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
         sde::SdeConcurrencyScopeAttr::get(ctx, sde::SdeConcurrencyScope::local),
-        /*nowait=*/nullptr);
+        /*nowait=*/nullptr,
+        /*iterArgs=*/ValueRange{});
     Block &old = op.getRegion().front();
     Block &blk = sde::ensureBlock(cuRegion.getBody());
     blk.getOperations().splice(blk.end(), old.getOperations());
+    // omp.master has implicit barrier (no nowait clause).
+    rewriter.setInsertionPointAfter(cuRegion);
+    sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{});
     rewriter.eraseOp(op);
     return success();
   }
@@ -268,12 +275,19 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
     auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
+        rewriter, loc, /*resultTypes=*/TypeRange{},
+        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
         sde::SdeConcurrencyScopeAttr::get(ctx, sde::SdeConcurrencyScope::local),
-        nowaitAttr(ctx, op.getNowait()));
+        nowaitAttr(ctx, op.getNowait()),
+        /*iterArgs=*/ValueRange{});
     Block &old = op.getRegion().front();
     Block &blk = sde::ensureBlock(cuRegion.getBody());
     blk.getOperations().splice(blk.end(), old.getOperations());
+    // Emit implicit barrier unless nowait.
+    if (!op.getNowait()) {
+      rewriter.setInsertionPointAfter(cuRegion);
+      sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{});
+    }
     rewriter.eraseOp(op);
     return success();
   }
@@ -496,9 +510,11 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
     rewriter.setInsertionPoint(op);
 
     auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
+        rewriter, loc, /*resultTypes=*/TypeRange{},
+        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
         /*concurrency_scope=*/nullptr,
-        /*nowait=*/nullptr);
+        /*nowait=*/nullptr,
+        /*iterArgs=*/ValueRange{});
     Block &parBlk = sde::ensureBlock(cuRegion.getBody());
 
     rewriter.setInsertionPointToStart(&parBlk);

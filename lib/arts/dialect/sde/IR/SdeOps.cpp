@@ -14,6 +14,195 @@ using namespace mlir::arts::sde;
 #define GET_OP_CLASSES
 #include "arts/dialect/sde/IR/SdeOps.cpp.inc"
 
+//===----------------------------------------------------------------------===//
+// SdeCuRegionOp — custom assembly format + verifier
+//===----------------------------------------------------------------------===//
+
+// Print: arts_sde.cu_region <kind> [scope(<scope>)] [nowait]
+//        [iter_args(%a = %init : type) -> (type)]
+//        { body } [attr-dict]
+void SdeCuRegionOp::print(OpAsmPrinter &p) {
+  // Print kind enum in angle-bracket form: <parallel>, <single>, <task>
+  p << " <" << stringifySdeCuKind(getKind()) << ">";
+  if (auto scope = getConcurrencyScope()) {
+    p << " scope(<" << stringifySdeConcurrencyScope(*scope) << ">)";
+  }
+  if (getNowait())
+    p << " nowait";
+  if (!getIterArgs().empty()) {
+    p << " iter_args(";
+    Block &body = getBody().front();
+    llvm::interleaveComma(
+        llvm::zip(body.getArguments(), getIterArgs()), p,
+        [&](auto pair) {
+          p << std::get<0>(pair) << " = " << std::get<1>(pair);
+        });
+    p << " : ";
+    llvm::interleaveComma(getIterArgs().getTypes(), p);
+    p << ")";
+    p << " -> (";
+    llvm::interleaveComma(getResultTypes(), p);
+    p << ")";
+  }
+  p << " ";
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/!getIterArgs().empty());
+  p.printOptionalAttrDict((*this)->getAttrs(),
+                          {"kind", "concurrency_scope", "nowait"});
+}
+
+// Parse: arts_sde.cu_region <kind> [scope(<scope>)] [nowait]
+//        [iter_args(%a = %init : type) -> (type)]
+//        { body } [attr-dict]
+ParseResult SdeCuRegionOp::parse(OpAsmParser &parser, OperationState &result) {
+  MLIRContext *ctx = parser.getContext();
+
+  // Parse kind: <parallel> | <single> | <task>
+  {
+    SdeCuKindAttr kindAttr;
+    if (parser.parseCustomAttributeWithFallback(kindAttr, Type{}, "kind",
+                                                result.attributes))
+      return failure();
+  }
+
+  // Parse optional scope: scope(<local>) | scope(<distributed>)
+  if (succeeded(parser.parseOptionalKeyword("scope"))) {
+    SdeConcurrencyScopeAttr scopeAttr;
+    if (parser.parseLParen() ||
+        parser.parseCustomAttributeWithFallback(
+            scopeAttr, Type{}, "concurrency_scope", result.attributes) ||
+        parser.parseRParen())
+      return failure();
+  }
+
+  // Parse optional nowait
+  if (succeeded(parser.parseOptionalKeyword("nowait")))
+    result.addAttribute("nowait", UnitAttr::get(ctx));
+
+  // Parse optional iter_args
+  SmallVector<OpAsmParser::UnresolvedOperand> iterArgOperands;
+  SmallVector<OpAsmParser::Argument> bodyArgs;
+  SmallVector<Type> iterArgTypes;
+  SmallVector<Type> resultTypes;
+  bool hasIterArgs = false;
+
+  if (succeeded(parser.parseOptionalKeyword("iter_args"))) {
+    hasIterArgs = true;
+    if (parser.parseLParen())
+      return failure();
+
+    if (failed(parser.parseOptionalRParen())) {
+      do {
+        OpAsmParser::Argument bodyArg;
+        OpAsmParser::UnresolvedOperand initVal;
+        if (parser.parseArgument(bodyArg) || parser.parseEqual() ||
+            parser.parseOperand(initVal))
+          return failure();
+        bodyArgs.push_back(bodyArg);
+        iterArgOperands.push_back(initVal);
+      } while (succeeded(parser.parseOptionalComma()));
+
+      if (parser.parseColon() || parser.parseTypeList(iterArgTypes) ||
+          parser.parseRParen())
+        return failure();
+
+      if (iterArgTypes.size() != iterArgOperands.size())
+        return parser.emitError(parser.getCurrentLocation(),
+                                "iter_args type count mismatch");
+
+      for (auto [arg, ty] : llvm::zip(bodyArgs, iterArgTypes))
+        arg.type = ty;
+
+      if (parser.resolveOperands(iterArgOperands, iterArgTypes,
+                                 parser.getCurrentLocation(), result.operands))
+        return failure();
+
+      if (parser.parseArrow() || parser.parseLParen() ||
+          parser.parseTypeList(resultTypes) || parser.parseRParen())
+        return failure();
+
+      result.addTypes(resultTypes);
+    }
+  }
+
+  // Parse region
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body, bodyArgs,
+                         /*enableNameShadowing=*/false))
+    return failure();
+
+  // Ensure block exists
+  if (body->empty())
+    body->push_back(new Block());
+
+  // If no iter_args and no terminator, add empty yield
+  // (preserves backward compat with NoTerminator-style IR)
+  Block &entry = body->front();
+  if (!hasIterArgs && (entry.empty() || !entry.back().hasTrait<OpTrait::IsTerminator>()))
+    OpBuilder::atBlockEnd(&entry).create<SdeYieldOp>(
+        result.location, ValueRange{});
+
+  // Parse optional attr-dict
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  return success();
+}
+
+LogicalResult SdeCuRegionOp::verify() {
+  if (getBody().empty())
+    return emitOpError() << "expects body to contain a single block";
+
+  Block &entry = getBody().front();
+  unsigned numIterArgs = getIterArgs().size();
+
+  if (numIterArgs > 0) {
+    // With iter_args: block args must match iter_args types
+    if (entry.getNumArguments() != numIterArgs)
+      return emitOpError() << "expects " << numIterArgs
+                           << " block argument(s) for iter_args; got "
+                           << entry.getNumArguments();
+    for (auto [i, pair] :
+         llvm::enumerate(llvm::zip(entry.getArguments(), getIterArgs()))) {
+      auto [blockArg, iterArg] = pair;
+      if (blockArg.getType() != iterArg.getType())
+        return emitOpError() << "block argument #" << i << " type ("
+                             << blockArg.getType()
+                             << ") does not match iter_arg type ("
+                             << iterArg.getType() << ")";
+    }
+
+    // Result count must match iter_args count
+    if (getNumResults() != numIterArgs)
+      return emitOpError() << "expects " << numIterArgs
+                           << " result(s) matching iter_args; got "
+                           << getNumResults();
+
+    // Yield must match results
+    auto yield = dyn_cast_or_null<SdeYieldOp>(entry.getTerminator());
+    if (!yield)
+      return emitOpError()
+             << "expects body to terminate with sde.yield when iter_args "
+                "are present";
+    if (yield.getValues().size() != getNumResults())
+      return emitOpError() << "sde.yield operand count ("
+                           << yield.getValues().size()
+                           << ") does not match result count ("
+                           << getNumResults() << ")";
+    for (auto [i, pair] :
+         llvm::enumerate(llvm::zip(yield.getValues(), getResultTypes()))) {
+      auto [yielded, resultTy] = pair;
+      if (yielded.getType() != resultTy)
+        return emitOpError() << "sde.yield operand #" << i << " type ("
+                             << yielded.getType()
+                             << ") does not match result type (" << resultTy
+                             << ")";
+    }
+  }
+
+  return success();
+}
+
 SmallVector<Region *> SdeSuIterateOp::getLoopRegions() { return {&getBody()}; }
 
 std::optional<SmallVector<Value>> SdeSuIterateOp::getLoopInductionVars() {
