@@ -131,7 +131,7 @@ def SdeDistributionKindAttr
 
 def SdeCuRegionOp
     : ArtsSde_Op<"cu_region", [
-      SingleBlock, NoTerminator,
+      SingleBlock,
       RecursiveMemoryEffects
     ]> {
   let summary = "Parallel or single execution region";
@@ -141,20 +141,26 @@ def SdeCuRegionOp
 
     The `nowait` attribute preserves OpenMP nowait semantics. The
     `concurrency_scope` attribute indicates local vs distributed execution.
+
+    Optional `iter_args` thread tensor SSA values through the region body.
+    When present, the body block receives matching block arguments and the
+    region must terminate with `sde.yield` returning updated values. When
+    absent, the body may omit a terminator or yield empty.
   }];
 
   let arguments = (ins
     SdeCuKindAttr:$kind,
     OptionalAttr<SdeConcurrencyScopeAttr>:$concurrency_scope,
-    UnitAttr:$nowait
+    UnitAttr:$nowait,
+    Variadic<AnyType>:$iterArgs
   );
+
+  let results = (outs Variadic<AnyType>:$results);
 
   let regions = (region SizedRegion<1>:$body);
 
-  let assemblyFormat = [{
-    $kind (`scope` `(` $concurrency_scope^ `)`)? (`nowait` $nowait^)?
-    $body attr-dict
-  }];
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
 }
 
 def SdeCuTaskOp
