@@ -83,6 +83,7 @@ std::unique_ptr<Pass>
 createStructuredSummariesPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createElementwiseFusionPass();
 std::unique_ptr<Pass> createIterationSpaceDecompositionPass();
+std::unique_ptr<Pass> createVectorizationPass();
 
 // --- Effect passes (scheduling decisions) ---
 std::unique_ptr<Pass>
