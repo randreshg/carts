@@ -110,6 +110,31 @@ def ScalarForwarding : Pass<"scalar-forwarding", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createScalarForwardingPass()";
 }
 
+def LowerToMemref : Pass<"lower-to-memref", "mlir::ModuleOp"> {
+  let summary = "Lower tensor SSA values back to memref.alloca form (inverse of RaiseToTensor)";
+  let description = [{
+    Walks each function body top-to-bottom, maintaining a mapping from each
+    tensor value to its backing memref (alloca or original memref). Rewrites
+    tensor.extract → memref.load, tensor.insert → memref.store, and strips
+    tensor iter_args from scf.for, cu_region (parallel/master), and
+    su_iterate.
+
+    After this pass, raisable allocas are restored and all data flows as
+    memref.alloca + memref.load/memref.store. Only <single> cu_region
+    iter_args are preserved for ConvertToCodelet.
+
+    Also erases dead linalg.generic carriers and remaining tensor chain ops.
+  }];
+  let dependentDialects = ["::mlir::bufferization::BufferizationDialect",
+                           "::mlir::tensor::TensorDialect",
+                           "::mlir::memref::MemRefDialect",
+                           "::mlir::linalg::LinalgDialect",
+                           "::mlir::func::FuncDialect",
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::arts::sde::ArtsSdeDialect"];
+  let constructor = "mlir::arts::sde::createLowerToMemrefPass()";
+}
+
 def ConvertToCodelet : Pass<"convert-to-codelet", "mlir::ModuleOp"> {
   let summary = "Convert tensor iter_args cu_regions to mu_data/mu_token/cu_codelet";
   let description = [{

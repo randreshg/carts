@@ -260,7 +260,7 @@ static const std::array<llvm::StringLiteral, 10>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 20> kOpenMPToArtsPasses = {
+static const std::array<llvm::StringLiteral, 21> kOpenMPToArtsPasses = {
     "ConvertOpenMPToSde",       "RaiseToLinalg",
     "RaiseToTensor",            "ScopeSelection",
     "ScheduleRefinement",       "ChunkOpt",
@@ -268,7 +268,8 @@ static const std::array<llvm::StringLiteral, 20> kOpenMPToArtsPasses = {
     "TensorOpt",                "StructuredSummaries",
     "ElementwiseFusion",        "DistributionPlanning",
     "IterationSpaceDecomposition", "BarrierElimination",
-    "ConvertToCodelet",         "ConvertSdeToArts",
+    "LowerToMemref",            "ConvertToCodelet",
+    "ConvertSdeToArts",
     "VerifySdeLowered",         "DeadCodeElimination",
     "CSE",                      "VerifyEdtCreated"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
@@ -676,6 +677,7 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createDistributionPlanningPass(costModel));
   pm.addPass(arts::sde::createIterationSpaceDecompositionPass());
   pm.addPass(arts::sde::createBarrierEliminationPass(costModel));
+  pm.addPass(arts::sde::createLowerToMemrefPass());
   pm.addPass(arts::sde::createConvertToCodeletPass());
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
   pm.addPass(arts::sde::createVerifySdeLoweredPass());

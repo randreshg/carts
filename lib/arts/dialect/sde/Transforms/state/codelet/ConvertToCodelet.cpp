@@ -26,7 +26,6 @@ namespace mlir::arts {
 } // namespace mlir::arts
 
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -70,282 +69,6 @@ static sde::SdeAccessMode classifyAccess(BlockArgument blockArg) {
   if (hasWrite)
     return sde::SdeAccessMode::write;
   return sde::SdeAccessMode::read;
-}
-
-/// Strip tensor iter_args from an su_iterate by materializing them back to
-/// alloca form. The reduction accumulators are kept. After this, the su_iterate
-/// has no tensor results and ConvertSdeToArts (SuIterateToArtsPattern) can
-/// convert it to arts.for.
-static LogicalResult stripSuIterateIterArgs(sde::SdeSuIterateOp suIter) {
-  MLIRContext *ctx = suIter.getContext();
-  Location loc = suIter.getLoc();
-  Block &body = suIter.getBody().front();
-
-  // Tensor iter_args are appended to reductionAccumulators by RaiseToTensor.
-  // Identify them by type: real reductions use memref<?xT>, tensor iter_args
-  // use tensor<T>.
-  ValueRange allAccumulators = suIter.getReductionAccumulators();
-  SmallVector<unsigned> tensorAccIndices; // indices within allAccumulators
-  SmallVector<unsigned> realAccIndices;   // memref reduction accumulators
-
-  for (auto [i, acc] : llvm::enumerate(allAccumulators)) {
-    if (isa<RankedTensorType>(acc.getType()))
-      tensorAccIndices.push_back(i);
-    else
-      realAccIndices.push_back(i);
-  }
-
-  if (tensorAccIndices.empty())
-    return success();
-
-  unsigned numIVs = suIter.getLowerBounds().size();
-
-  // For each tensor accumulator, find or create a backing alloca.
-  OpBuilder outerBuilder(suIter);
-  SmallVector<Value> backingAllocas;
-
-  for (unsigned accIdx : tensorAccIndices) {
-    Value initValue = allAccumulators[accIdx];
-    auto tensorTy = cast<RankedTensorType>(initValue.getType());
-    Value alloca;
-
-    // Trace init value to find backing alloca.
-    if (auto muToTensor =
-            initValue.getDefiningOp<sde::SdeMuMemrefToTensorOp>()) {
-      alloca = muToTensor.getMemref();
-    } else if (auto toTensor =
-                   initValue.getDefiningOp<bufferization::ToTensorOp>()) {
-      alloca = toTensor.getBuffer();
-    } else {
-      // Create a temporary alloca.
-      auto mrType = MemRefType::get(tensorTy.getShape(),
-                                    tensorTy.getElementType());
-      alloca = memref::AllocaOp::create(outerBuilder, loc, mrType);
-      sde::SdeMuTensorToMemrefOp::create(outerBuilder, loc, initValue, alloca);
-    }
-    backingAllocas.push_back(alloca);
-  }
-
-  // Inside the body: replace tensor block arg uses with reads from alloca.
-  for (auto [i, accIdx] : llvm::enumerate(tensorAccIndices)) {
-    unsigned blockArgIdx = numIVs + accIdx;
-    BlockArgument blockArg = body.getArgument(blockArgIdx);
-    Value alloca = backingAllocas[i];
-
-    OpBuilder bodyStart(ctx);
-    bodyStart.setInsertionPointToStart(&body);
-    auto tensorTy = cast<RankedTensorType>(blockArg.getType());
-    Value tensorFromAlloca = sde::SdeMuMemrefToTensorOp::create(
-        bodyStart, loc, tensorTy, alloca);
-    blockArg.replaceAllUsesWith(tensorFromAlloca);
-  }
-
-  // Before yield: store the yielded tensors back to alloca.
-  if (auto yield = dyn_cast_or_null<sde::SdeYieldOp>(body.getTerminator())) {
-    for (auto [i, accIdx] : llvm::enumerate(tensorAccIndices)) {
-      if (accIdx < yield.getValues().size()) {
-        OpBuilder preYield(yield);
-        sde::SdeMuTensorToMemrefOp::create(preYield, loc,
-                                           yield.getValues()[accIdx],
-                                           backingAllocas[i]);
-      }
-    }
-  }
-
-  // After the su_iterate: re-read from alloca for tensor result users.
-  OpBuilder afterBuilder(ctx);
-  afterBuilder.setInsertionPointAfter(suIter);
-  for (auto [i, accIdx] : llvm::enumerate(tensorAccIndices)) {
-    if (accIdx >= suIter.getNumResults())
-      continue;
-    auto tensorTy = cast<RankedTensorType>(
-        suIter.getResult(accIdx).getType());
-    Value tensorAfter = sde::SdeMuMemrefToTensorOp::create(
-        afterBuilder, loc, tensorTy, backingAllocas[i]);
-    suIter.getResult(accIdx).replaceAllUsesWith(tensorAfter);
-  }
-
-  // Rebuild su_iterate with only the real (memref) reduction accumulators.
-  OpBuilder rebuilder(suIter);
-  NamedAttrList attrs = sde::getRewrittenAttrs(suIter);
-
-  SmallVector<Value> realAccValues;
-  SmallVector<Type> newResultTypes;
-  for (unsigned idx : realAccIndices) {
-    realAccValues.push_back(allAccumulators[idx]);
-    newResultTypes.push_back(suIter.getResult(idx).getType());
-  }
-
-  // Filter reduction kinds to only keep real reductions.
-  ArrayAttr newReductionKinds;
-  if (auto kindsAttr = suIter.getReductionKindsAttr()) {
-    SmallVector<Attribute> filteredKinds;
-    for (unsigned idx : realAccIndices) {
-      if (idx < kindsAttr.size())
-        filteredKinds.push_back(kindsAttr[idx]);
-    }
-    if (!filteredKinds.empty())
-      newReductionKinds = ArrayAttr::get(ctx, filteredKinds);
-  }
-
-  auto newSuIter = sde::SdeSuIterateOp::create(
-      rebuilder, loc, newResultTypes, suIter.getLowerBounds(),
-      suIter.getUpperBounds(), suIter.getSteps(), suIter.getScheduleAttr(),
-      suIter.getChunkSize(),
-      suIter.getNowaitAttr() ? UnitAttr::get(ctx) : nullptr,
-      realAccValues, newReductionKinds,
-      suIter.getReductionStrategyAttr(),
-      suIter.getStructuredClassificationAttr(),
-      suIter.getAccessMinOffsetsAttr(), suIter.getAccessMaxOffsetsAttr(),
-      suIter.getOwnerDimsAttr(), suIter.getSpatialDimsAttr(),
-      suIter.getWriteFootprintAttr());
-
-  // Copy extra attrs (like distributionKind).
-  for (auto attr : attrs)
-    newSuIter->setAttr(attr.getName(), attr.getValue());
-
-  // Move old body into new.
-  newSuIter.getBody().takeBody(suIter.getBody());
-  Block &newBody = newSuIter.getBody().front();
-
-  // Erase tensor block args (in reverse order to keep indices valid).
-  for (auto it = tensorAccIndices.rbegin(); it != tensorAccIndices.rend(); ++it)
-    newBody.eraseArgument(numIVs + *it);
-
-  // Update yield to drop tensor values.
-  if (auto yield = dyn_cast_or_null<sde::SdeYieldOp>(newBody.getTerminator())) {
-    SmallVector<Value> newYieldedValues;
-    for (unsigned idx : realAccIndices) {
-      if (idx < yield.getValues().size())
-        newYieldedValues.push_back(yield.getValues()[idx]);
-    }
-    OpBuilder yieldBuilder(yield);
-    sde::SdeYieldOp::create(yieldBuilder, loc, newYieldedValues);
-    yield.erase();
-  }
-
-  // Replace old su_iterate real reduction results.
-  for (auto [newIdx, oldIdx] : llvm::enumerate(realAccIndices))
-    suIter.getResult(oldIdx).replaceAllUsesWith(newSuIter.getResult(newIdx));
-
-  suIter.erase();
-  return success();
-}
-
-/// Strip tensor iter_args from a <parallel> cu_region by materializing them
-/// back to alloca form. After this, the cu_region has no results and
-/// ConvertSdeToArts can handle it.
-static LogicalResult stripParallelIterArgs(sde::SdeCuRegionOp region) {
-  MLIRContext *ctx = region.getContext();
-  Location loc = region.getLoc();
-  Block &body = region.getBody().front();
-
-  // Collect tensor iter_args indices.
-  SmallVector<unsigned> tensorArgIndices;
-  for (auto [idx, arg] : llvm::enumerate(region.getIterArgs())) {
-    if (isa<RankedTensorType>(arg.getType()))
-      tensorArgIndices.push_back(idx);
-  }
-  if (tensorArgIndices.empty())
-    return success();
-
-  // All iter_args must be tensor-typed for the <parallel> case.
-  if (tensorArgIndices.size() != region.getIterArgs().size())
-    return failure();
-
-  // For each tensor iter_arg, find or create a backing memref alloca.
-  // Trace the init value to find an existing mu_memref_to_tensor → alloca chain.
-  OpBuilder outerBuilder(region);
-  SmallVector<Value> backingAllocas;
-  SmallVector<Operation *> toTensorOps; // to_tensor ops to erase
-
-  for (unsigned idx : tensorArgIndices) {
-    Value iterArg = region.getIterArgs()[idx];
-    auto tensorTy = cast<RankedTensorType>(iterArg.getType());
-    Value alloca;
-
-    if (auto muToTensor =
-            iterArg.getDefiningOp<sde::SdeMuMemrefToTensorOp>()) {
-      alloca = muToTensor.getMemref();
-      toTensorOps.push_back(muToTensor);
-    } else if (auto toTensor =
-                   iterArg.getDefiningOp<bufferization::ToTensorOp>()) {
-      alloca = toTensor.getBuffer();
-      toTensorOps.push_back(toTensor);
-    } else {
-      // No backing memref found — create a temporary alloca.
-      auto mrType = MemRefType::get(tensorTy.getShape(),
-                                    tensorTy.getElementType());
-      alloca = memref::AllocaOp::create(outerBuilder, loc, mrType);
-      // Store the init tensor into the alloca.
-      sde::SdeMuTensorToMemrefOp::create(outerBuilder, loc, iterArg, alloca);
-    }
-    backingAllocas.push_back(alloca);
-  }
-
-  // Inside the body: replace block arg uses with loads from the alloca.
-  // Before the yield: store the yielded tensor back to the alloca.
-  auto yield = cast<sde::SdeYieldOp>(body.getTerminator());
-
-  for (auto [i, idx] : llvm::enumerate(tensorArgIndices)) {
-    Value alloca = backingAllocas[i];
-    BlockArgument blockArg = body.getArgument(idx);
-
-    // Replace uses of block arg with mu_memref_to_tensor from alloca.
-    OpBuilder bodyStart(ctx);
-    bodyStart.setInsertionPointToStart(&body);
-    auto tensorTy = cast<RankedTensorType>(blockArg.getType());
-    Value tensorFromAlloca = sde::SdeMuMemrefToTensorOp::create(
-        bodyStart, loc, tensorTy, alloca);
-    blockArg.replaceAllUsesWith(tensorFromAlloca);
-
-    // Before yield: materialize the yielded tensor back to alloca.
-    OpBuilder preYield(yield);
-    Value yieldedVal = yield.getValues()[idx];
-    sde::SdeMuTensorToMemrefOp::create(preYield, loc, yieldedVal, alloca);
-  }
-
-  // After the cu_region: re-read from alloca to tensor for any result users.
-  OpBuilder afterBuilder(ctx);
-  afterBuilder.setInsertionPointAfter(region);
-  for (auto [i, idx] : llvm::enumerate(tensorArgIndices)) {
-    Value alloca = backingAllocas[i];
-    auto tensorTy = cast<RankedTensorType>(region.getResult(idx).getType());
-    Value tensorAfter = sde::SdeMuMemrefToTensorOp::create(
-        afterBuilder, loc, tensorTy, alloca);
-    region.getResult(idx).replaceAllUsesWith(tensorAfter);
-  }
-
-  // Erase to_tensor ops that fed the iter_args.
-  for (Operation *op : toTensorOps) {
-    if (op->use_empty())
-      op->erase();
-  }
-
-  // Erase the block arguments (in reverse order).
-  for (int i = static_cast<int>(body.getNumArguments()) - 1; i >= 0; --i)
-    body.eraseArgument(i);
-
-  // Rebuild the cu_region without iter_args.
-  OpBuilder rebuilder(region);
-  auto newRegion = sde::SdeCuRegionOp::create(
-      rebuilder, loc, /*resultTypes=*/TypeRange{}, region.getKindAttr(),
-      region.getConcurrencyScopeAttr(),
-      region.getNowaitAttr() ? UnitAttr::get(ctx) : nullptr,
-      /*iterArgs=*/ValueRange{});
-
-  // Move the body from old to new.
-  Block &newBody = sde::ensureBlock(newRegion.getBody());
-  newBody.getOperations().splice(newBody.end(), body.getOperations());
-
-  // Replace the old yield with an empty yield.
-  auto *oldYield = newBody.getTerminator();
-  OpBuilder yieldBuilder(oldYield);
-  sde::SdeYieldOp::create(yieldBuilder, loc, ValueRange{});
-  oldYield->erase();
-
-  region.erase();
-  return success();
 }
 
 /// Rewrite a single cu_region <single> with tensor iter_args into codelet form.
@@ -586,9 +309,10 @@ static LogicalResult convertCuRegion(sde::SdeCuRegionOp region) {
     for (Operation *op : materializeOps)
       op->erase();
 
-    // Now safely erase cu_region results' remaining uses (should be none).
-    // Replace them with codelet results for any remaining users.
-    unsigned codeletResultIdx = 0;
+    // Replace cu_region results with mu_data handles (not codelet results,
+    // which are inside the cu_region body and don't dominate external users).
+    // The mu_data handle is a tensor value that represents the shared data
+    // written by the codelet.
     for (auto [i, idx] : llvm::enumerate(tensorArgIndices)) {
       bool writable = false;
       for (unsigned wIdx : writableTokenIndices) {
@@ -597,10 +321,8 @@ static LogicalResult convertCuRegion(sde::SdeCuRegionOp region) {
           break;
         }
       }
-      if (writable) {
-        region.getResult(idx).replaceAllUsesWith(
-            codelet.getResult(codeletResultIdx++));
-      }
+      if (writable && !region.getResult(idx).use_empty())
+        region.getResult(idx).replaceAllUsesWith(muDataOps[i].getHandle());
     }
 
     // Erase to_tensor ops that fed the iter_args.
@@ -648,46 +370,9 @@ struct ConvertToCodeletPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
-    // Phase 0: Strip tensor iter_args from su_iterate ops.
-    // Must happen before cu_region stripping so that su_iterate results
-    // don't block cu_region iter_arg materialization.
-    // Tensor iter_args are appended to reductionAccumulators — identify them
-    // by their tensor type (real reductions use memref<?xT>).
-    {
-      SmallVector<sde::SdeSuIterateOp> suIters;
-      module.walk([&](sde::SdeSuIterateOp suIter) {
-        for (Value acc : suIter.getReductionAccumulators()) {
-          if (isa<RankedTensorType>(acc.getType())) {
-            suIters.push_back(suIter);
-            break;
-          }
-        }
-      });
-      for (sde::SdeSuIterateOp suIter : suIters) {
-        if (failed(stripSuIterateIterArgs(suIter))) {
-          signalPassFailure();
-          return;
-        }
-      }
-    }
-
-    // Phase 1: Strip tensor iter_args from <parallel> cu_regions.
-    {
-      SmallVector<sde::SdeCuRegionOp> parallels;
-      module.walk([&](sde::SdeCuRegionOp region) {
-        if (region.getKind() == sde::SdeCuKind::parallel &&
-            hasTensorIterArgs(region))
-          parallels.push_back(region);
-      });
-      for (sde::SdeCuRegionOp region : parallels) {
-        if (failed(stripParallelIterArgs(region))) {
-          signalPassFailure();
-          return;
-        }
-      }
-    }
-
-    // Phase 2: Convert <single> cu_regions to codelet form.
+    // Convert <single> cu_regions with tensor iter_args to codelet form.
+    // Phases 0+1 (strip su_iterate + parallel cu_region tensor iter_args)
+    // are now handled by LowerToMemref which runs before this pass.
     {
       SmallVector<sde::SdeCuRegionOp> singles;
       module.walk([&](sde::SdeCuRegionOp region) {

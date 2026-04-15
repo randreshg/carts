@@ -372,45 +372,6 @@ static void stampDistributionKind(Operation *op, EdtDistributionKind kind,
       IntegerAttr::get(IntegerType::get(op->getContext(), 32), version));
 }
 
-static bool isTensorCarrierOp(Operation *op) {
-  if (!op)
-    return false;
-  if (isa<bufferization::ToTensorOp, sde::SdeMuMemrefToTensorOp,
-          sde::SdeMuAllocOp>(op))
-    return true;
-  if (isa<tensor::TensorDialect>(op->getDialect()))
-    return true;
-  if (auto linalgOp = dyn_cast<linalg::LinalgOp>(op))
-    return linalgOp.hasPureTensorSemantics();
-  return false;
-}
-
-/// Drop dead transient tensor carriers after their linalg owner has been
-/// consumed for contract stamping.
-// TODO: Chase the full tensor use-chain (tensor.cast, tensor.extract_slice,
-// etc.) instead of relying on isOpTriviallyDead(). Currently
-// bufferization.to_tensor ops with live tensor-chain users survive,
-// causing VerifySdeLowered failures on rhs4sg/activations snapshots.
-static void eraseDeadTensorCarriers(ForOp artsFor, PatternRewriter &rewriter) {
-  bool changed = true;
-  while (changed) {
-    changed = false;
-
-    SmallVector<Operation *> deadCarriers;
-    artsFor.getRegion().walk([&](Operation *nestedOp) {
-      if (!isTensorCarrierOp(nestedOp))
-        return;
-      if (isOpTriviallyDead(nestedOp))
-        deadCarriers.push_back(nestedOp);
-    });
-
-    for (Operation *deadCarrier : llvm::reverse(deadCarriers)) {
-      rewriter.eraseOp(deadCarrier);
-      changed = true;
-    }
-  }
-}
-
 //===----------------------------------------------------------------------===//
 // Conversion Patterns
 //===----------------------------------------------------------------------===//
@@ -778,16 +739,20 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       artsFor->setAttr(AttrNames::Operation::Sde::UnrollFactor, unrollFactor);
 
     // RaiseToLinalg leaves the original loop body in place and uses
-    // linalg.generic as a transient carrier for contract stamping. Drop the
-    // cloned memref-backed carriers directly; tensor-backed carriers are
-    // removed by the dead-carrier sweep below so any dead tensor chain rooted
-    // at their results disappears without teaching ARTS about tensor IR.
+    // linalg.generic as a transient carrier for contract stamping.
+    // LowerToMemref has already lowered tensor carriers back to memref form,
+    // so erase ALL remaining linalg carriers uniformly.
     for (linalg::GenericOp generic : llvm::reverse(linalgGenerics)) {
-      if (generic.hasPureTensorSemantics())
-        continue;
+      // Erase materialize_in_destination sinks first.
+      for (Value result : generic->getResults()) {
+        for (Operation *user :
+             llvm::make_early_inc_range(result.getUsers())) {
+          if (isa<bufferization::MaterializeInDestinationOp>(user))
+            rewriter.eraseOp(user);
+        }
+      }
       rewriter.eraseOp(generic);
     }
-    eraseDeadTensorCarriers(artsFor, rewriter);
 
     ++numSuIterateConverted;
     rewriter.eraseOp(op);
