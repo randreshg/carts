@@ -1,9 +1,8 @@
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
 // Verify that the narrow single-accumulator reduction subset gets a
-// transient linalg.generic carrier at the SDE layer. Function args and
-// reduction accumulators remain as memrefs (not raised by RaiseToTensor),
-// so carriers are created from memref.load/store with bufferization wrapping.
+// carrier-authoritative linalg.generic carrier at the SDE layer. The scalar
+// body is erased and mu_memref_to_tensor converts memrefs at the boundary.
 
 // CHECK-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // CHECK: func.func @main
@@ -12,16 +11,16 @@
 // CHECK-SAME: reduction[#arts_sde.reduction_kind<add>](%{{.+}} : memref<?xi32>)
 // CHECK-SAME: classification(<reduction>) {
 // CHECK: arts_sde.cu_region <parallel> {
-// CHECK: %[[VAL:.+]] = memref.load %arg0[%[[IV:.*]]] : memref<128xi32>
-// CHECK: %[[ACC:.+]] = memref.load %{{.+}}[%c0] : memref<?xi32>
-// CHECK: %[[NEXT:.+]] = arith.addi %[[ACC]], %[[VAL]] : i32
-// CHECK: memref.store %[[NEXT]], %{{.+}}[%c0] : memref<?xi32>
-// CHECK: bufferization.to_tensor %arg0 : memref<128xi32> to tensor<128xi32>
+// CHECK: %[[VALS:.+]] = arts_sde.mu_memref_to_tensor %arg0 : memref<128xi32> -> tensor<128xi32>
+// CHECK: arts_sde.mu_memref_to_tensor %{{.+}} : memref<?xi32> -> tensor<?xi32>
+// CHECK: %[[ACC2:.+]] = arts_sde.mu_memref_to_tensor %{{.+}} : memref<?xi32> -> tensor<?xi32>
 // CHECK: linalg.generic
 // CHECK-SAME: iterator_types = ["reduction"]
 // CHECK: ^bb0(%[[ARGVAL:.+]]: i32, %[[ARGACC:.+]]: i32, %{{.+}}: i32):
 // CHECK: %[[REDUCED:.+]] = arith.addi %[[ARGACC]], %[[ARGVAL]] : i32
 // CHECK: linalg.yield %[[REDUCED]] : i32
+// CHECK-NOT: memref.load
+// CHECK-NOT: memref.store
 // CHECK-NOT: arts.for
 // CHECK: // -----// IR Dump After LoopInterchange
 

@@ -27,6 +27,7 @@ namespace mlir::arts {
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -187,7 +188,7 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
   indexingMaps.reserve(inputs.size() + outputs.size());
 
   // Build tensor inputs — use tensor sources directly, wrap memrefs via
-  // bufferization.to_tensor as fallback.
+  // sde.mu_memref_to_tensor (SDE-native boundary op for external data).
   SmallVector<Value> tensorInputs;
   tensorInputs.reserve(inputs.size());
   for (const InputOperand &input : inputs) {
@@ -199,14 +200,14 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
       auto tTy =
           RankedTensorType::get(mrType.getShape(), mrType.getElementType());
       tensorInput =
-          bufferization::ToTensorOp::create(builder, loc, tTy, input.source);
+          sde::SdeMuMemrefToTensorOp::create(builder, loc, tTy, input.source);
     }
     tensorInputs.push_back(tensorInput);
     indexingMaps.push_back(input.indexingMap);
   }
 
-  // Build tensor outputs — use tensor.empty for write-only, tensor source
-  // for RMW. Wrap memrefs via bufferization.to_tensor as fallback.
+  // Build tensor outputs — use tensor sources directly, wrap memrefs via
+  // sde.mu_memref_to_tensor (SDE-native boundary op).
   SmallVector<Value> tensorOutputs;
   SmallVector<Type> resultTypes;
   tensorOutputs.reserve(outputs.size());
@@ -221,8 +222,8 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
       tensorTy =
           RankedTensorType::get(mrType.getShape(), mrType.getElementType());
       tensorOutput =
-          bufferization::ToTensorOp::create(builder, loc, tensorTy,
-                                            output.source);
+          sde::SdeMuMemrefToTensorOp::create(builder, loc, tensorTy,
+                                              output.source);
     }
     tensorOutputs.push_back(tensorOutput);
     resultTypes.push_back(tensorTy);
@@ -285,10 +286,46 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
     return false;
   }
 
+  // Erase scalar body ops that the carrier now represents. The carrier is
+  // authoritative — the scalar ops (memref.load, memref.store, tensor.extract,
+  // tensor.insert, and now-dead arith ops) are redundant.
+  //
+  // Iteratively erase: first drop uses from stores/inserts (side-effecting
+  // ops that produce no results), then erase dead ops in reverse order.
+  unsigned erased = 0;
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    SmallVector<Operation *> toErase;
+    for (Operation &op : llvm::reverse(computeBody->without_terminator())) {
+      // Keep the carrier and its support ops.
+      if (isa<linalg::GenericOp>(op) ||
+          isa<sde::SdeMuMemrefToTensorOp>(op) ||
+          isa<bufferization::ToTensorOp>(op) ||
+          isa<tensor::EmptyOp>(op))
+        continue;
+      // Erase stores/inserts (side effects but no SSA results to worry about).
+      if (isa<memref::StoreOp, tensor::InsertOp>(&op)) {
+        toErase.push_back(&op);
+        continue;
+      }
+      // Erase loads/extracts and pure ops that are now dead.
+      if (op.use_empty()) {
+        toErase.push_back(&op);
+        continue;
+      }
+    }
+    for (Operation *op : toErase) {
+      op->erase();
+      ++erased;
+      changed = true;
+    }
+  }
+
   ARTS_DEBUG("  raised sde.su_iterate body to linalg.generic with "
              << inputs.size() << " inputs and " << outputs.size()
-             << " outputs");
-  (void)generic;
+             << " outputs (carrier-authoritative, " << erased
+             << " scalar ops erased)");
   return true;
 }
 

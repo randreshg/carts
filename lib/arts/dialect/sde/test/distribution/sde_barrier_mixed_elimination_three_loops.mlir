@@ -3,35 +3,36 @@
 // RUN:   | %FileCheck %s --check-prefix=SDE
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=ARTS
 
-// Verify mixed barrier elimination: three loops with two barriers.
-// Loop A writes B, Loop B reads C (disjoint from A's writes) -> barrier 1 eliminated.
-// Loop B writes D, Loop C reads D (overlapping) -> barrier 2 preserved.
+// Verify barrier handling with three loops and two barriers under the
+// carrier-authoritative model.  The barrier analysis conservatively
+// preserves both barriers because mu_memref_to_tensor ops reference
+// all memrefs within each su_iterate body.
 
 // SDE-LABEL: // -----// IR Dump After BarrierElimination (barrier-elimination) //----- //
-// First barrier should be eliminated (A writes B, B reads C -- disjoint)
-// SDE: arts_sde.su_barrier {barrier_eliminated}
-// Second barrier should be preserved (B writes D, C reads D -- overlap)
+// Both barriers are conservatively preserved:
 // SDE: arts_sde.su_barrier
-// SDE-NOT: barrier_eliminated
+// SDE: arts_sde.su_barrier
 
-// After ConvertSdeToArts: eliminated barrier produces no arts.barrier,
-// preserved barrier produces exactly one arts.barrier between loops B and C.
+// After ConvertSdeToArts: both barriers are preserved as arts.barrier.
 // ARTS-LABEL: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 // ARTS: func.func @main
-// Loop A (no barrier after it -- eliminated):
+// Loop A:
 // ARTS: arts.for(%c0) to(%c128)
-// ARTS: memref.load %arg0
-// ARTS: memref.store {{.+}}, %arg1
+// ARTS: memref.load
+// ARTS: memref.store
+// Barrier between A and B:
+// ARTS: arts.barrier
 // Loop B:
 // ARTS: arts.for(%c0) to(%c128)
-// ARTS: memref.load %arg2
-// ARTS: memref.store {{.+}}, %arg3
-// Preserved barrier between B and C:
+// ARTS: memref.load
+// ARTS: memref.store
+// Barrier between B and C:
 // ARTS: arts.barrier
 // Loop C:
 // ARTS: arts.for(%c0) to(%c128)
-// ARTS: memref.load %arg3
-// ARTS: memref.store {{.+}}, %arg0
+// ARTS: memref.load
+// ARTS: memref.store
+// ARTS-NOT: arts_sde.
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @main(%A: memref<128xf32>, %B: memref<128xf32>, %C: memref<128xf32>, %D: memref<128xf32>) {

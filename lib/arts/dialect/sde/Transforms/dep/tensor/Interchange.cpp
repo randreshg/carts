@@ -26,6 +26,7 @@ namespace mlir::arts {
 } // namespace mlir::arts
 
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
@@ -42,6 +43,29 @@ namespace {
 static bool isCarrierOp(Operation &op) {
   return isa<bufferization::ToTensorOp, sde::SdeMuMemrefToTensorOp,
              tensor::EmptyOp, linalg::GenericOp>(op);
+}
+
+/// Check whether a body block is carrier-authoritative: it contains a
+/// linalg.generic carrier but NO scalar executable ops (memref.load/store)
+/// anywhere in the body, including nested regions (except inside the carrier).
+static bool isCarrierAuthoritative(Block &body) {
+  bool hasCarrier = false;
+  bool hasScalar = false;
+  for (Operation &op : body.without_terminator()) {
+    if (isa<linalg::GenericOp>(op)) {
+      hasCarrier = true;
+      continue;
+    }
+    if (isa<memref::LoadOp, memref::StoreOp>(op)) {
+      hasScalar = true;
+      continue;
+    }
+    op.walk([&](Operation *nested) {
+      if (isa<memref::LoadOp, memref::StoreOp>(nested))
+        hasScalar = true;
+    });
+  }
+  return hasCarrier && !hasScalar;
 }
 
 static linalg::GenericOp findTensorCarrier(Block &body) {
@@ -411,6 +435,25 @@ struct LoopInterchangePass
   bool tryCarrierInterchange(sde::SdeSuIterateOp op, Block &body,
                              linalg::GenericOp carrier) {
     auto classification = *op.getStructuredClassification();
+
+    // Carrier-authoritative path: permute carrier dims directly via
+    // upstream linalg::interchangeGenericOp. No scf.for loops to swap.
+    if (isCarrierAuthoritative(body)) {
+      SmallVector<unsigned> perm = computeOptimalPermutation(carrier);
+      if (perm.empty())
+        return false;
+
+      IRRewriter rewriter(carrier.getContext());
+      rewriter.setInsertionPoint(carrier);
+      auto result = linalg::interchangeGenericOp(rewriter, carrier, perm);
+      if (failed(result))
+        return false;
+
+      ARTS_INFO("LoopInterchange: carrier-authoritative interchange applied");
+      return true;
+    }
+
+    // Dual-representation path below: interchange scf.for loops.
 
     // Matmul-specific path: uses the dedicated shouldInterchangeMatmul
     // analysis which handles the 3-dim (i,j,k) case precisely.

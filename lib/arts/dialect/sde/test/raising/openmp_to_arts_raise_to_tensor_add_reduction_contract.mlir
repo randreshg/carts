@@ -1,9 +1,8 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=TENSOR
 
-// Verify that RaiseToLinalg creates a reduction carrier with memref-backed
-// inputs when function args are used (not allocas). RaiseToTensor is a no-op
-// because there are no raisable allocas. The reduction accumulator is wrapped
-// via bufferization.to_tensor.
+// Verify that RaiseToLinalg creates a carrier-authoritative reduction carrier
+// with mu_memref_to_tensor boundary ops. The scalar body is erased and
+// the linalg.generic carrier is the sole representation.
 
 // TENSOR-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // TENSOR: func.func @main
@@ -12,12 +11,10 @@
 // TENSOR-SAME: reduction[#arts_sde.reduction_kind<add>](%{{.+}} : memref<?xi32>)
 // TENSOR-SAME: classification(<reduction>) {
 // TENSOR: arts_sde.cu_region <parallel>
-// TENSOR: %[[VALS:.+]] = bufferization.to_tensor %arg0 : memref<128xi32> to tensor<128xi32>
-// TENSOR: %[[ACC:.+]] = bufferization.to_tensor %{{.+}} : memref<?xi32> to tensor<?xi32>
-// TENSOR: %[[ACC2:.+]] = bufferization.to_tensor %{{.+}} : memref<?xi32> to tensor<?xi32>
+// TENSOR: %[[VALS:.+]] = arts_sde.mu_memref_to_tensor %arg0 : memref<128xi32> -> tensor<128xi32>
+// TENSOR: arts_sde.mu_memref_to_tensor %{{.+}} : memref<?xi32> -> tensor<?xi32>
+// TENSOR: %[[ACC2:.+]] = arts_sde.mu_memref_to_tensor %{{.+}} : memref<?xi32> -> tensor<?xi32>
 // TENSOR: linalg.generic
-// TENSOR-SAME: ins(%[[VALS]], %[[ACC]] : tensor<128xi32>, tensor<?xi32>)
-// TENSOR-SAME: outs(%[[ACC2]] : tensor<?xi32>)
 // TENSOR-NOT: tensor.empty
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {

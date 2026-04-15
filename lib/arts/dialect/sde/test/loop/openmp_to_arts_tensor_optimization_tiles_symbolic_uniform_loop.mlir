@@ -7,46 +7,39 @@
 // Tiling synthesizes a symbolic tile size and rewrites the
 // surrounding sde.su_iterate so the tiled shape survives into arts.for.
 
-// TENSOR-LABEL: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
+// TENSOR-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // TENSOR: arts_sde.su_iterate (%c0) to (%arg2) step (%c1) classification(<elementwise>) {
 // TENSOR: arts_sde.cu_region <parallel>
-// TENSOR: %[[IN:.+]] = bufferization.to_tensor %arg0 : memref<?xf64> to tensor<?xf64>
-// TENSOR: %[[OUT:.+]] = bufferization.to_tensor %arg1 : memref<?xf64> to tensor<?xf64>
+// TENSOR: %[[IN:.+]] = arts_sde.mu_memref_to_tensor %arg0 : memref<?xf64> -> tensor<?xf64>
+// TENSOR: %[[OUT:.+]] = arts_sde.mu_memref_to_tensor %arg1 : memref<?xf64> -> tensor<?xf64>
 // TENSOR: linalg.generic
 // TENSOR-SAME: ins(%[[IN]] : tensor<?xf64>)
 // TENSOR-SAME: outs(%[[OUT]] : tensor<?xf64>)
 
 // OPT-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // OPT: arts_sde.cu_region <parallel> {
-// OPT: = arith.constant 0 : index
 // OPT: = arith.subi %arg2, %c0 : index
 // OPT: = arith.cmpi slt
 // OPT: = arith.select
 // OPT: = arith.ceildivsi
-// OPT: = arith.constant 1 : index
-// OPT: = arith.constant 8 : index
-// OPT: = arith.constant 3 : index
-// OPT: = arith.maxui
-// OPT: = arith.ceildivui
-// OPT: = arith.maxui
-// OPT: = arith.minui
 // OPT: %[[TSTEP:.+]] = arith.muli %c1, %{{.+}} : index
 // OPT: arts_sde.su_iterate (%c0) to (%arg2) step (%[[TSTEP]]) classification(<elementwise>) {
-// OPT: %[[LIMIT:.+]] = arith.addi %arg3, %[[TSTEP]] : index
-// OPT: = arith.minui %[[LIMIT]], %arg2 : index
-// OPT: scf.for %[[IV:.+]] = %arg3 to %{{.+}} step %c1 {
-// OPT: memref.load %arg0[%[[IV]]] : memref<?xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg0 : memref<?xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg1 : memref<?xf64>
+// OPT: tensor.extract_slice
+// OPT: tensor.extract_slice
+// OPT: linalg.generic
 // OPT: arith.mulf
-// OPT: memref.store {{.+}}, %arg1[%[[IV]]] : memref<?xf64>
+// OPT: linalg.yield
+// OPT: tensor.insert_slice
 // OPT-NOT: bufferization.to_tensor
-// OPT-NOT: tensor.empty
-// OPT-NOT: linalg.generic
 
 // ARTS-LABEL: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 // ARTS: arts.for(%c0) to(%arg2) step(%{{.*}})
+// ARTS: memref.subview
 // ARTS: scf.for
 // ARTS-NOT: bufferization.to_tensor
-// ARTS-NOT: tensor.empty
+// ARTS-NOT: arts_sde.mu_memref_to_tensor
 // ARTS-NOT: linalg.generic
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {

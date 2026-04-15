@@ -9,14 +9,15 @@
 // OPT: arts_sde.cu_region <parallel> {
 // OPT: arts_sde.su_iterate
 // OPT-SAME: to (%c128, %c256)
-// OPT: scf.for %[[I:.+]] = %arg2
-// OPT: scf.for %[[J:.+]] = %arg3
-// OPT: memref.load %arg0[%[[I]], %[[J]]] : memref<128x256xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg0 : memref<128x256xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg1 : memref<128x256xf64>
+// OPT: tensor.extract_slice
+// OPT: tensor.extract_slice
+// OPT: linalg.generic
 // OPT: arith.mulf
-// OPT: memref.store {{.+}}, %arg1[%[[I]], %[[J]]] : memref<128x256xf64>
+// OPT: linalg.yield
+// OPT: tensor.insert_slice
 // OPT-NOT: bufferization.to_tensor
-// OPT-NOT: tensor.empty
-// OPT-NOT: linalg.generic
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @main(%A: memref<128x256xf64>, %B: memref<128x256xf64>) {

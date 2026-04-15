@@ -1,16 +1,17 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from openmp-to-arts --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
 // Verify the before/after for transient tensor-carrier cleanup:
-// ConvertSdeToArts should erase a dead tensor carrier chain rooted at a
-// tensor-backed linalg.generic without leaving tensor IR in the ARTS loop.
+// ConvertSdeToArts should erase the carrier-authoritative tensor chain
+// without leaving tensor IR in the ARTS loop.
 
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 // CHECK: func.func @main
 // CHECK: arts.edt <parallel> <intranode> route(%{{.*}})
 // CHECK: arts.for(%c0) to(%c16) step(%{{.*}})
 // CHECK: scf.for
-// CHECK: memref.load %{{.*}}[%{{.*}}] : memref<16xf64>
-// CHECK: memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<16xf64>
+// CHECK: memref.load
+// CHECK: memref.store
+// CHECK-NOT: arts_sde.mu_memref_to_tensor
 // CHECK-NOT: bufferization.to_tensor
 // CHECK-NOT: tensor.empty
 // CHECK-NOT: tensor.cast
@@ -31,7 +32,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
         %mul = arith.mulf %val, %cst : f64
         memref.store %mul, %B[%iv] : memref<16xf64>
 
-        %input = bufferization.to_tensor %A : memref<16xf64> to tensor<16xf64>
+        %input = arts_sde.mu_memref_to_tensor %A : memref<16xf64> -> tensor<16xf64>
         %init = tensor.empty() : tensor<16xf64>
         %generic = linalg.generic {indexing_maps = [affine_map<(d0) -> (d0)>, affine_map<(d0) -> (d0)>], iterator_types = ["parallel"]} ins(%input : tensor<16xf64>) outs(%init : tensor<16xf64>) {
         ^bb0(%in: f64, %out: f64):

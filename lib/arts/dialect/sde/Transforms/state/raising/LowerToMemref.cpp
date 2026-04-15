@@ -4,7 +4,7 @@
 /// Inverse of RaiseToTensor's mem2reg: lowers tensor SSA values back to
 /// memref.alloca + memref.load/memref.store form.
 ///
-/// Three-phase algorithm:
+/// Four-phase algorithm:
 ///   Phase A: Walk each function body, rewriting tensor.insert → memref.store,
 ///            tensor.extract → memref.load, and mapping tensor values to
 ///            their backing memrefs. Skips <single> cu_region bodies (those
@@ -13,7 +13,10 @@
 ///            using replaceAllUsesWith (not dropAllUses) to safely handle
 ///            nested ops. Tensor iter_args that feed <single> cu_regions
 ///            are preserved.
-///   Phase C: Erase remaining dead linalg carriers and tensor ops.
+///   Phase C: Lower authoritative linalg carriers to scf.for loops with
+///            memref.load/memref.store by converting tensor operands to
+///            memrefs and calling linalg::linalgOpToLoops().
+///   Phase D: Erase remaining dead linalg carriers and tensor ops.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
@@ -26,11 +29,15 @@ namespace mlir::arts {
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(lower_to_memref);
@@ -655,7 +662,188 @@ static void stripSuIterateTensorArgs(ModuleOp module) {
 }
 
 //===----------------------------------------------------------------------===//
-// Phase C: Erase dead carriers
+// Phase C: Lower authoritative carriers to scf.for loops
+//===----------------------------------------------------------------------===//
+
+/// Trace a tensor value back to a memref. Walks through bufferization.to_tensor,
+/// mu_memref_to_tensor, tensor.cast, tensor.extract_slice, and tensor.empty
+/// chains. For extract_slice, creates a memref.subview. For tensor.empty,
+/// creates a memref.alloca as backing storage.
+static Value traceToMemref(Value tensor, OpBuilder &builder) {
+  if (auto toTensor = tensor.getDefiningOp<bufferization::ToTensorOp>())
+    return toTensor.getBuffer();
+  if (auto muToTensor = tensor.getDefiningOp<sde::SdeMuMemrefToTensorOp>())
+    return muToTensor.getMemref();
+  if (auto castOp = tensor.getDefiningOp<tensor::CastOp>())
+    return traceToMemref(castOp.getSource(), builder);
+  if (auto sliceOp = tensor.getDefiningOp<tensor::ExtractSliceOp>()) {
+    Value srcMemref = traceToMemref(sliceOp.getSource(), builder);
+    if (!srcMemref)
+      return Value();
+    // Create a memref.subview matching the extract_slice. Let MLIR infer
+    // the correct strided result type from the source memref and offsets.
+    auto srcMemrefTy = cast<MemRefType>(srcMemref.getType());
+    auto resultMemrefTy = memref::SubViewOp::inferResultType(
+        srcMemrefTy, sliceOp.getStaticOffsets(), sliceOp.getStaticSizes(),
+        sliceOp.getStaticStrides());
+    return memref::SubViewOp::create(
+        builder, sliceOp.getLoc(), cast<MemRefType>(resultMemrefTy), srcMemref,
+        sliceOp.getMixedOffsets(), sliceOp.getMixedSizes(),
+        sliceOp.getMixedStrides());
+  }
+  if (auto emptyOp = tensor.getDefiningOp<tensor::EmptyOp>()) {
+    auto tensorTy = cast<RankedTensorType>(emptyOp.getType());
+    auto memrefTy = getMemRefType(tensorTy);
+    return memref::AllocaOp::create(builder, emptyOp.getLoc(), memrefTy,
+                                    emptyOp.getDynamicSizes());
+  }
+  return Value();
+}
+
+/// Lower a single tensor-backed linalg.generic carrier to scf.for loops
+/// with memref.load/memref.store. Also erases associated tensor.extract_slice
+/// and tensor.insert_slice ops from tiled carriers. Returns true on success.
+static bool lowerCarrierToLoops(linalg::GenericOp carrier) {
+  // Only handle tensor-backed carriers.
+  if (carrier.hasPureBufferSemantics())
+    return false;
+  if (!llvm::all_of(carrier.getDpsInputs(), [](Value v) {
+        return isa<TensorType>(v.getType());
+      }))
+    return false;
+  if (!llvm::all_of(carrier.getDpsInits(), [](Value v) {
+        return isa<TensorType>(v.getType());
+      }))
+    return false;
+
+  OpBuilder builder(carrier);
+  Location loc = carrier.getLoc();
+
+  // Trace all operands back to memrefs (handles extract_slice → subview).
+  SmallVector<Value> memrefInputs;
+  for (Value input : carrier.getDpsInputs()) {
+    Value memref = traceToMemref(input, builder);
+    if (!memref) {
+      ARTS_DEBUG("lowerCarrierToLoops: cannot trace input to memref");
+      return false;
+    }
+    memrefInputs.push_back(memref);
+  }
+
+  SmallVector<Value> memrefOutputs;
+  for (Value output : carrier.getDpsInits()) {
+    Value memref = traceToMemref(output, builder);
+    if (!memref) {
+      ARTS_DEBUG("lowerCarrierToLoops: cannot trace output to memref");
+      return false;
+    }
+    memrefOutputs.push_back(memref);
+  }
+
+  // Create an equivalent memref-backed linalg.generic.
+  auto indexingMaps = carrier.getIndexingMapsArray();
+  auto iterTypes = carrier.getIteratorTypesArray();
+
+  auto memrefGeneric = linalg::GenericOp::create(
+      builder, loc, /*resultTypes=*/TypeRange{}, memrefInputs, memrefOutputs,
+      indexingMaps, iterTypes,
+      [&](OpBuilder &nestedBuilder, Location nestedLoc,
+          ValueRange blockArgs) {
+        // Clone the carrier's body, mapping old block args to new ones.
+        IRMapping mapper;
+        Block &carrierBody = carrier.getRegion().front();
+        for (auto [oldArg, newArg] :
+             llvm::zip(carrierBody.getArguments(), blockArgs))
+          mapper.map(oldArg, newArg);
+
+        for (Operation &op : carrierBody.without_terminator())
+          nestedBuilder.clone(op, mapper);
+
+        // Map yield values.
+        auto carrierYield = cast<linalg::YieldOp>(carrierBody.getTerminator());
+        SmallVector<Value> yieldValues;
+        for (Value v : carrierYield.getValues())
+          yieldValues.push_back(mapper.lookupOrDefault(v));
+        linalg::YieldOp::create(nestedBuilder, nestedLoc, yieldValues);
+      });
+
+  // Lower the memref-backed generic to scf.for loops.
+  IRRewriter rewriter(carrier.getContext());
+  rewriter.setInsertionPoint(memrefGeneric);
+  auto result = linalg::linalgOpToLoops(rewriter, memrefGeneric);
+  if (failed(result)) {
+    ARTS_DEBUG("lowerCarrierToLoops: linalgOpToLoops failed");
+    memrefGeneric.erase();
+    return false;
+  }
+
+  // Erase tensor.insert_slice ops that use the carrier's results.
+  for (Value carrierResult : carrier.getResults()) {
+    for (Operation *user : llvm::make_early_inc_range(carrierResult.getUsers())) {
+      if (isa<tensor::InsertSliceOp>(user))
+        user->erase();
+    }
+  }
+
+  // linalgOpToLoops erases the op on success, no need to erase memrefGeneric.
+  ARTS_DEBUG("lowerCarrierToLoops: lowered carrier with "
+             << carrier.getNumDpsInputs() << " inputs, "
+             << carrier.getNumDpsInits() << " outputs");
+  return true;
+}
+
+/// Lower all authoritative linalg.generic carriers inside SDE regions.
+/// A carrier is "authoritative" if its parent su_iterate/cu_region body
+/// contains NO scalar executable ops (memref.load/memref.store) alongside
+/// the carrier — meaning the carrier IS the computation.
+static unsigned lowerAuthoritativeCarriers(ModuleOp module) {
+  SmallVector<linalg::GenericOp> carriers;
+  module.walk([&](linalg::GenericOp generic) {
+    // Only consider carriers inside SDE regions.
+    if (!generic->getParentOfType<sde::SdeSuIterateOp>() &&
+        !generic->getParentOfType<sde::SdeCuRegionOp>())
+      return;
+    // Only consider tensor-backed carriers.
+    if (generic.hasPureBufferSemantics())
+      return;
+    // Check if authoritative: parent block has no scalar body ops
+    // (memref.load/store). Carrier support ops (mu_memref_to_tensor,
+    // extract_slice, insert_slice, arith for tile math) are allowed.
+    Block *parent = generic->getBlock();
+    bool hasScalarBody = false;
+    for (Operation &op : parent->without_terminator()) {
+      if (isa<linalg::GenericOp, bufferization::ToTensorOp,
+              sde::SdeMuMemrefToTensorOp, tensor::EmptyOp, tensor::CastOp,
+              tensor::ExtractSliceOp, tensor::InsertSliceOp>(&op))
+        continue;
+      if (isa<memref::LoadOp, memref::StoreOp>(&op)) {
+        hasScalarBody = true;
+        break;
+      }
+      // Allow pure ops (arith for tile size computation, etc.)
+      if (isMemoryEffectFree(&op))
+        continue;
+      // Unknown side-effecting op — not authoritative.
+      hasScalarBody = true;
+      break;
+    }
+    // Only lower authoritative carriers (no coexisting scalar body).
+    if (!hasScalarBody)
+      carriers.push_back(generic);
+  });
+
+  unsigned lowered = 0;
+  for (linalg::GenericOp carrier : carriers) {
+    if (lowerCarrierToLoops(carrier)) {
+      carrier.erase();
+      ++lowered;
+    }
+  }
+  return lowered;
+}
+
+//===----------------------------------------------------------------------===//
+// Phase D: Erase dead carriers
 //===----------------------------------------------------------------------===//
 
 static void eraseDeadCarriers(ModuleOp module) {
@@ -667,6 +855,7 @@ static void eraseDeadCarriers(ModuleOp module) {
     module.walk([&](Operation *op) {
       if (isa<linalg::GenericOp, bufferization::ToTensorOp, tensor::EmptyOp,
               tensor::CastOp, tensor::ExtractOp, tensor::InsertOp,
+              tensor::ExtractSliceOp, tensor::InsertSliceOp,
               sde::SdeMuAllocOp, sde::SdeMuMemrefToTensorOp,
               sde::SdeMuTensorToMemrefOp>(op)) {
         if (op->use_empty())
@@ -707,11 +896,16 @@ struct LowerToMemrefPass
     stripSuIterateTensorArgs(module);
     stripScfForTensorArgs(module);
 
-    // Phase C: Erase remaining dead carriers.
+    // Phase C: Lower authoritative carriers to scf.for loops.
+    unsigned carriersLowered = lowerAuthoritativeCarriers(module);
+
+    // Phase D: Erase remaining dead carriers.
     eraseDeadCarriers(module);
 
     ARTS_INFO("LowerToMemref: lowered " << totalLowered
-                                        << " tensor value(s) to memref");
+                                        << " tensor value(s) to memref, "
+                                        << carriersLowered
+                                        << " carrier(s) to loops");
   }
 };
 
