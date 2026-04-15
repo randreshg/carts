@@ -1,20 +1,26 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=OPENMP
 
-// Verify the stencil classification path in RaiseToLinalg: the source
-// `arts_sde.su_iterate` carries the loop body; after RaiseToLinalg the loop
-// is still fallback-only but now carries an SDE-owned classification. After
-// ConvertSdeToArts the stencil contract attributes land on the ARTS edt/for.
+// Verify the stencil classification and carrier raising path in RaiseToLinalg:
+// after RaiseToLinalg, the su_iterate carries both the scalar body (scf.for +
+// memref.load/store) and a dual-rep linalg.generic carrier with shifted
+// extract_slice views. After ConvertSdeToArts, the stencil contract
+// attributes land on the ARTS edt/for.
 
 // OPENMP-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // OPENMP: func.func @main
 // OPENMP: arts_sde.cu_region <parallel> scope(<local>) {
 // OPENMP: arts_sde.su_iterate (%c1) to (%c63) step (%c1) classification(<stencil>) {
 // OPENMP: arts_sde.cu_region <parallel> scope(<local>) {
+// Scalar body preserved (dual-rep):
 // OPENMP: scf.for %[[J:.*]] = %c1 to %c63 step %c1
 // OPENMP: memref.load %arg0[%{{.*}}, %[[J]]] : memref<64x64xf64>
-// OPENMP: memref.load %arg0[%{{.*}}, %{{.*}}] : memref<64x64xf64>
 // OPENMP: memref.store %{{.*}}, %arg1[%{{.*}}, %[[J]]] : memref<64x64xf64>
-// OPENMP-NOT: linalg.generic
+// Shifted-view carrier alongside:
+// OPENMP: arts_sde.mu_memref_to_tensor %arg0 : memref<64x64xf64>
+// OPENMP: tensor.extract_slice
+// OPENMP: linalg.generic
+// OPENMP-SAME: iterator_types = ["parallel", "parallel"]
+// OPENMP: tensor.insert_slice
 // OPENMP-NOT: arts.for
 // OPENMP: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 // OPENMP: arts.edt <parallel> <intranode>

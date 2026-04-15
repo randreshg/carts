@@ -156,4 +156,17 @@ def ConvertToCodelet : Pass<"convert-to-codelet", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createConvertToCodeletPass()";
 }
 
+def TensorCleanup : Pass<"tensor-cleanup", "mlir::ModuleOp"> {
+  let summary = "Clean up tensor artifacts inside cu_codelet bodies.";
+  let dependentDialects = ["::mlir::tensor::TensorDialect",
+                           "::mlir::linalg::LinalgDialect"];
+  let constructor = "mlir::arts::sde::createTensorCleanupPass()";
+}
+
+def TokenModeRefine : Pass<"token-mode-refinement", "mlir::ModuleOp"> {
+  let summary = "Downgrade access modes on mu_token ops in cu_codelet bodies.";
+  let dependentDialects = ["::mlir::tensor::TensorDialect"];
+  let constructor = "mlir::arts::sde::createTokenModeRefinementPass()";
+}
+
 #endif // ARTS_DIALECT_SDE_TRANSFORMS_STATE_PASSES
