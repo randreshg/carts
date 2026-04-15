@@ -73,27 +73,43 @@ def RaiseToLinalg : Pass<"raise-to-linalg", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::sde::createRaiseToLinalgPass()";
 }
 
-def RaiseToTensor : Pass<"raise-to-tensor", "mlir::ModuleOp"> {
-  let summary = "Rewrite transient SDE linalg carriers to tensor-backed form";
+def ScalarForwarding : Pass<"scalar-forwarding", "mlir::ModuleOp"> {
+  let summary = "Forward constant-initialized scalar memrefs across region boundaries";
   let description = [{
-    Rewrites transient memref-backed linalg.generic carriers produced by
-    RaiseToLinalg into tensor-backed carriers so later SDE passes can apply
-    tensor/linalg transformations without exposing tensor IR to ARTS-lowering
-    passes. The source loop body remains in place and the tensor carriers stay
-    transient: ConvertSdeToArts consumes them for contract recovery and erases
-    the carrier chain afterwards.
+    Detects rank-0 memref.alloca ops initialized with a constant value and
+    replaces loads inside nested regions (omp.parallel, cu_region, etc.) with
+    the constant when all stores inside that region write the same value.
 
-    The current implementation keeps the rewrite deliberately narrow and valid:
-    it converts ranked memref carriers only. Elementwise loops use tensor.empty
-    destinations because every iteration fully overwrites the output element;
-    reduction-bearing carriers keep output initialization via
-    bufferization.to_tensor so the transient tensor semantics stay aligned with
-    the source loop body.
+    This eliminates Polygeist's continuation-boolean pattern where a memref<i1>
+    is used as a structured return guard, turning always-true scf.if conditions
+    into foldable constants.
+  }];
+  let dependentDialects = ["::mlir::memref::MemRefDialect",
+                           "::mlir::arith::ArithDialect"];
+  let constructor = "mlir::arts::sde::createScalarForwardingPass()";
+}
+
+def RaiseToTensor : Pass<"raise-to-tensor", "mlir::ModuleOp"> {
+  let summary = "Full function-scope tensor raising (tensor mem2reg)";
+  let description = [{
+    Walks each function body top-to-bottom, maintaining a mapping from each
+    raised memref.alloca to its current tensor SSA value. Rewrites
+    memref.load → tensor.extract, memref.store → tensor.insert, and threads
+    tensors through scf.for, cu_region, and su_iterate via iter_args.
+
+    Also converts memref-backed linalg.generic carriers inside su_iterate to
+    tensor-backed form for downstream SDE tensor passes.
+
+    After this pass, raisable allocas are eliminated and all data flows as
+    pure tensor SSA values through the SDE region hierarchy.
   }];
   let dependentDialects = ["::mlir::bufferization::BufferizationDialect",
                            "::mlir::tensor::TensorDialect",
                            "::mlir::memref::MemRefDialect",
-                           "::mlir::linalg::LinalgDialect"];
+                           "::mlir::linalg::LinalgDialect",
+                           "::mlir::func::FuncDialect",
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::arts::sde::ArtsSdeDialect"];
   let constructor = "mlir::arts::sde::createRaiseToTensorPass()";
 }
 
@@ -295,6 +311,27 @@ def LoopInterchange
                            "::mlir::linalg::LinalgDialect",
                            "::mlir::scf::SCFDialect"];
   let constructor = "mlir::arts::sde::createLoopInterchangePass()";
+}
+
+def ConvertToCodelet : Pass<"convert-to-codelet", "mlir::ModuleOp"> {
+  let summary = "Convert tensor iter_args cu_regions to mu_data/mu_token/cu_codelet";
+  let description = [{
+    Converts `arts_sde.cu_region <single>` operations that carry tensor
+    `iter_args` into the canonical SDE codelet form: `sde.mu_data` anchors,
+    `sde.mu_token` access handles, and `sde.cu_codelet` compute units.
+
+    This bridges the gap between the tensor-first pipeline (which threads
+    tensor values through `cu_region` iter_args) and `ConvertSdeToArts`
+    (which already knows how to lower `cu_codelet` + `mu_token` to ARTS EDTs
+    with DB acquire/release).
+
+    Current scope: `cu_region <single>` with tensor iter_args only. The
+    `<parallel>` case inside `su_iterate` is left to future work.
+  }];
+  let dependentDialects = ["::mlir::arts::sde::ArtsSdeDialect",
+                           "::mlir::bufferization::BufferizationDialect",
+                           "::mlir::tensor::TensorDialect"];
+  let constructor = "mlir::arts::sde::createConvertToCodeletPass()";
 }
 
 def ConvertSdeToArts : Pass<"convert-sde-to-arts", "mlir::ModuleOp"> {

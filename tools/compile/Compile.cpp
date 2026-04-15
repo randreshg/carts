@@ -247,10 +247,12 @@ static cl::opt<bool> PrintPipelineManifestJSON(
     cl::desc("Print pipeline step/pass manifest as JSON and exit"),
     cl::init(false));
 
-static const std::array<llvm::StringLiteral, 8>
+static const std::array<llvm::StringLiteral, 10>
     kRaiseMemRefDimensionalityPasses = {"LowerAffine(func)",
                                         "CSE",
                                         "ArtsInliner",
+                                        "PolygeistCanonicalize",
+                                        "ScalarForwarding",
                                         "PolygeistCanonicalize",
                                         "RaiseMemRefDimensionality",
                                         "HandleDeps",
@@ -259,14 +261,14 @@ static const std::array<llvm::StringLiteral, 8>
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
 static const std::array<llvm::StringLiteral, 20> kOpenMPToArtsPasses = {
-    "ConvertOpenMPToSde",       "ScopeSelection",
+    "ConvertOpenMPToSde",       "RaiseToLinalg",
+    "RaiseToTensor",            "ScopeSelection",
     "ScheduleRefinement",       "ChunkOpt",
-    "ReductionStrategy",        "RaiseToLinalg",
-    "RaiseToTensor",            "LoopInterchange",
+    "ReductionStrategy",        "LoopInterchange",
     "TensorOpt",                "StructuredSummaries",
-    "ElementwiseFusion",        "RaiseMemrefToTensor",
-    "DistributionPlanning",     "IterationSpaceDecomposition",
-    "BarrierElimination",       "ConvertSdeToArts",
+    "ElementwiseFusion",        "DistributionPlanning",
+    "IterationSpaceDecomposition", "BarrierElimination",
+    "ConvertToCodelet",         "ConvertSdeToArts",
     "VerifySdeLowered",         "DeadCodeElimination",
     "CSE",                      "VerifyEdtCreated"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
@@ -638,6 +640,8 @@ void buildRaiseMemRefDimensionalityPipeline(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(arts::createArtsInlinerPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::sde::createScalarForwardingPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createMemrefNormalizationPass());
   pm.addPass(arts::createHandleDepsPass());
   pm.addPass(arts::createDCEPass());
@@ -656,20 +660,23 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
                                arts::AnalysisManager *AM = nullptr) {
   arts::sde::SDECostModel *costModel = AM ? &AM->getCostModel() : nullptr;
   pm.addPass(arts::sde::createConvertOpenMPToSdePass(costModel));
+  // Raise memref→tensor and memref→linalg FIRST so effect passes see
+  // tensor/linalg form for correct decisions.
+  pm.addPass(arts::sde::createRaiseToLinalgPass());
+  pm.addPass(arts::sde::createRaiseToTensorPass());
+  // Effect passes now read tensor/linalg form.
   pm.addPass(arts::sde::createScopeSelectionPass(costModel));
   pm.addPass(arts::sde::createScheduleRefinementPass(costModel));
   pm.addPass(arts::sde::createChunkOptPass(costModel));
   pm.addPass(arts::sde::createReductionStrategyPass(costModel));
-  pm.addPass(arts::sde::createRaiseToLinalgPass());
-  pm.addPass(arts::sde::createRaiseToTensorPass());
   pm.addPass(arts::sde::createLoopInterchangePass());
   pm.addPass(arts::sde::createTensorOptPass(costModel));
   pm.addPass(arts::sde::createStructuredSummariesPass(costModel));
   pm.addPass(arts::sde::createElementwiseFusionPass());
-  pm.addPass(arts::sde::createRaiseMemrefToTensorPass());
   pm.addPass(arts::sde::createDistributionPlanningPass(costModel));
   pm.addPass(arts::sde::createIterationSpaceDecompositionPass());
   pm.addPass(arts::sde::createBarrierEliminationPass(costModel));
+  pm.addPass(arts::sde::createConvertToCodeletPass());
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
   pm.addPass(arts::sde::createVerifySdeLoweredPass());
   pm.addPass(arts::createDCEPass());

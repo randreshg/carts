@@ -167,7 +167,8 @@ struct ChunkOptPass
         continue;
 
       auto newOp = sde::SdeSuIterateOp::create(
-          rewriter, rewrite.op.getLoc(), rewrite.op.getLowerBounds(),
+          rewriter, rewrite.op.getLoc(), /*resultTypes=*/TypeRange{},
+          rewrite.op.getLowerBounds(),
           rewrite.op.getUpperBounds(), rewrite.op.getSteps(),
           rewrite.op.getScheduleAttr(), chunkSize, rewrite.op.getNowaitAttr(),
           rewrite.op.getReductionAccumulators(),

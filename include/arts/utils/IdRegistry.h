@@ -7,6 +7,7 @@
 #ifndef ARTS_UTILS_METADATA_IDREGISTRY_H
 #define ARTS_UTILS_METADATA_IDREGISTRY_H
 
+#include "arts/utils/OperationAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
@@ -27,7 +28,7 @@ namespace arts {
 /// - Sequential ID assignment
 class IdRegistry {
 public:
-  static constexpr const char *AttrName = "arts.id";
+  static constexpr auto AttrName = AttrNames::Operation::ArtsId;
   static constexpr int64_t DefaultStride = 1000;
 
   IdRegistry() = default;

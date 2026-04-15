@@ -49,6 +49,20 @@ inline NamedAttrList getRewrittenAttrs(SdeSuIterateOp op) {
   return attrs;
 }
 
+/// Get the computation block inside su_iterate, looking through an optional
+/// cu_region <parallel> wrapper. Returns the innermost block containing
+/// user compute ops.
+inline Block *getSuIterateComputeBlock(SdeSuIterateOp op) {
+  Block &body = op.getBody().front();
+  // Check if the body starts with a cu_region <parallel> wrapper.
+  for (Operation &inner : body.without_terminator()) {
+    if (auto cuRegion = dyn_cast<SdeCuRegionOp>(inner);
+        cuRegion && cuRegion.getKind() == SdeCuKind::parallel)
+      return &cuRegion.getBody().front();
+  }
+  return &body;
+}
+
 class SDECostModel;
 
 std::unique_ptr<Pass>
@@ -77,6 +91,8 @@ std::unique_ptr<Pass> createVerifySdeLoweredPass();
 std::unique_ptr<Pass> createRaiseToLinalgPass();
 std::unique_ptr<Pass> createRaiseToTensorPass();
 std::unique_ptr<Pass> createRaiseMemrefToTensorPass();
+std::unique_ptr<Pass> createScalarForwardingPass();
+std::unique_ptr<Pass> createConvertToCodeletPass();
 
 } // namespace mlir::arts::sde
 

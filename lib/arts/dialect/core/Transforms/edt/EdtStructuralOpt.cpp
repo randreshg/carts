@@ -13,6 +13,7 @@
 
 /// Dialects
 #include "arts/utils/DbUtils.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/EdtUtils.h"
 #include "arts/utils/RemovalUtils.h"
 #include "arts/utils/Utils.h"
@@ -115,7 +116,7 @@ unsigned sinkExternalAllocasInEdt(EdtOp edt) {
     // post-region readers observe the updated values. Sinking them into the
     // EDT would orphan those stores and the external alloca would still carry
     // its initial (zero) contents at the post-region readers. Skip the sink.
-    if (allocaOp->hasAttr("arts.preserve"))
+    if (allocaOp->hasAttr(AttrNames::Operation::Preserve))
       continue;
     bool hasStoreInEdt = false;
     for (Operation *user : entry.second) {

@@ -123,7 +123,8 @@ fuseStages(MutableArrayRef<ElementwiseStage> stages, IRRewriter &rewriter) {
   rewriter.setInsertionPoint(stages.back().op);
 
   auto fused = sde::SdeSuIterateOp::create(
-      rewriter, loc, first.getLowerBounds(), first.getUpperBounds(),
+      rewriter, loc, /*resultTypes=*/TypeRange{},
+      first.getLowerBounds(), first.getUpperBounds(),
       first.getSteps(), first.getScheduleAttr(), first.getChunkSize(),
       first.getNowaitAttr(), first.getReductionAccumulators(),
       first.getReductionKindsAttr(), first.getReductionStrategyAttr(),
@@ -145,16 +146,32 @@ fuseStages(MutableArrayRef<ElementwiseStage> stages, IRRewriter &rewriter) {
       dst.addArgument(arg.getType(), loc);
   }
 
+  // Create inner cu_region <parallel> wrapper to match the per-stage structure.
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(&dst);
+  auto innerCuRegion = sde::SdeCuRegionOp::create(
+      rewriter, loc, /*resultTypes=*/TypeRange{},
+      sde::SdeCuKindAttr::get(rewriter.getContext(), sde::SdeCuKind::parallel),
+      /*concurrency_scope=*/nullptr,
+      /*nowait=*/nullptr,
+      /*iterArgs=*/ValueRange{});
+  Block &innerBlk = sde::ensureBlock(innerCuRegion.getBody());
+  rewriter.setInsertionPointToStart(&innerBlk);
+
   for (ElementwiseStage &stage : stages) {
+    Block *srcBody = sde::getSuIterateComputeBlock(stage.op);
     IRMapping mapper;
+    // Map the su_iterate block args (induction vars).
     for (auto [srcArg, dstArg] :
          llvm::zip(stage.op.getBody().front().getArguments(), dst.getArguments()))
       mapper.map(srcArg, dstArg);
-    for (Operation &nested : stage.op.getBody().front().without_terminator())
+    for (Operation &nested : srcBody->without_terminator())
       rewriter.clone(nested, mapper);
   }
+  sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
+
+  // Yield at su_iterate level.
+  rewriter.setInsertionPointAfter(innerCuRegion);
   sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
   return fused;
 }

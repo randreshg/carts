@@ -42,7 +42,8 @@ using namespace mlir::arts;
 namespace {
 
 static bool isCarrierOp(Operation &op) {
-  return isa<bufferization::ToTensorOp, tensor::EmptyOp, linalg::GenericOp>(op);
+  return isa<bufferization::ToTensorOp, sde::SdeMuMemrefToTensorOp,
+             tensor::EmptyOp, linalg::GenericOp>(op);
 }
 
 static linalg::GenericOp findTensorCarrier(Block &body) {
@@ -545,22 +546,22 @@ struct LoopInterchangePass
       if (!classAttr)
         return;
 
-      Block &body = op.getBody().front();
+      Block *body = sde::getSuIterateComputeBlock(op);
       auto classification = *op.getStructuredClassification();
 
       // Phase 7B: Stencil halo ordering (no tensor carrier needed)
       if (classification == sde::SdeStructuredClassification::stencil) {
-        if (tryStencilHaloInterchange(op, body))
+        if (tryStencilHaloInterchange(op, *body))
           ++interchangeCount;
         return;
       }
 
       // Phase 7A: Carrier-based interchange for any classification
-      linalg::GenericOp carrier = findTensorCarrier(body);
+      linalg::GenericOp carrier = findTensorCarrier(*body);
       if (!carrier)
         return;
 
-      if (tryCarrierInterchange(op, body, carrier))
+      if (tryCarrierInterchange(op, *body, carrier))
         ++interchangeCount;
     });
 

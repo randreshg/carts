@@ -17,6 +17,7 @@ namespace mlir::arts {
 #include "arts/utils/costs/SDECostModel.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 
 using namespace mlir;
@@ -60,8 +61,11 @@ static void refineDistributedScope(Operation *operation,
 
       // Estimate remote access count from the loop body.
       int64_t memAccessCount = 0;
-      op.getBody().walk([&](memref::LoadOp) { ++memAccessCount; });
-      op.getBody().walk([&](memref::StoreOp) { ++memAccessCount; });
+      op.getBody().walk([&](Operation *inner) {
+        if (isa<memref::LoadOp, memref::StoreOp,
+                tensor::ExtractOp, tensor::InsertOp>(inner))
+          ++memAccessCount;
+      });
 
       std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
       if (!tripCount)

@@ -324,9 +324,10 @@ static void attachAliasScopes(Operation *op, DataPointerInfo &source,
     if (noaliasScopesAttr)
       storeOp.setNoaliasScopesAttr(noaliasScopesAttr);
   } else {
-    op->setAttr("alias_scopes", aliasScopesAttr);
+    op->setAttr(LLVM::LLVMDialect::getAliasScopesAttrName(), aliasScopesAttr);
     if (noaliasScopesAttr)
-      op->setAttr("noalias_scopes", noaliasScopesAttr);
+      op->setAttr(LLVM::LLVMDialect::getNoAliasScopesAttrName(),
+                  noaliasScopesAttr);
   }
 }
 

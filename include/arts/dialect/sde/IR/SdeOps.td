@@ -243,7 +243,7 @@ def SdeCuAtomicOp
 
 def SdeSuIterateOp
     : ArtsSde_Op<"su_iterate", [
-      SingleBlock, NoTerminator,
+      SingleBlock,
       RecursiveMemoryEffects,
       AttrSizedOperandSegments,
       DeclareOpInterfaceMethods<LoopLikeOpInterface,
@@ -258,6 +258,14 @@ def SdeSuIterateOp
 
     Reduction accumulators can carry the combiner kind and identity value,
     preserving information lost by the current pipeline.
+
+    Optional `iter_args` thread tensor SSA values through the loop body.
+    When present, the body block receives matching block arguments (after
+    induction variables) and the region must terminate with `sde.yield`
+    returning updated values.  Results match iter_args 1:1.
+
+    When iter_args are absent the op produces no results and the body
+    terminates with an empty `sde.yield`.
   }];
 
   let arguments = (ins
@@ -278,17 +286,12 @@ def SdeSuIterateOp
     OptionalAttr<ArrayAttr>:$writeFootprint
   );
 
+  let results = (outs Variadic<AnyType>:$results);
+
   let regions = (region SizedRegion<1>:$body);
 
-  let assemblyFormat = [{
-    `(` $lowerBounds `)` `to` `(` $upperBounds `)` `step` `(` $steps `)`
-    (`schedule` `(` $schedule^ (`,` $chunkSize^)? `)` )?
-    (`nowait` $nowait^)?
-    (`reduction` `[` $reductionKinds^ `]` `(` $reductionAccumulators `:` type($reductionAccumulators) `)`)?
-    (`reduction_strategy` `(` $reductionStrategy^ `)` )?
-    (`classification` `(` $structuredClassification^ `)` )?
-    $body attr-dict
-  }];
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
 }
 
 def SdeSuDistributeOp
@@ -427,6 +430,55 @@ def SdeCuCodeletOp
   }];
 
   let hasVerifier = 1;
+}
+
+def SdeMuAllocOp : ArtsSde_Op<"mu_alloc", [Pure]> {
+  let summary = "Allocate a tensor value with given shape.";
+  let description = [{
+    Creates a tensor SSA value of the given type with undefined contents.
+    This is the SDE-level equivalent of `memref.alloca` — it declares a
+    data container for the SDE dataflow graph. Supports both static and
+    dynamic dimensions.
+
+    Lowered by ConvertSdeToArts to `tensor.empty()` for the bufferization
+    path, or directly to `arts.db_alloc` for distributed execution.
+
+    Examples:
+      %arr = sde.mu_alloc : tensor<100xi32>
+      %mat = sde.mu_alloc(%n, %m) : tensor<?x?xf64>
+  }];
+  let arguments = (ins Variadic<Index>:$dynamicSizes);
+  let results = (outs AnyRankedTensor:$tensor);
+  let assemblyFormat = [{
+    (`(` $dynamicSizes^ `)`)? attr-dict `:` type($tensor)
+  }];
+  let hasVerifier = 1;
+}
+
+def SdeMuMemrefToTensorOp : ArtsSde_Op<"mu_memref_to_tensor", [Pure]> {
+  let summary = "Snapshot a memref into a tensor value at an SDE boundary.";
+  let description = [{
+    Creates a tensor SSA value from a memref at an SDE region boundary (e.g.,
+    before entering a cu_region). The tensor value enters pure SSA dataflow;
+    the memref is not modified. Lowered by ConvertSdeToArts to
+    `bufferization.to_tensor`.
+  }];
+  let arguments = (ins AnyMemRef:$memref);
+  let results = (outs AnyTensor:$tensor);
+  let assemblyFormat = "$memref `:` type($memref) `->` type($tensor) attr-dict";
+}
+
+def SdeMuTensorToMemrefOp
+    : ArtsSde_Op<"mu_tensor_to_memref", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Materialize a tensor value back into a memref at an SDE boundary.";
+  let description = [{
+    Writes a tensor SSA value back to its backing memref at an SDE region
+    boundary (e.g., after a cu_region yields tensor results). This is the
+    inverse of `sde.mu_memref_to_tensor`. Lowered by ConvertSdeToArts to
+    `bufferization.materialize_in_destination`.
+  }];
+  let arguments = (ins AnyTensor:$source, Arg<AnyMemRef, "", [MemWrite]>:$dest);
+  let assemblyFormat = "$source `in` `writable` $dest `:` type($source) `,` type($dest) attr-dict";
 }
 
 def SdeMuDataOp : ArtsSde_Op<"mu_data", [Pure]> {
