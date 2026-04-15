@@ -668,7 +668,6 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createRaiseToLinalgPass());
   // Dep passes first (structural transforms), then effect passes (scheduling decisions).
   pm.addPass(arts::sde::createLoopInterchangePass());
-  pm.addPass(arts::sde::createVectorizationPass());
   pm.addPass(arts::sde::createTilingPass(costModel));
   pm.addPass(arts::sde::createStructuredSummariesPass(costModel));
   pm.addPass(arts::sde::createElementwiseFusionPass());
@@ -679,6 +678,7 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createDistributionPlanningPass(costModel));
   pm.addPass(arts::sde::createIterationSpaceDecompositionPass());
   pm.addPass(arts::sde::createBarrierEliminationPass(costModel));
+  pm.addPass(arts::sde::createVectorizationPass());
   pm.addPass(arts::sde::createLowerToMemrefPass());
   pm.addPass(arts::sde::createConvertToCodeletPass());
   pm.addPass(arts::sde::createTensorCleanupPass());

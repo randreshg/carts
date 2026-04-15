@@ -220,6 +220,7 @@ constexpr StringLiteral VectorizeWidth = "sde.vectorize_width";
 constexpr StringLiteral UnrollFactor = "sde.unroll_factor";
 constexpr StringLiteral ReductionSplitFactor = "sde.reduction_split_factor";
 constexpr StringLiteral CollapsedDims = "sde.collapsed_dims";
+constexpr StringLiteral InterleaveCount = "sde.interleave_count";
 constexpr StringLiteral ExpandTileSize = "sde.expand_tile_size";
 constexpr StringLiteral PackedTile = "sde.packed_tile";
 } // namespace Sde
@@ -227,6 +228,20 @@ constexpr StringLiteral PackedTile = "sde.packed_tile";
 } // namespace Operation
 
 } // namespace AttrNames
+
+/// Forward SDE loop optimization hints (vectorize_width, unroll_factor,
+/// interleave_count) from one operation to another.
+inline void copySdeHintAttrs(Operation *source, Operation *dest) {
+  if (!source || !dest)
+    return;
+  for (StringRef attrName :
+       {AttrNames::Operation::Sde::VectorizeWidth,
+        AttrNames::Operation::Sde::UnrollFactor,
+        AttrNames::Operation::Sde::InterleaveCount}) {
+    if (auto attr = source->getAttr(attrName))
+      dest->setAttr(attrName, attr);
+  }
+}
 
 enum class MetadataProvenanceKind : uint8_t {
   Exact = 0,

@@ -1,17 +1,21 @@
 ///==========================================================================///
 /// File: Vectorization.cpp
 ///
-/// Carrier-aware vectorization width analysis for su_iterate bodies.
-/// Walks carrier-authoritative linalg.generic ops and stamps
-/// sde.vectorize_width on the enclosing su_iterate based on element type
-/// and static loop ranges. The actual vectorization is performed downstream
-/// by LoopVectorizationHints (in rt/) which emits LLVM vectorization metadata.
+/// Vectorize static-shape linalg.generic carriers inside su_iterate bodies
+/// using upstream MLIR's linalg::vectorize(). Runs after BarrierElimination
+/// (all dep/effect passes need carriers) and before LowerToMemref.
 ///
-/// Only analyzes carriers with:
+/// Only vectorizes carriers with:
 /// - All-parallel iterator types (no reduction vectorization yet)
 /// - Static shapes on all operands and loop ranges
 /// - Tensor semantics (not buffer)
-/// Defaults: f32->8, f64->4, i32->8, i64->4.
+/// Uses sde.vectorize_width attr if present, otherwise defaults based on
+/// element type (f32->8, f64->4, i32->8).
+///
+/// The vector sizes passed to linalg::vectorize() must be >= the static loop
+/// ranges. We use the full static loop ranges as vector sizes so the carrier
+/// is replaced by a single vector operation per dimension. LLVM's backend
+/// will decompose large vectors into hardware-sized chunks.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
@@ -20,30 +24,20 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
-#include "arts/utils/Debug.h"
-#include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/PatternMatch.h"
 
+#include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(vectorization);
 
 using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-
-/// Get default vectorization width for an element type.
-static int64_t getDefaultVectorWidth(Type elemTy) {
-  if (elemTy.isF32())
-    return 8;
-  if (elemTy.isF64())
-    return 4;
-  if (elemTy.isInteger(32))
-    return 8;
-  if (elemTy.isInteger(64))
-    return 4;
-  return 4;
-}
 
 /// Check whether a body block is carrier-authoritative: it contains a
 /// linalg.generic carrier but NO scalar executable ops (memref.load/store).
@@ -67,12 +61,12 @@ static bool isCarrierAuthoritative(Block &body) {
   return hasCarrier && !hasScalar;
 }
 
-/// Check if a linalg.generic is a vectorization candidate:
+/// Check if a linalg.generic can be vectorized:
 /// - All iterator types must be parallel (no reduction vectorization yet)
 /// - All shapes must be static
 /// - Must have tensor semantics
 /// - Must have at least one output
-static bool isVectorizationCandidate(linalg::GenericOp generic) {
+static bool canVectorize(linalg::GenericOp generic) {
   for (auto iterType : generic.getIteratorTypesArray()) {
     if (iterType != utils::IteratorType::parallel)
       return false;
@@ -97,49 +91,56 @@ struct VectorizationPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    unsigned stamped = 0;
 
+    // Collect vectorizable carriers inside carrier-authoritative su_iterate
+    // bodies.
+    SmallVector<linalg::GenericOp> candidates;
     module.walk([&](sde::SdeSuIterateOp iterOp) {
-      // Skip if already stamped.
-      if (iterOp->hasAttr(AttrNames::Operation::Sde::VectorizeWidth))
-        return;
-
       Block *computeBlock = sde::getSuIterateComputeBlock(iterOp);
       if (!computeBlock)
         return;
       if (!isCarrierAuthoritative(*computeBlock))
         return;
-
-      // Find the first vectorizable carrier.
-      linalg::GenericOp carrier;
       computeBlock->walk([&](linalg::GenericOp generic) {
-        if (!carrier && isVectorizationCandidate(generic))
-          carrier = generic;
+        if (canVectorize(generic))
+          candidates.push_back(generic);
       });
-      if (!carrier)
-        return;
-
-      // Determine width from element type.
-      Type elemTy = cast<RankedTensorType>(carrier.getDpsInits()[0].getType())
-                        .getElementType();
-      int64_t width = getDefaultVectorWidth(elemTy);
-
-      // Clamp to innermost loop range if smaller.
-      SmallVector<int64_t> ranges = carrier.getStaticLoopRanges();
-      if (!ranges.empty())
-        width = std::min(width, ranges.back());
-
-      iterOp->setAttr(
-          AttrNames::Operation::Sde::VectorizeWidth,
-          IntegerAttr::get(IndexType::get(&getContext()), width));
-      ++stamped;
     });
 
-    if (stamped > 0)
-      ARTS_INFO("Vectorization: stamped width on " << stamped
-                                                    << " su_iterate op(s)");
-    else
+    if (candidates.empty()) {
       ARTS_DEBUG("Vectorization: no vectorizable carriers found");
+      return;
+    }
+
+    IRRewriter rewriter(&getContext());
+    unsigned vectorized = 0;
+
+    for (linalg::GenericOp generic : candidates) {
+      // Use the full static loop ranges as vector sizes. linalg::vectorize()
+      // requires vector sizes >= iteration space sizes.
+      SmallVector<int64_t> vectorSizes = generic.getStaticLoopRanges();
+      if (vectorSizes.empty())
+        continue;
+
+      SmallVector<bool> scalableDims(vectorSizes.size(), false);
+      rewriter.setInsertionPoint(generic);
+      auto result =
+          linalg::vectorize(rewriter, generic, vectorSizes, scalableDims);
+      if (failed(result)) {
+        ARTS_DEBUG("Vectorization: vectorize() failed for carrier");
+        continue;
+      }
+      // Replace original op results with vectorized replacements and erase.
+      for (auto [oldResult, newResult] :
+           llvm::zip(generic.getResults(), result->replacements))
+        rewriter.replaceAllUsesWith(oldResult, newResult);
+      rewriter.eraseOp(generic);
+      ++vectorized;
+    }
+
+    ARTS_INFO("Vectorization: vectorized " << vectorized << " of "
+                                           << candidates.size()
+                                           << " candidate carrier(s)");
   }
 };
 

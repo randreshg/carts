@@ -39,6 +39,7 @@ namespace mlir::arts {
 
 #include "arts/utils/Debug.h"
 #include "arts/utils/LoopUtils.h"
+#include "arts/utils/OperationAttributes.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
@@ -684,20 +685,29 @@ struct LoopVectorizationHintsPass
           (funcOp.getNumArguments() >= 4) ? funcOp.getArgument(3) : Value{};
       SmallVector<LLVM::AccessGroupAttr> parallelAccessGroups;
 
+      // SDE is the single source of truth for loop optimization hints.
+      // Read SDE-stamped attrs from the EDT function; these were forwarded
+      // from StructuredSummaries → ConvertSdeToArts → ForLowering → EdtLowering.
+      unsigned sdeVecWidth = 0;
+      unsigned sdeUnrollFactor = 0;
+      unsigned sdeInterleaveCount = 0;
+      if (auto attr = funcOp->getAttrOfType<IntegerAttr>(
+              AttrNames::Operation::Sde::VectorizeWidth))
+        sdeVecWidth = attr.getInt();
+      if (auto attr = funcOp->getAttrOfType<IntegerAttr>(
+              AttrNames::Operation::Sde::UnrollFactor))
+        sdeUnrollFactor = attr.getInt();
+      if (auto attr = funcOp->getAttrOfType<IntegerAttr>(
+              AttrNames::Operation::Sde::InterleaveCount))
+        sdeInterleaveCount = attr.getInt();
+
       int innermostCount = 0;
       int outerCount = 0;
 
-      funcOp.walk([&](LLVM::BrOp brOp) {
-        Block *currentBlock = brOp->getBlock();
-        Block *destBlock = brOp.getDest();
-
-        if (!domInfo.dominates(destBlock, currentBlock))
-          return;
-
-        if (brOp.getLoopAnnotationAttr())
-          return;
-
-        if (loopHasVariantDepArrayAccess(destBlock, currentBlock, depv)) {
+      // Shared backedge processing for both BrOp and CondBrOp.
+      auto processBackedge = [&](Operation *terminator, Block *headerBlock,
+                                 Block *latchBlock) {
+        if (loopHasVariantDepArrayAccess(headerBlock, latchBlock, depv)) {
           skippedUnsafeLoops++;
           ARTS_DEBUG_TYPE("Skipping loop hints in "
                           << funcOp.getName()
@@ -706,8 +716,8 @@ struct LoopVectorizationHintsPass
         }
 
         SmallPtrSet<Block *, 16> loopBlocks =
-            getLoopBlocks(destBlock, currentBlock);
-        bool innermost = isInnermostLoop(destBlock, currentBlock, domInfo);
+            getLoopBlocks(headerBlock, latchBlock);
+        bool innermost = isInnermostLoop(headerBlock, latchBlock, domInfo);
         if (innermost && loopHasCallLikeFloatingPointWork(loopBlocks)) {
           skippedCallHeavyLoops++;
           ARTS_DEBUG_TYPE("Skipping innermost loop hints in "
@@ -716,94 +726,72 @@ struct LoopVectorizationHintsPass
           return;
         }
 
-        auto typeInfo = analyzeLoadTypes(loopBlocks);
-        unsigned width = vectorWidth ? vectorWidth : typeInfo.vectorWidth;
-        unsigned unrollCount = determineUnrollCount(typeInfo);
+        // SDE attrs are authoritative. Fall back to LLVM load-type analysis
+        // only for non-SDE loops (e.g. runtime helper loops).
+        unsigned width, unrollCount, interleave;
+        if (sdeVecWidth) {
+          width = sdeVecWidth;
+          unrollCount = sdeUnrollFactor ? sdeUnrollFactor : 2;
+          interleave = sdeInterleaveCount ? sdeInterleaveCount : interleaveCount;
+        } else {
+          auto typeInfo = analyzeLoadTypes(loopBlocks);
+          width = vectorWidth ? vectorWidth : typeInfo.vectorWidth;
+          unrollCount = determineUnrollCount(typeInfo);
+          interleave = interleaveCount;
+        }
 
         std::optional<unsigned> constantTripCount =
-            inferConstantTripCount(destBlock, currentBlock);
+            inferConstantTripCount(headerBlock, latchBlock);
         bool fullUnroll = innermost && constantTripCount &&
                           *constantTripCount > 0 && *constantTripCount <= 8;
         unsigned loopUnrollCount =
             fullUnroll ? *constantTripCount : unrollCount;
 
+        LLVM::LoopAnnotationAttr annotation;
         if (innermost) {
-          brOp.setLoopAnnotationAttr(createInnermostLoopHints(
-              ctx, width, interleaveCount, enableScalable, enableMustProgress,
-              loopUnrollCount, parallelAccessGroups, fullUnroll));
+          annotation = createInnermostLoopHints(
+              ctx, width, interleave, enableScalable, enableMustProgress,
+              loopUnrollCount, parallelAccessGroups, fullUnroll);
           innermostCount++;
           ARTS_DEBUG_TYPE(
               "Innermost loop - full vectorization hints at "
-              << brOp.getLoc()
+              << terminator->getLoc()
               << (fullUnroll ? " with loop-local full unroll" : ""));
         } else {
-          brOp.setLoopAnnotationAttr(createOuterLoopHints(
-              ctx, enableMustProgress, loopUnrollCount, parallelAccessGroups));
+          annotation = createOuterLoopHints(
+              ctx, enableMustProgress, loopUnrollCount, parallelAccessGroups);
           outerCount++;
-          ARTS_DEBUG_TYPE("Outer loop - light hints (no vectorization) at "
-                          << brOp.getLoc());
+          ARTS_DEBUG_TYPE("Outer loop - light hints at "
+                          << terminator->getLoc());
         }
+
+        if (auto brOp = dyn_cast<LLVM::BrOp>(terminator))
+          brOp.setLoopAnnotationAttr(annotation);
+        else if (auto condBr = dyn_cast<LLVM::CondBrOp>(terminator))
+          condBr.setLoopAnnotationAttr(annotation);
+      };
+
+      funcOp.walk([&](LLVM::BrOp brOp) {
+        Block *currentBlock = brOp->getBlock();
+        Block *destBlock = brOp.getDest();
+        if (!domInfo.dominates(destBlock, currentBlock))
+          return;
+        if (brOp.getLoopAnnotationAttr())
+          return;
+        processBackedge(brOp.getOperation(), destBlock, currentBlock);
       });
 
       funcOp.walk([&](LLVM::CondBrOp condBr) {
         if (!isLoopBackedge(condBr, domInfo))
           return;
-
         if (condBr.getLoopAnnotationAttr())
           return;
-
         Block *currentBlock = condBr->getBlock();
         Block *trueBlock = condBr.getTrueDest();
         Block *falseBlock = condBr.getFalseDest();
         Block *headerBlock =
             domInfo.dominates(trueBlock, currentBlock) ? trueBlock : falseBlock;
-
-        if (loopHasVariantDepArrayAccess(headerBlock, currentBlock, depv)) {
-          skippedUnsafeLoops++;
-          ARTS_DEBUG_TYPE("Skipping loop hints in "
-                          << funcOp.getName()
-                          << " (loop-varying dep-array access)");
-          return;
-        }
-
-        SmallPtrSet<Block *, 16> loopBlocks =
-            getLoopBlocks(headerBlock, currentBlock);
-        bool innermost = isInnermostLoop(headerBlock, currentBlock, domInfo);
-        if (innermost && loopHasCallLikeFloatingPointWork(loopBlocks)) {
-          skippedCallHeavyLoops++;
-          ARTS_DEBUG_TYPE("Skipping innermost loop hints in "
-                          << funcOp.getName()
-                          << " (call-like floating-point work)");
-          return;
-        }
-
-        auto typeInfo = analyzeLoadTypes(loopBlocks);
-        unsigned width = vectorWidth ? vectorWidth : typeInfo.vectorWidth;
-        unsigned unrollCount = determineUnrollCount(typeInfo);
-
-        std::optional<unsigned> constantTripCount =
-            inferConstantTripCount(headerBlock, currentBlock);
-        bool fullUnroll = innermost && constantTripCount &&
-                          *constantTripCount > 0 && *constantTripCount <= 8;
-        unsigned loopUnrollCount =
-            fullUnroll ? *constantTripCount : unrollCount;
-
-        if (innermost) {
-          condBr.setLoopAnnotationAttr(createInnermostLoopHints(
-              ctx, width, interleaveCount, enableScalable, enableMustProgress,
-              loopUnrollCount, parallelAccessGroups, fullUnroll));
-          innermostCount++;
-          ARTS_DEBUG_TYPE(
-              "Innermost loop (cond) - full vectorization hints at "
-              << condBr.getLoc()
-              << (fullUnroll ? " with loop-local full unroll" : ""));
-        } else {
-          condBr.setLoopAnnotationAttr(createOuterLoopHints(
-              ctx, enableMustProgress, loopUnrollCount, parallelAccessGroups));
-          outerCount++;
-          ARTS_DEBUG_TYPE("Outer loop (cond) - light hints at "
-                          << condBr.getLoc());
-        }
+        processBackedge(condBr.getOperation(), headerBlock, currentBlock);
       });
 
       int hintsInFunc = innermostCount + outerCount;

@@ -1711,6 +1711,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   ++numTaskEdtsCreated;
   transferOperationContract(forOp.getOperation(), taskEdt.getOperation());
   copyPlanAttrs(forOp.getOperation(), taskEdt.getOperation());
+  copySdeHintAttrs(forOp.getOperation(), taskEdt.getOperation());
   if (refinedTaskBlockShape)
     setStencilBlockShape(taskEdt.getOperation(), *refinedTaskBlockShape);
 

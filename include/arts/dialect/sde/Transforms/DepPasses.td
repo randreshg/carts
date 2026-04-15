@@ -103,18 +103,19 @@ def IterationSpaceDecomposition
 
 def Vectorization
     : Pass<"sde-vectorization", "mlir::ModuleOp"> {
-  let summary = "Carrier-aware vectorization width analysis for su_iterate bodies";
+  let summary = "Vectorize static-shape linalg.generic carriers in su_iterate bodies";
   let description = [{
-    Walks carrier-authoritative `linalg.generic` ops inside `su_iterate` and
-    stamps `sde.vectorize_width` based on element type and static loop ranges.
-    The actual vectorization is performed downstream by LoopVectorizationHints
-    (in rt/) which reads this attr and emits LLVM vectorization metadata.
+    Vectorizes carrier-authoritative `linalg.generic` ops inside `su_iterate`
+    using upstream MLIR's linalg::vectorize(). Replaces eligible carriers with
+    `vector.transfer_read/write` + arith-on-vectors. LLVM's backend decomposes
+    large vectors into hardware-sized chunks.
 
-    Only analyzes carriers with all-parallel iterator types and static shapes.
-    Defaults: f32→8, f64→4, i32→8, i64→4.
+    Only vectorizes carriers with all-parallel iterator types, static shapes on
+    all operands and loop ranges, and tensor semantics.
   }];
   let dependentDialects = ["::mlir::linalg::LinalgDialect",
-                           "::mlir::tensor::TensorDialect"];
+                           "::mlir::tensor::TensorDialect",
+                           "::mlir::vector::VectorDialect"];
   let constructor = "mlir::arts::sde::createVectorizationPass()";
 }
 

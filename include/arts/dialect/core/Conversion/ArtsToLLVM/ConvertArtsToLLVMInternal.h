@@ -43,7 +43,7 @@ public:
   static ArtsHintBuilder undef(OpBuilder &builder, Location loc,
                                Type descriptorType) {
     return ArtsHintBuilder(
-        builder.create<LLVM::UndefOp>(loc, descriptorType).getResult());
+        LLVM::UndefOp::create(builder, loc, descriptorType).getResult());
   }
 
   void setRoute(OpBuilder &builder, Location loc, Value route) {

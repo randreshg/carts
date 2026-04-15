@@ -129,6 +129,7 @@ def LowerToMemref : Pass<"lower-to-memref", "mlir::ModuleOp"> {
                            "::mlir::tensor::TensorDialect",
                            "::mlir::memref::MemRefDialect",
                            "::mlir::linalg::LinalgDialect",
+                           "::mlir::vector::VectorDialect",
                            "::mlir::func::FuncDialect",
                            "::mlir::scf::SCFDialect",
                            "::mlir::arts::sde::ArtsSdeDialect"];

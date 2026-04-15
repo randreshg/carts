@@ -838,6 +838,16 @@ void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
         info.analysis.criticalPathDistance, contractKind);
 }
 
+LoweringContractOp
+LoweringContractOp::create(OpBuilder &builder, Location location, Value target,
+                           const LoweringContractInfo &info) {
+  OperationState state(location, getOperationName());
+  build(builder, state, target, info);
+  auto result = llvm::dyn_cast<LoweringContractOp>(builder.create(state));
+  assert(result && "builder didn't return the right type");
+  return result;
+}
+
 namespace {
 static PatternAttr
 buildPatternAttr(OpBuilder &builder, std::optional<ArtsDepPattern> depPattern,

@@ -34,35 +34,35 @@ expandElementWindowWithHalo(OpBuilder &builder, Location loc, Value elemOffset,
   Value start = elemOffset;
   if (minOffset < 0) {
     Value haloLeft = arts::createConstantIndex(builder, loc, -minOffset);
-    Value canShift = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::uge, start, haloLeft);
-    Value shifted = builder.create<arith::SubIOp>(loc, start, haloLeft);
-    start = builder.create<arith::SelectOp>(loc, canShift, shifted, zero);
+    Value canShift = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::uge, start, haloLeft);
+    Value shifted = arith::SubIOp::create(builder, loc, start, haloLeft);
+    start = arith::SelectOp::create(builder, loc, canShift, shifted, zero);
   } else if (minOffset > 0) {
     Value shift = arts::createConstantIndex(builder, loc, minOffset);
-    start = builder.create<arith::AddIOp>(loc, start, shift);
+    start = arith::AddIOp::create(builder, loc, start, shift);
   }
 
-  Value end = builder.create<arith::AddIOp>(loc, elemOffset, elemSize);
+  Value end = arith::AddIOp::create(builder, loc, elemOffset, elemSize);
   if (maxOffset > 0) {
     Value haloRight = arts::createConstantIndex(builder, loc, maxOffset);
-    Value endPlusHalo = builder.create<arith::AddIOp>(loc, end, haloRight);
+    Value endPlusHalo = arith::AddIOp::create(builder, loc, end, haloRight);
     end = totalExtent
-              ? builder.create<arith::MinUIOp>(loc, endPlusHalo, totalExtent)
+              ? arith::MinUIOp::create(builder, loc, endPlusHalo, totalExtent)
               : endPlusHalo;
   } else if (maxOffset < 0) {
     Value shrink = arts::createConstantIndex(builder, loc, -maxOffset);
-    Value canShrink = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::uge, end, shrink);
-    Value shrunken = builder.create<arith::SubIOp>(loc, end, shrink);
-    end = builder.create<arith::SelectOp>(loc, canShrink, shrunken, zero);
+    Value canShrink = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::uge, end, shrink);
+    Value shrunken = arith::SubIOp::create(builder, loc, end, shrink);
+    end = arith::SelectOp::create(builder, loc, canShrink, shrunken, zero);
   }
 
-  Value endAfterStart =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge, end, start);
-  Value rawSize = builder.create<arith::SubIOp>(loc, end, start);
+  Value endAfterStart = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::uge, end, start);
+  Value rawSize = arith::SubIOp::create(builder, loc, end, start);
   Value size =
-      builder.create<arith::SelectOp>(loc, endAfterStart, rawSize, zero);
+      arith::SelectOp::create(builder, loc, endAfterStart, rawSize, zero);
   return ExpandedElementWindow{start, size};
 }
 
