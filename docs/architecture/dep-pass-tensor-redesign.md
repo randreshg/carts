@@ -1,6 +1,6 @@
-# Dep Pass Redesign: From Passive Carriers to Tensor-First Transforms
+# Dep Pass Architecture: From Passive Carriers to Carrier-Authoritative
 
-**Status**: PARTIALLY IMPLEMENTED
+**Status**: IMPLEMENTED (Steps 9-12b), PROPOSED remainder (Steps 13-14)
 **Date**: 2026-04-15 (updated)
 **Context**: Branch `architecture/sde-restructuring`, post-carrier-authoritative
 
@@ -14,15 +14,21 @@ But **none of the dep passes actually transform the carrier**. Every pass operat
 on the raw `scf.for` + `memref.load/store` body while carrying the `linalg.generic`
 as passive diagnostic cargo.
 
+> **Resolution (2026-04-15)**: The carrier paradox is resolved. The `linalg.generic`
+> carrier is now **authoritative** for elementwise, matmul, and reduction patterns.
+> RaiseToLinalg creates the carrier and erases the scalar body. All dep/effect
+> passes operate on the carrier or its traced operands. See the updated pass table
+> below. Stencils remain on the scalar body fallback path (no carrier yet).
+
 ### What Each Dep Pass Actually Does
 
 | Pass | Carrier Role | What It Actually Operates On |
 |------|-------------|------------------------------|
-| **LoopInterchange** | ✅ TRANSFORM carrier via `interchangeGenericOp()` | Carrier-authoritative: permutes carrier dims. Fallback: swaps `scf.for` loops |
-| **Tiling** | ✅ TRANSFORM carrier via `extract_slice`/`insert_slice` | Carrier-authoritative: tiles carrier directly. Fallback: strip-mines body |
+| **LoopInterchange** | TRANSFORM carrier via `interchangeGenericOp()` | Carrier-authoritative: permutes carrier dims. Fallback: swaps `scf.for` loops |
+| **Tiling** | TRANSFORM carrier via `extract_slice`/`insert_slice` | Carrier-authoritative: tiles carrier directly. Fallback: strip-mines body |
 | **StructuredSummaries** | READ via `StructuredOpAnalysis` | Reads classification attr + re-analyzes (handles tensor ops in carriers) |
-| **ElementwiseFusion** | ✅ READ carrier DPS outputs for write-set | Carrier-authoritative: traces `getDpsInits()` → `mu_memref_to_tensor` → memref root. Fallback: `memref.store` walk |
-| **BarrierElimination** | ✅ READ carrier DPS inputs/outputs for read/write sets | Carrier-authoritative: traces `getDpsInputs()`/`getDpsInits()` → memref roots. Fallback: `memref.load/store` walk |
+| **ElementwiseFusion** | READ carrier DPS outputs for write-set | Carrier-authoritative: traces `getDpsInits()` -> `mu_memref_to_tensor` -> memref root. Fallback: `memref.store` walk |
+| **BarrierElimination** | READ carrier DPS inputs/outputs for read/write sets | Carrier-authoritative: traces `getDpsInputs()`/`getDpsInits()` -> memref roots. Fallback: `memref.load/store` walk |
 | **IterationSpaceDecomposition** | IGNORED (stencils have no carrier) | Pattern-matches `scf.for` + `scf.if` + `memref.load/store` counts |
 
 **The carrier is now authoritative for elementwise/matmul/reduction.** After
@@ -30,71 +36,100 @@ RaiseToLinalg creates the carrier and erases the scalar body, all downstream
 passes operate on the carrier (or its traced operands) directly. Stencils
 remain on the scalar fallback path (no carrier yet).
 
-### TensorOpt: The Most Awkward Case
+### TensorOpt: The Most Awkward Case (Historical)
 
-`TensorOpt.cpp` (636 LOC) is the clearest example of the paradox:
+This section documents the original motivation. `TensorOpt.cpp` has since been
+renamed to `Tiling.cpp` and rewritten to use carrier-authoritative transforms.
+
+The original `TensorOpt.cpp` (636 LOC) was the clearest example of the paradox:
 
 ```
-What the name says:     "Apply cost-model-driven tensor optimizations"
-What it actually does:   Strip-mine su_iterate step + clone memref scalar body
+What the name said:      "Apply cost-model-driven tensor optimizations"
+What it actually did:     Strip-mine su_iterate step + clone memref scalar body
 
-What uses the carrier:   isElementwiseTensorCandidate() — checks carrier iterator
-                         types and indexing maps to VALIDATE that tiling is safe
-What skips the carrier:  cloneScalarBodyIntoTileLoop() — explicitly filters out
-                         carrier ops with isCarrierOp()
+What used the carrier:    isElementwiseTensorCandidate() — checked carrier iterator
+                          types and indexing maps to VALIDATE that tiling was safe
+What skipped the carrier: cloneScalarBodyIntoTileLoop() — explicitly filtered out
+                          carrier ops with isCarrierOp()
 ```
 
-The pass reads the `linalg.generic` carrier to determine if tiling is safe (disjoint
-write set, parallel vs reduction dims), then ignores the carrier entirely and manually
-constructs a tiled `scf.for` loop around the raw memref body. This is ~500 LOC of
+The pass read the `linalg.generic` carrier to determine if tiling was safe (disjoint
+write set, parallel vs reduction dims), then ignored the carrier entirely and manually
+constructed a tiled `scf.for` loop around the raw memref body. This was ~500 LOC of
 manual strip-mining that upstream MLIR's `scf::tileUsingSCF()` does in ~50 LOC.
+
+**What changed**: Tiling.cpp (~900 LOC) now has a carrier-authoritative path that
+tiles the `linalg.generic` directly via `extract_slice` -> tiled generic ->
+`insert_slice`. The dual-rep fallback path (scf.for + scalar clone) remains for
+stencils and cost-model edge cases.
 
 ---
 
-## Current vs. Desired: The Dual-Representation Problem
+## Architecture Evolution
 
-### Current: Carrier as Diagnostic Copy
+### Before (pre-2026-04-15): Dual Representation
 
-```
-su_iterate {
-  cu_region <parallel> {
-    bufferization.to_tensor %A → %in          ┐
-    linalg.generic ins(%in) outs(%out) { ... } ├── CARRIER (passive, diagnostic)
-    tensor.empty → %out                        ┘
-
-    memref.load %A[%i]                          ┐
-    arith.mulf %v, %cst                        ├── BODY (active, authoritative)
-    memref.store %r, %B[%i]                     ┘
-  }
-}
-```
-
-The carrier is a COPY of the body's computation structure. Dep passes transform
-the body while the carrier watches. This means:
-- LoopInterchange swaps `scf.for` loops but the carrier's indexing maps still
-  reflect the pre-interchange ordering (stale)
-- TensorOpt tiles the body but the carrier is erased (not tiled)
-- StructuredSummaries re-analyzes the body directly (ignoring the carrier)
-
-### Desired: Carrier as Authority
+Carrier and scalar body coexisted. The carrier was a passive diagnostic copy:
 
 ```
 su_iterate {
   cu_region <parallel> {
-    bufferization.to_tensor %A → %in
-    %tiled = scf.for %ii ... {                     ┐
-      %slice = tensor.extract_slice %in [%ii]...   │
-      %out = tensor.empty [tile_size]               ├── CARRIER IS THE BODY
-      linalg.generic ins(%slice) outs(%out) { ... } │
-      tensor.insert_slice %result into %out_full    │
-    }                                               ┘
-    // NO separate memref body — carrier IS authoritative
+    bufferization.to_tensor %A -> %in          |
+    linalg.generic ins(%in) outs(%out) { ... } |-- CARRIER (passive, diagnostic)
+    tensor.empty -> %out                        |
+
+    memref.load %A[%i]                          |
+    arith.mulf %v, %cst                         |-- BODY (active, authoritative)
+    memref.store %r, %B[%i]                     |
   }
 }
 ```
 
-Dep passes transform the carrier using upstream MLIR APIs. LowerToMemref
-(or one-shot bufferization) then derives the final memref body FROM the carrier.
+The carrier was a COPY of the body's computation structure. Dep passes transformed
+the body while the carrier watched. This meant:
+- LoopInterchange swapped `scf.for` loops but the carrier's indexing maps still
+  reflected the pre-interchange ordering (stale)
+- TensorOpt tiled the body but the carrier was erased (not tiled)
+- StructuredSummaries re-analyzed the body directly (ignoring the carrier)
+
+### After (2026-04-15): Carrier-Authoritative
+
+The `linalg.generic` carrier IS the computation for elementwise, matmul, and
+reduction patterns. The scalar body is erased after carrier creation:
+
+```
+su_iterate {
+  cu_region <parallel> {
+    sde.mu_memref_to_tensor %A -> %in
+    %tiled = scf.for %ii ... {                     |
+      %slice = tensor.extract_slice %in [%ii]...   |
+      %out = tensor.empty [tile_size]               |-- CARRIER IS THE BODY
+      linalg.generic ins(%slice) outs(%out) { ... } |
+      tensor.insert_slice %result into %out_full    |
+    }                                               |
+    // NO separate memref body -- carrier IS authoritative
+  }
+}
+```
+
+Dep passes transform the carrier using upstream MLIR APIs. LowerToMemref then
+derives the final memref body FROM the carrier via `traceToMemref()`.
+
+---
+
+## The Carrier Lifecycle (Current)
+
+```
+Pass 3   RaiseToLinalg:       CREATE carrier, ERASE scalar body
+Pass 4   LoopInterchange:     TRANSFORM carrier via interchangeGenericOp()
+Pass 5   Tiling:              TRANSFORM carrier via extract_slice/insert_slice
+Pass 6   StructuredSummaries: READ classification attr
+Pass 7   ElementwiseFusion:   READ carrier DPS outputs -> memref roots
+Pass 14  BarrierElimination:  READ carrier DPS inputs/outputs -> memref roots
+Pass 15  LowerToMemref:       LOWER carrier -> scf.for + memref.load/store
+```
+
+Carrier is born, transformed, analyzed, lowered. Every pass adds value.
 
 ---
 
@@ -110,7 +145,7 @@ which requires explicit index computation.
 
 Two paths to stencil carriers:
 
-**Path A: tensor.pad + linalg.generic** (from `sde-optimization-opportunities.md` §4):
+**Path A: tensor.pad + linalg.generic** (from `sde-optimization-opportunities.md` S4):
 ```mlir
 // Pad input with halo region
 %padded = tensor.pad %A low[1, 1] high[1, 1] { yield %zero }
@@ -137,200 +172,96 @@ must handle both carrier-based and body-based transforms.
 
 ---
 
-## Proposed Dep Pass Granularity
+## Dep Pass Granularity
 
 ### Three Transform Tiers
 
 ```
-── TIER 1: CARRIER TRANSFORMS (operate ON linalg.generic) ──────────────
+-- TIER 1: CARRIER TRANSFORMS (operate ON linalg.generic) ---------------
 
   dep/tensor/
-    Interchange.cpp       linalg::interchangeGenericOp() on carrier
-    Tiling.cpp            scf::tileUsingSCF() on carrier via TilingInterface
-    Fusion.cpp            linalg::fuseElementwiseOps() on carriers
+    Interchange.cpp       linalg::interchangeGenericOp() on carrier     607 LOC
+    Tiling.cpp            carrier-authoritative tiling via               902 LOC
+                          extract_slice/insert_slice + cost model
+
+  dep/fusion/
+    ElementwiseFusion.cpp carrier DPS output tracing for write-set      297 LOC
 
   Each reads:  linalg.generic carrier (indexing maps, iterator types)
   Each writes: transformed linalg.generic (new maps, tiled structure)
-  Fallback:    if no carrier, skip (body-level pass handles it)
+  Fallback:    if no carrier, dual-rep scf.for path (stencils)
 
-── TIER 2: BODY TRANSFORMS (operate on scf.for + memref) ───────────────
+-- TIER 2: BODY TRANSFORMS (operate on scf.for + memref) ----------------
 
   dep/loop/
-    IterationSpaceDecomposition.cpp    boundary peeling (stencils, no carrier)
+    IterationSpaceDecomposition.cpp    boundary peeling (stencils)       357 LOC
 
   Each reads:  scf.for structure, memref.load/store counts, SDE attrs
   Each writes: restructured scf.for nest
   When:        stencils and other patterns without carriers
 
-── TIER 3: ANALYSIS (stamp contracts, no IR changes) ───────────────────
+-- TIER 3: ANALYSIS (stamp contracts, no IR changes) ---------------------
 
   state/
-    StructuredSummaries.cpp    stamp neighborhood/footprint/vec attrs
+    StructuredSummaries.cpp    stamp neighborhood/footprint/vec attrs    262 LOC
 
   Reads:  StructuredOpAnalysis on post-optimization body OR carrier
   Writes: attributes on su_iterate
   When:   AFTER tiers 1+2 (analyzes optimized structure)
 ```
 
-### Migration Path: Current → Proposed
+### Phase Status
 
-**Phase 0 (current state, DONE)**:
-All dep passes operate on raw body. Carrier is passive. Pipeline reorder complete.
+**Phase 1: Tiling -> carrier-authoritative**: DONE
 
-**Phase 1: TensorOpt → Tiling via TilingInterface** (~200 LOC change):
-Replace manual strip-mining in TensorOpt with upstream `scf::tileUsingSCF()`:
-```cpp
-// Before (TensorOpt.cpp, ~500 LOC of manual tiling):
-Value tileIterations = buildTileIterationValue(...);
-auto newOp = SdeSuIterateOp::create(..., tiledSteps);
-// ... manual scf.for construction, body cloning, carrier skipping ...
+Replaced manual strip-mining with carrier-authoritative path:
+`extract_slice` -> tiled `linalg.generic` -> `insert_slice`. Cost model retained.
+Dual-rep fallback retained for stencils.
 
-// After (Tiling.cpp, ~50 LOC):
-SCFTilingOptions options;
-options.setTileSizes(costModel.computeTileSizes(carrier));
-options.setLoopType(SCFTilingOptions::LoopType::ForOp);
-auto result = scf::tileUsingSCF(rewriter, cast<TilingInterface>(carrier.getOperation()), options);
-```
+**Phase 2: LoopInterchange -> interchangeGenericOp()**: DONE
 
-**Key prerequisite**: `linalg.generic` already implements `TilingInterface`.
-No custom interface implementation needed. The carrier IS the tiling target.
+Carrier-authoritative path uses `linalg::interchangeGenericOp()` to permute
+carrier dims directly. Matmul: swaps j-k to k-j for stride-1 B access.
+Dual-rep fallback retained for stencils.
 
-**Key question**: After tiling the carrier, the raw memref body is stale. Two
-options:
-- **(a) Delete the body, make carrier authoritative**: Carrier becomes the source
-  of truth. LowerToMemref must bufferize the carrier into memref form. This is
-  the clean architecture but requires LowerToMemref to handle tiled carriers.
-- **(b) Keep dual representation, re-derive body**: After tiling the carrier, use
-  the tiled structure to drive body rewriting (what TensorOpt does manually today).
-  Less clean but lower risk.
+**Phase 3: ElementwiseFusion -> carrier-level**: DONE
 
-**Recommendation**: Start with (b) — same behavior as today but using upstream
-tiling APIs. Migrate to (a) when LowerToMemref supports carrier bufferization.
+Write-set extraction reads carrier DPS outputs (`getDpsInits()`) and traces
+through `mu_memref_to_tensor` to memref roots. Dual-rep fallback retained.
 
-**Phase 2: LoopInterchange → linalg::interchangeGenericOp** (~100 LOC change):
-Replace manual loop swapping with upstream carrier interchange:
-```cpp
-// Before (LoopInterchange.cpp, ~400 LOC of manual scf.for swapping):
-findInnerLoopPair(body, jLoop, kLoop, initOps);
-interchangeLoops(jLoop, kLoop, initOps);
+**Phase (bonus): BarrierElimination -> carrier-level**: DONE (not in original proposal)
 
-// After (~30 LOC):
-SmallVector<unsigned> perm = computeOptimalPermutation(carrier);
-auto result = linalg::interchangeGenericOp(rewriter, carrier, perm);
-// Carrier indexing maps are updated automatically.
-// Body interchange derived from carrier permutation.
-```
+Read/write set extraction traces carrier DPS inputs/outputs to memref roots.
+Located at `effect/distribution/BarrierElimination.cpp` (367 LOC).
 
-**Phase 3: ElementwiseFusion → carrier-level write-set** ✅ DONE:
-Write-set extraction now reads carrier DPS outputs instead of `memref.store`:
-```cpp
-// Before (ElementwiseFusion.cpp, ~300 LOC of memref.store pattern matching):
-SmallVector<Value> writeSet1, writeSet2;
-body1.walk([&](memref::StoreOp s) { writeSet1.push_back(s.getMemref()); });
-// ... disjointness check on memref roots ...
+**Phase 4: Full upstream API migration**: DEFERRED
 
-// After (~100 LOC):
-// Fuse at the linalg carrier level:
-linalg::LinalgOp producer = findCarrier(stage1);
-linalg::LinalgOp consumer = findCarrier(stage2);
-auto result = linalg::fuseElementwiseOps(rewriter, producer, consumer);
-```
-
-**Phase 4: Stencil carriers** (~500 LOC, from `sde-optimization-opportunities.md`):
-Raise stencils to `tensor.pad` + `linalg.generic` carriers. This unblocks
-carrier-level tiling and interchange for stencils.
+Replace remaining custom tiling/interchange code with upstream
+`scf::tileUsingSCF()` and `linalg::interchangeGenericOp()` exclusively
+(removing dual-rep fallback paths). Blocked on stencil carrier support.
 
 ---
 
 ## What Upstream MLIR APIs Replace What Code
 
-| Current Code | LOC | Upstream API | LOC | Prerequisite |
-|-------------|-----|-------------|-----|-------------|
-| TensorOpt manual strip-mining | ~500 | `scf::tileUsingSCF()` | ~50 | Carrier as tiling target |
-| TensorOpt trip count + tile size | ~100 | Keep (cost model is SDE-specific) | ~100 | — |
-| TensorOpt candidate validation | ~150 | `TilingInterface::getLoopIteratorTypes()` | ~20 | — |
-| LoopInterchange stride analysis | ~60 | Keep (stride cost is SDE-specific) | ~60 | — |
-| LoopInterchange loop swapping | ~200 | `linalg::interchangeGenericOp()` | ~30 | Carrier as target |
-| LoopInterchange init distribution | ~100 | Upstream handles imperfect nests | ~0 | — |
-| ElementwiseFusion write-set check | ~100 | `linalg::fuseElementwiseOps()` | ~50 | Both ops have carriers |
-| ElementwiseFusion body merging | ~200 | Upstream fusion handles this | ~0 | — |
-| IterationSpaceDecomp | ~350 | Keep (stencil-specific, no carrier) | ~350 | — |
-| StructuredSummaries | ~200 | Keep (SDE-specific attr stamping) | ~200 | — |
+| Current Code | LOC | Upstream API | LOC | Status |
+|-------------|-----|-------------|-----|--------|
+| Tiling carrier-authoritative path | ~400 | `extract_slice`/`insert_slice` carrier tiling | ~400 | DONE (kept cost model + dual-rep) |
+| Tiling dual-rep fallback | ~500 | Keep (stencil fallback) | ~500 | Retained |
+| Interchange carrier path | ~200 | `linalg::interchangeGenericOp()` | ~200 | DONE |
+| Interchange dual-rep fallback | ~400 | Keep (stencil fallback) | ~400 | Retained |
+| ElementwiseFusion write-set | ~100 | Carrier DPS output tracing | ~100 | DONE |
+| BarrierElimination read/write sets | ~130 | Carrier DPS input/output tracing | ~130 | DONE |
+| IterationSpaceDecomp | ~350 | Keep (stencil-specific, no carrier) | ~350 | Unchanged |
+| StructuredSummaries | ~260 | Keep (SDE-specific attr stamping) | ~260 | Unchanged |
 
-**Total current dep code**: ~1960 LOC
-**Total after migration**: ~860 LOC (56% reduction)
-**Risk**: LOW for Phases 1-2 (upstream APIs are battle-tested)
+**Total current dep code**: ~2163 LOC (tensor/ + loop/ + fusion/)
+**Plus analysis/effect code**: ~629 LOC (StructuredSummaries + BarrierElimination)
 
----
-
-## The Carrier Lifecycle: Current vs. Proposed
-
-### Current Lifecycle (passive carrier)
-
-```
-Pass 3  RaiseToLinalg:    CREATE carrier (diagnostic copy of body)
-Pass 4  LoopInterchange:  READ carrier maps → swap scf.for body
-Pass 5  TensorOpt:        READ carrier dims → strip-mine body (skip carrier)
-Pass 6  StructuredSummaries: IGNORE carrier → analyze body directly
-Pass 7  ElementwiseFusion:   IGNORE carrier → fuse by memref patterns
-Pass 15 LowerToMemref:    ERASE carrier (dead code cascade)
-```
-
-Carrier is born, carried, ignored, erased. ~12 passes of overhead for zero
-transformation.
-
-### Proposed Lifecycle (active carrier)
-
-```
-Pass 3  RaiseToLinalg:    CREATE carrier (authoritative computation)
-                            ── body derived from carrier, or dual-representation
-Pass 4  Interchange:       TRANSFORM carrier (interchangeGenericOp)
-                            → carrier indexing maps updated
-                            → body rewritten from carrier (or re-derived)
-Pass 5  Tiling:            TRANSFORM carrier (tileUsingSCF)
-                            → carrier tiled with extract/insert_slice
-                            → body rewritten from carrier (or re-derived)
-Pass 6  StructuredSummaries: ANALYZE carrier (post-optimization structure)
-                            → stamp contracts from tiled/interchanged carrier
-Pass 7  Fusion:            TRANSFORM carrier (fuseElementwiseOps)
-                            → carriers merged
-                            → body merged from carrier (or re-derived)
-Pass 15 LowerToMemref:    LOWER carrier → derive final memref body
-                            → one-shot bufferization on carrier structure
-```
-
-Carrier is born, transformed, analyzed, lowered. Every pass adds value.
-
----
-
-## Directory Structure: Current vs. Proposed
-
-### Current
-
-```
-dep/
-  loop/
-    LoopInterchange.cpp          564 LOC  (reads carrier, swaps scf.for)
-    TensorOpt.cpp                636 LOC  (reads carrier, tiles body)
-    IterationSpaceDecomposition  357 LOC  (raw scf.for, no carrier)
-  fusion/
-    ElementwiseFusion.cpp        ~300 LOC (raw memref, no carrier)
-```
-
-### Proposed
-
-```
-dep/
-  tensor/                         ── carrier-level transforms (upstream APIs)
-    Interchange.cpp               ~130 LOC (linalg::interchangeGenericOp)
-    Tiling.cpp                    ~200 LOC (scf::tileUsingSCF + cost model)
-    Fusion.cpp                    ~150 LOC (linalg::fuseElementwiseOps)
-  loop/                           ── body-level transforms (stencils, fallback)
-    IterationSpaceDecomposition   ~350 LOC (unchanged)
-```
-
-**StructuredSummaries stays in `state/`** — it's an analysis/contract pass, not a
-structural transform.
+The carrier-authoritative migration did not achieve the aggressive LOC reduction
+originally projected because dual-rep fallback paths were retained for stencils.
+The net LOC reduction will come when stencil carriers are implemented (Phase 4),
+allowing removal of all fallback paths.
 
 ---
 
@@ -341,11 +272,11 @@ nested passes on `cu_codelet` (IsolatedFromAbove):
 
 ```
 Pass 16  ConvertToCodelet:     create cu_codelet from cu_region <single>
-         ── CODELET BODY OPTS (nested, IsolatedFromAbove) ──
-         │  TensorCleanup       14 upstream patterns
-         │  Canonicalize+CSE    standard cleanup
-         │  Vectorization       linalg::vectorize()
-         │  CodeletFusion       merge producer/consumer codelets
+         -- CODELET BODY OPTS (nested, IsolatedFromAbove) --
+         |  TensorCleanup       14 upstream patterns
+         |  Canonicalize+CSE    standard cleanup
+         |  Vectorization       linalg::vectorize()
+         |  CodeletFusion       merge producer/consumer codelets
 ```
 
 **Key distinction**:
@@ -361,53 +292,76 @@ inner body. They compose, not compete.
 
 ---
 
+## Directory Structure (Current)
+
+```
+dep/
+  tensor/                         -- carrier-level transforms
+    Interchange.cpp               607 LOC (carrier-authoritative + dual-rep fallback)
+    Tiling.cpp                    902 LOC (carrier-authoritative + dual-rep fallback)
+  fusion/
+    ElementwiseFusion.cpp         297 LOC (carrier DPS tracing + memref fallback)
+  loop/                           -- body-level transforms (stencils)
+    IterationSpaceDecomposition   357 LOC (raw scf.for, no carrier)
+
+state/
+  StructuredSummaries.cpp         262 LOC (analysis, reads classification attr)
+  raising/
+    RaiseToLinalg.cpp             385 LOC (CREATE carrier, ERASE scalar body)
+    LowerToMemref.cpp             920 LOC (LOWER carrier -> memref via traceToMemref)
+
+effect/distribution/
+  BarrierElimination.cpp          367 LOC (carrier DPS tracing for read/write sets)
+```
+
+**StructuredSummaries stays in `state/`** -- it's an analysis/contract pass, not a
+structural transform.
+
+---
+
 ## Prioritized Action Items
 
-### Immediate (next commit)
+### Done
 
-1. **Rename** `dep/loop/TensorOpt.cpp` → `dep/loop/Tiling.cpp` (or keep, but
-   acknowledge the naming is misleading)
-2. **Update doc**: Mark the carrier as "READ-only diagnostic" in the pipeline
-   walkthrough until Phase 1 lands
+1. **Rename** `dep/loop/TensorOpt.cpp` -> `dep/tensor/Tiling.cpp`: DONE (moved to tensor/ tier)
+2. **Carrier-authoritative tiling**: DONE (Phase 1)
+3. **Carrier-authoritative interchange**: DONE (Phase 2)
+4. **Carrier-level write-set in ElementwiseFusion**: DONE (Phase 3)
+5. **Carrier-level read/write-set in BarrierElimination**: DONE (bonus)
+6. **RaiseToLinalg erases scalar body**: DONE (carrier becomes authoritative)
+7. **LowerToMemref traceToMemref()**: DONE (derives memref from carrier)
 
-### Short-term (Phase 1, 1-2 weeks)
+### Proposed (FUTURE)
 
-3. **Replace TensorOpt tiling** with `scf::tileUsingSCF()` targeting the
-   carrier. Keep cost model. Keep dual representation (re-derive body from
-   tiled structure). ~200 LOC net change.
-4. **Add StructuredSummaries carrier path**: Analyze `linalg.generic` carrier
-   directly when available, fall back to StructuredOpAnalysis for body-only
-   loops. ~50 LOC.
-
-### Medium-term (Phase 2, 2-4 weeks)
-
-5. **Replace LoopInterchange** with `linalg::interchangeGenericOp()` on carrier.
-   Keep stride cost analysis. ~100 LOC net change.
-6. **Replace ElementwiseFusion** with carrier-level fusion using
-   `linalg::fuseElementwiseOps()`. ~200 LOC net change.
-
-### Long-term (Phase 3-4, 1-2 months)
-
-7. **Make carrier authoritative**: LowerToMemref derives body from carrier via
-   one-shot bufferization. Delete dual-representation body. ~300 LOC.
 8. **Stencil carriers**: Raise stencils to `tensor.pad` + `linalg.generic`.
-   Unblocks carrier-level transforms for stencils. ~500 LOC.
-9. **Codelet body optimizations**: TensorCleanup, Vectorization, CodeletFusion
-   as nested passes on `cu_codelet`. ~600 LOC total.
+   Unblocks carrier-level transforms for stencils. Removes dual-rep fallback.
+   ~500 LOC. (HIGH risk -- stencil carriers are novel)
+9. **Full upstream API migration**: Replace custom tiling/interchange with
+   `scf::tileUsingSCF()` and `linalg::interchangeGenericOp()` exclusively.
+   Requires stencil carriers first. ~300 LOC net reduction.
+10. **Codelet body optimizations**: TensorCleanup, Vectorization, CodeletFusion
+    as nested passes on `cu_codelet`. ~600 LOC total.
 
 ---
 
 ## Summary
 
-**The core insight**: The SDE dep pipeline has the right ARCHITECTURE (linalg
-carriers for structured analysis) but the wrong IMPLEMENTATION (carriers are
-passive, transforms operate on raw memref). Fixing this means making the carrier
-the transform target, not the diagnostic copy, using upstream MLIR's battle-tested
-linalg/tensor/SCF transform APIs.
+**The core insight**: The SDE dep pipeline had the right ARCHITECTURE (linalg
+carriers for structured analysis) but the wrong IMPLEMENTATION (carriers were
+passive, transforms operated on raw memref).
 
-**Net result**: ~1100 LOC deleted, upstream correctness guarantees inherited,
-stencil support unlocked, codelet body optimization enabled.
+**What was done (2026-04-15)**: The carrier is now the transform target, not the
+diagnostic copy. RaiseToLinalg creates the carrier and erases the scalar body.
+Tiling, LoopInterchange, ElementwiseFusion, and BarrierElimination all operate
+on the carrier (or its traced operands). LowerToMemref derives the final memref
+body FROM the carrier.
 
-**Risk**: LOW for Phases 1-2 (upstream APIs are stable, dual representation
-provides fallback). MEDIUM for Phase 3 (carrier-authoritative requires
-LowerToMemref changes). HIGH for Phase 4 (stencil carriers are novel).
+**What remains**: Stencils still lack carriers, so dual-rep fallback paths are
+retained. Full LOC reduction (~50%) will come when stencil carriers are
+implemented, allowing removal of all fallback code. Codelet body optimizations
+(vectorization, fusion) are proposed but not yet implemented.
+
+**Risk**: LOW for current state (carrier-authoritative is stable, dual-rep
+provides fallback). MEDIUM for upstream API migration (requires stencil carriers).
+HIGH for stencil carriers (novel design, `tensor.pad` + `linalg.generic` approach
+needs validation).

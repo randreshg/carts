@@ -80,7 +80,7 @@ Phase 2B: OMP-to-SDE-to-ARTS pipeline (cd75cf2a)
 
 ```
 Phase 2C: Tensor/linalg window — IMPLEMENTED ON THIS BRANCH
-  - RaiseToLinalg, RaiseToTensor, and SdeTensorOptimization now exist in the
+  - RaiseToLinalg, RaiseToTensor, and Tiling now exist in the
     active OpenMP-to-SDE-to-ARTS path.
   - The branch uses transient linalg/tensor carriers inside SDE rather than a
     separately scheduled one-shot bufferization stage.

@@ -1,783 +1,268 @@
-# SDE as the Optimization Layer
+# SDE Dialect Reference
 
-## Summary
+The **SDE** (Semantic Dialect Extension) is an MLIR dialect that sits between
+OpenMP source semantics and the ARTS core dialect in the CARTS compilation
+pipeline. It preserves high-level information (reduction combiners, schedule
+hints, nowait semantics) that the direct OpenMP-to-ARTS conversion loses, and
+provides a structured optimization window before ARTS lowering.
 
-This branch moves the first optimization boundary from ARTS IR up into SDE IR.
-OpenMP lowers into SDE first, SDE-owned passes make scope, schedule, chunk,
-reduction-strategy, linalg, and tensor decisions there, and only
-`ConvertSdeToArts` crosses into ARTS IR.
+- **Dialect namespace**: `arts_sde`
+- **C++ namespace**: `mlir::arts::sde`
+- **TableGen**: `include/arts/dialect/sde/IR/SdeOps.td`
 
-That split matters for layering:
+## Pipeline
 
-- SDE optimization passes do not create `arts.for`, `arts.edt`, or other ARTS
-  runtime ops.
-- SDE may reason about semantic pattern families, dependence shapes, and
-  distribution/reduction/tensor structure, but those remain SDE concepts rather
-  than OpenMP syntax or ARTS runtime objects.
-- SDE passes operate on SDE concepts: concurrency regions, iteration spaces,
-  barriers, typed dependencies/completions, reductions, semantic access
-  annotations, and tensor/linalg carriers.
-- The cost model interface is SDE-owned (`SDECostModel`), with
-  `ARTSCostModel` as one implementation injected through `AnalysisManager`.
-- After RaiseToTensor, tensor SSA becomes the authoritative representation
-  inside SDE regions. `linalg.generic` carriers and tensor transforms operate
-  on this tensor-native form. LowerToMemref restores memref form before
-  ConvertSdeToArts crosses into ARTS IR.
+The SDE pipeline consists of 21 passes registered in `buildOpenMPToArtsPipeline`
+(`tools/compile/Compile.cpp:660`). After the pipeline completes, all `arts_sde`
+ops have been converted to `arts` ops and the ARTS core pipeline takes over.
 
-Pattern discovery is no longer an executable pass in the OpenMP-to-ARTS path.
-The current pipeline derives semantic structure and optimization decisions in
-SDE, lowers to ARTS, and then runs ARTS-native structural/runtime transforms on
-the resulting contracts later.
+### Entry
 
-## Boundary Rule
+| # | Pass | CLI flag | Source |
+|---|------|----------|--------|
+| 1 | ConvertOpenMPToSde | `--convert-openmp-to-sde` | `lib/arts/dialect/sde/Conversion/OmpToSde/ConvertOpenMPToSde.cpp` |
 
-The branch-local layering rule is:
+Converts `omp.parallel`, `omp.wsloop`, `omp.task`, etc. into `arts_sde.*` ops.
+Preserves reduction combiner kind, schedule, chunk, nowait, and task dep modes.
 
-- OpenMP belongs only at ingress. `ConvertOpenMPToSde` translates frontend
-  constructs into SDE semantics and then the SDE pipeline stops talking in
-  OpenMP terms.
-- SDE owns optimization decisions. Scope, schedule, chunk, reduction strategy,
-  linalg structure, tensor carriers, and supported semantic pattern choices are
-  decided in SDE IR.
-- ARTS belongs only at lowering. `ConvertSdeToArts` materializes the chosen SDE
-  semantics as `arts.*` IR.
-- The way this branch "optimizes to ARTS" is through the SDE cost-model
-  interface: SDE and cost-model-aware core heuristics query `SDECostModel`,
-  while `ARTSCostModel` is the current runtime-specific implementation hidden
-  behind that interface.
+### Raising (tensor-first)
 
-## Wavefront Ownership
+| # | Pass | CLI flag | Source |
+|---|------|----------|--------|
+| 2 | RaiseToTensor | `--raise-to-tensor` | `lib/arts/dialect/sde/Transforms/state/raising/RaiseToTensor.cpp` |
+| 3 | RaiseToLinalg | `--raise-to-linalg` | `lib/arts/dialect/sde/Transforms/state/raising/RaiseToLinalg.cpp` |
 
-Wavefront is a semantic dependence-pattern family, not an ARTS runtime concept.
-Detecting that a loop should use a wavefront schedule, choosing tile geometry
-or frontier granularity, and selecting any related distribution intent belong
-to SDE and the `SDECostModel` interface.
+**RaiseToTensor** converts `memref.alloca` values to tensor SSA threaded via
+`iter_args` (mem2reg for SDE). Function arg memrefs are not raised.
 
-That same rule applies to the other structured pattern families as well:
-elementwise, stencil, matmul, reduction-mixed, and future tensor/linalg-native
-dependence patterns should be classified and planned in SDE. ARTS may
-materialize those contracts as `arts.*` structure later, but it should not be
-the semantic source of truth for those choices.
+**RaiseToLinalg** classifies loop bodies via `StructuredOpAnalysis` and stamps
+`structuredClassification` on `su_iterate`. For elementwise, matmul, and narrow
+reduction patterns, creates a carrier-authoritative `linalg.generic` and erases
+the scalar body. Stencils are classified but get no carrier.
 
-The reusable analysis direction for this branch is therefore:
+### Dep (structural transforms)
 
-- structural loop and access classification in SDE
-- tensor/linalg analyses and transforms in SDE
-- contract forwarding at `ConvertSdeToArts`
-- ARTS-native cleanup and runtime-shaping after the boundary
+| # | Pass | CLI flag | Source |
+|---|------|----------|--------|
+| 4 | LoopInterchange | `--loop-interchange` | `lib/arts/dialect/sde/Transforms/dep/tensor/Interchange.cpp` |
+| 5 | Tiling | `--tiling` | `lib/arts/dialect/sde/Transforms/dep/tensor/Tiling.cpp` |
+| 6 | StructuredSummaries | `--structured-summaries` | `lib/arts/dialect/sde/Transforms/state/StructuredSummaries.cpp` |
+| 7 | ElementwiseFusion | `--elementwise-fusion` | `lib/arts/dialect/sde/Transforms/dep/fusion/ElementwiseFusion.cpp` |
 
-## Current OpenMP-to-ARTS Pipeline
+**LoopInterchange** reorders loop dims for stride-1 access. Carrier-based path
+uses `linalg::interchangeGenericOp()`; halo-based path reorders stencil loops.
 
-As of this branch, `buildOpenMPToArtsPipeline` is:
+**Tiling** applies cost-model-driven strip-mining. Carrier-authoritative path
+uses `extract_slice` / tiled `linalg.generic` / `insert_slice`; dual-rep path
+uses `scf.for` + scalar clone.
 
-```text
-ConvertOpenMPToSde
-  -> RaiseToTensor
-  -> RaiseToLinalg
-  -> LoopInterchange
-  -> Tiling
-  -> StructuredSummaries
-  -> ElementwiseFusion
-  -> ScopeSelection
-  -> ScheduleRefinement
-  -> ChunkOpt
-  -> ReductionStrategy
-  -> DistributionPlanning
-  -> IterationSpaceDecomposition
-  -> BarrierElimination
-  -> LowerToMemref
-  -> ConvertToCodelet
-  -> ConvertSdeToArts
-  -> VerifySdeLowered
-  -> DCE
-  -> CSE
-  -> VerifyEdtCreated
+**StructuredSummaries** stamps runtime-neutral neighborhood attributes
+(`accessMinOffsets`, `accessMaxOffsets`, `ownerDims`, `spatialDims`,
+`writeFootprint`) and vectorization hints (`sde.vector_width`,
+`sde.unroll_factor`). No structural IR changes.
+
+**ElementwiseFusion** merges consecutive elementwise `su_iterate` ops with
+compatible iteration spaces into `classification(<elementwise_pipeline>)`.
+
+### Effect (scheduling decisions)
+
+| # | Pass | CLI flag | Source |
+|---|------|----------|--------|
+| 8 | ScopeSelection | `--scope-selection` | `lib/arts/dialect/sde/Transforms/effect/scheduling/ScopeSelection.cpp` |
+| 9 | ScheduleRefinement | `--schedule-refinement` | `lib/arts/dialect/sde/Transforms/effect/scheduling/ScheduleRefinement.cpp` |
+| 10 | ChunkOpt | `--chunk-opt` | `lib/arts/dialect/sde/Transforms/effect/scheduling/ChunkOpt.cpp` |
+| 11 | ReductionStrategy | `--reduction-strategy` | `lib/arts/dialect/sde/Transforms/effect/scheduling/ReductionStrategy.cpp` |
+
+These passes stamp scheduling attributes without changing IR structure.
+ScopeSelection sets `local`/`distributed` on `cu_region`. ScheduleRefinement
+refines `auto`/`runtime` to `static`/`dynamic`/`guided`. ChunkOpt synthesizes
+chunk sizes. ReductionStrategy selects `atomic`/`tree`/`local_accumulate`.
+
+### Distribution and decomposition
+
+| # | Pass | CLI flag | Source |
+|---|------|----------|--------|
+| 12 | DistributionPlanning | `--distribution-planning` | `lib/arts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp` |
+| 13 | IterationSpaceDecomposition | `--iteration-space-decomposition` | `lib/arts/dialect/sde/Transforms/dep/loop/IterationSpaceDecomposition.cpp` |
+| 14 | BarrierElimination | `--barrier-elimination` | `lib/arts/dialect/sde/Transforms/effect/distribution/BarrierElimination.cpp` |
+
+**DistributionPlanning** wraps eligible `su_iterate` in `su_distribute`:
+elementwise gets `<blocked>`, stencil gets `<owner_compute>`.
+
+**IterationSpaceDecomposition** peels boundary iterations from stencil loops,
+creating branch-free interior loops suitable for vectorization.
+
+**BarrierElimination** eliminates redundant `su_barrier` ops between SUs with
+disjoint write/read sets. Carrier-aware: traces `linalg.generic` DPS
+inputs/outputs through `mu_memref_to_tensor`.
+
+### Lowering
+
+| # | Pass | CLI flag | Source |
+|---|------|----------|--------|
+| 15 | LowerToMemref | `--lower-to-memref` | `lib/arts/dialect/sde/Transforms/state/raising/LowerToMemref.cpp` |
+| 16 | ConvertToCodelet | `--convert-to-codelet` | `lib/arts/dialect/sde/Transforms/state/codelet/ConvertToCodelet.cpp` |
+| 17 | ConvertSdeToArts | `--convert-sde-to-arts` | `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` |
+| 18 | VerifySdeLowered | `--verify-sde-lowered` | `lib/arts/dialect/sde/Verify/VerifySdeLowered.cpp` |
+
+**LowerToMemref** is the inverse of RaiseToTensor: tensor SSA back to
+`memref.alloca` + load/store. Erases dead carriers.
+
+**ConvertToCodelet** converts `cu_region <single>` with tensor `iter_args` into
+`mu_data`/`mu_token`/`cu_codelet` graph.
+
+**ConvertSdeToArts** is the SDE-to-ARTS boundary. Converts all `arts_sde.*` to
+`arts.*`, materializes ARTS contracts from SDE attributes, and erases carriers.
+See [Three-route contract materialization](#three-route-contract-materialization)
+below.
+
+**VerifySdeLowered** rejects any surviving `arts_sde.*` ops or transient
+carriers.
+
+### Cleanup
+
+| # | Pass | Source |
+|---|------|--------|
+| 19 | DCE | MLIR builtin |
+| 20 | CSE | MLIR builtin |
+| 21 | VerifyEdtCreated | `lib/arts/dialect/core/Transforms/verify/VerifyEdtCreated.cpp` |
+
+## Carrier-Authoritative Model
+
+The `linalg.generic` carrier inside `su_iterate` is the source of truth for
+computation in elementwise, matmul, and reduction patterns:
+
+1. **RaiseToLinalg** creates the carrier using `mu_memref_to_tensor` for
+   external memrefs, then erases the scalar body.
+2. **Downstream passes** operate directly on the carrier:
+   - LoopInterchange: permutes dims via `linalg::interchangeGenericOp()`
+   - Tiling: `extract_slice` / tiled generic / `insert_slice`
+   - ElementwiseFusion: reads DPS outputs for write-set analysis
+   - BarrierElimination: reads DPS inputs/outputs for read/write sets
+3. **LowerToMemref** restores memref form.
+4. **ConvertSdeToArts** consumes classification + attributes, stamps ARTS
+   contracts, erases surviving carriers.
+
+Stencils remain on the fallback path: classified but no carrier. Their scalar
+bodies survive through the pipeline.
+
+### Three-route contract materialization
+
+| Route | Condition | Result |
+|-------|-----------|--------|
+| Primary | `structuredClassification` + neighborhood attrs | SDE attrs from RaiseToLinalg + StructuredSummaries |
+| Linalg fallback | No classification, `linalg.generic` exists | Derives pattern from iterator types + indexing maps |
+| No contract | Neither | Falls through to ARTS PatternDiscovery |
+
+Classification to ARTS contract mapping:
+
+| SDE classification | ARTS `depPattern` |
+|--------------------|-------------------|
+| `elementwise` | `uniform` |
+| `elementwise_pipeline` | `elementwise_pipeline` |
+| `stencil` | `stencil_tiling_nd` |
+| `matmul` | `matmul` |
+
+## Tensor-First Sandwich
+
+```
+  memref world             tensor world              memref world
+  ───────────  RaiseToTensor ───────────  LowerToMemref ──────────
+  memref.alloca ────────> tensor SSA     ────────> memref.alloca
+  memref.load   ────────> tensor.extract ────────> memref.load
+  memref.store  ────────> tensor.insert  ────────> memref.store
+                Pass 2                           Pass 15
+                     Passes 3-14 operate on
+                        tensor SSA form
 ```
 
-RaiseToTensor runs first (like `mem2reg`, raising memref allocas to tensor SSA),
-then RaiseToLinalg classifies and creates `linalg.generic` carriers from the
-already-tensor-native form. After RaiseToTensor, tensor SSA becomes the
-authoritative representation inside SDE regions until LowerToMemref restores
-memref form before ConvertSdeToArts.
+Tensor SSA enables alias-free analysis. Memref form is required by downstream
+ARTS core ops.
 
-There is no separately named `pattern-pipeline` stage after SDE on the
-current branch. ARTS-native structural cleanup and normalization happens
-inside the ARTS-core stages that follow (`edt-transforms`, `create-dbs`,
-`db-opt`, ...), which consume SDE-stamped contracts rather than invent new
-semantic policy.
+## Key Attributes
 
-Current implementation note:
+### On `su_iterate`
 
-- Some ARTS-side passes still contain transitional semantic planning debt,
-  especially around wavefront/distribution shaping. The architectural target
-  remains that those passes consume SDE-authored contracts rather than invent
-  new semantic policy after the boundary.
+| Attribute | Type | Stamped by | Consumed by |
+|-----------|------|-----------|-------------|
+| `structuredClassification` | `SdeStructuredClassificationAttr` | RaiseToLinalg (3) | ConvertSdeToArts (17) |
+| `accessMinOffsets` | `ArrayAttr` | StructuredSummaries (6) | ConvertSdeToArts (17) |
+| `accessMaxOffsets` | `ArrayAttr` | StructuredSummaries (6) | ConvertSdeToArts (17) |
+| `ownerDims` | `ArrayAttr` | StructuredSummaries (6) | ConvertSdeToArts (17) |
+| `spatialDims` | `ArrayAttr` | StructuredSummaries (6) | ConvertSdeToArts (17) |
+| `writeFootprint` | `ArrayAttr` | StructuredSummaries (6) | ConvertSdeToArts (17) |
+| `schedule` | `SdeScheduleKindAttr` | ConvertOpenMPToSde (1) / ScheduleRefinement (9) | ChunkOpt (10), ConvertSdeToArts (17) |
+| `chunkSize` | `Index` operand | ChunkOpt (10) | ConvertSdeToArts (17) |
+| `reductionKinds` | `ArrayAttr` | ConvertOpenMPToSde (1) | ReductionStrategy (11), ConvertSdeToArts (17) |
+| `reductionStrategy` | `SdeReductionStrategyAttr` | ReductionStrategy (11) | DistributionPlanning (12), ConvertSdeToArts (17) |
+| `nowait` | `UnitAttr` | ConvertOpenMPToSde (1) / BarrierElimination (14) | ConvertSdeToArts (17) |
 
-## Pass Boundaries
+### On `cu_region`
 
-The sections below describe the current behavior of each SDE-stage pass. The
-examples are schematic; they are meant to show what changes at each boundary,
-not every attribute detail.
+| Attribute | Type | Stamped by | Consumed by |
+|-----------|------|-----------|-------------|
+| `concurrency_scope` | `SdeConcurrencyScopeAttr` | ScopeSelection (8) | DistributionPlanning (12) |
 
-### `ConvertOpenMPToSde`
+## Dialect Ops
 
-**Before**
+### CU (Compute Unit)
 
-```mlir
-omp.parallel {
-  omp.wsloop schedule(runtime) reduction(@add %sum -> %prv) { ... }
-  omp.task depend(taskdependout -> %A) { ... }
-  omp.task depend(taskdependin -> %A) { ... }
-}
+| Op | Summary |
+|----|---------|
+| `cu_region` | Parallel, single, or task execution region (from `omp.parallel`/`omp.single`) |
+| `cu_task` | Task with explicit dep tokens (from `omp.task`) |
+| `cu_codelet` | IsolatedFromAbove dataflow unit; all I/O through `mu_token` operands |
+| `cu_reduce` | Reduction accumulation with explicit combiner kind |
+| `cu_atomic` | Atomic memory update (from `omp.atomic.update`) |
+
+### SU (Scheduling Unit)
+
+| Op | Summary |
+|----|---------|
+| `su_iterate` | Parallel iteration space (from `omp.wsloop`, `omp.taskloop`) |
+| `su_distribute` | Distribution advisory wrapper (`blocked`/`owner_compute`/`cyclic`) |
+| `su_barrier` | Synchronization point (from `omp.barrier`) |
+
+### MU (Memory Unit)
+
+| Op | Summary |
+|----|---------|
+| `mu_data` | Shared-data anchor (lowered to `arts.db_alloc`) |
+| `mu_dep` | Data dependency declaration on memref (memref fallback path) |
+| `mu_token` | Tensor-path access token for codelets (lowered to `arts.db_acquire`) |
+| `mu_alloc` | Tensor allocation (SDE equivalent of `memref.alloca`) |
+| `mu_memref_to_tensor` | Snapshot memref into tensor SSA at SDE boundary |
+| `mu_tensor_to_memref` | Materialize tensor back to memref at SDE boundary |
+| `mu_reduction_decl` | Module-level reduction symbol declaration |
+
+### Control flow
+
+| Op | Summary |
+|----|---------|
+| `yield` | Region terminator; optionally returns values for reductions/iter_args |
+
+## Testing
+
+SDE tests are co-located with source code (IREE-style):
+
+```
+lib/arts/dialect/sde/test/    -- ~100 SDE pass tests
 ```
 
-**After**
+Run all pass tests (includes SDE):
 
-```mlir
-arts_sde.cu_region <parallel> {
-  arts_sde.su_iterate ... schedule(<runtime>) reduction[...] (%sum) { ... }
-  %dep0 = arts_sde.mu_dep <write> %A ...
-  arts_sde.cu_task deps(%dep0) { ... }
-  %dep1 = arts_sde.mu_dep <read> %A ...
-  arts_sde.cu_task deps(%dep1) { ... }
-}
+```bash
+dekk carts test
 ```
 
-Current behavior:
+Run a single SDE test:
 
-- Converts `omp.parallel`, `omp.master`, `omp.single`, `omp.task`,
-  `omp.wsloop`, `omp.taskloop`, `scf.parallel`, and supported
-  `omp.atomic.update` forms into SDE ops.
-- Preserves SDE-visible loop metadata: schedule kind, explicit chunk, nowait,
-  reduction accumulator list, and reduction kind.
-- Converts task dependency access modes from the OpenMP `depend(...)` clause
-  itself into `arts_sde.mu_dep <read|write|readwrite>`.
-- Uses typed SDE dependency handles at the boundary: `arts_sde.mu_dep`
-  produces `!arts_sde.dep`, and `arts_sde.cu_task` consumes those typed
-  dependency tokens.
-- Does not copy generic ARTS bookkeeping metadata onto newly created SDE loop
-  ops. At the SDE boundary, the IR is expected to contain `arts_sde.*` ops, not
-  leaked `arts.*` loop metadata.
-
-Important limitation:
-
-- OpenMP task dependence slicing still extracts offsets and sizes from the
-  legacy upstream `arts.omp_dep` carrier internally. That bridge is still an
-  upstream ingress point, but the converted SDE IR no longer exposes
-  `arts.omp_dep` at this pass boundary.
-
-### `ScopeSelection`
-
-**Before**
-
-```mlir
-arts_sde.cu_region <parallel> {
-  arts_sde.cu_region <parallel> {
-    ...
-  }
-}
+```bash
+dekk carts lit lib/arts/dialect/sde/test/my_test.mlir
 ```
 
-**After**
-
-```mlir
-arts_sde.cu_region <parallel> scope(<local|distributed>) {
-  arts_sde.cu_region <parallel> scope(<inherited-or-explicit>) {
-    ...
-  }
-}
-```
-
-Current behavior:
-
-- Preserves an explicit scope if one is already present.
-- Fills in a missing top-level parallel scope from the active cost model
-  topology.
-- Lets a nested parallel region inherit the nearest enclosing parallel scope
-  when the nested region has no explicit scope.
-- Keeps an explicit nested scope authoritative, even when it differs from the
-  inherited outer scope.
-
-Current test coverage includes all four cases:
-
-- explicit local preserved
-- explicit distributed preserved
-- nested missing scope inherits explicit local or distributed
-- nested explicit local or distributed overrides the inherited outer scope
-
-### `ScheduleRefinement`
-
-**Before**
-
-```mlir
-arts_sde.su_iterate ... schedule(<auto>) { ... }
-arts_sde.su_iterate ... schedule(<runtime>) { ... }
-```
-
-**After**
-
-```mlir
-arts_sde.su_iterate ... schedule(<static|guided|dynamic>) { ... }
-```
-
-Current behavior:
-
-- Runs only on one-dimensional loops whose source schedule is still abstract
-  (`auto` or `runtime`) and that do not already carry an explicit chunk.
-- Uses `SDECostModel::getSchedulingOverhead(...)` to choose among
-  `static`, `guided`, and `dynamic`.
-- Refines constant-trip loops directly.
-- Refines symbolic-trip loops only when the same schedule wins across a small
-  set of cost-model-derived probe trip counts.
-
-What it does not do:
-
-- It does not invent chunk sizes. That is left to `ChunkOpt`.
-- It does not rewrite multidimensional schedules.
-
-### `ChunkOpt`
-
-**Before**
-
-```mlir
-arts_sde.su_iterate ... schedule(<dynamic>) { ... }
-arts_sde.su_iterate ... schedule(<guided>) { ... }
-```
-
-**After**
-
-```mlir
-arts_sde.su_iterate ... schedule(<dynamic>, %chunk) { ... }
-arts_sde.su_iterate ... schedule(<guided>, %chunk) { ... }
-```
-
-Current behavior:
-
-- Preserves any explicit chunk that already exists.
-- Synthesizes a chunk only for one-dimensional `dynamic` or `guided` loops.
-- Uses worker count and minimum useful work from the active `SDECostModel`.
-- Handles both constant and symbolic trip counts.
-- Uses signed-safe symbolic span computation, clamps negative runtime spans to
-  zero, and avoids the earlier unsigned fast-path bug for zero-based symbolic
-  loops.
-
-This pass is validated at the SDE boundary. The contract after this pass is an
-`arts_sde.su_iterate` with a concrete SDE schedule and chunk, not an
-`arts.for`.
-
-### `ReductionStrategy`
-
-**Before**
-
-```mlir
-arts_sde.su_iterate ... reduction[...] (%sum) { ... }
-```
-
-**After**
-
-```mlir
-arts_sde.su_iterate ... reduction[...] (%sum)
-    reduction_strategy(<atomic|tree|local_accumulate>) { ... }
-```
-
-Current behavior:
-
-- Annotates eligible reduction-bearing `arts_sde.su_iterate` ops with an
-  SDE-owned strategy recommendation.
-- Uses reduction kind, worker count, and nested-loop structure from the current
-  loop body plus the active cost model.
-- Chooses `local_accumulate` when the reduction loop already contains a nested
-  sequential loop.
-- Chooses between `atomic` and `tree` for loop-uniform reductions by comparing
-  atomic update cost against collective reduction cost.
-
-Current limitation:
-
-- This pass only stamps a strategy attribute. It does not change SDE loop
-  topology, allocate reduction buffers, or build a reduction tree in SDE.
-
-### `RaiseToLinalg`
-
-**Before**
-
-```mlir
-arts_sde.su_iterate ... {
-  %a = memref.load ...
-  %b = memref.load ...
-  %c = arith.addf %a, %b
-  memref.store %c, ...
-  arts_sde.yield
-}
-```
-
-**After**
-
-```mlir
-arts_sde.su_iterate ... structured_classification(<elementwise|matmul|stencil|reduction>) {
-  ... original memref/scalar body remains ...
-  linalg.generic ... ins(...) outs(...) { ... }
-  arts_sde.yield
-}
-```
-
-Current behavior:
-
-- Walks `arts_sde.su_iterate`, collects perfect loop nests, and stamps an
-  SDE-owned structural classification on the source loop.
-- Recognizes four structural families:
-  - `elementwise`
-  - `matmul`
-  - `stencil`
-  - `reduction`
-- Materializes a transient memref-backed `linalg.generic` carrier only for the
-  currently supported subset.
-
-Supported carrier raising today:
-
-- elementwise loops
-- narrow matmul loops
-- a narrow reduction subset:
-  - one-dimensional `arts_sde.su_iterate`
-  - exactly one reduction accumulator
-  - exactly one zero-offset load and one zero-offset store on that accumulator
-  - no extra writes
-
-Fallback-only today:
-
-- stencil loops
-- broader reduction shapes
-- nested or multi-accumulator reduction cases outside the narrow subset
-
-That fallback is still useful: the pass stamps
-`structured_classification` on the
-SDE loop itself, so `ConvertSdeToArts` can recover the intended contract later
-without depending on ARTS-namespaced strings.
-
-### `RaiseToTensor`
-
-**Before**
-
-```mlir
-linalg.generic ins(%a, %b : memref<...>, memref<...>)
-               outs(%out : memref<...>) { ... }
-```
-
-**After**
-
-```mlir
-%ta = bufferization.to_tensor %a : memref<...> to tensor<...>
-%tb = bufferization.to_tensor %b : memref<...> to tensor<...>
-%tout = tensor.empty() : tensor<...>           // overwrite-safe outputs only
-%res = linalg.generic ins(%ta, %tb : tensor<...>, tensor<...>)
-                    outs(%tout : tensor<...>) { ... }
-```
-
-Or, for preserved-value / in-place outputs:
-
-```mlir
-%tout = bufferization.to_tensor %out : memref<...> to tensor<...>
-%res = linalg.generic ... outs(%tout : tensor<...>) { ... }
-```
-
-Current behavior:
-
-- Rewrites supported transient memref-backed `linalg.generic` carriers inside
-  SDE into pure-tensor `linalg.generic` form.
-- Keeps the original loop and memref body authoritative.
-- Chooses output initialization per output operand:
-  - overwrite-safe elementwise outputs use `tensor.empty`
-  - preserved-value or in-place outputs reuse `bufferization.to_tensor`
-- Leaves non-elementwise outputs on the preserved-value path instead of
-  inventing `tensor.empty`.
-
-Recent correctness fix:
-
-- The output-init decision now strips simple `memref.cast` alias chains when it
-  checks whether an output is also read as an input. That fixes the narrow
-  cast-through-wrapper case where an in-place destination was previously
-  misclassified as overwrite-safe and incorrectly rewritten to `tensor.empty`.
-
-### `Tiling`
-
-**Before**
-
-```mlir
-arts_sde.su_iterate(%lb) to(%ub) step(%step)
-    structured_classification(<elementwise|matmul>) {
-  ... tensor-backed carrier ...
-}
-```
-
-**After**
-
-```mlir
-arts_sde.su_iterate(%lb) to(%ub) step(%tiled_step)
-    structured_classification(<elementwise|matmul>) {
-  %tile_ub = ...
-  scf.for %iv = %tile_base to %tile_ub step %step {
-    ... cloned scalar/memref body ...
-  }
-  arts_sde.yield
-}
-```
-
-Current behavior:
-
-- Uses the active `SDECostModel` to choose a tile size from worker count and
-  minimum iterations per worker.
-- Rewrites the surrounding `arts_sde.su_iterate`, not just the carrier, so the
-  tiled loop shape survives into `arts.for` after lowering.
-- Supports two executable tensor subsets today:
-  - one-dimensional elementwise loops
-  - a narrow matmul subset tiled on the outer parallel dimension
-
-Current restrictions:
-
-- no existing chunk
-- no reductions
-- top-level one-dimensional `arts_sde.su_iterate`
-- classification already present
-- static or absent schedule only
-
-What it does not do yet:
-
-- no tensor-side transform for stencil loops
-- no tensor-side transform for general reductions
-- no general multidimensional non-matmul strip-mining beyond the current
-  narrow 2-D disjoint-write elementwise slice
-
-### `StructuredSummaries`
-
-**Before**
-
-```mlir
-arts_sde.su_iterate(%c1) to(%c63) step(%c1) classification(<stencil>) {
-  ... loop body ...
-}
-```
-
-**After**
-
-```mlir
-arts_sde.su_iterate(%c1) to(%c63) step(%c1) classification(<stencil>) {
-  ... loop body ...
-} {
-  accessMinOffsets = [-1, -1],
-  accessMaxOffsets = [1, 1],
-  ownerDims = [0, 1],
-  spatialDims = [0, 1],
-  writeFootprint = [0, 0]
-}
-```
-
-Current behavior:
-
-- Refreshes the SDE-owned `classification(<...>)` attribute from the current
-  structured loop analysis.
-- Preserves a previously-authored `classification(<elementwise_pipeline>)`
-  when the current loop body still proves the underlying elementwise shape.
-- Stamps only runtime-neutral neighborhood summaries on eligible
-  `arts_sde.su_iterate` ops.
-- Keeps ARTS-specific contract materialization out of SDE. No
-  `distribution_pattern`, `depPattern`, `stencil_*`, or other `arts.*`
-  lowering attrs are authored here.
-- Gives `ConvertSdeToArts` enough information to materialize the runtime
-  contract at the boundary without re-deriving the semantic summary from ARTS
-  IR.
-
-### `ElementwiseFusion`
-
-**Before**
-
-```mlir
-arts_sde.cu_region <parallel> scope(<local>) {
-  arts_sde.su_iterate(%c0) to(%c128) step(%tile) nowait classification(<elementwise>) {
-    ... stage 0 ...
-  }
-  arts_sde.su_iterate(%c0) to(%c128) step(%tile) nowait classification(<elementwise>) {
-    ... stage 1 ...
-  }
-}
-```
-
-**After**
-
-```mlir
-arts_sde.cu_region <parallel> scope(<local>) {
-  arts_sde.su_iterate(%c0) to(%c128) step(%tile) nowait classification(<elementwise_pipeline>) {
-    ... stage 0 ...
-    ... stage 1 ...
-  }
-}
-```
-
-Current behavior:
-
-- Fuses consecutive sibling `arts_sde.su_iterate` ops that already carry an
-  SDE-owned `classification(<elementwise>)`.
-- Requires the same iteration space and schedule, preserves `nowait`, and
-  requires disjoint write roots across the fused stages.
-- Accepts the current tiled SDE loop form produced by `Tiling`,
-  so elementwise pipeline ownership stays in SDE even after tensor-driven
-  strip-mining.
-- Keeps the result runtime-neutral: the fused SDE loop carries only
-  `classification(<elementwise_pipeline>)`; `ConvertSdeToArts` materializes the
-  corresponding ARTS contract later.
-
-### `DistributionPlanning`
-
-**Before**
-
-```mlir
-arts_sde.cu_region <parallel> scope(<local>) {
-  arts_sde.su_iterate(%c0) to(%c128) step(%tile) classification(<elementwise>) {
-    ...
-  }
-}
-```
-
-**After**
-
-```mlir
-arts_sde.cu_region <parallel> scope(<local>) {
-  arts_sde.su_distribute <blocked> {
-    arts_sde.su_iterate(%c0) to(%c128) step(%tile) classification(<elementwise>) {
-      ...
-    }
-  }
-}
-```
-
-Current behavior:
-
-- Uses only SDE-side information: structured classification, selected
-  concurrency scope, and the active `SDECostModel`.
-- Authors a narrow first distribution layer in SDE IR:
-  - local `elementwise` and `elementwise_pipeline` loops get
-    `arts_sde.su_distribute <blocked>`
-  - distributed `stencil` loops with enough work get
-    `arts_sde.su_distribute <owner_compute>`
-- Leaves broader policy such as wavefront tile geometry, distributed matmul
-  decomposition, and other higher-order distribution families as remaining
-  migration work.
-- Keeps SDE runtime-neutral: no `distribution_kind`,
-  `distribution_pattern`, `depPattern`, or other `arts.*` attrs are stamped on
-  SDE IR here.
-
-### `BarrierElimination`
-
-Current behavior:
-
-- Removes redundant `arts_sde.su_barrier` ops when SDE-level analysis proves
-  that no inter-task or inter-region data hazard exists at that program point.
-- Reads `structured_classification` and memref access information to determine
-  barrier necessity.
-
-### `LowerToMemref`
-
-**Before**
-
-```mlir
-arts_sde.su_iterate ... {
-  %ta = bufferization.to_tensor %a : memref<...> to tensor<...>
-  %res = linalg.generic ins(%ta : tensor<...>) outs(...) { ... }
-  ...
-}
-```
-
-**After**
-
-```mlir
-arts_sde.su_iterate ... {
-  ... memref-form body ...
-}
-```
-
-Current behavior:
-
-- Lowers tensor-backed carriers and tensor SSA back to memref form. This is
-  the inverse of RaiseToTensor.
-- After this pass, the IR is back in memref form, ready for ConvertSdeToArts.
-
-### `ConvertToCodelet`
-
-Current behavior:
-
-- Transforms `cu_region <single>` iter_args patterns into a
-  `mu_data`/`mu_token`/`cu_codelet` graph.
-- Creates `IsolatedFromAbove` codelet bodies where all I/O flows through
-  tensor-typed tokens and yield results.
-
-### `ConvertSdeToArts`
-
-**Before**
-
-```mlir
-arts_sde.cu_region ...
-arts_sde.su_iterate ...
-arts_sde.cu_task ...
-arts_sde.mu_dep ...
-... transient linalg/tensor carriers ...
-```
-
-**After**
-
-```mlir
-arts.edt ...
-arts.for ...
-arts.db_control ...
-arts.barrier
-arts.atomic_add
-```
-
-Current behavior:
-
-- This is the only intended boundary where SDE lowering becomes ARTS-aware.
-- Converts:
-  - `arts_sde.cu_region` to `arts.edt`
-  - `arts_sde.su_distribute` by materializing its advisory on the lowered
-    `arts.for`
-  - `arts_sde.su_iterate` to `arts.for`
-  - `arts_sde.cu_task` to `arts.edt <task>` plus `arts.db_control`
-  - `arts_sde.su_barrier` to `arts.barrier`
-  - `arts_sde.cu_atomic` to `arts.atomic_add` when the reduction kind is add
-- For task dependencies consumed by `arts_sde.cu_task`, lowers `arts_sde.mu_dep`
-  directly to `arts.db_control`.
-- For standalone `arts_sde.mu_dep`, recreates a legacy `arts.omp_dep` for the
-  downstream passes that still expect that bridge.
-
-Contract recovery at this boundary:
-
-- If transient `linalg.generic` carriers exist, the pass classifies and stamps
-  contracts from them.
-- If no carrier survives, the pass falls back to the SDE-owned
-  `structured_classification` on the source `arts_sde.su_iterate`.
-- If the source loop sits under `arts_sde.su_distribute`, the pass converts
-  that SDE advisory into the matching ARTS `distribution_kind` at the
-  boundary.
-- It forwards `reduction_strategy` from SDE onto the lowered `arts.for` and,
-  if missing there, also onto the parent `arts.edt`.
-- It erases memref-backed and tensor-backed carriers after consuming them, so
-  downstream ARTS passes do not need to understand tensor IR.
-
-## Reduction Strategy Audit
-
-The reduction-strategy path is no longer just metadata forwarding.
-
-What is real today:
-
-1. `ReductionStrategy` stamps an SDE-owned strategy recommendation on
-   `arts_sde.su_iterate`.
-2. `ConvertSdeToArts` forwards that strategy to the lowered `arts.for` and its
-   parent `arts.edt`.
-3. `EdtReductionLowering` now resolves `arts.reduction_strategy` from the
-   `arts.for` first, then the parent `arts.edt`, and changes the final combine
-   code path accordingly.
-
-Current downstream consumers:
-
-- `local_accumulate`
-  - Uses the existing partial-accumulator path and performs a linear combine in
-    the result EDT.
-- `atomic`
-  - Uses the same partial-accumulator framework, but the result EDT combines
-    worker partials with `arts.atomic_add` when the reduced element type is an
-    integer.
-  - For non-integer element types, the current lowering falls back to the
-    linear combine path.
-- `tree`
-  - Uses the same partial-accumulator framework, but the result EDT performs a
-    pairwise combine loop before writing the final value.
-
-What is still not implemented:
-
-- No separate reduction topology is built in SDE.
-- No dedicated tree-shaped EDT graph is built downstream yet.
-- No fully atomic lowering bypasses worker partial accumulators yet.
-- The comment in `EdtTransformsPass::selectReductionStrategies()` still says
-  the attribute is annotation-only; that comment is stale relative to the
-  current `EdtReductionLowering` behavior.
-
-So the accurate statement is:
-
-- `reduction_strategy` is now a real lowering input for the result-combine
-  phase.
-- It is not yet a fully different end-to-end reduction architecture.
-
-## Coverage on This Branch
-
-The branch now has focused pass-boundary coverage for the main SDE features.
-The important point is where the checks live:
-
-- SDE passes are validated at SDE boundaries.
-- `arts.for` checks belong after `ConvertSdeToArts`, not inside SDE pass
-  contracts.
-
-Current coverage includes:
-
-- scope selection
-  - explicit local preserved
-  - explicit distributed preserved
-  - nested inheritance from explicit local or distributed
-  - nested explicit override in both directions
-- schedule and chunk handling
-  - `auto` and `runtime` schedule refinement
-  - explicit chunk preservation
-  - symbolic dynamic and guided chunk synthesis with signed-safe trip counts
-- task dependence ownership at the SDE boundary
-  - OpenMP depend mode maps to `arts_sde.mu_dep`
-  - generic ARTS loop metadata does not leak onto SDE loops
-- linalg carrier raising
-  - uniform elementwise
-  - stencil classification fallback
-  - narrow reduction carrier raising
-  - negative fallback coverage for broader local-accumulate-style reductions
-- tensor carrier rewriting
-  - fill
-  - unary elementwise
-  - binary elementwise
-  - in-place binary
-  - multi-output elementwise
-  - cast-alias in-place output preservation
-  - narrow matmul carrier rewriting
-- tensor-driven SDE transforms
-  - elementwise tiling
-  - fill tiling
-  - narrow matmul outer-dimension tiling
-- reduction strategy selection and forwarding
-  - atomic
-  - tree
-  - local_accumulate
-
-## Current Limitations
-
-The branch is materially ahead of the original plan, but some work remains.
-
-- Upstream OpenMP task dependence slicing still enters SDE through the legacy
-  `arts.omp_dep` bridge, even though the SDE IR after conversion is cleaned up.
-- `RaiseToLinalg` still keeps stencil loops and broader reduction shapes on the
-  classification-only fallback path.
-- `RaiseToTensor` and `Tiling` currently operate on the
-  supported carrier subsets only; they are not yet a general tensorization and
-  transformation framework for every `arts_sde.su_iterate`.
-- `Tiling` does not yet transform reduction or stencil kernels.
-- Standalone `arts_sde.mu_dep` still lowers back to `arts.omp_dep` for legacy
-  downstream consumers.
-- After RaiseToTensor, tensor SSA is the authoritative form inside SDE
-  regions. LowerToMemref restores memref form before ConvertSdeToArts.
-
-## Bottom Line
-
-The current branch state is:
-
-- SDE is the optimization layer for scope, abstract schedule refinement, chunk
-  synthesis, reduction-strategy selection, structural classification, and the
-  first real linalg/tensor transformations.
-- SDE optimization passes stay ARTS-unaware.
-- `ConvertSdeToArts` is the boundary that translates SDE decisions into ARTS
-  IR and removes transient carriers.
-- The tensor path is no longer analysis-only: it now performs real
-  cost-model-guided transformations on supported elementwise and matmul cases.
-- Reduction strategy is partially consumed downstream in real lowering, but the
-  implementation still shares one partial-accumulator framework rather than
-  separate end-to-end lowering topologies.
+## See Also
+
+- `docs/architecture/sde-pipeline-walkthrough.md` -- detailed IR traces through each pass
+- `docs/architecture/linalg-in-sde.md` -- carrier model design and limitations
+- `include/arts/dialect/sde/Transforms/Passes.td` -- umbrella TableGen pass declarations

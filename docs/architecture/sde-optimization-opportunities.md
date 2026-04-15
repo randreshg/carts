@@ -43,10 +43,10 @@ Layer 2: CODELET BODY (intra-codelet, IsolatedFromAbove sandbox)
 Layer 1: SDE SCHEDULING (su_iterate + cu_region level)
   |-- TRANSFORM FIRST:
   |   |-- Classification (StructuredOpAnalysis)    [HAVE]
-  |   |-- Tile using upstream TilingInterface      [KEY OPPORTUNITY]
+  |   |-- Tile using upstream TilingInterface      [IN-PROGRESS — carrier-authoritative path done]
   |   |-- Tile-and-fuse via tileConsumerAndFuseProducersUsingSCF
-  |   |-- LoopInterchange via linalg carrier       [HAVE]
-  |   '-- ElementwiseFusion                        [HAVE]
+  |   |-- LoopInterchange via linalg carrier       [DONE — carrier-authoritative via linalg::interchangeGenericOp]
+  |   '-- ElementwiseFusion                        [DONE — reads carrier DPS outputs for write-set]
   |-- THEN SCHEDULE (on optimized structure):
   |   |-- ScopeSelection                           [HAVE — reorder after transforms]
   |   |-- ScheduleRefinement                       [HAVE — reorder after transforms]
@@ -54,7 +54,7 @@ Layer 1: SDE SCHEDULING (su_iterate + cu_region level)
   |   '-- ReductionStrategy                        [HAVE — reorder after transforms]
   |-- THEN DISTRIBUTE:
   |   |-- DistributionPlanning                     [HAVE]
-  |   '-- BarrierElimination                       [HAVE]
+  |   '-- BarrierElimination                       [DONE — reads carrier DPS inputs/outputs]
   '-- DestinationStyleOpInterface on su_iterate
 ```
 
@@ -86,7 +86,7 @@ battle-tested implementation while preserving SDE scheduling semantics.
 
 **Estimated LOC reduction**: Tiling from ~932 to ~200 LOC.
 
-### 1.2 DestinationStyleOpInterface on SdeSuIterateOp (MEDIUM)
+### 1.2 DestinationStyleOpInterface on su_iterate (MEDIUM)
 
 **Source**: `mlir/include/mlir/Interfaces/DestinationStyleOpInterface.h`
 
@@ -507,36 +507,39 @@ schedule files rather than pass options.
 ### Phase 1: Quick Wins (1-2 weeks each)
 
 1. **Tensor cleanup pass inside codelets** — Just populate 14 upstream patterns
-   into a greedy rewrite. ~50 LOC.
+   into a greedy rewrite. ~50 LOC. **PROPOSED**
 2. **Canonicalization+CSE+DCE sub-pipeline** for codelet bodies — ~10 LOC pipeline
-   setup.
+   setup. **PROPOSED**
 3. **Token mode refinement** — Extend `classifyAccess()` to run as a standalone
-   optimization. ~100 LOC.
+   optimization. ~100 LOC. **PROPOSED**
 
 ### Phase 2: Major Upstream Adoption (2-4 weeks each)
 
-4. **Replace Tiling tiling with TilingInterface+CustomOp** — Cuts Tiling
-   from ~932 to ~200 LOC. Major correctness improvement.
+4. **Replace Tiling with TilingInterface+CustomOp** — Carrier-authoritative tiling
+   path (`extract_slice → tiled linalg.generic → insert_slice`) is DONE. Migration
+   to pure upstream `scf::tileUsingSCF` API deferred pending upstream refactor.
+   **IN-PROGRESS**
 5. **Vectorization pass for codelet bodies** — Call `linalg::vectorize()` after
-   tiling. ~200 LOC wrapper.
+   tiling. ~200 LOC wrapper. **PROPOSED**
 6. **DestinationStyleOpInterface on su_iterate** — One method, unlocks
-   interface-based transforms.
+   interface-based transforms. **PROPOSED**
 
 ### Phase 3: New Capabilities (1-2 months each)
 
 7. **Codelet fusion pass** — Eliminate intermediate tensors between
-   producer/consumer codelets. ~400 LOC.
+   producer/consumer codelets. ~400 LOC. **PROPOSED**
 8. **Stencil linalg raising** — Raise stencils to `linalg.generic` carriers using
-   `tensor.pad` + convolution-like maps. ~500 LOC.
+   `tensor.pad` + convolution-like maps. ~500 LOC. **PROPOSED** (Step 13, HIGH risk — stencils have
+   windowed access patterns that don't map cleanly to standard linalg indexing maps)
 9. **One-shot bufferization at codelet boundary** — Replace current
-   memref-fallback with proper tensor → memref at the SDE/ARTS boundary. ~300 LOC.
+   memref-fallback with proper tensor → memref at the SDE/ARTS boundary. ~300 LOC. **PROPOSED**
 
 ### Phase 4: Advanced (research-grade)
 
-10. **Diamond tiling for time-iterated stencils** — Via TilingInterface callbacks.
-11. **Transform dialect schedules** — Composable per-kernel optimization.
-12. **Double-buffering for iterative stencils** — Pure SDE-level optimization.
-13. **Codelet splitting for parallelism** — Dimension-based and reduction-based.
+10. **Diamond tiling for time-iterated stencils** — Via TilingInterface callbacks. **PROPOSED**
+11. **Transform dialect schedules** — Composable per-kernel optimization. **PROPOSED**
+12. **Double-buffering for iterative stencils** — Pure SDE-level optimization. **PROPOSED**
+13. **Codelet splitting for parallelism** — Dimension-based and reduction-based. **PROPOSED**
 
 ---
 
@@ -550,6 +553,13 @@ The single highest-impact opportunity: replacing `Tiling.cpp`'s manual tiling
 3. Preserves SDE scheduling semantics via `CustomOp` callbacks
 4. Enables automatic cleanup via `populateLinalgTilingCanonicalizationPatterns()`
 5. Opens the door to tile-and-fuse (`tileConsumerAndFuseProducersUsingSCF`)
+
+**Current status (IN-PROGRESS)**: Tiling now has a carrier-authoritative path
+(`extract_slice → tiled linalg.generic → insert_slice`) that operates directly on
+linalg carriers for elementwise/matmul/reduction patterns. The dual-rep path
+(scf.for + scalar clone) remains for stencils. Migration to the pure upstream
+`scf::tileUsingSCF` API with `CustomOp` callbacks has not yet started — this is
+deferred pending upstream API stabilization.
 
 **Before** (manual):
 ```cpp

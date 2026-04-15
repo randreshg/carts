@@ -75,12 +75,40 @@ This is why the current design preserves both properties at once:
 - Structured compute semantics are expressed through the authoritative
   linalg/tensor carrier, which downstream passes transform directly.
 
+## Carrier Lifecycle
+
+The `linalg.generic` carrier flows through the SDE pipeline as follows:
+
+| Pass | Role |
+|---|---|
+| `RaiseToLinalg` | Creates carrier, wraps external memrefs via `sde.mu_memref_to_tensor`, erases scalar body |
+| `LoopInterchange` | Permutes carrier dims via `linalg::interchangeGenericOp()` |
+| `Tiling` | Tiles carrier via `extract_slice` / `insert_slice` |
+| `ElementwiseFusion` | Reads carrier DPS outputs to determine write-set disjointness |
+| `BarrierElimination` | Reads carrier DPS inputs/outputs for read/write set analysis |
+| `LowerToMemref` | Traces carrier tensors back to memref, creates `scf.for` loops, lowers to executable form |
+| `ConvertSdeToArts` | Reads carrier for contract data, erases any remaining carrier artifacts |
+
+Stencil bodies bypass the carrier entirely — they stay on the scalar
+`memref.load`/`memref.store` path and are handled by the dual-rep fallback in
+each pass.
+
 ## `RaiseToLinalg`
 
-`RaiseToLinalg` is no longer a diagnostic pass. It walks
-`arts_sde.su_iterate`, classifies structurally recognizable loop bodies, stamps
+`RaiseToLinalg` walks `arts_sde.su_iterate`, classifies structurally
+recognizable loop bodies via `sde::analyzeStructuredLoop`, stamps
 `structured_classification` on the SDE loop, and materializes a transient
-memref-backed `linalg.generic` carrier for the currently supported subset.
+tensor-backed `linalg.generic` carrier for the currently supported subset.
+
+External memref operands are wrapped via `sde::SdeMuMemrefToTensorOp` (the
+SDE-native boundary op for external data), not `bufferization::ToTensorOp`.
+
+After creating the carrier, the pass **erases the scalar body** — all
+`memref.load`, `memref.store`, and now-dead `arith` ops are removed
+iteratively. This makes the carrier authoritative: downstream passes MUST read
+the carrier, not scalar ops. Passes that also need to handle stencil or
+classification-only bodies maintain a fallback path that walks `memref.load` /
+`memref.store`.
 
 ### What it raises today
 
@@ -94,7 +122,7 @@ memref-backed `linalg.generic` carrier for the currently supported subset.
 
 ### What it leaves on the fallback path
 
-- Stencil loops
+- Stencil loops (`supportsLinalgCarrier()` returns false)
 - Broader reduction shapes
 - Multi-accumulator reductions
 - Nested reduction forms outside the narrow supported slice
@@ -120,138 +148,154 @@ arts_sde.su_iterate(%lb) to(%ub) step(%step) {
 }
 ```
 
-After:
+After (carrier-authoritative — scalar body erased):
 
 ```mlir
 arts_sde.su_iterate(%lb) to(%ub) step(%step)
     structured_classification(<elementwise>) {
 ^bb0(%i: index):
-  ... original memref body remains ...
-  linalg.generic ins(%A, %B : memref<?xf32>, memref<?xf32>)
-                 outs(%C : memref<?xf32>) {
+  %tA = sde.mu_memref_to_tensor %A : memref<?xf32> -> tensor<?xf32>
+  %tB = sde.mu_memref_to_tensor %B : memref<?xf32> -> tensor<?xf32>
+  %tC = sde.mu_memref_to_tensor %C : memref<?xf32> -> tensor<?xf32>
+  %res = linalg.generic ins(%tA, %tB : tensor<?xf32>, tensor<?xf32>)
+                        outs(%tC : tensor<?xf32>) {
   ^bb0(%a: f32, %b: f32, %c: f32):
     %sum = arith.addf %a, %b : f32
     linalg.yield %sum : f32
-  }
+  } -> tensor<?xf32>
   arts_sde.yield
 }
 ```
 
 ## `RaiseToTensor`
 
-`RaiseToTensor` rewrites supported transient memref-backed carriers into
-tensor-backed `linalg.generic` carriers inside SDE. This is also real
-rewriting, not analysis-only.
+`RaiseToTensor` performs function-scope tensor mem2reg on `memref.alloca`
+values. It converts local allocas to tensor SSA form so that downstream passes
+can reason about value flow through `scf.for` iter_args, `cu_region`, and
+`su_iterate` bodies.
+
+This pass does NOT wrap external memrefs — that is handled by
+`RaiseToLinalg` via `sde::SdeMuMemrefToTensorOp`. `RaiseToTensor` only
+rewrites allocas whose users are exclusively `memref.load`, `memref.store`,
+`memref.cast`, and `sde.mu_dep` (no calls, no `su_iterate` operands, etc.).
 
 ### Current behavior
 
-- Inputs become `bufferization.to_tensor`.
-- Outputs are initialized per output operand.
-- The original loop and memref body stay authoritative.
-- The pass keeps the improvement narrow and alias-safe.
-
-### Output initialization policy
-
-For each output operand, the pass selects one of two forms:
-
-- `tensor.empty` for overwrite-safe outputs
-- `bufferization.to_tensor` for preserved-value or in-place outputs
-
-That policy is now broader and safer than the initial version:
-
-- overwrite-safe elementwise and disjoint-write outputs can use `tensor.empty`
-- preserved-value and read-modify-write outputs stay on the
-  `bufferization.to_tensor` path
-- simple `memref.cast` alias chains are stripped during the proof, so a casted
-  read of the destination does not get misclassified as overwrite-safe
-- narrow reduction carriers stay read-modify-write when the accumulator is both
-  an input and an output
+- `memref.store` → `tensor.insert`, advances `currentTensor[alloca]`
+- `memref.load` → `tensor.extract` from `currentTensor[alloca]`
+- Region-holding ops (`scf.for`, `cu_region`, `su_iterate`) → thread current
+  tensors as iter_args, recurse into body, update `currentTensor` to result
+- `memref.cast` alias chains are stripped when tracing back to the alloca
 
 ### Shape of the IR
 
 Before:
 
 ```mlir
-linalg.generic ins(%a, %b : memref<...>, memref<...>)
-               outs(%out : memref<...>) { ... }
-```
-
-After, overwrite-safe:
-
-```mlir
-%ta = bufferization.to_tensor %a : memref<...> to tensor<...>
-%tb = bufferization.to_tensor %b : memref<...> to tensor<...>
-%tout = tensor.empty() : tensor<...>
-%res = linalg.generic ins(%ta, %tb : tensor<...>, tensor<...>)
-                    outs(%tout : tensor<...>) { ... }
-```
-
-After, preserved-value or in-place:
-
-```mlir
-%ta = bufferization.to_tensor %a : memref<...> to tensor<...>
-%tb = bufferization.to_tensor %b : memref<...> to tensor<...>
-%tout = bufferization.to_tensor %out : memref<...> to tensor<...>
-%res = linalg.generic ins(%ta, %tb : tensor<...>, tensor<...>)
-                    outs(%tout : tensor<...>) { ... }
-```
-
-## `Tiling`
-
-`Tiling` performs real SDE tensor-level transforms using the
-active `SDECostModel`. It does not just inspect carriers. It rewrites the
-surrounding `arts_sde.su_iterate` so the optimized loop structure survives
-back into executable memref or loop IR after the carrier is erased.
-
-### What it does today
-
-- Chooses a tile size from the active `SDECostModel`
-- Rewrites the enclosing `arts_sde.su_iterate`
-- Preserves executable scalar or memref lowering by cloning or rebuilding the
-  loop body, not by requiring tensor IR downstream
-
-### Supported tensor transforms today
-
-- One-dimensional elementwise tiling
-- Narrow matmul tiling on the outer parallel dimension
-- Two-dimensional all-parallel elementwise tiling for a narrow perfect-nest
-  subset with a disjoint write set
-
-### Current restrictions
-
-- no existing explicit chunk
-- no reduction kernels in the tensor optimization pass
-- classification must already be present
-- schedule must be static or absent
-- the pass still operates on a narrow executable subset rather than general
-  tensorization
-
-### Shape of the IR
-
-Before:
-
-```mlir
-arts_sde.su_iterate(%lb) to(%ub) step(%step)
-    structured_classification(<elementwise>) {
-  ... tensor-backed carrier ...
-}
+%scratch = memref.alloca() : memref<4xf32>
+memref.store %val, %scratch[%i] : memref<4xf32>
+%v = memref.load %scratch[%j] : memref<4xf32>
 ```
 
 After:
 
 ```mlir
+%scratch = tensor.empty() : tensor<4xf32>
+%t1 = tensor.insert %val into %scratch[%i] : tensor<4xf32>
+%v = tensor.extract %t1[%j] : tensor<4xf32>
+```
+
+## `Tiling`
+
+`Tiling` performs real SDE tensor-level transforms using the active
+`SDECostModel`. It operates in dual mode depending on whether the body is
+carrier-authoritative or dual-representation.
+
+### Carrier-authoritative path
+
+When the body contains an authoritative `linalg.generic` carrier (no scalar
+`memref.load`/`memref.store` ops), the pass tiles the carrier directly:
+
+1. Creates `tensor.extract_slice` on each carrier input/output
+2. Builds a tiled `linalg.generic` operating on the slices
+3. Writes results back via `tensor.insert_slice`
+
+No `scf.for` tile loop is needed — the carrier's iteration domain is
+partitioned through the slice/insert_slice mechanism.
+
+### Dual-representation fallback path
+
+When scalar ops coexist with the carrier (stencils, or classification-only
+bodies), the pass creates `scf.for` tile loops and clones the scalar body into
+the innermost tile loop.
+
+### Supported transforms
+
+- N-dimensional elementwise tiling (carrier-authoritative)
+- Matmul tiling on the outer parallel dimension (carrier-authoritative)
+- Stencil tiling with halo-aware bounds (dual-rep)
+- Reduction tiling on parallel dimensions only (dual-rep)
+
+### Current restrictions
+
+- No existing explicit chunk
+- Classification must already be present
+- Schedule must be static or absent
+
+### Shape of the IR
+
+Carrier-authoritative (elementwise):
+
+```mlir
+// Before
+arts_sde.su_iterate(%lb) to(%ub) step(%step)
+    structured_classification(<elementwise>) {
+  %tA = sde.mu_memref_to_tensor ...
+  %res = linalg.generic ins(%tA : ...) outs(%tOut : ...) { ... }
+  arts_sde.yield
+}
+
+// After
 arts_sde.su_iterate(%lb) to(%ub) step(%tiledStep)
     structured_classification(<elementwise>) {
-  %tileUb = ...
+  %slice_in = tensor.extract_slice %tA[...] : ...
+  %slice_out = tensor.extract_slice %tOut[...] : ...
+  %tiled = linalg.generic ins(%slice_in : ...) outs(%slice_out : ...) { ... }
+  %updated = tensor.insert_slice %tiled into %tOut[...] : ...
+  arts_sde.yield
+}
+```
+
+Dual-rep fallback (stencil):
+
+```mlir
+arts_sde.su_iterate(%lb) to(%ub) step(%tiledStep)
+    structured_classification(<stencil>) {
   scf.for %iv = %tileBase to %tileUb step %step {
-    ... rebuilt executable body ...
+    ... cloned scalar body ...
   }
   arts_sde.yield
 }
 ```
 
-The key point is that the pass transforms the SDE-owned loop nest, not just
-the carrier.
+## `LoopInterchange`
+
+`LoopInterchange` reorders loop dimensions to improve data locality. Like
+`Tiling`, it operates in dual mode.
+
+### Carrier-authoritative path
+
+When the body is carrier-authoritative, the pass permutes the carrier's
+iterator dimensions directly via `linalg::interchangeGenericOp()`. No
+`scf.for` loops need to be swapped because the carrier encodes the iteration
+order in its indexing maps.
+
+Example: for matmul, swaps j-k to k-j for stride-1 access on B.
+
+### Dual-rep fallback path
+
+When scalar ops are present (stencils), the pass swaps `scf.for` loops in the
+enclosing nest.
 
 ## `ConvertSdeToArts`
 
@@ -277,14 +321,18 @@ At this boundary:
 
 ### Carrier erasure
 
-After the contract data is recovered, the pass erases the transient
-memref-backed and tensor-backed carriers. Downstream ARTS passes do not need to
-understand tensor IR or keep linalg alive.
+After the contract data is recovered, the pass erases the transient carriers:
 
-That is the current contract:
+- **Memref-backed generics**: erased directly (no SSA result users).
+- **Tensor-backed carriers**: erased via iterative dead-code cascade — the
+  `linalg.generic` result, `tensor.insert_slice`, `tensor.extract_slice`, and
+  `sde.mu_memref_to_tensor` ops are removed in dependency order.
 
-- linalg and tensor are available during the SDE optimization window
-- ARTS IR sees the resulting decisions, not the transient carrier chain
+Downstream ARTS passes do not need to understand tensor IR or keep linalg
+alive. That is the current contract:
+
+- Linalg and tensor are available during the SDE optimization window.
+- ARTS IR sees the resulting decisions, not the transient carrier chain.
 
 ## Supported Subsets
 
@@ -292,9 +340,10 @@ The current implementation is deliberately narrow.
 
 | Pass | Supported subset |
 |---|---|
-| `RaiseToLinalg` | elementwise, narrow matmul, narrow 1-D single-accumulator reduction |
-| `RaiseToTensor` | supported raised carriers with per-output init selection |
-| `Tiling` | 1-D elementwise tiling, narrow matmul tiling, 2-D disjoint-write elementwise tiling |
+| `RaiseToLinalg` | elementwise, narrow matmul, narrow 1-D single-accumulator reduction; scalar body erased (carrier-authoritative) |
+| `RaiseToTensor` | local `memref.alloca` values raised to tensor SSA form |
+| `LoopInterchange` | carrier-authoritative: `interchangeGenericOp()`; dual-rep: `scf.for` loop swap |
+| `Tiling` | carrier-authoritative: `extract_slice`/`insert_slice`; dual-rep: `scf.for` + scalar clone; N-dim cost-model-driven |
 | `ConvertSdeToArts` | carrier-derived contract recovery plus classification-only fallback recovery |
 | `LowerToMemref` | tensor-backed carriers and tensor SSA lowered back to memref form |
 | `ConvertToCodelet` | cu_region single iter_args to mu_data/mu_token/cu_codelet graph |
@@ -304,12 +353,15 @@ The current implementation is deliberately narrow.
 The branch is materially beyond the old diagnostic-only design, but it is not
 yet a fully general linalg or tensor optimizer.
 
-- `RaiseToLinalg` still keeps stencil loops and broader reduction shapes on the
-  fallback path.
-- `RaiseToTensor` does not tensorize arbitrary memref loop bodies.
-- `Tiling` does not yet transform stencil kernels.
-- `Tiling` does not yet perform tensor-side reduction
-  transformations.
+- `RaiseToLinalg` still keeps stencil loops and broader reduction shapes on
+  the classification-only fallback path (`supportsLinalgCarrier()` returns
+  false for stencils).
+- `RaiseToTensor` only raises local `memref.alloca` values, not arbitrary
+  memref loop bodies.
+- `Tiling` handles stencils via dual-rep `scf.for` + scalar clone, not the
+  carrier-authoritative path.
+- `Tiling` does not yet perform tensor-side reduction transformations (ARTS
+  handles partial accumulation).
 - The current matmul and disjoint-write support is intentionally narrow and
   tied to executable subsets that can lower cleanly back into the existing
   pipeline.
@@ -324,9 +376,13 @@ accurate.
 
 The current state is:
 
-- `RaiseToLinalg` builds real transient memref-backed carriers
-- `RaiseToTensor` builds real transient tensor-backed carriers
-- `Tiling` performs real cost-model-guided SDE transforms
-- `ConvertSdeToArts` consumes and erases those carriers before the ARTS phase
+- `RaiseToLinalg` creates carrier-authoritative `linalg.generic` carriers and
+  erases the scalar body
+- `RaiseToTensor` raises local allocas to tensor SSA form
+- `LoopInterchange` and `Tiling` transform carriers directly or fall back to
+  dual-rep scalar loop manipulation
+- `LowerToMemref` restores memref form before the ARTS boundary
+- `ConvertSdeToArts` consumes contract data and erases remaining carrier
+  artifacts
 
 That is the current implemented design on this branch.

@@ -28,7 +28,7 @@ concrete code snippets to show what each pass consumes, transforms, and produces
  │                                                         │
  │  DEP (structural transforms on the optimized form)      │
  │    4. LoopInterchange        reorder dims for stride-1   │
- │    5. TensorOpt              cost-model tiling           │
+ │    5. Tiling                 cost-model tiling           │
  │    6. StructuredSummaries    stamp neighborhood attrs    │
  │    7. ElementwiseFusion      merge compatible SUs        │
  │                                                         │
@@ -265,9 +265,9 @@ func.func @matmul(%A: memref<32x32xf64>, %B: memref<32x32xf64>,
 
 ## Pass 3: RaiseToLinalg
 
-Classifies loops via `StructuredOpAnalysis` and creates transient `linalg.generic`
-carriers for patterns that support them. The carrier makes loop structure explicit
-for downstream optimization passes.
+Classifies loops via `StructuredOpAnalysis` and creates **authoritative**
+`linalg.generic` carriers for patterns that support them. The carrier becomes the
+single source of truth for the computation — the original scalar body is erased.
 
 **Classification** (stamped as `classification(<pattern>)` attribute):
 - `elementwise`: all-parallel iterators, identity/permutation indexing maps
@@ -277,8 +277,11 @@ for downstream optimization passes.
 
 **Carrier creation** (only for `elementwise`, `matmul`, narrow `reduction`):
 - Wraps scalar body in `linalg.generic` with explicit indexing maps
-- Input memrefs wrapped via `bufferization.to_tensor`
-- Carrier is **transient** — erased by ConvertSdeToArts
+- External memrefs wrapped via `arts_sde.mu_memref_to_tensor` (not `bufferization.to_tensor`)
+- After creating the carrier, **erases the scalar body** (`memref.load`/`memref.store`
+  + dead `arith` ops). This makes the carrier authoritative — it IS the computation.
+- Carrier survives through passes 4-14 and is lowered back to `scf.for` + memref
+  ops by LowerToMemref (Pass 15)
 
 ### Elementwise: carrier created
 
@@ -295,14 +298,14 @@ arts_sde.su_iterate (%c0) to (%c128) step (%c1) {
 }
 ```
 
-**After** (classified + carrier):
+**After** (classified + authoritative carrier, scalar body erased):
 ```mlir
 arts_sde.su_iterate (%c0) to (%c128) step (%c1)
     classification(<elementwise>) {
   arts_sde.cu_region <parallel> {
-    // --- transient linalg carrier (erased at Pass 17) ---
-    %in = bufferization.to_tensor %A : memref<128xf64> to tensor<128xf64>
-    %out = bufferization.to_tensor %B : memref<128xf64> to tensor<128xf64>
+    // --- authoritative linalg carrier (lowered at Pass 15) ---
+    %in = arts_sde.mu_memref_to_tensor %A : memref<128xf64> -> tensor<128xf64>
+    %out = arts_sde.mu_memref_to_tensor %B : memref<128xf64> -> tensor<128xf64>
     %0 = linalg.generic {
         indexing_maps = [affine_map<(d0) -> (d0)>,
                          affine_map<(d0) -> (d0)>],
@@ -312,10 +315,7 @@ arts_sde.su_iterate (%c0) to (%c128) step (%c1)
       %r = arith.mulf %a, %cst : f64
       linalg.yield %r : f64
     } -> tensor<128xf64>
-    // --- original memref body unchanged below carrier ---
-    %v = memref.load %A[%i] : memref<128xf64>
-    %r = arith.mulf %v, %cst : f64
-    memref.store %r, %B[%i] : memref<128xf64>
+    // --- scalar body (memref.load/store + arith) ERASED ---
     arts_sde.yield
   }
   arts_sde.yield
@@ -343,12 +343,15 @@ arts_sde.su_iterate (%c1) to (%c63) step (%c1)
 }
 ```
 
-### Matmul: classified + carrier
+### Matmul: classified + authoritative carrier
 
 ```mlir
 arts_sde.su_iterate (%c0) to (%c32) step (%c1)
     classification(<matmul>) {
   ...
+  %A_t = arts_sde.mu_memref_to_tensor %A : memref<32x32xf64> -> tensor<32x32xf64>
+  %B_t = arts_sde.mu_memref_to_tensor %B : memref<32x32xf64> -> tensor<32x32xf64>
+  %C_t = arts_sde.mu_memref_to_tensor %C : memref<32x32xf64> -> tensor<32x32xf64>
   %0 = linalg.generic {
       indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>,   // A[i,k]
                        affine_map<(d0, d1, d2) -> (d2, d1)>,   // B[k,j]
@@ -360,12 +363,12 @@ arts_sde.su_iterate (%c0) to (%c32) step (%c1)
     %add = arith.addf %c, %mul : f64
     linalg.yield %add : f64
   } -> tensor<32x32xf64>
-  ...
+  // scalar body ERASED — carrier is authoritative
 }
 ```
 
 The `linalg.generic` indexing maps encode the contraction pattern — LoopInterchange
-and TensorOpt read these maps to determine optimal loop ordering and tiling.
+and Tiling read these maps to determine optimal loop ordering and tiling.
 
 ---
 
@@ -416,36 +419,43 @@ For 2D stencils, may reorder based on halo widths if asymmetric.
 
 ---
 
-## Pass 5: TensorOpt
+## Pass 5: Tiling
 
-Cost-model-driven tiling of `su_iterate` loops. Reads the transient
-`linalg.generic` carrier (if present) to determine tile sizes, then strip-mines
-the outer loop. The carrier is erased after tiling.
+Cost-model-driven tiling of `su_iterate` loops. For carrier-authoritative
+patterns (elementwise/matmul), tiles the `linalg.generic` carrier directly using
+`tensor.extract_slice` / `tensor.insert_slice`. For stencil/dual-rep patterns,
+creates `scf.for` tile loops with a cloned scalar body. The carrier survives
+tiling and is lowered by LowerToMemref (Pass 15).
 
-### Elementwise: strip-mine with tile size
+### Elementwise: carrier-authoritative tiling
 
-**Before** (128-element loop):
+**Before** (128-element loop with carrier):
 ```mlir
 arts_sde.su_iterate (%c0) to (%c128) step (%c1)
     classification(<elementwise>) {
-  ...
-  linalg.generic { iterator_types = ["parallel"] } ...
-  memref.load %A[%i] / memref.store %B[%i]
+  %in = arts_sde.mu_memref_to_tensor %A : memref<128xf64> -> tensor<128xf64>
+  %out = arts_sde.mu_memref_to_tensor %B : memref<128xf64> -> tensor<128xf64>
+  linalg.generic ins(%in) outs(%out) { ... }
 }
 ```
 
-**After** (tiled by 16):
+**After** (tiled by 16 — carrier operates on slices):
 ```mlir
 arts_sde.su_iterate (%c0) to (%c128) step (%c16)
     classification(<elementwise>) {
-  // tile loop (scf.for covers one tile)
-  %ub = arith.minui (%i + %c16), %c128
-  scf.for %ii = %i to %ub step %c1 {
-    %v = memref.load %A[%ii] : memref<128xf64>
-    %r = arith.mulf %v, %cst : f64
-    memref.store %r, %B[%ii] : memref<128xf64>
-  }
-  // linalg.generic carrier erased (no longer needed)
+  %in = arts_sde.mu_memref_to_tensor %A : memref<128xf64> -> tensor<128xf64>
+  %out = arts_sde.mu_memref_to_tensor %B : memref<128xf64> -> tensor<128xf64>
+  // extract tile slices
+  %tile_size = arith.minui (%c16), (%c128 - %i)
+  %in_slice = tensor.extract_slice %in[%i][%tile_size][1]
+      : tensor<128xf64> to tensor<?xf64>
+  %out_slice = tensor.extract_slice %out[%i][%tile_size][1]
+      : tensor<128xf64> to tensor<?xf64>
+  // tiled carrier
+  %r = linalg.generic ins(%in_slice) outs(%out_slice) { ... }
+  // write result back
+  tensor.insert_slice %r into %out[%i][%tile_size][1]
+      : tensor<?xf64> into tensor<128xf64>
   arts_sde.yield
 }
 ```
@@ -795,16 +805,31 @@ arts_sde.su_iterate (...)
 
 ## Pass 15: LowerToMemref
 
-Inverse of Pass 2 (RaiseToTensor). Converts tensor SSA values back to
-`memref.alloca` + `memref.load`/`memref.store` form. This is the exit from the
-"tensor-first" optimization window.
+Inverse of Pass 2 (RaiseToTensor) plus carrier lowering. Converts tensor SSA
+values back to `memref.alloca` + `memref.load`/`memref.store` form and lowers
+authoritative `linalg.generic` carriers to `scf.for` loops. This is the exit
+from the "tensor-first" optimization window.
 
-**Three phases**:
-1. **Rewrite**: `tensor.extract` → `memref.load`, `tensor.insert` → `memref.store`
-2. **Strip iter_args**: Remove tensor `iter_args` from `su_iterate`/`cu_region`
-3. **Erase dead carriers**: Remove orphaned `linalg.generic`, `bufferization.to_tensor`, `tensor.empty`, `arts_sde.mu_alloc`
+**Four phases**:
+1. **Phase A — Rewrite tensor ops**: `tensor.extract` → `memref.load`,
+   `tensor.insert` → `memref.store`. Maps tensor values to backing memrefs
+   (traces through `mu_alloc` → `memref.alloca`).
+2. **Phase B — Strip iter_args**: Remove tensor `iter_args` from
+   `su_iterate`/`cu_region`/`scf.for`. Tensor iter_args feeding `<single>`
+   cu_regions are preserved (handled by ConvertToCodelet).
+3. **Phase C — Lower authoritative carriers**: Converts carrier `linalg.generic`
+   ops to `scf.for` loops with `memref.load`/`memref.store` via
+   `linalg::linalgOpToLoops()`. Uses `traceToMemref()` to resolve tensor
+   operands back to memrefs — traces through `mu_memref_to_tensor` → backing
+   memref, `tensor.extract_slice` → `memref.subview`, `tensor.empty` →
+   `memref.alloca`. After lowering, erases `tensor.insert_slice` ops that
+   consumed the carrier's results.
+4. **Phase D — Erase dead ops**: Iteratively erases orphaned `linalg.generic`,
+   `mu_memref_to_tensor`, `mu_alloc`, `tensor.empty`, `tensor.extract_slice`,
+   `tensor.insert_slice`, `tensor.extract`, `tensor.insert`, and `tensor.cast`
+   ops with no remaining users.
 
-### Matmul accumulator lowered back to memref
+### Matmul accumulator lowered back to memref (Phase A + B)
 
 **Before** (tensor SSA from Pass 2):
 ```mlir
@@ -828,13 +853,39 @@ arts_sde.su_iterate (%c0) to (%c32) step (%c1) {
   memref.store %new, %acc[] : memref<f64>
   arts_sde.yield
 }
-// iter_args stripped, mu_alloc erased
+// iter_args stripped (Phase B), mu_alloc erased (Phase D)
 ```
 
-### Carrier erasure
+### Carrier lowering (Phase C): elementwise tiled carrier
 
-Any `linalg.generic` carriers that survived from Pass 3 are erased here as dead
-code (they have no users after the tensor→memref rewrite).
+**Before** (carrier with extract_slice/insert_slice from Tiling):
+```mlir
+arts_sde.su_iterate (%c0) to (%c128) step (%c16)
+    classification(<elementwise>) {
+  %in = arts_sde.mu_memref_to_tensor %A : memref<128xf64> -> tensor<128xf64>
+  %out = arts_sde.mu_memref_to_tensor %B : memref<128xf64> -> tensor<128xf64>
+  %in_slice = tensor.extract_slice %in[%i][%tile_size][1] ...
+  %out_slice = tensor.extract_slice %out[%i][%tile_size][1] ...
+  %r = linalg.generic ins(%in_slice) outs(%out_slice) { arith.mulf ... }
+  tensor.insert_slice %r into %out[%i][%tile_size][1] ...
+}
+```
+
+**After** (carrier lowered to scf.for + memref via traceToMemref):
+```mlir
+arts_sde.su_iterate (%c0) to (%c128) step (%c16)
+    classification(<elementwise>) {
+  // traceToMemref: mu_memref_to_tensor → %A, extract_slice → subview
+  %A_sub = memref.subview %A[%i][%tile_size][1] ...
+  %B_sub = memref.subview %B[%i][%tile_size][1] ...
+  scf.for %ii = %c0 to %tile_size step %c1 {
+    %v = memref.load %A_sub[%ii] : memref<?xf64>
+    %r = arith.mulf %v, %cst : f64
+    memref.store %r, %B_sub[%ii] : memref<?xf64>
+  }
+  // linalg.generic, extract_slice, insert_slice, mu_memref_to_tensor erased
+}
+```
 
 ---
 
@@ -885,7 +936,7 @@ tokens, making it safe for asynchronous execution in the ARTS runtime.
 ## Pass 17: ConvertSdeToArts
 
 The main SDE→ARTS bridge. Converts all `arts_sde.*` operations to `arts.*`
-operations and erases transient carriers.
+operations. Carriers are already lowered by LowerToMemref (Pass 15).
 
 ### Operation mapping
 
@@ -935,7 +986,7 @@ arts_sde.cu_region <parallel> scope(<local>) {
         %r = arith.mulf %v, %cst : f64
         memref.store %r, %B[%ii] : memref<128xf64>
       }
-      // linalg.generic carrier already erased at Pass 15
+      // carrier lowered to scf.for + memref by LowerToMemref (Pass 15)
       arts_sde.yield
     }
   }
@@ -998,9 +1049,9 @@ transient carriers.
 
 **Rejects**:
 - Any op in the `arts_sde` dialect → `"SDE operation survived past conversion"`
-- `linalg.generic` nested under `arts.for` → `"transient carrier survived"`
-- `bufferization.to_tensor` under `arts.for` → `"transient carrier survived"`
-- `tensor.empty` under `arts.for` → `"transient carrier survived"`
+- `linalg.generic` nested under `arts.for` → `"carrier survived past LowerToMemref"`
+- `mu_memref_to_tensor` under `arts.for` → `"carrier survived past LowerToMemref"`
+- `tensor.empty` under `arts.for` → `"carrier survived past LowerToMemref"`
 
 If any violations found → `signalPassFailure()`.
 
@@ -1043,21 +1094,50 @@ This table shows which pass **stamps** each attribute and which pass **consumes*
 
 ## The Tensor-First Sandwich
 
-The SDE pipeline uses a **raise-optimize-lower** pattern for local state:
+The SDE pipeline uses a **raise-optimize-lower** pattern. Local state is raised
+to tensor SSA for aliasing-free analysis, and authoritative `linalg.generic`
+carriers encode the computation for downstream transformation.
+
+### Carrier-authoritative lifecycle
 
 ```
-   memref world                tensor world               memref world
-  ─────────────  RaiseToTensor  ─────────────  LowerToMemref  ──────────
-  memref.alloca   ──────────>   tensor SSA     ──────────>   memref.alloca
-  memref.load     ──────────>   tensor.extract ──────────>   memref.load
-  memref.store    ──────────>   tensor.insert  ──────────>   memref.store
-                                iter_args threading
-                  Pass 2                                  Pass 15
-                          ↕ Passes 3-14 operate on ↕
-                          ↕    tensor SSA form     ↕
+Pass 2  RaiseToTensor:       memref.alloca → tensor SSA (local temps only)
+Pass 3  RaiseToLinalg:       classify + create linalg.generic carrier
+                             + ERASE scalar body (carrier-authoritative)
+Pass 4  LoopInterchange:     TRANSFORM carrier dims via interchangeGenericOp
+Pass 5  Tiling:              TRANSFORM carrier via extract_slice/insert_slice
+Pass 6  StructuredSummaries: READ classification + re-analyze
+Pass 7  ElementwiseFusion:   READ carrier DPS outputs for write-set
+Pass 14 BarrierElimination:  READ carrier DPS inputs/outputs for sets
+Pass 15 LowerToMemref:       Phase A: tensor.extract/insert → memref.load/store
+                             Phase B: strip tensor iter_args
+                             Phase C: lower carriers → scf.for + memref ops
+                             Phase D: erase dead extract_slice/insert_slice/mu ops
+```
+
+### Two parallel data paths
+
+```
+   memref world                tensor world                  memref world
+  ─────────────  RaiseToTensor  ──────────────  LowerToMemref  ──────────
+
+  LOCAL STATE (accumulators, temps):
+  memref.alloca   ──────────>   mu_alloc + tensor SSA  ──────>  memref.alloca
+  memref.load     ──────────>   tensor.extract         ──────>  memref.load
+  memref.store    ──────────>   tensor.insert          ──────>  memref.store
+                                + iter_args threading
+
+  COMPUTATION (elementwise, matmul, reduction):
+  memref.load     ──────────>   mu_memref_to_tensor           (Phase A+B)
+  + arith ops     ──────────>   linalg.generic carrier  ─────>  scf.for
+  memref.store    ──────────>   (scalar body ERASED)          (Phase C)
+                  Pass 2                                    Pass 15
+                           ↕ Passes 3-14 operate on ↕
+                           ↕    tensor SSA form     ↕
 ```
 
 **Why**: Tensor SSA enables SSA-based analysis and optimization (no aliasing,
 pure value semantics) while memref form is required by ARTS core ops downstream.
-The linalg carriers created by RaiseToLinalg exist entirely within this tensor
-window and are erased when lowering back to memref.
+The carrier-authoritative model ensures that downstream passes (4-14) only need
+to reason about one representation — the `linalg.generic` — rather than keeping
+a dual scalar body in sync.

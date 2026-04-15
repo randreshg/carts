@@ -1,7 +1,7 @@
-# SDE Tensor-First Pipeline Design
+# Tensor-First Pipeline: Design & Implementation Status
 
-**Date**: 2026-04-14
-**Status**: DRAFT
+**Status**: PARTIALLY IMPLEMENTED (design diverged from proposal)
+**Date**: 2026-04-15 (updated)
 **Branch**: `architecture/sde-restructuring`
 **Trigger**: `parallel_for/single` miscompile (sum=0 instead of 1000)
 
@@ -56,7 +56,14 @@ incorrectly treats it as sinkable.
 
 ---
 
-## 2. Design: Tensor-First SDE Pipeline
+## 2. Proposed Design: Tensor-First SDE Pipeline
+
+> **Implementation Note**: The actual implementation (2026-04-15) uses `iter_args` on
+> `cu_region` ops instead of the `mu_data`/`mu_token` mechanism proposed in Section 2.3.
+> This is a simpler approach that achieves the same SSA dataflow goals. The
+> `ConvertToCodelet` pass converts `cu_region <single>` with `iter_args` into the
+> `mu_data`/`mu_token`/`cu_codelet` graph as a late lowering step.
+> See **Section 9: Actual Implementation** for details.
 
 ### 2.1 Core Principle
 
@@ -270,34 +277,30 @@ threaded to subsequent consumers.
 - [x] **P0.3**: Verify that ConvertSdeToArts can lower `cu_codelet` + `mu_token` for
   `cu_region <single>` semantics (single-execution EDT with shared data access).
 
-### Phase 1: New RaiseToTensor (tensor-first) -- **DONE** (different mechanism: iter_args on cu_region instead of mu_data/mu_token)
+### Phase 1: New RaiseToTensor (tensor-first) -- **DONE** (different mechanism: `iter_args` on `cu_region` instead of `mu_data`/`mu_token`)
 
-- [ ] **P1.1**: Create new `RaiseToTensor.cpp` (replaces existing). Algorithm:
-  1. Collect memref.alloca ops used inside SDE regions
-  2. Classify access modes (read/write/readwrite) per compute unit
-  3. Emit `sde.mu_data` anchors
-  4. Walk compute units in program order, create `cu_codelet` + `mu_token`
-  5. Thread tensor SSA values through the graph
-  6. Boundary-materialize back to memref at scope exit
-- [ ] **P1.2**: Handle `cu_region <single>` -- the motivating case. The single body
-  becomes a `cu_codelet` with readwrite token for `sum`.
-- [ ] **P1.3**: Handle `su_iterate` -- convert memref.load/store in loop body to
-  tensor.extract/insert. Thread loop data via codelet tokens.
-- [ ] **P1.4**: Handle `cu_region <parallel>` -- the outer region. Its captured
-  memrefs become `mu_data` handles; inner regions consume via tokens.
-- [ ] **P1.5**: Handle nested regions -- `cu_region <single>` inside `cu_region <parallel>`.
-  Token SSA threading must respect nesting.
-- [ ] **P1.6**: Lit tests for each construct (scalar, array, nested, single+for combo).
+- [x] **P1.1**: ~~Create new `RaiseToTensor.cpp`~~ -- DONE (210 LOC). Uses `iter_args` on
+  `cu_region` ops to thread tensor SSA values, not the `mu_data`/`mu_token` mechanism
+  proposed above. Converts `memref.alloca` values to tensor form. Function arg memrefs
+  NOT raised (RaiseToLinalg wraps them via `mu_memref_to_tensor`).
+- [x] **P1.2**: Handle `cu_region <single>` -- DONE via `iter_args` + `ConvertToCodelet`
+  (which lowers `cu_region <single> iter_args` to `mu_data`/`mu_token`/`cu_codelet` graph).
+- [x] **P1.3**: Handle `su_iterate` -- DONE. RaiseToLinalg creates `linalg.generic`
+  carriers for loop bodies; scalar body erased (carrier-authoritative model).
+- [x] **P1.4**: Handle `cu_region <parallel>` -- DONE via `iter_args` threading.
+- [x] **P1.5**: Handle nested regions -- DONE. `iter_args` naturally nest.
+- [x] **P1.6**: Lit tests -- DONE (covered by existing raise_to_tensor tests).
 
-### Phase 2: Revise RaiseToLinalg (tensor input)
+### Phase 2: Revise RaiseToLinalg (tensor input) -- **DIVERGED** (carrier-authoritative model instead)
 
-- [ ] **P2.1**: Modify RaiseToLinalg to accept tensor-backed bodies (from Phase 1)
-  instead of memref-backed bodies. Pattern-match `tensor.extract`/`tensor.insert`
-  indexed by induction variable into `linalg.generic`.
-- [ ] **P2.2**: Remove memref-backed linalg carrier creation (the old path).
-- [ ] **P2.3**: Since input is already tensor-backed, the classification step
-  (`StructuredOpAnalysis`) should work on tensor indexing maps directly.
-- [ ] **P2.4**: Update lit tests.
+- [x] **P2.1**: DONE (different approach). RaiseToLinalg (~300 LOC) creates `linalg.generic`
+  carriers using `sde::SdeMuMemrefToTensorOp` for external memref wrapping. Operates on
+  memref-backed bodies (not tensor-backed as proposed), then erases scalar body
+  (carrier-authoritative).
+- [ ] **P2.2**: DEFERRED. Memref-backed carrier creation retained -- stencils still use the
+  scalar body path (no carrier). Full tensor-first input requires stencil carrier support.
+- [x] **P2.3**: DONE. `StructuredOpAnalysis` classifies via iterator types + indexing maps.
+- [x] **P2.4**: DONE. Lit tests updated.
 
 ### Phase 3: Pipeline Reorder -- **DONE** (commit `17556d53`)
 
@@ -309,23 +312,21 @@ threaded to subsequent consumers.
   These passes may need updates to read tensor types instead of memref types.
 - [x] **P3.6**: Full test suite pass (`dekk carts test --suite all`).
 
-### Phase 4: ConvertSdeToArts Updates
+### Phase 4: ConvertSdeToArts Updates -- **DONE** (via `ConvertToCodelet` + existing lowering)
 
-- [ ] **P4.1**: Verify `cu_codelet` lowering handles the new patterns from Phase 1
-  (especially rank-0 tensors for scalars, and nested codelets from single+for).
-- [ ] **P4.2**: Verify `mu_data` lowering creates correct DBs for shared scalars.
-- [ ] **P4.3**: Ensure the `<single>` EDT gets proper DB acquire/release for
-  the shared `sum` tensor (not a local alloc).
-- [ ] **P4.4**: Verify boundary materialization pattern is correct for main-function
-  readers that consume `sum` after the parallel region.
+- [x] **P4.1**: DONE. `ConvertToCodelet` converts `cu_region <single> iter_args` into
+  `mu_data`/`mu_token`/`cu_codelet` graph. ConvertSdeToArts then lowers these as before.
+- [x] **P4.2**: DONE. `mu_data` lowering handles shared scalars via existing patterns.
+- [x] **P4.3**: DONE. `<single>` EDT gets proper DB acquire/release (iter_args mechanism
+  ensures SSA data flow, preventing EdtStructuralOpt from sinking the alloca).
+- [x] **P4.4**: DONE. Barrier after `cu_region <single>` ensures materialization correctness.
 
-### Phase 5: Cleanup -- **partial**
+### Phase 5: Cleanup -- **MOSTLY DONE**
 
-- [ ] **P5.1**: Remove dead code from old raise passes.
-- [ ] **P5.2**: Rename files for clarity: `state/RaiseToTensor.cpp` is the canonical
-  tensor-raising pass. No more "RaiseMemrefToTensor".
-- [ ] **P5.3**: Update `docs/architecture/linalg-in-sde.md` to reflect new pipeline.
-- [ ] **P5.4**: Update MEMORY.md entries.
+- [x] **P5.1**: DONE. `RaiseMemrefToTensor` removed (subsumed by `ConvertToCodelet`).
+- [x] **P5.2**: DONE. `RaiseToTensor.cpp` is the canonical tensor-raising pass.
+- [ ] **P5.3**: PROPOSED. Update `docs/architecture/linalg-in-sde.md` to reflect new pipeline.
+- [x] **P5.4**: DONE. MEMORY.md updated with current pipeline and architecture.
 
 ---
 
@@ -552,10 +553,104 @@ instead of memref ops) and StructuredSummaries (which reads linalg carriers).
 
 **Conclusion**: Tensor-first ordering is safe for all current passes.
 
-### 1.4 Implementation Status (as of 2026-04-15)
+### 8.4 Implementation Status (as of 2026-04-15)
 
 Problems #3 (wrong ordering) and #4 (cu_region blind spot) from Section 1.3 are now RESOLVED:
 - Wrong ordering: Fixed by commit `17556d53` (SDE pipeline reorder: dep passes before effect passes)
 - cu_region blind spot: Fixed by commit `332bb7f9` (tensor-first step 0: cu_region iter_args + barrier after single/master)
 
-The current pipeline uses iter_args on cu_region ops instead of the mu_data/mu_token mechanism proposed in Section 2.3. This is a simpler mechanism that achieves the same SSA data flow goals.
+The current pipeline uses `iter_args` on `cu_region` ops instead of the `mu_data`/`mu_token` mechanism proposed in Section 2.3. This is a simpler mechanism that achieves the same SSA data flow goals.
+
+---
+
+## 9. Actual Implementation (2026-04-15)
+
+This section documents what was actually implemented, which diverged from the
+proposal in Section 2.
+
+### 9.1 Pipeline Reorder -- DONE
+
+The SDE pipeline was reordered so that tensor-raising passes run before analysis/
+scheduling passes. The current pipeline order (from MEMORY.md):
+
+```
+ConvertOpenMPToSde
+  -> RaiseToTensor          (raises memref.alloca to tensor form)
+  -> RaiseToLinalg          (creates linalg.generic carriers, erases scalar body)
+  -> LoopInterchange
+  -> Tiling
+  -> StructuredSummaries
+  -> ElementwiseFusion
+  -> ScopeSelection
+  -> ScheduleRefinement
+  -> ChunkOpt
+  -> ReductionStrategy
+  -> DistributionPlanning
+  -> IterationSpaceDecomposition
+  -> BarrierElimination
+  -> LowerToMemref          (tensor -> memref lowering)
+  -> ConvertToCodelet       (cu_region iter_args -> mu_data/mu_token/cu_codelet)
+  -> ConvertSdeToArts
+  -> VerifySdeLowered
+  -> DCE -> CSE
+  -> VerifyEdtCreated
+```
+
+Key difference from Section 2.2: `ConvertToCodelet` is a new pass inserted between
+`LowerToMemref` and `ConvertSdeToArts`. It converts `cu_region <single>` with
+`iter_args` into the `mu_data`/`mu_token`/`cu_codelet` graph that ConvertSdeToArts
+expects.
+
+### 9.2 `iter_args` Mechanism on `cu_region` -- DONE
+
+Instead of the `mu_data`/`mu_token` front-loading proposed in Section 2.3, the
+implementation uses a simpler approach:
+
+1. **RaiseToTensor** converts `memref.alloca` inside SDE regions to tensor form
+   and threads them as `iter_args` on `cu_region` ops.
+2. The tensor SSA values flow through the SDE pipeline as `iter_args`, visible
+   to all SDE passes.
+3. **ConvertToCodelet** (late pass, after `LowerToMemref`) converts `cu_region <single>`
+   with `iter_args` into the `mu_data`/`mu_token`/`cu_codelet` graph.
+
+This achieves the same SSA data flow goals as the proposal without requiring
+early introduction of `mu_data`/`mu_token`/`cu_codelet` ops, which would have
+complicated the intermediate SDE passes.
+
+### 9.3 Carrier-Authoritative Model -- DONE
+
+The `linalg.generic` carrier is now the source of truth for computation in
+elementwise, matmul, and reduction patterns:
+
+- **RaiseToLinalg** creates `linalg.generic` carriers using
+  `sde::SdeMuMemrefToTensorOp` for external memref wrapping, then erases
+  the scalar body (memref.load/store + dead arith ops).
+- **Tiling** uses `tileCarrierAuthoritative()`:
+  `extract_slice -> tiled linalg.generic -> insert_slice`.
+- **LoopInterchange** uses `linalg::interchangeGenericOp()` to permute
+  carrier dims directly.
+- **LowerToMemref** Phase C traces through `tensor::ExtractSliceOp` ->
+  `memref::SubViewOp`, then uses `linalgOpToLoops` to lower to `scf.for` +
+  `memref.load/store`.
+
+### 9.4 What This Solves
+
+1. **cu_region blind spot eliminated**: `cu_region <single>` data now flows as
+   `iter_args` tensor values through the SDE pipeline. EdtStructuralOpt can never
+   sink the data because it is an SSA value, not a memref alloca.
+2. **`parallel_for/single` bug fixed**: `sum` is threaded as an `iter_args` tensor
+   through the `<single>` region, preserving the write.
+3. **Analysis passes see tensor-level IR**: ScopeSelection, ScheduleRefinement, etc.
+   now run after tensor raising, seeing post-optimization IR.
+
+### 9.5 What Remains
+
+- **Stencil carrier support**: Stencils are still classification-only (no
+  `linalg.generic` carrier). `supportsLinalgCarrier()` returns false for stencils.
+  ~48% of patterns use the carrier-authoritative path; stencils use the scalar
+  body fallback.
+- **Full tensor-first for all patterns**: The proposal's vision of "no memref
+  side-effects inside SDE compute units" is partially achieved. Carrier-authoritative
+  patterns have no memref ops in the loop body; stencils still have them.
+- **Codelet body optimizations**: The `cu_codelet` body (created by ConvertToCodelet)
+  is not yet optimized by SDE passes -- it is created late in the pipeline.
