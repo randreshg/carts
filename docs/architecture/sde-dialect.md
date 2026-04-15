@@ -14,13 +14,19 @@ The implemented SDE-stage pipeline is:
 
 ```text
 ConvertOpenMPToSde
-  -> SdeScopeSelection
-  -> SdeScheduleRefinement
-  -> SdeChunkOptimization
-  -> SdeReductionStrategy
+  -> ScopeSelection
+  -> ScheduleRefinement
+  -> ChunkOpt
+  -> ReductionStrategy
   -> RaiseToLinalg
   -> RaiseToTensor
-  -> SdeTensorOptimization
+  -> LoopInterchange
+  -> TensorOpt
+  -> StructuredSummaries
+  -> ElementwiseFusion
+  -> DistributionPlanning
+  -> IterationSpaceDecomposition
+  -> BarrierElimination
   -> ConvertSdeToArts
 ```
 
@@ -62,7 +68,7 @@ The implemented enum set is also concrete today:
 - `SdeCuKind`
 - `SdeAccessMode`
 - `SdeReductionKind`
-- `SdeReductionStrategy`
+- `ReductionStrategy`
 - `SdeStructuredClassification`
 - `SdeScheduleKind`
 - `SdeConcurrencyScope`
@@ -76,19 +82,19 @@ The branch currently implements these SDE-owned decisions:
 
 - `ConvertOpenMPToSde` creates `arts_sde.*` IR from OpenMP constructs and
   preserves SDE-visible loop and task semantics.
-- `SdeScopeSelection` assigns or inherits local versus distributed scope for
+- `ScopeSelection` assigns or inherits local versus distributed scope for
   parallel regions.
-- `SdeScheduleRefinement` refines `auto` and `runtime` schedules to concrete
+- `ScheduleRefinement` refines `auto` and `runtime` schedules to concrete
   SDE schedule kinds on the supported loop subset.
-- `SdeChunkOptimization` synthesizes schedule chunks for supported dynamic and
+- `ChunkOpt` synthesizes schedule chunks for supported dynamic and
   guided loops.
-- `SdeReductionStrategy` chooses `atomic`, `tree`, or `local_accumulate` as an
+- `ReductionStrategy` chooses `atomic`, `tree`, or `local_accumulate` as an
   SDE-owned recommendation.
 - `RaiseToLinalg` creates transient linalg carriers on supported memref loop
   bodies, including the current narrow reduction subset.
 - `RaiseToTensor` creates transient tensor carriers on supported linalg
   carriers, including the current disjoint-init and cast-alias-safe cases.
-- `SdeTensorOptimization` performs real SDE-stage tensor/linalg
+- `TensorOpt` performs real SDE-stage tensor/linalg
   transformations on the supported elementwise and matmul subsets.
 - `ConvertSdeToArts` forwards the selected SDE semantics into ARTS and erases
   transient carrier IR.
@@ -140,7 +146,7 @@ loop/schedule shell.
 
 | Op | Current role | Current status |
 |---|---|---|
-| `sde.su_distribute` | Runtime-neutral advisory wrapper for distribution intent | Implemented; `SdeDistributionPlanning` authors it and `ConvertSdeToArts` materializes the advisory at the ARTS boundary |
+| `sde.su_distribute` | Runtime-neutral advisory wrapper for distribution intent | Implemented; `DistributionPlanning` authors it and `ConvertSdeToArts` materializes the advisory at the ARTS boundary |
 | `sde.mu_access` | In-body access-region annotation for memref fallback | Implemented as an annotation op; current lowering erases it |
 | `sde.mu_reduction_decl` | Module-level reduction symbol with type, kind, optional identity, optional custom combiner | Implemented; current lowering erases it after the SDE phase |
 

@@ -92,7 +92,7 @@ LLVM conversion patterns. They stay shared.
 | — | `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | NEW/2 | SDE->ARTS lowering |
 | — | `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | NEW/2 | scf.for+memref -> linalg.generic |
 | — | `lib/arts/dialect/sde/Transforms/RaiseToTensor.cpp` | NEW/2 | linalg on memref -> linalg on tensor |
-| — | `lib/arts/dialect/sde/Transforms/SdeOpt.cpp` | NEW/2 | tensor-space tile-and-fuse |
+| — | `lib/arts/dialect/sde/Transforms/dep/loop/TensorOpt.cpp` | NEW/2 | tensor-space tile-and-fuse |
 
 ### Internal Headers: `include/arts/passes/transforms/`
 
@@ -202,7 +202,7 @@ LLVM conversion patterns. They stay shared.
 | `LoopFusion.cpp` | `lib/arts/dialect/core/Transforms/LoopFusion.cpp` | 3 | Walks EdtOp + BarrierOp — ARTS structural |
 | `LoopNormalization.cpp` | `lib/arts/dialect/core/Transforms/LoopNormalization.cpp` | 3 | ARTS-coupled: ForOp in match/apply, DbPatternMatchers |
 | `LoopReordering.cpp` | `lib/arts/dialect/core/Transforms/LoopReordering.cpp` | 3 | ARTS-coupled: ForOp, DbPatternMatchers auto-detection |
-| `SdeIterationSpaceDecomposition.cpp` | `lib/arts/dialect/sde/Transforms/SdeIterationSpaceDecomposition.cpp` | DONE | Moved to SDE: pattern-agnostic, zero ARTS deps |
+| `IterationSpaceDecomposition.cpp` | `lib/arts/dialect/sde/Transforms/IterationSpaceDecomposition.cpp` | DONE | Moved to SDE: pattern-agnostic, zero ARTS deps |
 
 ---
 
@@ -760,7 +760,7 @@ lib/arts/
         ConvertOpenMPToSde.cpp          NEW Phase 2B
         RaiseToLinalg.cpp               NEW Phase 2C (deferred)
         RaiseToTensor.cpp               NEW Phase 2C (deferred)
-        SdeOpt.cpp                      NEW Phase 2C (deferred)
+        TensorOpt.cpp                   NEW Phase 2C (deferred)
         CMakeLists.txt                  NEW Phase 2
     core/
       IR/
@@ -837,7 +837,7 @@ lib/arts/
       DepTransforms.cpp                 <- passes/transforms/
       KernelTransforms.cpp              <- passes/opt/kernel/
       PatternDiscovery.cpp              <- passes/transforms/
-      # StencilBoundaryPeeling -> moved to sde/Transforms/SdeIterationSpaceDecomposition.cpp
+      # StencilBoundaryPeeling -> moved to sde/Transforms/IterationSpaceDecomposition.cpp
       dep/
         JacobiAlternatingBuffersPattern.cpp   <- transforms/dep/
         Seidel2DWavefrontPattern.cpp          <- transforms/dep/

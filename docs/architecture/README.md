@@ -150,7 +150,7 @@ lib/arts/
       IR/                  SdeDialect.cpp, SdeOps.cpp
       Analysis/            structured loop/access analysis, tensor/linalg-facing summaries
       Transforms/          ConvertOpenMPToSde, RaiseToLinalg, RaiseToTensor,
-                           SdeTensorOptimization, SDE policy passes
+                           TensorOpt, SDE policy passes
       Conversion/SdeToArts/ SdeToArtsPatterns
 
     core/                  "materialize and optimize ARTS runtime structure"
@@ -182,5 +182,5 @@ lib/arts/dialect/sde/ contains:
   Analysis/StructuredOpAnalysis.cpp reusable structured loop/access analysis
   RaiseToLinalg.cpp        supported scf.for+memref -> linalg.generic carriers
   RaiseToTensor.cpp        supported memref linalg -> tensor carriers
-  SdeTensorOptimization.cpp tensor/linalg transformations on the supported subset
+  TensorOpt.cpp tensor/linalg transformations on the supported subset
 ```

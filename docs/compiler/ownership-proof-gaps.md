@@ -15,8 +15,8 @@ stages.
 ### 1.1 Pattern Discovery (stages 3-4)
 
 **Passes**: SDE passes inside `openmp-to-arts` (stage 3) — especially
-`SdeScopeSelection`, `SdeScheduleRefinement`, `SdeDistributionPlanning`,
-`SdeIterationSpaceDecomposition` — then `edt-transforms` (stage 4) refines
+`ScopeSelection`, `ScheduleRefinement`, `DistributionPlanning`,
+`IterationSpaceDecomposition` — then `edt-transforms` (stage 4) refines
 EDT structure.
 
 **Source files**:

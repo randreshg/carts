@@ -117,7 +117,7 @@ op implementing `TilingInterface`. If we implement `TilingInterface` on
 | IREE Concept | SDE Equivalent | Reuse |
 |---|---|---|
 | Root-based clustering | What goes into one codelet | Adopt FusionGroup + affine map compat |
-| ElementwiseOpFusion with operand count ceiling | SdeElementwiseFusion | Adopt operand count limit |
+| ElementwiseOpFusion with operand count ceiling | ElementwiseFusion | Adopt operand count limit |
 | SplitReduction threshold (>=128K) | ReductionStrategy | Adopt threshold heuristic |
 | CollapseDimensions | Simplify distribution dims | Medium |
 | FuseHorizontalContractions | Batched scientific computing | Medium |
@@ -133,7 +133,7 @@ Key rules:
   duplicate it, don't fuse — multi-output fusion instead.
 - **Element count threshold**: Fuse if output < 128K elements; else tile first.
 
-**Mapping to SDE**: Apply these rules in `SdeElementwiseFusion` to avoid
+**Mapping to SDE**: Apply these rules in `ElementwiseFusion` to avoid
 generating oversized fused codelets that hurt locality.
 
 ---
@@ -409,10 +409,10 @@ stencil workload:
 | OEC/xDSL Concept | SDE Equivalent | Status |
 |---|---|---|
 | `stencil.access` (constant offsets) | `accessMinOffsets`/`accessMaxOffsets` | Already have |
-| `stencil.combine` (domain merge) | `SdeIterationSpaceDecomposition` | Already have |
+| `stencil.combine` (domain merge) | `IterationSpaceDecomposition` | Already have |
 | `DomainSplitPass` | Block partitioning | Already have (ARTS core) |
 | `ShapeOverlapPass` (halo detection) | Stencil boundary peeling | Already have |
-| `stencil.buffer` (fusion barrier) | `SdeBarrierElimination` (inverse) | Already have |
+| `stencil.buffer` (fusion barrier) | `BarrierElimination` (inverse) | Already have |
 | `dmp.swap` (halo exchange) | ARTS halo DB transport | Already have (ARTS) |
 
 **Key insight**: SDE already exceeds OEC in task-based distribution, distributed
@@ -496,7 +496,7 @@ schedule files rather than pass options.
 
 ## Prioritized Roadmap
 
-### Phase 0: Pipeline Reordering (prerequisite — unlocks everything else)
+### Phase 0: Pipeline Reordering (prerequisite — unlocks everything else) **STATUS: COMPLETE** (commit `17556d53`)
 
 0. **Reorder SDE pipeline: optimize → analyze → schedule** — Move ScopeSelection,
    ScheduleRefinement, ChunkOpt, ReductionStrategy AFTER TensorOpt +
@@ -578,7 +578,7 @@ auto result = scf::tileUsingSCF(rewriter, tilingOp, options);
 The current SDE pipeline schedules BEFORE optimizing:
 
 ```text
-CURRENT (WRONG):
+OLD (FIXED by commit 17556d53):
   RaiseToLinalg → RaiseToTensor
   → ScopeSelection       ← reads PRE-TILING trip count
   → ScheduleRefinement   ← reads PRE-TILING trip count
@@ -621,12 +621,12 @@ CURRENT (WRONG):
 ### Proposed Pipeline: Transform → Analyze → Schedule
 
 ```text
-PROPOSED:
+PROPOSED (IMPLEMENTED by commit 17556d53):
   ConvertOpenMPToSde
 
   ── RAISING ──
-  RaiseToLinalg                  ── classification + memref carrier
-  RaiseToTensor                  ── tensor carrier
+  RaiseToTensor                  ── mem2reg-style raise to tensor SSA
+  RaiseToLinalg                  ── classification + linalg carrier on tensor-native form
 
   ── STRUCTURAL OPTIMIZATION (transform the computation) ──
   LoopInterchange                ── dimension reordering (reads classification from RaiseToLinalg)
@@ -648,6 +648,9 @@ PROPOSED:
   DistributionPlanning           ── reads classification + scope + neighborhood + reduction_strategy
   IterationSpaceDecomposition    ── pure pattern matching
   BarrierElimination             ── reads classification + memref access
+
+  ── MEMREF RESTORATION ──
+  LowerToMemref                  ── tensor SSA → memref (inverse of RaiseToTensor)
 
   ── CODELET FORMATION ──
   ConvertToCodelet               ── cu_region → mu_data + mu_token + cu_codelet
@@ -680,7 +683,7 @@ All hard dependencies are satisfied in the proposed order:
 | `classification=elementwise` | StructuredSummaries → ElementwiseFusion | **YES** |
 | `schedule`/`chunk` matching | (not yet set) → ElementwiseFusion matches default=default | **YES** (better!) |
 
-### Required Code Changes
+### Required Code Changes **STATUS: DONE**
 
 **`Compile.cpp:659-685`**: Reorder the pass additions in `buildOpenMPToArtsPipeline`.
 

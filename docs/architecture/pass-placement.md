@@ -334,7 +334,7 @@ shared / utility:
 
 ## Notes on the Current Layout
 
-- `RaiseToLinalg`, `RaiseToTensor`, and `SdeTensorOptimization` are real SDE
+- `RaiseToLinalg`, `RaiseToTensor`, and `TensorOpt` are real SDE
   passes on this branch. They are not documentation-only placeholders.
 - The tensor/linalg window is transient and SDE-owned. `ConvertSdeToArts`
   consumes it directly instead of handing off to a separately scheduled

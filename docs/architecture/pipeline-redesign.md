@@ -70,11 +70,11 @@ Within `openmp-to-arts`, the branch currently does the following:
 
 - `ConvertOpenMPToSde` builds `arts_sde.*` regions, loops, tasks, deps, and
   reductions from OpenMP and supported SCF forms.
-- `SdeScopeSelection`, `SdeScheduleRefinement`, `SdeChunkOptimization`, and
-  `SdeReductionStrategy` stamp SDE-owned decisions before ARTS IR exists.
+- `ScopeSelection`, `ScheduleRefinement`, `ChunkOpt`, and
+  `ReductionStrategy` stamp SDE-owned decisions before ARTS IR exists.
 - `RaiseToLinalg` and `RaiseToTensor` build transient structured carriers
   inside SDE when the loop body matches the supported subsets.
-- `SdeTensorOptimization` performs SDE-level tensor/linalg transforms on those
+- `TensorOpt` performs SDE-level tensor/linalg transforms on those
   transient carriers, guided by the active `SDECostModel`.
 - `ConvertSdeToArts` consumes the SDE loop plus any transient carrier state,
   recovers contracts, lowers to ARTS IR, and erases the SDE-only carriers.
@@ -92,7 +92,7 @@ current branch does not schedule a discrete stage like that.
 What is true today:
 
 - `RaiseToTensor` introduces transient tensor-backed carriers inside SDE.
-- `SdeTensorOptimization` rewrites those carriers while the surrounding SDE
+- `TensorOpt` rewrites those carriers while the surrounding SDE
   loop stays executable in memref/SCF form.
 - `ConvertSdeToArts` consumes the transient carrier information and erases the
   carrier chain when crossing into ARTS IR.

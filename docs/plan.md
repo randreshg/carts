@@ -44,19 +44,19 @@ redundantly re-derives patterns that SDE already computed.
 STATE (data & layout):
   - RaiseToLinalg          — creates linalg carriers (skips stencils entirely)
   - RaiseToTensor           — lifts to tensor-backed carriers
-  - SdeStructuredSummaries  — stamps canonical access descriptors
+  - StructuredSummaries  — stamps canonical access descriptors
 
 DEPENDENCY (access patterns):
-  - SdeTensorOptimization   — cost-model strip-mining (elem+matmul only, 1-D only)
-  - SdeElementwiseFusion    — fuses sibling elementwise (no cost gate)
-  - SdeIterationSpaceDecomp — peels stencil boundaries (0 tests)
+  - TensorOpt   — cost-model strip-mining (elem+matmul only, 1-D only)
+  - ElementwiseFusion    — fuses sibling elementwise (no cost gate)
+  - IterationSpaceDecomp — peels stencil boundaries (0 tests)
 
 EFFECT (sync, reduction, distribution):
-  - SdeReductionStrategy    — atomic/tree/local_accumulate selection
-  - SdeScopeSelection       — local vs distributed scope
-  - SdeScheduleRefinement   — static/dynamic/guided selection
-  - SdeChunkOptimization    — chunk size for dynamic/guided
-  - SdeDistributionPlanning — blocked/owner_compute (incomplete scope coverage)
+  - ReductionStrategy    — atomic/tree/local_accumulate selection
+  - ScopeSelection       — local vs distributed scope
+  - ScheduleRefinement   — static/dynamic/guided selection
+  - ChunkOpt    — chunk size for dynamic/guided
+  - DistributionPlanning — blocked/owner_compute (incomplete scope coverage)
 
 STRUCTURAL:
   - ConvertOpenMPToSde      — OMP→SDE conversion
@@ -69,7 +69,7 @@ STRUCTURAL:
 **Analysis**: `analyzeStructuredLoop()` fails on imperfect nests (scf.if/scf.for
 mix) → 48% of benchmarks get zero classification.
 
-**Loop transforms**: SdeTensorOptimization only does 1-D outer strip-mining for
+**Loop transforms**: TensorOpt only does 1-D outer strip-mining for
 elementwise+matmul. No multi-level tiling, no loop interchange, no stencil
 tiling, no reduction tiling. Reductions explicitly excluded (line 253).
 
@@ -105,19 +105,19 @@ lib/arts/dialect/sde/Transforms/
   state/                          ← State: data layout, carrier creation, summaries
     RaiseToLinalg.cpp
     RaiseToTensor.cpp
-    SdeStructuredSummaries.cpp
+    StructuredSummaries.cpp
   dep/                            ← Dependencies: access patterns, loop transforms
-    SdeTensorOptimization.cpp
-    SdeElementwiseFusion.cpp
-    SdeIterationSpaceDecomposition.cpp
-    SdeLoopInterchange.cpp          (NEW — Phase 7)
+    TensorOpt.cpp
+    ElementwiseFusion.cpp
+    IterationSpaceDecomposition.cpp
+    LoopInterchange.cpp          (NEW — Phase 7)
   effect/                         ← Effects: sync, reduction, distribution, scheduling
-    SdeReductionStrategy.cpp
-    SdeScopeSelection.cpp
-    SdeScheduleRefinement.cpp
-    SdeChunkOptimization.cpp
-    SdeDistributionPlanning.cpp
-    SdeBarrierElimination.cpp       (NEW — Phase 10)
+    ReductionStrategy.cpp
+    ScopeSelection.cpp
+    ScheduleRefinement.cpp
+    ChunkOpt.cpp
+    DistributionPlanning.cpp
+    BarrierElimination.cpp       (NEW — Phase 10)
   ConvertOpenMPToSde.cpp            ← stays at root (entry boundary)
   VerifySdeLowered.cpp              ← stays at root (exit barrier)
   CMakeLists.txt
@@ -158,15 +158,15 @@ set(CARTS_SDE_TRANSFORMS_SOURCE_FILES ${CARTS_SDE_TRANSFORMS_SOURCE_FILES} PAREN
 mkdir -p lib/arts/dialect/sde/Transforms/{state,dep,effect}
 git mv lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp         lib/arts/dialect/sde/Transforms/state/
 git mv lib/arts/dialect/sde/Transforms/RaiseToTensor.cpp          lib/arts/dialect/sde/Transforms/state/
-git mv lib/arts/dialect/sde/Transforms/SdeStructuredSummaries.cpp lib/arts/dialect/sde/Transforms/state/
-git mv lib/arts/dialect/sde/Transforms/SdeTensorOptimization.cpp  lib/arts/dialect/sde/Transforms/dep/
-git mv lib/arts/dialect/sde/Transforms/SdeElementwiseFusion.cpp   lib/arts/dialect/sde/Transforms/dep/
-git mv lib/arts/dialect/sde/Transforms/SdeIterationSpaceDecomposition.cpp lib/arts/dialect/sde/Transforms/dep/
-git mv lib/arts/dialect/sde/Transforms/SdeReductionStrategy.cpp   lib/arts/dialect/sde/Transforms/effect/
-git mv lib/arts/dialect/sde/Transforms/SdeScopeSelection.cpp      lib/arts/dialect/sde/Transforms/effect/
-git mv lib/arts/dialect/sde/Transforms/SdeScheduleRefinement.cpp  lib/arts/dialect/sde/Transforms/effect/
-git mv lib/arts/dialect/sde/Transforms/SdeChunkOptimization.cpp   lib/arts/dialect/sde/Transforms/effect/
-git mv lib/arts/dialect/sde/Transforms/SdeDistributionPlanning.cpp lib/arts/dialect/sde/Transforms/effect/
+git mv lib/arts/dialect/sde/Transforms/StructuredSummaries.cpp lib/arts/dialect/sde/Transforms/state/
+git mv lib/arts/dialect/sde/Transforms/TensorOpt.cpp  lib/arts/dialect/sde/Transforms/dep/
+git mv lib/arts/dialect/sde/Transforms/ElementwiseFusion.cpp   lib/arts/dialect/sde/Transforms/dep/
+git mv lib/arts/dialect/sde/Transforms/IterationSpaceDecomposition.cpp lib/arts/dialect/sde/Transforms/dep/
+git mv lib/arts/dialect/sde/Transforms/ReductionStrategy.cpp   lib/arts/dialect/sde/Transforms/effect/
+git mv lib/arts/dialect/sde/Transforms/ScopeSelection.cpp      lib/arts/dialect/sde/Transforms/effect/
+git mv lib/arts/dialect/sde/Transforms/ScheduleRefinement.cpp  lib/arts/dialect/sde/Transforms/effect/
+git mv lib/arts/dialect/sde/Transforms/ChunkOpt.cpp   lib/arts/dialect/sde/Transforms/effect/
+git mv lib/arts/dialect/sde/Transforms/DistributionPlanning.cpp lib/arts/dialect/sde/Transforms/effect/
 ```
 
 #### Verification
@@ -290,10 +290,10 @@ aborting analysis for any loop with boundary guards.
 Also handle nested `scf::ForOp` inside innermost body (reduction loops) —
 collect accesses from its body recursively but don't add its IV to the IVs.
 
-#### 0C. No changes needed in SdeStructuredSummaries or SdeToArtsPatterns
+#### 0C. No changes needed in StructuredSummaries or SdeToArtsPatterns
 
 Once `analyzeStructuredLoop()` succeeds for imperfect nests:
-- `SdeStructuredSummaries.cpp` already stamps all neighborhood attrs (lines 55-64)
+- `StructuredSummaries.cpp` already stamps all neighborhood attrs (lines 55-64)
 - `SdeToArtsPatterns.cpp` already reads via `getSdeNeighborhoodSummary()` (lines 675-681)
 
 #### Tests
@@ -309,7 +309,7 @@ Once `analyzeStructuredLoop()` succeeds for imperfect nests:
 
 #### 1A. Fix float-add atomic fallback (BUG)
 
-**File**: `lib/arts/dialect/sde/Transforms/SdeReductionStrategy.cpp`
+**File**: `lib/arts/dialect/sde/Transforms/ReductionStrategy.cpp`
 
 `isAtomicCapable()` (line 25) checks only KIND, not element type. Float-add
 selects atomic → `EdtReductionLowering.cpp:276` falls back to O(n) linear.
@@ -334,7 +334,7 @@ site at line 87 to extract memref element type per accumulator.
 
 **Status**: Implemented in the current worktree.
 
-**File**: `lib/arts/dialect/sde/Transforms/SdeDistributionPlanning.cpp`
+**File**: `lib/arts/dialect/sde/Transforms/DistributionPlanning.cpp`
 
 #### 2A. Elementwise for distributed scope (lines 74-78)
 Replace scope check with `hasEnoughDistributedWork()` gate.
@@ -347,12 +347,12 @@ Gate on `op.getReductionStrategyAttr() && hasEnoughDistributedWork()`.
 
 #### 2D. Preserve elementwise/matmul classification after tensor strip-mining
 
-**File**: `lib/arts/dialect/sde/Transforms/state/SdeStructuredSummaries.cpp`
+**File**: `lib/arts/dialect/sde/Transforms/state/StructuredSummaries.cpp`
 
-When `SdeTensorOptimization` rewrites an elementwise or matmul loop into a
+When `TensorOpt` rewrites an elementwise or matmul loop into a
 tiled scalar form, the refreshed summary can look reduction-shaped after the
 carrier is erased. Preserve the existing non-reduction classification when the
-loop has no reduction accumulators so `SdeDistributionPlanning` still sees the
+loop has no reduction accumulators so `DistributionPlanning` still sees the
 intended contract.
 
 #### Tests
@@ -427,8 +427,8 @@ accurate. Track the remaining coverage work as gaps, not frozen counts.
 - VerifySdeLowered: orphaned `linalg` carrier rejection
 
 **Still worth adding**:
-- `SdeIterationSpaceDecomposition` regression tests
-- More `SdeElementwiseFusion` coverage, especially mismatched-bounds cases
+- `IterationSpaceDecomposition` regression tests
+- More `ElementwiseFusion` coverage, especially mismatched-bounds cases
 - Additional PatternPipeline fallback tests when no SDE contract is present
 
 ---
@@ -459,14 +459,14 @@ cost model. The actual `scf.for` loop nest is transformed in tandem.
 ```
 RaiseToLinalg → creates carrier matching original loop structure
     ↓
-SdeTensorOptimization → transforms carrier dims + rewrites scf.for to match
+TensorOpt → transforms carrier dims + rewrites scf.for to match
     ↓
 ConvertSdeToArts → reads transformed carrier → stamps contracts → erases carrier
 ```
 
 ### Phase 6: N-Dimensional Tiling & Dimension Transforms
 
-**File**: `lib/arts/dialect/sde/Transforms/dep/SdeTensorOptimization.cpp`
+**File**: `lib/arts/dialect/sde/Transforms/dep/TensorOpt.cpp`
 
 **Current state**: Hardcoded to 1-D (`su_iterate` bounds `size() == 1`, lines
 257-259). Only tiles the outermost dimension. Only elementwise + matmul.
@@ -542,7 +542,7 @@ are preserved — the tile loop wraps the parallel dims only.
 
 #### 6D. Add elementwise fusion cost gate
 
-`SdeElementwiseFusion.cpp` always fuses when structural criteria met. Add
+`ElementwiseFusion.cpp` always fuses when structural criteria met. Add
 `SDECostModel*` parameter. Before fusing, check combined body ops <
 `getMinIterationsPerWorker() * 2`. This prevents excessive per-task work.
 
@@ -637,14 +637,14 @@ cache-line-aligned, contiguous access. Creates `linalg.pack` + transformed
 **Cost model gate**: `getLocalDataAccessCost()` > threshold — pack when
 stride-N access cost exceeds pack overhead.
 
-**Files**: `dep/SdeTensorOptimization.cpp`, `dep/SdeElementwiseFusion.cpp`,
+**Files**: `dep/TensorOpt.cpp`, `dep/ElementwiseFusion.cpp`,
 `Passes.h`, `Compile.cpp`
 
 ---
 
 ### Phase 7: Loop Interchange at SDE Level
 
-**New pass**: `SdeLoopInterchange` (in `dep/`)
+**New pass**: `LoopInterchange` (in `dep/`)
 
 **Current state**: Loop interchange only in ARTS LoopReordering.cpp (matmul
 only, no cost model). After Phase 3D makes it defer to SDE, SDE owns this.
@@ -670,15 +670,15 @@ Use `getLocalDataAccessCost()` to weight stride-1 vs stride-N accesses.
 - **Stencil**: Reorder so dimension with smallest halo width is outermost
   (minimizes total halo volume for distribution).
 
-**Files**: New `lib/arts/dialect/sde/Transforms/dep/SdeLoopInterchange.cpp`
-**Pipeline position**: After SdeStructuredSummaries, before SdeTensorOptimization
+**Files**: New `lib/arts/dialect/sde/Transforms/dep/LoopInterchange.cpp`
+**Pipeline position**: After StructuredSummaries, before TensorOpt
 **Registration**: `Passes.td`, `Compile.cpp`
 
 ---
 
 ### Phase 8: Reduction Dimension Splitting
 
-**File**: `lib/arts/dialect/sde/Transforms/dep/SdeTensorOptimization.cpp`
+**File**: `lib/arts/dialect/sde/Transforms/dep/TensorOpt.cpp`
 
 **Current state**: Reductions explicitly excluded (line 253).
 
@@ -739,7 +739,7 @@ decision is driven specifically by `getVectorWidth()` vs inner trip count.
 For small-trip-count inner loops, stamp `sde.unroll_factor` attr. Factor
 derived from trip count and element byte width.
 
-**Files**: `state/SdeStructuredSummaries.cpp` (stamp attrs), `SdeToArtsPatterns.cpp`
+**Files**: `state/StructuredSummaries.cpp` (stamp attrs), `SdeToArtsPatterns.cpp`
 (forward to `arts.for` attrs), `LoopVectorizationHints.cpp` (read them)
 
 ---
@@ -750,7 +750,7 @@ Synchronization elimination and effect optimization at SDE level.
 
 ### Phase 10: Barrier Elimination
 
-**New pass**: `SdeBarrierElimination` (runs after SdeReductionStrategy)
+**New pass**: `BarrierElimination` (runs after ReductionStrategy)
 
 #### 10A. Prove barrier is unnecessary
 
@@ -791,7 +791,7 @@ Reuse `analyzeStructuredLoop()` infrastructure.
 
 ### Phase 12: Halo-Aware Distribution Cost
 
-**Enhancement to**: `SdeDistributionPlanning.cpp`
+**Enhancement to**: `DistributionPlanning.cpp`
 
 #### 12A. Use `getHaloExchangeCostPerByte()` in distribution decision
 
@@ -804,7 +804,7 @@ Scale `hasEnoughDistributedWork()` threshold by `1 + haloCost/computeCost`.
 
 #### 12B. Use `getRemoteDataAccessCost()` for scope selection
 
-In `SdeScopeSelection.cpp`, when deciding local vs distributed, factor in
+In `ScopeSelection.cpp`, when deciding local vs distributed, factor in
 remote access cost for data that won't be local:
 ```
 distributedCost = estimatedRemoteAccesses * getRemoteDataAccessCost()
@@ -817,7 +817,7 @@ localCost = tripCount * getLocalDataAccessCost()
 
 ### Phase 13: Dependency Distance Stamping
 
-**Enhancement to**: `SdeStructuredSummaries.cpp`
+**Enhancement to**: `StructuredSummaries.cpp`
 
 After stamping classification + neighborhood, also compute and stamp
 per-dimension loop-carried dependency distance:
@@ -838,11 +838,11 @@ schedule selection (prefer static if provably independent).
 
 ### Phase 14: Data Reuse Distance Estimation
 
-**Enhancement to**: `SdeStructuredSummaries.cpp`
+**Enhancement to**: `StructuredSummaries.cpp`
 
 Compute temporal reuse distance per operand from access maps. Stamp as
 `sde.reuse_footprint_bytes` attr. This drives tile size selection in
-`SdeTensorOptimization` — tile should keep reuse footprint in L2 cache.
+`TensorOpt` — tile should keep reuse footprint in L2 cache.
 
 **Cost model**: New `getL2CacheSize()` method in `SDECostModel`.
 
@@ -850,7 +850,7 @@ Compute temporal reuse distance per operand from access maps. Stamp as
 
 ### Phase 15: In-Place Operation Detection
 
-**Enhancement to**: `SdeStructuredSummaries.cpp`
+**Enhancement to**: `StructuredSummaries.cpp`
 
 Detect when output operand safely overwrites an input (write map is identity
 on output dims, no other reader aliases the output). Stamp `in_place_safe`
@@ -930,9 +930,9 @@ Tier 1 is ~2-3 days. Tiers 2-4 are ongoing improvement work.
 | File | Phase | Change |
 |------|-------|--------|
 | `sde/Transforms/CMakeLists.txt` | -1 | Add state/, dep/, effect/ glob patterns |
-| `sde/Transforms/state/` | -1 | NEW dir: RaiseToLinalg, RaiseToTensor, SdeStructuredSummaries |
-| `sde/Transforms/dep/` | -1 | NEW dir: SdeTensorOptimization, SdeElementwiseFusion, SdeIterationSpaceDecomposition |
-| `sde/Transforms/effect/` | -1 | NEW dir: SdeReductionStrategy, SdeScopeSelection, SdeScheduleRefinement, SdeChunkOptimization, SdeDistributionPlanning |
+| `sde/Transforms/state/` | -1 | NEW dir: RaiseToLinalg, RaiseToTensor, StructuredSummaries |
+| `sde/Transforms/dep/` | -1 | NEW dir: TensorOpt, ElementwiseFusion, IterationSpaceDecomposition |
+| `sde/Transforms/effect/` | -1 | NEW dir: ReductionStrategy, ScopeSelection, ScheduleRefinement, ChunkOpt, DistributionPlanning |
 | `core/Conversion/OmpToArts/` | -2 | DELETE entire directory (dead code) |
 | `Passes.td` / `Passes.h` | -2 | Remove ConvertOpenMPToArts declaration |
 | `core/Conversion/ArtsToLLVM/` | -3 | Keep directory; audit which patterns really belong here |
@@ -944,12 +944,12 @@ Tier 1 is ~2-3 days. Tiers 2-4 are ongoing improvement work.
 | File | Phase | Change |
 |------|-------|--------|
 | `StructuredOpAnalysis.cpp` | 0 | Walk scf.if + semi-perfect nests |
-| `effect/SdeReductionStrategy.cpp` | 1A | Float guard on atomic |
+| `effect/ReductionStrategy.cpp` | 1A | Float guard on atomic |
 | `ConvertOpenMPToSde.cpp` | 1B | Bitwise reduction inference |
 | `EdtReductionLowering.h` | 1B | Extend enum (land/lor/lxor) |
 | `EdtReductionLowering.cpp` | 1B | Bitwise combiner + identity + guard |
-| `effect/SdeDistributionPlanning.cpp` | 2 | All scope/classification combos |
-| `state/SdeStructuredSummaries.cpp` | 2D | Preserve non-reduction classification after tensor strip-mining |
+| `effect/DistributionPlanning.cpp` | 2 | All scope/classification combos |
+| `state/StructuredSummaries.cpp` | 2D | Preserve non-reduction classification after tensor strip-mining |
 | `StencilTilingNDPattern.cpp` | 3A | Skip on existing SDE contract |
 | `MatmulReductionPattern.cpp` | 3B | Skip on existing SDE contract |
 | `LoopNormalization.cpp` | 3C | Skip on existing SDE contract |
@@ -963,31 +963,31 @@ Tier 1 is ~2-3 days. Tiers 2-4 are ongoing improvement work.
 ### Tier 2 (Compute — Dimension Transforms)
 | File | Phase | Change |
 |------|-------|--------|
-| `dep/SdeTensorOptimization.cpp` | 6A-C | N-dim tiling (all classifications) |
-| `dep/SdeTensorOptimization.cpp` | 6E | Dim collapsing via `collapseOpIterationDims()` |
-| `dep/SdeTensorOptimization.cpp` | 6F | Dim expansion via `tensor::ExpandShapeOp` |
-| `dep/SdeTensorOptimization.cpp` | 6G | Data packing via `linalg::pack()` |
-| `dep/SdeTensorOptimization.cpp` | 8 | Reduction splitting via `splitReduction()` |
-| `dep/SdeElementwiseFusion.cpp` | 6D | Cost-model fusion gate |
-| `dep/SdeLoopInterchange.cpp` | 7 | NEW — via `interchangeGenericOp()` on carrier |
-| `state/SdeStructuredSummaries.cpp` | 9 | Vec/unroll hints |
+| `dep/TensorOpt.cpp` | 6A-C | N-dim tiling (all classifications) |
+| `dep/TensorOpt.cpp` | 6E | Dim collapsing via `collapseOpIterationDims()` |
+| `dep/TensorOpt.cpp` | 6F | Dim expansion via `tensor::ExpandShapeOp` |
+| `dep/TensorOpt.cpp` | 6G | Data packing via `linalg::pack()` |
+| `dep/TensorOpt.cpp` | 8 | Reduction splitting via `splitReduction()` |
+| `dep/ElementwiseFusion.cpp` | 6D | Cost-model fusion gate |
+| `dep/LoopInterchange.cpp` | 7 | NEW — via `interchangeGenericOp()` on carrier |
+| `state/StructuredSummaries.cpp` | 9 | Vec/unroll hints |
 | `SDECostModel.h` | 6E-G | Add `getVectorWidth()`, cache size methods |
 | `ARTSCostModel.h` | 6E-G | Implement new methods (hardcoded or from target) |
-| `Passes.td` (sde) | 7 | Register SdeLoopInterchange pass |
+| `Passes.td` (sde) | 7 | Register LoopInterchange pass |
 | `Compile.cpp` | 6D,7 | Wire new passes |
 
 ### Tier 3 (Sync)
 | File | Phase | Change |
 |------|-------|--------|
-| `effect/SdeBarrierElimination.cpp` | 10 | NEW — data-flow barrier elimination |
+| `effect/BarrierElimination.cpp` | 10 | NEW — data-flow barrier elimination |
 | `ConvertOpenMPToSde.cpp` | 11 | Nowait inference |
-| `effect/SdeDistributionPlanning.cpp` | 12 | Halo cost in threshold |
-| `effect/SdeScopeSelection.cpp` | 12B | Remote access cost in scope selection |
+| `effect/DistributionPlanning.cpp` | 12 | Halo cost in threshold |
+| `effect/ScopeSelection.cpp` | 12B | Remote access cost in scope selection |
 
 ### Tier 4 (Data)
 | File | Phase | Change |
 |------|-------|--------|
-| `state/SdeStructuredSummaries.cpp` | 13-15 | Dependency distance, reuse, in-place attrs |
+| `state/StructuredSummaries.cpp` | 13-15 | Dependency distance, reuse, in-place attrs |
 | `SDECostModel.h` | 14 | Add `getL2CacheSize()` |
 
 ### Tests

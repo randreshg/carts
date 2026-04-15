@@ -264,7 +264,7 @@ removed rather than relaxed.
 
 - Machine/config parsing belongs to `AbstractMachine`.
 - Semantic pattern classification happens inside `openmp-to-arts` — the SDE
-  passes (`SdeScopeSelection`, `SdeScheduleRefinement`, `SdeDistributionPlanning`,
+  passes (`ScopeSelection`, `ScheduleRefinement`, `DistributionPlanning`,
   etc.) seed contracts that later ARTS-core stages consume. There is no
   separate "pattern-pipeline" stage; legacy references elsewhere are stale.
 - Analysis and heuristics speak contract vocabulary:
