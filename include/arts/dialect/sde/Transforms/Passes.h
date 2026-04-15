@@ -70,6 +70,7 @@ std::unique_ptr<Pass> createRaiseToLinalgPass();
 std::unique_ptr<Pass> createRaiseToTensorPass();
 std::unique_ptr<Pass> createRaiseMemrefToTensorPass();
 std::unique_ptr<Pass> createScalarForwardingPass();
+std::unique_ptr<Pass> createLowerToMemrefPass();
 std::unique_ptr<Pass> createConvertToCodeletPass();
 
 // --- Dep passes (structural transforms) ---

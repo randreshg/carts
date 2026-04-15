@@ -840,29 +840,110 @@ struct TensorOptPass
         return;
 
       // Expand each tensor operand's dim 0: [N] -> [N/tile, tile].
+      // We must rebuild the linalg.generic with updated indexing maps,
+      // iterator types, and result types to match the expanded shapes.
       int64_t tileSize = std::max<int64_t>(1, cacheTile);
       IRRewriter rewriter(op.getContext());
 
+      // Check that all rank-1 tensor operands can be expanded.
+      bool canExpand = true;
       for (OpOperand &operand : carrier->getOpOperands()) {
         auto tensorTy = dyn_cast<RankedTensorType>(operand.get().getType());
-        if (!tensorTy || tensorTy.getRank() != 1)
+        if (!tensorTy)
           continue;
-
-        int64_t dimSize = tensorTy.getDimSize(0);
-        if (ShapedType::isDynamic(dimSize))
-          continue;
-
-        int64_t outerSize = llvm::divideCeil(dimSize, tileSize);
-        SmallVector<int64_t> expandedShape = {outerSize, tileSize};
-        auto expandedTy =
-            RankedTensorType::get(expandedShape, tensorTy.getElementType());
-
-        rewriter.setInsertionPoint(carrier);
-        SmallVector<ReassociationIndices> reassoc = {{0, 1}};
-        auto expandOp = tensor::ExpandShapeOp::create(
-            rewriter, carrier.getLoc(), expandedTy, operand.get(), reassoc);
-        operand.set(expandOp.getResult());
+        if (tensorTy.getRank() != 1) {
+          canExpand = false;
+          break;
+        }
+        if (ShapedType::isDynamic(tensorTy.getDimSize(0))) {
+          canExpand = false;
+          break;
+        }
       }
+      if (!canExpand)
+        return;
+
+      rewriter.setInsertionPoint(carrier);
+      Location carrierLoc = carrier.getLoc();
+
+      // Create expand_shape ops for all operands.
+      SmallVector<Value> expandedInputs;
+      for (Value input : carrier.getDpsInputs()) {
+        auto tensorTy = cast<RankedTensorType>(input.getType());
+        int64_t dimSize = tensorTy.getDimSize(0);
+        int64_t outerSize = llvm::divideCeil(dimSize, tileSize);
+        auto expandedTy = RankedTensorType::get(
+            {outerSize, tileSize}, tensorTy.getElementType());
+        SmallVector<ReassociationIndices> reassoc = {{0, 1}};
+        expandedInputs.push_back(tensor::ExpandShapeOp::create(
+            rewriter, carrierLoc, expandedTy, input, reassoc));
+      }
+
+      SmallVector<Value> expandedOutputs;
+      SmallVector<Type> expandedResultTypes;
+      for (Value output : carrier.getDpsInits()) {
+        auto tensorTy = cast<RankedTensorType>(output.getType());
+        int64_t dimSize = tensorTy.getDimSize(0);
+        int64_t outerSize = llvm::divideCeil(dimSize, tileSize);
+        auto expandedTy = RankedTensorType::get(
+            {outerSize, tileSize}, tensorTy.getElementType());
+        SmallVector<ReassociationIndices> reassoc = {{0, 1}};
+        auto expanded = tensor::ExpandShapeOp::create(
+            rewriter, carrierLoc, expandedTy, output, reassoc);
+        expandedOutputs.push_back(expanded);
+        expandedResultTypes.push_back(expandedTy);
+      }
+
+      // Build 2D indexing maps and iterator types.
+      unsigned newNumLoops = carrier.getNumLoops() + 1; // 1D -> 2D
+      SmallVector<AffineMap> newMaps;
+      for (unsigned i = 0, e = carrier.getNumDpsInputs() +
+                                carrier.getNumDpsInits();
+           i < e; ++i) {
+        newMaps.push_back(AffineMap::getMultiDimIdentityMap(
+            newNumLoops, op.getContext()));
+      }
+      SmallVector<utils::IteratorType> newIterTypes(
+          newNumLoops, utils::IteratorType::parallel);
+
+      // Clone the body into the new generic.
+      Block &oldBody = carrier.getRegion().front();
+      auto newGeneric = linalg::GenericOp::create(
+          rewriter, carrierLoc, expandedResultTypes, expandedInputs,
+          expandedOutputs, newMaps, newIterTypes,
+          [&](OpBuilder &b, Location nestedLoc, ValueRange blockArgs) {
+            IRMapping mapper;
+            for (auto [oldArg, newArg] :
+                 llvm::zip(oldBody.getArguments(), blockArgs))
+              mapper.map(oldArg, newArg);
+            for (Operation &bodyOp : oldBody.without_terminator())
+              b.clone(bodyOp, mapper);
+            auto oldYield = cast<linalg::YieldOp>(oldBody.getTerminator());
+            SmallVector<Value> yielded;
+            for (Value v : oldYield.getValues())
+              yielded.push_back(mapper.lookupOrDefault(v));
+            linalg::YieldOp::create(b, nestedLoc, yielded);
+          });
+      // Copy custom attributes but skip linalg structural attrs (indexing_maps,
+      // iterator_types, operandSegmentSizes) which were set during construction.
+      for (auto attr : carrier->getAttrs()) {
+        if (attr.getName() == "indexing_maps" ||
+            attr.getName() == "iterator_types" ||
+            attr.getName() == "operandSegmentSizes")
+          continue;
+        newGeneric->setAttr(attr.getName(), attr.getValue());
+      }
+
+      // Collapse results back to 1D for downstream consumers.
+      for (auto [i, result] : llvm::enumerate(newGeneric.getResults())) {
+        auto origTy =
+            cast<RankedTensorType>(carrier.getResult(i).getType());
+        SmallVector<ReassociationIndices> reassoc = {{0, 1}};
+        Value collapsed = tensor::CollapseShapeOp::create(
+            rewriter, carrierLoc, origTy, result, reassoc);
+        carrier.getResult(i).replaceAllUsesWith(collapsed);
+      }
+      rewriter.eraseOp(carrier);
 
       op->setAttr(AttrNames::Operation::Sde::ExpandTileSize,
                   IntegerAttr::get(IndexType::get(op.getContext()), tileSize));

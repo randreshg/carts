@@ -12,7 +12,7 @@
 ///     tensors as iter_args, recurse into body, update currentTensor to result
 ///
 /// Also converts memref-backed linalg.generic carriers inside su_iterate
-/// to tensor-backed form (unchanged from before).
+/// to tensor-backed form for downstream SDE tensor passes.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
@@ -87,9 +87,11 @@ static bool hasNonRaisableUser(Value memref, Operation **blocker = nullptr) {
 }
 
 /// Return true if the operation is directly inside a supported region-holding
-/// op (scf.for, cu_region, su_iterate) or in the function entry block —
-/// NOT inside scf.if, scf.execute_region, etc. that we can't thread tensors
-/// through.
+/// op (scf.for, cu_region, su_iterate, scf.execute_region) or in the function
+/// entry block — NOT inside scf.if, scf.while, etc. that we can't thread
+/// tensors through.
+/// scf.execute_region is treated as transparent: it always executes, has a
+/// single entry/exit, and tensor updates inside it are visible after it.
 static bool isInSupportedParent(Operation *op, func::FuncOp func) {
   Operation *parent = op->getParentOp();
   while (parent && parent != func) {
@@ -97,8 +99,13 @@ static bool isInSupportedParent(Operation *op, func::FuncOp func) {
       return true;
     if (isa<func::FuncOp>(parent))
       return true;
-    // scf.if, scf.execute_region, scf.while, etc. — unsupported
-    if (isa<scf::IfOp, scf::ExecuteRegionOp, scf::WhileOp>(parent))
+    // scf.execute_region is transparent — walk through it.
+    if (isa<scf::ExecuteRegionOp>(parent)) {
+      parent = parent->getParentOp();
+      continue;
+    }
+    // scf.if, scf.while, etc. — unsupported
+    if (isa<scf::IfOp, scf::WhileOp>(parent))
       return false;
     parent = parent->getParentOp();
   }
@@ -750,8 +757,15 @@ static void walkBlock(Block &block, DenseMap<Value, Value> &currentTensor,
       continue;
     }
 
+    // scf.execute_region is transparent — propagate tensor updates through.
+    if (auto execRegion = dyn_cast<scf::ExecuteRegionOp>(&op)) {
+      if (!execRegion.getRegion().empty())
+        walkBlock(execRegion.getRegion().front(), currentTensor, allocas);
+      continue;
+    }
+
     // Other region-holding ops: recurse into their bodies with a COPY
-    // of currentTensor. Values defined inside scf.if, scf.execute_region,
+    // of currentTensor. Values defined inside scf.if, scf.while,
     // etc. do NOT dominate ops after the region, so we must not leak
     // inner tensor updates to the outer scope.
     if (op.getNumRegions() > 0) {
@@ -873,7 +887,7 @@ static unsigned raiseFunctionAllocas(func::FuncOp func) {
 }
 
 //===----------------------------------------------------------------------===//
-// Linalg carrier conversion (unchanged)
+// Linalg carrier conversion
 //===----------------------------------------------------------------------===//
 
 static RankedTensorType getRankedTensorType(Value memref) {
@@ -897,10 +911,6 @@ static Value getOrCreateTensorValue(OpBuilder &builder, Location loc,
   return tensor;
 }
 
-static Value stripSimpleMemrefAlias(Value value) {
-  return stripMemrefCasts(value);
-}
-
 static BlockArgument getOutputBlockArgument(linalg::GenericOp generic,
                                             unsigned outputIndex) {
   return generic.getRegion().front().getArgument(generic.getNumDpsInputs() +
@@ -909,21 +919,18 @@ static BlockArgument getOutputBlockArgument(linalg::GenericOp generic,
 
 static bool hasSimpleAliasWithOtherOperands(linalg::GenericOp generic,
                                             unsigned outputIndex) {
-  Value output = stripSimpleMemrefAlias(generic.getDpsInits()[outputIndex]);
-
+  Value output = stripMemrefCasts(generic.getDpsInits()[outputIndex]);
   for (Value input : generic.getDpsInputs()) {
-    if (stripSimpleMemrefAlias(input) == output)
+    if (stripMemrefCasts(input) == output)
       return true;
   }
-
   for (auto [otherIndex, otherOutput] :
        llvm::enumerate(generic.getDpsInits())) {
     if (otherIndex == outputIndex)
       continue;
-    if (stripSimpleMemrefAlias(otherOutput) == output)
+    if (stripMemrefCasts(otherOutput) == output)
       return true;
   }
-
   return false;
 }
 
@@ -931,7 +938,6 @@ static bool shouldUseEmptyTensorInit(linalg::GenericOp generic,
                                      unsigned outputIndex) {
   if (!getOutputBlockArgument(generic, outputIndex).use_empty())
     return false;
-
   return !hasSimpleAliasWithOtherOperands(generic, outputIndex);
 }
 
@@ -945,14 +951,12 @@ buildTensorOutputs(OpBuilder &builder, Location loc,
     RankedTensorType tensorType = getRankedTensorType(output);
     if (!tensorType)
       return {};
-
     if (shouldUseEmptyTensorInit(oldGeneric, outputIndex)) {
       tensorOutputs.push_back(tensor::EmptyOp::create(
           builder, loc, memref::getMixedSizes(builder, loc, output),
           tensorType.getElementType()));
       continue;
     }
-
     Value tensor = getOrCreateTensorValue(builder, loc, tensorValues, output);
     if (!tensor)
       return {};
@@ -996,10 +1000,8 @@ static linalg::GenericOp rewriteGenericToTensor(linalg::GenericOp oldGeneric) {
         for (auto [oldArg, newArg] :
              llvm::zip(oldBody.getArguments(), blockArgs))
           mapper.map(oldArg, newArg);
-
         for (Operation &op : oldBody.without_terminator())
           nestedBuilder.clone(op, mapper);
-
         SmallVector<Value> yielded;
         auto oldYield = cast<linalg::YieldOp>(oldBody.getTerminator());
         yielded.reserve(oldYield.getNumOperands());
@@ -1076,6 +1078,12 @@ struct RaiseToTensorPass
         for (memref::AllocaOp alloca : found) {
           // Reduction accumulators are managed by su_iterate — skip.
           if (isManagedByReduction(alloca))
+            continue;
+          // Allocas defined inside an ancestor cu_region are local state
+          // that can stay in memref form (e.g., scalars used inside scf.if).
+          // Only flag truly external captures (function-scope allocas).
+          if (auto parentCuRegion =
+                  alloca->getParentOfType<sde::SdeCuRegionOp>())
             continue;
           diagnoseCapturedAlloca(alloca, cuRegion, func);
           ++unraised;
