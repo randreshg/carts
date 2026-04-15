@@ -13,7 +13,9 @@ namespace mlir::arts {
 
 #include "arts/utils/ValueAnalysis.h"
 
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
@@ -71,6 +73,26 @@ static Value getWriteRoot(Value value) {
   return ValueAnalysis::stripMemrefViewOps(value);
 }
 
+/// Trace a carrier tensor operand back to its backing memref root through
+/// mu_memref_to_tensor and tensor.cast chains.
+static Value traceCarrierOperandToMemref(Value tensorOperand) {
+  Value cur = tensorOperand;
+  while (cur) {
+    if (auto muOp = cur.getDefiningOp<sde::SdeMuMemrefToTensorOp>())
+      return getWriteRoot(muOp.getMemref());
+    if (auto castOp = cur.getDefiningOp<tensor::CastOp>()) {
+      cur = castOp.getSource();
+      continue;
+    }
+    if (auto sliceOp = cur.getDefiningOp<tensor::ExtractSliceOp>()) {
+      cur = sliceOp.getSource();
+      continue;
+    }
+    break;
+  }
+  return {};
+}
+
 static bool hasDisjointWrites(ArrayRef<ElementwiseStage> stages) {
   llvm::DenseSet<Value> writtenTargets;
   for (const ElementwiseStage &stage : stages) {
@@ -93,16 +115,41 @@ static bool isElementwiseStage(sde::SdeSuIterateOp op, ElementwiseStage &stage) 
   llvm::DenseSet<Value> seenWrites;
   SmallVector<Value, 4> writes;
   bool hasDuplicateWrite = false;
-  op.getBody().walk([&](memref::StoreOp storeOp) {
-    Value target = getWriteRoot(storeOp.getMemref());
-    if (!target)
-      return;
-    if (!seenWrites.insert(target).second) {
-      hasDuplicateWrite = true;
-      return;
+
+  // Carrier-authoritative path: extract write-set from carrier DPS outputs.
+  Block *computeBody = sde::getSuIterateComputeBlock(op);
+  linalg::GenericOp carrier;
+  for (Operation &inner : computeBody->without_terminator())
+    if (auto g = dyn_cast<linalg::GenericOp>(inner)) {
+      carrier = g;
+      break;
     }
-    writes.push_back(target);
-  });
+
+  if (carrier) {
+    for (Value output : carrier.getDpsInits()) {
+      Value target = traceCarrierOperandToMemref(output);
+      if (!target)
+        return false;
+      if (!seenWrites.insert(target).second) {
+        hasDuplicateWrite = true;
+        break;
+      }
+      writes.push_back(target);
+    }
+  } else {
+    // Fallback: walk memref.store ops (dual-rep / stencil path).
+    op.getBody().walk([&](memref::StoreOp storeOp) {
+      Value target = getWriteRoot(storeOp.getMemref());
+      if (!target)
+        return;
+      if (!seenWrites.insert(target).second) {
+        hasDuplicateWrite = true;
+        return;
+      }
+      writes.push_back(target);
+    });
+  }
+
   if (writes.empty() || hasDuplicateWrite)
     return false;
 

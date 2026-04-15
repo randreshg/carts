@@ -3,30 +3,30 @@
 // RUN:   | %FileCheck %s --check-prefix=SDE
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=ARTS
 
-// Verify barrier handling with three loops and two barriers under the
-// carrier-authoritative model.  The barrier analysis conservatively
-// preserves both barriers because mu_memref_to_tensor ops reference
-// all memrefs within each su_iterate body.
+// Verify mixed barrier elimination with three loops under the
+// carrier-authoritative model.
+// Barrier 1: A writes B, B reads C — disjoint → ELIMINATED.
+// Barrier 2: B writes D, C reads D — overlap → PRESERVED.
 
 // SDE-LABEL: // -----// IR Dump After BarrierElimination (barrier-elimination) //----- //
-// Both barriers are conservatively preserved:
+// Barrier 1 is eliminated (disjoint), barrier 2 is preserved (overlap):
+// SDE: arts_sde.su_barrier {barrier_eliminated}
 // SDE: arts_sde.su_barrier
-// SDE: arts_sde.su_barrier
+// SDE-NOT: arts.barrier_eliminated
 
-// After ConvertSdeToArts: both barriers are preserved as arts.barrier.
+// After ConvertSdeToArts: only the second barrier survives.
 // ARTS-LABEL: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 // ARTS: func.func @main
 // Loop A:
 // ARTS: arts.for(%c0) to(%c128)
 // ARTS: memref.load
 // ARTS: memref.store
-// Barrier between A and B:
-// ARTS: arts.barrier
+// No barrier between A and B (eliminated):
 // Loop B:
 // ARTS: arts.for(%c0) to(%c128)
 // ARTS: memref.load
 // ARTS: memref.store
-// Barrier between B and C:
+// Barrier between B and C (preserved):
 // ARTS: arts.barrier
 // Loop C:
 // ARTS: arts.for(%c0) to(%c128)

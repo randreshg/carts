@@ -1,11 +1,10 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=SDE
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=ARTS
 
-// Verify that BarrierElimination preserves the barrier between two loops
-// whose carrier-authoritative tensor bodies reference different memrefs.
-// Under the carrier-authoritative model the barrier analysis sees
-// mu_memref_to_tensor ops on both memrefs within each su_iterate, so
-// the barrier is conservatively preserved.
+// Verify that BarrierElimination eliminates the barrier between two loops
+// with disjoint write/read sets under the carrier-authoritative model.
+// Loop A: reads A, writes B.  Loop B: reads C, writes D.
+// Pred writes {B}, succ reads {C} — disjoint, so barrier is eliminated.
 
 // SDE-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //
 // SDE: arts_sde.su_iterate
@@ -13,14 +12,14 @@
 // SDE: arts_sde.su_iterate
 
 // SDE-LABEL: // -----// IR Dump After BarrierElimination (barrier-elimination) //----- //
-// SDE: arts_sde.su_barrier
+// SDE: arts_sde.su_barrier {barrier_eliminated}
 // SDE: arts_sde.su_iterate
 
-// After ConvertSdeToArts, the preserved barrier appears as arts.barrier
+// After ConvertSdeToArts, the eliminated barrier is NOT lowered to arts.barrier
 // ARTS-LABEL: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 // ARTS: func.func @main
 // ARTS: arts.for
-// ARTS: arts.barrier
+// ARTS-NOT: arts.barrier
 // ARTS: arts.for
 // ARTS-NOT: arts_sde.
 

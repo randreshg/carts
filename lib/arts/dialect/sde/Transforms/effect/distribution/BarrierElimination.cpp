@@ -17,7 +17,9 @@ namespace mlir::arts {
 #include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/costs/SDECostModel.h"
 
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
@@ -30,17 +32,57 @@ using namespace mlir::arts;
 
 namespace {
 
+/// Trace a carrier tensor operand back to its backing memref root through
+/// mu_memref_to_tensor and tensor.cast/extract_slice chains.
+static Value traceCarrierOperandToMemref(Value tensorOperand) {
+  Value cur = tensorOperand;
+  while (cur) {
+    if (auto muOp = cur.getDefiningOp<sde::SdeMuMemrefToTensorOp>())
+      return ValueAnalysis::stripMemrefViewOps(muOp.getMemref());
+    if (auto castOp = cur.getDefiningOp<tensor::CastOp>()) {
+      cur = castOp.getSource();
+      continue;
+    }
+    if (auto sliceOp = cur.getDefiningOp<tensor::ExtractSliceOp>()) {
+      cur = sliceOp.getSource();
+      continue;
+    }
+    break;
+  }
+  return {};
+}
+
 /// Collect memref roots written by ops inside a region.
+/// Handles both carrier-authoritative (linalg.generic DPS outputs) and
+/// scalar (memref.store) bodies.
 static void collectWriteSet(Region &region, llvm::DenseSet<Value> &writes) {
-  region.walk([&](memref::StoreOp storeOp) {
-    writes.insert(ValueAnalysis::stripMemrefViewOps(storeOp.getMemref()));
+  region.walk([&](Operation *op) {
+    if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+      writes.insert(ValueAnalysis::stripMemrefViewOps(storeOp.getMemref()));
+    } else if (auto generic = dyn_cast<linalg::GenericOp>(op)) {
+      for (Value output : generic.getDpsInits()) {
+        Value root = traceCarrierOperandToMemref(output);
+        if (root)
+          writes.insert(root);
+      }
+    }
   });
 }
 
 /// Collect memref roots read by ops inside a region.
+/// Handles both carrier-authoritative (linalg.generic DPS inputs) and
+/// scalar (memref.load) bodies.
 static void collectReadSet(Region &region, llvm::DenseSet<Value> &reads) {
-  region.walk([&](memref::LoadOp loadOp) {
-    reads.insert(ValueAnalysis::stripMemrefViewOps(loadOp.getMemref()));
+  region.walk([&](Operation *op) {
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+      reads.insert(ValueAnalysis::stripMemrefViewOps(loadOp.getMemref()));
+    } else if (auto generic = dyn_cast<linalg::GenericOp>(op)) {
+      for (Value input : generic.getDpsInputs()) {
+        Value root = traceCarrierOperandToMemref(input);
+        if (root)
+          reads.insert(root);
+      }
+    }
   });
 }
 
@@ -175,7 +217,8 @@ struct BarrierEliminationPass
         accumulatorBases.insert(ValueAnalysis::stripMemrefViewOps(acc));
 
       // Check all memory operations in the body — only accumulator
-      // loads/stores are allowed for nowait inference.
+      // loads/stores are allowed for nowait inference. Handles both
+      // carrier-authoritative (linalg.generic) and scalar (memref ops) bodies.
       bool allReductionLocal = true;
       op.getBody().walk([&](Operation *memOp) -> WalkResult {
         if (auto loadOp = dyn_cast<memref::LoadOp>(memOp)) {
@@ -190,6 +233,22 @@ struct BarrierEliminationPass
             allReductionLocal = false;
             return WalkResult::interrupt();
           }
+        } else if (auto generic = dyn_cast<linalg::GenericOp>(memOp)) {
+          for (Value operand : generic.getDpsInputs()) {
+            Value root = traceCarrierOperandToMemref(operand);
+            if (root && !accumulatorBases.contains(root)) {
+              allReductionLocal = false;
+              return WalkResult::interrupt();
+            }
+          }
+          for (Value operand : generic.getDpsInits()) {
+            Value root = traceCarrierOperandToMemref(operand);
+            if (root && !accumulatorBases.contains(root)) {
+              allReductionLocal = false;
+              return WalkResult::interrupt();
+            }
+          }
+          return WalkResult::skip(); // Don't walk into carrier body.
         }
         return WalkResult::advance();
       });
@@ -217,7 +276,7 @@ struct BarrierEliminationPass
               sde::SdeStructuredClassification::elementwise_pipeline)
         return;
 
-      // Verify all memory ops are loads/stores — no unknown side effects.
+      // Collect write set — handles both carrier and scalar bodies.
       DenseSet<Value> writtenBases;
       bool hasSideEffects = false;
 
@@ -227,6 +286,13 @@ struct BarrierEliminationPass
               ValueAnalysis::stripMemrefViewOps(storeOp.getMemref()));
         } else if (isa<memref::LoadOp>(memOp)) {
           // Loads are fine.
+        } else if (auto generic = dyn_cast<linalg::GenericOp>(memOp)) {
+          for (Value output : generic.getDpsInits()) {
+            Value root = traceCarrierOperandToMemref(output);
+            if (root)
+              writtenBases.insert(root);
+          }
+          return WalkResult::skip(); // Don't walk into carrier body.
         } else if (!isMemoryEffectFree(memOp) && !isa<scf::YieldOp>(memOp)) {
           hasSideEffects = true;
           return WalkResult::interrupt();
@@ -244,9 +310,20 @@ struct BarrierEliminationPass
       while (nextOp) {
         if (auto nextSu = dyn_cast<sde::SdeSuIterateOp>(nextOp)) {
           llvm::DenseSet<Value> nextReadBases;
-          nextSu.getBody().walk([&](memref::LoadOp loadOp) {
-            nextReadBases.insert(
-                ValueAnalysis::stripMemrefViewOps(loadOp.getMemref()));
+          // Collect read set from successor — handles both paths.
+          nextSu.getBody().walk([&](Operation *innerOp) -> WalkResult {
+            if (auto loadOp = dyn_cast<memref::LoadOp>(innerOp)) {
+              nextReadBases.insert(
+                  ValueAnalysis::stripMemrefViewOps(loadOp.getMemref()));
+            } else if (auto generic = dyn_cast<linalg::GenericOp>(innerOp)) {
+              for (Value input : generic.getDpsInputs()) {
+                Value root = traceCarrierOperandToMemref(input);
+                if (root)
+                  nextReadBases.insert(root);
+              }
+              return WalkResult::skip();
+            }
+            return WalkResult::advance();
           });
           for (Value wb : writtenBases) {
             if (nextReadBases.contains(wb)) {
