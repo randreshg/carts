@@ -65,34 +65,43 @@ inline Block *getSuIterateComputeBlock(SdeSuIterateOp op) {
 
 class SDECostModel;
 
-std::unique_ptr<Pass>
-createConvertOpenMPToSdePass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createChunkOptPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createScheduleRefinementPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createReductionStrategyPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createScopeSelectionPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createTensorOptPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createStructuredSummariesPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createDistributionPlanningPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
-createBarrierEliminationPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass> createElementwiseFusionPass();
-std::unique_ptr<Pass> createIterationSpaceDecompositionPass();
-std::unique_ptr<Pass> createLoopInterchangePass();
-std::unique_ptr<Pass> createConvertSdeToArtsPass();
-std::unique_ptr<Pass> createVerifySdeLoweredPass();
+// --- State passes (IR form changes) ---
 std::unique_ptr<Pass> createRaiseToLinalgPass();
 std::unique_ptr<Pass> createRaiseToTensorPass();
 std::unique_ptr<Pass> createRaiseMemrefToTensorPass();
 std::unique_ptr<Pass> createScalarForwardingPass();
 std::unique_ptr<Pass> createConvertToCodeletPass();
+
+// --- Dep passes (structural transforms) ---
+std::unique_ptr<Pass> createLoopInterchangePass();
+std::unique_ptr<Pass>
+createTensorOptPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createStructuredSummariesPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass> createElementwiseFusionPass();
+std::unique_ptr<Pass> createIterationSpaceDecompositionPass();
+
+// --- Effect passes (scheduling decisions) ---
+std::unique_ptr<Pass>
+createScopeSelectionPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createScheduleRefinementPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createChunkOptPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createReductionStrategyPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createDistributionPlanningPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createBarrierEliminationPass(SDECostModel *costModel = nullptr);
+
+// --- Conversion passes ---
+std::unique_ptr<Pass>
+createConvertOpenMPToSdePass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass> createConvertSdeToArtsPass();
+
+// --- Verification ---
+std::unique_ptr<Pass> createVerifySdeLoweredPass();
 
 } // namespace mlir::arts::sde
 

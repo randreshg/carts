@@ -365,16 +365,16 @@ had three overlapping passes. Net pass count decreases by 1.
 ## 6. Files Affected
 
 ### New/Rewritten
-- `lib/arts/dialect/sde/Transforms/state/RaiseToTensor.cpp` -- complete rewrite
+- `lib/arts/dialect/sde/Transforms/state/raising/RaiseToTensor.cpp` -- complete rewrite
 
 ### Modified
-- `lib/arts/dialect/sde/Transforms/state/RaiseToLinalg.cpp` -- accept tensor input
+- `lib/arts/dialect/sde/Transforms/state/raising/RaiseToLinalg.cpp` -- accept tensor input
 - `tools/compile/Compile.cpp` -- pipeline reorder (lines 658-669)
 - `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` -- verify codelet lowering
 - `include/arts/dialect/sde/Transforms/Passes.td` -- remove RaiseMemrefToTensor pass def
 
 ### Deleted
-- `lib/arts/dialect/sde/Transforms/state/RaiseMemrefToTensor.cpp` -- subsumed (Phase 5)
+- `lib/arts/dialect/sde/Transforms/state/raising/RaiseMemrefToTensor.cpp` -- subsumed (Phase 5)
 
 ### Test Files
 - `lib/arts/dialect/sde/test/raise_to_tensor_*.mlir` -- new tensor-first tests

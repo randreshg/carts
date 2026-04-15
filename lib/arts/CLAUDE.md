@@ -21,8 +21,17 @@ dialect/                 MLIR dialects (IREE-style per-dialect structure)
     Transforms/          DataPtrHoisting, GuidRangCallOpt, RuntimeCallOpt, ScalarReplacement, LoopVectorizationHints, AliasScopeGen
   sde/                   SEMANTIC — OMP conversion, linalg raising, semantic transforms
     Analysis/            StructuredOpAnalysis (loop/access classification)
+    Conversion/OmpToSde/ ConvertOpenMPToSde (OMP→SDE boundary)
     IR/                  sde dialect (SdeDialect.cpp, SdeOps.cpp)
-    Transforms/          ConvertOpenMPToSde, RaiseToLinalg, RaiseToTensor, SdeTensorOptimization, SdeStructuredSummaries, SdeElementwiseFusion, SdeDistributionPlanning, SdeIterationSpaceDecomposition, ConvertSdeToArts
+    Transforms/
+      state/raising/     RaiseToLinalg, RaiseToTensor, RaiseMemrefToTensor
+      state/codelet/     ConvertToCodelet, ScalarForwarding
+      state/             StructuredSummaries
+      dep/loop/          LoopInterchange, TensorOpt, IterationSpaceDecomposition
+      dep/fusion/        ElementwiseFusion
+      effect/scheduling/ ScopeSelection, ScheduleRefinement, ChunkOpt, ReductionStrategy
+      effect/distribution/ DistributionPlanning, BarrierElimination
+    Verify/              VerifySdeLowered
 codegen/                 Shared lowering infra (ArtsCodegen)
 passes/
   verify/                Verification barrier passes

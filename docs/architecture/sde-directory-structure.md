@@ -1,4 +1,4 @@
-# SDE Directory Structure: Proposed Reorganization
+# SDE Directory Structure
 
 ## Design Principles
 
@@ -21,54 +21,7 @@
 
 ---
 
-## Current Structure (21 source files)
-
-```
-lib/arts/dialect/sde/
-├── Analysis/
-│   └── StructuredOpAnalysis.cpp
-├── IR/
-│   ├── SdeDialect.cpp
-│   └── SdeOps.cpp
-├── Transforms/
-│   ├── ConvertOpenMPToSde.cpp          ← conversion, not transform
-│   ├── VerifySdeLowered.cpp            ← verification, not transform
-│   ├── dep/
-│   │   ├── ElementwiseFusion.cpp
-│   │   ├── IterationSpaceDecomposition.cpp
-│   │   ├── LoopInterchange.cpp
-│   │   └── TensorOpt.cpp
-│   ├── effect/
-│   │   ├── BarrierElimination.cpp
-│   │   ├── ChunkOpt.cpp
-│   │   ├── DistributionPlanning.cpp
-│   │   ├── ReductionStrategy.cpp
-│   │   ├── ScheduleRefinement.cpp
-│   │   └── ScopeSelection.cpp
-│   └── state/
-│       ├── ConvertToCodelet.cpp
-│       ├── RaiseMemrefToTensor.cpp
-│       ├── RaiseToLinalg.cpp
-│       ├── RaiseToTensor.cpp
-│       ├── ScalarForwarding.cpp
-│       └── StructuredSummaries.cpp
-└── test/
-    ├── Inputs/
-    └── (85 flat .mlir files)
-```
-
-**Problems:**
-- `ConvertOpenMPToSde` is a cross-dialect conversion living in `Transforms/`
-- `VerifySdeLowered` is a verification barrier living in `Transforms/`
-- No internal sub-grouping — state/ has raising + codelet + analysis materialization
-  mixed together; effect/ has scheduling + distribution mixed together
-- Tests are flat — 85 files with no grouping
-- Pipeline order mismatch: directory grouping doesn't reflect the correct
-  transform → schedule phase ordering
-
----
-
-## Proposed Structure
+## Structure
 
 ```
 lib/arts/dialect/sde/
@@ -296,9 +249,7 @@ Phase 10: VERIFY    │    Verify/      │  VerifySdeLowered
 | StructuredOpAnalysis.cpp | Analysis/ | Pure analysis, correct |
 | SdeToArtsPatterns.cpp | core/Conversion/SdeToArts/ | Creates core ops, owned by core |
 
-### Include Structure (unchanged)
-
-The include layout stays flat:
+### Include Structure
 
 ```
 include/arts/dialect/sde/
@@ -309,14 +260,17 @@ include/arts/dialect/sde/
 ├── Analysis/
 │   └── StructuredOpAnalysis.h
 └── Transforms/
-    ├── Passes.td          ── ALL pass declarations (flat, sub-groups don't affect TableGen)
-    └── Passes.h           ── ALL pass create functions + shared helpers
+    ├── Passes.td              ── umbrella (includes phase sub-files)
+    ├── StatePasses.td         ── state pass declarations
+    ├── DepPasses.td           ── dep pass declarations
+    ├── EffectPasses.td        ── effect pass declarations
+    ├── ConversionPasses.td    ── conversion pass declarations
+    ├── VerifyPasses.td        ── verification pass declarations
+    └── Passes.h               ── ALL pass create functions + shared helpers
 ```
 
-Passes.td and Passes.h remain flat because:
-- TableGen doesn't benefit from sub-file splitting
-- The pass create functions are all in the same namespace (`mlir::arts::sde`)
-- Consumers include one header, get all passes
+Passes.td is an umbrella that includes 5 phase-grouped sub-files. Passes.h
+remains a single header — consumers include one header, get all passes.
 
 ---
 
