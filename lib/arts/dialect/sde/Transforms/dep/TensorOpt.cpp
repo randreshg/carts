@@ -44,12 +44,6 @@ static Value stripSimpleMemrefAlias(Value value) {
   return value;
 }
 
-static bool isTensorOptimizationSchedule(sde::SdeScheduleKindAttr schedule) {
-  if (!schedule)
-    return true;
-  return schedule.getValue() == sde::SdeScheduleKind::static_;
-}
-
 static Value getConstantIndex(OpBuilder &builder, Location loc, int64_t value) {
   return arith::ConstantIndexOp::create(builder, loc, value);
 }
@@ -413,7 +407,7 @@ static SmallVector<int64_t> getStencilHaloWidths(sde::SdeSuIterateOp op) {
 
 static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op, Block &body,
                                           linalg::GenericOp tensorGeneric) {
-  if (op.getChunkSize() || !isTensorOptimizationSchedule(op.getScheduleAttr()))
+  if (op.getChunkSize())
     return false;
   if (op->getParentOfType<scf::ForOp>())
     return false;
