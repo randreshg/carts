@@ -176,7 +176,8 @@ buildPerDimTileIterations(OpBuilder &builder, Location loc,
 
 static bool isCarrierOp(Operation &op) {
   return isa<bufferization::ToTensorOp, sde::SdeMuMemrefToTensorOp,
-             tensor::EmptyOp, linalg::GenericOp>(op);
+             tensor::EmptyOp, linalg::GenericOp, tensor::ExtractSliceOp,
+             tensor::InsertSliceOp>(op);
 }
 
 static bool isScalarExecutableOp(Operation &op) {

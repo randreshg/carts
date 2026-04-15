@@ -72,6 +72,8 @@ std::unique_ptr<Pass> createRaiseMemrefToTensorPass();
 std::unique_ptr<Pass> createScalarForwardingPass();
 std::unique_ptr<Pass> createLowerToMemrefPass();
 std::unique_ptr<Pass> createConvertToCodeletPass();
+std::unique_ptr<Pass> createTensorCleanupPass();
+std::unique_ptr<Pass> createTokenModeRefinementPass();
 
 // --- Dep passes (structural transforms) ---
 std::unique_ptr<Pass> createLoopInterchangePass();

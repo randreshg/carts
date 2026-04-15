@@ -22,9 +22,11 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -114,6 +116,299 @@ static Value cloneScalarValueIntoRegion(Value value, Block &body,
 
   builder.clone(*defOp, mapper);
   return mapper.lookupOrNull(value);
+}
+
+/// Key for grouping stencil accesses by (base memref, per-dim offset vector).
+struct StencilAccessKey {
+  Value memref;
+  SmallVector<int64_t> offsets; // per-dim constant offset
+};
+
+/// Collect loop bounds for each dimension in the nest. Dim 0 comes from the
+/// su_iterate; dims 1+ come from nested scf.for ops.
+static bool collectLoopBounds(sde::SdeSuIterateOp iterOp,
+                              const sde::LoopNestInfo &nest,
+                              SmallVectorImpl<Value> &lowerBounds,
+                              SmallVectorImpl<Value> &upperBounds) {
+  unsigned numDims = nest.ivs.size();
+  if (numDims == 0)
+    return false;
+
+  // Dim 0: su_iterate bounds (must be exactly 1-D su_iterate for stencils).
+  if (iterOp.getLowerBounds().size() != 1 ||
+      iterOp.getUpperBounds().size() != 1)
+    return false;
+  lowerBounds.push_back(iterOp.getLowerBounds().front());
+  upperBounds.push_back(iterOp.getUpperBounds().front());
+
+  // Dims 1+: nested scf.for loops. Walk the nest to find them.
+  Block *body = &iterOp.getBody().front();
+  // Look through cu_region.
+  for (Operation &inner : body->without_terminator()) {
+    if (auto cuRegion = dyn_cast<sde::SdeCuRegionOp>(inner);
+        cuRegion && cuRegion.getKind() == sde::SdeCuKind::parallel) {
+      body = &cuRegion.getBody().front();
+      break;
+    }
+  }
+
+  for (unsigned d = 1; d < numDims; ++d) {
+    scf::ForOp innerFor;
+    for (Operation &op : body->without_terminator()) {
+      if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+        innerFor = forOp;
+        break;
+      }
+    }
+    if (!innerFor)
+      return false;
+    lowerBounds.push_back(innerFor.getLowerBound());
+    upperBounds.push_back(innerFor.getUpperBound());
+    body = innerFor.getBody();
+  }
+  return true;
+}
+
+/// Raise a stencil loop nest to a linalg.generic carrier using shifted
+/// tensor.extract_slice views. Each neighbor access becomes a separate input
+/// with an extract_slice at the appropriate offset, and all indexing maps
+/// are identity. The stencil geometry is encoded in the slice offsets.
+static bool raiseStencilToLinalg(sde::SdeSuIterateOp iterOp,
+                                 const sde::LoopNestInfo &nest,
+                                 ArrayRef<sde::MemrefAccessEntry> reads,
+                                 ArrayRef<sde::MemrefAccessEntry> writes,
+                                 ArrayRef<utils::IteratorType> iterTypes) {
+  Block *computeBody = sde::getSuIterateComputeBlock(iterOp);
+  Operation *terminator = computeBody->getTerminator();
+  if (!terminator || !isa<sde::SdeYieldOp>(terminator))
+    return false;
+  auto oldYield = cast<sde::SdeYieldOp>(terminator);
+
+  unsigned numDims = nest.ivs.size();
+  if (numDims == 0)
+    return false;
+
+  // Collect per-dim loop bounds.
+  SmallVector<Value> lowerBounds, upperBounds;
+  if (!collectLoopBounds(iterOp, nest, lowerBounds, upperBounds))
+    return false;
+
+  Location loc = iterOp.getLoc();
+  OpBuilder builder(oldYield);
+
+  // Compute trip count per dimension: tc_d = ub_d - lb_d.
+  SmallVector<Value> tripCounts;
+  for (unsigned d = 0; d < numDims; ++d)
+    tripCounts.push_back(
+        arith::SubIOp::create(builder, loc, upperBounds[d], lowerBounds[d]));
+
+  // Decompose each read access into (memref, per-dim-offset) and group them.
+  // Each unique (memref, offset_vector) becomes one linalg input.
+  struct StencilInput {
+    Value memref;
+    SmallVector<int64_t> offsets;
+    SmallVector<Operation *> accessOps;
+  };
+  SmallVector<StencilInput> stencilInputs;
+  DenseMap<Value, Value> memrefToTensor; // cache mu_memref_to_tensor
+
+  for (const sde::MemrefAccessEntry &read : reads) {
+    if (!isa<memref::LoadOp>(read.op))
+      return false;
+
+    // Decompose indexing map into per-dim offsets.
+    SmallVector<int64_t> offsets;
+    for (unsigned r = 0; r < read.indexingMap.getNumResults(); ++r) {
+      auto dimOffset = sde::extractDimOffset(read.indexingMap.getResult(r));
+      if (!dimOffset || !dimOffset->dim)
+        return false;
+      offsets.push_back(dimOffset->offset);
+    }
+
+    // Find or create matching input group.
+    bool found = false;
+    for (auto &input : stencilInputs) {
+      if (input.memref == read.memref && input.offsets == offsets) {
+        input.accessOps.push_back(read.op);
+        found = true;
+        break;
+      }
+    }
+    if (!found)
+      stencilInputs.push_back({read.memref, offsets, {read.op}});
+  }
+
+  // Process writes — must all be identity (offset 0 on every dim).
+  if (writes.empty())
+    return false;
+  struct StencilOutput {
+    Value memref;
+    Type elementType;
+    Operation *writeOp;
+  };
+  SmallVector<StencilOutput> stencilOutputs;
+  for (const sde::MemrefAccessEntry &write : writes) {
+    if (!isa<memref::StoreOp>(write.op))
+      return false;
+    auto mrType = dyn_cast<MemRefType>(write.memref.getType());
+    if (!mrType)
+      return false;
+    stencilOutputs.push_back({write.memref, mrType.getElementType(), write.op});
+  }
+
+  // Create mu_memref_to_tensor for each unique base memref.
+  auto getOrCreateTensor = [&](Value memref) -> Value {
+    auto it = memrefToTensor.find(memref);
+    if (it != memrefToTensor.end())
+      return it->second;
+    auto mrType = cast<MemRefType>(memref.getType());
+    auto tTy = RankedTensorType::get(mrType.getShape(), mrType.getElementType());
+    Value tensor =
+        sde::SdeMuMemrefToTensorOp::create(builder, loc, tTy, memref);
+    memrefToTensor[memref] = tensor;
+    return tensor;
+  };
+
+  // Build extract_slice for each stencil input view.
+  // For access A[iv_d + offset_d], the slice is:
+  //   offset = lb_d + offset_d, size = tc_d, stride = 1
+  SmallVector<Value> tensorInputs;
+  SmallVector<AffineMap> indexingMaps;
+  for (const StencilInput &input : stencilInputs) {
+    Value baseTensor = getOrCreateTensor(input.memref);
+    auto tensorTy = cast<RankedTensorType>(baseTensor.getType());
+    unsigned rank = tensorTy.getRank();
+
+    SmallVector<OpFoldResult> offsets(rank);
+    SmallVector<OpFoldResult> sizes(rank);
+    SmallVector<OpFoldResult> strides(rank, builder.getIndexAttr(1));
+
+    for (unsigned d = 0; d < rank; ++d) {
+      if (input.offsets[d] == 0) {
+        offsets[d] = lowerBounds[d];
+      } else {
+        Value offsetVal =
+            arith::ConstantIndexOp::create(builder, loc, input.offsets[d]);
+        Value sum =
+            arith::AddIOp::create(builder, loc, lowerBounds[d], offsetVal);
+        offsets[d] = sum;
+      }
+      sizes[d] = tripCounts[d];
+    }
+
+    Value sliced = tensor::ExtractSliceOp::create(builder, loc, baseTensor,
+                                                   offsets, sizes, strides);
+    tensorInputs.push_back(sliced);
+    indexingMaps.push_back(
+        builder.getMultiDimIdentityMap(numDims));
+  }
+
+  // Build extract_slice for each output.
+  SmallVector<Value> tensorOutputs;
+  SmallVector<Type> resultTypes;
+  SmallVector<Value> fullOutputTensors;
+  for (const StencilOutput &output : stencilOutputs) {
+    Value baseTensor = getOrCreateTensor(output.memref);
+    auto tensorTy = cast<RankedTensorType>(baseTensor.getType());
+    unsigned rank = tensorTy.getRank();
+
+    SmallVector<OpFoldResult> offsets(rank);
+    SmallVector<OpFoldResult> sizes(rank);
+    SmallVector<OpFoldResult> strides(rank, builder.getIndexAttr(1));
+
+    for (unsigned d = 0; d < rank; ++d) {
+      offsets[d] = lowerBounds[d];
+      sizes[d] = tripCounts[d];
+    }
+
+    Value sliced = tensor::ExtractSliceOp::create(builder, loc, baseTensor,
+                                                   offsets, sizes, strides);
+    tensorOutputs.push_back(sliced);
+    resultTypes.push_back(sliced.getType());
+    fullOutputTensors.push_back(baseTensor);
+    indexingMaps.push_back(
+        builder.getMultiDimIdentityMap(numDims));
+  }
+
+  // Build linalg.generic with all-identity maps.
+  bool cloneFailed = false;
+  auto generic = linalg::GenericOp::create(
+      builder, loc, resultTypes, tensorInputs, tensorOutputs, indexingMaps,
+      iterTypes,
+      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+        IRMapping mapper;
+        // Map each read load result to the corresponding block arg.
+        unsigned argIdx = 0;
+        for (const StencilInput &input : stencilInputs) {
+          for (Operation *accessOp : input.accessOps) {
+            auto loadOp = cast<memref::LoadOp>(accessOp);
+            mapper.map(loadOp.getResult(), blockArgs[argIdx]);
+          }
+          ++argIdx;
+        }
+
+        // Clone scalar computation and build yield values.
+        SmallVector<Value> yielded(stencilOutputs.size());
+        SmallVector<bool> hasYield(stencilOutputs.size(), false);
+        unsigned outputArgOffset = stencilInputs.size();
+
+        for (auto [outIdx, output] : llvm::enumerate(stencilOutputs)) {
+          auto storeOp = cast<memref::StoreOp>(output.writeOp);
+          Value valueToWrite = storeOp.getValue();
+
+          Value mappedValue = cloneScalarValueIntoRegion(
+              valueToWrite, *nest.innermostBody, nestedBuilder, mapper);
+          if (!mappedValue) {
+            cloneFailed = true;
+            continue;
+          }
+          yielded[outIdx] = mappedValue;
+          hasYield[outIdx] = true;
+        }
+
+        for (unsigned i = 0; i < stencilOutputs.size(); ++i) {
+          if (!hasYield[i])
+            yielded[i] = blockArgs[outputArgOffset + i];
+        }
+
+        linalg::YieldOp::create(nestedBuilder, nestedLoc, yielded);
+      });
+
+  if (cloneFailed) {
+    generic.erase();
+    return false;
+  }
+
+  // Create insert_slice for each output result.
+  for (auto [idx, result] : llvm::enumerate(generic.getResults())) {
+    auto tensorTy =
+        cast<RankedTensorType>(fullOutputTensors[idx].getType());
+    unsigned rank = tensorTy.getRank();
+
+    SmallVector<OpFoldResult> offsets(rank);
+    SmallVector<OpFoldResult> sizes(rank);
+    SmallVector<OpFoldResult> strides(rank, builder.getIndexAttr(1));
+
+    for (unsigned d = 0; d < rank; ++d) {
+      offsets[d] = lowerBounds[d];
+      sizes[d] = tripCounts[d];
+    }
+
+    tensor::InsertSliceOp::create(builder, loc, result,
+                                   fullOutputTensors[idx], offsets, sizes,
+                                   strides);
+  }
+
+  // Stencil carriers stay dual-representation: the scalar body (scf.for +
+  // memref.load/store) coexists with the carrier. Downstream passes (Tiling,
+  // IterationSpaceDecomposition) work on the scalar body. The carrier and its
+  // support ops (extract_slice, insert_slice, mu_memref_to_tensor) are dead
+  // and will be erased by LowerToMemref's eraseDeadCarriers phase.
+
+  ARTS_DEBUG("  raised stencil to linalg.generic with "
+             << stencilInputs.size() << " shifted inputs and "
+             << stencilOutputs.size() << " outputs (dual-rep)");
+  return true;
 }
 
 static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
@@ -356,10 +651,18 @@ struct RaiseToLinalgPass
       iterOp.setStructuredClassificationAttr(
           sde::SdeStructuredClassificationAttr::get(ctx, pattern));
       ++classified;
-      if (summary->supportsLinalgCarrier() &&
-          raiseToLinalg(iterOp, summary->nest, summary->reads, summary->writes,
-                        summary->iterTypes))
-        ++raised;
+      if (summary->supportsLinalgCarrier()) {
+        bool didRaise = false;
+        if (pattern == sde::SdeStructuredClassification::stencil)
+          didRaise = raiseStencilToLinalg(iterOp, summary->nest,
+                                          summary->reads, summary->writes,
+                                          summary->iterTypes);
+        else
+          didRaise = raiseToLinalg(iterOp, summary->nest, summary->reads,
+                                   summary->writes, summary->iterTypes);
+        if (didRaise)
+          ++raised;
+      }
 
       ARTS_DEBUG("classified sde.su_iterate as '"
                  << stringifySdeStructuredClassification(pattern) << "' with "

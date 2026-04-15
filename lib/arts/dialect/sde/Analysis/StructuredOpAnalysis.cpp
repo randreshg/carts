@@ -421,9 +421,36 @@ bool hasConstantOffsets(AffineMap map) {
 }
 
 bool StructuredLoopSummary::supportsLinalgCarrier() const {
-  return classification != SdeStructuredClassification::stencil &&
-         (classification != SdeStructuredClassification::reduction ||
-          supportsReductionCarrier);
+  if (classification == SdeStructuredClassification::stencil) {
+    // Stencil carriers require a branch-free innermost body: no scf.if or
+    // nested scf.for that would make the access pattern ambiguous.
+    if (!nest.innermostBody)
+      return false;
+    for (Operation &op : nest.innermostBody->without_terminator()) {
+      if (isa<scf::IfOp, scf::ForOp>(op))
+        return false;
+    }
+    // Stencil carriers require static constant offsets that we can decompose
+    // into shifted extract_slice views. Verify every read has dim+const form.
+    for (const MemrefAccessEntry &entry : reads) {
+      for (AffineExpr result : entry.indexingMap.getResults()) {
+        auto dimOffset = extractDimOffset(result);
+        if (!dimOffset || !dimOffset->dim)
+          return false;
+      }
+    }
+    // Also require at least one write with all-identity maps.
+    for (const MemrefAccessEntry &entry : writes) {
+      for (AffineExpr result : entry.indexingMap.getResults()) {
+        auto dimOffset = extractDimOffset(result);
+        if (!dimOffset || !dimOffset->dim || dimOffset->offset != 0)
+          return false;
+      }
+    }
+    return true;
+  }
+  return classification != SdeStructuredClassification::reduction ||
+         supportsReductionCarrier;
 }
 
 std::optional<StructuredLoopSummary>
