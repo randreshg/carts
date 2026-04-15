@@ -260,17 +260,17 @@ static const std::array<llvm::StringLiteral, 10>
                                         "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 23> kOpenMPToArtsPasses = {
+static const std::array<llvm::StringLiteral, 24> kOpenMPToArtsPasses = {
     "ConvertOpenMPToSde",       "RaiseToLinalg",
     "RaiseToTensor",            "ScopeSelection",
     "ScheduleRefinement",       "ChunkOpt",
     "ReductionStrategy",        "LoopInterchange",
-    "Tiling",                "StructuredSummaries",
+    "Tiling",                   "StructuredSummaries",
     "ElementwiseFusion",        "DistributionPlanning",
     "IterationSpaceDecomposition", "BarrierElimination",
-    "LowerToMemref",            "ConvertToCodelet",
-    "TensorCleanup",            "TokenModeRefine",
-    "ConvertSdeToArts",
+    "Vectorization",            "LowerToMemref",
+    "ConvertToCodelet",         "TensorCleanup",
+    "TokenModeRefine",          "ConvertSdeToArts",
     "VerifySdeLowered",         "DeadCodeElimination",
     "CSE",                      "VerifyEdtCreated"};
 static const std::array<llvm::StringLiteral, 6> kEdtTransformsPasses = {
@@ -668,6 +668,7 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createRaiseToLinalgPass());
   // Dep passes first (structural transforms), then effect passes (scheduling decisions).
   pm.addPass(arts::sde::createLoopInterchangePass());
+  pm.addPass(arts::sde::createVectorizationPass());
   pm.addPass(arts::sde::createTilingPass(costModel));
   pm.addPass(arts::sde::createStructuredSummariesPass(costModel));
   pm.addPass(arts::sde::createElementwiseFusionPass());
@@ -682,6 +683,10 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createConvertToCodeletPass());
   pm.addPass(arts::sde::createTensorCleanupPass());
   pm.addPass(arts::sde::createTokenModeRefinementPass());
+  // Cleanup sub-pipeline deferred: Canonicalize+CSE+DCE here would optimize
+  // codelet bodies (cu_codelet is IsolatedFromAbove) but the module-level
+  // DCE+CSE after ConvertSdeToArts already covers this. Adding it here
+  // changes IR shapes that downstream CHECK patterns depend on.
   pm.addPass(arts::sde::createConvertSdeToArtsPass());
   pm.addPass(arts::sde::createVerifySdeLoweredPass());
   pm.addPass(arts::createDCEPass());
