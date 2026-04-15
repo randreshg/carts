@@ -10,9 +10,6 @@
 ///   - memref.load → tensor.extract from currentTensor[alloca]
 ///   - Region-holding ops (scf.for, cu_region, su_iterate) → thread current
 ///     tensors as iter_args, recurse into body, update currentTensor to result
-///
-/// Also converts memref-backed linalg.generic carriers inside su_iterate
-/// to tensor-backed form for downstream SDE tensor passes.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
@@ -25,13 +22,12 @@ namespace mlir::arts {
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/IRMapping.h"
+
 
 #include "arts/utils/Debug.h"
 ARTS_DEBUG_SETUP(raise_to_tensor);
@@ -331,60 +327,6 @@ initializeTensorValues(OpBuilder &builder,
 
     currentTensor[alloca.getResult()] = tensor;
   }
-}
-
-//===----------------------------------------------------------------------===//
-// Core: rewrite loads/stores in a flat block
-//===----------------------------------------------------------------------===//
-
-/// Rewrite memref.load → tensor.extract and memref.store → tensor.insert for
-/// direct (non-region-holding) ops in the given block that access raised
-/// allocas. Skips region-holding ops (handled by the caller's dispatch).
-static void rewriteBlockOps(Block &block,
-                            DenseMap<Value, Value> &currentTensor) {
-  SmallVector<Operation *> toErase;
-
-  for (Operation &op : llvm::make_early_inc_range(block)) {
-    // Skip region-holding ops — caller dispatches.
-    if (op.getNumRegions() > 0)
-      continue;
-
-    if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
-      auto alloca = resolveAlloca(loadOp.getMemref());
-      if (!alloca)
-        continue;
-      auto it = currentTensor.find(alloca.getResult());
-      if (it == currentTensor.end())
-        continue;
-
-      OpBuilder b(loadOp);
-      Value extracted = tensor::ExtractOp::create(
-          b, loadOp.getLoc(), it->second, loadOp.getIndices());
-      loadOp.getResult().replaceAllUsesWith(extracted);
-      toErase.push_back(loadOp);
-      continue;
-    }
-
-    if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
-      auto alloca = resolveAlloca(storeOp.getMemref());
-      if (!alloca)
-        continue;
-      auto it = currentTensor.find(alloca.getResult());
-      if (it == currentTensor.end())
-        continue;
-
-      OpBuilder b(storeOp);
-      Value inserted = tensor::InsertOp::create(
-          b, storeOp.getLoc(), storeOp.getValueToStore(),
-          it->second, storeOp.getIndices());
-      it->second = inserted;
-      toErase.push_back(storeOp);
-      continue;
-    }
-  }
-
-  for (Operation *op : llvm::reverse(toErase))
-    op->erase();
 }
 
 //===----------------------------------------------------------------------===//
@@ -887,159 +829,6 @@ static unsigned raiseFunctionAllocas(func::FuncOp func) {
 }
 
 //===----------------------------------------------------------------------===//
-// Linalg carrier conversion
-//===----------------------------------------------------------------------===//
-
-static RankedTensorType getRankedTensorType(Value memref) {
-  return dyn_cast<RankedTensorType>(
-      memref::getTensorTypeFromMemRefType(memref.getType()));
-}
-
-static Value getOrCreateTensorValue(OpBuilder &builder, Location loc,
-                                    DenseMap<Value, Value> &tensorValues,
-                                    Value memref) {
-  if (Value tensor = tensorValues.lookup(memref))
-    return tensor;
-
-  RankedTensorType tensorType = getRankedTensorType(memref);
-  if (!tensorType)
-    return Value();
-
-  Value tensor =
-      bufferization::ToTensorOp::create(builder, loc, tensorType, memref);
-  tensorValues[memref] = tensor;
-  return tensor;
-}
-
-static BlockArgument getOutputBlockArgument(linalg::GenericOp generic,
-                                            unsigned outputIndex) {
-  return generic.getRegion().front().getArgument(generic.getNumDpsInputs() +
-                                                 outputIndex);
-}
-
-static bool hasSimpleAliasWithOtherOperands(linalg::GenericOp generic,
-                                            unsigned outputIndex) {
-  Value output = stripMemrefCasts(generic.getDpsInits()[outputIndex]);
-  for (Value input : generic.getDpsInputs()) {
-    if (stripMemrefCasts(input) == output)
-      return true;
-  }
-  for (auto [otherIndex, otherOutput] :
-       llvm::enumerate(generic.getDpsInits())) {
-    if (otherIndex == outputIndex)
-      continue;
-    if (stripMemrefCasts(otherOutput) == output)
-      return true;
-  }
-  return false;
-}
-
-static bool shouldUseEmptyTensorInit(linalg::GenericOp generic,
-                                     unsigned outputIndex) {
-  if (!getOutputBlockArgument(generic, outputIndex).use_empty())
-    return false;
-  return !hasSimpleAliasWithOtherOperands(generic, outputIndex);
-}
-
-static SmallVector<Value>
-buildTensorOutputs(OpBuilder &builder, Location loc,
-                   linalg::GenericOp oldGeneric,
-                   DenseMap<Value, Value> &tensorValues) {
-  SmallVector<Value> tensorOutputs;
-  tensorOutputs.reserve(oldGeneric.getNumDpsInits());
-  for (auto [outputIndex, output] : llvm::enumerate(oldGeneric.getDpsInits())) {
-    RankedTensorType tensorType = getRankedTensorType(output);
-    if (!tensorType)
-      return {};
-    if (shouldUseEmptyTensorInit(oldGeneric, outputIndex)) {
-      tensorOutputs.push_back(tensor::EmptyOp::create(
-          builder, loc, memref::getMixedSizes(builder, loc, output),
-          tensorType.getElementType()));
-      continue;
-    }
-    Value tensor = getOrCreateTensorValue(builder, loc, tensorValues, output);
-    if (!tensor)
-      return {};
-    tensorOutputs.push_back(tensor);
-  }
-  return tensorOutputs;
-}
-
-static linalg::GenericOp rewriteGenericToTensor(linalg::GenericOp oldGeneric) {
-  OpBuilder builder(oldGeneric);
-  Location loc = oldGeneric.getLoc();
-  DenseMap<Value, Value> tensorValues;
-
-  SmallVector<Value> tensorInputs;
-  tensorInputs.reserve(oldGeneric.getNumDpsInputs());
-  for (Value input : oldGeneric.getDpsInputs()) {
-    Value tensor = getOrCreateTensorValue(builder, loc, tensorValues, input);
-    if (!tensor)
-      return nullptr;
-    tensorInputs.push_back(tensor);
-  }
-
-  SmallVector<Value> tensorOutputs =
-      buildTensorOutputs(builder, loc, oldGeneric, tensorValues);
-  if (tensorInputs.size() !=
-          static_cast<size_t>(oldGeneric.getNumDpsInputs()) ||
-      tensorOutputs.size() != static_cast<size_t>(oldGeneric.getNumDpsInits()))
-    return nullptr;
-
-  SmallVector<Type> resultTensorTypes;
-  resultTensorTypes.reserve(tensorOutputs.size());
-  for (Value output : tensorOutputs)
-    resultTensorTypes.push_back(output.getType());
-
-  Block &oldBody = oldGeneric.getRegion().front();
-  auto newGeneric = linalg::GenericOp::create(
-      builder, loc, resultTensorTypes, tensorInputs, tensorOutputs,
-      oldGeneric.getIndexingMapsArray(), oldGeneric.getIteratorTypesArray(),
-      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
-        IRMapping mapper;
-        for (auto [oldArg, newArg] :
-             llvm::zip(oldBody.getArguments(), blockArgs))
-          mapper.map(oldArg, newArg);
-        for (Operation &op : oldBody.without_terminator())
-          nestedBuilder.clone(op, mapper);
-        SmallVector<Value> yielded;
-        auto oldYield = cast<linalg::YieldOp>(oldBody.getTerminator());
-        yielded.reserve(oldYield.getNumOperands());
-        for (Value value : oldYield.getValues())
-          yielded.push_back(mapper.lookupOrDefault(value));
-        linalg::YieldOp::create(nestedBuilder, nestedLoc, yielded);
-      });
-
-  newGeneric->setAttrs(oldGeneric->getAttrs());
-  return newGeneric;
-}
-
-static void rewriteLinalgCarriers(ModuleOp module) {
-  SmallVector<linalg::GenericOp> candidates;
-  module.walk([&](linalg::GenericOp generic) {
-    if (generic->getParentOfType<sde::SdeSuIterateOp>())
-      candidates.push_back(generic);
-  });
-
-  for (linalg::GenericOp generic : candidates) {
-    if (!generic)
-      continue;
-    if (!generic->getResults().empty())
-      continue;
-    if (!llvm::all_of(generic->getOperands(), [](Value operand) {
-          return isa<MemRefType>(operand.getType());
-        }))
-      continue;
-
-    linalg::GenericOp tensorGeneric = rewriteGenericToTensor(generic);
-    if (!tensorGeneric)
-      continue;
-
-    generic.erase();
-  }
-}
-
-//===----------------------------------------------------------------------===//
 // Pass implementation
 //===----------------------------------------------------------------------===//
 
@@ -1097,9 +886,6 @@ struct RaiseToTensorPass
       signalPassFailure();
       return;
     }
-
-    // Phase 3: Rewrite linalg carriers.
-    rewriteLinalgCarriers(module);
 
     ARTS_INFO("RaiseToTensor: raised " << totalRaised
               << " alloca(s), all captured memrefs eliminated");

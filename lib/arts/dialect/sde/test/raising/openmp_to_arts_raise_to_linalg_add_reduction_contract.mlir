@@ -1,8 +1,9 @@
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Verify that the narrow single-accumulator reduction subset now gets a
-// transient tensor-backed linalg.generic carrier at the SDE layer while the
-// original loop/memref body remains authoritative.
+// Verify that the narrow single-accumulator reduction subset gets a
+// transient linalg.generic carrier at the SDE layer. Function args and
+// reduction accumulators remain as memrefs (not raised by RaiseToTensor),
+// so carriers are created from memref.load/store with bufferization wrapping.
 
 // CHECK-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // CHECK: func.func @main
@@ -16,15 +17,13 @@
 // CHECK: %[[NEXT:.+]] = arith.addi %[[ACC]], %[[VAL]] : i32
 // CHECK: memref.store %[[NEXT]], %{{.+}}[%c0] : memref<?xi32>
 // CHECK: bufferization.to_tensor %arg0 : memref<128xi32> to tensor<128xi32>
-// CHECK: bufferization.to_tensor %cast : memref<?xi32> to tensor<?xi32>
-// CHECK: bufferization.to_tensor %cast : memref<?xi32> to tensor<?xi32>
 // CHECK: linalg.generic
 // CHECK-SAME: iterator_types = ["reduction"]
 // CHECK: ^bb0(%[[ARGVAL:.+]]: i32, %[[ARGACC:.+]]: i32, %{{.+}}: i32):
 // CHECK: %[[REDUCED:.+]] = arith.addi %[[ARGACC]], %[[ARGVAL]] : i32
 // CHECK: linalg.yield %[[REDUCED]] : i32
 // CHECK-NOT: arts.for
-// CHECK: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
+// CHECK: // -----// IR Dump After LoopInterchange
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   omp.declare_reduction @add_i32 : i32 init {

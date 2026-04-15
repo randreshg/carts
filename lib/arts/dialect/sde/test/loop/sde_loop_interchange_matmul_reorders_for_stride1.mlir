@@ -5,7 +5,7 @@
 // B[k,j] access in matmul patterns. Before interchange (after RaiseToTensor),
 // the inner loop order is j/k. After interchange, the order should be k/j.
 
-// BEFORE-LABEL: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
+// BEFORE-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // BEFORE: arts_sde.su_iterate
 // BEFORE-SAME: classification(<matmul>)
 // BEFORE: scf.for %[[J:.+]] = %c0 to %c32 step %c1 {

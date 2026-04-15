@@ -659,14 +659,6 @@ static void stripSuIterateTensorArgs(ModuleOp module) {
 //===----------------------------------------------------------------------===//
 
 static void eraseDeadCarriers(ModuleOp module) {
-  // Erase materialize_in_destination sinks first.
-  SmallVector<Operation *> matOps;
-  module.walk([&](bufferization::MaterializeInDestinationOp op) {
-    matOps.push_back(op);
-  });
-  for (Operation *op : llvm::reverse(matOps))
-    op->erase();
-
   // Iteratively erase dead tensor/linalg/sde-mu ops.
   bool changed = true;
   while (changed) {

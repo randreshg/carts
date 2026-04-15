@@ -2,6 +2,8 @@
 
 // Verify that a raiseable elementwise OpenMP loop is classified and gets a
 // transient linalg.generic carrier at the SDE layer during RaiseToLinalg.
+// Function args are memrefs (not allocas), so RaiseToTensor is a no-op and
+// the carrier is built from memref.load/store ops with bufferization wrapping.
 
 // CHECK-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // CHECK: func.func @main

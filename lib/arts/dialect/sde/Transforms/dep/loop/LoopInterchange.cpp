@@ -26,11 +26,9 @@ namespace mlir::arts {
 } // namespace mlir::arts
 
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
-#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #include "arts/utils/Debug.h"
@@ -421,15 +419,6 @@ struct LoopInterchangePass
       if (!shouldInterchangeMatmul(carrier, jDimIdx, kDimIdx))
         return false;
 
-      // Permute the carrier's indexing maps and iterator types so that
-      // Route 2 (classifyFromLinalg) in ConvertSdeToArts sees the
-      // interchange reflected in the carrier's dim ordering.
-      IRRewriter rewriter(carrier->getContext());
-      SmallVector<unsigned> interchangeVec = {0, 2, 1}; // swap j(1) and k(2)
-      if (failed(linalg::interchangeGenericOp(rewriter, carrier,
-                                              interchangeVec)))
-        return false;
-
       scf::ForOp jLoop, kLoop;
       SmallVector<Operation *> initOps;
       if (!findInnerLoopPair(body, jLoop, kLoop, initOps))
@@ -442,12 +431,6 @@ struct LoopInterchangePass
     // compute optimal permutation from stride cost analysis.
     SmallVector<unsigned> perm = computeOptimalPermutation(carrier);
     if (perm.empty())
-      return false;
-
-    // Permute the carrier to match the new dim ordering so that downstream
-    // passes (ConvertSdeToArts Route 2) see consistent indexing maps.
-    IRRewriter rewriter(carrier->getContext());
-    if (failed(linalg::interchangeGenericOp(rewriter, carrier, perm)))
       return false;
 
     // For the general case, we currently support 2-loop interchange only

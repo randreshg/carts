@@ -661,10 +661,10 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
                                arts::AnalysisManager *AM = nullptr) {
   arts::sde::SDECostModel *costModel = AM ? &AM->getCostModel() : nullptr;
   pm.addPass(arts::sde::createConvertOpenMPToSdePass(costModel));
-  // Raise memref→tensor and memref→linalg FIRST so effect passes see
-  // tensor/linalg form for correct decisions.
-  pm.addPass(arts::sde::createRaiseToLinalgPass());
+  // Raise tensor FIRST (mem2reg), then classify+create linalg carriers
+  // from tensor-native form — no bufferization wrapping needed.
   pm.addPass(arts::sde::createRaiseToTensorPass());
+  pm.addPass(arts::sde::createRaiseToLinalgPass());
   // Dep passes first (structural transforms), then effect passes (scheduling decisions).
   pm.addPass(arts::sde::createLoopInterchangePass());
   pm.addPass(arts::sde::createTensorOptPass(costModel));

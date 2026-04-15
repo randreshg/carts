@@ -1,10 +1,11 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=TENSOR
 
-// Verify that RaiseToLinalg creates a tensor-backed reduction carrier directly.
-// The reduction accumulator is still both an input and an output via separate
-// bufferization.to_tensor calls. RaiseToTensor is a no-op.
+// Verify that RaiseToLinalg creates a reduction carrier with memref-backed
+// inputs when function args are used (not allocas). RaiseToTensor is a no-op
+// because there are no raisable allocas. The reduction accumulator is wrapped
+// via bufferization.to_tensor.
 
-// TENSOR-LABEL: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
+// TENSOR-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // TENSOR: func.func @main
 // TENSOR: arts_sde.cu_region <parallel>
 // TENSOR: arts_sde.su_iterate (%c0) to (%c128) step (%c1)
