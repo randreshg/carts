@@ -203,6 +203,309 @@ LogicalResult SdeCuRegionOp::verify() {
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+// SdeSuIterateOp — custom assembly format + verifier
+//===----------------------------------------------------------------------===//
+
+// Assembly format (preserves the shape of the previous declarative format,
+// adding optional `iter_args` / result types and always emitting sde.yield):
+//
+//   arts_sde.su_iterate (%lb) to (%ub) step (%step)
+//     [schedule(<kind> [, %chunk])]
+//     [nowait]
+//     [reduction [<kinds>] (%accs : types)]
+//     [reduction_strategy(<strategy>)]
+//     [classification(<class>)]
+//     [iter_args(%a = %init : type) -> (type)]
+//     { body }
+//     [attr-dict]
+
+void SdeSuIterateOp::print(OpAsmPrinter &p) {
+  // (lb) to (ub) step (step)
+  p << " (" << getLowerBounds() << ") to (" << getUpperBounds() << ") step ("
+    << getSteps() << ")";
+
+  // schedule(<kind>[, %chunk])
+  if (auto sched = getSchedule()) {
+    p << " schedule(<" << stringifySdeScheduleKind(*sched) << ">";
+    if (getChunkSize())
+      p << ", " << getChunkSize();
+    p << ")";
+  }
+
+  // nowait
+  if (getNowait())
+    p << " nowait";
+
+  // reduction[<kinds>](%accs : types)
+  if (auto reductionKinds = getReductionKindsAttr()) {
+    p << " reduction[";
+    llvm::interleaveComma(reductionKinds, p);
+    p << "](";
+    llvm::interleaveComma(getReductionAccumulators(), p,
+                          [&](Value v) { p << v; });
+    p << " : ";
+    llvm::interleaveComma(getReductionAccumulators().getTypes(), p);
+    p << ")";
+  }
+
+  // reduction_strategy(<strategy>)
+  if (auto strategy = getReductionStrategy()) {
+    p << " reduction_strategy(<"
+      << stringifySdeReductionStrategy(*strategy) << ">)";
+  }
+
+  // classification(<class>)
+  if (auto cls = getStructuredClassification()) {
+    p << " classification(<"
+      << stringifySdeStructuredClassification(*cls) << ">)";
+  }
+
+  // iter_args(%a = %init : type) -> (type)
+  // Block arguments beyond the induction variables carry iter_args.
+  unsigned numIVs = getLowerBounds().size();
+  unsigned numResults = getNumResults();
+  if (numResults > 0) {
+    Block &body = getBody().front();
+    p << " iter_args(";
+    for (unsigned i = 0; i < numResults; ++i) {
+      if (i > 0)
+        p << ", ";
+      p << body.getArgument(numIVs + i) << " = "
+        << getReductionAccumulators()[i];
+    }
+    p << " : ";
+    llvm::interleaveComma(getResultTypes(), p);
+    p << ") -> (";
+    llvm::interleaveComma(getResultTypes(), p);
+    p << ")";
+  }
+
+  // body — hide entry block args; show yield only when results exist
+  p << " ";
+  p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
+                /*printBlockTerminators=*/numResults > 0);
+
+  // attr-dict — elide attributes with dedicated syntax
+  SmallVector<StringRef> elidedAttrs = {
+      "schedule", "nowait", "reductionKinds", "reductionStrategy",
+      "structuredClassification",
+      getOperandSegmentSizesAttrName().getValue()};
+  p.printOptionalAttrDict((*this)->getAttrs(), elidedAttrs);
+}
+
+ParseResult SdeSuIterateOp::parse(OpAsmParser &parser,
+                                  OperationState &result) {
+  MLIRContext *ctx = parser.getContext();
+  auto indexType = IndexType::get(ctx);
+
+  // ---- (lb) to (ub) step (step) ----
+  SmallVector<OpAsmParser::UnresolvedOperand> lbOps, ubOps, stepOps;
+  if (parser.parseLParen() || parser.parseOperandList(lbOps) ||
+      parser.parseRParen() || parser.parseKeyword("to") ||
+      parser.parseLParen() || parser.parseOperandList(ubOps) ||
+      parser.parseRParen() || parser.parseKeyword("step") ||
+      parser.parseLParen() || parser.parseOperandList(stepOps) ||
+      parser.parseRParen())
+    return failure();
+
+  unsigned numDims = lbOps.size();
+  SmallVector<Type> indexTypes(numDims, indexType);
+  if (parser.resolveOperands(lbOps, indexTypes, parser.getCurrentLocation(),
+                             result.operands) ||
+      parser.resolveOperands(ubOps, indexTypes, parser.getCurrentLocation(),
+                             result.operands) ||
+      parser.resolveOperands(stepOps, indexTypes, parser.getCurrentLocation(),
+                             result.operands))
+    return failure();
+
+  // ---- optional schedule(<kind>[, %chunk]) ----
+  bool hasChunkSize = false;
+  if (succeeded(parser.parseOptionalKeyword("schedule"))) {
+    SdeScheduleKindAttr schedAttr;
+    if (parser.parseLParen() ||
+        parser.parseCustomAttributeWithFallback(schedAttr, Type{}, "schedule",
+                                                result.attributes))
+      return failure();
+    if (succeeded(parser.parseOptionalComma())) {
+      OpAsmParser::UnresolvedOperand chunkOp;
+      if (parser.parseOperand(chunkOp) ||
+          parser.resolveOperand(chunkOp, indexType, result.operands))
+        return failure();
+      hasChunkSize = true;
+    }
+    if (parser.parseRParen())
+      return failure();
+  }
+
+  // ---- optional nowait ----
+  if (succeeded(parser.parseOptionalKeyword("nowait")))
+    result.addAttribute("nowait", UnitAttr::get(ctx));
+
+  // ---- optional reduction[<kinds>](%accs : types) ----
+  SmallVector<OpAsmParser::UnresolvedOperand> redAccOps;
+  SmallVector<Type> redAccTypes;
+  if (succeeded(parser.parseOptionalKeyword("reduction"))) {
+    Attribute kindsAttr;
+    if (parser.parseLSquare())
+      return failure();
+    // Parse the array attribute (e.g. [#arts_sde<reduction_kind<add>>])
+    if (parser.parseAttribute(kindsAttr))
+      return failure();
+    if (parser.parseRSquare())
+      return failure();
+    result.addAttribute("reductionKinds", kindsAttr);
+
+    if (parser.parseLParen() || parser.parseOperandList(redAccOps) ||
+        parser.parseColon() || parser.parseTypeList(redAccTypes) ||
+        parser.parseRParen() ||
+        parser.resolveOperands(redAccOps, redAccTypes,
+                               parser.getCurrentLocation(), result.operands))
+      return failure();
+  }
+
+  // ---- optional reduction_strategy(<strategy>) ----
+  if (succeeded(parser.parseOptionalKeyword("reduction_strategy"))) {
+    SdeReductionStrategyAttr stratAttr;
+    if (parser.parseLParen() ||
+        parser.parseCustomAttributeWithFallback(stratAttr, Type{},
+                                                "reductionStrategy",
+                                                result.attributes) ||
+        parser.parseRParen())
+      return failure();
+  }
+
+  // ---- optional classification(<class>) ----
+  if (succeeded(parser.parseOptionalKeyword("classification"))) {
+    SdeStructuredClassificationAttr classAttr;
+    if (parser.parseLParen() ||
+        parser.parseCustomAttributeWithFallback(
+            classAttr, Type{}, "structuredClassification",
+            result.attributes) ||
+        parser.parseRParen())
+      return failure();
+  }
+
+  // ---- optional iter_args(%a = %init : type) -> (type) ----
+  SmallVector<OpAsmParser::Argument> iterBodyArgs;
+  SmallVector<OpAsmParser::UnresolvedOperand> iterArgOperands;
+  SmallVector<Type> iterArgTypes;
+
+  if (succeeded(parser.parseOptionalKeyword("iter_args"))) {
+    if (parser.parseLParen())
+      return failure();
+
+    if (failed(parser.parseOptionalRParen())) {
+      do {
+        OpAsmParser::Argument bodyArg;
+        OpAsmParser::UnresolvedOperand initVal;
+        if (parser.parseArgument(bodyArg) || parser.parseEqual() ||
+            parser.parseOperand(initVal))
+          return failure();
+        iterBodyArgs.push_back(bodyArg);
+        iterArgOperands.push_back(initVal);
+      } while (succeeded(parser.parseOptionalComma()));
+
+      if (parser.parseColon() || parser.parseTypeList(iterArgTypes) ||
+          parser.parseRParen())
+        return failure();
+
+      if (iterArgTypes.size() != iterArgOperands.size())
+        return parser.emitError(parser.getCurrentLocation(),
+                                "iter_args type count mismatch");
+
+      for (auto [arg, ty] : llvm::zip(iterBodyArgs, iterArgTypes))
+        arg.type = ty;
+
+      // iter_args init values go into the reductionAccumulators segment.
+      if (parser.resolveOperands(iterArgOperands, iterArgTypes,
+                                 parser.getCurrentLocation(), result.operands))
+        return failure();
+
+      SmallVector<Type> resultTypes;
+      if (parser.parseArrow() || parser.parseLParen() ||
+          parser.parseTypeList(resultTypes) || parser.parseRParen())
+        return failure();
+      result.addTypes(resultTypes);
+    }
+  }
+
+  // ---- Operand segment sizes ----
+  // Order: lowerBounds | upperBounds | steps | chunkSize? | redAccs+iterArgs
+  SmallVector<int32_t> segmentSizes = {
+      static_cast<int32_t>(numDims),
+      static_cast<int32_t>(numDims),
+      static_cast<int32_t>(numDims),
+      hasChunkSize ? 1 : 0,
+      static_cast<int32_t>(redAccOps.size() + iterArgOperands.size())};
+  result.addAttribute(
+      SdeSuIterateOp::getOperandSegmentSizeAttr(),
+      parser.getBuilder().getDenseI32ArrayAttr(segmentSizes));
+
+  // ---- Body region ----
+  // Build block arguments: numDims IV args + iter_args body args.
+  SmallVector<OpAsmParser::Argument> allBodyArgs;
+  for (unsigned i = 0; i < numDims; ++i) {
+    OpAsmParser::Argument ivArg;
+    ivArg.type = indexType;
+    allBodyArgs.push_back(ivArg);
+  }
+  for (auto &arg : iterBodyArgs)
+    allBodyArgs.push_back(arg);
+
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body, allBodyArgs,
+                         /*enableNameShadowing=*/false))
+    return failure();
+
+  if (body->empty())
+    body->push_back(new Block());
+
+  // Auto-insert empty sde.yield when body has no terminator.
+  Block &entry = body->front();
+  if (entry.empty() || !entry.back().hasTrait<OpTrait::IsTerminator>())
+    OpBuilder::atBlockEnd(&entry).create<SdeYieldOp>(result.location,
+                                                     ValueRange{});
+
+  // ---- attr-dict ----
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  return success();
+}
+
+LogicalResult SdeSuIterateOp::verify() {
+  if (getBody().empty())
+    return emitOpError() << "expects body to contain a single block";
+
+  Block &entry = getBody().front();
+
+  // Body must have a terminator (sde.yield)
+  auto yield = dyn_cast_or_null<SdeYieldOp>(entry.getTerminator());
+  if (!yield)
+    return emitOpError() << "expects body to terminate with sde.yield";
+
+  // Result count must match yield operand count
+  if (yield.getValues().size() != getNumResults())
+    return emitOpError() << "sde.yield operand count ("
+                         << yield.getValues().size()
+                         << ") does not match result count ("
+                         << getNumResults() << ")";
+
+  // When results are present, check type consistency
+  for (auto [i, pair] :
+       llvm::enumerate(llvm::zip(yield.getValues(), getResultTypes()))) {
+    auto [yielded, resultTy] = pair;
+    if (yielded.getType() != resultTy)
+      return emitOpError() << "sde.yield operand #" << i << " type ("
+                           << yielded.getType()
+                           << ") does not match result type (" << resultTy
+                           << ")";
+  }
+
+  return success();
+}
+
 SmallVector<Region *> SdeSuIterateOp::getLoopRegions() { return {&getBody()}; }
 
 std::optional<SmallVector<Value>> SdeSuIterateOp::getLoopInductionVars() {
@@ -230,11 +533,24 @@ std::optional<SmallVector<OpFoldResult>> SdeSuIterateOp::getLoopSteps() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// SdeMuTokenOp verifier (rules V1-V3 from raise-memref-to-tensor RFC §4.4).
+/// SdeMuAllocOp verifier — dynamic dim count must match `?` in result type.
+///===----------------------------------------------------------------------===///
+LogicalResult SdeMuAllocOp::verify() {
+  auto tensorTy = cast<RankedTensorType>(getTensor().getType());
+  int64_t numDynamic = tensorTy.getNumDynamicDims();
+  if (static_cast<int64_t>(getDynamicSizes().size()) != numDynamic)
+    return emitOpError() << "expects " << numDynamic
+                         << " dynamic size(s) for result type " << tensorTy
+                         << "; got " << getDynamicSizes().size();
+  return success();
+}
+
+///===----------------------------------------------------------------------===///
+/// SdeMuTokenOp verifier.
 ///===----------------------------------------------------------------------===///
 LogicalResult SdeMuTokenOp::verify() {
-  // V1: `source` is an `AnyTensor` (enforced by the TableGen operand
-  //     constraint, so no runtime check required here).
+  // `source` is an `AnyTensor` (enforced by the TableGen operand constraint,
+  // so no runtime check required here).
   auto tensorTy = llvm::dyn_cast<RankedTensorType>(getSource().getType());
   if (!tensorTy) {
     // Unranked tensor: skip rank-specific checks.
@@ -255,7 +571,7 @@ LogicalResult SdeMuTokenOp::verify() {
   if (offsets.empty())
     return success();
 
-  // V2: rank match between offsets/sizes and source tensor.
+  // Rank match between offsets/sizes and source tensor.
   int64_t rank = tensorTy.getRank();
   if (static_cast<int64_t>(offsets.size()) != rank) {
     return emitOpError()
@@ -263,8 +579,8 @@ LogicalResult SdeMuTokenOp::verify() {
            << ") to match source tensor rank (" << rank << ")";
   }
 
-  // V3: static sizes must be non-negative; when both offset and size are
-  //     constants for a dimension, offset + size <= source_dim.
+  // Static sizes must be non-negative; when both offset and size are constants
+  // for a dimension, offset + size <= source_dim.
   auto shape = tensorTy.getShape();
   for (int64_t i = 0; i < rank; ++i) {
     APInt sizeVal;
@@ -297,16 +613,12 @@ LogicalResult SdeMuTokenOp::verify() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// SdeCuCodeletOp verifier (rules V4-V11 from raise-memref-to-tensor RFC §4.4).
-///
-/// Deferred: V12 (single-use token) — follow-up pattern, not a trait.
-/// Automatic: V13 (no captures) — enforced by IsolatedFromAbove trait.
+/// SdeCuCodeletOp verifier.
 ///===----------------------------------------------------------------------===///
 LogicalResult SdeCuCodeletOp::verify() {
   auto tokens = getTokens();
 
-  // V4: every operand is a `!sde.token<Ti>` for ranked Ti.
-  //     (The variadic operand type is SdeTokenType, so the dyn_cast suffices.)
+  // Every operand must be `!sde.token<Ti>` for ranked Ti.
   SmallVector<TokenType> tokenTypes;
   tokenTypes.reserve(tokens.size());
   for (auto token : tokens) {
@@ -317,13 +629,12 @@ LogicalResult SdeCuCodeletOp::verify() {
     tokenTypes.push_back(tt);
   }
 
-  // V5: body has exactly one block. Enforced by SingleBlock trait already,
-  //     but SizedRegion<1> only checks block count; make sure a block exists.
+  // Body has exactly one block.
   if (getBody().empty())
     return emitOpError() << "expects body to contain a single block";
   Block &entry = getBody().front();
 
-  // V6: block-arg count == operand count; block-arg types == token slice_type.
+  // Block-arg count == operand count; block-arg types == token slice_type.
   if (entry.getNumArguments() != tokens.size()) {
     return emitOpError() << "expects " << tokens.size()
                          << " block argument(s) (one per token); got "
@@ -339,7 +650,7 @@ LogicalResult SdeCuCodeletOp::verify() {
     }
   }
 
-  // Collect writable (write / readwrite) tokens for V7-V10.
+  // Collect writable (write / readwrite) tokens.
   SmallVector<unsigned> writableIndices;
   unsigned readOnlyCount = 0;
   for (auto [idx, token] : llvm::enumerate(tokens)) {
@@ -360,19 +671,18 @@ LogicalResult SdeCuCodeletOp::verify() {
   }
   (void)readOnlyCount;
 
-  // V7: result count equals writable-token count.
+  // Result count equals writable-token count.
   if (getOutputs().size() != writableIndices.size()) {
     return emitOpError()
            << "expects one result per writable token: got "
            << getOutputs().size() << " result(s) and "
            << writableIndices.size()
            << " writable (write / readwrite) token(s); a <read> token must "
-              "not have a yielded counterpart (RFC §4.4 V10)";
+              "not have a yielded counterpart";
   }
 
-  // V8: terminator is sde.yield; operand count matches result count; types
-  //     match the matching writable token's slice_type (destination-passing
-  //     style).
+  // Terminator is sde.yield; operand count matches result count; types match
+  // the writable token's slice_type (destination-passing style).
   auto yield = llvm::dyn_cast_or_null<SdeYieldOp>(entry.getTerminator());
   if (!yield)
     return emitOpError() << "expects body to terminate with sde.yield";
@@ -392,8 +702,8 @@ LogicalResult SdeCuCodeletOp::verify() {
              << ")";
     }
 
-    // V9: the result type matches the parent tensor type of the writable
-    //     token's producer (mu_token source).
+    // The result type matches the parent tensor type of the writable token's
+    // producer (mu_token source).
     auto muToken = tokens[writableIdx].getDefiningOp<SdeMuTokenOp>();
     if (muToken) {
       Type parentTy = muToken.getSource().getType();
@@ -406,9 +716,8 @@ LogicalResult SdeCuCodeletOp::verify() {
     }
   }
 
-  // V11: best-effort check for conflicting modes on statically-overlapping
-  //      slices of the same source tensor. Non-constant slices are delegated
-  //      to runtime analysis.
+  // Best-effort check for conflicting modes on statically-overlapping slices
+  // of the same source tensor. Non-constant slices are delegated to runtime.
   auto modeKind = [](SdeAccessMode m) {
     // 0 = read, 1 = write-ish (write or readwrite).
     return (m == SdeAccessMode::read) ? 0 : 1;
@@ -473,13 +782,12 @@ LogicalResult SdeCuCodeletOp::verify() {
         return emitOpError()
                << "tokens #" << i << " and #" << j
                << " have conflicting access modes on statically-overlapping "
-                  "slices of the same source tensor (RFC §4.4 V11)";
+                  "slices of the same source tensor";
       }
     }
   }
 
-  // Deferred: V12 single-use token. Will be enforced by a dedicated pattern
-  // in a follow-up; see raise-memref-to-tensor-rfc.md §4.4.
+  // TODO: single-use token enforcement (dedicated pattern, not a verifier).
   return success();
 }
 

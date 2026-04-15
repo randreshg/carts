@@ -6,6 +6,7 @@
 
 #include "arts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "arts/dialect/sde/Transforms/Passes.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/StencilAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/costs/SDECostModel.h"
@@ -91,7 +92,7 @@ struct StructuredSummariesPass
           depDistances.push_back(
               std::max(std::abs(minOff), std::abs(maxOff)));
         }
-        op->setAttr("sde.dep_distances",
+        op->setAttr(AttrNames::Operation::Sde::DepDistances,
                      buildI64ArrayAttr(op.getContext(), depDistances));
 
         // Phase 14: Stamp data reuse footprint (stencil path)
@@ -115,7 +116,7 @@ struct StructuredSummariesPass
           });
 
           if (totalFootprintBytes > 0) {
-            op->setAttr("sde.reuse_footprint_bytes",
+            op->setAttr(AttrNames::Operation::Sde::ReuseFootprintBytes,
                         IntegerAttr::get(IndexType::get(&getContext()),
                                          totalFootprintBytes));
           }
@@ -144,7 +145,7 @@ struct StructuredSummariesPass
           }
 
           if (inPlaceSafe) {
-            op->setAttr("in_place_safe", UnitAttr::get(op.getContext()));
+            op->setAttr(AttrNames::Operation::InPlaceSafe, UnitAttr::get(op.getContext()));
           }
         }
 
@@ -156,7 +157,7 @@ struct StructuredSummariesPass
       {
         unsigned numDims = op.getLowerBounds().size();
         SmallVector<int64_t> zeroDistances(numDims, 0);
-        op->setAttr("sde.dep_distances",
+        op->setAttr(AttrNames::Operation::Sde::DepDistances,
                      buildI64ArrayAttr(op.getContext(), zeroDistances));
       }
 
@@ -175,10 +176,10 @@ struct StructuredSummariesPass
           return WalkResult::interrupt();
         });
 
-        op->setAttr("sde.vectorize_width",
+        op->setAttr(AttrNames::Operation::Sde::VectorizeWidth,
                      IntegerAttr::get(IndexType::get(&getContext()),
                                       vectorWidth));
-        op->setAttr("sde.unroll_factor",
+        op->setAttr(AttrNames::Operation::Sde::UnrollFactor,
                      IntegerAttr::get(IndexType::get(&getContext()), 2));
       }
 
@@ -204,7 +205,7 @@ struct StructuredSummariesPass
         });
 
         if (totalFootprintBytes > 0) {
-          op->setAttr("sde.reuse_footprint_bytes",
+          op->setAttr(AttrNames::Operation::Sde::ReuseFootprintBytes,
                       IntegerAttr::get(IndexType::get(&getContext()),
                                        totalFootprintBytes));
         }
@@ -237,7 +238,7 @@ struct StructuredSummariesPass
         }
 
         if (inPlaceSafe) {
-          op->setAttr("in_place_safe", UnitAttr::get(op.getContext()));
+          op->setAttr(AttrNames::Operation::InPlaceSafe, UnitAttr::get(op.getContext()));
         }
       }
 

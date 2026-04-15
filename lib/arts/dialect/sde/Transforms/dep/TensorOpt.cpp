@@ -16,6 +16,7 @@ namespace mlir::arts {
 } // namespace mlir::arts
 
 #include "arts/utils/LoopUtils.h"
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/costs/SDECostModel.h"
 
@@ -180,7 +181,8 @@ buildPerDimTileIterations(OpBuilder &builder, Location loc,
 }
 
 static bool isCarrierOp(Operation &op) {
-  return isa<bufferization::ToTensorOp, tensor::EmptyOp, linalg::GenericOp>(op);
+  return isa<bufferization::ToTensorOp, sde::SdeMuMemrefToTensorOp,
+             tensor::EmptyOp, linalg::GenericOp>(op);
 }
 
 static bool isScalarExecutableOp(Operation &op) {
@@ -463,9 +465,9 @@ struct TensorOptPass
 
     SmallVector<std::pair<sde::SdeSuIterateOp, linalg::GenericOp>> rewrites;
     getOperation().walk([&](sde::SdeSuIterateOp op) {
-      Block &body = op.getBody().front();
-      linalg::GenericOp tensorGeneric = findTensorCarrier(body);
-      if (!isTensorOptimizationCandidate(op, body, tensorGeneric))
+      Block *body = sde::getSuIterateComputeBlock(op);
+      linalg::GenericOp tensorGeneric = findTensorCarrier(*body);
+      if (!isTensorOptimizationCandidate(op, *body, tensorGeneric))
         return;
 
       std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
@@ -497,9 +499,9 @@ struct TensorOptPass
         continue;
 
       // Find the reduction scf.for loop to get trip count.
-      Block &body = op.getBody().front();
+      Block *body = sde::getSuIterateComputeBlock(op);
       scf::ForOp reductionLoop;
-      for (Operation &bodyOp : body.without_terminator()) {
+      for (Operation &bodyOp : body->without_terminator()) {
         if (isCarrierOp(bodyOp))
           continue;
         if (auto forOp = dyn_cast<scf::ForOp>(bodyOp))
@@ -542,7 +544,7 @@ struct TensorOptPass
         continue;
 
       // Stamp the split factor for downstream visibility.
-      op->setAttr("sde.reduction_split_factor",
+      op->setAttr(AttrNames::Operation::Sde::ReductionSplitFactor,
                   IntegerAttr::get(IndexType::get(op.getContext()),
                                    splitFactor));
     }
@@ -645,7 +647,8 @@ struct TensorOptPass
         continue;
 
       auto newOp = sde::SdeSuIterateOp::create(
-          rewriter, loc, op.getLowerBounds(), op.getUpperBounds(),
+          rewriter, loc, /*resultTypes=*/TypeRange{},
+          op.getLowerBounds(), op.getUpperBounds(),
           ValueRange{tiledSteps}, op.getScheduleAttr(), op.getChunkSize(),
           op.getNowaitAttr(), op.getReductionAccumulators(),
           op.getReductionKindsAttr(), op.getReductionStrategyAttr(),
@@ -665,6 +668,7 @@ struct TensorOptPass
       // Reduction dims pass through directly (no tiling).
       IRMapping mapper;
       Block &srcBody = op.getBody().front();
+      Block *computeBody = sde::getSuIterateComputeBlock(op);
       for (unsigned d = 0; d < numDims; ++d) {
         Value tileBase = newBody.getArgument(d);
         if (!parallelMask[d]) {
@@ -684,7 +688,7 @@ struct TensorOptPass
       }
 
       // Clone scalar body into the innermost tile loop.
-      cloneScalarBodyIntoTileLoop(srcBody, mapper, rewriter);
+      cloneScalarBodyIntoTileLoop(*computeBody, mapper, rewriter);
 
       // Yield at the end of the su_iterate body (not inside nested loops).
       rewriter.setInsertionPointToEnd(&newBody);
@@ -705,8 +709,8 @@ struct TensorOptPass
               sde::SdeStructuredClassification::elementwise_pipeline)
         return;
 
-      Block &body = op.getBody().front();
-      linalg::GenericOp carrier = findTensorCarrier(body);
+      Block *body = sde::getSuIterateComputeBlock(op);
+      linalg::GenericOp carrier = findTensorCarrier(*body);
       if (!carrier)
         return;
 
@@ -798,7 +802,7 @@ struct TensorOptPass
 
       // Replace carrier results and stamp attribute.
       rewriter.replaceOp(carrier, result->results);
-      op->setAttr("sde.collapsed_dims",
+      op->setAttr(AttrNames::Operation::Sde::CollapsedDims,
                   IntegerAttr::get(IndexType::get(op.getContext()),
                                    collapsibleDims.size()));
     });
@@ -818,8 +822,8 @@ struct TensorOptPass
               sde::SdeStructuredClassification::elementwise_pipeline)
         return;
 
-      Block &body = op.getBody().front();
-      linalg::GenericOp carrier = findTensorCarrier(body);
+      Block *body = sde::getSuIterateComputeBlock(op);
+      linalg::GenericOp carrier = findTensorCarrier(*body);
       if (!carrier || carrier.getNumDpsInits() == 0)
         return;
 
@@ -866,7 +870,7 @@ struct TensorOptPass
         operand.set(expandOp.getResult());
       }
 
-      op->setAttr("sde.expand_tile_size",
+      op->setAttr(AttrNames::Operation::Sde::ExpandTileSize,
                   IntegerAttr::get(IndexType::get(op.getContext()), tileSize));
     });
 
@@ -878,8 +882,8 @@ struct TensorOptPass
           *classification != sde::SdeStructuredClassification::matmul)
         return;
 
-      Block &body = op.getBody().front();
-      linalg::GenericOp carrier = findTensorCarrier(body);
+      Block *body = sde::getSuIterateComputeBlock(op);
+      linalg::GenericOp carrier = findTensorCarrier(*body);
       if (!carrier)
         return;
 
@@ -908,7 +912,7 @@ struct TensorOptPass
       if (failed(packResult))
         return;
 
-      op->setAttr("sde.packed_tile",
+      op->setAttr(AttrNames::Operation::Sde::PackedTile,
                   IntegerAttr::get(IndexType::get(op.getContext()),
                                    tileFactor));
     });

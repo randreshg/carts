@@ -151,6 +151,16 @@ struct DistributionPlanningPass
     });
 
     for (PlannedDistribution rewrite : rewrites) {
+      if (rewrite.op.getNumResults() > 0) {
+        // su_iterate with iter_arg results: can't wrap in su_distribute
+        // (NoTerminator op can't forward results). Stamp distribution kind
+        // directly on the su_iterate — SuIterateToArtsPattern reads it.
+        rewrite.op->setAttr(
+            "distributionKind",
+            sde::SdeDistributionKindAttr::get(&getContext(), rewrite.kind));
+        continue;
+      }
+
       IRRewriter rewriter(rewrite.op.getContext());
       rewriter.setInsertionPoint(rewrite.op);
 

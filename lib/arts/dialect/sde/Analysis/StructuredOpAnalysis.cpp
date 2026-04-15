@@ -65,6 +65,19 @@ static bool collectInner(Block &body, LoopNestInfo &info) {
   return true;
 }
 
+static Block &getComputeBlock(Block &body) {
+  // Delegate to the shared helper that looks through cu_region <parallel>.
+  // We need the SdeSuIterateOp to call the shared helper, but this function
+  // is called from contexts where we only have the block. Inline the same
+  // logic to avoid changing all callers.
+  for (Operation &inner : body.without_terminator()) {
+    if (auto cuRegion = dyn_cast<SdeCuRegionOp>(inner);
+        cuRegion && cuRegion.getKind() == SdeCuKind::parallel)
+      return cuRegion.getBody().front();
+  }
+  return body;
+}
+
 static bool collectPerfectNest(SdeSuIterateOp iterOp, LoopNestInfo &info) {
   info.rootIterOp = iterOp;
 
@@ -73,7 +86,7 @@ static bool collectPerfectNest(SdeSuIterateOp iterOp, LoopNestInfo &info) {
     return false;
 
   llvm::append_range(info.ivs, region.front().getArguments());
-  return collectInner(region.front(), info);
+  return collectInner(getComputeBlock(region.front()), info);
 }
 
 static std::optional<AffineExpr>

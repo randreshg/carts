@@ -22,7 +22,10 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/IRMapping.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -105,10 +108,13 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
                           ArrayRef<sde::MemrefAccessEntry> reads,
                           ArrayRef<sde::MemrefAccessEntry> writes,
                           ArrayRef<utils::IteratorType> iterTypes) {
-  Block &rootBody = iterOp.getBody().front();
-  auto oldYield = dyn_cast<sde::SdeYieldOp>(rootBody.getTerminator());
-  if (!oldYield)
+  Block *computeBody = sde::getSuIterateComputeBlock(iterOp);
+  // Find the yield terminator in the compute block (inside cu_region if
+  // present, otherwise the su_iterate body directly).
+  Operation *terminator = computeBody->getTerminator();
+  if (!terminator || !isa<sde::SdeYieldOp>(terminator))
     return false;
+  auto oldYield = cast<sde::SdeYieldOp>(terminator);
 
   Location loc = iterOp.getLoc();
 
@@ -150,26 +156,42 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
 
   OpBuilder builder(oldYield);
 
-  SmallVector<Value> inputMemrefs;
-  SmallVector<Value> outputMemrefs;
   SmallVector<AffineMap> indexingMaps;
-  inputMemrefs.reserve(inputs.size());
-  outputMemrefs.reserve(outputs.size());
   indexingMaps.reserve(inputs.size() + outputs.size());
 
+  // Build tensor-backed inputs via bufferization.to_tensor.
+  SmallVector<Value> tensorInputs;
+  tensorInputs.reserve(inputs.size());
   for (const InputOperand &input : inputs) {
-    inputMemrefs.push_back(input.memref);
+    auto mrType = cast<MemRefType>(input.memref.getType());
+    auto tensorTy =
+        RankedTensorType::get(mrType.getShape(), mrType.getElementType());
+    Value tensor = bufferization::ToTensorOp::create(builder, loc, tensorTy,
+                                                     input.memref);
+    tensorInputs.push_back(tensor);
     indexingMaps.push_back(input.indexingMap);
   }
 
+  // Build tensor-backed outputs via bufferization.to_tensor (conservative —
+  // ConvertSdeToArts handles erasure of unused carriers).
+  SmallVector<Value> tensorOutputs;
+  SmallVector<Type> resultTypes;
+  tensorOutputs.reserve(outputs.size());
   for (const auto &output : outputs) {
-    outputMemrefs.push_back(output.memref);
+    auto mrType = cast<MemRefType>(output.memref.getType());
+    auto tensorTy =
+        RankedTensorType::get(mrType.getShape(), mrType.getElementType());
+    Value tensor = bufferization::ToTensorOp::create(builder, loc, tensorTy,
+                                                     output.memref);
+    tensorOutputs.push_back(tensor);
+    resultTypes.push_back(tensorTy);
     indexingMaps.push_back(output.indexingMap);
   }
 
   bool cloneFailed = false;
   auto generic = linalg::GenericOp::create(
-      builder, loc, inputMemrefs, outputMemrefs, indexingMaps, iterTypes,
+      builder, loc, resultTypes, tensorInputs, tensorOutputs, indexingMaps,
+      iterTypes,
       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
         IRMapping mapper;
         for (auto [inputIdx, input] : llvm::enumerate(inputs)) {

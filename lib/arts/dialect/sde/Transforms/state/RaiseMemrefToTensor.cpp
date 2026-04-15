@@ -1,10 +1,9 @@
 ///==========================================================================///
 /// File: RaiseMemrefToTensor.cpp
 ///
-/// v1 implementation of the RaiseMemrefToTensor pass described in
-/// docs/compiler/raise-memref-to-tensor-rfc.md §5.
+/// RaiseMemrefToTensor pass — lifts small memref allocas into tensor SSA.
 ///
-/// Scope (v1):
+/// Scope:
 ///   - memref.alloca producing memref<KxT> with small constant K (K <= 16).
 ///   - Accesses inside sde.cu_task bodies are constant-indexed
 ///     memref.load / memref.store / affine.load / affine.store only.
@@ -13,7 +12,7 @@
 ///   - memref.cast is tolerated only when its uses outside cu_task bodies are
 ///     limited to sde.mu_dep (which this pass erases).
 ///
-/// High-level algorithm (see RFC §5.1 and §9):
+/// High-level algorithm:
 ///
 ///   1. Collect raisable memrefs (allocas with rank-1 static shape K<=16,
 ///      constant-indexed task accesses, limited external uses).
@@ -38,7 +37,7 @@
 ///      alloca. This preserves observable-equivalence for any non-raised
 ///      post-scope reader of the memref.
 ///
-/// Out of scope for v1 (see RFC §5.2 and §10 for v2/v3 plans):
+/// Out of scope for v1:
 ///   - Slice-access patterns (`memref.subview` etc.).
 ///   - Dynamic-ranked memrefs.
 ///   - Threading through scf.for / scf.while / scf.if iter_args.
@@ -50,6 +49,7 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -634,7 +634,8 @@ struct RaiseMemrefToTensorPass
       // tensor DB back to this user-visible memref; if the alloca were sunk,
       // the sink would redirect the boundary store to a local EDT-private
       // alloca and post-region readers would still see the initial contents.
-      alloca->setAttr("arts.preserve", UnitAttr::get(alloca.getContext()));
+      alloca->setAttr(AttrNames::Operation::Preserve,
+                      UnitAttr::get(alloca.getContext()));
     }
 
     // ---- Erase mu_dep ops for raised memrefs. ------------------------------

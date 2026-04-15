@@ -140,7 +140,7 @@ constexpr StringLiteral NarrowableDep = "narrowable_dep";
 constexpr StringLiteral ContractKindKey = "contract_kind";
 } // namespace Contract
 
-/// Structured kernel plan attributes (Phase 0 constants, RFC Section 5.1)
+/// Structured kernel plan attributes.
 namespace Plan {
 using namespace llvm;
 constexpr StringLiteral KernelFamily = "arts.plan.kernel_family";
@@ -170,7 +170,7 @@ constexpr StringLiteral WaveIndex = "arts.orch.wave_index";
 constexpr StringLiteral WaveCount = "arts.orch.wave_count";
 } // namespace Orchestration
 
-/// Split launch state attributes (Phase 0 constants, RFC Section 5.2)
+/// Split launch state attributes.
 namespace LaunchState {
 using namespace llvm;
 constexpr StringLiteral StateSchema = "arts.launch.state_schema";
@@ -179,7 +179,7 @@ constexpr StringLiteral StateSchemaVersion = "arts.launch.state_schema_version";
 constexpr StringLiteral DepSchemaVersion = "arts.launch.dep_schema_version";
 } // namespace LaunchState
 
-/// Proof-driven ownership attributes (Phase 0 constants, RFC Section 5.3)
+/// Proof-driven ownership attributes.
 namespace Proof {
 using namespace llvm;
 constexpr StringLiteral OwnerDimReachability =
@@ -201,6 +201,28 @@ constexpr llvm::StringLiteral RepeatedWaveGroup = "repeated_wave_group";
 /// Block-loop strip-mining marker attribute.
 constexpr llvm::StringLiteral StripMiningGenerated =
     "arts.block_loop_strip_mining.generated";
+
+/// Marks allocas that bridge raised tensor DBs back to user-visible memrefs.
+constexpr llvm::StringLiteral Preserve = "arts.preserve";
+
+/// Marks barriers that have been proven redundant by SdeBarrierElimination.
+constexpr llvm::StringLiteral BarrierEliminated = "barrier_eliminated";
+
+/// Marks operations whose input/output can safely alias (in-place update).
+constexpr llvm::StringLiteral InPlaceSafe = "in_place_safe";
+
+/// SDE-specific semantic attributes stamped by SDE transforms.
+namespace Sde {
+using namespace llvm;
+constexpr StringLiteral DepDistances = "sde.dep_distances";
+constexpr StringLiteral ReuseFootprintBytes = "sde.reuse_footprint_bytes";
+constexpr StringLiteral VectorizeWidth = "sde.vectorize_width";
+constexpr StringLiteral UnrollFactor = "sde.unroll_factor";
+constexpr StringLiteral ReductionSplitFactor = "sde.reduction_split_factor";
+constexpr StringLiteral CollapsedDims = "sde.collapsed_dims";
+constexpr StringLiteral ExpandTileSize = "sde.expand_tile_size";
+constexpr StringLiteral PackedTile = "sde.packed_tile";
+} // namespace Sde
 
 } // namespace Operation
 

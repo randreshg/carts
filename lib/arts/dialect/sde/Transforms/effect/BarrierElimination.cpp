@@ -13,6 +13,7 @@ namespace mlir::arts {
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
+#include "arts/utils/OperationAttributes.h"
 #include "arts/utils/ValueAnalysis.h"
 #include "arts/utils/costs/SDECostModel.h"
 
@@ -138,7 +139,7 @@ struct BarrierEliminationPass
 
       if (areSetsDisjoint(predWrites, succReads)) {
         double syncCost = costModel ? costModel->getTaskSyncCost() : 0.0;
-        barrier->setAttr("barrier_eliminated",
+        barrier->setAttr(AttrNames::Operation::BarrierEliminated,
                          UnitAttr::get(barrier.getContext()));
         eliminated++;
         ARTS_DEBUG("Eliminated barrier (sync cost: " << syncCost << ")");

@@ -342,7 +342,8 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     }
 
     auto suIter = sde::SdeSuIterateOp::create(
-        rewriter, loc, ValueRange{lbs}, ValueRange{ubs}, ValueRange{steps},
+        rewriter, loc, /*resultTypes=*/TypeRange{},
+        ValueRange{lbs}, ValueRange{ubs}, ValueRange{steps},
         schedAttr, chunkSize, nowaitAttr(ctx, nw), ValueRange{redAccs},
         reductionKinds.empty() ? nullptr
                                : rewriter.getArrayAttr(reductionKinds),
@@ -376,8 +377,24 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
       mapper.map(oldArg, newArg);
     }
     mapWsloopCapturedArgs(op, mapper);
+
+    // Wrap cloned body ops in cu_region <parallel> so downstream passes
+    // see a uniform cu_region→su_iterate→cu_region nesting.
+    auto innerCuRegion = sde::SdeCuRegionOp::create(
+        rewriter, loc, /*resultTypes=*/TypeRange{},
+        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
+        /*concurrency_scope=*/nullptr,
+        /*nowait=*/nullptr,
+        /*iterArgs=*/ValueRange{});
+    Block &innerBlk = sde::ensureBlock(innerCuRegion.getBody());
+    OpBuilder::InsertionGuard IG2(rewriter);
+    rewriter.setInsertionPointToStart(&innerBlk);
     for (Operation &srcOp : src.without_terminator())
       rewriter.clone(srcOp, mapper);
+    sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
+
+    // Yield at su_iterate level (outside cu_region).
+    rewriter.setInsertionPointAfter(innerCuRegion);
     sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
 
     // Barrier if not nowait and work follows
@@ -460,7 +477,8 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
     Value step = ensureIndex(rewriter, loc, loopNest.getLoopSteps()[0]);
 
     auto suIter = sde::SdeSuIterateOp::create(
-        rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{step},
+        rewriter, loc, /*resultTypes=*/TypeRange{},
+        ValueRange{lb}, ValueRange{ub}, ValueRange{step},
         /*schedule=*/nullptr, /*chunkSize=*/Value(),
         /*nowait=*/nullptr,
         /*reductionAccumulators=*/ValueRange{},
@@ -523,7 +541,8 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
     Value st = ensureIndex(rewriter, loc, op.getStep().front());
 
     auto suIter = sde::SdeSuIterateOp::create(
-        rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{st},
+        rewriter, loc, /*resultTypes=*/TypeRange{},
+        ValueRange{lb}, ValueRange{ub}, ValueRange{st},
         /*schedule=*/nullptr, /*chunkSize=*/Value(),
         /*nowait=*/nullptr,
         /*reductionAccumulators=*/ValueRange{},
