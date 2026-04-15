@@ -51,25 +51,29 @@ the resulting SDE decisions after `ConvertSdeToArts`.
 
 ## Carrier Model
 
-The branch uses a carrier model, not a replacement model.
+The branch uses a **carrier-authoritative** model for elementwise, matmul, and
+reduction patterns. `arts_sde.su_iterate` remains the authoritative SDE
+scheduling op, but the `linalg.generic` carrier inside it is now the
+**source of truth for computation** — the scalar `memref.load/store` body is
+erased by RaiseToLinalg after creating the carrier.
 
-`arts_sde.su_iterate` remains the authoritative SDE scheduling op. The pass
-sequence may attach one of two transient structured carriers inside that loop:
+After RaiseToLinalg, downstream passes operate on the carrier directly:
 
-- a memref-backed `linalg.generic`
-- a tensor-backed `linalg.generic`
+- **LoopInterchange**: permutes carrier dims via `linalg::interchangeGenericOp()`
+- **Tiling**: tiles the carrier via `extract_slice` → tiled `linalg.generic` → `insert_slice`
+- **ElementwiseFusion**: reads carrier DPS outputs to determine write-set disjointness
+- **BarrierElimination**: reads carrier DPS inputs/outputs for read/write set analysis
 
-After RaiseToTensor, tensor SSA is the authoritative representation inside
-SDE regions. The carrier makes structure explicit enough for SDE-local
-analysis and transform passes. LowerToMemref restores memref form before
-ConvertSdeToArts, which consumes the recovered contract data and stamps it
-onto the lowered ARTS ops.
+Each pass has a fallback path that walks `memref.load/store` for dual-rep or
+stencil bodies (stencils have no carrier yet). LowerToMemref restores memref
+form before ConvertSdeToArts, which consumes the recovered contract data and
+stamps it onto the lowered ARTS ops.
 
 This is why the current design preserves both properties at once:
 
 - SDE scheduling semantics stay on `arts_sde.su_iterate`.
-- Structured compute semantics become visible to SDE passes through transient
-  linalg and tensor IR.
+- Structured compute semantics are expressed through the authoritative
+  linalg/tensor carrier, which downstream passes transform directly.
 
 ## `RaiseToLinalg`
 
