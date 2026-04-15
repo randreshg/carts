@@ -9,6 +9,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/SmallBitVector.h"
 
@@ -183,6 +184,30 @@ static bool collectMemrefAccessesImpl(Block &body, ArrayRef<Value> ivs,
         return false;
       writes.push_back({storeOp.getMemref(), *map, storeOp.getOperation(),
                         /*isRead=*/false});
+      sawAccess = true;
+      continue;
+    }
+
+    if (auto extractOp = dyn_cast<tensor::ExtractOp>(&op)) {
+      // Skip extracts that return tensor values (nested tensor types).
+      if (isa<TensorType>(extractOp.getResult().getType()))
+        continue;
+
+      auto map = tryBuildIndexingMap(extractOp.getIndices(), ivs, ctx);
+      if (!map)
+        return false;
+      reads.push_back({extractOp.getTensor(), *map,
+                       extractOp.getOperation(), /*isRead=*/true});
+      sawAccess = true;
+      continue;
+    }
+
+    if (auto insertOp = dyn_cast<tensor::InsertOp>(&op)) {
+      auto map = tryBuildIndexingMap(insertOp.getIndices(), ivs, ctx);
+      if (!map)
+        return false;
+      writes.push_back({insertOp.getDest(), *map,
+                        insertOp.getOperation(), /*isRead=*/false});
       sawAccess = true;
       continue;
     }

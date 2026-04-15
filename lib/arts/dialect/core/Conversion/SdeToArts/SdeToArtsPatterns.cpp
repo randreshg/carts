@@ -28,8 +28,6 @@ namespace mlir::arts {
 #include "arts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
-#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
@@ -147,88 +145,10 @@ convertDistributionKind(sde::SdeDistributionKindAttr kind) {
 }
 
 //===----------------------------------------------------------------------===//
-// Linalg-derived contract classification helpers
+// SDE contract classification helpers
 //===----------------------------------------------------------------------===//
 
-// StructuredNeighborhoodSummary, AffineDimOffset, extractDimOffset, and
-// hasConstantOffsets are provided by StructuredOpAnalysis.h.
 using StructuredNeighborhoodSummary = sde::StructuredNeighborhoodInfo;
-
-/// Recover a structured neighborhood summary from linalg.generic read maps.
-static std::optional<StructuredNeighborhoodSummary>
-extractNeighborhoodSummaryFromLinalg(linalg::GenericOp generic) {
-  unsigned numLoops = generic.getNumLoops();
-  if (numLoops == 0)
-    return std::nullopt;
-
-  auto maps = generic.getIndexingMapsArray();
-  StructuredNeighborhoodSummary info;
-  info.minOffsets.assign(numLoops, 0);
-  info.maxOffsets.assign(numLoops, 0);
-  info.writeFootprint.assign(numLoops, 1);
-  for (unsigned dim = 0; dim < numLoops; ++dim) {
-    info.ownerDims.push_back(dim);
-    info.spatialDims.push_back(dim);
-  }
-
-  bool sawNeighborhoodOffset = false;
-  for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs();
-       ++inputIdx) {
-    AffineMap map = maps[inputIdx];
-    for (AffineExpr result : map.getResults()) {
-      auto dimOffset = sde::extractDimOffset(result);
-      if (!dimOffset || !dimOffset->dim)
-        continue;
-
-      unsigned dim = *dimOffset->dim;
-      if (dim >= numLoops)
-        continue;
-
-      info.minOffsets[dim] = std::min(info.minOffsets[dim], dimOffset->offset);
-      info.maxOffsets[dim] = std::max(info.maxOffsets[dim], dimOffset->offset);
-      sawNeighborhoodOffset |= dimOffset->offset != 0;
-    }
-  }
-
-  if (!sawNeighborhoodOffset)
-    return std::nullopt;
-  return info;
-}
-
-/// Merge two neighborhood summaries across multiple linalg.generic ops.
-static void mergeNeighborhoodSummary(StructuredNeighborhoodSummary &dst,
-                                     const StructuredNeighborhoodSummary &src) {
-  if (dst.minOffsets.empty()) {
-    dst = src;
-    return;
-  }
-
-  if (dst.minOffsets.size() != src.minOffsets.size())
-    return;
-
-  for (auto [idx, minOffset] : llvm::enumerate(src.minOffsets))
-    dst.minOffsets[idx] = std::min(dst.minOffsets[idx], minOffset);
-  for (auto [idx, maxOffset] : llvm::enumerate(src.maxOffsets))
-    dst.maxOffsets[idx] = std::max(dst.maxOffsets[idx], maxOffset);
-}
-
-/// Recover an already-materialized neighborhood summary from an op.
-static std::optional<StructuredNeighborhoodSummary>
-getStampedNeighborhoodSummary(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (!getStencilMinOffsets(op) || !getStencilMaxOffsets(op) ||
-      !getStencilOwnerDims(op) || !getStencilWriteFootprint(op))
-    return std::nullopt;
-
-  StructuredNeighborhoodSummary info;
-  info.ownerDims = *getStencilOwnerDims(op);
-  info.spatialDims = getStencilSpatialDims(op).value_or(info.ownerDims);
-  info.minOffsets = *getStencilMinOffsets(op);
-  info.maxOffsets = *getStencilMaxOffsets(op);
-  info.writeFootprint = *getStencilWriteFootprint(op);
-  return info;
-}
 
 static std::optional<StructuredNeighborhoodSummary>
 getSdeNeighborhoodSummary(sde::SdeSuIterateOp op) {
@@ -268,41 +188,6 @@ getSdeNeighborhoodSummary(sde::SdeSuIterateOp op) {
   else
     info.spatialDims = info.ownerDims;
   return info;
-}
-
-/// Classify a linalg.generic directly from its iterator structure.
-static std::optional<ArtsDepPattern>
-classifyFromLinalg(linalg::GenericOp generic) {
-  auto iterTypes = generic.getIteratorTypesArray();
-  if (iterTypes.empty())
-    return std::nullopt;
-
-  bool allParallel = llvm::all_of(iterTypes, [](utils::IteratorType type) {
-    return type == utils::IteratorType::parallel;
-  });
-  if (allParallel) {
-    auto maps = generic.getIndexingMapsArray();
-    for (unsigned inputIdx = 0; inputIdx < generic.getNumDpsInputs();
-         ++inputIdx) {
-      if (sde::hasConstantOffsets(maps[inputIdx]))
-        return ArtsDepPattern::stencil_tiling_nd;
-    }
-    return ArtsDepPattern::uniform;
-  }
-
-  unsigned numParallel = 0, numReduction = 0;
-  for (utils::IteratorType type : iterTypes) {
-    if (type == utils::IteratorType::parallel)
-      ++numParallel;
-    else
-      ++numReduction;
-  }
-
-  if (numParallel == 2 && numReduction == 1 && iterTypes.size() == 3 &&
-      generic.getNumDpsInputs() >= 2 && generic.getNumDpsInits() >= 1)
-    return ArtsDepPattern::matmul;
-
-  return std::nullopt;
 }
 
 /// Stamp a simple (non-stencil) pattern contract on an op.
@@ -518,10 +403,8 @@ struct SuDistributeToArtsPattern
 };
 
 /// sde.su_iterate -> arts.for
-/// If the body contains transient linalg.generic carriers from RaiseToLinalg,
-/// derive and stamp the matching contract from them. Otherwise, fall back to
-/// the classification stamped on the source sde.su_iterate. The transient
-/// carriers are erased after stamping so downstream passes keep the loop/memref
+/// Reads the SDE classification attrs stamped by StructuredSummaries and
+/// stamps the matching ARTS contract on the resulting arts.for. The loop/memref
 /// IR shape.
 struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -603,82 +486,10 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       YieldOp::create(rewriter, loc);
     }
 
-    SmallVector<linalg::GenericOp> linalgGenerics;
-    artsFor.getRegion().walk(
-        [&](linalg::GenericOp generic) { linalgGenerics.push_back(generic); });
-
-    linalg::GenericOp contractSource;
+    // Route 1: Read stamped SDE classification attrs.
     std::optional<ArtsDepPattern> selectedPattern;
     std::optional<StructuredNeighborhoodSummary> selectedStencilContract;
     int64_t selectedRevision = 1;
-    bool selectedFromExplicitContract = false;
-
-    auto considerLinalgContract = [&](linalg::GenericOp generic) {
-      std::optional<ArtsDepPattern> candidatePattern;
-      bool fromExplicitContract = false;
-
-      if (auto depPattern = getDepPattern(generic.getOperation());
-          depPattern && *depPattern != ArtsDepPattern::unknown) {
-        candidatePattern = *depPattern;
-        fromExplicitContract = true;
-      } else {
-        candidatePattern = classifyFromLinalg(generic);
-      }
-
-      if (!candidatePattern)
-        return;
-
-      std::optional<StructuredNeighborhoodSummary> candidateStencil;
-      if (isStencilFamilyDepPattern(*candidatePattern)) {
-        candidateStencil = extractNeighborhoodSummaryFromLinalg(generic);
-        if (!candidateStencil)
-          candidateStencil =
-              getStampedNeighborhoodSummary(generic.getOperation());
-      }
-
-      if (!selectedPattern) {
-        selectedPattern = candidatePattern;
-        selectedStencilContract = candidateStencil;
-        selectedRevision =
-            getPatternRevision(generic.getOperation()).value_or(1);
-        selectedFromExplicitContract = fromExplicitContract;
-        contractSource = generic;
-        return;
-      }
-
-      if (*selectedPattern == *candidatePattern) {
-        if (candidateStencil) {
-          if (selectedStencilContract)
-            mergeNeighborhoodSummary(*selectedStencilContract,
-                                     *candidateStencil);
-          else
-            selectedStencilContract = candidateStencil;
-        }
-
-        if (fromExplicitContract && !selectedFromExplicitContract) {
-          selectedRevision =
-              getPatternRevision(generic.getOperation()).value_or(1);
-          selectedFromExplicitContract = true;
-          contractSource = generic;
-        }
-        return;
-      }
-
-      if (fromExplicitContract && !selectedFromExplicitContract) {
-        selectedPattern = candidatePattern;
-        selectedStencilContract = candidateStencil;
-        selectedRevision =
-            getPatternRevision(generic.getOperation()).value_or(1);
-        selectedFromExplicitContract = true;
-        contractSource = generic;
-        return;
-      }
-
-      ARTS_DEBUG(
-          "conflicting linalg.generic contracts in arts.for body: keeping "
-          << stringifyArtsDepPattern(*selectedPattern) << ", ignoring "
-          << stringifyArtsDepPattern(*candidatePattern));
-    };
 
     if (auto classAttr = op.getStructuredClassificationAttr()) {
       selectedPattern =
@@ -688,22 +499,8 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
         selectedStencilContract = getSdeNeighborhoodSummary(op);
     }
 
-    // Fallback to transient carrier inference when no SDE-owned structured
-    // classification or summary exists on the source loop.
-    if (!selectedPattern) {
-      for (linalg::GenericOp generic : linalgGenerics)
-        considerLinalgContract(generic);
-      if (contractSource) {
-        copySemanticContractAttrs(contractSource.getOperation(),
-                                  artsFor.getOperation());
-        if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
-          copySemanticContractAttrs(contractSource.getOperation(),
-                                    parentEdt.getOperation());
-      }
-    }
-
     if (selectedPattern) {
-      ARTS_DEBUG("stamping linalg-derived contract: "
+      ARTS_DEBUG("stamping SDE-derived contract: "
                  << stringifyArtsDepPattern(*selectedPattern));
       if (selectedStencilContract &&
           isStencilFamilyDepPattern(*selectedPattern)) {
@@ -717,10 +514,6 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
 
     if (auto distributionKind =
             convertDistributionKind(enclosingDistribution)) {
-      // For internode (distributed scope), don't stamp distribution_kind —
-      // let ARTS DistributionHeuristics pick topology-aware kinds like
-      // two_level based on runtime config. SDE only knows about semantic
-      // distribution (blocked/cyclic/owner_compute), not node topology.
       bool isInternode = false;
       if (auto parentEdt = artsFor.getOperation()->getParentOfType<EdtOp>())
         isInternode =
@@ -737,22 +530,6 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       artsFor->setAttr(AttrNames::Operation::Sde::VectorizeWidth, vecWidth);
     if (auto unrollFactor = op->getAttr(AttrNames::Operation::Sde::UnrollFactor))
       artsFor->setAttr(AttrNames::Operation::Sde::UnrollFactor, unrollFactor);
-
-    // RaiseToLinalg leaves the original loop body in place and uses
-    // linalg.generic as a transient carrier for contract stamping.
-    // LowerToMemref has already lowered tensor carriers back to memref form,
-    // so erase ALL remaining linalg carriers uniformly.
-    for (linalg::GenericOp generic : llvm::reverse(linalgGenerics)) {
-      // Erase materialize_in_destination sinks first.
-      for (Value result : generic->getResults()) {
-        for (Operation *user :
-             llvm::make_early_inc_range(result.getUsers())) {
-          if (isa<bufferization::MaterializeInDestinationOp>(user))
-            rewriter.eraseOp(user);
-        }
-      }
-      rewriter.eraseOp(generic);
-    }
 
     ++numSuIterateConverted;
     rewriter.eraseOp(op);

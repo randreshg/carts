@@ -43,32 +43,40 @@ namespace {
 //===----------------------------------------------------------------------===//
 
 struct InputOperand {
-  Value memref;
+  Value source; // memref or tensor value
   AffineMap indexingMap;
-  SmallVector<memref::LoadOp> loads;
+  SmallVector<Operation *> accessOps; // memref::LoadOp or tensor::ExtractOp
 };
 
 struct OutputOperand {
-  Value memref;
+  Value source; // memref or tensor value
   AffineMap indexingMap;
   Type elementType;
 };
 
+/// Trace a tensor value through tensor.insert chains to find the original
+/// tensor block arg or defining value.
+static Value traceToTensorSource(Value v) {
+  while (auto insertOp = v.getDefiningOp<tensor::InsertOp>())
+    v = insertOp.getDest();
+  return v;
+}
+
 static std::optional<unsigned> findOperandIndex(ArrayRef<InputOperand> inputs,
-                                                Value memref,
+                                                Value source,
                                                 AffineMap indexingMap) {
   for (auto [idx, input] : llvm::enumerate(inputs)) {
-    if (input.memref == memref && input.indexingMap == indexingMap)
+    if (input.source == source && input.indexingMap == indexingMap)
       return idx;
   }
   return std::nullopt;
 }
 
 static std::optional<unsigned> findOperandIndex(ArrayRef<OutputOperand> outputs,
-                                                Value memref,
+                                                Value source,
                                                 AffineMap indexingMap) {
   for (auto [idx, output] : llvm::enumerate(outputs)) {
-    if (output.memref == memref && output.indexingMap == indexingMap)
+    if (output.source == source && output.indexingMap == indexingMap)
       return idx;
   }
   return std::nullopt;
@@ -89,8 +97,12 @@ static Value cloneScalarValueIntoRegion(Value value, Block &body,
   if (!defOp || defOp->getBlock() != &body)
     return value;
 
-  if (isa<memref::LoadOp>(defOp))
+  if (isa<memref::LoadOp, tensor::ExtractOp>(defOp))
     return mapper.lookupOrNull(value);
+
+  // tensor.insert is not a scalar op — skip it.
+  if (isa<tensor::InsertOp>(defOp))
+    return Value();
 
   for (Value operand : defOp->getOperands()) {
     Value mappedOperand =
@@ -120,35 +132,50 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
 
   SmallVector<InputOperand> inputs;
   for (const sde::MemrefAccessEntry &read : reads) {
-    auto loadOp = dyn_cast<memref::LoadOp>(read.op);
-    if (!loadOp)
+    // Accept both tensor.extract and memref.load.
+    Value source;
+    if (auto extractOp = dyn_cast<tensor::ExtractOp>(read.op))
+      source = traceToTensorSource(extractOp.getTensor());
+    else if (auto loadOp = dyn_cast<memref::LoadOp>(read.op))
+      source = read.memref;
+    else
       return false;
 
-    auto inputIdx = findOperandIndex(inputs, read.memref, read.indexingMap);
+    auto inputIdx = findOperandIndex(inputs, source, read.indexingMap);
     if (!inputIdx) {
-      inputs.push_back({read.memref, read.indexingMap, {}});
+      inputs.push_back({source, read.indexingMap, {}});
       inputIdx = inputs.size() - 1;
     }
-    inputs[*inputIdx].loads.push_back(loadOp);
+    inputs[*inputIdx].accessOps.push_back(read.op);
   }
 
   SmallVector<OutputOperand> outputs;
-  DenseMap<Operation *, unsigned> storeOperandIndex;
+  DenseMap<Operation *, unsigned> writeOperandIndex;
   for (const sde::MemrefAccessEntry &write : writes) {
-    auto storeOp = dyn_cast<memref::StoreOp>(write.op);
-    if (!storeOp)
+    // Accept both tensor.insert and memref.store.
+    Value source;
+    Type elementType;
+    if (auto insertOp = dyn_cast<tensor::InsertOp>(write.op)) {
+      source = traceToTensorSource(insertOp.getDest());
+      auto tensorTy = dyn_cast<RankedTensorType>(source.getType());
+      if (!tensorTy)
+        return false;
+      elementType = tensorTy.getElementType();
+    } else if (auto storeOp = dyn_cast<memref::StoreOp>(write.op)) {
+      source = write.memref;
+      auto memrefTy = dyn_cast<MemRefType>(source.getType());
+      if (!memrefTy)
+        return false;
+      elementType = memrefTy.getElementType();
+    } else {
+      return false;
+    }
+
+    if (findOperandIndex(outputs, source, write.indexingMap))
       return false;
 
-    if (findOperandIndex(outputs, write.memref, write.indexingMap))
-      return false;
-
-    auto memrefTy = dyn_cast<MemRefType>(write.memref.getType());
-    if (!memrefTy)
-      return false;
-
-    outputs.push_back(
-        {write.memref, write.indexingMap, memrefTy.getElementType()});
-    storeOperandIndex[write.op] = outputs.size() - 1;
+    outputs.push_back({source, write.indexingMap, elementType});
+    writeOperandIndex[write.op] = outputs.size() - 1;
   }
 
   if (outputs.empty())
@@ -159,31 +186,45 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
   SmallVector<AffineMap> indexingMaps;
   indexingMaps.reserve(inputs.size() + outputs.size());
 
-  // Build tensor-backed inputs via bufferization.to_tensor.
+  // Build tensor inputs — use tensor sources directly, wrap memrefs via
+  // bufferization.to_tensor as fallback.
   SmallVector<Value> tensorInputs;
   tensorInputs.reserve(inputs.size());
   for (const InputOperand &input : inputs) {
-    auto mrType = cast<MemRefType>(input.memref.getType());
-    auto tensorTy =
-        RankedTensorType::get(mrType.getShape(), mrType.getElementType());
-    Value tensor = bufferization::ToTensorOp::create(builder, loc, tensorTy,
-                                                     input.memref);
-    tensorInputs.push_back(tensor);
+    Value tensorInput;
+    if (auto tensorTy = dyn_cast<RankedTensorType>(input.source.getType())) {
+      tensorInput = input.source;
+    } else {
+      auto mrType = cast<MemRefType>(input.source.getType());
+      auto tTy =
+          RankedTensorType::get(mrType.getShape(), mrType.getElementType());
+      tensorInput =
+          bufferization::ToTensorOp::create(builder, loc, tTy, input.source);
+    }
+    tensorInputs.push_back(tensorInput);
     indexingMaps.push_back(input.indexingMap);
   }
 
-  // Build tensor-backed outputs via bufferization.to_tensor (conservative —
-  // ConvertSdeToArts handles erasure of unused carriers).
+  // Build tensor outputs — use tensor.empty for write-only, tensor source
+  // for RMW. Wrap memrefs via bufferization.to_tensor as fallback.
   SmallVector<Value> tensorOutputs;
   SmallVector<Type> resultTypes;
   tensorOutputs.reserve(outputs.size());
   for (const auto &output : outputs) {
-    auto mrType = cast<MemRefType>(output.memref.getType());
-    auto tensorTy =
-        RankedTensorType::get(mrType.getShape(), mrType.getElementType());
-    Value tensor = bufferization::ToTensorOp::create(builder, loc, tensorTy,
-                                                     output.memref);
-    tensorOutputs.push_back(tensor);
+    Value tensorOutput;
+    RankedTensorType tensorTy;
+    if (auto tTy = dyn_cast<RankedTensorType>(output.source.getType())) {
+      tensorTy = tTy;
+      tensorOutput = output.source;
+    } else {
+      auto mrType = cast<MemRefType>(output.source.getType());
+      tensorTy =
+          RankedTensorType::get(mrType.getShape(), mrType.getElementType());
+      tensorOutput =
+          bufferization::ToTensorOp::create(builder, loc, tensorTy,
+                                            output.source);
+    }
+    tensorOutputs.push_back(tensorOutput);
     resultTypes.push_back(tensorTy);
     indexingMaps.push_back(output.indexingMap);
   }
@@ -195,8 +236,12 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
         IRMapping mapper;
         for (auto [inputIdx, input] : llvm::enumerate(inputs)) {
-          for (memref::LoadOp loadOp : input.loads)
-            mapper.map(loadOp.getResult(), blockArgs[inputIdx]);
+          for (Operation *accessOp : input.accessOps) {
+            if (auto loadOp = dyn_cast<memref::LoadOp>(accessOp))
+              mapper.map(loadOp.getResult(), blockArgs[inputIdx]);
+            else if (auto extractOp = dyn_cast<tensor::ExtractOp>(accessOp))
+              mapper.map(extractOp.getResult(), blockArgs[inputIdx]);
+          }
         }
 
         SmallVector<Value> yielded(outputs.size());
@@ -204,19 +249,26 @@ static bool raiseToLinalg(sde::SdeSuIterateOp iterOp,
         unsigned outputArgOffset = inputs.size();
 
         for (const sde::MemrefAccessEntry &write : writes) {
-          auto storeOp = cast<memref::StoreOp>(write.op);
-          auto storeIt = storeOperandIndex.find(storeOp.getOperation());
-          if (storeIt == storeOperandIndex.end())
+          Value valueToWrite;
+          if (auto storeOp = dyn_cast<memref::StoreOp>(write.op))
+            valueToWrite = storeOp.getValue();
+          else if (auto insertOp = dyn_cast<tensor::InsertOp>(write.op))
+            valueToWrite = insertOp.getScalar();
+          else
+            continue;
+
+          auto writeIt = writeOperandIndex.find(write.op);
+          if (writeIt == writeOperandIndex.end())
             continue;
 
           Value mappedValue = cloneScalarValueIntoRegion(
-              storeOp.getValue(), *nest.innermostBody, nestedBuilder, mapper);
+              valueToWrite, *nest.innermostBody, nestedBuilder, mapper);
           if (!mappedValue) {
             cloneFailed = true;
             continue;
           }
-          yielded[storeIt->second] = mappedValue;
-          hasYield[storeIt->second] = true;
+          yielded[writeIt->second] = mappedValue;
+          hasYield[writeIt->second] = true;
         }
 
         for (auto [outputIdx, output] : llvm::enumerate(outputs)) {
