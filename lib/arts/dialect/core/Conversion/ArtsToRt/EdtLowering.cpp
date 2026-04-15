@@ -577,6 +577,8 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
   outlinedFunc.setArgAttr(3, "llvm.nofree", unitAttr);
   outlinedFunc.setArgAttr(3, "llvm.nocapture", unitAttr);
 
+  copySdeHintAttrs(edtOp.getOperation(), outlinedFunc.getOperation());
+
   ARTS_INFO("Created outlined function: " << funcName);
   return outlinedFunc;
 }

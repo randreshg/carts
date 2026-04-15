@@ -152,7 +152,7 @@ public:
     if (!lhs || !rhs)
       return nullptr;
     builder.setInsertionPoint(insertBefore);
-    return builder.create<OpType>(loc, lhs, rhs);
+    return OpType::create(builder, loc, lhs, rhs);
   }
 
   /// Trace min/select with partial operand fallback.

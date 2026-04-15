@@ -850,8 +850,7 @@ bool tryCPSChainTransform(scf::ForOp forOp,
                                            Type targetType) -> Value {
           if (!replacement || replacement.getType() == targetType)
             return replacement;
-          return bodyBuilder
-              .create<memref::CastOp>(loc, targetType, replacement)
+          return memref::CastOp::create(bodyBuilder, loc, targetType, replacement)
               .getResult();
         };
 

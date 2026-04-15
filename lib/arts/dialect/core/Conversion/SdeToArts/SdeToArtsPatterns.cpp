@@ -525,11 +525,7 @@ struct SuIterateToArtsPattern : public OpRewritePattern<sde::SdeSuIterateOp> {
       }
     }
 
-    // Forward vectorization hints from SDE
-    if (auto vecWidth = op->getAttr(AttrNames::Operation::Sde::VectorizeWidth))
-      artsFor->setAttr(AttrNames::Operation::Sde::VectorizeWidth, vecWidth);
-    if (auto unrollFactor = op->getAttr(AttrNames::Operation::Sde::UnrollFactor))
-      artsFor->setAttr(AttrNames::Operation::Sde::UnrollFactor, unrollFactor);
+    copySdeHintAttrs(op.getOperation(), artsFor.getOperation());
 
     ++numSuIterateConverted;
     rewriter.eraseOp(op);

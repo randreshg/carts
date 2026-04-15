@@ -33,6 +33,7 @@ namespace mlir::arts {
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -233,6 +234,40 @@ static void walkBlock(Block &block, DenseMap<Value, Value> &backingMemref) {
         backingMemref[castOp.getResult()] = backing;
         toErase.push_back(castOp);
         continue;
+      }
+    }
+
+    // Vector transfer ops on tensors (from carrier vectorization).
+    if (auto readOp = dyn_cast<vector::TransferReadOp>(&op)) {
+      if (isa<RankedTensorType>(readOp.getBase().getType())) {
+        Value backing = traceBackingMemref(readOp.getBase(), backingMemref);
+        if (backing) {
+          OpBuilder b(readOp);
+          auto newRead = vector::TransferReadOp::create(
+              b, readOp.getLoc(), readOp.getVectorType(), backing,
+              readOp.getIndices(), readOp.getPermutationMapAttr(),
+              readOp.getPadding(), readOp.getMask(),
+              readOp.getInBoundsAttr());
+          readOp.getResult().replaceAllUsesWith(newRead.getResult());
+          toErase.push_back(readOp);
+          continue;
+        }
+      }
+    }
+    if (auto writeOp = dyn_cast<vector::TransferWriteOp>(&op)) {
+      if (isa<RankedTensorType>(writeOp.getBase().getType())) {
+        Value backing = traceBackingMemref(writeOp.getBase(), backingMemref);
+        if (backing) {
+          OpBuilder b(writeOp);
+          vector::TransferWriteOp::create(
+              b, writeOp.getLoc(), writeOp.getVector(), backing,
+              writeOp.getIndices(), writeOp.getPermutationMapAttr(),
+              writeOp.getMask(), writeOp.getInBoundsAttr());
+          if (writeOp.getNumResults() > 0)
+            backingMemref[writeOp.getResult()] = backing;
+          toErase.push_back(writeOp);
+          continue;
+        }
       }
     }
 
@@ -856,6 +891,7 @@ static void eraseDeadCarriers(ModuleOp module) {
       if (isa<linalg::GenericOp, bufferization::ToTensorOp, tensor::EmptyOp,
               tensor::CastOp, tensor::ExtractOp, tensor::InsertOp,
               tensor::ExtractSliceOp, tensor::InsertSliceOp,
+              vector::TransferReadOp, vector::TransferWriteOp,
               sde::SdeMuAllocOp, sde::SdeMuMemrefToTensorOp,
               sde::SdeMuTensorToMemrefOp>(op)) {
         if (op->use_empty())

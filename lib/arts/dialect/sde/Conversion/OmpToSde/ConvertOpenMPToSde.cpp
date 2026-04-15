@@ -74,7 +74,7 @@ using namespace mlir::arts;
 static Value ensureIndex(OpBuilder &b, Location loc, Value v) {
   if (v.getType().isIndex())
     return v;
-  return b.create<arith::IndexCastOp>(loc, b.getIndexType(), v);
+  return arith::IndexCastOp::create(b, loc, b.getIndexType(), v);
 }
 
 /// Ensure all values in a range have index type.
@@ -372,7 +372,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
       Value oldArg = src.getArgument(d);
       // If the source IV was non-index, cast back so cloned body ops match
       if (!oldArg.getType().isIndex())
-        newArg = rewriter.create<arith::IndexCastOp>(loc, oldArg.getType(),
+        newArg = arith::IndexCastOp::create(rewriter, loc, oldArg.getType(),
                                                       newArg);
       mapper.map(oldArg, newArg);
     }
@@ -503,7 +503,7 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
       Value newArg = dst.getArgument(0);
       Value oldArg = src.getArgument(0);
       if (!oldArg.getType().isIndex())
-        newArg = rewriter.create<arith::IndexCastOp>(loc, oldArg.getType(),
+        newArg = arith::IndexCastOp::create(rewriter, loc, oldArg.getType(),
                                                       newArg);
       mapper.map(oldArg, newArg);
     }

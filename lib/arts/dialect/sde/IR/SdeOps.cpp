@@ -138,9 +138,10 @@ ParseResult SdeCuRegionOp::parse(OpAsmParser &parser, OperationState &result) {
   // If no iter_args and no terminator, add empty yield
   // (preserves backward compat with NoTerminator-style IR)
   Block &entry = body->front();
-  if (!hasIterArgs && (entry.empty() || !entry.back().hasTrait<OpTrait::IsTerminator>()))
-    OpBuilder::atBlockEnd(&entry).create<SdeYieldOp>(
-        result.location, ValueRange{});
+  if (!hasIterArgs && (entry.empty() || !entry.back().hasTrait<OpTrait::IsTerminator>())) {
+    auto endBuilder = OpBuilder::atBlockEnd(&entry);
+    SdeYieldOp::create(endBuilder, result.location, ValueRange{});
+  }
 
   // Parse optional attr-dict
   if (parser.parseOptionalAttrDict(result.attributes))
@@ -463,9 +464,10 @@ ParseResult SdeSuIterateOp::parse(OpAsmParser &parser,
 
   // Auto-insert empty sde.yield when body has no terminator.
   Block &entry = body->front();
-  if (entry.empty() || !entry.back().hasTrait<OpTrait::IsTerminator>())
-    OpBuilder::atBlockEnd(&entry).create<SdeYieldOp>(result.location,
-                                                     ValueRange{});
+  if (entry.empty() || !entry.back().hasTrait<OpTrait::IsTerminator>()) {
+    auto endBuilder = OpBuilder::atBlockEnd(&entry);
+    SdeYieldOp::create(endBuilder, result.location, ValueRange{});
+  }
 
   // ---- attr-dict ----
   if (parser.parseOptionalAttrDict(result.attributes))

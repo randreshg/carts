@@ -167,20 +167,42 @@ struct StructuredSummariesPass
           classification == sde::SdeStructuredClassification::matmul) {
         int64_t baseWidth = costModel ? costModel->getVectorWidth() : 4;
         int64_t vectorWidth = baseWidth; // default for f64/i64
+        // Try scalar stores first (dual-rep bodies).
+        bool foundType = false;
         op.getBody().walk([&](memref::StoreOp storeOp) {
           Type elemType = storeOp.getValueToStore().getType();
           if (elemType.isF32() || elemType.isInteger(32))
             vectorWidth = baseWidth * 2;
           else if (elemType.isF64() || elemType.isInteger(64))
             vectorWidth = baseWidth;
+          foundType = true;
           return WalkResult::interrupt();
         });
+        // Carrier-authoritative fallback: walk linalg.generic DPS inits.
+        if (!foundType) {
+          op.getBody().walk([&](linalg::GenericOp generic) {
+            for (Value init : generic.getDpsInits()) {
+              if (auto ty = dyn_cast<RankedTensorType>(init.getType())) {
+                Type elemType = ty.getElementType();
+                if (elemType.isF32() || elemType.isInteger(32))
+                  vectorWidth = baseWidth * 2;
+                else if (elemType.isF64() || elemType.isInteger(64))
+                  vectorWidth = baseWidth;
+                foundType = true;
+                break;
+              }
+            }
+            return WalkResult::interrupt();
+          });
+        }
 
         op->setAttr(AttrNames::Operation::Sde::VectorizeWidth,
                      IntegerAttr::get(IndexType::get(&getContext()),
                                       vectorWidth));
         op->setAttr(AttrNames::Operation::Sde::UnrollFactor,
                      IntegerAttr::get(IndexType::get(&getContext()), 2));
+        op->setAttr(AttrNames::Operation::Sde::InterleaveCount,
+                     IntegerAttr::get(IndexType::get(&getContext()), 4));
       }
 
       // Phase 14: Stamp data reuse footprint

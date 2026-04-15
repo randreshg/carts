@@ -437,6 +437,9 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
   let extraClassDeclaration = [{
     static void build(OpBuilder &builder, OperationState &state, Value target,
                       const LoweringContractInfo &info);
+    static LoweringContractOp create(OpBuilder &builder, Location location,
+                                     Value target,
+                                     const LoweringContractInfo &info);
     std::optional<ArtsDepPattern> getDepPattern();
     std::optional<EdtDistributionKind> getDistributionKind();
     std::optional<EdtDistributionPattern> getDistributionPattern();

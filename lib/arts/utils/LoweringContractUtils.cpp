@@ -859,7 +859,7 @@ mlir::arts::upsertLoweringContract(OpBuilder &builder, Location loc,
   materializedInfo.spatial.writeFootprint = std::move(writeFootprintVals);
 
   auto contract =
-      builder.create<LoweringContractOp>(loc, target, materializedInfo);
+      LoweringContractOp::create(builder, loc, target, materializedInfo);
 
   for (auto stale : staleContracts)
     if (stale.getOperation() != contract.getOperation())
