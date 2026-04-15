@@ -26,7 +26,7 @@ top section**, not as the exact current branch status.
   - cast-alias read/modify/write outputs no longer degrade to `tensor.empty`
   - disjoint-write reduction-shaped carriers can now use `tensor.empty` when
     the output value is provably not read
-- `SdeTensorOptimization` broadened beyond the original one-dimensional subset:
+- `Tiling` (formerly `SdeTensorOptimization`) broadened beyond the original one-dimensional subset:
   - narrow matmul outer-dimension tiling is live
   - 2-D disjoint-write elementwise tiling is now covered
 - `SdeElementwiseFusion` now owns the first executable migration of
@@ -160,7 +160,7 @@ Atomic updates: 100 cycles (local), 500 (distributed)
 At audit time this was effectively true for the core heuristic files. Since
 then, the branch has also grown SDE-side consumers (`SdeScopeSelection`,
 `SdeScheduleRefinement`, `SdeChunkOptimization`, `SdeReductionStrategy`,
-`SdeTensorOptimization`), and `EdtTransformsPass::selectReductionStrategies()`
+`Tiling`), and `EdtTransformsPass::selectReductionStrategies()`
 now compares cost-model-derived atomic-vs-tree costs instead of using a fixed
 worker cutoff. The broader **core** heuristic files still rely heavily on
 hardcoded if-else cascades.
@@ -298,7 +298,7 @@ Key differences:
 | Stage 2 (collect-metadata) | Exists with 3 passes | **Removed entirely** |
 | SDE->ARTS conversion | 5 substages (3.5-3.9) | **1 stage** ("openmp-to-arts") with 13 passes |
 | Bufferize stage (3.9) | Explicit one-shot-bufferize | **Not implemented** as discrete stage |
-| SDE passes | 5 listed | **9 actual** (missing: ScopeSelection, ScheduleRefinement, ChunkOpt, ReductionStrategy, TensorOpt) |
+| SDE passes | 5 listed | **9 actual** (missing: ScopeSelection, ScheduleRefinement, ChunkOpt, ReductionStrategy, Tiling) |
 | Pass invocations | 69 unique | **142 total** invocations (duplicates by design) |
 
 **"openmp-to-arts" stage actual pass list (Compile.cpp:685-697):**
@@ -310,7 +310,7 @@ SdeChunkOptimization
 SdeReductionStrategy
 RaiseToLinalg
 RaiseToTensor
-SdeTensorOptimization
+Tiling
 SdeStructuredSummaries
 SdeElementwiseFusion
 SdeDistributionPlanning

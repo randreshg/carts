@@ -365,7 +365,7 @@ ConvertOpenMPToSde
   → RaiseMemrefToTensor              ← NEW
   → RaiseToLinalg                     (now consumes tensors natively)
   → RaiseToTensor                     (becomes a narrow cleanup, eventually retires)
-  → LoopInterchange → TensorOpt → StructuredSummaries → …
+  → LoopInterchange → Tiling → StructuredSummaries → …
   → ConvertSdeToArts
 ```
 
@@ -489,7 +489,7 @@ transformation purposes.
 | `RaiseToLinalg` | no | yes |
 | `RaiseToTensor` | no | yes (linalg inside) |
 | `LoopInterchange` | no | yes |
-| `TensorOpt` | no | yes |
+| `Tiling` | no | yes |
 | `StructuredSummaries` | no | yes |
 | `ElementwiseFusion` | no | yes |
 | `DistributionPlanning` | no | yes |
@@ -517,7 +517,7 @@ SSA-visible — which is exactly the shape the existing
 | OMP → SDE conversion | Task shape is the natural IR for `omp.task` | `ConvertOpenMPToSde` |
 | Region-scope annotation | Looks at `cu_region`, not task bodies | `ScopeSelection` |
 | Schedule / chunk / reduction strategy on loops | Pure `su_iterate` concerns | `ScheduleRefinement`, `ChunkOpt`, `ReductionStrategy` |
-| Loop raise and tensor transforms on loops | `su_iterate` path — already covered | `RaiseToLinalg`, `RaiseToTensor`, `LoopInterchange`, `TensorOpt`, `StructuredSummaries`, `ElementwiseFusion` |
+| Loop raise and tensor transforms on loops | `su_iterate` path — already covered | `RaiseToLinalg`, `RaiseToTensor`, `LoopInterchange`, `Tiling`, `StructuredSummaries`, `ElementwiseFusion` |
 
 **Moves to `cu_codelet` (tokenized tensor) side, after the raise:**
 
@@ -542,7 +542,7 @@ SSA-visible — which is exactly the shape the existing
 | `RaiseToLinalg` | Walks `su_iterate` bodies, emits `linalg.generic(memref)` when the pattern matches. | Walks `su_iterate` bodies, emits `linalg.generic(tensor)` directly — no memref middle step. |
 | `RaiseToTensor` | Rewrites emitted `linalg.generic(memref)` → `linalg.generic(tensor)`. | Becomes a narrow cleanup for cases that escaped the main raise. Retires when v3 lands. |
 | `ScopeSelection`, `ScheduleRefinement`, `ChunkOpt`, `ReductionStrategy` | Annotate SDE ops (loops + region scopes). | Unchanged. Run before the raise, so SDE ops still carry memref form at annotation time. |
-| `LoopInterchange`, `TensorOpt`, `StructuredSummaries`, `ElementwiseFusion`, `IterationSpaceDecomposition` | Walk `su_iterate` in mixed memref/tensor. | Unchanged on loops. Optionally extended to walk `cu_codelet` bodies as a follow-up. |
+| `LoopInterchange`, `Tiling`, `StructuredSummaries`, `ElementwiseFusion`, `IterationSpaceDecomposition` | Walk `su_iterate` in mixed memref/tensor. | Unchanged on loops. Optionally extended to walk `cu_codelet` bodies as a follow-up. |
 | `DistributionPlanning` | Walks `su_iterate` only — chooses distribution kind per loop. | Extended to also walk `cu_codelet` — token slices become distribution units for task graphs. |
 | `BarrierElimination` | Inspects `mu_dep` / `su_barrier` on loops. | `mu_dep` count drops for raised memrefs; tensor SSA makes the dep graph directly visible. Unchanged on loops. |
 | `ConvertSdeToArts` | Memref path via `mu_dep`. | Adds codelet branch (token operands → `db_acquire`, tensor results → `db_alloc` + `db_acquire`). Fallback memref branch unchanged. |

@@ -27,7 +27,7 @@ dialect/                 MLIR dialects (IREE-style per-dialect structure)
       state/raising/     RaiseToLinalg, RaiseToTensor, RaiseMemrefToTensor
       state/codelet/     ConvertToCodelet, ScalarForwarding
       state/             StructuredSummaries
-      dep/loop/          LoopInterchange, TensorOpt, IterationSpaceDecomposition
+      dep/loop/          LoopInterchange, Tiling, IterationSpaceDecomposition
       dep/fusion/        ElementwiseFusion
       effect/scheduling/ ScopeSelection, ScheduleRefinement, ChunkOpt, ReductionStrategy
       effect/distribution/ DistributionPlanning, BarrierElimination

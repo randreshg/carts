@@ -66,7 +66,7 @@ The openmp-to-arts stage now runs 16 passes (12 SDE + cleanup/verification):
  5. SdeReductionStrategy         atomic/tree/local_accumulate from cost model
  6. RaiseToLinalg                linalg.generic carrier materialization
  7. RaiseToTensor                memref -> tensor conversion for carriers
- 8. SdeTensorOptimization        cost-model-driven tiling/strip-mining
+ 8. Tiling                        cost-model-driven tiling/strip-mining
  9. SdeStructuredSummaries  NEW  classification + neighborhood stamps
 10. SdeElementwiseFusion    NEW  fuse consecutive elementwise su_iterate
 11. SdeDistributionPlanning NEW  wrap eligible ops in su_distribute
@@ -121,7 +121,7 @@ LLVM: ConvertArtsToLLVMPatterns
 | SdeReductionStrategy | sde/Transforms/ | `getAtomicUpdateCost()`, `getReductionCost(workers)` |
 | SdeScheduleRefinement | sde/Transforms/ | `getSchedulingOverhead(kind, tripCount)` |
 | SdeChunkOptimization | sde/Transforms/ | `getWorkerCount()`, `getMinIterationsPerWorker()` |
-| SdeTensorOptimization | sde/Transforms/ | `getWorkerCount()`, `getMinIterationsPerWorker()` |
+| Tiling | sde/Transforms/ | `getWorkerCount()`, `getMinIterationsPerWorker()` |
 | SdeDistributionPlanning | sde/Transforms/ | `getMinIterationsPerWorker()`, `getNodeCount()` |
 | SdeScopeSelection | sde/Transforms/ | `isDistributed()` |
 | EdtTransformsPass (ET-5) | core/Transforms/ | `getAtomicUpdateCost()`, `getTaskSyncCost()` |
