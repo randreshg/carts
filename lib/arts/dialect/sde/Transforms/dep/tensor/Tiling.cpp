@@ -1,17 +1,16 @@
 ///==========================================================================///
-/// File: TensorOpt.cpp
+/// File: Tiling.cpp
 ///
-/// Cost-model-driven tensor optimization in SDE. The current implementation
-/// focuses on executable loop nests whose tensor-backed linalg carrier proves
-/// that strip-mining the outer SDE loop preserves a disjoint write set. The
-/// pass rewrites the surrounding sde.su_iterate so the tiled loop nest
-/// survives SDE->ARTS lowering while tensor carriers remain an SDE-only
-/// concern.
+/// Cost-model-driven tiling in SDE. The current implementation focuses on
+/// executable loop nests whose tensor-backed linalg carrier proves that
+/// strip-mining the outer SDE loop preserves a disjoint write set. The pass
+/// rewrites the surrounding sde.su_iterate so the tiled loop nest survives
+/// SDE->ARTS lowering while tensor carriers remain an SDE-only concern.
 ///==========================================================================///
 
 #include "arts/dialect/sde/Transforms/Passes.h"
 namespace mlir::arts {
-#define GEN_PASS_DEF_TENSOROPT
+#define GEN_PASS_DEF_TILING
 #include "arts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::arts
 
@@ -404,8 +403,8 @@ static SmallVector<int64_t> getStencilHaloWidths(sde::SdeSuIterateOp op) {
   return halos;
 }
 
-static bool isTensorOptimizationCandidate(sde::SdeSuIterateOp op, Block &body,
-                                          linalg::GenericOp tensorGeneric) {
+static bool isTilingCandidate(sde::SdeSuIterateOp op, Block &body,
+                              linalg::GenericOp tensorGeneric) {
   if (op.getChunkSize())
     return false;
   if (op->getParentOfType<scf::ForOp>())
@@ -447,9 +446,9 @@ static void cloneScalarBodyIntoTileLoop(Block &srcBody, IRMapping &mapper,
   }
 }
 
-struct TensorOptPass
-    : public arts::impl::TensorOptBase<TensorOptPass> {
-  explicit TensorOptPass(sde::SDECostModel *costModel = nullptr)
+struct TilingPass
+    : public arts::impl::TilingBase<TilingPass> {
+  explicit TilingPass(sde::SDECostModel *costModel = nullptr)
       : costModel(costModel) {}
 
   void runOnOperation() override {
@@ -460,7 +459,7 @@ struct TensorOptPass
     getOperation().walk([&](sde::SdeSuIterateOp op) {
       Block *body = sde::getSuIterateComputeBlock(op);
       linalg::GenericOp tensorGeneric = findTensorCarrier(*body);
-      if (!isTensorOptimizationCandidate(op, *body, tensorGeneric))
+      if (!isTilingCandidate(op, *body, tensorGeneric))
         return;
 
       std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
@@ -628,8 +627,8 @@ private:
 namespace mlir::arts::sde {
 
 std::unique_ptr<Pass>
-createTensorOptPass(sde::SDECostModel *costModel) {
-  return std::make_unique<TensorOptPass>(costModel);
+createTilingPass(sde::SDECostModel *costModel) {
+  return std::make_unique<TilingPass>(costModel);
 }
 
 } // namespace mlir::arts::sde

@@ -50,7 +50,7 @@ openmp-to-arts
   |- ScopeSelection / ScheduleRefinement / ChunkOpt
   |- ReductionStrategy
   |- RaiseToLinalg / RaiseToTensor
-  |- LoopInterchange / TensorOpt
+  |- LoopInterchange / Tiling
   |- StructuredSummaries / ElementwiseFusion
   |- DistributionPlanning / IterationSpaceDecomposition
   |- BarrierElimination

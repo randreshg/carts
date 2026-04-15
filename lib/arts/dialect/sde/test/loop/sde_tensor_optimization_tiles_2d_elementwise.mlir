@@ -1,11 +1,11 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=OPT
 
-// Verify that TensorOpt tiles a true 2D su_iterate produced from
+// Verify that Tiling tiles a true 2D su_iterate produced from
 // a multi-dimensional omp.loop_nest. The pass distributes workers across both
 // dimensions (ceil(W^(1/N)) per dim) and creates two nested scf.for tile loops
 // inside the rewritten su_iterate.
 
-// OPT-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// OPT-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // OPT: arts_sde.cu_region <parallel> {
 // OPT: arts_sde.su_iterate
 // OPT-SAME: to (%c128, %c256)

@@ -92,7 +92,7 @@ LLVM conversion patterns. They stay shared.
 | — | `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` | NEW/2 | SDE->ARTS lowering |
 | — | `lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp` | NEW/2 | scf.for+memref -> linalg.generic |
 | — | `lib/arts/dialect/sde/Transforms/RaiseToTensor.cpp` | NEW/2 | linalg on memref -> linalg on tensor |
-| — | `lib/arts/dialect/sde/Transforms/dep/loop/TensorOpt.cpp` | NEW/2 | tensor-space tile-and-fuse |
+| — | `lib/arts/dialect/sde/Transforms/dep/loop/Tiling.cpp` | NEW/2 | tensor-space tile-and-fuse |
 
 ### Internal Headers: `include/arts/passes/transforms/`
 
@@ -760,7 +760,7 @@ lib/arts/
         ConvertOpenMPToSde.cpp          NEW Phase 2B
         RaiseToLinalg.cpp               NEW Phase 2C (deferred)
         RaiseToTensor.cpp               NEW Phase 2C (deferred)
-        TensorOpt.cpp                   NEW Phase 2C (deferred)
+        Tiling.cpp                   NEW Phase 2C (deferred)
         CMakeLists.txt                  NEW Phase 2
     core/
       IR/

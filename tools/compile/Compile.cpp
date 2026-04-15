@@ -265,7 +265,7 @@ static const std::array<llvm::StringLiteral, 21> kOpenMPToArtsPasses = {
     "RaiseToTensor",            "ScopeSelection",
     "ScheduleRefinement",       "ChunkOpt",
     "ReductionStrategy",        "LoopInterchange",
-    "TensorOpt",                "StructuredSummaries",
+    "Tiling",                "StructuredSummaries",
     "ElementwiseFusion",        "DistributionPlanning",
     "IterationSpaceDecomposition", "BarrierElimination",
     "LowerToMemref",            "ConvertToCodelet",
@@ -667,7 +667,7 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   pm.addPass(arts::sde::createRaiseToLinalgPass());
   // Dep passes first (structural transforms), then effect passes (scheduling decisions).
   pm.addPass(arts::sde::createLoopInterchangePass());
-  pm.addPass(arts::sde::createTensorOptPass(costModel));
+  pm.addPass(arts::sde::createTilingPass(costModel));
   pm.addPass(arts::sde::createStructuredSummariesPass(costModel));
   pm.addPass(arts::sde::createElementwiseFusionPass());
   pm.addPass(arts::sde::createScopeSelectionPass(costModel));

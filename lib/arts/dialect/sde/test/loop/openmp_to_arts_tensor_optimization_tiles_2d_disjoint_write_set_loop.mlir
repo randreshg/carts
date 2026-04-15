@@ -2,7 +2,7 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=OPT
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=ARTS
 
-// Verify that TensorOpt now tiles a narrow multi-dimensional
+// Verify that Tiling now tiles a narrow multi-dimensional
 // elementwise carrier when the executable body writes a disjoint output set.
 // The pass still rewrites only the outer SDE loop, sized from the active
 // SDECostModel, and preserves the inner memref loop nest for later lowering.
@@ -17,7 +17,7 @@
 // TENSOR-SAME: ins(%[[IN]] : tensor<64x64xf64>)
 // TENSOR-SAME: outs(%[[OUT0]], %[[OUT1]] : tensor<64x64xf64>, tensor<64x64xf64>)
 
-// OPT-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// OPT-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // OPT: arts_sde.cu_region <parallel> {
 // OPT: %c8 = arith.constant 8 : index
 // OPT: %[[TSTEP:.+]] = arith.muli %c1, %c8 : index

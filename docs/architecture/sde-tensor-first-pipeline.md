@@ -77,7 +77,7 @@ RaiseToLinalg          (pattern-matches tensor ops into linalg.generic)
   |
   v
 LoopInterchange
-TensorOpt
+Tiling
 StructuredSummaries
 ElementwiseFusion
 ScopeSelection         (now sees post-optimization tensor-level IR)
@@ -510,7 +510,7 @@ Examined the `parallel_for/single` pipeline dumps at every SDE pass.
 | RaiseToLinalg (006) | `passes/03_openmp-to-arts/006_*.mlir` | **NO-OP** on `<single>` — only walks `su_iterate` bodies |
 | RaiseToTensor (007) | `passes/03_openmp-to-arts/007_*.mlir` | **NO-OP** on `<single>` — only rewrites linalg carriers |
 | LoopInterchange (008) | `passes/03_openmp-to-arts/008_*.mlir` | **NO-OP** — only targets `su_iterate` |
-| TensorOpt (009) | `passes/03_openmp-to-arts/009_*.mlir` | **NO-OP** — only targets `su_iterate` carriers |
+| Tiling (009) | `passes/03_openmp-to-arts/009_*.mlir` | **NO-OP** — only targets `su_iterate` carriers |
 | StructuredSummaries (010) | `passes/03_openmp-to-arts/010_*.mlir` | **NO-OP** — only targets `su_iterate` |
 | ElementwiseFusion (011) | `passes/03_openmp-to-arts/011_*.mlir` | **NO-OP** — only targets `su_iterate` carriers |
 | RaiseMemrefToTensor (012) | `passes/03_openmp-to-arts/012_*.mlir` | **NO-OP** — only targets `cu_task` bodies |

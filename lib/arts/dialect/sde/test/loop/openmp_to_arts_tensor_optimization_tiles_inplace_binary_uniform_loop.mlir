@@ -3,7 +3,7 @@
 
 // Verify that executable SDE tensor tiling also handles in-place binary
 // elementwise loops. RaiseToTensor preserves the destination read by reusing
-// the tensorized output buffer, and TensorOpt still rewrites the
+// the tensorized output buffer, and Tiling still rewrites the
 // surrounding sde.su_iterate into a tiled executable loop nest.
 
 // TENSOR-LABEL: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
@@ -17,7 +17,7 @@
 // TENSOR-SAME: outs(%[[BOUT]] : tensor<128xf64>)
 // TENSOR-NOT: tensor.empty
 
-// OPT-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// OPT-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // OPT: arts_sde.cu_region <parallel> {
 // OPT: %c16 = arith.constant 16 : index
 // OPT: %[[TSTEP:.+]] = arith.muli %c1, %c16 : index

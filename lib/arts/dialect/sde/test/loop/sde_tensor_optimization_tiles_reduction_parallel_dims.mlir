@@ -1,6 +1,6 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Verify that TensorOpt correctly handles reduction-classified
+// Verify that Tiling correctly handles reduction-classified
 // loops. A pure reduction (all reduction dims in the tensor carrier) must
 // NOT be tiled, because there are no parallel dims to distribute.
 //
@@ -8,7 +8,7 @@
 // would be tiled (tested by the code path but not yet triggered by the
 // pipeline, as RaiseToLinalg only creates narrow 1-D reduction carriers).
 
-// CHECK-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// CHECK-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // CHECK: func.func @main
 // The reduction su_iterate must keep its original step (NOT tiled):
 // CHECK: arts_sde.cu_region <parallel> {

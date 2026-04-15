@@ -24,14 +24,14 @@ def LoopInterchange
   let constructor = "mlir::arts::sde::createLoopInterchangePass()";
 }
 
-def TensorOpt : Pass<"tensor-opt", "mlir::ModuleOp"> {
-  let summary = "Apply cost-model-driven tensor optimizations in SDE";
+def Tiling : Pass<"tiling", "mlir::ModuleOp"> {
+  let summary = "Apply cost-model-driven tiling using SDE linalg carriers";
   let description = [{
     Uses the SDE-owned cost model together with the transient tensor-backed
-    linalg carriers to apply real loop transformations before SDE->ARTS
-    lowering. The current implementation focuses on the first executable
-    subset: one-dimensional elementwise loops are strip-mined into cost-model-
-    sized tiles and the surrounding sde.su_iterate step is rewritten so the
+    linalg carriers to apply real loop tiling before SDE->ARTS lowering.
+    The current implementation focuses on the first executable subset:
+    one-dimensional elementwise loops are strip-mined into cost-model-sized
+    tiles and the surrounding sde.su_iterate step is rewritten so the
     transformed loop nest survives into later ARTS lowering without exposing
     tensor IR past the SDE boundary.
   }];
@@ -42,7 +42,7 @@ def TensorOpt : Pass<"tensor-opt", "mlir::ModuleOp"> {
                            "::mlir::memref::MemRefDialect",
                            "::mlir::scf::SCFDialect",
                            "::mlir::tensor::TensorDialect"];
-  let constructor = "mlir::arts::sde::createTensorOptPass()";
+  let constructor = "mlir::arts::sde::createTilingPass()";
 }
 
 def StructuredSummaries

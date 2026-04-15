@@ -2,7 +2,7 @@
 
 // Verify that a symbolic-trip runtime schedule survives through
 // ScheduleRefinement and ChunkOpt without acquiring a chunk operand when
-// TensorOpt has already tiled the iteration space. The refinement stays
+// Tiling has already tiled the iteration space. The refinement stays
 // attribute-only.
 
 // CHECK-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //

@@ -1,7 +1,7 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=TENSOR
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=OPT
 
-// Verify that TensorOpt now accepts a narrow matmul carrier and
+// Verify that Tiling now accepts a narrow matmul carrier and
 // rewrites the authoritative SDE loop with a cost-model-driven outer tile on
 // the leading parallel dimension while dropping transient tensor carriers from
 // the executable body.
@@ -17,7 +17,7 @@
 // TENSOR-SAME: ins(%[[A]], %[[B]], %[[C]] : tensor<32x32xf32>, tensor<32x32xf32>, tensor<32x32xf32>)
 // TENSOR-SAME: outs(%[[COUT]] : tensor<32x32xf32>)
 
-// OPT-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// OPT-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // OPT: arts_sde.cu_region <parallel> {
 // OPT: %c4 = arith.constant 4 : index
 // OPT: %[[TSTEP:.+]] = arith.muli %c1, %c4 : index

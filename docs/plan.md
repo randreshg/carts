@@ -47,7 +47,7 @@ STATE (data & layout):
   - StructuredSummaries  — stamps canonical access descriptors
 
 DEPENDENCY (access patterns):
-  - TensorOpt   — cost-model strip-mining (elem+matmul only, 1-D only)
+  - Tiling   — cost-model strip-mining (elem+matmul only, 1-D only)
   - ElementwiseFusion    — fuses sibling elementwise (no cost gate)
   - IterationSpaceDecomp — peels stencil boundaries (0 tests)
 
@@ -69,7 +69,7 @@ STRUCTURAL:
 **Analysis**: `analyzeStructuredLoop()` fails on imperfect nests (scf.if/scf.for
 mix) → 48% of benchmarks get zero classification.
 
-**Loop transforms**: TensorOpt only does 1-D outer strip-mining for
+**Loop transforms**: Tiling only does 1-D outer strip-mining for
 elementwise+matmul. No multi-level tiling, no loop interchange, no stencil
 tiling, no reduction tiling. Reductions explicitly excluded (line 253).
 
@@ -107,7 +107,7 @@ lib/arts/dialect/sde/Transforms/
     RaiseToTensor.cpp
     StructuredSummaries.cpp
   dep/                            ← Dependencies: access patterns, loop transforms
-    TensorOpt.cpp
+    Tiling.cpp
     ElementwiseFusion.cpp
     IterationSpaceDecomposition.cpp
     LoopInterchange.cpp          (NEW — Phase 7)
@@ -159,7 +159,7 @@ mkdir -p lib/arts/dialect/sde/Transforms/{state,dep,effect}
 git mv lib/arts/dialect/sde/Transforms/RaiseToLinalg.cpp         lib/arts/dialect/sde/Transforms/state/
 git mv lib/arts/dialect/sde/Transforms/RaiseToTensor.cpp          lib/arts/dialect/sde/Transforms/state/
 git mv lib/arts/dialect/sde/Transforms/StructuredSummaries.cpp lib/arts/dialect/sde/Transforms/state/
-git mv lib/arts/dialect/sde/Transforms/TensorOpt.cpp  lib/arts/dialect/sde/Transforms/dep/
+git mv lib/arts/dialect/sde/Transforms/Tiling.cpp  lib/arts/dialect/sde/Transforms/dep/
 git mv lib/arts/dialect/sde/Transforms/ElementwiseFusion.cpp   lib/arts/dialect/sde/Transforms/dep/
 git mv lib/arts/dialect/sde/Transforms/IterationSpaceDecomposition.cpp lib/arts/dialect/sde/Transforms/dep/
 git mv lib/arts/dialect/sde/Transforms/ReductionStrategy.cpp   lib/arts/dialect/sde/Transforms/effect/
@@ -349,7 +349,7 @@ Gate on `op.getReductionStrategyAttr() && hasEnoughDistributedWork()`.
 
 **File**: `lib/arts/dialect/sde/Transforms/state/StructuredSummaries.cpp`
 
-When `TensorOpt` rewrites an elementwise or matmul loop into a
+When `Tiling` rewrites an elementwise or matmul loop into a
 tiled scalar form, the refreshed summary can look reduction-shaped after the
 carrier is erased. Preserve the existing non-reduction classification when the
 loop has no reduction accumulators so `DistributionPlanning` still sees the
@@ -459,14 +459,14 @@ cost model. The actual `scf.for` loop nest is transformed in tandem.
 ```
 RaiseToLinalg → creates carrier matching original loop structure
     ↓
-TensorOpt → transforms carrier dims + rewrites scf.for to match
+Tiling → transforms carrier dims + rewrites scf.for to match
     ↓
 ConvertSdeToArts → reads transformed carrier → stamps contracts → erases carrier
 ```
 
 ### Phase 6: N-Dimensional Tiling & Dimension Transforms
 
-**File**: `lib/arts/dialect/sde/Transforms/dep/TensorOpt.cpp`
+**File**: `lib/arts/dialect/sde/Transforms/dep/Tiling.cpp`
 
 **Current state**: Hardcoded to 1-D (`su_iterate` bounds `size() == 1`, lines
 257-259). Only tiles the outermost dimension. Only elementwise + matmul.
@@ -501,7 +501,7 @@ Rewrite the core tiling logic to handle N parallel dimensions:
   for N dimensions, computing trip count per dim.
 - `buildTileIterationValue()` (line 88): Return `SmallVector<Value>` of tile
   sizes, one per parallel dimension.
-- `isTensorOptimizationCandidate()` (line 247): Remove 1-D restriction (lines
+- `isTilingimizationCandidate()` (line 247): Remove 1-D restriction (lines
   257-259). Instead, require `lowerBounds.size() >= 1`.
 - Rewrite loop (line 309): Create N-level nested `scf.for` tile structure.
 
@@ -637,7 +637,7 @@ cache-line-aligned, contiguous access. Creates `linalg.pack` + transformed
 **Cost model gate**: `getLocalDataAccessCost()` > threshold — pack when
 stride-N access cost exceeds pack overhead.
 
-**Files**: `dep/TensorOpt.cpp`, `dep/ElementwiseFusion.cpp`,
+**Files**: `dep/Tiling.cpp`, `dep/ElementwiseFusion.cpp`,
 `Passes.h`, `Compile.cpp`
 
 ---
@@ -671,14 +671,14 @@ Use `getLocalDataAccessCost()` to weight stride-1 vs stride-N accesses.
   (minimizes total halo volume for distribution).
 
 **Files**: New `lib/arts/dialect/sde/Transforms/dep/LoopInterchange.cpp`
-**Pipeline position**: After StructuredSummaries, before TensorOpt
+**Pipeline position**: After StructuredSummaries, before Tiling
 **Registration**: `Passes.td`, `Compile.cpp`
 
 ---
 
 ### Phase 8: Reduction Dimension Splitting
 
-**File**: `lib/arts/dialect/sde/Transforms/dep/TensorOpt.cpp`
+**File**: `lib/arts/dialect/sde/Transforms/dep/Tiling.cpp`
 
 **Current state**: Reductions explicitly excluded (line 253).
 
@@ -842,7 +842,7 @@ schedule selection (prefer static if provably independent).
 
 Compute temporal reuse distance per operand from access maps. Stamp as
 `sde.reuse_footprint_bytes` attr. This drives tile size selection in
-`TensorOpt` — tile should keep reuse footprint in L2 cache.
+`Tiling` — tile should keep reuse footprint in L2 cache.
 
 **Cost model**: New `getL2CacheSize()` method in `SDECostModel`.
 
@@ -931,7 +931,7 @@ Tier 1 is ~2-3 days. Tiers 2-4 are ongoing improvement work.
 |------|-------|--------|
 | `sde/Transforms/CMakeLists.txt` | -1 | Add state/, dep/, effect/ glob patterns |
 | `sde/Transforms/state/` | -1 | NEW dir: RaiseToLinalg, RaiseToTensor, StructuredSummaries |
-| `sde/Transforms/dep/` | -1 | NEW dir: TensorOpt, ElementwiseFusion, IterationSpaceDecomposition |
+| `sde/Transforms/dep/` | -1 | NEW dir: Tiling, ElementwiseFusion, IterationSpaceDecomposition |
 | `sde/Transforms/effect/` | -1 | NEW dir: ReductionStrategy, ScopeSelection, ScheduleRefinement, ChunkOpt, DistributionPlanning |
 | `core/Conversion/OmpToArts/` | -2 | DELETE entire directory (dead code) |
 | `Passes.td` / `Passes.h` | -2 | Remove ConvertOpenMPToArts declaration |
@@ -963,11 +963,11 @@ Tier 1 is ~2-3 days. Tiers 2-4 are ongoing improvement work.
 ### Tier 2 (Compute — Dimension Transforms)
 | File | Phase | Change |
 |------|-------|--------|
-| `dep/TensorOpt.cpp` | 6A-C | N-dim tiling (all classifications) |
-| `dep/TensorOpt.cpp` | 6E | Dim collapsing via `collapseOpIterationDims()` |
-| `dep/TensorOpt.cpp` | 6F | Dim expansion via `tensor::ExpandShapeOp` |
-| `dep/TensorOpt.cpp` | 6G | Data packing via `linalg::pack()` |
-| `dep/TensorOpt.cpp` | 8 | Reduction splitting via `splitReduction()` |
+| `dep/Tiling.cpp` | 6A-C | N-dim tiling (all classifications) |
+| `dep/Tiling.cpp` | 6E | Dim collapsing via `collapseOpIterationDims()` |
+| `dep/Tiling.cpp` | 6F | Dim expansion via `tensor::ExpandShapeOp` |
+| `dep/Tiling.cpp` | 6G | Data packing via `linalg::pack()` |
+| `dep/Tiling.cpp` | 8 | Reduction splitting via `splitReduction()` |
 | `dep/ElementwiseFusion.cpp` | 6D | Cost-model fusion gate |
 | `dep/LoopInterchange.cpp` | 7 | NEW — via `interchangeGenericOp()` on carrier |
 | `state/StructuredSummaries.cpp` | 9 | Vec/unroll hints |

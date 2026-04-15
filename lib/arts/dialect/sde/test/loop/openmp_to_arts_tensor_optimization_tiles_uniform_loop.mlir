@@ -4,7 +4,7 @@
 
 // Verify that tensor optimization is an executable SDE transform, not just a
 // carrier-only analysis step. RaiseToTensor materializes the tensor-backed
-// carrier; TensorOpt then rewrites the surrounding sde.su_iterate
+// carrier; Tiling then rewrites the surrounding sde.su_iterate
 // into a tiled loop nest sized from the active SDECostModel, and the tiled
 // shape survives into arts.for lowering.
 
@@ -17,7 +17,7 @@
 // TENSOR-SAME: ins(%[[IN]] : tensor<128xf64>)
 // TENSOR-SAME: outs(%[[OUT]] : tensor<128xf64>)
 
-// OPT-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// OPT-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // OPT: arts_sde.cu_region <parallel> {
 // OPT: %c16 = arith.constant 16 : index
 // OPT: %[[TSTEP:.+]] = arith.muli %c1, %c16 : index

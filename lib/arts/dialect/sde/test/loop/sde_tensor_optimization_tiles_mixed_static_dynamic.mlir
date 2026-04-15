@@ -1,11 +1,11 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Verify that TensorOpt handles elementwise loops with dynamic
+// Verify that Tiling handles elementwise loops with dynamic
 // upper bounds. When the trip count is not statically known, the pass emits
 // runtime tile computation (CeilDivSI, MaxUI, MinUI) instead of a static
 // constant tile size.
 
-// CHECK-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// CHECK-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // CHECK: func.func @main
 // Dynamic tile computation: trip count derived from runtime bound
 // CHECK: arith.subi

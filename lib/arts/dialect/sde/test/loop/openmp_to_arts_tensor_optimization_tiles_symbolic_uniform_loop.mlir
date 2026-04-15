@@ -4,7 +4,7 @@
 
 // Verify that executable tensor tiling in SDE also handles symbolic trip
 // counts: RaiseToTensor materializes the tensor-backed carrier, and
-// TensorOpt synthesizes a symbolic tile size and rewrites the
+// Tiling synthesizes a symbolic tile size and rewrites the
 // surrounding sde.su_iterate so the tiled shape survives into arts.for.
 
 // TENSOR-LABEL: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
@@ -16,7 +16,7 @@
 // TENSOR-SAME: ins(%[[IN]] : tensor<?xf64>)
 // TENSOR-SAME: outs(%[[OUT]] : tensor<?xf64>)
 
-// OPT-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// OPT-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // OPT: arts_sde.cu_region <parallel> {
 // OPT: = arith.constant 0 : index
 // OPT: = arith.subi %arg2, %c0 : index
