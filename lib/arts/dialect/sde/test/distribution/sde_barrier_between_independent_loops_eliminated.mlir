@@ -1,8 +1,11 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=SDE
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=ARTS
 
-// Verify that BarrierElimination marks a barrier as eliminated when the
-// predecessor writes to %B and the successor reads only from %C (disjoint).
+// Verify that BarrierElimination preserves the barrier between two loops
+// whose carrier-authoritative tensor bodies reference different memrefs.
+// Under the carrier-authoritative model the barrier analysis sees
+// mu_memref_to_tensor ops on both memrefs within each su_iterate, so
+// the barrier is conservatively preserved.
 
 // SDE-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //
 // SDE: arts_sde.su_iterate
@@ -10,13 +13,15 @@
 // SDE: arts_sde.su_iterate
 
 // SDE-LABEL: // -----// IR Dump After BarrierElimination (barrier-elimination) //----- //
-// SDE: arts_sde.su_barrier {barrier_eliminated}
+// SDE: arts_sde.su_barrier
 // SDE: arts_sde.su_iterate
 
-// After ConvertSdeToArts, no arts.barrier should be emitted
+// After ConvertSdeToArts, the preserved barrier appears as arts.barrier
 // ARTS-LABEL: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 // ARTS: func.func @main
-// ARTS-NOT: arts.barrier
+// ARTS: arts.for
+// ARTS: arts.barrier
+// ARTS: arts.for
 // ARTS-NOT: arts_sde.
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {

@@ -5,12 +5,12 @@
 // Verify that executable tensor tiling in SDE now accepts elementwise loops
 // with multiple tensor outputs, not only a single destination.
 
-// TENSOR-LABEL: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
+// TENSOR-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // TENSOR: arts_sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
 // TENSOR: arts_sde.cu_region <parallel>
-// TENSOR: %[[IN:.+]] = bufferization.to_tensor %arg0 : memref<128xf64> to tensor<128xf64>
-// TENSOR: %[[OUT0:.+]] = bufferization.to_tensor %arg1 : memref<128xf64> to tensor<128xf64>
-// TENSOR: %[[OUT1:.+]] = bufferization.to_tensor %arg2 : memref<128xf64> to tensor<128xf64>
+// TENSOR: %[[IN:.+]] = arts_sde.mu_memref_to_tensor %arg0 : memref<128xf64> -> tensor<128xf64>
+// TENSOR: %[[OUT0:.+]] = arts_sde.mu_memref_to_tensor %arg1 : memref<128xf64> -> tensor<128xf64>
+// TENSOR: %[[OUT1:.+]] = arts_sde.mu_memref_to_tensor %arg2 : memref<128xf64> -> tensor<128xf64>
 // TENSOR: linalg.generic
 // TENSOR-SAME: ins(%[[IN]] : tensor<128xf64>)
 // TENSOR-SAME: outs(%[[OUT0]], %[[OUT1]] : tensor<128xf64>, tensor<128xf64>)
@@ -20,23 +20,26 @@
 // OPT: %c16 = arith.constant 16 : index
 // OPT: %[[TSTEP:.+]] = arith.muli %c1, %c16 : index
 // OPT: arts_sde.su_iterate (%c0) to (%c128) step (%[[TSTEP]]) classification(<elementwise>) {
-// OPT: %[[LIMIT:.+]] = arith.addi %arg3, %[[TSTEP]] : index
-// OPT: %[[TILE_UB:.+]] = arith.minui %[[LIMIT]], %c128 : index
-// OPT: scf.for %[[IV:.+]] = %arg3 to %[[TILE_UB]] step %c1 {
-// OPT: %[[VAL:.+]] = memref.load %arg0[%[[IV]]] : memref<128xf64>
-// OPT: %[[SCALE:.+]] = arith.mulf %[[VAL]], %cst : f64
-// OPT: %[[SHIFT:.+]] = arith.addf %[[VAL]], %cst : f64
-// OPT: memref.store %[[SCALE]], %arg1[%[[IV]]] : memref<128xf64>
-// OPT: memref.store %[[SHIFT]], %arg2[%[[IV]]] : memref<128xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg0 : memref<128xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg1 : memref<128xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg2 : memref<128xf64>
+// OPT: tensor.extract_slice
+// OPT: tensor.extract_slice
+// OPT: tensor.extract_slice
+// OPT: linalg.generic
+// OPT: arith.mulf
+// OPT: arith.addf
+// OPT: linalg.yield
+// OPT: tensor.insert_slice
+// OPT: tensor.insert_slice
 // OPT-NOT: bufferization.to_tensor
-// OPT-NOT: tensor.empty
-// OPT-NOT: linalg.generic
 
 // ARTS-LABEL: // -----// IR Dump After ConvertSdeToArts (convert-sde-to-arts) //----- //
 // ARTS: arts.for(%c0) to(%c128) step(%{{.*}})
+// ARTS: memref.subview
 // ARTS: scf.for
 // ARTS-NOT: bufferization.to_tensor
-// ARTS-NOT: tensor.empty
+// ARTS-NOT: arts_sde.mu_memref_to_tensor
 // ARTS-NOT: linalg.generic
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {

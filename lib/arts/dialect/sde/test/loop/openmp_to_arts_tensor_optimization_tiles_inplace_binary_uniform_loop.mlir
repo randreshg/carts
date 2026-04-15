@@ -6,12 +6,12 @@
 // the tensorized output buffer, and Tiling still rewrites the
 // surrounding sde.su_iterate into a tiled executable loop nest.
 
-// TENSOR-LABEL: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
+// TENSOR-LABEL: // -----// IR Dump After RaiseToLinalg (raise-to-linalg) //----- //
 // TENSOR: arts_sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
 // TENSOR: arts_sde.cu_region <parallel> {
-// TENSOR: %[[A:.+]] = bufferization.to_tensor %arg0 : memref<128xf64> to tensor<128xf64>
-// TENSOR: %[[B:.+]] = bufferization.to_tensor %arg1 : memref<128xf64> to tensor<128xf64>
-// TENSOR: %[[BOUT:.+]] = bufferization.to_tensor %arg1 : memref<128xf64> to tensor<128xf64>
+// TENSOR: %[[A:.+]] = arts_sde.mu_memref_to_tensor %arg0 : memref<128xf64> -> tensor<128xf64>
+// TENSOR: %[[B:.+]] = arts_sde.mu_memref_to_tensor %arg1 : memref<128xf64> -> tensor<128xf64>
+// TENSOR: %[[BOUT:.+]] = arts_sde.mu_memref_to_tensor %arg1 : memref<128xf64> -> tensor<128xf64>
 // TENSOR: linalg.generic
 // TENSOR-SAME: ins(%[[A]], %[[B]] : tensor<128xf64>, tensor<128xf64>)
 // TENSOR-SAME: outs(%[[BOUT]] : tensor<128xf64>)
@@ -22,16 +22,17 @@
 // OPT: %c16 = arith.constant 16 : index
 // OPT: %[[TSTEP:.+]] = arith.muli %c1, %c16 : index
 // OPT: arts_sde.su_iterate (%c0) to (%c128) step (%[[TSTEP]]) classification(<elementwise>) {
-// OPT: %[[LIMIT:.+]] = arith.addi %arg2, %[[TSTEP]] : index
-// OPT: %[[TILE_UB:.+]] = arith.minui %[[LIMIT]], %c128 : index
-// OPT: scf.for %[[IV:.+]] = %arg2 to %[[TILE_UB]] step %c1 {
-// OPT: %[[A:.+]] = memref.load %arg0[%[[IV]]] : memref<128xf64>
-// OPT: %[[B:.+]] = memref.load %arg1[%[[IV]]] : memref<128xf64>
-// OPT: %[[SUM:.+]] = arith.addf %[[B]], %[[A]] : f64
-// OPT: memref.store %[[SUM]], %arg1[%[[IV]]] : memref<128xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg0 : memref<128xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg1 : memref<128xf64>
+// OPT: arts_sde.mu_memref_to_tensor %arg1 : memref<128xf64>
+// OPT: tensor.extract_slice
+// OPT: tensor.extract_slice
+// OPT: tensor.extract_slice
+// OPT: linalg.generic
+// OPT: arith.addf
+// OPT: linalg.yield
+// OPT: tensor.insert_slice
 // OPT-NOT: bufferization.to_tensor
-// OPT-NOT: tensor.empty
-// OPT-NOT: linalg.generic
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @main(%A: memref<128xf64>, %B: memref<128xf64>) {

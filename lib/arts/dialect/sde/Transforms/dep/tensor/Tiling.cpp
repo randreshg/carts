@@ -26,6 +26,8 @@ namespace mlir::arts {
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -403,6 +405,74 @@ static SmallVector<int64_t> getStencilHaloWidths(sde::SdeSuIterateOp op) {
   return halos;
 }
 
+/// Check whether a body block is carrier-authoritative: it contains a
+/// linalg.generic carrier but NO scalar executable ops (memref.load/store)
+/// anywhere in the body, including nested regions (except inside the carrier
+/// itself). This distinguishes carrier-authoritative IR (where the carrier IS
+/// the computation) from dual-representation IR (where scalar ops coexist).
+static bool isCarrierAuthoritative(Block &body) {
+  bool hasCarrier = false;
+  bool hasScalar = false;
+  for (Operation &op : body.without_terminator()) {
+    if (isa<linalg::GenericOp>(op)) {
+      hasCarrier = true;
+      continue; // Don't walk into the carrier's own body.
+    }
+    if (isa<memref::LoadOp, memref::StoreOp>(op)) {
+      hasScalar = true;
+      continue;
+    }
+    // Walk into nested regions (scf.for, etc.) to find scalar ops.
+    op.walk([&](Operation *nested) {
+      if (isa<memref::LoadOp, memref::StoreOp>(nested))
+        hasScalar = true;
+    });
+  }
+  return hasCarrier && !hasScalar;
+}
+
+/// Check carrier-authoritative eligibility purely from the carrier's properties.
+/// In authoritative mode, the carrier IS the computation — no scalar body to
+/// inspect. We check iterator types, output projections, and disjointness
+/// directly from the linalg.generic.
+static bool isCarrierAuthoritativeCandidate(linalg::GenericOp carrier,
+                                            sde::SdeStructuredClassification cls) {
+  if (carrier.getNumDpsInits() == 0 || carrier.getNumLoops() == 0)
+    return false;
+
+  auto iterTypes = carrier.getIteratorTypesArray();
+  switch (cls) {
+  case sde::SdeStructuredClassification::elementwise:
+    // All iterators must be parallel, all output maps must be projected perms.
+    if (!llvm::all_of(iterTypes, [](utils::IteratorType t) {
+          return t == utils::IteratorType::parallel;
+        }))
+      return false;
+    for (unsigned i = 0; i < carrier.getNumDpsInits(); ++i) {
+      AffineMap map = carrier.getMatchingIndexingMap(
+          carrier.getDpsInitOperand(i));
+      if (!map.isProjectedPermutation())
+        return false;
+    }
+    return true;
+
+  case sde::SdeStructuredClassification::matmul:
+    return carrier.getNumLoops() == 3 && carrier.getNumDpsInits() == 1;
+
+  case sde::SdeStructuredClassification::reduction: {
+    bool hasParallel = false, hasReduction = false;
+    for (auto t : iterTypes) {
+      if (t == utils::IteratorType::parallel) hasParallel = true;
+      if (t == utils::IteratorType::reduction) hasReduction = true;
+    }
+    return hasParallel && hasReduction;
+  }
+
+  default:
+    return false;
+  }
+}
+
 static bool isTilingCandidate(sde::SdeSuIterateOp op, Block &body,
                               linalg::GenericOp tensorGeneric) {
   if (op.getChunkSize())
@@ -414,10 +484,16 @@ static bool isTilingCandidate(sde::SdeSuIterateOp op, Block &body,
   if (!op.getStructuredClassificationAttr())
     return false;
 
+  auto classification = *op.getStructuredClassification();
+
+  // Carrier-authoritative path: body has carrier but no scalar ops.
+  if (tensorGeneric && isCarrierAuthoritative(body))
+    return isCarrierAuthoritativeCandidate(tensorGeneric, classification);
+
+  // Dual-representation path: scalar body alongside carrier.
   unsigned numSuDims = op.getLowerBounds().size();
-  switch (*op.getStructuredClassification()) {
+  switch (classification) {
   case sde::SdeStructuredClassification::stencil:
-    // Stencils don't have tensor carriers; only verify loop nest structure.
     return op.getReductionAccumulators().size() == 0 &&
            isStencilCandidate(op, body);
   case sde::SdeStructuredClassification::elementwise:
@@ -437,10 +513,166 @@ static bool isTilingCandidate(sde::SdeSuIterateOp op, Block &body,
   }
 }
 
-static void cloneScalarBodyIntoTileLoop(Block &srcBody, IRMapping &mapper,
-                                        OpBuilder &builder) {
+/// Tile a carrier-authoritative body. Instead of creating scf.for tile loops
+/// and cloning scalar ops, construct extract_slice → tiled linalg.generic →
+/// insert_slice at the su_iterate body level.
+///
+/// For each carrier operand, the slicing is driven by the operand's indexing
+/// map: dimensions that reference a tiled parallel dim get sliced at
+/// [tileBase][tileSize], while untiled (reduction/full-range) dimensions
+/// keep their full range.
+static bool tileCarrierAuthoritative(linalg::GenericOp carrier,
+                                     Block &srcBody, OpBuilder &builder,
+                                     Value tileBase, Value tileSize,
+                                     unsigned tileDim,
+                                     IRMapping &mapper) {
+  Location loc = carrier.getLoc();
+
+  // 1. Clone carrier prep ops (mu_memref_to_tensor, bufferization.to_tensor,
+  //    tensor.empty, etc.) but NOT the carrier itself.
   for (Operation &op : srcBody.without_terminator()) {
-    if (isCarrierOp(op))
+    if (isa<linalg::GenericOp>(op))
+      continue;
+    builder.clone(op, mapper);
+  }
+
+  auto iterTypes = carrier.getIteratorTypesArray();
+  auto indexingMaps = carrier.getIndexingMapsArray();
+  unsigned numLoops = carrier.getNumLoops();
+
+  // Build a map: carrier loop dim → (isTiled, tileBase, tileSize).
+  // Only the tileDim is tiled; others keep full range.
+  // For N-dim carriers where the su_iterate provides dim 0 and inner dims
+  // are additional parallel dims, only dim tileDim is sliced here.
+
+  // Helper: for a given operand, compute extract_slice offsets/sizes/strides
+  // based on its indexing map.
+  auto sliceOperand = [&](Value operand, AffineMap map) -> Value {
+    Value mapped = mapper.lookupOrDefault(operand);
+    auto tensorTy = cast<RankedTensorType>(mapped.getType());
+    unsigned rank = tensorTy.getRank();
+
+    SmallVector<OpFoldResult> offsets(rank, builder.getIndexAttr(0));
+    SmallVector<OpFoldResult> sizes;
+    SmallVector<OpFoldResult> strides(rank, builder.getIndexAttr(1));
+
+    // Initialize sizes to full static extents.
+    for (unsigned d = 0; d < rank; ++d)
+      sizes.push_back(builder.getIndexAttr(tensorTy.getDimSize(d)));
+
+    // For each result dim of the map, check if it references the tiled
+    // carrier dim. If so, slice that operand dim.
+    for (unsigned r = 0; r < map.getNumResults(); ++r) {
+      AffineExpr expr = map.getResult(r);
+      if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
+        if (dimExpr.getPosition() == tileDim) {
+          offsets[r] = tileBase;
+          sizes[r] = tileSize;
+        }
+      }
+    }
+
+    // Check if any dim is actually dynamic (tiled).
+    bool needsSlice = false;
+    for (unsigned r = 0; r < rank; ++r) {
+      if (auto val = dyn_cast<Value>(offsets[r])) {
+        needsSlice = true;
+        break;
+      }
+      if (auto val = dyn_cast<Value>(sizes[r])) {
+        needsSlice = true;
+        break;
+      }
+    }
+    if (!needsSlice)
+      return mapped;
+
+    return tensor::ExtractSliceOp::create(builder, loc, mapped, offsets, sizes,
+                                          strides);
+  };
+
+  // 2. Slice each carrier input.
+  SmallVector<Value> slicedInputs;
+  for (auto [idx, input] : llvm::enumerate(carrier.getDpsInputs())) {
+    AffineMap map = indexingMaps[idx];
+    Value sliced = sliceOperand(input, map);
+    slicedInputs.push_back(sliced);
+  }
+
+  // 3. Slice each carrier output.
+  unsigned inputCount = carrier.getNumDpsInputs();
+  SmallVector<Value> slicedOutputs;
+  SmallVector<Value> fullOutputs; // for insert_slice targets
+  for (auto [idx, output] : llvm::enumerate(carrier.getDpsInits())) {
+    AffineMap map = indexingMaps[inputCount + idx];
+    Value mappedFull = mapper.lookupOrDefault(output);
+    fullOutputs.push_back(mappedFull);
+    Value sliced = sliceOperand(output, map);
+    slicedOutputs.push_back(sliced);
+  }
+
+  // 4. Compute result types from sliced outputs.
+  SmallVector<Type> resultTypes;
+  for (Value out : slicedOutputs)
+    resultTypes.push_back(out.getType());
+
+  // 5. Create tiled linalg.generic with sliced operands.
+  // The carrier body may reference values outside the carrier (e.g., su_iterate
+  // block args). Start from the parent mapper so those external references are
+  // remapped to the new body's arguments.
+  auto tiledGeneric = linalg::GenericOp::create(
+      builder, loc, resultTypes, slicedInputs, slicedOutputs, indexingMaps,
+      iterTypes,
+      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+        IRMapping bodyMapper(mapper);
+        Block &carrierBody = carrier.getRegion().front();
+        for (auto [oldArg, newArg] :
+             llvm::zip(carrierBody.getArguments(), blockArgs))
+          bodyMapper.map(oldArg, newArg);
+        for (Operation &op : carrierBody.without_terminator())
+          nestedBuilder.clone(op, bodyMapper);
+        auto carrierYield =
+            cast<linalg::YieldOp>(carrierBody.getTerminator());
+        SmallVector<Value> yieldValues;
+        for (Value v : carrierYield.getValues())
+          yieldValues.push_back(bodyMapper.lookupOrDefault(v));
+        linalg::YieldOp::create(nestedBuilder, nestedLoc, yieldValues);
+      });
+
+  // 6. Insert_slice each output result back into the full tensor.
+  for (auto [idx, result] : llvm::enumerate(tiledGeneric.getResults())) {
+    AffineMap map = indexingMaps[inputCount + idx];
+    auto fullTensorTy = cast<RankedTensorType>(fullOutputs[idx].getType());
+    unsigned rank = fullTensorTy.getRank();
+
+    SmallVector<OpFoldResult> offsets(rank, builder.getIndexAttr(0));
+    SmallVector<OpFoldResult> sizes;
+    SmallVector<OpFoldResult> strides(rank, builder.getIndexAttr(1));
+    for (unsigned d = 0; d < rank; ++d)
+      sizes.push_back(builder.getIndexAttr(fullTensorTy.getDimSize(d)));
+
+    for (unsigned r = 0; r < map.getNumResults(); ++r) {
+      AffineExpr expr = map.getResult(r);
+      if (auto dimExpr = dyn_cast<AffineDimExpr>(expr)) {
+        if (dimExpr.getPosition() == tileDim) {
+          offsets[r] = tileBase;
+          sizes[r] = tileSize;
+        }
+      }
+    }
+
+    tensor::InsertSliceOp::create(builder, loc, result, fullOutputs[idx],
+                                  offsets, sizes, strides);
+  }
+
+  return true;
+}
+
+static void cloneBodyIntoTileLoop(Block &srcBody, IRMapping &mapper,
+                                  OpBuilder &builder) {
+  bool authoritative = isCarrierAuthoritative(srcBody);
+  for (Operation &op : srcBody.without_terminator()) {
+    if (!authoritative && isCarrierOp(op))
       continue;
     builder.clone(op, mapper);
   }
@@ -523,12 +755,23 @@ struct TilingPass
         }
         // Cache-friendly tile: prefer tiles that fit in L2 cache
         int64_t elemSize = 8; // default f64
+        // Try memref stores first; fall back to carrier output type.
+        bool foundElem = false;
         op.getBody().walk([&](memref::StoreOp storeOp) {
           Type elemType = storeOp.getValueToStore().getType();
           if (elemType.isF32() || elemType.isInteger(32))
             elemSize = 4;
+          foundElem = true;
           return WalkResult::interrupt();
         });
+        if (!foundElem && tensorGeneric && tensorGeneric.getNumDpsInits() > 0) {
+          Type outTy = tensorGeneric.getDpsInits()[0].getType();
+          if (auto shapedTy = dyn_cast<ShapedType>(outTy)) {
+            Type et = shapedTy.getElementType();
+            if (et.isF32() || et.isInteger(32))
+              elemSize = 4;
+          }
+        }
         int64_t l2Size = costModel->getL2CacheSize();
         int64_t cacheLineTile =
             l2Size / (elemSize * std::max<unsigned>(1, numDims));
@@ -583,31 +826,56 @@ struct TilingPass
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(&newBody);
 
-      // Build nested scf.for tile loops for parallel dims only.
-      // Reduction dims pass through directly (no tiling).
-      IRMapping mapper;
       Block &srcBody = op.getBody().front();
       Block *computeBody = sde::getSuIterateComputeBlock(op);
-      for (unsigned d = 0; d < numDims; ++d) {
-        Value tileBase = newBody.getArgument(d);
-        if (!parallelMask[d]) {
-          // Reduction dim: map directly, no tile loop.
-          mapper.map(srcBody.getArgument(d), tileBase);
-          continue;
-        }
-        Value tileLimit =
-            arith::AddIOp::create(rewriter, loc, tileBase, tiledSteps[d]);
-        Value tileUpper = arith::MinUIOp::create(rewriter, loc, tileLimit,
-                                                  op.getUpperBounds()[d]);
-        Value originalStep = op.getSteps()[d];
-        auto tileLoop = scf::ForOp::create(rewriter, loc, tileBase, tileUpper,
-                                            originalStep);
-        mapper.map(srcBody.getArgument(d), tileLoop.getInductionVar());
-        rewriter.setInsertionPointToStart(tileLoop.getBody());
-      }
 
-      // Clone scalar body into the innermost tile loop.
-      cloneScalarBodyIntoTileLoop(*computeBody, mapper, rewriter);
+      // Carrier-authoritative path: tile the carrier directly via
+      // extract_slice → tiled linalg.generic → insert_slice.
+      // No scf.for tile loop — the carrier encodes the iteration.
+      if (tensorGeneric && isCarrierAuthoritative(*computeBody)) {
+        // For 1-D: tile dim 0 (the su_iterate dim).
+        // Compute dynamic tile size: min(tileStep, ub - base).
+        Value tileBase = newBody.getArgument(0);
+        Value rem = arith::SubIOp::create(rewriter, loc,
+                                           op.getUpperBounds()[0], tileBase);
+        Value tileSizeVal = arith::MinUIOp::create(rewriter, loc,
+                                                    perDimTileIter[0], rem);
+        // Map old body's block args → new body's block args so that any
+        // ops cloned from the old body that reference iteration variables
+        // will point to the new body's arguments (not the old, soon-erased
+        // ones).
+        IRMapping carrierMapper;
+        for (unsigned d = 0; d < numDims; ++d)
+          carrierMapper.map(srcBody.getArgument(d), newBody.getArgument(d));
+        tileCarrierAuthoritative(tensorGeneric, *computeBody, rewriter,
+                                 tileBase, tileSizeVal, /*tileDim=*/0,
+                                 carrierMapper);
+      } else {
+        // Dual-representation path: build nested scf.for tile loops for
+        // parallel dims only. Reduction dims pass through directly.
+        IRMapping mapper;
+        for (unsigned d = 0; d < numDims; ++d) {
+          Value tileBase = newBody.getArgument(d);
+          if (!parallelMask[d]) {
+            // Reduction dim: map directly, no tile loop.
+            mapper.map(srcBody.getArgument(d), tileBase);
+            continue;
+          }
+          Value tileLimit =
+              arith::AddIOp::create(rewriter, loc, tileBase, tiledSteps[d]);
+          Value tileUpper = arith::MinUIOp::create(rewriter, loc, tileLimit,
+                                                    op.getUpperBounds()[d]);
+          Value originalStep = op.getSteps()[d];
+          auto tileLoop = scf::ForOp::create(rewriter, loc, tileBase,
+                                              tileUpper, originalStep);
+          mapper.map(srcBody.getArgument(d), tileLoop.getInductionVar());
+          rewriter.setInsertionPointToStart(tileLoop.getBody());
+        }
+
+        // Clone body into the innermost tile loop. In dual-representation
+        // mode, skips carrier ops.
+        cloneBodyIntoTileLoop(*computeBody, mapper, rewriter);
+      }
 
       // Yield at the end of the su_iterate body (not inside nested loops).
       rewriter.setInsertionPointToEnd(&newBody);
