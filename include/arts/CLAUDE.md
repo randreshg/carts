@@ -13,7 +13,9 @@ dialect/           MLIR dialect definitions
     IR/            RtDialect.h, RtOps.td
     Transforms/    DataPtrHoistingInternal.h, Passes.h/td
   sde/
+    Analysis/      StructuredOpAnalysis.h
     IR/            SdeDialect.h, SdeOps.td
+    Transforms/    Passes.h, Passes.td (umbrella), StatePasses.td, DepPasses.td, EffectPasses.td, ConversionPasses.td, VerifyPasses.td
 passes/            Pass declarations (Passes.h, Passes.td)
 utils/             Utilities
   OperationAttributes.h   AttrNames::Operation — centralized attribute name strings
