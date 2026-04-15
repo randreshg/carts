@@ -70,24 +70,30 @@ boundary is the FIRST transformation after ConvertOpenMPToSde, not a late aftert
 ConvertOpenMPToSde
   |
   v
-RaiseToTensor          (NEW -- first pass, raises ALL memrefs to tensor SSA)
+RaiseToTensor          (first pass, raises memrefs to tensor SSA)
   |
   v
-RaiseToLinalg          (REVISED -- pattern-matches tensor ops into linalg.generic)
+RaiseToLinalg          (pattern-matches tensor ops into linalg.generic)
   |
   v
-ScopeSelection         (now sees tensor-level IR)
-ScheduleRefinement     (now sees tensor-level IR)
-ChunkOpt               (now sees tensor-level IR)
-ReductionStrategy      (now sees tensor-level IR)
 LoopInterchange
 TensorOpt
 StructuredSummaries
 ElementwiseFusion
+ScopeSelection         (now sees post-optimization tensor-level IR)
+ScheduleRefinement     (now sees post-optimization tensor-level IR)
+ChunkOpt               (now sees post-optimization tensor-level IR)
+ReductionStrategy      (now sees post-optimization tensor-level IR)
 DistributionPlanning
 IterationSpaceDecomposition
 BarrierElimination
+LowerToMemref
+ConvertToCodelet
 ConvertSdeToArts
+VerifySdeLowered
+DCE
+CSE
+VerifyEdtCreated
 ```
 
 **Key changes**:
@@ -254,17 +260,17 @@ threaded to subsequent consumers.
 
 ## 3. Implementation Plan
 
-### Phase 0: Preparation (no functional change)
+### Phase 0: Preparation (no functional change) -- **DONE**
 
-- [ ] **P0.1**: Audit `cu_region` / `su_iterate` / `cu_task` TableGen definitions to
+- [x] **P0.1**: Audit `cu_region` / `su_iterate` / `cu_task` TableGen definitions to
   understand what operand changes are needed.
-- [ ] **P0.2**: Ensure `sde.mu_data`, `sde.mu_token`, `sde.cu_codelet` ops and their
+- [x] **P0.2**: Ensure `sde.mu_data`, `sde.mu_token`, `sde.cu_codelet` ops and their
   ConvertSdeToArts lowering patterns work for rank-0 tensors (`tensor<i32>` for scalars).
   Add lit tests if missing.
-- [ ] **P0.3**: Verify that ConvertSdeToArts can lower `cu_codelet` + `mu_token` for
+- [x] **P0.3**: Verify that ConvertSdeToArts can lower `cu_codelet` + `mu_token` for
   `cu_region <single>` semantics (single-execution EDT with shared data access).
 
-### Phase 1: New RaiseToTensor (tensor-first)
+### Phase 1: New RaiseToTensor (tensor-first) -- **DONE** (different mechanism: iter_args on cu_region instead of mu_data/mu_token)
 
 - [ ] **P1.1**: Create new `RaiseToTensor.cpp` (replaces existing). Algorithm:
   1. Collect memref.alloca ops used inside SDE regions
@@ -293,15 +299,15 @@ threaded to subsequent consumers.
   (`StructuredOpAnalysis`) should work on tensor indexing maps directly.
 - [ ] **P2.4**: Update lit tests.
 
-### Phase 3: Pipeline Reorder
+### Phase 3: Pipeline Reorder -- **DONE** (commit `17556d53`)
 
-- [ ] **P3.1**: Move `RaiseToTensor` to position #1 (right after ConvertOpenMPToSde).
-- [ ] **P3.2**: Move `RaiseToLinalg` to position #2.
-- [ ] **P3.3**: Remove old `RaiseToTensor` (carrier converter) -- subsumed.
-- [ ] **P3.4**: Remove `RaiseMemrefToTensor` -- subsumed by new `RaiseToTensor`.
-- [ ] **P3.5**: Verify ScopeSelection/ScheduleRefinement/etc. work on tensor-level IR.
+- [x] **P3.1**: Move `RaiseToTensor` to position #1 (right after ConvertOpenMPToSde).
+- [x] **P3.2**: Move `RaiseToLinalg` to position #2.
+- [x] **P3.3**: Remove old `RaiseToTensor` (carrier converter) -- subsumed.
+- [x] **P3.4**: Remove `RaiseMemrefToTensor` -- subsumed by new `RaiseToTensor`.
+- [x] **P3.5**: Verify ScopeSelection/ScheduleRefinement/etc. work on tensor-level IR.
   These passes may need updates to read tensor types instead of memref types.
-- [ ] **P3.6**: Full test suite pass (`dekk carts test --suite all`).
+- [x] **P3.6**: Full test suite pass (`dekk carts test --suite all`).
 
 ### Phase 4: ConvertSdeToArts Updates
 
@@ -313,7 +319,7 @@ threaded to subsequent consumers.
 - [ ] **P4.4**: Verify boundary materialization pattern is correct for main-function
   readers that consume `sum` after the parallel region.
 
-### Phase 5: Cleanup
+### Phase 5: Cleanup -- **partial**
 
 - [ ] **P5.1**: Remove dead code from old raise passes.
 - [ ] **P5.2**: Rename files for clarity: `state/RaiseToTensor.cpp` is the canonical
@@ -369,6 +375,7 @@ had three overlapping passes. Net pass count decreases by 1.
 
 ### Modified
 - `lib/arts/dialect/sde/Transforms/state/raising/RaiseToLinalg.cpp` -- accept tensor input
+- `lib/arts/dialect/sde/Transforms/state/raising/LowerToMemref.cpp` -- tensor-to-memref lowering (inverse of RaiseToTensor)
 - `tools/compile/Compile.cpp` -- pipeline reorder (lines 658-669)
 - `lib/arts/dialect/core/Conversion/SdeToArts/SdeToArtsPatterns.cpp` -- verify codelet lowering
 - `include/arts/dialect/sde/Transforms/Passes.td` -- remove RaiseMemrefToTensor pass def
@@ -544,3 +551,11 @@ passes that read the body are RaiseToLinalg (which would read tensor ops
 instead of memref ops) and StructuredSummaries (which reads linalg carriers).
 
 **Conclusion**: Tensor-first ordering is safe for all current passes.
+
+### 1.4 Implementation Status (as of 2026-04-15)
+
+Problems #3 (wrong ordering) and #4 (cu_region blind spot) from Section 1.3 are now RESOLVED:
+- Wrong ordering: Fixed by commit `17556d53` (SDE pipeline reorder: dep passes before effect passes)
+- cu_region blind spot: Fixed by commit `332bb7f9` (tensor-first step 0: cu_region iter_args + barrier after single/master)
+
+The current pipeline uses iter_args on cu_region ops instead of the mu_data/mu_token mechanism proposed in Section 2.3. This is a simpler mechanism that achieves the same SSA data flow goals.

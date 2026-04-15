@@ -276,7 +276,7 @@ PD(seed)
   -> generic stencil evidence
   |
   v
-SdeIterationSpaceDecomposition (in openmp-to-arts stage)
+IterationSpaceDecomposition (in openmp-to-arts stage)
   -> isolate interior from boundary handling
   |
   v

@@ -3,7 +3,7 @@
 ## Summary
 
 This branch does not use linalg or tensor as a diagnostic-only experiment.
-`RaiseToLinalg`, `RaiseToTensor`, and `SdeTensorOptimization` are real SDE
+`RaiseToLinalg`, `RaiseToTensor`, and `TensorOpt` are real SDE
 passes in the OpenMP-to-ARTS pipeline. They materialize transient carriers
 inside `arts_sde.su_iterate`, use those carriers to recover or transform
 structured computation at the SDE level, and then let `ConvertSdeToArts`
@@ -22,18 +22,26 @@ The relevant part of `buildOpenMPToArtsPipeline` is:
 
 ```text
 ConvertOpenMPToSde
-  -> SdeScopeSelection
-  -> SdeScheduleRefinement
-  -> SdeChunkOptimization
-  -> SdeReductionStrategy
-  -> RaiseToLinalg
   -> RaiseToTensor
-  -> SdeTensorOptimization
-  -> SdeStructuredSummaries
-  -> SdeElementwiseFusion
-  -> SdeDistributionPlanning
-  -> SdeIterationSpaceDecomposition
+  -> RaiseToLinalg
+  -> LoopInterchange
+  -> TensorOpt
+  -> StructuredSummaries
+  -> ElementwiseFusion
+  -> ScopeSelection
+  -> ScheduleRefinement
+  -> ChunkOpt
+  -> ReductionStrategy
+  -> DistributionPlanning
+  -> IterationSpaceDecomposition
+  -> BarrierElimination
+  -> LowerToMemref
+  -> ConvertToCodelet
   -> ConvertSdeToArts
+  -> VerifySdeLowered
+  -> DCE
+  -> CSE
+  -> VerifyEdtCreated
 ```
 
 That means linalg and tensor work happens before ARTS IR exists. The SDE phase
@@ -51,11 +59,11 @@ sequence may attach one of two transient structured carriers inside that loop:
 - a memref-backed `linalg.generic`
 - a tensor-backed `linalg.generic`
 
-The original loop and scalar or memref body remain authoritative through the
-SDE phase. The carrier exists to make structure explicit enough for SDE-local
-analysis and transform passes. After that, `ConvertSdeToArts` consumes the
-carrier, stamps the recovered contract data onto the lowered ARTS ops, and
-erases the carrier chain.
+After RaiseToTensor, tensor SSA is the authoritative representation inside
+SDE regions. The carrier makes structure explicit enough for SDE-local
+analysis and transform passes. LowerToMemref restores memref form before
+ConvertSdeToArts, which consumes the recovered contract data and stamps it
+onto the lowered ARTS ops.
 
 This is why the current design preserves both properties at once:
 
@@ -184,9 +192,9 @@ After, preserved-value or in-place:
                     outs(%tout : tensor<...>) { ... }
 ```
 
-## `SdeTensorOptimization`
+## `TensorOpt`
 
-`SdeTensorOptimization` performs real SDE tensor-level transforms using the
+`TensorOpt` performs real SDE tensor-level transforms using the
 active `SDECostModel`. It does not just inspect carriers. It rewrites the
 surrounding `arts_sde.su_iterate` so the optimized loop structure survives
 back into executable memref or loop IR after the carrier is erased.
@@ -282,8 +290,10 @@ The current implementation is deliberately narrow.
 |---|---|
 | `RaiseToLinalg` | elementwise, narrow matmul, narrow 1-D single-accumulator reduction |
 | `RaiseToTensor` | supported raised carriers with per-output init selection |
-| `SdeTensorOptimization` | 1-D elementwise tiling, narrow matmul tiling, 2-D disjoint-write elementwise tiling |
+| `TensorOpt` | 1-D elementwise tiling, narrow matmul tiling, 2-D disjoint-write elementwise tiling |
 | `ConvertSdeToArts` | carrier-derived contract recovery plus classification-only fallback recovery |
+| `LowerToMemref` | tensor-backed carriers and tensor SSA lowered back to memref form |
+| `ConvertToCodelet` | cu_region single iter_args to mu_data/mu_token/cu_codelet graph |
 
 ## Current Limitations
 
@@ -293,8 +303,8 @@ yet a fully general linalg or tensor optimizer.
 - `RaiseToLinalg` still keeps stencil loops and broader reduction shapes on the
   fallback path.
 - `RaiseToTensor` does not tensorize arbitrary memref loop bodies.
-- `SdeTensorOptimization` does not yet transform stencil kernels.
-- `SdeTensorOptimization` does not yet perform tensor-side reduction
+- `TensorOpt` does not yet transform stencil kernels.
+- `TensorOpt` does not yet perform tensor-side reduction
   transformations.
 - The current matmul and disjoint-write support is intentionally narrow and
   tied to executable subsets that can lower cleanly back into the existing
@@ -312,7 +322,7 @@ The current state is:
 
 - `RaiseToLinalg` builds real transient memref-backed carriers
 - `RaiseToTensor` builds real transient tensor-backed carriers
-- `SdeTensorOptimization` performs real cost-model-guided SDE transforms
+- `TensorOpt` performs real cost-model-guided SDE transforms
 - `ConvertSdeToArts` consumes and erases those carriers before the ARTS phase
 
 That is the current implemented design on this branch.
