@@ -664,15 +664,15 @@ void buildOpenMPToArtsPipeline(PassManager &pm,
   // tensor/linalg form for correct decisions.
   pm.addPass(arts::sde::createRaiseToLinalgPass());
   pm.addPass(arts::sde::createRaiseToTensorPass());
-  // Effect passes now read tensor/linalg form.
-  pm.addPass(arts::sde::createScopeSelectionPass(costModel));
-  pm.addPass(arts::sde::createScheduleRefinementPass(costModel));
-  pm.addPass(arts::sde::createChunkOptPass(costModel));
-  pm.addPass(arts::sde::createReductionStrategyPass(costModel));
+  // Dep passes first (structural transforms), then effect passes (scheduling decisions).
   pm.addPass(arts::sde::createLoopInterchangePass());
   pm.addPass(arts::sde::createTensorOptPass(costModel));
   pm.addPass(arts::sde::createStructuredSummariesPass(costModel));
   pm.addPass(arts::sde::createElementwiseFusionPass());
+  pm.addPass(arts::sde::createScopeSelectionPass(costModel));
+  pm.addPass(arts::sde::createScheduleRefinementPass(costModel));
+  pm.addPass(arts::sde::createChunkOptPass(costModel));
+  pm.addPass(arts::sde::createReductionStrategyPass(costModel));
   pm.addPass(arts::sde::createDistributionPlanningPass(costModel));
   pm.addPass(arts::sde::createIterationSpaceDecompositionPass());
   pm.addPass(arts::sde::createBarrierEliminationPass(costModel));
