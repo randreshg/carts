@@ -60,7 +60,7 @@ lib/arts/dialect/sde/
 │   │   │
 │   │   ├── loop/                            ── loop-level transforms [NEW sub-group]
 │   │   │   ├── LoopInterchange.cpp          ── dimension reordering via carrier maps
-│   │   │   ├── TensorOpt.cpp               ── cost-model-driven tiling
+│   │   │   ├── Tiling.cpp               ── cost-model-driven tiling
 │   │   │   └── IterationSpaceDecomposition.cpp  ── stencil boundary peeling
 │   │   │
 │   │   └── fusion/                          ── operation merging [NEW sub-group]
@@ -99,7 +99,7 @@ lib/arts/dialect/sde/
     │   ├── raise_memref_dimensionality_*.mlir           (3 files)
     │   └── omp_region_helper_inlining_raise_memref.mlir
     │
-    ├── loop/                                ── LoopInterchange, TensorOpt, IterSpaceDecomp tests
+    ├── loop/                                ── LoopInterchange, Tiling, IterSpaceDecomp tests
     │   ├── sde_loop_interchange_*.mlir                 (4 files)
     │   ├── sde_tensor_optimization_tiles_*.mlir        (5 files)
     │   ├── openmp_to_arts_tensor_optimization_*.mlir   (8 files)
@@ -171,7 +171,7 @@ Phase 2: RAISE      │  RaiseToLinalg   │  classification + memref carrier
                     ┌────────▼────────┐
                     │    dep/loop/    │
 Phase 3: TRANSFORM  │  LoopInterchange │  dimension reordering
-                    │  TensorOpt      │  cost-model tiling
+                    │  Tiling      │  cost-model tiling
                     └────────┬────────┘
                              │
                     ┌────────▼────────┐
@@ -231,7 +231,7 @@ Phase 10: VERIFY    │    Verify/      │  VerifySdeLowered
 | ScalarForwarding.cpp | state/ | state/codelet/ | Sub-group: codelet formation |
 | StructuredSummaries.cpp | state/ | state/ (stays) | Top-level state — analysis materialization |
 | LoopInterchange.cpp | dep/ | dep/loop/ | Sub-group: loop transforms |
-| TensorOpt.cpp | dep/ | dep/loop/ | Sub-group: loop transforms |
+| Tiling.cpp | dep/ | dep/loop/ | Sub-group: loop transforms |
 | IterationSpaceDecomposition.cpp | dep/ | dep/loop/ | Sub-group: loop transforms |
 | ElementwiseFusion.cpp | dep/ | dep/fusion/ | Sub-group: operation merging |
 | ScopeSelection.cpp | effect/ | effect/scheduling/ | Sub-group: execution policy |
@@ -287,7 +287,7 @@ The sub-grouping anticipates these additions (from sde-optimization-opportunitie
 - `CodeletBufferization.cpp` — one-shot bufferize at codelet boundary
 
 ### dep/loop/ (tiling improvements)
-- `TileAndFuse.cpp` — upstream TilingInterface+CustomOp replaces TensorOpt manual tiling
+- `TileAndFuse.cpp` — upstream TilingInterface+CustomOp replaces Tiling manual tiling
 - `StencilTiling.cpp` — diamond tiling for time-iterated stencils
 
 ### dep/fusion/ (inter-codelet merging)
@@ -323,7 +323,7 @@ Passes that change the shape of the computation based on data dependency analysi
 They answer: "What computes what?"
 
 - **loop/**: Transform loop structure — reorder dimensions (interchange),
-  strip-mine into tiles (TensorOpt), decompose iteration space into
+  strip-mine into tiles (Tiling), decompose iteration space into
   interior/boundary regions (IterationSpaceDecomposition).
 - **fusion/**: Merge operations that are data-compatible — fuse adjacent
   elementwise loops into a single pipelined loop.
@@ -392,7 +392,7 @@ add_mlir_dialect_library(ArtsSdeTransforms
 
   # dep/
   dep/loop/LoopInterchange.cpp
-  dep/loop/TensorOpt.cpp
+  dep/loop/Tiling.cpp
   dep/loop/IterationSpaceDecomposition.cpp
   dep/fusion/ElementwiseFusion.cpp
 

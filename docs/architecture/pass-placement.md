@@ -32,7 +32,7 @@ lib/arts/dialect/sde/Transforms/
   RaiseToLinalg
   RaiseToTensor
   LoopInterchange
-  TensorOpt
+  Tiling
   StructuredSummaries
   ElementwiseFusion
   DistributionPlanning
@@ -100,7 +100,7 @@ sde/Transforms:
   RaiseToLinalg
   RaiseToTensor
   LoopInterchange
-  TensorOpt
+  Tiling
   StructuredSummaries
   ElementwiseFusion
   DistributionPlanning
@@ -334,7 +334,7 @@ shared / utility:
 
 ## Notes on the Current Layout
 
-- `RaiseToLinalg`, `RaiseToTensor`, and `TensorOpt` are real SDE
+- `RaiseToLinalg`, `RaiseToTensor`, and `Tiling` are real SDE
   passes on this branch. They are not documentation-only placeholders.
 - The tensor/linalg window is transient and SDE-owned. `ConvertSdeToArts`
   consumes it directly instead of handing off to a separately scheduled

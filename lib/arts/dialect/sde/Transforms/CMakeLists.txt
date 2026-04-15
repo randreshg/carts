@@ -3,6 +3,7 @@ file(GLOB CARTS_SDE_TRANSFORMS_SOURCE_FILES CONFIGURE_DEPENDS
     "state/raising/*.cpp"
     "state/codelet/*.cpp"
     "dep/loop/*.cpp"
+    "dep/tensor/*.cpp"
     "dep/fusion/*.cpp"
     "effect/scheduling/*.cpp"
     "effect/distribution/*.cpp"

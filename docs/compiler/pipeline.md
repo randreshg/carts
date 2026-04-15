@@ -87,7 +87,7 @@ dropped since the dialect location already carries that information.
 6. `RaiseToLinalg`
 7. `RaiseToTensor`
 8. `LoopInterchange`
-9. `TensorOpt`
+9. `Tiling`
 10. `StructuredSummaries`
 11. `ElementwiseFusion`
 12. `DistributionPlanning`

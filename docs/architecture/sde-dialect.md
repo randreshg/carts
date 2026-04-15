@@ -21,7 +21,7 @@ ConvertOpenMPToSde
   -> RaiseToLinalg
   -> RaiseToTensor
   -> LoopInterchange
-  -> TensorOpt
+  -> Tiling
   -> StructuredSummaries
   -> ElementwiseFusion
   -> DistributionPlanning
@@ -94,7 +94,7 @@ The branch currently implements these SDE-owned decisions:
   bodies, including the current narrow reduction subset.
 - `RaiseToTensor` creates transient tensor carriers on supported linalg
   carriers, including the current disjoint-init and cast-alias-safe cases.
-- `TensorOpt` performs real SDE-stage tensor/linalg
+- `Tiling` performs real SDE-stage tensor/linalg
   transformations on the supported elementwise and matmul subsets.
 - `ConvertSdeToArts` forwards the selected SDE semantics into ARTS and erases
   transient carrier IR.

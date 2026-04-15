@@ -15,7 +15,7 @@
 // TENSOR-SAME: ins(%[[A]], %[[B]] : tensor<128xf64>, tensor<128xf64>)
 // TENSOR-SAME: outs(%[[OUT]] : tensor<128xf64>)
 
-// OPT-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// OPT-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // OPT: arts_sde.cu_region <parallel> {
 // OPT: %c16 = arith.constant 16 : index
 // OPT: %[[TSTEP:.+]] = arith.muli %c1, %c16 : index

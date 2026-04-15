@@ -1,10 +1,10 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from openmp-to-arts --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Verify that TensorOpt tiles a stencil su_iterate when
+// Verify that Tiling tiles a stencil su_iterate when
 // accessMinOffsets/accessMaxOffsets are present. The tile size must be at
 // least as large as the halo width (maxOffset - minOffset + 1 = 3 per dim).
 
-// CHECK-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// CHECK-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // CHECK: func.func @main
 // The halo width is 3 (from [-1,1]), so the tile must be max(balanced, 3).
 // CHECK: %[[HALO:.+]] = arith.constant 3 : index

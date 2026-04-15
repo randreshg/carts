@@ -76,7 +76,7 @@ std::unique_ptr<Pass> createConvertToCodeletPass();
 // --- Dep passes (structural transforms) ---
 std::unique_ptr<Pass> createLoopInterchangePass();
 std::unique_ptr<Pass>
-createTensorOptPass(SDECostModel *costModel = nullptr);
+createTilingPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createStructuredSummariesPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createElementwiseFusionPass();

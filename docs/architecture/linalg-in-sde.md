@@ -3,7 +3,7 @@
 ## Summary
 
 This branch does not use linalg or tensor as a diagnostic-only experiment.
-`RaiseToLinalg`, `RaiseToTensor`, and `TensorOpt` are real SDE
+`RaiseToLinalg`, `RaiseToTensor`, and `Tiling` are real SDE
 passes in the OpenMP-to-ARTS pipeline. They materialize transient carriers
 inside `arts_sde.su_iterate`, use those carriers to recover or transform
 structured computation at the SDE level, and then let `ConvertSdeToArts`
@@ -25,7 +25,7 @@ ConvertOpenMPToSde
   -> RaiseToTensor
   -> RaiseToLinalg
   -> LoopInterchange
-  -> TensorOpt
+  -> Tiling
   -> StructuredSummaries
   -> ElementwiseFusion
   -> ScopeSelection
@@ -192,9 +192,9 @@ After, preserved-value or in-place:
                     outs(%tout : tensor<...>) { ... }
 ```
 
-## `TensorOpt`
+## `Tiling`
 
-`TensorOpt` performs real SDE tensor-level transforms using the
+`Tiling` performs real SDE tensor-level transforms using the
 active `SDECostModel`. It does not just inspect carriers. It rewrites the
 surrounding `arts_sde.su_iterate` so the optimized loop structure survives
 back into executable memref or loop IR after the carrier is erased.
@@ -290,7 +290,7 @@ The current implementation is deliberately narrow.
 |---|---|
 | `RaiseToLinalg` | elementwise, narrow matmul, narrow 1-D single-accumulator reduction |
 | `RaiseToTensor` | supported raised carriers with per-output init selection |
-| `TensorOpt` | 1-D elementwise tiling, narrow matmul tiling, 2-D disjoint-write elementwise tiling |
+| `Tiling` | 1-D elementwise tiling, narrow matmul tiling, 2-D disjoint-write elementwise tiling |
 | `ConvertSdeToArts` | carrier-derived contract recovery plus classification-only fallback recovery |
 | `LowerToMemref` | tensor-backed carriers and tensor SSA lowered back to memref form |
 | `ConvertToCodelet` | cu_region single iter_args to mu_data/mu_token/cu_codelet graph |
@@ -303,8 +303,8 @@ yet a fully general linalg or tensor optimizer.
 - `RaiseToLinalg` still keeps stencil loops and broader reduction shapes on the
   fallback path.
 - `RaiseToTensor` does not tensorize arbitrary memref loop bodies.
-- `TensorOpt` does not yet transform stencil kernels.
-- `TensorOpt` does not yet perform tensor-side reduction
+- `Tiling` does not yet transform stencil kernels.
+- `Tiling` does not yet perform tensor-side reduction
   transformations.
 - The current matmul and disjoint-write support is intentionally narrow and
   tied to executable subsets that can lower cleanly back into the existing
@@ -322,7 +322,7 @@ The current state is:
 
 - `RaiseToLinalg` builds real transient memref-backed carriers
 - `RaiseToTensor` builds real transient tensor-backed carriers
-- `TensorOpt` performs real cost-model-guided SDE transforms
+- `Tiling` performs real cost-model-guided SDE transforms
 - `ConvertSdeToArts` consumes and erases those carriers before the ARTS phase
 
 That is the current implemented design on this branch.

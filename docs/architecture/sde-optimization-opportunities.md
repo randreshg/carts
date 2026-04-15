@@ -75,7 +75,7 @@ Instead of:  scf.for (tile_lo to tile_hi) { tiled_linalg.generic }
 Generate:    sde.su_iterate (tile_lo to tile_hi) { tiled_linalg.generic }
 ```
 
-**Impact**: Replaces ~700 LOC of manual tiling in `TensorOpt.cpp` with upstream's
+**Impact**: Replaces ~700 LOC of manual tiling in `Tiling.cpp` with upstream's
 battle-tested implementation while preserving SDE scheduling semantics.
 
 **Integration**:
@@ -84,7 +84,7 @@ battle-tested implementation while preserving SDE scheduling semantics.
 3. Let upstream handle `extract_slice`/`insert_slice` mechanics
 4. Run cleanup patterns: `populateLinalgTilingCanonicalizationPatterns()`
 
-**Estimated LOC reduction**: TensorOpt from ~932 to ~200 LOC.
+**Estimated LOC reduction**: Tiling from ~932 to ~200 LOC.
 
 ### 1.2 DestinationStyleOpInterface on SdeSuIterateOp (MEDIUM)
 
@@ -499,9 +499,9 @@ schedule files rather than pass options.
 ### Phase 0: Pipeline Reordering (prerequisite — unlocks everything else) **STATUS: COMPLETE** (commit `17556d53`)
 
 0. **Reorder SDE pipeline: optimize → analyze → schedule** — Move ScopeSelection,
-   ScheduleRefinement, ChunkOpt, ReductionStrategy AFTER TensorOpt +
-   StructuredSummaries + ElementwiseFusion. Remove TensorOpt rejection gates.
-   ~20 LOC change in Compile.cpp, ~10 LOC cleanup in TensorOpt.cpp. See
+   ScheduleRefinement, ChunkOpt, ReductionStrategy AFTER Tiling +
+   StructuredSummaries + ElementwiseFusion. Remove Tiling rejection gates.
+   ~20 LOC change in Compile.cpp, ~10 LOC cleanup in Tiling.cpp. See
    "Pipeline Reordering" section for full analysis.
 
 ### Phase 1: Quick Wins (1-2 weeks each)
@@ -515,7 +515,7 @@ schedule files rather than pass options.
 
 ### Phase 2: Major Upstream Adoption (2-4 weeks each)
 
-4. **Replace TensorOpt tiling with TilingInterface+CustomOp** — Cuts TensorOpt
+4. **Replace Tiling tiling with TilingInterface+CustomOp** — Cuts Tiling
    from ~932 to ~200 LOC. Major correctness improvement.
 5. **Vectorization pass for codelet bodies** — Call `linalg::vectorize()` after
    tiling. ~200 LOC wrapper.
@@ -540,9 +540,9 @@ schedule files rather than pass options.
 
 ---
 
-## Key Finding: TensorOpt Simplification
+## Key Finding: Tiling Simplification
 
-The single highest-impact opportunity: replacing `TensorOpt.cpp`'s manual tiling
+The single highest-impact opportunity: replacing `Tiling.cpp`'s manual tiling
 (~700 LOC) with upstream `scf::tileUsingSCF()` using `CustomOp` callbacks. This:
 
 1. Eliminates manual trip count computation, tile loop nesting, scalar body cloning
@@ -585,7 +585,7 @@ OLD (FIXED by commit 17556d53):
   → ChunkOpt             ← reads PRE-TILING trip count
   → ReductionStrategy    ← sees PRE-TILING loop structure
   → LoopInterchange      ← stencil halo path broken (needs StructuredSummaries)
-  → TensorOpt            ← GATEKEPT by schedule+chunk rejection
+  → Tiling            ← GATEKEPT by schedule+chunk rejection
   → StructuredSummaries  ← analyzes post-optimization form
   → ElementwiseFusion    ← fusion can fail if schedule/chunk diverged
   ...
@@ -594,14 +594,14 @@ OLD (FIXED by commit 17556d53):
 **Five concrete problems:**
 
 1. **Trip count is wrong.** ScopeSelection, ScheduleRefinement, and ChunkOpt read
-   `getStaticTripCount()` to compute costs and chunk sizes. TensorOpt changes the
+   `getStaticTripCount()` to compute costs and chunk sizes. Tiling changes the
    `su_iterate` step from `%step` to `%step × tileIterations`, reducing the trip
    count. Effect passes compute on the ORIGINAL trip count, not the tiled one.
 
-2. **TensorOpt is gatekept.** `isTensorOptimizationSchedule()` rejects loops with
+2. **Tiling is gatekept.** `isTilingimizationSchedule()` rejects loops with
    `schedule(dynamic)` or `schedule(guided)`. `getChunkSize()` presence also causes
    rejection. If ScheduleRefinement picks `dynamic` or ChunkOpt sets a chunk,
-   TensorOpt SKIPS the loop entirely — missing a tiling opportunity.
+   Tiling SKIPS the loop entirely — missing a tiling opportunity.
 
 3. **Fusion is blocked.** ElementwiseFusion matches adjacent loops by comparing
    `schedule` and `chunkSize`. If ScheduleRefinement/ChunkOpt assigned different
@@ -609,7 +609,7 @@ OLD (FIXED by commit 17556d53):
    fails even though the loops were originally identical.
 
 4. **Reduction strategy sees wrong structure.** ReductionStrategy checks
-   `hasNestedSequentialLoop()`. TensorOpt creates inner `scf.for` tile loops. After
+   `hasNestedSequentialLoop()`. Tiling creates inner `scf.for` tile loops. After
    tiling, `hasNestedSequentialLoop` returns true → `local_accumulate` is chosen.
    Before tiling, it returns false → `atomic`/`tree` is chosen. The post-tiling
    decision is MORE correct for tiled reductions.
@@ -630,7 +630,7 @@ PROPOSED (IMPLEMENTED by commit 17556d53):
 
   ── STRUCTURAL OPTIMIZATION (transform the computation) ──
   LoopInterchange                ── dimension reordering (reads classification from RaiseToLinalg)
-  TensorOpt                      ── cost-model tiling (schedule=auto → proceeds, no chunk → proceeds)
+  Tiling                      ── cost-model tiling (schedule=auto → proceeds, no chunk → proceeds)
 
   ── ANALYSIS (analyze the optimized form) ──
   StructuredSummaries            ── stamps neighborhood attrs ON POST-OPTIMIZATION structure
@@ -675,7 +675,7 @@ All hard dependencies are satisfied in the proposed order:
 
 | Dependency | Required Before → After | Satisfied? |
 |---|---|---|
-| `structured_classification` | RaiseToLinalg → LoopInterchange, TensorOpt, StructuredSummaries | **YES** |
+| `structured_classification` | RaiseToLinalg → LoopInterchange, Tiling, StructuredSummaries | **YES** |
 | `structured_classification` (refreshed) | StructuredSummaries → ElementwiseFusion, BarrierElimination | **YES** |
 | `neighborhood attrs` | StructuredSummaries → DistributionPlanning, ConvertSdeToArts | **YES** |
 | `concurrency_scope` | ScopeSelection → DistributionPlanning | **YES** |
@@ -687,9 +687,9 @@ All hard dependencies are satisfied in the proposed order:
 
 **`Compile.cpp:659-685`**: Reorder the pass additions in `buildOpenMPToArtsPipeline`.
 
-**`TensorOpt.cpp`**: Remove or simplify the `isTensorOptimizationSchedule()` and
+**`Tiling.cpp`**: Remove or simplify the `isTilingimizationSchedule()` and
 `getChunkSize()` rejection gates. In the new order, schedule is always `auto` and
-chunk is always absent when TensorOpt runs. The gates become dead code. Keep a
+chunk is always absent when Tiling runs. The gates become dead code. Keep a
 guard for user-specified `schedule(static, N)` from OpenMP source if needed.
 
 **`ScheduleRefinement.cpp`**: No changes needed — it already reads trip count from

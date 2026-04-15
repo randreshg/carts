@@ -1,7 +1,7 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --pipeline openmp-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
 // Verify that a symbolic-trip auto schedule survives through ScheduleRefinement
-// and ChunkOpt without acquiring a chunk operand when TensorOpt has already
+// and ChunkOpt without acquiring a chunk operand when Tiling has already
 // tiled the iteration space. The refinement stays attribute-only.
 
 // CHECK-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //

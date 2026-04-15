@@ -75,7 +75,7 @@ ConvertOpenMPToSde
   -> RaiseToTensor
   -> RaiseToLinalg
   -> LoopInterchange
-  -> TensorOpt
+  -> Tiling
   -> StructuredSummaries
   -> ElementwiseFusion
   -> ScopeSelection
@@ -397,7 +397,7 @@ Recent correctness fix:
   cast-through-wrapper case where an in-place destination was previously
   misclassified as overwrite-safe and incorrectly rewritten to `tensor.empty`.
 
-### `TensorOpt`
+### `Tiling`
 
 **Before**
 
@@ -517,7 +517,7 @@ Current behavior:
   SDE-owned `classification(<elementwise>)`.
 - Requires the same iteration space and schedule, preserves `nowait`, and
   requires disjoint write roots across the fused stages.
-- Accepts the current tiled SDE loop form produced by `TensorOpt`,
+- Accepts the current tiled SDE loop form produced by `Tiling`,
   so elementwise pipeline ownership stays in SDE even after tensor-driven
   strip-mining.
 - Keeps the result runtime-neutral: the fused SDE loop carries only
@@ -757,10 +757,10 @@ The branch is materially ahead of the original plan, but some work remains.
   `arts.omp_dep` bridge, even though the SDE IR after conversion is cleaned up.
 - `RaiseToLinalg` still keeps stencil loops and broader reduction shapes on the
   classification-only fallback path.
-- `RaiseToTensor` and `TensorOpt` currently operate on the
+- `RaiseToTensor` and `Tiling` currently operate on the
   supported carrier subsets only; they are not yet a general tensorization and
   transformation framework for every `arts_sde.su_iterate`.
-- `TensorOpt` does not yet transform reduction or stencil kernels.
+- `Tiling` does not yet transform reduction or stencil kernels.
 - Standalone `arts_sde.mu_dep` still lowers back to `arts.omp_dep` for legacy
   downstream consumers.
 - After RaiseToTensor, tensor SSA is the authoritative form inside SDE

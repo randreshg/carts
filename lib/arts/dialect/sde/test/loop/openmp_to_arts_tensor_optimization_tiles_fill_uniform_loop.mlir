@@ -4,7 +4,7 @@
 
 // Verify that executable SDE tensor tiling also handles write-only elementwise
 // loops. RaiseToTensor materializes a tensor-backed carrier with no inputs,
-// TensorOpt rewrites the surrounding sde.su_iterate into a tiled
+// Tiling rewrites the surrounding sde.su_iterate into a tiled
 // loop nest, and the tiled shape survives into arts.for lowering.
 
 // TENSOR-LABEL: // -----// IR Dump After RaiseToTensor (raise-to-tensor) //----- //
@@ -14,7 +14,7 @@
 // TENSOR: linalg.generic
 // TENSOR-SAME: outs(%[[OUT]] : tensor<128xf64>)
 
-// OPT-LABEL: // -----// IR Dump After TensorOpt (tensor-opt) //----- //
+// OPT-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // OPT: arts_sde.cu_region <parallel> {
 // OPT: %c16 = arith.constant 16 : index
 // OPT: %[[TSTEP:.+]] = arith.muli %c1, %c16 : index
