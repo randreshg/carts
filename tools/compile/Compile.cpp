@@ -249,12 +249,13 @@ static cl::opt<std::string> CustomPassPipeline(
              "pipeline"),
     cl::value_desc("pipeline"), cl::init(""));
 
-static const std::array<llvm::StringLiteral, 10> kSdeInputNormalizationPasses =
-    {"LowerAffine(func)",      "CSE",
-     "SdeInputInliner",        "PolygeistCanonicalize",
-     "ScalarForwarding",       "PolygeistCanonicalize",
-     "SdeMemrefNormalization", "SdeHandleDeps",
-     "SdeDeadStateCleanup",    "CSE"};
+static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
+    {"PromoteTargetAttrs",     "LowerAffine(func)",
+     "CSE",                    "SdeInputInliner",
+     "PolygeistCanonicalize",  "ScalarForwarding",
+     "PolygeistCanonicalize",  "SdeMemrefNormalization",
+     "SdeHandleDeps",          "SdeDeadStateCleanup",
+     "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
 static const std::array<llvm::StringLiteral, 14> kSdePlanningPasses = {
@@ -1128,6 +1129,10 @@ static void addCanonicalizeAndEdtLocalCSE(PassManager &pm) {
 
 /// Normalize frontend storage and dependency shape before SDE conversion.
 void buildSdeInputNormalizationPipeline(PassManager &pm) {
+  /// PromoteTargetAttrs runs first so every downstream stage observes the
+  /// host target through ARTS-owned module attrs, even after upstream
+  /// conversion passes drop the polygeist-prefixed originals.
+  pm.addPass(sde::createPromoteTargetAttrs());
   OpPassManager &optPM = pm.nest<func::FuncOp>();
   /// Stage contract: normalize affine memory/control ops before the module pass
   /// runs so SdeInputNormalization only needs to reason about the

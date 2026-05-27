@@ -456,6 +456,38 @@ inline void setRuntimeTotalNodes(ModuleOp module, int64_t nodes) {
       IntegerAttr::get(IntegerType::get(module.getContext(), 64), nodes));
 }
 
+inline std::optional<StringRef> getTargetCpu(ModuleOp module) {
+  if (!module)
+    return std::nullopt;
+  if (auto attr =
+          module->getAttrOfType<StringAttr>(AttrNames::Module::TargetCpu))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setTargetCpu(ModuleOp module, StringRef cpu) {
+  if (!module || cpu.empty())
+    return;
+  module->setAttr(AttrNames::Module::TargetCpu,
+                  StringAttr::get(module.getContext(), cpu));
+}
+
+inline std::optional<StringRef> getTargetFeatures(ModuleOp module) {
+  if (!module)
+    return std::nullopt;
+  if (auto attr =
+          module->getAttrOfType<StringAttr>(AttrNames::Module::TargetFeatures))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setTargetFeatures(ModuleOp module, StringRef features) {
+  if (!module || features.empty())
+    return;
+  module->setAttr(AttrNames::Module::TargetFeatures,
+                  StringAttr::get(module.getContext(), features));
+}
+
 inline int64_t getArtsId(Operation *op) {
   if (!op)
     return 0;

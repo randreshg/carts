@@ -22,6 +22,14 @@ inline constexpr llvm::StringLiteral RuntimeTotalNodes =
 inline constexpr llvm::StringLiteral RuntimeStaticWorkers =
     "arts.runtime_static_workers";
 
+/// Host target CPU and feature set promoted from the upstream
+/// `polygeist.target-cpu` / `polygeist.target-features` module attrs so
+/// downstream CARTS passes do not depend on a non-ARTS attribute surviving
+/// every conversion pipeline. Populated by PromoteTargetAttrs at the start
+/// of `sde-input-normalization`.
+inline constexpr llvm::StringLiteral TargetCpu = "arts.target-cpu";
+inline constexpr llvm::StringLiteral TargetFeatures = "arts.target-features";
+
 } // namespace Module
 
 /// Operation-level marker attributes attached to non-ARTS ops (func.func,

@@ -961,6 +961,10 @@ def _build_cgeist_cmd(
         cmd.append("-fopenmp")
     if with_debug_info:
         cmd.append("--print-debug-info")
+    # Stamp host target features into the module so downstream vector-width
+    # clamping (LoopVectorizationHints) and the LLVM backend can emit AVX/AVX-512
+    # / FMA. A user-supplied -march= in passthrough_args comes after and wins.
+    cmd.append("-march=native")
     cmd.extend(passthrough_args)
     if output_file is not None:
         cmd.extend(["-o", str(output_file)])
@@ -984,6 +988,11 @@ def _build_link_cmd(
     cmd.extend(config.linker_flags)
     if optimize:
         cmd.append("-O3")
+    # The MLIR -> LLVM lowering drops polygeist.target-features, so the .ll
+    # arrives at clang carrying only the default x86-64 triple. -march=native
+    # tells the backend to enable host SIMD (AVX2/AVX-512, FMA) when codegen'ing
+    # the EDT bodies. A user-supplied -march= in extra_args (link_args) wins.
+    cmd.append("-march=native")
     cmd.append(str(input_file))
     cmd.extend(["-o", str(output_file)])
     if debug:

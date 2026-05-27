@@ -6,6 +6,24 @@
 
 include "mlir/Pass/PassBase.td"
 
+def PromoteTargetAttrs
+    : Pass<"sde-promote-target-attrs", "mlir::ModuleOp"> {
+  let summary = "Promote polygeist target-cpu/features to ARTS-owned module attrs";
+  let description = [{
+    cgeist stamps `polygeist.target-cpu` and `polygeist.target-features` on
+    the top-level module. Downstream conversion passes (notably the LLVM
+    lowerings inside `llvm-ir-emission`) drop foreign module attrs, so any
+    CARTS pass that reads them in the LLVM-facing stages observes a default
+    x86-64 target and emits SSE-width vector hints on AVX/AVX-512 hosts.
+
+    This pass copies the polygeist attrs into ARTS-owned
+    `arts.target-cpu` / `arts.target-features` on the same module before
+    any other CARTS pass runs. The ARTS attrs become the single source of
+    truth consumers must read. The pass is a no-op when the polygeist attrs
+    are absent and idempotent when the ARTS attrs are already present.
+  }];
+}
+
 def ScalarForwarding : Pass<"scalar-forwarding", "mlir::ModuleOp"> {
   let summary = "Forward constant-initialized scalar memrefs across region boundaries";
   let description = [{

@@ -136,10 +136,9 @@ static bool isInnermostLoop(Block *headerBlock, Block *latchBlock,
   return true;
 }
 
-/// Analyze function to determine optimal vector width based on data types.
-/// Returns: {vectorWidth, f64Count, f32Count, totalLoads}
+/// Count loop loads by element type so the target-aware width resolver can
+/// pick the right lane count for the dominant FP element width.
 struct TypeAnalysisResult {
-  unsigned vectorWidth;
   unsigned f64Count;
   unsigned f32Count;
   unsigned totalLoads;
@@ -147,7 +146,7 @@ struct TypeAnalysisResult {
 
 static TypeAnalysisResult
 analyzeLoadTypes(const SmallPtrSet<Block *, 16> &loopBlocks) {
-  unsigned floatCount = 0, doubleCount = 0, i32Count = 0, totalLoads = 0;
+  unsigned floatCount = 0, doubleCount = 0, totalLoads = 0;
 
   for (Block *block : loopBlocks) {
     for (Operation &opRef : *block) {
@@ -161,26 +160,26 @@ analyzeLoadTypes(const SmallPtrSet<Block *, 16> &loopBlocks) {
         floatCount++;
       else if (elemType.isF64())
         doubleCount++;
-      else if (elemType.isInteger(32))
-        i32Count++;
     }
   }
 
-  // The emitted CARTS modules currently target generic x86-64, whose declared
-  // feature set is SSE/SSE2. Use 128-bit lane counts by default; wider SDE
-  // hints are clamped again below against the concrete module features.
-  unsigned width = 4;
-  if (doubleCount >= floatCount && doubleCount >= i32Count)
-    width = 2;
-
-  return {width, doubleCount, floatCount, totalLoads};
+  return {doubleCount, floatCount, totalLoads};
 }
 
 static unsigned getTargetVectorBits(ModuleOp module) {
   unsigned bits = 128;
 
-  auto features =
-      module->getAttrOfType<StringAttr>("polygeist.target-features");
+  // PromoteTargetAttrs copies the polygeist module attrs into
+  // arts.target-features at the start of `sde-input-normalization` so the
+  // ARTS-owned name is what survives the LLVM-conversion passes that strip
+  // foreign module attrs. Fall back to the polygeist attr only as a
+  // compatibility path for tests that hand-craft a module without running
+  // the full pipeline.
+  StringAttr features;
+  if (auto promoted = arts::getTargetFeatures(module))
+    features = StringAttr::get(module.getContext(), *promoted);
+  else
+    features = module->getAttrOfType<StringAttr>("polygeist.target-features");
   if (!features)
     return bits;
 
@@ -203,10 +202,19 @@ static unsigned getTargetMaxVectorWidth(ModuleOp module,
   return std::max(1u, getTargetVectorBits(module) / elementBits);
 }
 
-static unsigned clampVectorWidthToTarget(ModuleOp module, unsigned requested,
-                                         const TypeAnalysisResult &typeInfo) {
-  unsigned maxWidth = getTargetMaxVectorWidth(module, typeInfo);
-  return std::clamp(requested, 1u, maxWidth);
+/// Resolve the per-loop vectorize width to the host vector lane count for the
+/// loop's dominant FP element type. The only target-aware signal available at
+/// this stage is `arts.target-features`, promoted from the upstream polygeist
+/// module attrs by PromoteTargetAttrs so the ARTS-owned name survives the
+/// LLVM-conversion passes that strip foreign module attrs. Returning the
+/// target-derived width pins the hint to the host's native lane count both
+/// when the conservative SSE2-shaped default from `analyzeLoadTypes` is too
+/// narrow (AVX2/AVX-512 host) and when it is too wide (SSE2-only host). With
+/// no target features visible (legacy fixture, hand-crafted lit input) the
+/// cap falls back to 128 bits.
+static unsigned resolveVectorWidthForTarget(ModuleOp module,
+                                            const TypeAnalysisResult &typeInfo) {
+  return getTargetMaxVectorWidth(module, typeInfo);
 }
 
 static bool isVectorFriendlyFPIntrinsic(StringRef intrinsic) {
@@ -438,12 +446,12 @@ struct LoopVectorizationHintsPass
           (funcOp.getNumArguments() >= 4) ? funcOp.getArgument(3) : Value{};
       SmallVector<LLVM::AccessGroupAttr> parallelAccessGroups;
 
-      // RT reads only RT-facing hints translated from Core EDT attrs.
-      unsigned rtVecWidth = 0;
+      // RT reads only RT-facing hints translated from Core EDT attrs. The
+      // SDE-stamped `arts.rt.vectorize_width` is currently target-blind (it
+      // derives from `ARTSCostModel::getVectorWidth()`, a generic SSE2 floor)
+      // so RT resolves the per-loop lane count from the host target features
+      // instead; only the interleave hint is consumed from SDE.
       unsigned rtInterleaveCount = 0;
-      if (auto attr = funcOp->getAttrOfType<IntegerAttr>(
-              ::mlir::carts::arts_rt::AttrNames::Rt::VectorizeWidth))
-        rtVecWidth = attr.getInt();
       if (auto attr = funcOp->getAttrOfType<IntegerAttr>(
               ::mlir::carts::arts_rt::AttrNames::Rt::InterleaveCount))
         rtInterleaveCount = attr.getInt();
@@ -473,19 +481,15 @@ struct LoopVectorizationHintsPass
           return;
         }
 
-        // SDE attrs carry the semantic vectorization request. RT still clamps
-        // the lane count to the module target so generic x86-64 IR does not
-        // force 256-bit vectors on an SSE/SSE2 target.
-        unsigned width, interleave;
+        // The lane count is resolved against the host target features
+        // (promoted from polygeist by PromoteTargetAttrs). The pass-option
+        // `vectorWidth` override still wins for lit fixtures that force a
+        // specific width.
         auto typeInfo = analyzeLoadTypes(loopBlocks);
-        if (rtVecWidth) {
-          width = rtVecWidth;
-          interleave = rtInterleaveCount ? rtInterleaveCount : interleaveCount;
-        } else {
-          width = vectorWidth ? vectorWidth : typeInfo.vectorWidth;
-          interleave = interleaveCount;
-        }
-        width = clampVectorWidthToTarget(module, width, typeInfo);
+        unsigned width = vectorWidth ? vectorWidth
+                                     : resolveVectorWidthForTarget(module, typeInfo);
+        unsigned interleave =
+            rtInterleaveCount ? rtInterleaveCount : interleaveCount;
 
         LLVM::LoopAnnotationAttr annotation;
         if (innermost) {
