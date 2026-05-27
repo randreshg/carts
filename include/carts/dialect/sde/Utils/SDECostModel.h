@@ -122,6 +122,13 @@ public:
     // one task per logical worker when the owner domain is large enough.
     return 1;
   }
+
+  // Per-tile output-payload floor for distributed plans. 0 disables the floor;
+  // a positive value asks distribution writers to grow tiles (and shrink the
+  // worker grid) until each owner tile carries at least this many bytes of
+  // output. The unit is bytes on the output element type so SDE can reason
+  // about both numeric (f32/f64) and packed-vector workloads uniformly.
+  virtual int64_t getMinDistributedTileBytes() const { return 0; }
 };
 
 } // namespace mlir::carts::sde

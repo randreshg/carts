@@ -160,6 +160,17 @@ static cl::opt<bool> DistributedDb(
              "(ownership marking + parallel initPerWorker creation)"),
     cl::init(false));
 
+/// Output-tile byte floor for distributed plans. When > 0, distribution
+/// writers coarsen the per-EDT output tile until it carries at least this
+/// many bytes; reduces remote DB-acquire round-trips on RTT-bound multinode
+/// runs at the cost of per-node load-balance slack. 0 (default) preserves
+/// the prior fine-grained plan.
+static cl::opt<int64_t> MinDistributedTileBytes(
+    "min-distributed-tile-bytes",
+    cl::desc("Per-EDT output-tile byte floor for SDE distribution planning; "
+             "0 disables (default)."),
+    cl::init(0));
+
 ///===----------------------------------------------------------------------===///
 /// Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
@@ -1606,6 +1617,9 @@ buildPassManager(ModuleOp module, MLIRContext &context,
                "or place a valid arts.cfg in the working directory.");
     return failure();
   }
+
+  if (MinDistributedTileBytes.getNumOccurrences() > 0)
+    machine.setMinDistributedTileBytes(MinDistributedTileBytes);
 
   /// Embed config file contents into the module so generated binaries are
   /// self-contained — no external config file needed at runtime.

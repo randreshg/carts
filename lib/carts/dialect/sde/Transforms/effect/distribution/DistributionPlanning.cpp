@@ -605,6 +605,41 @@ static void stampMatmulPhysicalPlan(sde::SdeSuIterateOp op,
   physicalBlockShape[1] =
       sde::ceilDivPositive(outputPlan->shape[1], workerGrid[1]);
 
+  // Optional payload-bytes floor: coarsen tiles until each carries at least
+  // `min-distributed-tile-bytes` of output. Shrinks the worker grid along
+  // whichever distributed axis is currently most subdivided. Default 0 keeps
+  // the prior plan untouched. Provides a single knob to trade per-EDT
+  // load-balance slack for fewer remote DB acquires when communication
+  // round-trips dominate the kernel.
+  int64_t minTileBytes = costModel.getMinDistributedTileBytes();
+  if (minTileBytes > 0) {
+    int64_t elemBytes = 0;
+    if (auto memrefTy = dyn_cast<MemRefType>(outputPlan->root.getType())) {
+      Type elt = memrefTy.getElementType();
+      if (elt.isIntOrFloat())
+        elemBytes = llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
+    }
+    if (elemBytes > 0) {
+      auto tileBytes = [&]() {
+        return elemBytes * physicalBlockShape[0] * physicalBlockShape[1];
+      };
+      while (tileBytes() < minTileBytes &&
+             (workerGrid[0] > 1 || workerGrid[1] > 1)) {
+        unsigned shrinkDim;
+        if (workerGrid[0] > 1 && workerGrid[1] > 1)
+          shrinkDim = workerGrid[0] >= workerGrid[1] ? 0 : 1;
+        else
+          shrinkDim = workerGrid[0] > 1 ? 0 : 1;
+        workerGrid[shrinkDim] =
+            std::max<int64_t>(1, workerGrid[shrinkDim] / 2);
+        physicalBlockShape[0] =
+            sde::ceilDivPositive(outputPlan->shape[0], workerGrid[0]);
+        physicalBlockShape[1] =
+            sde::ceilDivPositive(outputPlan->shape[1], workerGrid[1]);
+      }
+    }
+  }
+
   op.setPhysicalOwnerDimsAttr(
       buildI64ArrayAttr(op.getContext(), SmallVector<int64_t, 2>{0, 1}));
   op.setPhysicalBlockShapeAttr(

@@ -79,6 +79,10 @@ public:
       return configured;
     return carts::sde::SDECostModel::getMinIterationsPerWorker();
   }
+
+  int64_t getMinDistributedTileBytes() const override {
+    return machine.getMinDistributedTileBytes();
+  }
 };
 
 } // namespace mlir::carts::arts
