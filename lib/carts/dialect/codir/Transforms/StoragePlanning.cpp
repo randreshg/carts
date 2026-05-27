@@ -445,6 +445,22 @@ static bool isMatmulCodelet(codir::CodeletOp codelet) {
   return pattern && pattern.getValue() == codir::CodirPattern::matmul;
 }
 
+static bool isStencilCodelet(codir::CodeletOp codelet) {
+  auto pattern = codelet ? codelet.getPatternAttr() : nullptr;
+  if (!pattern)
+    return false;
+  switch (pattern.getValue()) {
+  case codir::CodirPattern::stencil_tiling_nd:
+  case codir::CodirPattern::cross_dim_stencil_3d:
+  case codir::CodirPattern::higher_order_stencil:
+  case codir::CodirPattern::wavefront_2d:
+  case codir::CodirPattern::jacobi_alternating_buffers:
+    return true;
+  default:
+    return false;
+  }
+}
+
 static std::optional<unsigned>
 getCodeletDepOperandIndex(codir::CodeletOp codelet, OpOperand &use) {
   if (!codelet)
@@ -585,7 +601,7 @@ static bool shouldUseHostWholeReadOnlyDep(codir::CodeletOp codelet,
 
 static bool shouldUseReplicatedReadDep(codir::CodeletOp codelet,
                                        unsigned depIndex) {
-  if (!isMatmulCodelet(codelet))
+  if (!isMatmulCodelet(codelet) && !isStencilCodelet(codelet))
     return false;
   std::optional<codir::CodirAccessMode> mode =
       getDepAccessMode(codelet, depIndex);
