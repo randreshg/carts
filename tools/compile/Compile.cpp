@@ -355,7 +355,7 @@ static const std::array<llvm::StringLiteral, 6> kPostO3OptPasses = {
     "LICM",
     "CSE",
     "PolygeistCanonicalize"};
-static const std::array<llvm::StringLiteral, 15> kLLVMIREmissionPasses = {
+static const std::array<llvm::StringLiteral, 16> kLLVMIREmissionPasses = {
     "CSE",
     "PolygeistCanonicalize",
     "MaterializeArtsFunctionPointers",
@@ -369,6 +369,7 @@ static const std::array<llvm::StringLiteral, 15> kLLVMIREmissionPasses = {
     "ReconcileUnrealizedCasts",
     "AliasScopeGen",
     "LoopVectorizationHints",
+    "AttachFastMathOnEdt",
     "PolygeistCanonicalize",
     "CSE"};
 
@@ -1347,6 +1348,7 @@ void buildLLVMIREmissionPipeline(PassManager &pm, bool convertOpenMP) {
   pm.addPass(createReconcileUnrealizedCastsPass());
   pm.addPass(arts_rt::createAliasScopeGenPass());
   pm.addPass(arts_rt::createLoopVectorizationHintsPass());
+  pm.addPass(arts_rt::createAttachFastMathOnEdtPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
 }

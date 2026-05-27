@@ -61,6 +61,8 @@ std::unique_ptr<::mlir::Pass> createRuntimeCallOptPass();
 std::unique_ptr<::mlir::Pass> createAliasScopeGenPass();
 /// Attach LLVM loop vectorization hints to EDT function loops.
 std::unique_ptr<::mlir::Pass> createLoopVectorizationHintsPass();
+/// Attach LLVM fastmath flags to FP ops inside EDT functions.
+std::unique_ptr<::mlir::Pass> createAttachFastMathOnEdtPass();
 /// Transform memory-based reductions to register-based iter_args.
 std::unique_ptr<::mlir::Pass> createScalarReplacementPass();
 /// Verify no ARTS DB ops survive DB lowering.

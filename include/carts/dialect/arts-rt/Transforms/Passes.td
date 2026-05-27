@@ -224,6 +224,24 @@ def LoopVectorizationHints
   let constructor = "mlir::carts::arts_rt::createLoopVectorizationHintsPass()";
 }
 
+def AttachFastMathOnEdt
+    : Pass<"arts-attach-fastmath-on-edt", "mlir::ModuleOp"> {
+  let summary = "Attach LLVM fastmath flags to FP ops inside EDT functions";
+  let description = [{
+    Walks every `llvm.func` whose symbol starts with `__arts_edt_` and stamps
+    `fastmath<reassoc, contract>` on contained `llvm.fmul`, `llvm.fadd`,
+    `llvm.fsub`, `llvm.fdiv`, `llvm.fneg`, and `llvm.frem` ops that do not
+    already carry a non-none fastmath attribute. `reassoc` lets the LLVM
+    loop vectorizer reorder FP reductions; `contract` lets it fuse mul+add
+    into FMA. The unsafe `nnan`, `ninf`, `nsz`, `arcp`, and `afn` flags are
+    deliberately omitted: enabling them produced checksum drift on multiple
+    Polybench kernels whose parallelized init/reduction paths inside
+    `__arts_edt_*` touched values the unsafe assumptions break.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+  let constructor = "mlir::carts::arts_rt::createAttachFastMathOnEdtPass()";
+}
+
 def ScalarReplacement
     : Pass<"arts-scalar-replacement", "mlir::ModuleOp"> {
   let summary = "Transform memory-based reductions to register-based iter_args";
