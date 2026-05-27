@@ -50,6 +50,17 @@ static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
                                     costModel.getInterLocalityTaskWaves());
 }
 
+// Worker target for the stencil physical-plan stamper. Caps at logical
+// worker capacity (no inter-locality wave multiplier) because stencil DBs
+// today cannot cross a node boundary without halo-exchange lowering, so
+// the inter-locality wave headroom turns into tile inflation paid on the
+// single executing node after `DistributedLaunchConsistency` demotes the
+// EDT from `internode` back to `<intranode>`. Revisit once
+// `arts.halo_exchange` makes stencil DBs distributable end-to-end.
+static int64_t getStencilWorkerTarget(sde::SDECostModel &costModel) {
+  return costModel.getLogicalWorkerCapacity();
+}
+
 static int64_t readStencilHaloForOwnerDim(sde::SdeSuIterateOp op,
                                           unsigned ownerDim) {
   auto minOffsets = readI64ArrayAttr(op.getAccessMinOffsetsAttr());
@@ -389,7 +400,7 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
       SmallVector<unsigned, 4> ownerLoopDims =
           chooseMappedSdeOwnerLoopDims(op, *outputPlan);
       int64_t workers =
-          std::max<int64_t>(1, getInterLocalityTargetWorkers(costModel));
+          std::max<int64_t>(1, getStencilWorkerTarget(costModel));
       // One-dimensional halo stencils form a dependency pipeline between
       // neighboring owner blocks. Planning modestly more owner blocks than
       // logical worker capacity gives later ARTS scheduling enough ready tasks
@@ -441,7 +452,7 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
   }
 
   int64_t workers =
-      std::max<int64_t>(1, getInterLocalityTargetWorkers(costModel));
+      std::max<int64_t>(1, getStencilWorkerTarget(costModel));
   SmallVector<int64_t, 4> ownerDims;
   SmallVector<int64_t, 4> physicalBlockShape;
   if (!buildOwnerDimPlan(*secondaryPlan, workers, ownerDims,
