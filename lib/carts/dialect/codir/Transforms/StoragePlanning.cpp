@@ -599,6 +599,64 @@ static bool shouldUseHostWholeReadOnlyDep(codir::CodeletOp codelet,
          *elements <= kMaxSmallReadOnlyHostWholeElements;
 }
 
+/// True when any access offset on |codelet| is nonzero. For stencil codelets
+/// this implies the halo crosses tile boundaries even when every leaf access
+/// indexes via the owner dim, which is the case `depAccessesStayWithinSingle
+/// OwnerSlice` cannot detect (it tracks dim alignment, not byte offsets).
+static bool stencilCrossesTileBoundary(codir::CodeletOp codelet) {
+  if (!codelet)
+    return false;
+  auto anyNonzero = [](ArrayAttr attr) {
+    if (!attr)
+      return false;
+    for (Attribute element : attr) {
+      auto intAttr = dyn_cast<IntegerAttr>(element);
+      if (intAttr && intAttr.getInt() != 0)
+        return true;
+    }
+    return false;
+  };
+  return anyNonzero(codelet.getAccessMinOffsetsAttr()) ||
+         anyNonzero(codelet.getAccessMaxOffsetsAttr());
+}
+
+/// True when the stencil's per-iteration write footprint fits inside the
+/// codelet's owner-dim tile slice. Conv-3d-style centrally-written stencils
+/// have `write_footprint = [1, ...]` against tiles of [32, 64, 64]; such
+/// writes are safe to lower as block-owned.
+static bool stencilWriteFitsInTile(codir::CodeletOp codelet) {
+  if (!codelet || !hasTileOwnerSlicePlan(codelet))
+    return false;
+  std::optional<SmallVector<int64_t, 4>> writeFootprint =
+      readI64ArrayAttr(codelet.getWriteFootprintAttr());
+  std::optional<SmallVector<int64_t, 4>> tileShape =
+      readI64ArrayAttr(codelet.getTileShapeAttr());
+  if (!writeFootprint || !tileShape ||
+      writeFootprint->size() != tileShape->size())
+    return false;
+  for (size_t dim = 0, e = writeFootprint->size(); dim < e; ++dim) {
+    int64_t footprint = (*writeFootprint)[dim];
+    int64_t tile = (*tileShape)[dim];
+    if (footprint < 0 || tile <= 0 || footprint > tile)
+      return false;
+  }
+  return true;
+}
+
+/// Stencil writes that stay inside the owner-dim tile slice are the canonical
+/// block-owned output: demote SDE's default `host_whole` to `compute_block`
+/// so the resulting DB is distributed instead of host-resident.
+static bool shouldDemoteStencilWriteToComputeBlock(codir::CodeletOp codelet,
+                                                   unsigned depIndex) {
+  if (!isStencilCodelet(codelet) || !hasTileOwnerSlicePlan(codelet))
+    return false;
+  std::optional<codir::CodirAccessMode> mode =
+      getDepAccessMode(codelet, depIndex);
+  if (!mode || *mode != codir::CodirAccessMode::write)
+    return false;
+  return stencilWriteFitsInTile(codelet);
+}
+
 static bool shouldUseReplicatedReadDep(codir::CodeletOp codelet,
                                        unsigned depIndex) {
   if (!isMatmulCodelet(codelet) && !isStencilCodelet(codelet))
@@ -607,8 +665,15 @@ static bool shouldUseReplicatedReadDep(codir::CodeletOp codelet,
       getDepAccessMode(codelet, depIndex);
   if (!mode || *mode != codir::CodirAccessMode::read)
     return false;
-  return hasTileOwnerSlicePlan(codelet) &&
-         !depAccessesStayWithinSingleOwnerSlice(codelet, depIndex);
+  if (!hasTileOwnerSlicePlan(codelet))
+    return false;
+  /// Stencil reads cross tile boundaries via the halo even when every access
+  /// is aligned on the owner dim; treat any nonzero offset as replicated-read.
+  if (isStencilCodelet(codelet))
+    return stencilCrossesTileBoundary(codelet);
+  /// Matmul keeps the dim-alignment semantic: a B/A read whose access dim
+  /// disagrees with the codelet's owner dim is the replicated participant.
+  return !depAccessesStayWithinSingleOwnerSlice(codelet, depIndex);
 }
 
 static ArrayAttr buildOwnerDimsAttr(MLIRContext *ctx,
@@ -624,6 +689,9 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
   if (requested == codir::CodirStorageViewKind::host_whole &&
       shouldUseReplicatedReadDep(codelet, depIndex))
     return codir::CodirStorageViewKind::replicated_read;
+  if (requested == codir::CodirStorageViewKind::host_whole &&
+      shouldDemoteStencilWriteToComputeBlock(codelet, depIndex))
+    requested = codir::CodirStorageViewKind::compute_block;
   if (requested != codir::CodirStorageViewKind::compute_block)
     return requested;
   if (!codelet || depIndex >= codelet.getDeps().size())
