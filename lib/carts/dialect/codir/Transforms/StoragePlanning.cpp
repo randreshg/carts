@@ -461,31 +461,6 @@ static bool isStencilCodelet(codir::CodeletOp codelet) {
   }
 }
 
-/// Stencil patterns whose reads are provably independent across iterations of
-/// the surrounding time loop. These are safe to replicate (one coarse DB,
-/// duplicated across nodes) because no codelet in the loop writes to the same
-/// DB. Patterns like jacobi_alternating_buffers and wavefront_2d, in contrast,
-/// have the property that this iteration's write becomes the next iteration's
-/// read — replicating those reads forces whole-array re-broadcast every step
-/// and destroys scaling. Those patterns must keep block-owned storage with
-/// halo exchange between neighboring tiles.
-static bool isReplicatedReadEligibleStencil(codir::CodeletOp codelet) {
-  auto pattern = codelet ? codelet.getPatternAttr() : nullptr;
-  if (!pattern)
-    return false;
-  switch (pattern.getValue()) {
-  case codir::CodirPattern::stencil_tiling_nd:
-  case codir::CodirPattern::cross_dim_stencil_3d:
-  case codir::CodirPattern::higher_order_stencil:
-    return true;
-  case codir::CodirPattern::wavefront_2d:
-  case codir::CodirPattern::jacobi_alternating_buffers:
-    return false;
-  default:
-    return false;
-  }
-}
-
 static std::optional<unsigned>
 getCodeletDepOperandIndex(codir::CodeletOp codelet, OpOperand &use) {
   if (!codelet)
@@ -668,6 +643,80 @@ static bool stencilWriteFitsInTile(codir::CodeletOp codelet) {
   return true;
 }
 
+/// True iff `root` (the allocation underlying a codelet dep) is written by
+/// some other CodeletOp in the same function. Walks `root`'s users
+/// transitively through memref-forwarding ops so jacobi-style swap loops,
+/// where the same outer alloc reaches both a write codelet and a read
+/// codelet via casts or subviews, are classified as having a sibling
+/// writer. Bare memref.store users (sequential init code outside any
+/// codelet) are ignored: they are not concurrent with parallel execution
+/// and do not invalidate replicated_read.
+static bool isWrittenByAnotherCodelet(Value root, codir::CodeletOp self) {
+  if (!root)
+    return false;
+  SmallVector<Value, 8> worklist{root};
+  llvm::SmallPtrSet<Value, 16> visited;
+  while (!worklist.empty()) {
+    Value cur = worklist.pop_back_val();
+    if (!cur || !visited.insert(cur).second)
+      continue;
+    for (Operation *user : cur.getUsers()) {
+      if (!user)
+        continue;
+      if (auto otherCodelet = dyn_cast<codir::CodeletOp>(user)) {
+        if (otherCodelet == self)
+          continue;
+        for (auto [idx, dep] : llvm::enumerate(otherCodelet.getDeps())) {
+          if (dep != cur)
+            continue;
+          std::optional<codir::CodirAccessMode> mode =
+              getDepAccessMode(otherCodelet, static_cast<unsigned>(idx));
+          if (mode && (*mode == codir::CodirAccessMode::write ||
+                       *mode == codir::CodirAccessMode::readwrite))
+            return true;
+        }
+        continue;
+      }
+      if (codir::isMemrefForwardingOp(user))
+        for (Value result : user->getResults())
+          if (isa<MemRefType>(result.getType()))
+            worklist.push_back(result);
+    }
+  }
+  return false;
+}
+
+/// A stencil codelet's read dep is replicate-eligible iff (a) the codelet
+/// pattern is a halo-style stencil whose reads may cross a tile boundary
+/// (wavefront and jacobi-alternating patterns are excluded by enum), and
+/// (b) the dep's underlying allocation is not written by any sibling
+/// codelet in the same function. Condition (b) distinguishes the
+/// read-only stencil case (replicate-safe) from the alternating-buffer
+/// case where replicate forces a whole-array re-broadcast every step.
+static bool isStencilDepReplicateEligible(codir::CodeletOp codelet,
+                                          unsigned depIndex) {
+  if (!codelet || depIndex >= codelet.getDeps().size())
+    return false;
+  auto pattern = codelet.getPatternAttr();
+  if (!pattern)
+    return false;
+  switch (pattern.getValue()) {
+  case codir::CodirPattern::stencil_tiling_nd:
+  case codir::CodirPattern::cross_dim_stencil_3d:
+  case codir::CodirPattern::higher_order_stencil:
+    break;
+  case codir::CodirPattern::wavefront_2d:
+  case codir::CodirPattern::jacobi_alternating_buffers:
+    return false;
+  default:
+    return false;
+  }
+  if (!stencilCrossesTileBoundary(codelet))
+    return false;
+  Value root = stripStorageViews(codelet.getDeps()[depIndex]);
+  return !isWrittenByAnotherCodelet(root, codelet);
+}
+
 /// Stencil writes that stay inside the owner-dim tile slice are the canonical
 /// block-owned output: demote SDE's default `host_whole` to `compute_block`
 /// so the resulting DB is distributed instead of host-resident.
@@ -692,7 +741,7 @@ static bool shouldDemoteStencilHaloReadToComputeBlock(codir::CodeletOp codelet,
                                                       unsigned depIndex) {
   if (!isStencilCodelet(codelet) || !hasTileOwnerSlicePlan(codelet))
     return false;
-  if (isReplicatedReadEligibleStencil(codelet))
+  if (isStencilDepReplicateEligible(codelet, depIndex))
     return false;
   std::optional<codir::CodirAccessMode> mode =
       getDepAccessMode(codelet, depIndex);
@@ -713,14 +762,8 @@ static bool shouldUseReplicatedReadDep(codir::CodeletOp codelet,
     return false;
   if (!hasTileOwnerSlicePlan(codelet))
     return false;
-  /// Stencil reads cross tile boundaries via the halo even when every access
-  /// is aligned on the owner dim; treat any nonzero offset as replicated-read.
-  /// Restricted to read-only stencil shapes — alternating-buffer / wavefront
-  /// patterns have writers in the same loop, so replicating the read would
-  /// force whole-array re-broadcast every step (kills scaling).
   if (isStencilCodelet(codelet))
-    return isReplicatedReadEligibleStencil(codelet) &&
-           stencilCrossesTileBoundary(codelet);
+    return isStencilDepReplicateEligible(codelet, depIndex);
   /// Matmul keeps the dim-alignment semantic: a B/A read whose access dim
   /// disagrees with the codelet's owner dim is the replicated participant.
   return !depAccessesStayWithinSingleOwnerSlice(codelet, depIndex);
