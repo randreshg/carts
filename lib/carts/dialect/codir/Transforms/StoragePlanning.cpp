@@ -801,8 +801,15 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
   if (isStorageView(dep))
     return codir::CodirStorageViewKind::compute_block;
   if (!hasTileOwnerSlicePlan(codelet) ||
-      !depAccessesStayWithinSingleOwnerSlice(codelet, depIndex))
+      !depAccessesStayWithinSingleOwnerSlice(codelet, depIndex)) {
+    // Stencil halo accesses cross the owner slice by construction; keep
+    // compute_block when the stencil demote predicates authorize block-owned
+    // storage with halo-fetched neighbors.
+    if (shouldDemoteStencilWriteToComputeBlock(codelet, depIndex) ||
+        shouldDemoteStencilHaloReadToComputeBlock(codelet, depIndex))
+      return codir::CodirStorageViewKind::compute_block;
     return codir::CodirStorageViewKind::host_whole;
+  }
 
   Value root = stripStorageViews(dep);
   if (shouldUseHostWholeReadOnlyDep(codelet, depIndex, dep))
