@@ -139,8 +139,10 @@ static void addUniqueDim(SmallVectorImpl<unsigned> &dims, unsigned dim) {
 static bool remapSubviewOwnerDims(memref::SubViewOp subview,
                                   SmallVectorImpl<unsigned> &selectedDims,
                                   Value ownerBase) {
-  std::optional<unsigned> sourceRank = ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getSource());
-  std::optional<unsigned> resultRank = ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getResult());
+  std::optional<unsigned> sourceRank =
+      ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getSource());
+  std::optional<unsigned> resultRank =
+      ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getResult());
   if (!sourceRank || !resultRank ||
       subview.getMixedOffsets().size() != *sourceRank)
     return false;
@@ -174,7 +176,8 @@ static bool remapSubviewOwnerDims(memref::SubViewOp subview,
 
 static AccessOwnerDims traceAccessToRoot(Value memref, ArrayRef<Value> indices,
                                          Value root, Value ownerBase) {
-  std::optional<unsigned> currentRank = ::mlir::carts::ValueAnalysis::getMemrefRank(memref);
+  std::optional<unsigned> currentRank =
+      ::mlir::carts::ValueAnalysis::getMemrefRank(memref);
   bool unsupportedMapping = !currentRank || indices.size() != *currentRank;
   SmallVector<unsigned> selectedDims;
   if (!unsupportedMapping)
@@ -193,7 +196,8 @@ static AccessOwnerDims traceAccessToRoot(Value memref, ArrayRef<Value> indices,
       return {AccessTraceStatus::NotRooted, {}};
 
     if (auto cast = dyn_cast<memref::CastOp>(def)) {
-      std::optional<unsigned> sourceRank = ::mlir::carts::ValueAnalysis::getMemrefRank(cast.getSource());
+      std::optional<unsigned> sourceRank =
+          ::mlir::carts::ValueAnalysis::getMemrefRank(cast.getSource());
       if (!sourceRank || !currentRank || *sourceRank != *currentRank)
         unsupportedMapping = true;
       current = cast.getSource();
@@ -202,7 +206,8 @@ static AccessOwnerDims traceAccessToRoot(Value memref, ArrayRef<Value> indices,
     }
 
     if (auto subview = dyn_cast<memref::SubViewOp>(def)) {
-      std::optional<unsigned> sourceRank = ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getSource());
+      std::optional<unsigned> sourceRank =
+          ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getSource());
       if (!unsupportedMapping &&
           !remapSubviewOwnerDims(subview, selectedDims, ownerBase))
         unsupportedMapping = true;
@@ -212,7 +217,8 @@ static AccessOwnerDims traceAccessToRoot(Value memref, ArrayRef<Value> indices,
     }
 
     if (auto subindex = dyn_cast<polygeist::SubIndexOp>(def)) {
-      std::optional<unsigned> sourceRank = ::mlir::carts::ValueAnalysis::getMemrefRank(subindex.getSource());
+      std::optional<unsigned> sourceRank =
+          ::mlir::carts::ValueAnalysis::getMemrefRank(subindex.getSource());
       if (!sourceRank || !currentRank || *sourceRank != *currentRank + 1) {
         unsupportedMapping = true;
         current = subindex.getSource();
@@ -234,7 +240,8 @@ static AccessOwnerDims traceAccessToRoot(Value memref, ArrayRef<Value> indices,
     return {AccessTraceStatus::NotRooted, {}};
   }
 
-  std::optional<unsigned> rootRank = ::mlir::carts::ValueAnalysis::getMemrefRank(root);
+  std::optional<unsigned> rootRank =
+      ::mlir::carts::ValueAnalysis::getMemrefRank(root);
   if (!rootRank || !currentRank || *rootRank != *currentRank ||
       unsupportedMapping)
     return {AccessTraceStatus::Unsupported, {}};
@@ -700,6 +707,12 @@ static bool isWrittenByAnotherCodelet(Value root, codir::CodeletOp self) {
 /// boundary correctness relies on each node independently initializing the
 /// full array, but the halo-exchange contract provides stronger ordering
 /// guarantees at the producer-consumer boundary across partitions.
+///
+/// stencil_tiling_nd and higher_order_stencil are only eligible when the
+/// codelet distributes along a single tile owner dim. With multiple tile owner
+/// dims (2D distribution), the per-node tile is a 2D shard and the read-only
+/// input cannot be correctly replicated at partition boundaries via the
+/// local_only path; route through compute_block halo exchange instead.
 static bool isStencilDepReplicateEligible(codir::CodeletOp codelet,
                                           unsigned depIndex) {
   if (!codelet || depIndex >= codelet.getDeps().size())
@@ -710,6 +723,10 @@ static bool isStencilDepReplicateEligible(codir::CodeletOp codelet,
   switch (pattern.getValue()) {
   case codir::CodirPattern::stencil_tiling_nd:
   case codir::CodirPattern::higher_order_stencil:
+    // Only safe when exactly one tile owner dim drives the distribution.
+    // Multi-owner-dim (2D/3D tile) distributions require halo exchange.
+    if (!getSingleTileOwnerDim(codelet))
+      return false;
     break;
   case codir::CodirPattern::cross_dim_stencil_3d:
   case codir::CodirPattern::wavefront_2d:
