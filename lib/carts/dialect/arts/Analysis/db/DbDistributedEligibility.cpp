@@ -148,8 +148,11 @@ static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
   return true;
 }
 
-/// Returns true when an acquire node uses stencil semantics, checking the
-/// contract summary, the analysis access pattern, and the node access pattern.
+/// Returns true when an acquire node belongs to a stencil-family codelet,
+/// reading the stamped `ArtsDepPattern` rather than re-detecting from raw
+/// memory accesses (Invariant 5). The contract summary (which embeds halo
+/// geometry) is consulted first; if absent, the depPattern stamped on the
+/// acquire or its consumer EDT is authoritative.
 static bool isStencilAcquire(DbAcquireNode *node, DbAnalysis &dbAnalysis) {
   DbAcquireOp acquireOp = node->getDbAcquireOp();
   if (!acquireOp)
@@ -159,10 +162,15 @@ static bool isStencilAcquire(DbAcquireNode *node, DbAnalysis &dbAnalysis) {
       contract && contract->contract.hasExplicitStencilContract())
     return true;
 
-  if (auto accessPattern = dbAnalysis.getAcquireAccessPattern(acquireOp))
-    return *accessPattern == AccessPattern::Stencil;
+  if (auto depPattern = getDepPattern(acquireOp.getOperation()))
+    if (isStencilFamilyDepPattern(*depPattern))
+      return true;
 
-  return node->getAccessPattern() == AccessPattern::Stencil;
+  if (EdtOp edt = node->getEdtUser())
+    if (auto depPattern = getDepPattern(edt.getOperation()))
+      return isStencilFamilyDepPattern(*depPattern);
+
+  return false;
 }
 
 /// Summary of facts collected in a single pass over all acquire nodes
@@ -174,6 +182,11 @@ struct EligibilityFacts {
   bool allAcquiresReadOnly = true;
   bool isStencilFamily = false;
   bool allHaveEdtAcquireUsers = true;
+  /// True only when every internode read-only stencil acquire of |alloc|
+  /// carries the `replicatedRead` storage-view marker authored by CODIR
+  /// storage planning. This is the contract that says "the codelet wants
+  /// the full DB replicated", not just "the access happens to be RO".
+  bool allInternodeStencilReadsAreReplicated = true;
 };
 
 /// Performs a single traversal of the acquire nodes for |alloc|, collecting
@@ -217,12 +230,24 @@ collectEligibilityFacts(DbAllocOp alloc, DbAnalysis &dbAnalysis) {
     bool internode = edt && edt.getConcurrency() == EdtConcurrency::internode;
     if (internode)
       facts.hasInternodeEdtUse = true;
-    if (internode && !readOnly)
+    /// Bridge-fill EDTs (carrying the `storageBridgeCopy` marker) are
+    /// orchestration machinery that materializes the host->compute bridge,
+    /// not user computation. Their writes must not block the halo-backed
+    /// bridge eligibility path; otherwise every bridged stencil DB looks
+    /// "internode-written" before the user codelet ever runs.
+    bool isBridgeFill = edt && edt.getStorageBridgeCopyAttr();
+    if (internode && !readOnly && !isBridgeFill)
       facts.hasInternodeWriteUse = true;
 
     /// hasStencilReadInternodeUse (existential)
-    if (internode && readOnly && stencil)
+    if (internode && readOnly && stencil) {
       facts.hasStencilReadInternodeUse = true;
+      /// allInternodeStencilReadsAreReplicated (universal, over the same
+      /// subset). The codelet expresses storage-view intent via the
+      /// `replicatedRead` marker on its acquire; respect that contract.
+      if (!acquireNode->getDbAcquireOp().getReplicatedReadAttr())
+        facts.allInternodeStencilReadsAreReplicated = false;
+    }
   });
 
   return facts;
@@ -316,14 +341,14 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
     return {false, DistributedDbEligibilityRejectReason::NoInternodeEdtUse};
   if (facts.hasStencilReadInternodeUse) {
     /// EXT-DIST-1: Allow read-only stencil DBs as replicated distributed DBs.
-    /// A stencil-pattern DB is safe for distribution when no writes occur —
-    /// each node can hold a complete copy of the data including halo regions.
-    /// TODO(DT-5): Lowering must emit arts_add_db_duplicate() to actually
-    /// replicate the data. Until then, this falls through to block
-    /// distribution.
+    /// CODIR storage planning marks acquires with `replicatedRead` when the
+    /// codelet wants the whole DB on every node (DT-5 emits PREFER_DUPLICATE
+    /// in lowering). Without that marker, the codelet asked for a block view
+    /// and we must not unilaterally replicate.
     bool readOnly =
         facts.allAcquiresReadOnly || hasReadOnlyAfterInitAttr(alloc);
-    if (readOnly && facts.isStencilFamily)
+    if (readOnly && facts.isStencilFamily &&
+        facts.allInternodeStencilReadsAreReplicated)
       return {true, DistributedDbEligibilityRejectReason::None,
               EdtDistributionKind::replicated};
     if (!facts.hasInternodeWriteUse && isHaloBackedHostBridge(alloc))
