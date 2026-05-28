@@ -83,6 +83,10 @@ public:
   int64_t getMinDistributedTileBytes() const override {
     return machine.getMinDistributedTileBytes();
   }
+
+  int64_t getMinDistributedStencilTileBytes() const override {
+    return machine.getMinDistributedStencilTileBytes();
+  }
 };
 
 } // namespace mlir::carts::arts

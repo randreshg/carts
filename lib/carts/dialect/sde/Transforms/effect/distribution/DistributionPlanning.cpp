@@ -61,6 +61,17 @@ static int64_t getStencilWorkerTarget(sde::SDECostModel &costModel) {
   return costModel.getLogicalWorkerCapacity();
 }
 
+// Element-byte width derived from the output plan's underlying memref. Returns
+// 0 for non-numeric types or shapeless roots; callers should treat 0 as
+// "cannot reason about tile bytes" and skip the floor.
+static int64_t outputElementBytes(Value root) {
+  auto memrefTy = dyn_cast_or_null<MemRefType>(root.getType());
+  if (!memrefTy) return 0;
+  Type elt = memrefTy.getElementType();
+  if (!elt.isIntOrFloat()) return 0;
+  return llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
+}
+
 static int64_t readStencilHaloForOwnerDim(sde::SdeSuIterateOp op,
                                           unsigned ownerDim) {
   auto minOffsets = readI64ArrayAttr(op.getAccessMinOffsetsAttr());
@@ -414,6 +425,50 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
                              physicalBlockShape, haloShape))
         return;
 
+      // Optional halo-expanded tile-bytes floor. Mirrors the matmul coarsening
+      // loop but accounts for perimeter halo overhead. When the configured
+      // floor is met by the initial plan (or disabled), this is a no-op.
+      int64_t stencilFloor = costModel.getMinDistributedStencilTileBytes();
+      if (stencilFloor > 0) {
+        int64_t elemBytes = outputElementBytes(outputPlan->root);
+        if (elemBytes > 0) {
+          // Per-physical-dim halo radii (zeros for non-owner dims), so the
+          // expansion ratio reflects the full N-d tile.
+          SmallVector<int64_t, 4> haloByPhysical(outputPlan->shape.size(), 0);
+          for (auto [idx, physDim] : llvm::enumerate(ownerDims)) {
+            if (physDim < 0 ||
+                static_cast<size_t>(physDim) >= haloByPhysical.size())
+              continue;
+            haloByPhysical[physDim] =
+                idx < haloShape.size() ? haloShape[idx] : 0;
+          }
+          auto rebuild = [&](int64_t candidateWorkers,
+                             SmallVectorImpl<int64_t> &candidateShape) {
+            SmallVector<int64_t, 4> tmpOwnerDims;
+            SmallVector<int64_t, 4> tmpHalo;
+            SmallVector<int64_t, 4> tmpBlock;
+            if (!buildOwnerDimPlan(op, *outputPlan, ownerLoopDims,
+                                   candidateWorkers, tmpOwnerDims, tmpBlock,
+                                   tmpHalo))
+              return false;
+            candidateShape.assign(tmpBlock.begin(), tmpBlock.end());
+            return true;
+          };
+          int64_t coarsened = sde::coarsenStencilWorkersToFloor(
+              workers, outputPlan->shape, haloByPhysical, physicalBlockShape,
+              elemBytes, stencilFloor, rebuild);
+          if (coarsened < workers) {
+            workers = coarsened;
+            ownerDims.clear();
+            physicalBlockShape.clear();
+            haloShape.clear();
+            if (!buildOwnerDimPlan(op, *outputPlan, ownerLoopDims, workers,
+                                   ownerDims, physicalBlockShape, haloShape))
+              return;
+          }
+        }
+      }
+
       if (isInPlaceSelfReadStencil(op)) {
         auto effects = sde::collectStructuredMemoryEffects(op.getBody());
         if (effects.hasUnknownEffects || effects.writes.empty())
@@ -458,6 +513,40 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
   if (!buildOwnerDimPlan(*secondaryPlan, workers, ownerDims,
                          physicalBlockShape))
     return;
+
+  // Halo-expanded tile-bytes floor (secondary owner-dim path). This planner
+  // arm handles imperfect local stencil/update nests; halo radii are not
+  // surfaced here, so the floor compares against owned-tile bytes alone. Any
+  // halo overhead beyond that becomes additional motivation to coarsen.
+  int64_t stencilFloor = costModel.getMinDistributedStencilTileBytes();
+  if (stencilFloor > 0) {
+    int64_t elemBytes = outputElementBytes(secondaryPlan->root);
+    if (elemBytes > 0) {
+      SmallVector<int64_t, 4> zeroHalo(secondaryPlan->shape.size(), 0);
+      auto rebuild = [&](int64_t candidateWorkers,
+                         SmallVectorImpl<int64_t> &candidateShape) {
+        SmallVector<int64_t, 4> tmpOwnerDims;
+        SmallVector<int64_t, 4> tmpBlock;
+        if (!buildOwnerDimPlan(*secondaryPlan, candidateWorkers, tmpOwnerDims,
+                               tmpBlock))
+          return false;
+        candidateShape.assign(tmpBlock.begin(), tmpBlock.end());
+        return true;
+      };
+      int64_t coarsened = sde::coarsenStencilWorkersToFloor(
+          workers, secondaryPlan->shape, zeroHalo, physicalBlockShape,
+          elemBytes, stencilFloor, rebuild);
+      if (coarsened < workers) {
+        workers = coarsened;
+        ownerDims.clear();
+        physicalBlockShape.clear();
+        if (!buildOwnerDimPlan(*secondaryPlan, workers, ownerDims,
+                               physicalBlockShape))
+          return;
+      }
+    }
+  }
+
   alignLateOwnerPlanToExistingStep(op, ownerDims, physicalBlockShape);
   applyPhysicalPlan(op, ownerDims, physicalBlockShape);
 }

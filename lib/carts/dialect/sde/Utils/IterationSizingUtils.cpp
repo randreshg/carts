@@ -60,9 +60,9 @@ SmallVector<int64_t, 4> factorWorkersAcrossDims(int64_t workers,
   return grid;
 }
 
-static long double estimateStencilExpandedTileRatio(ArrayRef<int64_t> extents,
-                                                    ArrayRef<int64_t> haloRadii,
-                                                    ArrayRef<int64_t> grid) {
+long double estimateStencilExpandedTileRatio(ArrayRef<int64_t> extents,
+                                              ArrayRef<int64_t> haloRadii,
+                                              ArrayRef<int64_t> grid) {
   long double ownedVolume = 1.0L;
   long double expandedVolume = 1.0L;
   for (auto [idx, extent] : llvm::enumerate(extents)) {
@@ -125,6 +125,60 @@ factorStencilWorkersAcrossDims(int64_t workers, ArrayRef<int64_t> extents,
   return grid;
 }
 
+
+int64_t haloExpandedTileBytes(ArrayRef<int64_t> extents,
+                              ArrayRef<int64_t> haloRadii,
+                              ArrayRef<int64_t> physicalBlockShape,
+                              int64_t elemBytes) {
+  if (elemBytes <= 0)
+    return 0;
+  int64_t ownedBytes = elemBytes;
+  for (int64_t dim : physicalBlockShape) {
+    if (dim <= 0)
+      return 0;
+    ownedBytes *= dim;
+  }
+  SmallVector<int64_t, 4> grid;
+  grid.reserve(extents.size());
+  for (auto [idx, extent] : llvm::enumerate(extents)) {
+    if (extent <= 0 || idx >= physicalBlockShape.size() ||
+        physicalBlockShape[idx] <= 0)
+      return 0;
+    grid.push_back(ceilDivPositive(extent, physicalBlockShape[idx]));
+  }
+  long double ratio = estimateStencilExpandedTileRatio(extents, haloRadii, grid);
+  if (!std::isfinite(static_cast<double>(ratio)) || ratio <= 0.0L)
+    return ownedBytes;
+  long double expanded = static_cast<long double>(ownedBytes) * ratio;
+  if (expanded > static_cast<long double>(std::numeric_limits<int64_t>::max()))
+    return std::numeric_limits<int64_t>::max();
+  return static_cast<int64_t>(expanded);
+}
+
+int64_t coarsenStencilWorkersToFloor(
+    int64_t workers, ArrayRef<int64_t> extents, ArrayRef<int64_t> haloRadii,
+    ArrayRef<int64_t> physicalBlockShape, int64_t elemBytes,
+    int64_t minTileBytes,
+    llvm::function_ref<bool(int64_t, SmallVectorImpl<int64_t> &)> rebuild) {
+  if (minTileBytes <= 0 || workers <= 1 || elemBytes <= 0)
+    return workers;
+  SmallVector<int64_t, 4> currentShape(physicalBlockShape.begin(),
+                                       physicalBlockShape.end());
+  int64_t currentWorkers = workers;
+  while (currentWorkers > 1 &&
+         haloExpandedTileBytes(extents, haloRadii, currentShape, elemBytes) <
+             minTileBytes) {
+    int64_t nextWorkers = std::max<int64_t>(1, currentWorkers / 2);
+    if (nextWorkers == currentWorkers)
+      break;
+    SmallVector<int64_t, 4> candidateShape;
+    if (!rebuild(nextWorkers, candidateShape))
+      break;
+    currentWorkers = nextWorkers;
+    currentShape = std::move(candidateShape);
+  }
+  return currentWorkers;
+}
 
 Value buildLogicalWorkerCapacityValue(OpBuilder &builder, Location loc) {
   Value logicalWorkers = SdeResourceQueryOp::create(

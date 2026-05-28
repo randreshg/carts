@@ -129,6 +129,13 @@ public:
   // output. The unit is bytes on the output element type so SDE can reason
   // about both numeric (f32/f64) and packed-vector workloads uniformly.
   virtual int64_t getMinDistributedTileBytes() const { return 0; }
+
+  // Stencil-specific tile-payload floor. Stencils pay a perimeter halo on top
+  // of the owned tile, so the matmul floor is too coarse: stencil tiles should
+  // satisfy `(owned_tile_bytes * expansion_ratio) >= floor`, where the
+  // expansion ratio captures the per-direction halo (see
+  // `estimateStencilExpandedTileRatio`). 0 disables the floor for stencils.
+  virtual int64_t getMinDistributedStencilTileBytes() const { return 0; }
 };
 
 } // namespace mlir::carts::sde

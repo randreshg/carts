@@ -623,12 +623,54 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
   if (plan.ownerPhysicalDims.empty())
     return std::nullopt;
 
-  SmallVector<int64_t, 4> grid = sde::factorStencilWorkersAcrossDims(
-      std::max<int64_t>(1, getTargetTileTasks(op, costModel)), ownerExtents,
-      plan.haloShape);
+  int64_t targetWorkers =
+      std::max<int64_t>(1, getTargetTileTasks(op, costModel));
+
+  // Apply the SDE stencil-tile-bytes floor before stamping. Halo-expanded tile
+  // bytes < floor → halve the worker target and recompute the grid. Default
+  // 0 (off); set by --min-distributed-stencil-tile-bytes / arts.cfg.
+  int64_t stencilFloor = costModel.getMinDistributedStencilTileBytes();
+  int64_t elemBytes = 0;
+  if (stencilFloor > 0) {
+    if (auto memrefTy = dyn_cast_or_null<MemRefType>(outputPlan->root.getType()))
+      if (Type elt = memrefTy.getElementType(); elt.isIntOrFloat())
+        elemBytes = llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
+  }
+
+  auto computeBlockShape = [&](int64_t workers,
+                               SmallVectorImpl<int64_t> &blockShape) {
+    blockShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
+    SmallVector<int64_t, 4> grid = sde::factorStencilWorkersAcrossDims(
+        std::max<int64_t>(1, workers), ownerExtents, plan.haloShape);
+    for (auto [idx, physicalDim] : llvm::enumerate(plan.ownerPhysicalDims))
+      blockShape[physicalDim] =
+          sde::ceilDivPositive(outputPlan->shape[physicalDim], grid[idx]);
+  };
+
+  SmallVector<int64_t, 4> initialBlockShape;
+  computeBlockShape(targetWorkers, initialBlockShape);
+
+  // Build a per-physical-dim halo radius vector (0 for non-owner dims) so the
+  // expansion ratio reflects the full N-d tile, not just owner dims.
+  SmallVector<int64_t, 4> haloByPhysical(outputPlan->shape.size(), 0);
+  for (auto [idx, physDim] : llvm::enumerate(plan.ownerPhysicalDims)) {
+    if (physDim < 0 || static_cast<size_t>(physDim) >= haloByPhysical.size())
+      continue;
+    haloByPhysical[physDim] = idx < plan.haloShape.size() ? plan.haloShape[idx] : 0;
+  }
+
+  int64_t coarsenedWorkers = sde::coarsenStencilWorkersToFloor(
+      targetWorkers, outputPlan->shape, haloByPhysical, initialBlockShape,
+      elemBytes, stencilFloor,
+      [&](int64_t candidateWorkers, SmallVectorImpl<int64_t> &candidateShape) {
+        computeBlockShape(candidateWorkers, candidateShape);
+        return true;
+      });
+
+  SmallVector<int64_t, 4> finalBlockShape;
+  computeBlockShape(coarsenedWorkers, finalBlockShape);
   for (auto [idx, physicalDim] : llvm::enumerate(plan.ownerPhysicalDims)) {
-    int64_t tile =
-        sde::ceilDivPositive(outputPlan->shape[physicalDim], grid[idx]);
+    int64_t tile = finalBlockShape[physicalDim];
     plan.blockShape[physicalDim] = tile;
     unsigned loopDim = ownerLoopDims[idx];
     if (loopDim < plan.tileIterations.size())

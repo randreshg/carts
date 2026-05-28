@@ -55,6 +55,16 @@ public:
     minDistributedTileBytes = bytes;
   }
 
+  /// Stencil-specific tile-byte floor (0 = disabled). Separate from the
+  /// matmul floor so the two grain knobs drift independently: stencil tiles
+  /// include perimeter halo overhead the matmul plan does not pay.
+  int64_t getMinDistributedStencilTileBytes() const {
+    return minDistributedStencilTileBytes;
+  }
+  void setMinDistributedStencilTileBytes(int64_t bytes) {
+    minDistributedStencilTileBytes = bytes;
+  }
+
   /// Execution mode derived from runtime-visible worker concurrency.
   ExecutionMode getExecutionMode() const {
     if (nodeCount > 1)
@@ -117,6 +127,7 @@ private:
   int routeTableSize = 16;
   int minIterationsPerWorker = 0;
   int64_t minDistributedTileBytes = 0;
+  int64_t minDistributedStencilTileBytes = 0;
   bool coreDump = false;
 
   /// Performance Monitoring
