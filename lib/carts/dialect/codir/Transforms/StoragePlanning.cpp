@@ -461,6 +461,31 @@ static bool isStencilCodelet(codir::CodeletOp codelet) {
   }
 }
 
+/// Stencil patterns whose reads are provably independent across iterations of
+/// the surrounding time loop. These are safe to replicate (one coarse DB,
+/// duplicated across nodes) because no codelet in the loop writes to the same
+/// DB. Patterns like jacobi_alternating_buffers and wavefront_2d, in contrast,
+/// have the property that this iteration's write becomes the next iteration's
+/// read — replicating those reads forces whole-array re-broadcast every step
+/// and destroys scaling. Those patterns must keep block-owned storage with
+/// halo exchange between neighboring tiles.
+static bool isReplicatedReadEligibleStencil(codir::CodeletOp codelet) {
+  auto pattern = codelet ? codelet.getPatternAttr() : nullptr;
+  if (!pattern)
+    return false;
+  switch (pattern.getValue()) {
+  case codir::CodirPattern::stencil_tiling_nd:
+  case codir::CodirPattern::cross_dim_stencil_3d:
+  case codir::CodirPattern::higher_order_stencil:
+    return true;
+  case codir::CodirPattern::wavefront_2d:
+  case codir::CodirPattern::jacobi_alternating_buffers:
+    return false;
+  default:
+    return false;
+  }
+}
+
 static std::optional<unsigned>
 getCodeletDepOperandIndex(codir::CodeletOp codelet, OpOperand &use) {
   if (!codelet)
@@ -657,6 +682,27 @@ static bool shouldDemoteStencilWriteToComputeBlock(codir::CodeletOp codelet,
   return stencilWriteFitsInTile(codelet);
 }
 
+/// Stencil reads on patterns that have writers in the same time loop
+/// (alternating buffers, wavefront) must stay block-distributed. SDE may stamp
+/// `host_whole` as the initial view; demote it so the resulting DB is
+/// distributed and the existing halo-exchange machinery
+/// (`kArtsDepFlagPreserveShape` + `arts_add_dependence_at_ex`) fires for the
+/// neighbor-tile slices.
+static bool shouldDemoteStencilHaloReadToComputeBlock(codir::CodeletOp codelet,
+                                                      unsigned depIndex) {
+  if (!isStencilCodelet(codelet) || !hasTileOwnerSlicePlan(codelet))
+    return false;
+  if (isReplicatedReadEligibleStencil(codelet))
+    return false;
+  std::optional<codir::CodirAccessMode> mode =
+      getDepAccessMode(codelet, depIndex);
+  if (!mode || *mode != codir::CodirAccessMode::read)
+    return false;
+  if (!stencilCrossesTileBoundary(codelet))
+    return false;
+  return stencilWriteFitsInTile(codelet);
+}
+
 static bool shouldUseReplicatedReadDep(codir::CodeletOp codelet,
                                        unsigned depIndex) {
   if (!isMatmulCodelet(codelet) && !isStencilCodelet(codelet))
@@ -669,8 +715,12 @@ static bool shouldUseReplicatedReadDep(codir::CodeletOp codelet,
     return false;
   /// Stencil reads cross tile boundaries via the halo even when every access
   /// is aligned on the owner dim; treat any nonzero offset as replicated-read.
+  /// Restricted to read-only stencil shapes — alternating-buffer / wavefront
+  /// patterns have writers in the same loop, so replicating the read would
+  /// force whole-array re-broadcast every step (kills scaling).
   if (isStencilCodelet(codelet))
-    return stencilCrossesTileBoundary(codelet);
+    return isReplicatedReadEligibleStencil(codelet) &&
+           stencilCrossesTileBoundary(codelet);
   /// Matmul keeps the dim-alignment semantic: a B/A read whose access dim
   /// disagrees with the codelet's owner dim is the replicated participant.
   return !depAccessesStayWithinSingleOwnerSlice(codelet, depIndex);
@@ -696,7 +746,8 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
       shouldUseReplicatedReadDep(codelet, depIndex))
     return codir::CodirStorageViewKind::replicated_read;
   if (requested == codir::CodirStorageViewKind::host_whole &&
-      shouldDemoteStencilWriteToComputeBlock(codelet, depIndex))
+      (shouldDemoteStencilWriteToComputeBlock(codelet, depIndex) ||
+       shouldDemoteStencilHaloReadToComputeBlock(codelet, depIndex)))
     requested = codir::CodirStorageViewKind::compute_block;
   if (requested != codir::CodirStorageViewKind::compute_block)
     return requested;
