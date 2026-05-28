@@ -77,6 +77,14 @@ def ConvertOpenMPToSde : Pass<"convert-openmp-to-sde", "mlir::ModuleOp"> {
                            "::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::arith::ArithDialect",
                            "::mlir::scf::SCFDialect"];
+  let options = [
+    Option<"enableDistributedDb", "enable-distributed-db", "bool",
+           /*default=*/"false",
+           "When true, the user requested distributed DB execution via "
+           "--distributed-db. Suppress single-node host-OpenMP fallback "
+           "island marking so all OpenMP work enters the SDE/CODIR/ARTS "
+           "pipeline and can be distributed across nodes.">
+  ];
   let constructor = "mlir::carts::sde::createConvertOpenMPToSdePass()";
 }
 

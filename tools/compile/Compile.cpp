@@ -1171,9 +1171,10 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
 /// OpenMP to SDE planning. Codelets are intentionally not lowered
 /// here; SDE plans feed `sde-to-codir`, and CODIR then materializes ARTS.
 void buildSdePlanningPipeline(PassManager &pm,
-                              arts::AnalysisManager *AM = nullptr) {
+                              arts::AnalysisManager *AM = nullptr,
+                              bool enableDistributedDb = false) {
   sde::SDECostModel *costModel = AM ? &AM->getCostModel() : nullptr;
-  pm.addPass(sde::createConvertOpenMPToSdePass());
+  pm.addPass(sde::createConvertOpenMPToSdePass(enableDistributedDb));
   // SDE pattern analysis first stamps approved memref/ND access facts. Dep
   // transforms then consume those SDE facts before effect passes make
   // scheduling decisions.
@@ -1407,7 +1408,7 @@ static ArrayRef<StageDescriptor> getStageRegistry() {
       {StageId::SdePlanning, "sde-planning", StageKind::Core, true, true, false,
        "Error when converting OpenMP to SDE planning IR", kSdePlanningPasses,
        [](PassManager &pm, const StageExecutionContext &ctx) {
-         buildSdePlanningPipeline(pm, ctx.analysisManager);
+         buildSdePlanningPipeline(pm, ctx.analysisManager, DistributedDb);
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepInitialCleanup},

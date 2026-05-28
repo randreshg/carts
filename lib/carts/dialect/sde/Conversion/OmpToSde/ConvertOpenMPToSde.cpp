@@ -791,12 +791,19 @@ static bool isMultinodeRuntime(ModuleOp module) {
   return nodes && *nodes > 1;
 }
 
-static unsigned markHostOpenMPIslands(ModuleOp module) {
+static unsigned markHostOpenMPIslands(ModuleOp module,
+                                      bool enableDistributedDb) {
   if (!isBenchmarkModule(module))
     return 0;
   // Multinode modules must enter SDE/CODIR/ARTS so CDAG ordering and
   // distributed slicing remain the compiler contract.
   if (isMultinodeRuntime(module))
+    return 0;
+  // The user requested distributed DBs at compile time; the binary will be
+  // run multinode even if the compile-time runtime config is single-node.
+  // Single-node OpenMP fallback islands would silently bypass the
+  // distribution path on that run, so suppress them here.
+  if (enableDistributedDb)
     return 0;
 
   SmallVector<omp::ParallelOp> fallbackParallels;
@@ -1654,7 +1661,8 @@ struct ConvertOpenMPToSdePass
     ModuleOp module = getOperation();
     ARTS_INFO_HEADER(ConvertOpenMPToSdePass);
     MLIRContext *context = &getContext();
-    unsigned hostOpenMPIslands = markHostOpenMPIslands(module);
+    unsigned hostOpenMPIslands =
+        markHostOpenMPIslands(module, enableDistributedDb);
     if (hostOpenMPIslands != 0)
       ARTS_INFO("ConvertOpenMPToSde: preserving " << hostOpenMPIslands
                                                   << " host OpenMP island(s)");
@@ -1698,6 +1706,12 @@ namespace carts {
 namespace sde {
 std::unique_ptr<Pass> createConvertOpenMPToSdePass() {
   return std::make_unique<ConvertOpenMPToSdePass>();
+}
+std::unique_ptr<Pass>
+createConvertOpenMPToSdePass(bool enableDistributedDb) {
+  ConvertOpenMPToSdeOptions options;
+  options.enableDistributedDb = enableDistributedDb;
+  return std::make_unique<ConvertOpenMPToSdePass>(options);
 }
 } // namespace sde
 } // namespace carts

@@ -84,6 +84,8 @@ createBarrierEliminationPass(SDECostModel *costModel = nullptr);
 
 // --- Conversion passes ---
 std::unique_ptr<Pass> createConvertOpenMPToSdePass();
+std::unique_ptr<Pass>
+createConvertOpenMPToSdePass(bool enableDistributedDb);
 
 // --- Verification ---
 std::unique_ptr<Pass> createVerifySdeCpsPlanPass();
