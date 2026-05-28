@@ -1,10 +1,11 @@
 // RUN: %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg --distributed-db \
-// RUN:   | %FileCheck %s --implicit-check-not=stencil_read_internode_use
+// RUN:   | %FileCheck %s --implicit-check-not=stencil_read_internode_use --implicit-check-not=host_whole_to_compute_block
 
-// Large read-only stencil deps that are bridged from a host-visible whole DB
-// must allocate payload space for the owner-dimension halo. The bridge copy-in
-// is a local writer, but the compute DB is still distributed when no internode
-// writer uses it.
+// Large read-only stencil deps with cross-tile halo are promoted to
+// replicated-read at storage-planning. A single coarse DB hosts the data and
+// the per-EDT acquire carries `replicatedRead`, so the runtime can duplicate
+// it across nodes via PREFER_DUPLICATE instead of paying for a host_whole →
+// compute_block bridge.
 
 module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_workers = 512 : i64} {
   func.func @read_only_stencil_halo_bridge() {
@@ -57,11 +58,11 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-LABEL: func.func @read_only_stencil_halo_bridge
 // CHECK: arts.db_alloc{{.*}}<coarse>
 // CHECK-SAME: local_only
-// CHECK: arts.db_alloc{{.*}}<block>
-// CHECK-SAME: elementSizes[%c10{{(_[0-9]+)?}}, %c4{{(_[0-9]+)?}}]
-// CHECK-SAME: distributed
+// CHECK: arts.db_acquire[<in>]
+// CHECK-SAME: partitioning(<coarse>)
+// CHECK-SAME: {replicatedRead}
+// CHECK: arts.edt <task> <internode>
+// CHECK-SAME: distribution_kind = #arts.distribution_kind<block>
 // CHECK-SAME: planHaloShape = [1]
 // CHECK-SAME: planPhysicalBlockShape = [8, 4]
 // CHECK-SAME: stencil_supported_block_halo
-// CHECK-SAME: storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
-// CHECK: arts.edt <task> <internode>

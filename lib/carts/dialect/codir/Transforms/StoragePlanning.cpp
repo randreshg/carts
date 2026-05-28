@@ -686,7 +686,13 @@ static ArrayAttr buildOwnerDimsAttr(MLIRContext *ctx,
 static codir::CodirStorageViewKind
 chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
                   codir::CodirStorageViewKind requested) {
-  if (requested == codir::CodirStorageViewKind::host_whole &&
+  /// Replicated-read eligibility is a semantic property of the dep (matmul
+  /// inner operand, or stencil read with halo crossing). The initial view the
+  /// SDE→CODIR materializer stamps (host_whole for whole-storage tokens,
+  /// compute_block for sliced tokens) is irrelevant to that semantics, so the
+  /// promotion fires for either starting view.
+  if ((requested == codir::CodirStorageViewKind::host_whole ||
+       requested == codir::CodirStorageViewKind::compute_block) &&
       shouldUseReplicatedReadDep(codelet, depIndex))
     return codir::CodirStorageViewKind::replicated_read;
   if (requested == codir::CodirStorageViewKind::host_whole &&
