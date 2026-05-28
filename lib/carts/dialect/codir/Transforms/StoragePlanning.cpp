@@ -693,6 +693,13 @@ static bool isWrittenByAnotherCodelet(Value root, codir::CodeletOp self) {
 /// codelet in the same function. Condition (b) distinguishes the
 /// read-only stencil case (replicate-safe) from the alternating-buffer
 /// case where replicate forces a whole-array re-broadcast every step.
+///
+/// cross_dim_stencil_3d is excluded because its halo-crossing read deps need
+/// the compute_block path (with halo exchange) to guarantee correct boundary
+/// values at 2n. The replicated-read path produces a local_only DB whose
+/// boundary correctness relies on each node independently initializing the
+/// full array, but the halo-exchange contract provides stronger ordering
+/// guarantees at the producer-consumer boundary across partitions.
 static bool isStencilDepReplicateEligible(codir::CodeletOp codelet,
                                           unsigned depIndex) {
   if (!codelet || depIndex >= codelet.getDeps().size())
@@ -702,9 +709,9 @@ static bool isStencilDepReplicateEligible(codir::CodeletOp codelet,
     return false;
   switch (pattern.getValue()) {
   case codir::CodirPattern::stencil_tiling_nd:
-  case codir::CodirPattern::cross_dim_stencil_3d:
   case codir::CodirPattern::higher_order_stencil:
     break;
+  case codir::CodirPattern::cross_dim_stencil_3d:
   case codir::CodirPattern::wavefront_2d:
   case codir::CodirPattern::jacobi_alternating_buffers:
     return false;
