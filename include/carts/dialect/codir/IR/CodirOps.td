@@ -58,6 +58,17 @@ def CartsCodir_CodeletOp
     OptionalAttr<ArrayAttr>:$write_footprint,
     UnitAttr:$in_place_safe,
     UnitAttr:$in_place_shared_state,
+    // --- SDE module-scoped layout-assignment carriers (WF-5a). Threaded
+    // verbatim from the source `sde.su_iterate` so the SDE layout engine's
+    // per-array BLOCK decision survives into CODIR instead of being dropped at
+    // the SDE -> CODIR boundary. These are pure element-space DATA-LAYOUT facts
+    // (no runtime nodes/routes/collective names); see SdeOps.td $arrayLayout,
+    // $layoutsDisagree, $commVolumeBytes for the exact schema. ADDITIVE:
+    // codir-to-arts lowering ignores them unless a consumer opts in, so IR for
+    // kernels whose greedy plan already matches the SDE choice is byte-identical.
+    OptionalAttr<ArrayAttr>:$array_layout,
+    OptionalAttr<ArrayAttr>:$layouts_disagree,
+    OptionalAttr<I64Attr>:$comm_volume_bytes,
     Variadic<AnyType>:$deps,
     Variadic<AnyType>:$params
   );

@@ -59,6 +59,10 @@ struct CodirCodeletMetadata {
   ArrayAttr writeFootprint;
   UnitAttr inPlaceSafe;
   UnitAttr inPlaceSharedState;
+  // SDE module-scoped layout-assignment carriers (WF-5a), threaded verbatim.
+  ArrayAttr arrayLayout;
+  ArrayAttr layoutsDisagree;
+  IntegerAttr commVolumeBytes;
 };
 
 inline CodirCodeletMetadata getCodirMetadataFromTask(sde::SdeCuTaskOp task) {
@@ -118,6 +122,12 @@ getCodirMetadataFromSchedulingUnit(sde::SdeSuIterateOp source) {
     metadata.inPlaceSafe = UnitAttr::get(ctx);
   if (source.getInPlaceSharedStateAttr())
     metadata.inPlaceSharedState = UnitAttr::get(ctx);
+  // Carry the SDE layout-assignment facts verbatim across the boundary. These
+  // are plain Array/Integer attrs (no SDE/CODIR enum split), so no translation
+  // is needed beyond copying the attribute handle.
+  metadata.arrayLayout = source.getArrayLayoutAttr();
+  metadata.layoutsDisagree = source.getLayoutsDisagreeAttr();
+  metadata.commVolumeBytes = source.getCommVolumeBytesAttr();
   return metadata;
 }
 

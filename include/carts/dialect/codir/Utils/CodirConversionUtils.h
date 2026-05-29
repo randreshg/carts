@@ -90,7 +90,8 @@ createCodirCodelet(OpBuilder &builder, Location loc, ArrayAttr depModes,
       metadata.tileShape, metadata.logicalWorkerSlice, metadata.haloShape,
       metadata.accessMinOffsets, metadata.accessMaxOffsets,
       metadata.spatialDims, metadata.writeFootprint, metadata.inPlaceSafe,
-      metadata.inPlaceSharedState, deps, params);
+      metadata.inPlaceSharedState, metadata.arrayLayout,
+      metadata.layoutsDisagree, metadata.commVolumeBytes, deps, params);
 }
 
 static inline Value materializeIndexFoldResult(OpBuilder &builder, Location loc,
