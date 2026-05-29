@@ -1439,6 +1439,8 @@ static inline bool canHoistHostBridgeAcrossLoop(scf::ForOp loop,
       return false;
   }
 
+  Value hostBridgeRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(hostView);
+  arts::DbAllocOp hostBridgeAlloc = findBackingDbAlloc(hostView);
   bool hasExistingBridgeWriter = false;
   loop.walk([&](codir::CodeletOp nestedCodelet) {
     if (hasExistingBridgeWriter)
@@ -1452,6 +1454,15 @@ static inline bool canHoistHostBridgeAcrossLoop(scf::ForOp loop,
         continue;
       arts::DbAllocOp alloc = findBackingDbAlloc(dep);
       if (!alloc || !alloc.getStorageBridgeAttr())
+        continue;
+      // Only an already-materialized bridge writer for the SAME host data is a
+      // staleness hazard. A bridge writer for a different program array (a
+      // sibling array that was hoisted on an earlier seed) is independent and
+      // must not block hoisting this array's bridge. Match by the host root the
+      // dep still references, or by the host DB alloc backing this bridge.
+      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) !=
+              hostBridgeRoot &&
+          (!hostBridgeAlloc || findBackingDbAlloc(dep) != hostBridgeAlloc))
         continue;
       hasExistingBridgeWriter = true;
       return WalkResult::interrupt();
@@ -1478,6 +1489,17 @@ static inline bool canHoistHostBridgeAcrossLoop(scf::ForOp loop,
       std::optional<codir::CodirAccessMode> mode =
           getCodirDepAccessMode(nestedCodelet, static_cast<unsigned>(idx));
       if (!mode || !codirAccessMayWrite(*mode))
+        continue;
+      // A same-root writer that is itself a compatible host-bridge participant
+      // writes into the shared block tile this bridge materializes, not back
+      // into the coarse host image. For an iterative stencil (the read seed and
+      // the write live in the same time-loop iteration), the coarse host array
+      // is therefore untouched between the pre-loop copy-in and post-loop
+      // copy-out, so the bridge stays loop-invariant and is safe to hoist. Only
+      // a writer that bypasses this bridge (writing the coarse host directly)
+      // blocks hoisting.
+      if (isCompatibleHostBridgeParticipant(codelet, seedDepIndex, nestedCodelet,
+                                            static_cast<unsigned>(idx)))
         continue;
       hasPotentialSameRootWriter = true;
       return WalkResult::interrupt();

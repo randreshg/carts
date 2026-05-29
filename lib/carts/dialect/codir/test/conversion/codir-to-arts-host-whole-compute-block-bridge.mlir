@@ -523,21 +523,27 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 
 // PERSIST-LABEL: func.func @write_bridge_persists_across_read_only_host_phase
 // PERSIST: %[[HOST:.*]] = arts.db_ref
+// The compute-block tile for the readwrite array is allocated once before the
+// repetition loop and reused every iteration; only the coarse host image is
+// refreshed for the interleaved host-whole reads.
 // PERSIST-COUNT-1: storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
+// Copy-in (coarse -> block) is hoisted before the repetition loop.
 // PERSIST: arts.edt <task> <internode>
 // PERSIST-SAME: storageBridgeCopy
+// PERSIST: scf.for %{{.*}} = %c0 to %c2
+// PERSIST: arts.edt <task> <internode>
+// PERSIST: arts.barrier
+// In-loop copy-out (block -> coarse) services the host-whole reads of the
+// sibling arrays that follow in the same iteration.
+// PERSIST: arts.edt <task> <intranode>
+// PERSIST-SAME: storageBridgeCopy
+// PERSIST: arts.barrier
+// PERSIST: arts.edt <task> <intranode>
+// PERSIST: arts.edt <task> <intranode>
+// PERSIST: arts.edt <task> <internode>
+// PERSIST: arts.barrier
+// Final copy-out (block -> coarse) lands after the repetition loop closes.
 // PERSIST: scf.for
-// PERSIST: arts.edt <task> <internode>
-// PERSIST: arts.barrier
-// PERSIST: arts.edt <task> <intranode>
-// PERSIST-SAME: storageBridgeCopy
-// PERSIST: arts.barrier
-// PERSIST: arts.edt <task> <intranode>
-// PERSIST: arts.edt <task> <intranode>
-// PERSIST: arts.edt <task> <internode>
-// PERSIST-SAME: storageBridgeCopy
-// PERSIST: arts.edt <task> <internode>
-// PERSIST: arts.barrier
 // PERSIST: arts.edt <task> <intranode>
 // PERSIST-SAME: storageBridgeCopy
 // PERSIST: arts.barrier
