@@ -615,6 +615,20 @@ getCodirOwnerHaloWindow(codir::CodeletOp codelet, unsigned depIndex,
   return window;
 }
 
+// Defined below (after findBackingDbAlloc); forward-declared so createDbBackedMemref
+// can use the unioned per-buffer halo window.
+static inline CodirOwnerHaloWindow
+codirBackingBufferHaloWindow(Value rootMemref, unsigned memrefRank);
+
+// Predicates defined later in this header; forward-declared so the union helper
+// can replicate the exact block-vs-coarse materialization decision per read dep.
+static inline bool codirDepRequiresPhaseRedistributionBridge(
+    codir::CodeletOp codelet, unsigned depIndex);
+static inline bool
+canMaterializeRawCodirDependencyWithPlan(Value root,
+                                         codir::CodeletOp planSource);
+static inline bool rawCodirDependencyNeedsHostBridge(Value root);
+
 static inline Value subtractClampZero(OpBuilder &builder, Location loc,
                                       Value value, int64_t amount) {
   if (amount <= 0)
@@ -863,8 +877,19 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
 
   CodirOwnerHaloWindow ownerHalo;
   if (depIndex) {
-    ownerHalo = getCodirOwnerHaloWindow(
-        planSource, *depIndex, static_cast<unsigned>(memrefType.getRank()));
+    // Pad for the union of every codelet that reads this backing buffer as a
+    // stencil halo input, not just the dependency that first triggered
+    // materialization. A double-buffered stencil array is read by one half-step
+    // and written by the other; if the write half-step materializes it first the
+    // single-dep window is empty and the buffer is left unpadded, breaking the
+    // symmetric block-halo read in the read half-step. The union folds in the
+    // read half-step's window. For single-pass stencils (write-only output
+    // re-read only by a metadata-free storageBridgeCopy) the union equals the
+    // single-dep window, so their layout is unchanged.
+    Value backingRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
+        planSource.getDeps()[*depIndex]);
+    ownerHalo = codirBackingBufferHaloWindow(
+        backingRoot, static_cast<unsigned>(memrefType.getRank()));
     std::optional<unsigned> ownerDim =
         getCodirDepOwnerDim(planSource, *depIndex);
     if (!ownerHalo.empty() && ownerDim &&
@@ -952,6 +977,79 @@ findCodirDependencyIndexForRoot(codir::CodeletOp codelet, Value root) {
     if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) == root)
       return static_cast<unsigned>(idx);
   return std::nullopt;
+}
+
+// Compute the halo padding a single backing buffer needs by taking the union of
+// the owner halo windows of every codelet dependency that reads the SAME
+// backing buffer as a stencil halo input. A double-buffered stencil array (e.g.
+// jacobi2d's A/B) is read by one half-step and written by the other, but each
+// backing memref lowers to a single block db_alloc. Deciding halo padding from
+// only the dependency that first triggered materialization underpads a buffer
+// whose first appearance is a write (getCodirOwnerHaloWindow returns an empty
+// window for may-write deps), so the symmetric stencil EDT body then reads it
+// with the block-halo column shift against an unpadded block. Unioning over all
+// read deps backed by `rootMemref` makes the padding (and the
+// stencil_supported_block_halo attribute) match the access formula regardless of
+// which half-step materialized the buffer first.
+//
+// Write-only outputs (e.g. conv-2d/conv-3d's result buffer, only re-read by a
+// storageBridgeCopy codelet that carries no owner/halo metadata) contribute an
+// empty window, so this union reduces to the single-dep window for single-pass
+// stencils and leaves them unchanged.
+static inline CodirOwnerHaloWindow
+codirBackingBufferHaloWindow(Value rootMemref, unsigned memrefRank) {
+  CodirOwnerHaloWindow unionWindow;
+  if (!rootMemref)
+    return unionWindow;
+
+  Operation *defining = rootMemref.getDefiningOp();
+  Operation *scope =
+      defining ? defining : rootMemref.getParentBlock()->getParentOp();
+  ModuleOp module = scope ? scope->getParentOfType<ModuleOp>() : ModuleOp{};
+  if (!module)
+    return unionWindow;
+
+  std::optional<unsigned> unionOwnerDim;
+  module.walk([&](codir::CodeletOp codelet) {
+    for (auto [idx, dep] : llvm::enumerate(codelet.getDeps())) {
+      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != rootMemref)
+        continue;
+      unsigned depIdx = static_cast<unsigned>(idx);
+      std::optional<codir::CodirAccessMode> mode =
+          getCodirDepAccessMode(codelet, depIdx);
+      if (!mode || !codirAccessMayRead(*mode))
+        continue;
+      CodirOwnerHaloWindow window =
+          getCodirOwnerHaloWindow(codelet, depIdx, memrefRank);
+      if (window.empty())
+        continue;
+      // Only a read that is itself materialized as a block owner-slice view
+      // applies the block-halo column shift in its EDT body; such a read needs
+      // the buffer padded. Reads that fall back to a coarse host-whole view
+      // (e.g. tiles below the distribution threshold, as in jacobi2d small)
+      // index the buffer globally with no halo shift, so they must not pad it.
+      // This mirrors the usePlan decision in materializeRawCodirDependency so the
+      // padding and the body access formula stay in agreement.
+      if (!canMaterializeRawCodirDependencyWithPlan(rootMemref, codelet))
+        continue;
+      if (rawCodirDependencyNeedsHostBridge(rootMemref) &&
+          !codirDepRequiresPhaseRedistributionBridge(codelet, depIdx))
+        continue;
+      std::optional<unsigned> ownerDim =
+          getCodirDepOwnerDim(codelet, depIdx);
+      // A non-empty window always carries an owner dim; require all unioned
+      // read deps to agree on it so the padded dimension is unambiguous.
+      if (!ownerDim)
+        continue;
+      if (unionOwnerDim && *unionOwnerDim != *ownerDim)
+        continue;
+      unionOwnerDim = ownerDim;
+      unionWindow.lower = std::max(unionWindow.lower, window.lower);
+      unionWindow.upper = std::max(unionWindow.upper, window.upper);
+    }
+  });
+
+  return unionWindow;
 }
 
 static inline std::optional<codir::CodirStorageViewKind>
