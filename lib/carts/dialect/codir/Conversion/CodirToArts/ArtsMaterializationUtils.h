@@ -1035,6 +1035,105 @@ coarseBridgeTargetHasReplicatedReadConsumer(codir::CodeletOp producer,
   return found;
 }
 
+/// True when |consumer| reads its dependency |depIndex| as a CROSS-OWNER
+/// transpose reduction: a rank-2 (matrix) read whose contraction runs over the
+/// leading (row) dimension while the codelet's owner-aligned output maps to a
+/// trailing dimension. This is the step2 of the transpose-matvec family
+/// (atax y = A^T(Ax), bicg s = A^T r): the reduction IV sweeps the matrix's row
+/// dim (mapped to -1 in the dep-result-dim map) and the owned output column
+/// maps to the matrix's later dim.
+///
+/// The discriminator is the position of the reduction marker (-1) inside the
+/// dep's entry of partialReductionDepResultDimMaps. The owner-LOCAL pipeline
+/// reductions (correlation, 3mm's owner-aligned matmul) map the matrix as
+/// `[ownerDim, -1]` (leading dim carries the result-owner mapping, trailing dim
+/// reduces) and are explicitly NOT matched here, so their lowering is
+/// untouched. The transpose case maps the matrix as `[-1, ownerDim]` (leading
+/// dim reduces, a trailing dim carries the result-owner mapping). Matching only
+/// the latter keeps this gate disjoint from the owner-local reduction razor.
+static inline bool
+codeletIsCrossOwnerTransposeReduce(codir::CodeletOp consumer) {
+  if (!consumer || !consumer.getPartialReductionAttr())
+    return false;
+  ArrayAttr ownerDims = consumer.getPartialReductionOwnerDimsAttr();
+  if (!ownerDims || ownerDims.empty())
+    return false;
+  auto isResultOwnerDim = [&](int64_t dim) {
+    for (Attribute owner : ownerDims)
+      if (auto intAttr = dyn_cast<IntegerAttr>(owner))
+        if (intAttr.getInt() == dim)
+          return true;
+    return false;
+  };
+  ArrayAttr depMaps = consumer.getPartialReductionDepResultDimMapsAttr();
+  if (!depMaps)
+    return false;
+  // The discriminating dep is the rank-2 (matrix) contraction read. A matrix
+  // dep mapped `[-1, ownerDim]` reduces over its leading (row) dim while a
+  // trailing dim carries the result-owner mapping: the cross-owner transpose-
+  // matvec signature (atax y = A^T(Ax), bicg s = A^T r). The owner-LOCAL
+  // pipeline reductions (correlation, 3mm owner-aligned matmul) map the matrix
+  // as `[ownerDim, -1]` (leading dim carries the result-owner mapping) and fail
+  // the leading == -1 test, so their lowering stays untouched.
+  for (Attribute mapAttr : depMaps) {
+    auto depMap = dyn_cast<ArrayAttr>(mapAttr);
+    if (!depMap || depMap.size() != 2)
+      continue;
+    auto leading = dyn_cast<IntegerAttr>(depMap[0]);
+    auto trailing = dyn_cast<IntegerAttr>(depMap[1]);
+    if (!leading || !trailing)
+      continue;
+    if (leading.getInt() < 0 && isResultOwnerDim(trailing.getInt()))
+      return true;
+  }
+  return false;
+}
+
+/// True when the coarse bridge target produced by |producer|'s |depIndex|
+/// (a block-distributed intermediate gathered to a coarse host-whole buffer)
+/// is later read by a cross-owner transpose reduction consumer (atax/bicg
+/// step2). For that consumer the coarse buffer must hold the COMPLETE gathered
+/// intermediate on every node, because the reduction sweeps the full leading
+/// dimension; the default intranode copy-out leaves each node's coarse buffer
+/// holding only the strip that node produced, which is the value-broken combine
+/// that collapses atax/bicg at 2n. The companion all-gather copy-out (gated on
+/// this predicate) fills the coarse buffer cross-node instead.
+static inline bool
+coarseBridgeTargetHasCrossOwnerReduceConsumer(codir::CodeletOp producer,
+                                              unsigned depIndex) {
+  if (!producer || depIndex >= producer.getDeps().size())
+    return false;
+  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
+      producer.getDeps()[depIndex]);
+  if (!root)
+    return false;
+  Operation *scope = producer->getParentOfType<ModuleOp>();
+  if (!scope)
+    return false;
+
+  bool found = false;
+  scope->walk([&](codir::CodeletOp consumer) {
+    if (found || consumer == producer)
+      return;
+    if (!codeletIsCrossOwnerTransposeReduce(consumer))
+      return;
+    // The consumer must actually read the gathered intermediate (the small
+    // vector tmp / Ax / Ap), so the gather only fires for the buffer that feeds
+    // this cross-owner reduction, not every intermediate in the module.
+    for (auto [idx, dep] : llvm::enumerate(consumer.getDeps())) {
+      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != root)
+        continue;
+      std::optional<codir::CodirAccessMode> mode =
+          getCodirDepAccessMode(consumer, static_cast<unsigned>(idx));
+      if (mode && codirAccessMayRead(*mode)) {
+        found = true;
+        return;
+      }
+    }
+  });
+  return found;
+}
+
 // Compute the halo padding a single backing buffer needs by taking the union of
 // the owner halo windows of every codelet dependency that reads the SAME
 // backing buffer as a stencil halo input. A double-buffered stencil array (e.g.
@@ -1897,7 +1996,7 @@ static inline LogicalResult
 materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
                              arts::DbAllocOp blockAlloc,
                              codir::CodeletOp codelet, unsigned depIndex,
-                             bool copyIntoBlock) {
+                             bool copyIntoBlock, bool crossNodeGather = false) {
   auto hostType = dyn_cast<MemRefType>(hostView.getType());
   if (!hostType || hostType.getRank() == 0)
     return failure();
@@ -1932,8 +2031,29 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
                                     static_cast<unsigned>(hostType.getRank()))
           : CodirOwnerHaloWindow{};
 
-  auto loop = scf::ForOp::create(builder, loc, zero, blockCount, one);
+  // Cross-node gather (copy-out only): wrap the per-block copy in an outer
+  // per-node loop so every node assembles the COMPLETE coarse buffer from all
+  // producer blocks, pulling the blocks it did not produce through the existing
+  // cross-node read-only block acquire. This is the gather half of the
+  // transpose-matvec reduce (atax/bicg step2): once the coarse intermediate is
+  // complete on every node, the cross-owner reduction reads correct values.
+  // The default intranode copy-out (crossNodeGather == false) is byte-for-byte
+  // unchanged, so every other kernel's lowering is preserved.
+  bool gatherAcrossNodes = crossNodeGather && !copyIntoBlock;
   OpBuilder::InsertionGuard guard(builder);
+  Value gatherNodeOrdinal;
+  scf::ForOp nodeLoop;
+  if (gatherAcrossNodes) {
+    auto totalNodesI32 = arts::RuntimeQueryOp::create(
+        builder, loc, arts::RuntimeQueryKind::totalNodes);
+    Value totalNodes = arith::IndexCastOp::create(
+        builder, loc, builder.getIndexType(), totalNodesI32.getResult());
+    nodeLoop = scf::ForOp::create(builder, loc, zero, totalNodes, one);
+    builder.setInsertionPointToStart(nodeLoop.getBody());
+    gatherNodeOrdinal = nodeLoop.getInductionVar();
+  }
+
+  auto loop = scf::ForOp::create(builder, loc, zero, blockCount, one);
   builder.setInsertionPointToStart(loop.getBody());
   Value blockIndex = loop.getInductionVar();
   Value ownerDomainBase =
@@ -1986,6 +2106,10 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
   if (copyIntoBlock)
     launch = arts::resolveArtsOrdinalLaunchPolicy(
         blockAlloc->getParentOfType<ModuleOp>(), blockIndex, builder, loc);
+  else if (gatherAcrossNodes)
+    launch = arts::resolveArtsOrdinalLaunchPolicy(
+        blockAlloc->getParentOfType<ModuleOp>(), gatherNodeOrdinal, builder,
+        loc);
   Value route =
       launch.route ? launch.route : arts::createCurrentNodeRoute(builder, loc);
   auto copyTask = arts::EdtOp::create(builder, loc, arts::EdtType::task,
@@ -2018,7 +2142,8 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
   }
 
   if (!copyIntoBlock) {
-    builder.setInsertionPointAfter(loop);
+    builder.setInsertionPointAfter(gatherAcrossNodes ? nodeLoop.getOperation()
+                                                     : loop.getOperation());
     auto reason = arts::ArtsBarrierReasonAttr::get(
         builder.getContext(), arts::ArtsBarrierReason::required_memory);
     arts::BarrierOp::create(builder, loc, reason);
@@ -2257,6 +2382,28 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                    participant.codelet, participant.depIndex);
       });
 
+  // Cross-owner transpose-reduce gate (atax/bicg). Two coarse buffers in this
+  // family hold only the strip the local node produced after the default
+  // intranode copy-out, which is the 2n=68 collapse:
+  //   (1) the gathered intermediate (atax tmp = Ax) read in full by the
+  //       transpose step that contracts over its leading dim, and
+  //   (2) the transpose step's own column-distributed output (atax y, bicg s)
+  //       which the host reads whole for verification.
+  // Fire the cross-node gather when the copy-out's producer is itself a
+  // cross-owner transpose reduction (case 2) OR its coarse target is read by
+  // one (case 1), so every node's coarse buffer holds the complete result. The
+  // owner-aligned reductions (correlation, 3mm, and the q = A*p / tmp = A*x
+  // first steps) are not cross-owner transpose reductions, so this stays closed
+  // for them and their lowering is byte-identical.
+  bool crossNodeGatherCopyOut =
+      needsCopyOut &&
+      llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
+        return codirAccessMayWrite(participant.mode) &&
+               (codeletIsCrossOwnerTransposeReduce(participant.codelet) ||
+                coarseBridgeTargetHasCrossOwnerReduceConsumer(
+                    participant.codelet, participant.depIndex));
+      });
+
   OpBuilder builder(anchor);
   Location loc = codelet.getLoc();
   FailureOr<Value> materializedHostView =
@@ -2305,15 +2452,15 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
       if (!observationAnchor || !isUseInsideAnchor(anchor, observationAnchor))
         continue;
       builder.setInsertionPoint(observationAnchor);
-      if (failed(materializeHostBlockCopyLoop(builder, loc, hostView,
-                                              blockAlloc, codelet, depIndex,
-                                              /*copyIntoBlock=*/false)))
+      if (failed(materializeHostBlockCopyLoop(
+              builder, loc, hostView, blockAlloc, codelet, depIndex,
+              /*copyIntoBlock=*/false, crossNodeGatherCopyOut)))
         return failure();
     }
     builder.setInsertionPointAfter(anchor);
-    if (failed(materializeHostBlockCopyLoop(builder, loc, hostView, blockAlloc,
-                                            codelet, depIndex,
-                                            /*copyIntoBlock=*/false)))
+    if (failed(materializeHostBlockCopyLoop(
+            builder, loc, hostView, blockAlloc, codelet, depIndex,
+            /*copyIntoBlock=*/false, crossNodeGatherCopyOut)))
       return failure();
 
     // Emit the per-block single-writer all-gather substrate for the gated
