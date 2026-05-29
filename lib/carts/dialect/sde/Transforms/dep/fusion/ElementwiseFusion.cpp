@@ -377,7 +377,9 @@ static sde::SdeSuIterateOp fuseStages(MutableArrayRef<ElementwiseStage> stages,
       first.getCpsStageIndexAttr(), first.getCpsStageCountAttr(),
       first.getDistributionKindAttr(), first.getInPlaceSafeAttr(),
       first.getInPlaceSharedStateAttr(), first.getVectorizeWidthAttr(),
-      first.getUnrollFactorAttr(), first.getInterleaveCountAttr());
+      first.getUnrollFactorAttr(), first.getInterleaveCountAttr(),
+      first.getArrayLayoutAttr(), first.getLayoutsDisagreeAttr(),
+      first.getCommVolumeBytesAttr());
   fused->setAttrs(sde::getRewrittenAttrs(first));
   fused.setStructuredClassificationAttr(
       sde::SdeStructuredClassificationAttr::get(

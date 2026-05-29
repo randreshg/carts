@@ -280,9 +280,10 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 14> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 15> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "PatternAnalysis",
+    "LayoutAssignment",
     "LoopInterchange",
     "Tiling",
     "ElementwiseFusion",
@@ -1190,6 +1191,11 @@ void buildSdePlanningPipeline(PassManager &pm,
   // transforms then consume those SDE facts before effect passes make
   // scheduling decisions.
   pm.addPass(sde::createPatternAnalysisPass());
+  // Module-scoped per-array BLOCK layout assignment (WF-5a). Runs at
+  // PatternAnalysis time, before Tiling/Interchange split the parallel axes.
+  // ADDITIVE: only stamps `arrayLayout`/`layoutsDisagree`/`commVolumeBytes`;
+  // nothing downstream consumes them yet, so lowering stays byte-identical.
+  pm.addPass(sde::createLayoutAssignmentPass(costModel));
   pm.addPass(sde::createLoopInterchangePass());
   pm.addPass(sde::createTilingPass(costModel));
   pm.addPass(sde::createElementwiseFusionPass());

@@ -71,6 +71,41 @@ def PatternAnalysis
   let constructor = "mlir::carts::sde::createPatternAnalysisPass()";
 }
 
+def LayoutAssignment
+    : Pass<"sde-layout-assignment", "mlir::ModuleOp"> {
+  let summary = "Module-scoped affine-driven per-array BLOCK layout assignment";
+  let description = [{
+    Assigns one element-space BLOCK layout to every external array root accessed
+    by the module's `sde.su_iterate` scheduling units (WF-5a). This is the
+    DATA-LAYOUT decision in the spirit of HPF DISTRIBUTE/ALIGN: it chooses owner
+    (distributed) positions and per-block extents for each array from its affine
+    access relations, minimizing an ABSTRACT communication-volume cost. It is
+    pattern-free (driven only by affine maps, iterator types, and static
+    shapes), names no collective, and knows nothing about DBs, EDTs, or runtime
+    placement.
+
+    Four phases:
+    - PhaseA builds module-wide per-array access profiles
+      (`buildModuleAccessRelations`).
+    - PhaseB enumerates candidate layouts per array (block-parallel owner-dim,
+      block-contraction, replicated fallback).
+    - PhaseC assigns one layout per array, seeding from the writer's owner dims
+      (owner-computes) and minimizing total abstract `commVolumeBytes`.
+    - PhaseD stamps the chosen layout as the `arrayLayout` attr on BOTH the
+      writer and every reader scheduling unit (the key generalization to
+      INPUTS), plus a per-edge `layoutsDisagree` geometric mismatch marker and
+      an abstract `commVolumeBytes`.
+
+    This pass is ADDITIVE: it only ADDS SDE-level attrs. It does NOT rewire the
+    per-codelet physical stampers and nothing downstream consumes `arrayLayout`
+    yet, so post-SDE (codir-to-arts) IR stays byte-identical. The future
+    integration step (after the serial CODIR/ARTS core lands) will have the
+    physical stampers + `needsSharedRootRedistribution` consume `arrayLayout`.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
+  let constructor = "mlir::carts::sde::createLayoutAssignmentPass()";
+}
+
 def ElementwiseFusion
     : Pass<"elementwise-fusion", "mlir::ModuleOp"> {
   let summary = "Fuse consecutive SDE elementwise scheduling units";

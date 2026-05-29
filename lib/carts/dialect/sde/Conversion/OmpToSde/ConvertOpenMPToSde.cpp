@@ -1266,7 +1266,9 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
         /*cps_stage_count=*/nullptr,
         /*distributionKind=*/nullptr, /*inPlaceSafe=*/nullptr,
         /*inPlaceSharedState=*/nullptr, /*vectorizeWidth=*/nullptr,
-        /*unrollFactor=*/nullptr, /*interleaveCount=*/nullptr);
+        /*unrollFactor=*/nullptr, /*interleaveCount=*/nullptr,
+        /*arrayLayout=*/nullptr, /*layoutsDisagree=*/nullptr,
+        /*commVolumeBytes=*/nullptr);
 
     // Create body with one block argument per dimension.
     Region &dstRegion = suIter.getBody();
@@ -1437,7 +1439,9 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
         /*cps_stage_count=*/nullptr,
         /*distributionKind=*/nullptr, /*inPlaceSafe=*/nullptr,
         /*inPlaceSharedState=*/nullptr, /*vectorizeWidth=*/nullptr,
-        /*unrollFactor=*/nullptr, /*interleaveCount=*/nullptr);
+        /*unrollFactor=*/nullptr, /*interleaveCount=*/nullptr,
+        /*arrayLayout=*/nullptr, /*layoutsDisagree=*/nullptr,
+        /*commVolumeBytes=*/nullptr);
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
@@ -1513,7 +1517,9 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
         /*cps_stage_count=*/nullptr,
         /*distributionKind=*/nullptr, /*inPlaceSafe=*/nullptr,
         /*inPlaceSharedState=*/nullptr, /*vectorizeWidth=*/nullptr,
-        /*unrollFactor=*/nullptr, /*interleaveCount=*/nullptr);
+        /*unrollFactor=*/nullptr, /*interleaveCount=*/nullptr,
+        /*arrayLayout=*/nullptr, /*layoutsDisagree=*/nullptr,
+        /*commVolumeBytes=*/nullptr);
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())

@@ -146,7 +146,9 @@ struct ChunkOptPass : public sde::impl::ChunkOptBase<ChunkOptPass> {
           rewrite.op.getDistributionKindAttr(), rewrite.op.getInPlaceSafeAttr(),
           rewrite.op.getInPlaceSharedStateAttr(),
           rewrite.op.getVectorizeWidthAttr(), rewrite.op.getUnrollFactorAttr(),
-          rewrite.op.getInterleaveCountAttr());
+          rewrite.op.getInterleaveCountAttr(), rewrite.op.getArrayLayoutAttr(),
+          rewrite.op.getLayoutsDisagreeAttr(),
+          rewrite.op.getCommVolumeBytesAttr());
       newOp->setAttrs(sde::getRewrittenAttrs(rewrite.op));
       newOp.getBody().takeBody(rewrite.op.getBody());
       rewriter.eraseOp(rewrite.op);

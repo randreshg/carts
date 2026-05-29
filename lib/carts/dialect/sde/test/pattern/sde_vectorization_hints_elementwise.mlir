@@ -8,7 +8,8 @@
 // CHECK: func.func @main
 // CHECK: sde.su_iterate
 // CHECK: memref.store
-// CHECK: } {interleaveCount = 4 : i64
+// CHECK: } {
+// CHECK-SAME: interleaveCount = 4 : i64
 // CHECK-SAME: unrollFactor = 2 : i64
 // CHECK-SAME: vectorizeWidth = 2 : i64
 // CHECK-NOT: linalg.generic

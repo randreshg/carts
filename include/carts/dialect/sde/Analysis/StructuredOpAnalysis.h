@@ -25,6 +25,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/AffineMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
 
@@ -125,6 +126,97 @@ struct ContractionTilingCandidate {
 /// contraction input is a sibling-computed distributed intermediate.
 std::optional<ContractionTilingCandidate>
 findContractionTilingCandidate(SdeSuIterateOp op);
+
+//===----------------------------------------------------------------------===//
+// Module-scoped layout-assignment access model (WF-5a)
+//===----------------------------------------------------------------------===//
+
+/// How one indexed position of an array is used by one scheduling unit's loop.
+/// Derived purely from affine access maps + iterator types — pattern-free.
+enum class ArrayDimKind {
+  /// The position is indexed by a single parallel loop IV (offset 0). This is an
+  /// owner-dim candidate (the position can be block-distributed).
+  parallelIndexed,
+  /// The position is indexed by a single reduction loop IV. A position used this
+  /// way blocks the contraction axis when the array is a matmul rhs.
+  reductionIndexed,
+  /// The position is indexed by a parallel IV with a non-zero constant offset
+  /// (a stencil neighborhood read) — owner-alignable but with a halo.
+  parallelHalo,
+  /// The position is broadcast (constant index / not a function of any single
+  /// loop dim) — it does not select an owner.
+  broadcast,
+};
+
+/// One scheduling unit's use of one array-root position.
+struct ArrayPositionUse {
+  /// Stable per-module id of the scheduling unit that produced this use.
+  unsigned codeletId = 0;
+  /// How the loop indexes this physical position.
+  ArrayDimKind kind = ArrayDimKind::broadcast;
+  /// The loop dim doing the indexing (when kind selects a single dim).
+  std::optional<unsigned> loopDim;
+  /// True when this use is a write (the producing/owner access).
+  bool isWrite = false;
+};
+
+/// Accumulated module-wide access facts for one array root. The root is the
+/// memref SSA value after view-op stripping; profiles are keyed by it.
+struct ArrayAccessProfile {
+  Value root;
+  unsigned rank = 0;
+  SmallVector<int64_t, 4> staticShape;
+  /// Per physical position, every recorded use across the module.
+  SmallVector<SmallVector<ArrayPositionUse, 2>, 4> positionUses;
+  /// True when at least one scheduling unit writes this root.
+  bool hasWriter = false;
+  /// True when at least one scheduling unit reads this root.
+  bool hasReader = false;
+  /// The codeletId of the (single) writer scheduling unit, if exactly one.
+  std::optional<unsigned> writerCodeletId;
+};
+
+/// Module-wide access relations: one profile per accessed external array root,
+/// plus the codeletId assigned to every analyzed `sde.su_iterate`. Pattern-free
+/// (built only from affine access maps, iterator types, and static shapes).
+struct ModuleAccessRelations {
+  /// Profiles keyed by the array root SSA value (post view-strip).
+  llvm::MapVector<Value, ArrayAccessProfile> profiles;
+  /// The scheduling-unit ops in stable id order; index == codeletId.
+  SmallVector<SdeSuIterateOp> codelets;
+};
+
+/// Walk every `sde.su_iterate` under `moduleOp`, run `analyzeStructuredLoop`,
+/// and accumulate per-array-root access profiles. Returns the module access
+/// relations used by layout assignment. Pattern-free.
+ModuleAccessRelations buildModuleAccessRelations(Operation *moduleOp);
+
+/// The geometric family of a chosen array layout (WF-5a). NAMES NO COLLECTIVE.
+enum class ArrayLayoutKind {
+  /// Block-distributed on owner (parallel) positions — the common case.
+  blockParallel,
+  /// Block-distributed on a contraction (reduction) position — a sibling matmul
+  /// intermediate consumed on its contraction axis.
+  blockContraction,
+  /// Replicated / host-whole — highest-cost fallback.
+  replicated,
+};
+
+/// One candidate layout for an array (PhaseB). Element-space only.
+struct ArrayLayoutCandidate {
+  ArrayLayoutKind kind = ArrayLayoutKind::replicated;
+  /// Element-space owner positions (the distributed axes).
+  SmallVector<int64_t, 4> ownerPositions;
+  /// Element-space per-position block extents (full extent on non-owner dims).
+  SmallVector<int64_t, 4> blockShape;
+};
+
+/// The chosen layout for an array root after cost-minimizing assignment
+/// (PhaseC). `commVolumeBytes` is the abstract per-array contribution.
+struct AssignedArrayLayout {
+  ArrayLayoutCandidate layout;
+  int64_t commVolumeBytes = 0;
+};
 
 //===----------------------------------------------------------------------===//
 // Shared affine decomposition utilities

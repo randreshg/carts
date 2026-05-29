@@ -1194,4 +1194,120 @@ findCompatibleOutputLayoutPlan(SdeSuIterateOp op) {
   return findCompatibleOutputLayoutPlan(*summary);
 }
 
+//===----------------------------------------------------------------------===//
+// Module-scoped layout-assignment access model (WF-5a / PhaseA)
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+// Classify one physical access position from its affine result expression and
+// the loop iterator types. Pattern-free: the kind comes only from whether the
+// expression is a single loop dim (and which iterator type that dim has) plus
+// any constant offset.
+static ArrayPositionUse
+classifyPositionUse(AffineExpr result, ArrayRef<utils::IteratorType> iterTypes,
+                    unsigned codeletId, bool isWrite) {
+  ArrayPositionUse use;
+  use.codeletId = codeletId;
+  use.isWrite = isWrite;
+
+  std::optional<AffineDimOffset> dimOffset = extractDimOffset(result);
+  if (!dimOffset || !dimOffset->dim) {
+    use.kind = ArrayDimKind::broadcast;
+    return use;
+  }
+
+  unsigned loopDim = *dimOffset->dim;
+  if (loopDim >= iterTypes.size()) {
+    use.kind = ArrayDimKind::broadcast;
+    return use;
+  }
+  use.loopDim = loopDim;
+
+  if (iterTypes[loopDim] == utils::IteratorType::reduction) {
+    use.kind = ArrayDimKind::reductionIndexed;
+    return use;
+  }
+
+  use.kind = dimOffset->offset != 0 ? ArrayDimKind::parallelHalo
+                                    : ArrayDimKind::parallelIndexed;
+  return use;
+}
+
+// Record one access entry's per-position uses into the array profile.
+static void recordAccessEntry(ModuleAccessRelations &relations,
+                              const MemrefAccessEntry &entry,
+                              ArrayRef<utils::IteratorType> iterTypes,
+                              unsigned codeletId, bool isWrite) {
+  Value root = normalizeOutputRoot(entry.memref);
+  if (!root)
+    return;
+  // External arrays only: scratch defined inside the codelet is not a
+  // distribution candidate.
+  if (isDefinedInside(relations.codelets[codeletId].getOperation(), root))
+    return;
+
+  std::optional<SmallVector<int64_t, 4>> shape = getStaticShape(root);
+  if (!shape || shape->empty())
+    return;
+  unsigned rank = shape->size();
+  if (entry.indexingMap.getNumResults() != rank)
+    return;
+
+  ArrayAccessProfile &profile = relations.profiles[root];
+  if (!profile.root) {
+    profile.root = root;
+    profile.rank = rank;
+    profile.staticShape = *shape;
+    profile.positionUses.assign(rank, {});
+  }
+  if (profile.rank != rank || profile.staticShape != *shape)
+    return;
+
+  if (isWrite) {
+    profile.hasWriter = true;
+    if (!profile.writerCodeletId)
+      profile.writerCodeletId = codeletId;
+    else if (*profile.writerCodeletId != codeletId)
+      // More than one writer scheduling unit: leave writerCodeletId as the
+      // first; assignment seeds from it but readers still align to it.
+      ;
+  } else {
+    profile.hasReader = true;
+  }
+
+  for (unsigned pos = 0; pos < rank; ++pos) {
+    ArrayPositionUse use = classifyPositionUse(entry.indexingMap.getResult(pos),
+                                               iterTypes, codeletId, isWrite);
+    profile.positionUses[pos].push_back(use);
+  }
+}
+
+} // namespace
+
+ModuleAccessRelations buildModuleAccessRelations(Operation *moduleOp) {
+  ModuleAccessRelations relations;
+  if (!moduleOp)
+    return relations;
+
+  // Assign stable codelet ids in walk order so writer/reader joins are
+  // deterministic across runs.
+  moduleOp->walk(
+      [&](SdeSuIterateOp op) { relations.codelets.push_back(op); });
+
+  for (auto [codeletId, op] : llvm::enumerate(relations.codelets)) {
+    std::optional<StructuredLoopSummary> summary = analyzeStructuredLoop(op);
+    if (!summary)
+      continue;
+    for (const MemrefAccessEntry &write : summary->writes)
+      recordAccessEntry(relations, write, summary->iterTypes,
+                        static_cast<unsigned>(codeletId), /*isWrite=*/true);
+    for (const MemrefAccessEntry &read : summary->reads)
+      recordAccessEntry(relations, read, summary->iterTypes,
+                        static_cast<unsigned>(codeletId), /*isWrite=*/false);
+  }
+
+  return relations;
+}
+
 } // namespace mlir::carts::sde

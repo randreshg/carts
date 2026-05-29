@@ -463,7 +463,9 @@ promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor) {
       op.getCpsStageIndexAttr(), op.getCpsStageCountAttr(),
       op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
       op.getInPlaceSharedStateAttr(), op.getVectorizeWidthAttr(),
-      op.getUnrollFactorAttr(), op.getInterleaveCountAttr());
+      op.getUnrollFactorAttr(), op.getInterleaveCountAttr(),
+      op.getArrayLayoutAttr(), op.getLayoutsDisagreeAttr(),
+      op.getCommVolumeBytesAttr());
   newOp->setAttrs(sde::getRewrittenAttrs(op));
   removeStaleShapePlanAttrs(newOp);
 
@@ -666,7 +668,9 @@ promoteOutOfPlaceStencilOwnerLoop(sde::SdeSuIterateOp op,
       op.getCpsStageIndexAttr(), op.getCpsStageCountAttr(),
       op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
       op.getInPlaceSharedStateAttr(), op.getVectorizeWidthAttr(),
-      op.getUnrollFactorAttr(), op.getInterleaveCountAttr());
+      op.getUnrollFactorAttr(), op.getInterleaveCountAttr(),
+      op.getArrayLayoutAttr(), op.getLayoutsDisagreeAttr(),
+      op.getCommVolumeBytesAttr());
   newOp->setAttrs(sde::getRewrittenAttrs(op));
   removeStaleShapePlanAttrs(newOp);
 

@@ -848,7 +848,8 @@ static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
       /*cps_stage_count=*/nullptr, /*distributionKind=*/nullptr,
       /*inPlaceSafe=*/nullptr, /*inPlaceSharedState=*/nullptr,
       /*vectorizeWidth=*/nullptr, /*unrollFactor=*/nullptr,
-      /*interleaveCount=*/nullptr);
+      /*interleaveCount=*/nullptr, /*arrayLayout=*/nullptr,
+      /*layoutsDisagree=*/nullptr, /*commVolumeBytes=*/nullptr);
 
   Block &mirrorBody = sde::ensureBlock(mirror.getBody());
   while (mirrorBody.getNumArguments() < 1)

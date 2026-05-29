@@ -64,6 +64,8 @@ std::unique_ptr<Pass> createMemoryUnitMaterializationPass();
 
 // --- Dep passes (structural transforms) ---
 std::unique_ptr<Pass> createPatternAnalysisPass();
+std::unique_ptr<Pass>
+createLayoutAssignmentPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createLoopInterchangePass();
 std::unique_ptr<Pass> createTilingPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createElementwiseFusionPass();

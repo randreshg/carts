@@ -11,7 +11,8 @@
 // CHECK: func.func @owner_slice_write_only
 // CHECK: %[[STEP:.*]] = arith.muli %c1, %c3{{(_[0-9]+)?}} : index
 // CHECK: sde.su_iterate (%c0) to (%c128) step (%[[STEP]]) classification(<elementwise>) {
-// CHECK: } {iterationTopology = #sde.iteration_topology<owner_strip>
+// CHECK: } {
+// CHECK-SAME: iterationTopology = #sde.iteration_topology<owner_strip>
 // CHECK-SAME: logicalWorkerSlice = [18, 64]
 // CHECK-SAME: physicalBlockShape = [18, 64]
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir (convert-sde-to-codir) //----- //

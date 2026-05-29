@@ -1071,7 +1071,9 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           op.getCpsStageIndexAttr(), op.getCpsStageCountAttr(),
           op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
           op.getInPlaceSharedStateAttr(), op.getVectorizeWidthAttr(),
-          op.getUnrollFactorAttr(), op.getInterleaveCountAttr());
+          op.getUnrollFactorAttr(), op.getInterleaveCountAttr(),
+          op.getArrayLayoutAttr(), op.getLayoutsDisagreeAttr(),
+          op.getCommVolumeBytesAttr());
       newOp->setAttrs(sde::getRewrittenAttrs(op));
       if (!physicalTilePlan && !directMatmul)
         alignExistingStaticPhysicalPlanToSteps(newOp, tiledSteps, parallelMask);

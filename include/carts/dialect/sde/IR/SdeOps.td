@@ -430,7 +430,41 @@ def SdeSuIterateOp
     UnitAttr:$inPlaceSharedState,
     OptionalAttr<I64Attr>:$vectorizeWidth,
     OptionalAttr<I64Attr>:$unrollFactor,
-    OptionalAttr<I64Attr>:$interleaveCount
+    OptionalAttr<I64Attr>:$interleaveCount,
+    // --- Module-scoped layout assignment (WF-5a). Placed last so the positional
+    // op builder stays additive: existing create() sites that stop at
+    // interleaveCount keep compiling. ---
+    // Per-array BLOCK layout authored by the `sde-layout-assignment` pass. Pure
+    // DATA-LAYOUT intent in the spirit of HPF DISTRIBUTE/ALIGN: for every array
+    // root this scheduling unit accesses (writer AND readers — the key
+    // generalization over the output-only physical owner plan), a dictionary
+    // entry records the chosen BLOCK layout. Each entry is a DictionaryAttr
+    // with keys:
+    //   - `arrayId`    (I64): a module-stable id joining the same array root
+    //                         across the writer and all reader su_iterates.
+    //   - `kind`       (StringAttr): "block_parallel", "block_contraction", or
+    //                         "replicated" — geometric layout family only,
+    //                         NAMES NO COLLECTIVE, no DB/EDT, no pattern.
+    //   - `ownerDims`  (ArrayAttr<I64>): the element-space owner (distributed)
+    //                         positions of the array.
+    //   - `blockShape` (ArrayAttr<I64>): element-space per-block extents
+    //                         (full extent on non-owner positions).
+    // Element-space only: encodes NO runtime nodes, routes, ARTS worker
+    // placement, collective name, or split factor. ADDITIVE — nothing
+    // downstream consumes it yet, so lowering stays byte-identical.
+    OptionalAttr<ArrayAttr>:$arrayLayout,
+    // Per-edge geometric layouts-disagree marker (WF-5a). An ArrayAttr of the
+    // `arrayId`s (I64) whose chosen layout on this scheduling unit is a pure
+    // GEOMETRIC mismatch against the array's home/writer layout (e.g. an input
+    // read on a non-owner-aligned window, or a contraction-dim read of a
+    // row-block intermediate). Records WHERE a redistribution edge exists, as
+    // geometry only — NAMES NO COLLECTIVE and does not pick a remedy.
+    OptionalAttr<ArrayAttr>:$layoutsDisagree,
+    // Abstract communication-volume estimate (bytes) for this scheduling unit
+    // under the chosen layouts (WF-5a). Closed-form, pattern-free: aligned
+    // edges cost 0; a block read of a full extent / owner-dim permutation costs
+    // ~ N*(P-1)/P; a cross-owner reduction costs ~ output*logP. Advisory only.
+    OptionalAttr<I64Attr>:$commVolumeBytes
   );
 
   let results = (outs Variadic<AnyType>:$results);
