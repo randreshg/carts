@@ -122,7 +122,8 @@ static bool onlyUsedByRegionsOrLocalFree(Value value,
       return false;
 
     if (auto storeOp = dyn_cast<memref::StoreOp>(owner))
-      if (::mlir::carts::ValueAnalysis::sameMemrefRoot(storeOp.getValueToStore(), root))
+      if (::mlir::carts::ValueAnalysis::sameMemrefRoot(
+              storeOp.getValueToStore(), root))
         return false;
 
     if (auto call = dyn_cast<func::CallOp>(owner)) {
@@ -187,11 +188,14 @@ static bool isLocalLibcAllocatorScratchCall(Operation *op, Block &scope,
 static bool isLocalLibcFreeScratchCall(Operation *op, Block &scope,
                                        ArrayRef<Operation *> regions) {
   auto call = dyn_cast_or_null<func::CallOp>(op);
-  if (!isLibcFreeCallUsing(call, call && call->getNumOperands() == 1
-                                     ? ::mlir::carts::ValueAnalysis::stripMemrefViewOps(call.getOperand(0))
-                                     : Value{}))
+  if (!isLibcFreeCallUsing(
+          call, call && call->getNumOperands() == 1
+                    ? ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
+                          call.getOperand(0))
+                    : Value{}))
     return false;
-  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(call.getOperand(0));
+  Value root =
+      ::mlir::carts::ValueAnalysis::stripMemrefViewOps(call.getOperand(0));
   return isLocalLibcAllocatorScratch(root, scope, regions);
 }
 
@@ -941,6 +945,98 @@ bool hasDistinctExternalMatmulInputRoots(SdeSuIterateOp iterOp) {
   if (lhsRoot && rhsRoot && lhsRoot != rhsRoot)
     return true;
   return hasDistinctExternalReadOnlyRoots();
+}
+
+std::optional<ContractionTilingCandidate>
+findContractionTilingCandidate(SdeSuIterateOp iterOp) {
+  std::optional<StructuredLoopSummary> summary = analyzeStructuredLoop(iterOp);
+  if (!summary)
+    return std::nullopt;
+  if (summary->classification != SdeStructuredClassification::matmul)
+    return std::nullopt;
+
+  SmallVector<unsigned, 2> parallelDims;
+  SmallVector<unsigned, 1> reductionDims;
+  for (auto [dim, type] : llvm::enumerate(summary->iterTypes)) {
+    if (type == utils::IteratorType::parallel)
+      parallelDims.push_back(dim);
+    else
+      reductionDims.push_back(dim);
+  }
+  if (parallelDims.size() != 2 || reductionDims.size() != 1 ||
+      summary->nest.ivs.size() != 3)
+    return std::nullopt;
+
+  unsigned numDims = summary->nest.ivs.size();
+  llvm::SmallBitVector lhsDims(numDims);
+  lhsDims.set(parallelDims[0]);
+  lhsDims.set(reductionDims[0]);
+  llvm::SmallBitVector rhsDims(numDims);
+  rhsDims.set(reductionDims[0]);
+  rhsDims.set(parallelDims[1]);
+
+  llvm::DenseSet<Value> externalWriteRoots;
+  for (const MemrefAccessEntry &write : summary->writes) {
+    Value root = normalizeOutputRoot(write.memref);
+    if (root && !isDefinedInside(iterOp.getOperation(), root))
+      externalWriteRoots.insert(root);
+  }
+
+  Value lhsRoot;
+  Value rhsRoot;
+  for (const MemrefAccessEntry &read : summary->reads) {
+    Value root = normalizeOutputRoot(read.memref);
+    if (!root || isDefinedInside(iterOp.getOperation(), root) ||
+        externalWriteRoots.contains(root))
+      continue;
+
+    llvm::SmallBitVector used = getUsedDims(read.indexingMap, numDims);
+    if (used == lhsDims) {
+      if (!lhsRoot)
+        lhsRoot = root;
+      else if (lhsRoot != root)
+        return std::nullopt;
+    }
+    if (used == rhsDims) {
+      if (!rhsRoot)
+        rhsRoot = root;
+      else if (rhsRoot != root)
+        return std::nullopt;
+    }
+  }
+
+  // The contraction-dim input must be a single distinct external root that is
+  // not also the lhs (rules out self-Gram correlation shapes).
+  if (!lhsRoot || !rhsRoot || lhsRoot == rhsRoot)
+    return std::nullopt;
+
+  ContractionTilingCandidate candidate;
+  candidate.contractionInputRoot = rhsRoot;
+  candidate.reductionLoopDim = reductionDims[0];
+  candidate.parallelLoopDims.assign(parallelDims.begin(), parallelDims.end());
+
+  // Recover the static contraction extent from the reduction-axis extent of the
+  // contraction-dim input root. The rhs uses {reduction, parallel[1]}; the
+  // result position carrying the reduction dim indexes the contracted axis.
+  if (auto rhsShape = getStaticShape(rhsRoot)) {
+    for (const MemrefAccessEntry &read : summary->reads) {
+      if (normalizeOutputRoot(read.memref) != rhsRoot)
+        continue;
+      if (getUsedDims(read.indexingMap, numDims) != rhsDims)
+        continue;
+      for (auto [pos, result] :
+           llvm::enumerate(read.indexingMap.getResults())) {
+        auto dimOffset = extractDimOffset(result);
+        if (dimOffset && dimOffset->dim &&
+            *dimOffset->dim == reductionDims[0] && pos < rhsShape->size()) {
+          candidate.contractionExtent = (*rhsShape)[pos];
+        }
+      }
+      break;
+    }
+  }
+
+  return candidate;
 }
 
 std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr) {

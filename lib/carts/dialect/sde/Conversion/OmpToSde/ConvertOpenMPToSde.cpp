@@ -620,7 +620,8 @@ static bool hasCanonicalPrivateScratchMatmul(omp::WsloopOp wsloop) {
     if (!isFloatMemref(store.getMemRef()))
       return WalkResult::advance();
 
-    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(store.getMemRef());
+    Value root =
+        ::mlir::carts::ValueAnalysis::stripMemrefViewOps(store.getMemRef());
     if (!root || isDefinedInside(loopNest.getOperation(), root))
       return WalkResult::advance();
 
@@ -642,7 +643,8 @@ static bool hasCanonicalPrivateScratchMatmul(omp::WsloopOp wsloop) {
     if (!isFloatMemref(load.getMemRef()))
       return WalkResult::advance();
 
-    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(load.getMemRef());
+    Value root =
+        ::mlir::carts::ValueAnalysis::stripMemrefViewOps(load.getMemRef());
     if (!root || isDefinedInside(loopNest.getOperation(), root) ||
         outputRoots.contains(root))
       return WalkResult::advance();
@@ -845,7 +847,8 @@ static unsigned markHostOpenMPIslands(ModuleOp module,
       return;
     if (!markedOps.insert(op).second)
       return;
-    op->setAttr(sde::AttrNames::KeepHostOpenMP, UnitAttr::get(op->getContext()));
+    op->setAttr(sde::AttrNames::KeepHostOpenMP,
+                UnitAttr::get(op->getContext()));
     ++marked;
   };
 
@@ -1030,7 +1033,6 @@ static bool dependsOnAny(Value value, ArrayRef<Value> roots) {
   return false;
 }
 
-
 static bool isElementDependSlice(const OmpDependSlice &slice) {
   if (slice.offsets.size() != 1)
     return false;
@@ -1072,7 +1074,8 @@ static bool isWavefrontTaskDependPattern(Operation *taskOp,
     return false;
 
   for (const TaskDependSpec *read : reads) {
-    if (!::mlir::carts::ValueAnalysis::sameMemrefRoot(read->slice.source, write->slice.source))
+    if (!::mlir::carts::ValueAnalysis::sameMemrefRoot(read->slice.source,
+                                                      write->slice.source))
       return false;
     if (::mlir::carts::ValueAnalysis::sameValue(read->slice.offsets.front(),
                                                 write->slice.offsets.front()))
@@ -1255,7 +1258,8 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
         /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
         /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
         /*writeFootprint=*/nullptr, /*physicalOwnerDims=*/nullptr,
-        /*physicalBlockShape=*/nullptr, /*logicalWorkerSlice=*/nullptr,
+        /*physicalBlockShape=*/nullptr, /*contractionTileShape=*/nullptr,
+        /*logicalWorkerSlice=*/nullptr,
         /*physicalHaloShape=*/nullptr, /*iterationTopology=*/nullptr,
         /*repetitionStructure=*/nullptr, /*asyncStrategy=*/nullptr,
         /*cps_group_id=*/nullptr, /*cps_stage_index=*/nullptr,
@@ -1425,7 +1429,8 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
         /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
         /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
         /*writeFootprint=*/nullptr, /*physicalOwnerDims=*/nullptr,
-        /*physicalBlockShape=*/nullptr, /*logicalWorkerSlice=*/nullptr,
+        /*physicalBlockShape=*/nullptr, /*contractionTileShape=*/nullptr,
+        /*logicalWorkerSlice=*/nullptr,
         /*physicalHaloShape=*/nullptr, /*iterationTopology=*/nullptr,
         /*repetitionStructure=*/nullptr, /*asyncStrategy=*/nullptr,
         /*cps_group_id=*/nullptr, /*cps_stage_index=*/nullptr,
@@ -1500,7 +1505,8 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
         /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
         /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
         /*writeFootprint=*/nullptr, /*physicalOwnerDims=*/nullptr,
-        /*physicalBlockShape=*/nullptr, /*logicalWorkerSlice=*/nullptr,
+        /*physicalBlockShape=*/nullptr, /*contractionTileShape=*/nullptr,
+        /*logicalWorkerSlice=*/nullptr,
         /*physicalHaloShape=*/nullptr, /*iterationTopology=*/nullptr,
         /*repetitionStructure=*/nullptr, /*asyncStrategy=*/nullptr,
         /*cps_group_id=*/nullptr, /*cps_stage_index=*/nullptr,
@@ -1707,8 +1713,7 @@ namespace sde {
 std::unique_ptr<Pass> createConvertOpenMPToSdePass() {
   return std::make_unique<ConvertOpenMPToSdePass>();
 }
-std::unique_ptr<Pass>
-createConvertOpenMPToSdePass(bool enableDistributedDb) {
+std::unique_ptr<Pass> createConvertOpenMPToSdePass(bool enableDistributedDb) {
   ConvertOpenMPToSdeOptions options;
   options.enableDistributedDb = enableDistributedDb;
   return std::make_unique<ConvertOpenMPToSdePass>(options);

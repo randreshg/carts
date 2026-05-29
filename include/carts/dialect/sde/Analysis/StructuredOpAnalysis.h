@@ -101,6 +101,31 @@ bool isOwnerLocalPipelineReduction(SdeSuIterateOp op);
 /// can represent both windows independently.
 bool hasDistinctExternalMatmulInputRoots(SdeSuIterateOp op);
 
+/// Contraction-tiling candidate facts for a matmul-class scheduling unit
+/// (ADR-0003 §7d). Pattern-free: derived from iterator types + affine access
+/// shapes only.
+struct ContractionTilingCandidate {
+  /// The external input root read on the {reduction, parallel[1]} window — the
+  /// rhs/contraction-dim input (3mm's F in G = E*F).
+  Value contractionInputRoot;
+  /// The single reduction loop dim that blocks the contraction axis.
+  unsigned reductionLoopDim = 0;
+  /// The output (parallel) loop dims, in loop order.
+  SmallVector<int64_t, 2> parallelLoopDims;
+  /// The static contraction extent (the reduction trip count), if recoverable.
+  std::optional<int64_t> contractionExtent;
+};
+
+/// Recover the contraction-tiling candidate for a matmul-class scheduling unit:
+/// a canonical (2 parallel, 1 reduction, 3-dim) matmul with distinct external
+/// lhs/rhs roots whose rhs (contraction-dim) input is read on the
+/// {reduction, parallel[1]} window. Returns nullopt when the loop is not a
+/// canonical matmul or the contraction-dim input cannot be isolated. This does
+/// NOT decide that tiling should fire — the caller gates that on whether the
+/// contraction input is a sibling-computed distributed intermediate.
+std::optional<ContractionTilingCandidate>
+findContractionTilingCandidate(SdeSuIterateOp op);
+
 //===----------------------------------------------------------------------===//
 // Shared affine decomposition utilities
 //===----------------------------------------------------------------------===//

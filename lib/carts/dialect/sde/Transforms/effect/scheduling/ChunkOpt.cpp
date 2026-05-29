@@ -110,8 +110,8 @@ struct ChunkOptPass : public sde::impl::ChunkOptBase<ChunkOptPass> {
 
       Value chunkSize;
       if (rewrite.chunkSize) {
-        chunkSize =
-            createConstantIndex(rewriter, rewrite.op.getLoc(), *rewrite.chunkSize);
+        chunkSize = createConstantIndex(rewriter, rewrite.op.getLoc(),
+                                        *rewrite.chunkSize);
       } else {
         chunkSize = buildSymbolicChunkValue(
             rewriter, rewrite.op.getLoc(), rewrite.op,
@@ -136,6 +136,7 @@ struct ChunkOptPass : public sde::impl::ChunkOptBase<ChunkOptPass> {
           rewrite.op.getSpatialDimsAttr(), rewrite.op.getWriteFootprintAttr(),
           rewrite.op.getPhysicalOwnerDimsAttr(),
           rewrite.op.getPhysicalBlockShapeAttr(),
+          rewrite.op.getContractionTileShapeAttr(),
           rewrite.op.getLogicalWorkerSliceAttr(),
           rewrite.op.getPhysicalHaloShapeAttr(),
           rewrite.op.getIterationTopologyAttr(),

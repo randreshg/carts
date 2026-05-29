@@ -407,6 +407,16 @@ def SdeSuIterateOp
     // runtime nodes, routes, or concrete ARTS worker placement.
     OptionalAttr<ArrayAttr>:$physicalOwnerDims,
     OptionalAttr<ArrayAttr>:$physicalBlockShape,
+    // Element-space contraction-tile shape authored by SDE when a matmul-class
+    // scheduling unit contracts a sibling-computed distributed intermediate on
+    // its reduction axis (ADR-0003 §7d / §7a). It declares "tile the reduction
+    // axis into element-space tiles of this shape; partials exist; combine =
+    // sum" so CODIR can materialize the per-block partial-product codelets and
+    // the cross-tile reduce. Like physicalBlockShape it is element-space only:
+    // it encodes NO runtime nodes, routes, ARTS worker placement, or the
+    // concrete split factor T (CODIR derives T from this shape and the static
+    // contraction extent).
+    OptionalAttr<ArrayAttr>:$contractionTileShape,
     OptionalAttr<ArrayAttr>:$logicalWorkerSlice,
     OptionalAttr<ArrayAttr>:$physicalHaloShape,
     OptionalAttr<SdeIterationTopologyAttr>:$iterationTopology,

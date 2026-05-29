@@ -66,9 +66,11 @@ static int64_t getStencilWorkerTarget(sde::SDECostModel &costModel) {
 // "cannot reason about tile bytes" and skip the floor.
 static int64_t outputElementBytes(Value root) {
   auto memrefTy = dyn_cast_or_null<MemRefType>(root.getType());
-  if (!memrefTy) return 0;
+  if (!memrefTy)
+    return 0;
   Type elt = memrefTy.getElementType();
-  if (!elt.isIntOrFloat()) return 0;
+  if (!elt.isIntOrFloat())
+    return 0;
   return llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
 }
 
@@ -410,8 +412,7 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
     if (outputPlan) {
       SmallVector<unsigned, 4> ownerLoopDims =
           chooseMappedSdeOwnerLoopDims(op, *outputPlan);
-      int64_t workers =
-          std::max<int64_t>(1, getStencilWorkerTarget(costModel));
+      int64_t workers = std::max<int64_t>(1, getStencilWorkerTarget(costModel));
       // One-dimensional halo stencils form a dependency pipeline between
       // neighboring owner blocks. Planning modestly more owner blocks than
       // logical worker capacity gives later ARTS scheduling enough ready tasks
@@ -506,8 +507,7 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
       return;
   }
 
-  int64_t workers =
-      std::max<int64_t>(1, getStencilWorkerTarget(costModel));
+  int64_t workers = std::max<int64_t>(1, getStencilWorkerTarget(costModel));
   SmallVector<int64_t, 4> ownerDims;
   SmallVector<int64_t, 4> physicalBlockShape;
   if (!buildOwnerDimPlan(*secondaryPlan, workers, ownerDims,
@@ -730,8 +730,7 @@ static void stampMatmulPhysicalPlan(sde::SdeSuIterateOp op,
           shrinkDim = workerGrid[0] >= workerGrid[1] ? 0 : 1;
         else
           shrinkDim = workerGrid[0] > 1 ? 0 : 1;
-        workerGrid[shrinkDim] =
-            std::max<int64_t>(1, workerGrid[shrinkDim] / 2);
+        workerGrid[shrinkDim] = std::max<int64_t>(1, workerGrid[shrinkDim] / 2);
         physicalBlockShape[0] =
             sde::ceilDivPositive(outputPlan->shape[0], workerGrid[0]);
         physicalBlockShape[1] =
@@ -786,6 +785,62 @@ static void stampDirectRowMatmulPhysicalPlan(sde::SdeSuIterateOp op,
   alignLateOwnerPlanToExistingStep(op, outputPlan->ownerPhysicalDims,
                                    physicalBlockShape);
   applyPhysicalPlan(op, outputPlan->ownerPhysicalDims, physicalBlockShape);
+}
+
+/// Contraction tiling — refinement half (ADR-0003 §7d / §7a, SDE-decides).
+///
+/// PatternAnalysis detects the contraction-tiling candidate while the matmul
+/// loop nest is still canonical and stamps a PROVISIONAL element-space
+/// `contractionTileShape = [contractionExtent]` plus the inert declarative
+/// facts. This pass, running after the matmul owner plan is stamped, refines
+/// that tile size to the producer's owner-block extent so each k-tile maps to
+/// exactly one producer block. CODIR (WF-5b) later derives the concrete split
+/// factor T = ceil(contractionExtent / tileSize) from this element-space shape.
+///
+/// If no real tiling results (single tile / unrecoverable block), the
+/// provisional intent is dropped along with its declarative facts: graceful
+/// degradation to the existing coarse path, never a regression.
+static void refineContractionTileShape(sde::SdeSuIterateOp op,
+                                       sde::SDECostModel &costModel) {
+  auto provisional = readI64ArrayAttr(op.getContractionTileShapeAttr());
+  if (!provisional || provisional->size() != 1)
+    return;
+  int64_t contractionExtent = provisional->front();
+  if (contractionExtent <= 0)
+    return;
+
+  auto dropIntent = [&]() {
+    op->removeAttr(op.getContractionTileShapeAttrName());
+    op->removeAttr(op.getPartialReductionDimsAttrName());
+    op->removeAttr(op.getPartialReductionOwnerDimsAttrName());
+    op->removeAttr(op.getReductionKindsAttrName());
+  };
+
+  if (!op.getPhysicalOwnerDimsAttr() || !op.getPhysicalBlockShapeAttr()) {
+    dropIntent();
+    return;
+  }
+
+  SmallVector<int64_t, 4> shape;
+  if (auto blockShape = readI64ArrayAttr(op.getPhysicalBlockShapeAttr()))
+    shape = *blockShape;
+  int64_t tileSize = contractionExtent;
+  if (auto ownerDims = readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
+      ownerDims && !ownerDims->empty()) {
+    int64_t ownerDim = ownerDims->front();
+    if (ownerDim >= 0 && static_cast<size_t>(ownerDim) < shape.size() &&
+        shape[ownerDim] > 0)
+      tileSize = std::min<int64_t>(shape[ownerDim], contractionExtent);
+  }
+
+  if (tileSize <= 0 || tileSize >= contractionExtent) {
+    // No real tiling possible — drop the intent, keep the coarse path.
+    dropIntent();
+    return;
+  }
+
+  op.setContractionTileShapeAttr(
+      buildI64ArrayAttr(op.getContext(), {tileSize}));
 }
 
 static void stampReductionTaskShapePlan(sde::SdeSuIterateOp op,
@@ -964,6 +1019,7 @@ struct DistributionPlanningPass
       stampStencilPhysicalPlan(op, *costModel);
       stampDirectRowMatmulPhysicalPlan(op, *costModel);
       stampMatmulPhysicalPlan(op, *costModel);
+      refineContractionTileShape(op, *costModel);
       stampUniformPhysicalPlan(op, *costModel);
       stampReductionTaskShapePlan(op, *costModel);
       stampInPlaceSharedStencilSerialSlice(op, *costModel);

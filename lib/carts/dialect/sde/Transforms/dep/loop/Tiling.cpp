@@ -632,7 +632,8 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
   int64_t stencilFloor = costModel.getMinDistributedStencilTileBytes();
   int64_t elemBytes = 0;
   if (stencilFloor > 0) {
-    if (auto memrefTy = dyn_cast_or_null<MemRefType>(outputPlan->root.getType()))
+    if (auto memrefTy =
+            dyn_cast_or_null<MemRefType>(outputPlan->root.getType()))
       if (Type elt = memrefTy.getElementType(); elt.isIntOrFloat())
         elemBytes = llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
   }
@@ -656,7 +657,8 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
   for (auto [idx, physDim] : llvm::enumerate(plan.ownerPhysicalDims)) {
     if (physDim < 0 || static_cast<size_t>(physDim) >= haloByPhysical.size())
       continue;
-    haloByPhysical[physDim] = idx < plan.haloShape.size() ? plan.haloShape[idx] : 0;
+    haloByPhysical[physDim] =
+        idx < plan.haloShape.size() ? plan.haloShape[idx] : 0;
   }
 
   int64_t coarsenedWorkers = sde::coarsenStencilWorkersToFloor(
@@ -1006,8 +1008,8 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
         int64_t l2Size = costModel->getL2CacheSize();
         int64_t cacheLineTile =
             l2Size / (elemSize * std::max<unsigned>(1, numDims));
-        Value cacheVal = createConstantIndex(rewriter, loc,
-                                          std::max<int64_t>(1, cacheLineTile));
+        Value cacheVal = createConstantIndex(
+            rewriter, loc, std::max<int64_t>(1, cacheLineTile));
         for (unsigned d = 0; d < numDims; ++d) {
           perDimTileIter[d] = arith::MinUIOp::create(
               rewriter, loc, perDimTileIter[d], cacheVal);
@@ -1062,14 +1064,14 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           op.getAccessMinOffsetsAttr(), op.getAccessMaxOffsetsAttr(),
           op.getOwnerDimsAttr(), op.getSpatialDimsAttr(),
           op.getWriteFootprintAttr(), op.getPhysicalOwnerDimsAttr(),
-          op.getPhysicalBlockShapeAttr(), op.getLogicalWorkerSliceAttr(),
-          op.getPhysicalHaloShapeAttr(), op.getIterationTopologyAttr(),
-          op.getRepetitionStructureAttr(), op.getAsyncStrategyAttr(),
-          op.getCpsGroupIdAttr(), op.getCpsStageIndexAttr(),
-          op.getCpsStageCountAttr(), op.getDistributionKindAttr(),
-          op.getInPlaceSafeAttr(), op.getInPlaceSharedStateAttr(),
-          op.getVectorizeWidthAttr(), op.getUnrollFactorAttr(),
-          op.getInterleaveCountAttr());
+          op.getPhysicalBlockShapeAttr(), op.getContractionTileShapeAttr(),
+          op.getLogicalWorkerSliceAttr(), op.getPhysicalHaloShapeAttr(),
+          op.getIterationTopologyAttr(), op.getRepetitionStructureAttr(),
+          op.getAsyncStrategyAttr(), op.getCpsGroupIdAttr(),
+          op.getCpsStageIndexAttr(), op.getCpsStageCountAttr(),
+          op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
+          op.getInPlaceSharedStateAttr(), op.getVectorizeWidthAttr(),
+          op.getUnrollFactorAttr(), op.getInterleaveCountAttr());
       newOp->setAttrs(sde::getRewrittenAttrs(op));
       if (!physicalTilePlan && !directMatmul)
         alignExistingStaticPhysicalPlanToSteps(newOp, tiledSteps, parallelMask);
