@@ -138,6 +138,10 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<StorageBridgeAttr>:$storage_bridge,
     OptionalAttr<UnitAttr>:$local_only,
     OptionalAttr<UnitAttr>:$read_only_after_init,
+    // WF-2 per-block all-gather replica: this block DB must stay REPLICATED
+    // (every block on every node), so the distributed-ownership pass must not
+    // block-scatter it. See emitPerBlockAllGatherWriteBack / ADR-0003 §2c.
+    OptionalAttr<UnitAttr>:$perBlockReplicated,
     OptionalAttr<StrAttr>:$distributed_reject_reason
   );
   let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
@@ -670,6 +674,10 @@ def EdtOp : Arts_Op<"edt", [
     I32:$route,
     OptionalAttr<UnitAttr>:$nowait,
     OptionalAttr<UnitAttr>:$storageBridgeCopy,
+    // WF-2 per-block all-gather copy EDT: one EDT per gathered block, each
+    // writing its own distinct-GUID replica block (single writer). Marks the
+    // race-free collective substrate. See emitPerBlockAllGatherWriteBack.
+    OptionalAttr<UnitAttr>:$perBlockAllGather,
     UnitAttr:$inPlaceSafe,
     UnitAttr:$inPlaceSharedState,
     OptionalAttr<I64Attr>:$vectorizeWidth,

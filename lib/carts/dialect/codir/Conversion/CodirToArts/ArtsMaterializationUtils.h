@@ -8,11 +8,11 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_ARTSMATERIALIZATIONUTILS_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_ARTSMATERIALIZATIONUTILS_H
 
-#include "carts/dialect/codir/Utils/CodirConversionUtils.h"
 #include "carts/dialect/arts/Utils/DbLayoutPlanUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
+#include "carts/dialect/codir/Utils/CodirConversionUtils.h"
 #include "carts/utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -122,9 +122,8 @@ static_assert(static_cast<int>(sde::SdeBarrierReason::unknown_required) ==
 static_assert(
     static_cast<int>(codir::CodirReductionStrategy::local_accumulate) ==
     static_cast<int>(arts::ArtsReductionStrategy::local_accumulate));
-static_assert(
-    static_cast<int>(codir::CodirIterationTopology::owner_tile_2d) ==
-    static_cast<int>(arts::ArtsPlanIterationTopology::owner_tile_2d));
+static_assert(static_cast<int>(codir::CodirIterationTopology::owner_tile_2d) ==
+              static_cast<int>(arts::ArtsPlanIterationTopology::owner_tile_2d));
 
 static inline arts::ArtsDepPattern convertPattern(codir::CodirPattern pattern) {
   switch (pattern) {
@@ -232,10 +231,9 @@ static inline void propagateCodirPlanToArts(codir::CodeletOp codelet,
   }
   if (auto topology = codelet.getIterationTopologyAttr()) {
     arts::setPlanIterationTopologyAttr(
-        taskOp,
-        arts::ArtsPlanIterationTopologyAttr::get(
-            ctx, static_cast<arts::ArtsPlanIterationTopology>(
-                     topology.getValue())));
+        taskOp, arts::ArtsPlanIterationTopologyAttr::get(
+                    ctx, static_cast<arts::ArtsPlanIterationTopology>(
+                             topology.getValue())));
   }
   if (auto repetition = codelet.getRepetitionStructureAttr()) {
     arts::setPlanRepetitionStructureAttr(
@@ -615,15 +613,17 @@ getCodirOwnerHaloWindow(codir::CodeletOp codelet, unsigned depIndex,
   return window;
 }
 
-// Defined below (after findBackingDbAlloc); forward-declared so createDbBackedMemref
-// can use the unioned per-buffer halo window.
+// Defined below (after findBackingDbAlloc); forward-declared so
+// createDbBackedMemref can use the unioned per-buffer halo window.
 static inline CodirOwnerHaloWindow
 codirBackingBufferHaloWindow(Value rootMemref, unsigned memrefRank);
 
 // Predicates defined later in this header; forward-declared so the union helper
-// can replicate the exact block-vs-coarse materialization decision per read dep.
-static inline bool codirDepRequiresPhaseRedistributionBridge(
-    codir::CodeletOp codelet, unsigned depIndex);
+// can replicate the exact block-vs-coarse materialization decision per read
+// dep.
+static inline bool
+codirDepRequiresPhaseRedistributionBridge(codir::CodeletOp codelet,
+                                          unsigned depIndex);
 static inline bool
 canMaterializeRawCodirDependencyWithPlan(Value root,
                                          codir::CodeletOp planSource);
@@ -880,10 +880,10 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
     // Pad for the union of every codelet that reads this backing buffer as a
     // stencil halo input, not just the dependency that first triggered
     // materialization. A double-buffered stencil array is read by one half-step
-    // and written by the other; if the write half-step materializes it first the
-    // single-dep window is empty and the buffer is left unpadded, breaking the
-    // symmetric block-halo read in the read half-step. The union folds in the
-    // read half-step's window. For single-pass stencils (write-only output
+    // and written by the other; if the write half-step materializes it first
+    // the single-dep window is empty and the buffer is left unpadded, breaking
+    // the symmetric block-halo read in the read half-step. The union folds in
+    // the read half-step's window. For single-pass stencils (write-only output
     // re-read only by a metadata-free storageBridgeCopy) the union equals the
     // single-dep window, so their layout is unchanged.
     Value backingRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
@@ -967,8 +967,8 @@ static inline LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op) {
 }
 
 static inline arts::DbAllocOp findBackingDbAlloc(Value storage) {
-  return dyn_cast_or_null<arts::DbAllocOp>(
-      arts::DbUtils::getUnderlyingDbAlloc(::mlir::carts::ValueAnalysis::stripMemrefViewOps(storage)));
+  return dyn_cast_or_null<arts::DbAllocOp>(arts::DbUtils::getUnderlyingDbAlloc(
+      ::mlir::carts::ValueAnalysis::stripMemrefViewOps(storage)));
 }
 
 static inline std::optional<unsigned>
@@ -977,6 +977,62 @@ findCodirDependencyIndexForRoot(codir::CodeletOp codelet, Value root) {
     if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) == root)
       return static_cast<unsigned>(idx);
   return std::nullopt;
+}
+
+static inline std::optional<codir::CodirStorageViewKind>
+getCodirDepStorageViewKind(codir::CodeletOp codelet, unsigned depIndex);
+static inline std::optional<codir::CodirAccessMode>
+getCodirDepAccessMode(codir::CodeletOp codelet, unsigned depIndex);
+static inline bool codirAccessMayRead(codir::CodirAccessMode mode);
+
+/// True when the coarse host buffer underlying `producer`'s write dependency
+/// `depIndex` is read by a SIBLING codelet as a `replicated_read` operand. This
+/// is the signal that a computed intermediate (e.g. 3mm's F = C*D, contracted
+/// over its row dimension by the downstream G = E*F) must be present in full on
+/// every node, not merely the strip each node produced. A matmul output that is
+/// only observed by the host (gemm/2mm final results) has no such sibling
+/// reader and keeps the plain owner-local write-back, so its lowering is
+/// unchanged.
+///
+/// This is the gate from the WF-1 coarse all-gather point fix (carts-wt
+/// e31337b4). The framework reuses the gate concept but targets the WF-2
+/// per-block single-writer collective substrate (see
+/// emitPerBlockAllGatherWriteBack below), not the coarse <inout> replica that
+/// could not scale (ADR-0001 phase 2 / ADR-0003).
+static inline bool
+coarseBridgeTargetHasReplicatedReadConsumer(codir::CodeletOp producer,
+                                            unsigned depIndex) {
+  if (!producer || depIndex >= producer.getDeps().size())
+    return false;
+  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
+      producer.getDeps()[depIndex]);
+  if (!root)
+    return false;
+  Operation *scope = producer->getParentOfType<ModuleOp>();
+  if (!scope)
+    return false;
+
+  bool found = false;
+  scope->walk([&](codir::CodeletOp consumer) {
+    if (found || consumer == producer)
+      return;
+    for (auto [idx, dep] : llvm::enumerate(consumer.getDeps())) {
+      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != root)
+        continue;
+      unsigned consumerDep = static_cast<unsigned>(idx);
+      std::optional<codir::CodirAccessMode> mode =
+          getCodirDepAccessMode(consumer, consumerDep);
+      if (!mode || !codirAccessMayRead(*mode))
+        continue;
+      std::optional<codir::CodirStorageViewKind> view =
+          getCodirDepStorageViewKind(consumer, consumerDep);
+      if (view && *view == codir::CodirStorageViewKind::replicated_read) {
+        found = true;
+        return;
+      }
+    }
+  });
+  return found;
 }
 
 // Compute the halo padding a single backing buffer needs by taking the union of
@@ -989,8 +1045,8 @@ findCodirDependencyIndexForRoot(codir::CodeletOp codelet, Value root) {
 // window for may-write deps), so the symmetric stencil EDT body then reads it
 // with the block-halo column shift against an unpadded block. Unioning over all
 // read deps backed by `rootMemref` makes the padding (and the
-// stencil_supported_block_halo attribute) match the access formula regardless of
-// which half-step materialized the buffer first.
+// stencil_supported_block_halo attribute) match the access formula regardless
+// of which half-step materialized the buffer first.
 //
 // Write-only outputs (e.g. conv-2d/conv-3d's result buffer, only re-read by a
 // storageBridgeCopy codelet that carries no owner/halo metadata) contribute an
@@ -1028,15 +1084,14 @@ codirBackingBufferHaloWindow(Value rootMemref, unsigned memrefRank) {
       // the buffer padded. Reads that fall back to a coarse host-whole view
       // (e.g. tiles below the distribution threshold, as in jacobi2d small)
       // index the buffer globally with no halo shift, so they must not pad it.
-      // This mirrors the usePlan decision in materializeRawCodirDependency so the
-      // padding and the body access formula stay in agreement.
+      // This mirrors the usePlan decision in materializeRawCodirDependency so
+      // the padding and the body access formula stay in agreement.
       if (!canMaterializeRawCodirDependencyWithPlan(rootMemref, codelet))
         continue;
       if (rawCodirDependencyNeedsHostBridge(rootMemref) &&
           !codirDepRequiresPhaseRedistributionBridge(codelet, depIdx))
         continue;
-      std::optional<unsigned> ownerDim =
-          getCodirDepOwnerDim(codelet, depIdx);
+      std::optional<unsigned> ownerDim = getCodirDepOwnerDim(codelet, depIdx);
       // A non-empty window always carries an owner dim; require all unioned
       // read deps to agree on it so the padded dimension is unambiguous.
       if (!ownerDim)
@@ -1537,7 +1592,8 @@ static inline bool canHoistHostBridgeAcrossLoop(scf::ForOp loop,
       return false;
   }
 
-  Value hostBridgeRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(hostView);
+  Value hostBridgeRoot =
+      ::mlir::carts::ValueAnalysis::stripMemrefViewOps(hostView);
   arts::DbAllocOp hostBridgeAlloc = findBackingDbAlloc(hostView);
   bool hasExistingBridgeWriter = false;
   loop.walk([&](codir::CodeletOp nestedCodelet) {
@@ -1596,8 +1652,8 @@ static inline bool canHoistHostBridgeAcrossLoop(scf::ForOp loop,
       // copy-out, so the bridge stays loop-invariant and is safe to hoist. Only
       // a writer that bypasses this bridge (writing the coarse host directly)
       // blocks hoisting.
-      if (isCompatibleHostBridgeParticipant(codelet, seedDepIndex, nestedCodelet,
-                                            static_cast<unsigned>(idx)))
+      if (isCompatibleHostBridgeParticipant(
+              codelet, seedDepIndex, nestedCodelet, static_cast<unsigned>(idx)))
         continue;
       hasPotentialSameRootWriter = true;
       return WalkResult::interrupt();
@@ -1970,6 +2026,183 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
   return success();
 }
 
+/// Build the per-element copy nest that fills one gathered block of the
+/// replicated DB from the corresponding producer block. Unlike the coarse
+/// write-back (materializeHostBlockElementCopyNest), both source and
+/// destination are block payloads indexed identically; there is no coarse host
+/// offset to add, because each gathered block is a full standalone DB.
+static inline void
+materializePerBlockCopyNest(OpBuilder &builder, Location loc, Value srcPayload,
+                            Value dstPayload, ArrayRef<Value> copySizes,
+                            SmallVectorImpl<Value> &indices) {
+  unsigned dim = indices.size();
+  if (dim == copySizes.size()) {
+    Value loaded = memref::LoadOp::create(builder, loc, srcPayload, indices);
+    memref::StoreOp::create(builder, loc, loaded, dstPayload, indices);
+    return;
+  }
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  auto loop = scf::ForOp::create(builder, loc, zero, copySizes[dim], one);
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(loop.getBody());
+  indices.push_back(loop.getInductionVar());
+  materializePerBlockCopyNest(builder, loc, srcPayload, dstPayload, copySizes,
+                              indices);
+  indices.pop_back();
+}
+
+/// WF-2 keystone: the per-block single-writer all-gather substrate.
+///
+/// The coarse write-back (materializeHostBlockCopyLoop with allGather) made
+/// each node assemble a SINGLE coarse <inout> replica DB; the disjoint
+/// per-block strip writes then contend on that one DB's exclusive-write (EW)
+/// frontier and serialize (ADR-0001 phase 2; un-ordering it instead races).
+/// That coarse replica is the thing ADR-0003 declares cannot scale.
+///
+/// This emission realizes the architecture's central insight (§2c): every
+/// gathered output block is its OWN distinct-GUID DB written ONCE by exactly
+/// one EDT. The gathered replica is a `block`-mode DB (N per-block DBs, each
+/// reserved with its own GUID by createMultiDbs) created REPLICATED on every
+/// node (no distributed ownership: each node holds all blocks locally, exactly
+/// like an MPI rank's full recv buffer). Each copy EDT acquires:
+///   - the producer block  RO  (<in>, PREFER_DUPLICATE via the read path) —
+///     local fast, remote through the existing cross-node RO db acquire,
+///   - its OWN gathered block  output-only (<out>) — block partition by the
+///     block index, so it is one distinct DB, one writer.
+/// Because each gathered block is a distinct DB, the EW frontier degenerates to
+/// a single uncontended writer: race-free by construction, and the N block
+/// writes run concurrently (no shared frontier). This is the phase-2
+/// serialization removed at the root, not relaxed.
+///
+/// Returns the gathered replicated block DB's inner payload (a memref view) so
+/// the caller can decide whether a consumer can read it block-native. The
+/// existing coarse consumer (3mm's G, which reads the whole F on the
+/// contraction dim from one EDT) cannot read N per-block DBs without
+/// contraction tiling of its k-loop (WF-3); that boundary is reported, not
+/// papered over by re-coarsening.
+static inline FailureOr<Value>
+emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
+                               arts::DbAllocOp producerBlockAlloc,
+                               codir::CodeletOp codelet, unsigned depIndex) {
+  auto hostType = dyn_cast<MemRefType>(hostView.getType());
+  if (!hostType || hostType.getRank() == 0)
+    return failure();
+  ModuleOp module = producerBlockAlloc->getParentOfType<ModuleOp>();
+  if (!module || !arts::hasArtsInterNodeRuntime(module))
+    return failure();
+  if (producerBlockAlloc.getSizes().size() != 1 ||
+      producerBlockAlloc.getElementSizes().size() !=
+          static_cast<size_t>(hostType.getRank()))
+    return failure();
+
+  // Mirror the producer's block layout for the gathered replica, but mark it
+  // REPLICATED (local_only, not distributed) so every node materializes all N
+  // blocks locally. Each block keeps its own GUID (createMultiDbs), so the
+  // single-writer property is per block.
+  OpBuilder::InsertionGuard topGuard(builder);
+  Value route = arts::createCurrentNodeRoute(builder, loc);
+  SmallVector<Value> outerSizes(producerBlockAlloc.getSizes().begin(),
+                                producerBlockAlloc.getSizes().end());
+  SmallVector<Value> innerSizes(producerBlockAlloc.getElementSizes().begin(),
+                                producerBlockAlloc.getElementSizes().end());
+  auto replicaAlloc = arts::DbAllocOp::create(
+      builder, loc, arts::ArtsMode::inout, route, arts::DbAllocType::heap,
+      arts::DbMode::write, hostType.getElementType(), std::move(outerSizes),
+      std::move(innerSizes), arts::PartitionMode::block);
+  if (auto ownerDims =
+          arts::getPlanOwnerDimsAttr(producerBlockAlloc.getOperation()))
+    arts::setPlanOwnerDimsAttr(replicaAlloc.getOperation(), ownerDims);
+  if (auto blockShape = arts::getPlanPhysicalBlockShapeAttr(
+          producerBlockAlloc.getOperation()))
+    arts::setPlanPhysicalBlockShapeAttr(replicaAlloc.getOperation(),
+                                        blockShape);
+  // Replicated, not distributed: every block is local on every node. The
+  // perBlockReplicated marker keeps the distributed-ownership pass from
+  // block-scattering the gathered blocks (which would defeat the all-gather);
+  // the single-writer property holds per block-GUID either way.
+  replicaAlloc.setLocalOnlyAttr(UnitAttr::get(replicaAlloc.getContext()));
+  replicaAlloc.setPerBlockReplicatedAttr(
+      UnitAttr::get(replicaAlloc.getContext()));
+
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  Value blockCount = producerBlockAlloc.getSizes().front();
+
+  SmallVector<Value> blockElementSizes(
+      producerBlockAlloc.getElementSizes().begin(),
+      producerBlockAlloc.getElementSizes().end());
+
+  // Outer per-node loop: every node assembles its OWN full set of gathered
+  // blocks. Routing each block copy to the node ordinal keeps the gathered
+  // write owner-local on each node's replica while the RO producer-block
+  // acquire pulls remote blocks through the existing cross-node acquire.
+  auto totalNodesI32 = arts::RuntimeQueryOp::create(
+      builder, loc, arts::RuntimeQueryKind::totalNodes);
+  Value totalNodes = arith::IndexCastOp::create(
+      builder, loc, builder.getIndexType(), totalNodesI32.getResult());
+  auto nodeLoop = scf::ForOp::create(builder, loc, zero, totalNodes, one);
+  builder.setInsertionPointToStart(nodeLoop.getBody());
+  Value nodeOrdinal = nodeLoop.getInductionVar();
+
+  auto blockLoop = scf::ForOp::create(builder, loc, zero, blockCount, one);
+  builder.setInsertionPointToStart(blockLoop.getBody());
+  Value blockIndex = blockLoop.getInductionVar();
+
+  // Source: producer block, read-only (cross-node RO acquire; PREFER_DUPLICATE
+  // is applied downstream because the producer DB is distributed/read).
+  auto srcAcquire = materializeBridgeAcquire(
+      builder, loc, producerBlockAlloc, arts::ArtsMode::in,
+      arts::PartitionMode::block, blockIndex, one);
+  // Destination: this gathered block, output-only. Distinct DB per block ⇒
+  // single writer ⇒ no shared EW frontier.
+  auto dstAcquire =
+      materializeBridgeAcquire(builder, loc, replicaAlloc, arts::ArtsMode::out,
+                               arts::PartitionMode::block, blockIndex, one);
+
+  SmallVector<Value> deps{srcAcquire.getPtr(), dstAcquire.getPtr()};
+  SmallVector<Value> params(blockElementSizes.begin(), blockElementSizes.end());
+
+  arts::ArtsLaunchPolicy launch =
+      arts::resolveArtsOrdinalLaunchPolicy(module, nodeOrdinal, builder, loc);
+  Value taskRoute =
+      launch.route ? launch.route : arts::createCurrentNodeRoute(builder, loc);
+  auto copyTask =
+      arts::EdtOp::create(builder, loc, arts::EdtType::task, launch.concurrency,
+                          taskRoute, deps, params);
+  copyTask.setStorageBridgeCopyAttr(UnitAttr::get(copyTask.getContext()));
+  copyTask.setPerBlockAllGatherAttr(UnitAttr::get(copyTask.getContext()));
+  Block &body = copyTask.getBody().front();
+  for (Value dep : deps)
+    body.addArgument(dep.getType(), loc);
+  for (Value param : params)
+    body.addArgument(param.getType(), loc);
+  {
+    OpBuilder::InsertionGuard bodyGuard(builder);
+    builder.setInsertionPointToStart(&body);
+    Value bodyZero = createZeroIndex(builder, loc);
+    Value srcPayload = arts::DbRefOp::create(builder, loc, body.getArgument(0),
+                                             SmallVector<Value>{bodyZero});
+    Value dstPayload = arts::DbRefOp::create(builder, loc, body.getArgument(1),
+                                             SmallVector<Value>{bodyZero});
+    SmallVector<Value> bodyCopySizes;
+    bodyCopySizes.reserve(blockElementSizes.size());
+    for (size_t i = 0; i < blockElementSizes.size(); ++i)
+      bodyCopySizes.push_back(body.getArgument(2 + i));
+    SmallVector<Value> indices;
+    materializePerBlockCopyNest(builder, loc, srcPayload, dstPayload,
+                                bodyCopySizes, indices);
+    arts::YieldOp::create(builder, loc);
+  }
+
+  builder.setInsertionPointAfter(nodeLoop);
+  auto reason = arts::ArtsBarrierReasonAttr::get(
+      builder.getContext(), arts::ArtsBarrierReason::required_memory);
+  arts::BarrierOp::create(builder, loc, reason);
+
+  return materializeInnerPayload(builder, loc, replicaAlloc.getPtr());
+}
+
 static inline FailureOr<Value>
 materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                                          unsigned depIndex, Value hostView) {
@@ -2009,6 +2242,20 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
   bool needsCopyOut = llvm::any_of(participants, [](const auto &participant) {
     return codirAccessMayWrite(participant.mode);
   });
+
+  // WF-2 keystone gate (reuses the e31337b4 gate concept, ADR-0003): a written
+  // coarse intermediate whose buffer is read by a sibling `replicated_read`
+  // codelet (3mm's F, contracted over its row dim by G) is the all-gather
+  // pattern. Emit the per-block single-writer collective substrate for it. A
+  // matmul output read only by the host (gemm/2mm/correlation results) has no
+  // such consumer, so the gate stays closed and their IR is unchanged.
+  bool perBlockAllGather =
+      needsCopyOut &&
+      llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
+        return codirAccessMayWrite(participant.mode) &&
+               coarseBridgeTargetHasReplicatedReadConsumer(
+                   participant.codelet, participant.depIndex);
+      });
 
   OpBuilder builder(anchor);
   Location loc = codelet.getLoc();
@@ -2068,6 +2315,22 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                                             codelet, depIndex,
                                             /*copyIntoBlock=*/false)))
       return failure();
+
+    // Emit the per-block single-writer all-gather substrate for the gated
+    // replicated-read consumer pattern. This assembles, on every node, N
+    // per-block replicated DBs (each its own GUID, written once, output-only),
+    // RO-acquiring the producer's blocks — the race-free, concurrent collective
+    // the coarse <inout> replica above could never be (ADR-0003 §2c). The
+    // coarse write-back is kept so the existing whole-array consumer (3mm's G)
+    // stays correct: rewiring that consumer to read the per-block DBs needs
+    // contraction tiling of its k-loop (WF-3), the precise boundary of D2.
+    if (perBlockAllGather) {
+      builder.setInsertionPointAfter(anchor);
+      FailureOr<Value> gathered = emitPerBlockAllGatherWriteBack(
+          builder, loc, hostView, blockAlloc, codelet, depIndex);
+      if (failed(gathered))
+        return failure();
+    }
   }
 
   for (HostBridgeParticipant &participant : participants)
@@ -2404,9 +2667,8 @@ static inline LogicalResult lowerSdeControlBarrier(sde::SdeSuBarrierOp op) {
     arts::BarrierOp::create(
         builder, op.getLoc(),
         reasonAttr ? arts::ArtsBarrierReasonAttr::get(
-                         op.getContext(),
-                         static_cast<arts::ArtsBarrierReason>(
-                             reasonAttr.getValue()))
+                         op.getContext(), static_cast<arts::ArtsBarrierReason>(
+                                              reasonAttr.getValue()))
                    : arts::ArtsBarrierReasonAttr{});
   }
   op.erase();

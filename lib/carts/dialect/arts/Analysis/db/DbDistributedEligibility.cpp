@@ -306,6 +306,8 @@ mlir::carts::arts::toString(DistributedDbEligibilityRejectReason reason) {
     return "non_edt_acquire_use";
   case DistributedDbEligibilityRejectReason::NoInternodeEdtUse:
     return "no_internode_edt_use";
+  case DistributedDbEligibilityRejectReason::PerBlockReplicated:
+    return "per_block_replicated";
   }
   return "unknown";
 }
@@ -315,6 +317,13 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
                                                     DbAnalysis &dbAnalysis) {
   if (!alloc)
     return {false, DistributedDbEligibilityRejectReason::UnsupportedShape};
+  // WF-2 per-block all-gather replica: keep it REPLICATED (every block on every
+  // node) so each node assembles its own full gathered set. Marking it
+  // distributed would block-scatter the gathered blocks back across nodes,
+  // defeating the all-gather. The single-writer property is preserved per
+  // block-GUID regardless of distribution marking.
+  if (alloc.getPerBlockReplicated().value_or(false))
+    return {false, DistributedDbEligibilityRejectReason::PerBlockReplicated};
   if (alloc->getParentOfType<EdtOp>())
     return {false, DistributedDbEligibilityRejectReason::NestedInEdt};
   if (alloc.getAllocType() == DbAllocType::global)
