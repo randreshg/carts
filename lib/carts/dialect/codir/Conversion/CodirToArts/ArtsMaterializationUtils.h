@@ -2052,6 +2052,40 @@ materializePerBlockCopyNest(OpBuilder &builder, Location loc, Value srcPayload,
   indices.pop_back();
 }
 
+/// Build the per-element summing nest that settles one output block by reducing
+/// the P per-tile partial payloads with `+=` (arith.addf) and writing the result
+/// ONCE. This is the addf dual of materializePerBlockCopyNest: instead of a
+/// single source copy, the leaf loads tile 0, accumulates tiles 1..P-1 with
+/// arith.addf, and stores once into the settled block. All payloads are block
+/// payloads indexed identically (no coarse host offset).
+static inline void
+materializePerBlockSumNest(OpBuilder &builder, Location loc,
+                           ArrayRef<Value> partialPayloads, Value dstPayload,
+                           ArrayRef<Value> copySizes,
+                           SmallVectorImpl<Value> &indices) {
+  unsigned dim = indices.size();
+  if (dim == copySizes.size()) {
+    Value acc =
+        memref::LoadOp::create(builder, loc, partialPayloads.front(), indices);
+    for (size_t tile = 1; tile < partialPayloads.size(); ++tile) {
+      Value next =
+          memref::LoadOp::create(builder, loc, partialPayloads[tile], indices);
+      acc = arith::AddFOp::create(builder, loc, acc, next);
+    }
+    memref::StoreOp::create(builder, loc, acc, dstPayload, indices);
+    return;
+  }
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  auto loop = scf::ForOp::create(builder, loc, zero, copySizes[dim], one);
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(loop.getBody());
+  indices.push_back(loop.getInductionVar());
+  materializePerBlockSumNest(builder, loc, partialPayloads, dstPayload,
+                             copySizes, indices);
+  indices.pop_back();
+}
+
 /// WF-2 keystone: the per-block single-writer all-gather substrate.
 ///
 /// The coarse write-back (materializeHostBlockCopyLoop with allGather) made
@@ -2203,6 +2237,192 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
   return materializeInnerPayload(builder, loc, replicaAlloc.getPtr());
 }
 
+/// WF-3 keystone: the per-block single-writer summing settle — the `arith.addf`
+/// dual of emitPerBlockAllGatherWriteBack.
+///
+/// A cross-owner reduction (atax/bicg's y = Aᵀ(Ax), 3mm's chained contraction,
+/// any reduce-scatter / allreduce) produces, per output block, P partial
+/// results — one per contraction tile / per node strip. The legacy coarse path
+/// funnels those partials through a single shared <inout> replica DB whose
+/// exclusive-write (EW) frontier serializes the disjoint partial writes (and
+/// un-ordered, races them): the same ADR-0001 phase-2 failure the all-gather
+/// removed at the root.
+///
+/// This emission realizes the architecture's central insight (§2c) for the
+/// reduction direction: every settled output block is its OWN distinct-GUID DB
+/// written ONCE by exactly one EDT. The P per-(block,tile) partials are
+/// themselves per-block single-writer DBs (each its own GUID via createMultiDbs,
+/// flat outer index `block * tileCount + tile`), and the settle DB is a `block`
+/// mode DB created REPLICATED on every node (perBlockReplicated: each node holds
+/// all settled blocks locally, exactly like an MPI rank's full recv buffer after
+/// an allreduce). For each settled block, exactly one EDT:
+///   - RO-acquires (with PREFER_DUPLICATE via the read path) the P partial
+///     blocks it must sum — local fast, remote through the existing cross-node RO
+///     db acquire. The acquires are emitted OUTSIDE the EDT and delivered as
+///     block-args (the EdtLowering ABI forbids GEPing an outer DB alloc from the
+///     EDT body — every DB an EDT touches must arrive as a dep), exactly as the
+///     all-gather's producer side does.
+///   - writes its OWN settled block output-only (<out>) ONCE, accumulating the P
+///     partials with `+=` (arith.addf). NO RW accumulator, NO coarse DB.
+/// Because each settled block is a distinct DB, the EW frontier degenerates to a
+/// single uncontended writer: race-free by construction, and the N block settles
+/// run concurrently (no shared frontier). This is the phase-2 serialization
+/// removed at the root, not relaxed — the reduce-scatter/allreduce analogue of
+/// MPI's disjoint per-rank send/recv buffers.
+///
+/// `partialBlockAlloc` is the per-(block,tile) partials DB (outer dim =
+/// blockCount * tileCount, element block = one output block's footprint).
+/// Returns the settled replicated block DB's inner payload (a memref view) so a
+/// caller can wire a consumer to read it block-native.
+static inline FailureOr<Value>
+emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
+                          arts::DbAllocOp partialBlockAlloc, unsigned tileCount,
+                          codir::CodeletOp codelet, unsigned depIndex) {
+  if (tileCount == 0)
+    return failure();
+  ModuleOp module = partialBlockAlloc->getParentOfType<ModuleOp>();
+  if (!module || !arts::hasArtsInterNodeRuntime(module))
+    return failure();
+  // The partials DB is a single-axis block DB whose element block carries the
+  // settled block's footprint; its outer extent counts blockCount * tileCount
+  // distinct per-(block,tile) GUIDs.
+  if (partialBlockAlloc.getSizes().size() != 1 ||
+      partialBlockAlloc.getElementSizes().empty())
+    return failure();
+
+  // Mirror the partials' element-block layout for the settle replica, but mark
+  // it REPLICATED (local_only, not distributed) so every node materializes all
+  // settled blocks locally. Each block keeps its own GUID (createMultiDbs), so
+  // the single-writer property is per settled block.
+  OpBuilder::InsertionGuard topGuard(builder);
+  Value route = arts::createCurrentNodeRoute(builder, loc);
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  Value tileCountVal = createConstantIndex(builder, loc, tileCount);
+
+  // blockCount = partialCount / tileCount (the partials carry tileCount entries
+  // per settled block, contiguous on the flat outer axis).
+  Value partialCount = partialBlockAlloc.getSizes().front();
+  Value blockCount =
+      arith::DivUIOp::create(builder, loc, partialCount, tileCountVal);
+
+  SmallVector<Value> blockElementSizes(
+      partialBlockAlloc.getElementSizes().begin(),
+      partialBlockAlloc.getElementSizes().end());
+  // The DbAllocOp `elementType` is the SCALAR element; the ptr result nests one
+  // memref level per (block axis + element rank). Mirror the partials' scalar
+  // element type so the settle replica's payload has the same rank as a partial
+  // block (and the addf body stores scalars, not nested memrefs).
+  Type elementType = partialBlockAlloc.getElementType();
+
+  SmallVector<Value> outerSizes{blockCount};
+  SmallVector<Value> innerSizes(blockElementSizes.begin(),
+                                blockElementSizes.end());
+  auto settleAlloc = arts::DbAllocOp::create(
+      builder, loc, arts::ArtsMode::inout, route, arts::DbAllocType::heap,
+      arts::DbMode::write, elementType, std::move(outerSizes),
+      std::move(innerSizes), arts::PartitionMode::block);
+  if (auto ownerDims =
+          arts::getPlanOwnerDimsAttr(partialBlockAlloc.getOperation()))
+    arts::setPlanOwnerDimsAttr(settleAlloc.getOperation(), ownerDims);
+  if (auto blockShape = arts::getPlanPhysicalBlockShapeAttr(
+          partialBlockAlloc.getOperation()))
+    arts::setPlanPhysicalBlockShapeAttr(settleAlloc.getOperation(), blockShape);
+  // Replicated, not distributed: every settled block is local on every node, so
+  // the distributed-ownership pass must not block-scatter it (that would defeat
+  // the allreduce). The single-writer property holds per block-GUID either way.
+  settleAlloc.setLocalOnlyAttr(UnitAttr::get(settleAlloc.getContext()));
+  settleAlloc.setPerBlockReplicatedAttr(
+      UnitAttr::get(settleAlloc.getContext()));
+
+  // Outer per-node loop: every node settles its OWN full set of blocks (an
+  // allreduce leaves the reduced result on every rank). Routing each settle to
+  // the node ordinal keeps the settled write owner-local on each node's replica
+  // while the RO partial acquires pull remote partials through the existing
+  // cross-node acquire.
+  auto totalNodesI32 = arts::RuntimeQueryOp::create(
+      builder, loc, arts::RuntimeQueryKind::totalNodes);
+  Value totalNodes = arith::IndexCastOp::create(
+      builder, loc, builder.getIndexType(), totalNodesI32.getResult());
+  auto nodeLoop = scf::ForOp::create(builder, loc, zero, totalNodes, one);
+  builder.setInsertionPointToStart(nodeLoop.getBody());
+  Value nodeOrdinal = nodeLoop.getInductionVar();
+
+  auto blockLoop = scf::ForOp::create(builder, loc, zero, blockCount, one);
+  builder.setInsertionPointToStart(blockLoop.getBody());
+  Value blockIndex = blockLoop.getInductionVar();
+
+  // Acquire the P per-(block,tile) partials read-only OUTSIDE the EDT (the
+  // EdtLowering ABI forbids GEPing an outer DB alloc from the EDT body): each
+  // partial arrives as a block-arg dep. Flat partial index = block*tileCount+t.
+  Value blockBase =
+      arith::MulIOp::create(builder, loc, blockIndex, tileCountVal);
+  SmallVector<Value> deps;
+  deps.reserve(tileCount + 1);
+  for (unsigned tile = 0; tile < tileCount; ++tile) {
+    Value tileVal = createConstantIndex(builder, loc, tile);
+    Value partialIndex =
+        arith::AddIOp::create(builder, loc, blockBase, tileVal);
+    auto partialAcquire = materializeBridgeAcquire(
+        builder, loc, partialBlockAlloc, arts::ArtsMode::in,
+        arts::PartitionMode::block, partialIndex, one);
+    deps.push_back(partialAcquire.getPtr());
+  }
+  // Destination: this settled block, output-only. Distinct DB per block ⇒
+  // single writer ⇒ no shared EW frontier.
+  auto dstAcquire =
+      materializeBridgeAcquire(builder, loc, settleAlloc, arts::ArtsMode::out,
+                               arts::PartitionMode::block, blockIndex, one);
+  deps.push_back(dstAcquire.getPtr());
+
+  SmallVector<Value> params(blockElementSizes.begin(), blockElementSizes.end());
+
+  arts::ArtsLaunchPolicy launch =
+      arts::resolveArtsOrdinalLaunchPolicy(module, nodeOrdinal, builder, loc);
+  Value taskRoute =
+      launch.route ? launch.route : arts::createCurrentNodeRoute(builder, loc);
+  auto settleTask =
+      arts::EdtOp::create(builder, loc, arts::EdtType::task, launch.concurrency,
+                          taskRoute, deps, params);
+  settleTask.setStorageBridgeCopyAttr(UnitAttr::get(settleTask.getContext()));
+  settleTask.setPerBlockSummingSettleAttr(
+      UnitAttr::get(settleTask.getContext()));
+  Block &body = settleTask.getBody().front();
+  for (Value dep : deps)
+    body.addArgument(dep.getType(), loc);
+  for (Value param : params)
+    body.addArgument(param.getType(), loc);
+  {
+    OpBuilder::InsertionGuard bodyGuard(builder);
+    builder.setInsertionPointToStart(&body);
+    Value bodyZero = createZeroIndex(builder, loc);
+    // Block-args 0..tileCount-1 are the partial payloads; tileCount is the dst.
+    SmallVector<Value> partialPayloads;
+    partialPayloads.reserve(tileCount);
+    for (unsigned tile = 0; tile < tileCount; ++tile)
+      partialPayloads.push_back(arts::DbRefOp::create(
+          builder, loc, body.getArgument(tile), SmallVector<Value>{bodyZero}));
+    Value dstPayload =
+        arts::DbRefOp::create(builder, loc, body.getArgument(tileCount),
+                              SmallVector<Value>{bodyZero});
+    SmallVector<Value> bodyCopySizes;
+    bodyCopySizes.reserve(blockElementSizes.size());
+    for (size_t i = 0; i < blockElementSizes.size(); ++i)
+      bodyCopySizes.push_back(body.getArgument(tileCount + 1 + i));
+    SmallVector<Value> indices;
+    materializePerBlockSumNest(builder, loc, partialPayloads, dstPayload,
+                               bodyCopySizes, indices);
+    arts::YieldOp::create(builder, loc);
+  }
+
+  builder.setInsertionPointAfter(nodeLoop);
+  auto reason = arts::ArtsBarrierReasonAttr::get(
+      builder.getContext(), arts::ArtsBarrierReason::required_memory);
+  arts::BarrierOp::create(builder, loc, reason);
+
+  return materializeInnerPayload(builder, loc, settleAlloc.getPtr());
+}
+
 static inline FailureOr<Value>
 materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                                          unsigned depIndex, Value hostView) {
@@ -2270,6 +2490,24 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
         return getCodirDepCollectiveKind(participant.codelet,
                                          participant.depIndex) ==
                codir::CodirCollectiveKind::reduce_scatter;
+      });
+
+  // WF-3 keystone opt-in: realize a reduce_scatter/allreduce dep with the
+  // block-native per-block summing settle instead of the legacy coarse gather.
+  // ADDITIVE: `emit_block_native_settle` is absent on every kernel today
+  // (chooseCollective never sets it), so this stays false for the 18 oracle
+  // baselines and the settle is emitted only where a producer has explicitly
+  // opted in. The number of per-block partials to sum is the contraction-tile /
+  // node-strip count carried on `partial_reduction_split_factor`.
+  bool perBlockSummingSettle =
+      needsCopyOut &&
+      llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
+        codir::CodeletOp participantCodelet = participant.codelet;
+        return participantCodelet &&
+               participantCodelet.getEmitBlockNativeSettleAttr() &&
+               getCodirDepCollectiveKind(participantCodelet,
+                                         participant.depIndex) ==
+                   codir::CodirCollectiveKind::reduce_scatter;
       });
 
   OpBuilder builder(anchor);
@@ -2345,6 +2583,28 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
           builder, loc, hostView, blockAlloc, codelet, depIndex);
       if (failed(gathered))
         return failure();
+    }
+
+    // Emit the per-block single-writer summing settle (the arith.addf dual) for
+    // a reduce_scatter/allreduce dep that opted into the block-native path. Each
+    // settled block is its OWN distinct-GUID DB written once with `+=` over the
+    // P per-tile partials — race-free and concurrent, never the coarse <inout>
+    // replica whose EW frontier serializes the partial writes (ADR-0001 phase 2;
+    // ADR-0003 §2c). Until per-tile partial producers are materialized for
+    // atax/bicg/3mm, this gate is opt-in only (emit_block_native_settle), so the
+    // coarse gather above stays the default and the oracle is byte-identical.
+    if (perBlockSummingSettle) {
+      unsigned tileCount = 0;
+      if (auto factor = codelet.getPartialReductionSplitFactorAttr())
+        if (factor.getInt() > 0)
+          tileCount = static_cast<unsigned>(factor.getInt());
+      if (tileCount > 0) {
+        builder.setInsertionPointAfter(anchor);
+        FailureOr<Value> settled = emitPerBlockSummingSettle(
+            builder, loc, blockAlloc, tileCount, codelet, depIndex);
+        if (failed(settled))
+          return failure();
+      }
     }
   }
 

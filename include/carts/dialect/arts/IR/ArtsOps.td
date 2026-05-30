@@ -678,6 +678,13 @@ def EdtOp : Arts_Op<"edt", [
     // writing its own distinct-GUID replica block (single writer). Marks the
     // race-free collective substrate. See emitPerBlockAllGatherWriteBack.
     OptionalAttr<UnitAttr>:$perBlockAllGather,
+    // WF-3 per-block summing settle EDT: the arith.addf dual of the all-gather
+    // copy EDT. One EDT per settled output block, RO-acquiring the P per-tile
+    // single-writer partial DBs and writing its own distinct-GUID result block
+    // ONCE with `+=` (single writer, no RW accumulator, no coarse DB). Marks the
+    // race-free reduce-scatter/allreduce realization. See
+    // emitPerBlockSummingSettle.
+    OptionalAttr<UnitAttr>:$perBlockSummingSettle,
     UnitAttr:$inPlaceSafe,
     UnitAttr:$inPlaceSharedState,
     OptionalAttr<I64Attr>:$vectorizeWidth,

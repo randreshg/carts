@@ -34,6 +34,14 @@ def CartsCodir_CodeletOp
     // to dispatch the realization. ADDITIVE: ARTS lowering is unchanged for
     // `none` deps, so kernels with no redistribution stay byte-identical.
     OptionalAttr<ArrayAttr>:$dep_collectives,
+    // WF-3 opt-in: realize a `reduce_scatter`/`allreduce` dep with the
+    // block-native per-block summing settle (emitPerBlockSummingSettle) instead
+    // of the legacy coarse cross-node gather. ADDITIVE: absent on every kernel
+    // today (chooseCollective never sets it), so the coarse path and the 18
+    // oracle baselines are unchanged; the keystone fires only where explicitly
+    // opted in. The block-native settle becomes the default once the per-tile
+    // partial producers are materialized for atax/bicg/3mm.
+    OptionalAttr<UnitAttr>:$emit_block_native_settle,
     OptionalAttr<ArrayAttr>:$dep_owner_dims,
     OptionalAttr<UnitAttr>:$task_depend,
     OptionalAttr<UnitAttr>:$ordered_task_depend,
