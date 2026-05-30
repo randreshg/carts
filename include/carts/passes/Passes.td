@@ -98,6 +98,27 @@ def PartialReductionSplitMaterialization
       "mlir::carts::arts::createPartialReductionSplitMaterializationPass()";
 }
 
+def Matmul3mmContractionMaterialization
+    : Pass<"matmul-3mm-contraction-materialization", "mlir::ModuleOp"> {
+  let summary = "Split chained-matmul G contraction into per-tile producers";
+  let description = [{
+    WF-3 (3mm scaler). Rewrites the chained-matmul G consumer that reads its
+    contraction operand F from the coarse `replicatedRead` copy into per-(G-block,
+    k-tile) partial-product producer EDTs reading F block-native from the
+    `perBlockReplicated` all-gather replica, plus a per-block summing settle that
+    reduces the partials into G's settled block with `arith.addf`. Each producer
+    and the settle acquire every DB OUTSIDE the EDT as a block-arg dependency, so
+    no EDT body GEPs an outer DB alloc (the ARTS-RT lowering ABI). Tightly gated
+    to the matmul-G shape; no other kernel's IR is touched.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
+       "::mlir::arith::ArithDialect", "::mlir::memref::MemRefDialect",
+       "::mlir::carts::arts::ArtsDialect"];
+  let constructor =
+      "mlir::carts::arts::createMatmul3mmContractionMaterializationPass()";
+}
+
 def DistributedLaunchConsistency
     : Pass<"distributed-launch-consistency", "mlir::ModuleOp"> {
   let summary = "Keep distributed EDT placement consistent with DB ownership";

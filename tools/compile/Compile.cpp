@@ -310,12 +310,13 @@ static const std::array<llvm::StringLiteral, 6> kCreateDbsPasses = {
     "Mem2Reg",   "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
     "DbModeTightening", "PolygeistCanonicalize", "CSE(arts.edt)", "Mem2Reg"};
-static const std::array<llvm::StringLiteral, 10> kPostDbRefinementPasses = {
+static const std::array<llvm::StringLiteral, 11> kPostDbRefinementPasses = {
     "DbModeTightening",
     "DbDistributedOwnership (conditional)",
     "EdtTransforms",
     "DbTransforms",
     "PartialReductionSplitMaterialization",
+    "Matmul3mmContractionMaterialization",
     "DistributedLaunchConsistency",
     "ContractValidation",
     "DbScratchElimination",
@@ -695,6 +696,7 @@ void registerDialects(DialectRegistry &registry) {
   /// through textual pass registration with default arguments.
   registerDeadCodeElimination();
   registerPartialReductionSplitMaterialization();
+  registerMatmul3mmContractionMaterialization();
   registerDistributedLaunchConsistency();
   registerVerifyArtsObjectsOnly();
   registerArtsRtPasses();
@@ -1273,6 +1275,7 @@ void buildPostDbRefinementPipeline(PassManager &pm, arts::AnalysisManager *AM,
   /// acquires and now-unreachable DB roots are removed in the DB layer.
   pm.addPass(arts::createDbTransformsPass(AM));
   pm.addPass(arts::createPartialReductionSplitMaterializationPass());
+  pm.addPass(arts::createMatmul3mmContractionMaterializationPass());
   pm.addPass(arts::createDistributedLaunchConsistencyPass());
   pm.addPass(arts::createContractValidationPass());
   pm.addPass(arts::createDbScratchEliminationPass());

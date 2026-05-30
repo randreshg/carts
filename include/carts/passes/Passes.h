@@ -40,6 +40,7 @@ std::unique_ptr<Pass> createDbScratchEliminationPass();
 std::unique_ptr<Pass> createDbDistributedOwnershipPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createDbTransformsPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createPartialReductionSplitMaterializationPass();
+std::unique_ptr<Pass> createMatmul3mmContractionMaterializationPass();
 std::unique_ptr<Pass> createDistributedLaunchConsistencyPass();
 std::unique_ptr<Pass> createCreateEpochsPass();
 
