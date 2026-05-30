@@ -76,7 +76,10 @@ module {
 // CHECK: memref.store
 // CHECK: arts.db_acquire[<in>] (%[[TREE_GUID]] : {{.*}}, %[[TREE_PTR]]
 // CHECK: arts.db_acquire[<in>] (%[[TREE_GUID]] : {{.*}}, %[[TREE_PTR]]
+// The final combine is the allreduce of the per-node partials: a single-writer
+// block-native summing settle (the reduce_scatter/allreduce dual of all-gather).
 // CHECK: arts.edt <task>
+// CHECK-SAME: perBlockSummingSettle
 // CHECK-SAME: reductionStrategy = #arts.reduction_strategy<local_accumulate>
 // CHECK: arith.addf
 // CHECK: arith.addf
