@@ -478,16 +478,8 @@ getCodeletDepOperandIndex(codir::CodeletOp codelet, OpOperand &use) {
   return operandIndex;
 }
 
-static std::optional<codir::CodirStorageViewKind>
-getDepStorageViewKind(codir::CodeletOp codelet, unsigned depIndex) {
-  ArrayAttr views = codelet ? codelet.getDepStorageViewsAttr() : ArrayAttr{};
-  if (!views || depIndex >= views.size())
-    return std::nullopt;
-  auto view = dyn_cast<codir::CodirStorageViewKindAttr>(views[depIndex]);
-  if (!view)
-    return std::nullopt;
-  return view.getValue();
-}
+// `getDepStorageViewKind` is provided by the shared codir Utils
+// (CodeletABIUtils.h) and reached unqualified here.
 
 static bool storageViewUsesComputeBlock(codir::CodirStorageViewKind view) {
   return view == codir::CodirStorageViewKind::compute_block ||
@@ -912,6 +904,34 @@ struct StoragePlanningPass
             ArrayAttr::get(codelet.getContext(), plannedViews));
       codelet.setDepOwnerDimsAttr(
           ArrayAttr::get(codelet.getContext(), plannedOwnerDims));
+    });
+
+    // First-class collective selection (ADR-0003 §7b). Stamp `dep_collectives`
+    // in a SECOND module walk, AFTER every codelet's `dep_storage_views` is
+    // planned: `chooseCollective` consults consumers' planned storage views
+    // (the all-gather gate looks for a sibling `replicated_read` reader), so it
+    // must run on the fully-planned module — exactly the state the historical
+    // ConvertCodirToArts gates observed. The selection is the extracted gate
+    // bodies, so the stamped kind reproduces today's gate decision; ARTS
+    // lowering reads it instead of re-evaluating the predicates, byte-identical.
+    getOperation().walk([&](codir::CodeletOp codelet) {
+      unsigned depCount = codelet.getDeps().size();
+      if (depCount == 0)
+        return;
+      SmallVector<Attribute> collectives;
+      collectives.reserve(depCount);
+      for (unsigned index = 0; index < depCount; ++index) {
+        codir::CodirCollectiveKind kind =
+            codir::chooseCollective(codelet, index);
+        collectives.push_back(
+            codir::CodirCollectiveKindAttr::get(codelet.getContext(), kind));
+      }
+      // Stamp the full per-dep vector (one entry per dep, `none` for aligned
+      // deps) so the carrier is uniform and self-describing. ADDITIVE: only the
+      // CODIR-stage IR gains the attribute; ARTS lowering reads it and produces
+      // byte-identical output.
+      codelet.setDepCollectivesAttr(
+          ArrayAttr::get(codelet.getContext(), collectives));
     });
   }
 };

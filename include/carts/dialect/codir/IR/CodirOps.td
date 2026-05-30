@@ -28,6 +28,12 @@ def CartsCodir_CodeletOp
   let arguments = (ins
     OptionalAttr<ArrayAttr>:$dep_modes,
     OptionalAttr<ArrayAttr>:$dep_storage_views,
+    // First-class CODIR collective family per dep (ADR-0003 §7b), one
+    // `CollectiveKindAttr` per dep, parallel to `dep_storage_views`. Stamped
+    // by `chooseCollective` during StoragePlanning; read by ConvertCodirToArts
+    // to dispatch the realization. ADDITIVE: ARTS lowering is unchanged for
+    // `none` deps, so kernels with no redistribution stay byte-identical.
+    OptionalAttr<ArrayAttr>:$dep_collectives,
     OptionalAttr<ArrayAttr>:$dep_owner_dims,
     OptionalAttr<UnitAttr>:$task_depend,
     OptionalAttr<UnitAttr>:$ordered_task_depend,

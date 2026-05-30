@@ -41,6 +41,27 @@ def CodirStorageViewKind
 def StorageViewKindAttr
     : CartsCodir_I32EnumAttr<"storage_view", CodirStorageViewKind>;
 
+// First-class MPI-collective family for CODIR redistribution (ADR-0003 §7b).
+// Names WHICH collective realizes a layout mismatch on a producer->consumer
+// edge; selected by the name-free `chooseCollective` from the (producer layout,
+// consumer access dim, compute pattern) triple already present in CODIR. This
+// is the distribution PATTERN only — never an EDT/DB/GUID identity nor the
+// ring/recursive-doubling/Bruck ALGORITHM (ARTS picks that). Carried per dep
+// in `dep_collectives` (CodirOps.td), parallel to `dep_storage_views`.
+def CodirCollectiveKind
+    : CartsCodir_I32Enum<"CodirCollectiveKind",
+                         "CODIR redistribution collective family", [
+      I32EnumAttrCase<"none", 0, "none">,
+      I32EnumAttrCase<"all_gather", 1, "all_gather">,
+      I32EnumAttrCase<"all_to_all", 2, "all_to_all">,
+      I32EnumAttrCase<"reduce_scatter", 3, "reduce_scatter">,
+      I32EnumAttrCase<"allreduce", 4, "allreduce">,
+      I32EnumAttrCase<"broadcast", 5, "broadcast">,
+      I32EnumAttrCase<"halo", 6, "halo">
+    ]>;
+def CollectiveKindAttr
+    : CartsCodir_I32EnumAttr<"collective", CodirCollectiveKind>;
+
 def CodirReductionStrategy
     : CartsCodir_I32Enum<"CodirReductionStrategy",
                          "CODIR reduction execution strategy", [

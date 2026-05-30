@@ -985,154 +985,14 @@ static inline std::optional<codir::CodirAccessMode>
 getCodirDepAccessMode(codir::CodeletOp codelet, unsigned depIndex);
 static inline bool codirAccessMayRead(codir::CodirAccessMode mode);
 
-/// True when the coarse host buffer underlying `producer`'s write dependency
-/// `depIndex` is read by a SIBLING codelet as a `replicated_read` operand. This
-/// is the signal that a computed intermediate (e.g. 3mm's F = C*D, contracted
-/// over its row dimension by the downstream G = E*F) must be present in full on
-/// every node, not merely the strip each node produced. A matmul output that is
-/// only observed by the host (gemm/2mm final results) has no such sibling
-/// reader and keeps the plain owner-local write-back, so its lowering is
-/// unchanged.
-///
-/// This is the gate from the WF-1 coarse all-gather point fix (carts-wt
-/// e31337b4). The framework reuses the gate concept but targets the WF-2
-/// per-block single-writer collective substrate (see
-/// emitPerBlockAllGatherWriteBack below), not the coarse <inout> replica that
-/// could not scale (ADR-0001 phase 2 / ADR-0003).
-static inline bool
-coarseBridgeTargetHasReplicatedReadConsumer(codir::CodeletOp producer,
-                                            unsigned depIndex) {
-  if (!producer || depIndex >= producer.getDeps().size())
-    return false;
-  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
-      producer.getDeps()[depIndex]);
-  if (!root)
-    return false;
-  Operation *scope = producer->getParentOfType<ModuleOp>();
-  if (!scope)
-    return false;
-
-  bool found = false;
-  scope->walk([&](codir::CodeletOp consumer) {
-    if (found || consumer == producer)
-      return;
-    for (auto [idx, dep] : llvm::enumerate(consumer.getDeps())) {
-      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != root)
-        continue;
-      unsigned consumerDep = static_cast<unsigned>(idx);
-      std::optional<codir::CodirAccessMode> mode =
-          getCodirDepAccessMode(consumer, consumerDep);
-      if (!mode || !codirAccessMayRead(*mode))
-        continue;
-      std::optional<codir::CodirStorageViewKind> view =
-          getCodirDepStorageViewKind(consumer, consumerDep);
-      if (view && *view == codir::CodirStorageViewKind::replicated_read) {
-        found = true;
-        return;
-      }
-    }
-  });
-  return found;
-}
-
-/// True when |consumer| reads its dependency |depIndex| as a CROSS-OWNER
-/// transpose reduction: a rank-2 (matrix) read whose contraction runs over the
-/// leading (row) dimension while the codelet's owner-aligned output maps to a
-/// trailing dimension. This is the step2 of the transpose-matvec family
-/// (atax y = A^T(Ax), bicg s = A^T r): the reduction IV sweeps the matrix's row
-/// dim (mapped to -1 in the dep-result-dim map) and the owned output column
-/// maps to the matrix's later dim.
-///
-/// The discriminator is the position of the reduction marker (-1) inside the
-/// dep's entry of partialReductionDepResultDimMaps. The owner-LOCAL pipeline
-/// reductions (correlation, 3mm's owner-aligned matmul) map the matrix as
-/// `[ownerDim, -1]` (leading dim carries the result-owner mapping, trailing dim
-/// reduces) and are explicitly NOT matched here, so their lowering is
-/// untouched. The transpose case maps the matrix as `[-1, ownerDim]` (leading
-/// dim reduces, a trailing dim carries the result-owner mapping). Matching only
-/// the latter keeps this gate disjoint from the owner-local reduction razor.
-static inline bool
-codeletIsCrossOwnerTransposeReduce(codir::CodeletOp consumer) {
-  if (!consumer || !consumer.getPartialReductionAttr())
-    return false;
-  ArrayAttr ownerDims = consumer.getPartialReductionOwnerDimsAttr();
-  if (!ownerDims || ownerDims.empty())
-    return false;
-  auto isResultOwnerDim = [&](int64_t dim) {
-    for (Attribute owner : ownerDims)
-      if (auto intAttr = dyn_cast<IntegerAttr>(owner))
-        if (intAttr.getInt() == dim)
-          return true;
-    return false;
-  };
-  ArrayAttr depMaps = consumer.getPartialReductionDepResultDimMapsAttr();
-  if (!depMaps)
-    return false;
-  // The discriminating dep is the rank-2 (matrix) contraction read. A matrix
-  // dep mapped `[-1, ownerDim]` reduces over its leading (row) dim while a
-  // trailing dim carries the result-owner mapping: the cross-owner transpose-
-  // matvec signature (atax y = A^T(Ax), bicg s = A^T r). The owner-LOCAL
-  // pipeline reductions (correlation, 3mm owner-aligned matmul) map the matrix
-  // as `[ownerDim, -1]` (leading dim carries the result-owner mapping) and fail
-  // the leading == -1 test, so their lowering stays untouched.
-  for (Attribute mapAttr : depMaps) {
-    auto depMap = dyn_cast<ArrayAttr>(mapAttr);
-    if (!depMap || depMap.size() != 2)
-      continue;
-    auto leading = dyn_cast<IntegerAttr>(depMap[0]);
-    auto trailing = dyn_cast<IntegerAttr>(depMap[1]);
-    if (!leading || !trailing)
-      continue;
-    if (leading.getInt() < 0 && isResultOwnerDim(trailing.getInt()))
-      return true;
-  }
-  return false;
-}
-
-/// True when the coarse bridge target produced by |producer|'s |depIndex|
-/// (a block-distributed intermediate gathered to a coarse host-whole buffer)
-/// is later read by a cross-owner transpose reduction consumer (atax/bicg
-/// step2). For that consumer the coarse buffer must hold the COMPLETE gathered
-/// intermediate on every node, because the reduction sweeps the full leading
-/// dimension; the default intranode copy-out leaves each node's coarse buffer
-/// holding only the strip that node produced, which is the value-broken combine
-/// that collapses atax/bicg at 2n. The companion all-gather copy-out (gated on
-/// this predicate) fills the coarse buffer cross-node instead.
-static inline bool
-coarseBridgeTargetHasCrossOwnerReduceConsumer(codir::CodeletOp producer,
-                                              unsigned depIndex) {
-  if (!producer || depIndex >= producer.getDeps().size())
-    return false;
-  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
-      producer.getDeps()[depIndex]);
-  if (!root)
-    return false;
-  Operation *scope = producer->getParentOfType<ModuleOp>();
-  if (!scope)
-    return false;
-
-  bool found = false;
-  scope->walk([&](codir::CodeletOp consumer) {
-    if (found || consumer == producer)
-      return;
-    if (!codeletIsCrossOwnerTransposeReduce(consumer))
-      return;
-    // The consumer must actually read the gathered intermediate (the small
-    // vector tmp / Ax / Ap), so the gather only fires for the buffer that feeds
-    // this cross-owner reduction, not every intermediate in the module.
-    for (auto [idx, dep] : llvm::enumerate(consumer.getDeps())) {
-      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != root)
-        continue;
-      std::optional<codir::CodirAccessMode> mode =
-          getCodirDepAccessMode(consumer, static_cast<unsigned>(idx));
-      if (mode && codirAccessMayRead(*mode)) {
-        found = true;
-        return;
-      }
-    }
-  });
-  return found;
-}
+// The first-class collective gate predicates
+// (coarseBridgeTargetHasReplicatedReadConsumer / codeletIsCrossOwnerTranspose
+// Reduce / coarseBridgeTargetHasCrossOwnerReduceConsumer) and the name-free
+// chooseCollective selector now live in the shared codir Utils
+// (CodeletABIUtils.h). StoragePlanning stamps the result onto the per-dep
+// `dep_collectives` carrier; this file READS that carrier via
+// getCodirDepCollectiveKind (ADR-0003 §7b). Keeping the bodies in one place
+// guarantees the refactor is byte-identical with the historical gates.
 
 // Compute the halo padding a single backing buffer needs by taking the union of
 // the owner halo windows of every codelet dependency that reads the SAME
@@ -1215,6 +1075,21 @@ getCodirDepStorageViewKind(codir::CodeletOp codelet, unsigned depIndex) {
   if (!view)
     return std::nullopt;
   return view.getValue();
+}
+
+/// First-class collective family for |codelet|'s |depIndex|, read from the
+/// `dep_collectives` carrier StoragePlanning stamped via `chooseCollective`
+/// (ADR-0003 §7b). Defaults to `none` when the carrier is absent (e.g. IR not
+/// produced through StoragePlanning), which keeps lowering unchanged.
+static inline codir::CodirCollectiveKind
+getCodirDepCollectiveKind(codir::CodeletOp codelet, unsigned depIndex) {
+  ArrayAttr collectives = codelet ? codelet.getDepCollectivesAttr() : ArrayAttr{};
+  if (!collectives || depIndex >= collectives.size())
+    return codir::CodirCollectiveKind::none;
+  auto kind = dyn_cast<codir::CodirCollectiveKindAttr>(collectives[depIndex]);
+  if (!kind)
+    return codir::CodirCollectiveKind::none;
+  return kind.getValue();
 }
 
 static inline std::optional<codir::CodirAccessMode>
@@ -2368,40 +2243,33 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
     return codirAccessMayWrite(participant.mode);
   });
 
-  // WF-2 keystone gate (reuses the e31337b4 gate concept, ADR-0003): a written
-  // coarse intermediate whose buffer is read by a sibling `replicated_read`
-  // codelet (3mm's F, contracted over its row dim by G) is the all-gather
-  // pattern. Emit the per-block single-writer collective substrate for it. A
-  // matmul output read only by the host (gemm/2mm/correlation results) has no
-  // such consumer, so the gate stays closed and their IR is unchanged.
+  // First-class collective dispatch (ADR-0003 §7b). The all-gather and cross-
+  // owner reduce realizations are selected by reading the `dep_collectives`
+  // carrier StoragePlanning stamped via `chooseCollective` (the extracted gate
+  // bodies), not by re-evaluating the ad-hoc predicates here. `chooseCollective`
+  // already folds the per-dep write-mode guard, so this `any_of` over the bridge
+  // participants reproduces the historical gate decision byte-identically:
+  //   all_gather     -> 3mm's F (coarse intermediate read by a sibling
+  //                     `replicated_read` consumer): emit the per-block single-
+  //                     writer all-gather substrate. gemm/2mm/correlation
+  //                     outputs read only by the host select `none`, so the gate
+  //                     stays closed and their IR is unchanged.
+  //   reduce_scatter -> atax/bicg cross-owner transpose-reduce coarse buffers:
+  //                     fill cross-node so every node holds the complete result.
   bool perBlockAllGather =
       needsCopyOut &&
       llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
-        return codirAccessMayWrite(participant.mode) &&
-               coarseBridgeTargetHasReplicatedReadConsumer(
-                   participant.codelet, participant.depIndex);
+        return getCodirDepCollectiveKind(participant.codelet,
+                                         participant.depIndex) ==
+               codir::CodirCollectiveKind::all_gather;
       });
 
-  // Cross-owner transpose-reduce gate (atax/bicg). Two coarse buffers in this
-  // family hold only the strip the local node produced after the default
-  // intranode copy-out, which is the 2n=68 collapse:
-  //   (1) the gathered intermediate (atax tmp = Ax) read in full by the
-  //       transpose step that contracts over its leading dim, and
-  //   (2) the transpose step's own column-distributed output (atax y, bicg s)
-  //       which the host reads whole for verification.
-  // Fire the cross-node gather when the copy-out's producer is itself a
-  // cross-owner transpose reduction (case 2) OR its coarse target is read by
-  // one (case 1), so every node's coarse buffer holds the complete result. The
-  // owner-aligned reductions (correlation, 3mm, and the q = A*p / tmp = A*x
-  // first steps) are not cross-owner transpose reductions, so this stays closed
-  // for them and their lowering is byte-identical.
   bool crossNodeGatherCopyOut =
       needsCopyOut &&
       llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
-        return codirAccessMayWrite(participant.mode) &&
-               (codeletIsCrossOwnerTransposeReduce(participant.codelet) ||
-                coarseBridgeTargetHasCrossOwnerReduceConsumer(
-                    participant.codelet, participant.depIndex));
+        return getCodirDepCollectiveKind(participant.codelet,
+                                         participant.depIndex) ==
+               codir::CodirCollectiveKind::reduce_scatter;
       });
 
   OpBuilder builder(anchor);

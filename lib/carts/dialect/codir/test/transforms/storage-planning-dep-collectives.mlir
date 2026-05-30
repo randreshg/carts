@@ -1,0 +1,94 @@
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,storage-planning)' \
+// RUN:   | %FileCheck %s
+
+// First-class CODIR collective dispatch (ADR-0003 §7b): StoragePlanning stamps a
+// per-dep `dep_collectives` array via `chooseCollective`, the name-free
+// extraction of the historical all-gather / cross-owner-reduce gate bodies.
+//   - the producer whose output is consumed by a `replicated_read` sibling
+//     (3mm's F) selects `all_gather`;
+//   - the cross-owner transpose-reduce step (atax/bicg A^T) selects
+//     `reduce_scatter`;
+//   - owner-aligned deps select `none`.
+
+module {
+  // all_gather: %F is written by the first codelet and read as
+  // `replicated_read` by the sibling codelet in the same module (shared root).
+  func.func @all_gather(%C: memref<1024x1024xf64>, %D: memref<1024x1024xf64>,
+                        %E: memref<1024x1024xf64>, %F: memref<1024x1024xf64>,
+                        %G: memref<1024x1024xf64>, %base: index) {
+    %c4 = arith.constant 4 : index
+    %c1024 = arith.constant 1024 : index
+    scf.for %i = %base to %c1024 step %c4 {
+      codir.codelet deps(%F, %C, %D : memref<1024x1024xf64>, memref<1024x1024xf64>, memref<1024x1024xf64>)
+          params(%i : index)
+          attributes {dep_modes = [#codir.access_mode<readwrite>, #codir.access_mode<read>, #codir.access_mode<read>],
+                      dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>, #codir.storage_view<replicated_read>],
+                      pattern = #codir.pattern<matmul>,
+                      tile_owner_dims = [0],
+                      tile_shape = [4, 1024]} {
+      ^bb0(%f: memref<1024x1024xf64>, %c: memref<1024x1024xf64>, %d: memref<1024x1024xf64>, %owner: index):
+        codir.yield
+      }
+    }
+    scf.for %i = %base to %c1024 step %c4 {
+      codir.codelet deps(%G, %E, %F : memref<1024x1024xf64>, memref<1024x1024xf64>, memref<1024x1024xf64>)
+          params(%i : index)
+          attributes {dep_modes = [#codir.access_mode<readwrite>, #codir.access_mode<read>, #codir.access_mode<read>],
+                      dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>, #codir.storage_view<replicated_read>],
+                      pattern = #codir.pattern<matmul>,
+                      tile_owner_dims = [0],
+                      tile_shape = [4, 1024]} {
+      ^bb0(%g: memref<1024x1024xf64>, %e: memref<1024x1024xf64>, %f: memref<1024x1024xf64>, %owner: index):
+        codir.yield
+      }
+    }
+    return
+  }
+
+  // reduce_scatter: cross-owner transpose-reduce (atax y = A^T(Ax)); the matrix
+  // dep is mapped `[-1, ownerDim]` (leading row dim reduces, trailing dim owns).
+  func.func @reduce_scatter(%y: memref<32768xf32>, %A: memref<1024x32768xf32>,
+                            %base: index) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c16 = arith.constant 16 : index
+    %c1024 = arith.constant 1024 : index
+    %c32768 = arith.constant 32768 : index
+    scf.for %i = %base to %c32768 step %c16 {
+      codir.codelet deps(%y, %A : memref<32768xf32>, memref<1024x32768xf32>)
+          params(%i : index)
+          attributes {dep_modes = [#codir.access_mode<readwrite>, #codir.access_mode<read>],
+                      dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>],
+                      partial_reduction,
+                      partial_reduction_dims = [1],
+                      partial_reduction_owner_dims = [0],
+                      tile_owner_dims = [0],
+                      tile_shape = [16]} {
+      ^bb0(%arg0: memref<32768xf32>, %arg1: memref<1024x32768xf32>, %owner: index):
+        %inner_c0 = arith.constant 0 : index
+        %inner_c1 = arith.constant 1 : index
+        %inner_c1024 = arith.constant 1024 : index
+        %old = memref.load %arg0[%owner] : memref<32768xf32>
+        scf.for %j = %inner_c0 to %inner_c1024 step %inner_c1 {
+          %a = memref.load %arg1[%j, %owner] : memref<1024x32768xf32>
+          %next = arith.addf %old, %a : f32
+          memref.store %next, %arg0[%owner] : memref<32768xf32>
+        }
+        codir.yield
+      }
+    }
+    return
+  }
+}
+
+// The all-gather producer writes %F (dep #0) consumed by the replicated_read
+// sibling: dep #0 selects all_gather, the others none.
+// CHECK-LABEL: func.func @all_gather
+// CHECK: codir.codelet
+// CHECK-SAME: dep_collectives = [#codir.collective<all_gather>, #codir.collective<none>, #codir.collective<none>]
+
+// The cross-owner transpose-reduce writes %y (dep #0): dep #0 selects
+// reduce_scatter, the matrix read none.
+// CHECK-LABEL: func.func @reduce_scatter
+// CHECK: codir.codelet
+// CHECK-SAME: dep_collectives = [#codir.collective<reduce_scatter>, #codir.collective<none>]

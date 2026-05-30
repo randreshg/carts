@@ -21,6 +21,46 @@ bool isMemrefForwardingOp(Operation *op);
 std::optional<CodirAccessMode> getDepAccessMode(CodeletOp codelet,
                                                 unsigned depIndex);
 
+/// Return the declared storage view for the given dependency index of a
+/// codelet, or nullopt when the codelet has no dep-storage-views attribute or
+/// the index entry is not a CodirStorageViewKindAttr.
+std::optional<CodirStorageViewKind> getDepStorageViewKind(CodeletOp codelet,
+                                                          unsigned depIndex);
+
+/// --- First-class CODIR collective selection (ADR-0003 §7b) ------------------
+/// These predicates are the EXACT gate bodies that ConvertCodirToArts has
+/// historically used to decide the all-gather and cross-owner reduce
+/// realizations (ArtsMaterializationUtils.h). Hoisted here so StoragePlanning
+/// can stamp the first-class `dep_collectives` carrier from the SAME bodies,
+/// making the refactor byte-identical by construction.
+
+/// True when |producer|'s |depIndex| coarse intermediate buffer is read by a
+/// sibling `replicated_read` consumer (3mm's F contracted over its row dim by
+/// G). This is the all-gather signature.
+bool coarseBridgeTargetHasReplicatedReadConsumer(CodeletOp producer,
+                                                 unsigned depIndex);
+
+/// True when |consumer| reads a dependency as a cross-owner transpose
+/// reduction (atax y = A^T(Ax), bicg s = A^T r): a rank-2 matrix dep mapped
+/// `[-1, ownerDim]` (leading row dim reduces, a trailing dim carries the
+/// result-owner mapping).
+bool codeletIsCrossOwnerTransposeReduce(CodeletOp consumer);
+
+/// True when |producer|'s |depIndex| coarse buffer is read by a cross-owner
+/// transpose reduction consumer (atax/bicg step2 gathered intermediate).
+bool coarseBridgeTargetHasCrossOwnerReduceConsumer(CodeletOp producer,
+                                                   unsigned depIndex);
+
+/// Pure name-free selection of the first-class collective family for
+/// |codelet|'s |depIndex|, from the gate predicate bodies above. Returns the
+/// kind that reproduces today's gate decision:
+///   all_gather     iff coarseBridgeTargetHasReplicatedReadConsumer fires;
+///   reduce_scatter iff the cross-owner transpose-reduce gate fires
+///                  (codeletIsCrossOwnerTransposeReduce on this codelet, or its
+///                   coarse target is read by one);
+///   none           otherwise.
+CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex);
+
 } // namespace mlir::carts::codir
 
 #endif // CARTS_DIALECT_CODIR_UTILS_CODELETABIUTILS_H
