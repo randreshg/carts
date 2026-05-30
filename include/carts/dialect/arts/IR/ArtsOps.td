@@ -142,6 +142,11 @@ def DbAllocOp : Arts_Op<"db_alloc",
     // (every block on every node), so the distributed-ownership pass must not
     // block-scatter it. See emitPerBlockAllGatherWriteBack / ADR-0003 §2c.
     OptionalAttr<UnitAttr>:$perBlockReplicated,
+    // WF-6 per-block single-writer stencil DB: this block DB stays DISTRIBUTED
+    // (block-scattered, one writer per block-GUID) and carries an iterative WAR
+    // resolved by a nearest-neighbor halo exchange instead of a local_only
+    // whole-array replica. See emitPerBlockSingleWriterStencilDb / ADR-0003 §2c.
+    OptionalAttr<UnitAttr>:$perBlockSingleWriterStencil,
     OptionalAttr<StrAttr>:$distributed_reject_reason
   );
   let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
@@ -685,6 +690,13 @@ def EdtOp : Arts_Op<"edt", [
     // race-free reduce-scatter/allreduce realization. See
     // emitPerBlockSummingSettle.
     OptionalAttr<UnitAttr>:$perBlockSummingSettle,
+    // WF-6 per-block halo exchange EDT: one EDT per owner block, RO-acquiring its
+    // top/bottom neighbor single-writer block-GUIDs (ordered after each
+    // neighbor's writer frontier) and writing this block's halo region ONCE. The
+    // nearest-neighbor dual of the all-gather copy EDT — resolves the iterative
+    // stencil cross-node halo without a local_only replica. See
+    // emitPerBlockSingleWriterStencilDb.
+    OptionalAttr<UnitAttr>:$perBlockHaloExchange,
     UnitAttr:$inPlaceSafe,
     UnitAttr:$inPlaceSharedState,
     OptionalAttr<I64Attr>:$vectorizeWidth,

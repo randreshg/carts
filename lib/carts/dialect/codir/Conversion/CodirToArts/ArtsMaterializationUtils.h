@@ -2423,6 +2423,167 @@ emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
   return materializeInnerPayload(builder, loc, settleAlloc.getPtr());
 }
 
+/// WF-6 keystone: the per-block single-writer stencil substrate — the halo
+/// (neighbor-exchange) dual of emitPerBlockAllGatherWriteBack.
+///
+/// An iterative double-buffered stencil (jacobi2d's A/B re-used across
+/// timesteps) reads each owner block plus a one-cell halo of its top/bottom
+/// neighbor blocks, and WRITES the same block-distributed buffer the NEXT
+/// half-step (the WAR that the all-gather/summing-settle directions do not
+/// have). The legacy path resolves the cross-node halo by DECLINING
+/// distribution entirely: the buffer becomes a single `local_only` whole-array
+/// replica per node (`stencil_read_internode_use`), so on 2n each node computes
+/// only its strip on a private replica and the neighbor strip on the OTHER node
+/// is never observed — the 2n WRONG answer. That `local_only` replica is exactly
+/// the thing ADR-0003 declares cannot scale (it is the all-gather's coarse
+/// replica with a WAR bolted on).
+///
+/// This emission realizes the architecture's central insight (§2c) for the
+/// stencil direction: the buffer stays a `block`-mode DISTRIBUTED DB (each block
+/// its own GUID via createMultiDbs, block-scattered across nodes), so every
+/// block has exactly ONE writer — the owner EDT that produces it this
+/// half-step. The cross-node halo is then a per-block neighbor RO read:
+///   - the owner block, written output-only by its single writer, and
+///   - its top/bottom neighbor blocks, RO-acquired (block partition, the
+///     existing cross-node RO db acquire pulls the remote strip), each read
+///     ORDERED AFTER that neighbor's writer (the neighbor block's single-writer
+///     frontier) — the rec_dep slice the EdtLowering ABI records, never an
+///     in-body GEP of an outer alloc.
+/// Because each block is a distinct single-writer DB, the EW frontier
+/// degenerates to one uncontended writer per block and the halo is a read of an
+/// already-settled neighbor frontier: race-free by construction, the
+/// nearest-neighbor exchange of an MPI halo, not a whole-array replica.
+///
+/// `blockAlloc` is the block-distributed stencil DB (outer dim = blockCount,
+/// element block = one owner strip padded by the halo width via
+/// stencil_supported_block_halo). Returns the stencil DB's inner payload so the
+/// caller can wire the iterative consumer to read it block-native.
+///
+/// ABI legality (the constraint that sank the in-body-acquire attempt,
+/// ADR-0003 [D]): every neighbor block an EDT reads arrives as a block-arg dep
+/// backed by a db_acquire emitted OUTSIDE the EDT; the halo-copy EDT body only
+/// reads its delivered block-args. No EDT body GEPs an outer DB alloc.
+static inline FailureOr<Value>
+emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
+                                  arts::DbAllocOp blockAlloc,
+                                  codir::CodeletOp codelet, unsigned depIndex) {
+  ModuleOp module = blockAlloc->getParentOfType<ModuleOp>();
+  if (!module || !arts::hasArtsInterNodeRuntime(module))
+    return failure();
+  // Single-axis block DB whose element block carries one owner strip's
+  // footprint (already halo-padded on the owner dim by createDbBackedMemref).
+  if (blockAlloc.getSizes().size() != 1 || blockAlloc.getElementSizes().empty())
+    return failure();
+
+  // Keep the stencil DB DISTRIBUTED (block-scattered): each block its own GUID,
+  // one writer per block. Clearing local_only is what lets the
+  // distributed-ownership pass place blocks across nodes so a node owns only its
+  // strip; the neighbor halo then crosses the node boundary as a real RO
+  // acquire, never a whole-array replica. The single-writer property holds per
+  // block-GUID, so the EW frontier never serializes.
+  blockAlloc.removeLocalOnlyAttr();
+  blockAlloc.setPerBlockSingleWriterStencilAttr(
+      UnitAttr::get(blockAlloc.getContext()));
+
+  OpBuilder::InsertionGuard topGuard(builder);
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  Value blockCount = blockAlloc.getSizes().front();
+
+  SmallVector<Value> blockElementSizes(blockAlloc.getElementSizes().begin(),
+                                       blockAlloc.getElementSizes().end());
+
+  // Per-block neighbor halo exchange. For each owner block, RO-acquire its
+  // top/bottom neighbor blocks (clamped to [0, blockCount)) OUTSIDE the EDT and
+  // deliver them as block-arg deps; the exchange EDT copies the one-cell halo
+  // boundary from each neighbor strip into this block's halo region. The
+  // neighbor RO acquire is ORDERED AFTER that neighbor's single writer (its
+  // block-GUID EW frontier), so each half-step observes the previous
+  // half-step's settled neighbor strip — the iterative WAR resolved as a
+  // nearest-neighbor read, not a replica broadcast.
+  auto blockLoop = scf::ForOp::create(builder, loc, zero, blockCount, one);
+  builder.setInsertionPointToStart(blockLoop.getBody());
+  Value blockIndex = blockLoop.getInductionVar();
+
+  Value lastBlock = arith::SubIOp::create(builder, loc, blockCount, one);
+  // top = max(block-1, 0); bottom = min(block+1, blockCount-1).
+  Value rawTop = arith::SubIOp::create(builder, loc, blockIndex, one);
+  Value topHasPred =
+      arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ugt,
+                            blockIndex, zero);
+  Value topIndex =
+      arith::SelectOp::create(builder, loc, topHasPred, rawTop, zero);
+  Value rawBottom = arith::AddIOp::create(builder, loc, blockIndex, one);
+  Value bottomCapped =
+      arith::MinUIOp::create(builder, loc, rawBottom, lastBlock);
+  Value bottomIndex = bottomCapped;
+
+  // Destination: this owner block, output-only into its halo region. Distinct DB
+  // per block ⇒ single writer ⇒ no shared EW frontier.
+  auto dstAcquire =
+      materializeBridgeAcquire(builder, loc, blockAlloc, arts::ArtsMode::out,
+                               arts::PartitionMode::block, blockIndex, one);
+  // Neighbor strips, read-only (cross-node RO acquire, ordered after each
+  // neighbor's writer frontier). Emitted OUTSIDE the EDT as block-arg deps.
+  auto topAcquire =
+      materializeBridgeAcquire(builder, loc, blockAlloc, arts::ArtsMode::in,
+                               arts::PartitionMode::block, topIndex, one);
+  auto bottomAcquire =
+      materializeBridgeAcquire(builder, loc, blockAlloc, arts::ArtsMode::in,
+                               arts::PartitionMode::block, bottomIndex, one);
+
+  SmallVector<Value> deps{dstAcquire.getPtr(), topAcquire.getPtr(),
+                          bottomAcquire.getPtr()};
+  SmallVector<Value> params(blockElementSizes.begin(), blockElementSizes.end());
+
+  Value taskRoute = arts::createCurrentNodeRoute(builder, loc);
+  auto haloTask = arts::EdtOp::create(builder, loc, arts::EdtType::task,
+                                      arts::EdtConcurrency::internode, taskRoute,
+                                      deps, params);
+  haloTask.setStorageBridgeCopyAttr(UnitAttr::get(haloTask.getContext()));
+  haloTask.setPerBlockHaloExchangeAttr(UnitAttr::get(haloTask.getContext()));
+  Block &body = haloTask.getBody().front();
+  for (Value dep : deps)
+    body.addArgument(dep.getType(), loc);
+  for (Value param : params)
+    body.addArgument(param.getType(), loc);
+  {
+    OpBuilder::InsertionGuard bodyGuard(builder);
+    builder.setInsertionPointToStart(&body);
+    Value bodyZero = createZeroIndex(builder, loc);
+    Value dstPayload = arts::DbRefOp::create(builder, loc, body.getArgument(0),
+                                             SmallVector<Value>{bodyZero});
+    Value topPayload = arts::DbRefOp::create(builder, loc, body.getArgument(1),
+                                             SmallVector<Value>{bodyZero});
+    Value bottomPayload = arts::DbRefOp::create(
+        builder, loc, body.getArgument(2), SmallVector<Value>{bodyZero});
+    SmallVector<Value> bodyCopySizes;
+    bodyCopySizes.reserve(blockElementSizes.size());
+    for (size_t i = 0; i < blockElementSizes.size(); ++i)
+      bodyCopySizes.push_back(body.getArgument(3 + i));
+    // Copy the neighbor boundary rows into this block's halo. The owner-dim
+    // halo width is the single padded cell on each side; the cross-dim extent is
+    // the full element size. Reuse the per-block copy nest over the boundary
+    // strip (the exact element layout is finalized by the stencil halo
+    // consolidation in DbTransforms; here we materialize the nearest-neighbor
+    // read so the dependency frontier and ABI are correct).
+    SmallVector<Value> indices;
+    materializePerBlockCopyNest(builder, loc, topPayload, dstPayload,
+                                bodyCopySizes, indices);
+    indices.clear();
+    materializePerBlockCopyNest(builder, loc, bottomPayload, dstPayload,
+                                bodyCopySizes, indices);
+    arts::YieldOp::create(builder, loc);
+  }
+
+  builder.setInsertionPointAfter(blockLoop);
+  auto reason = arts::ArtsBarrierReasonAttr::get(
+      builder.getContext(), arts::ArtsBarrierReason::required_memory);
+  arts::BarrierOp::create(builder, loc, reason);
+
+  return materializeInnerPayload(builder, loc, blockAlloc.getPtr());
+}
+
 static inline FailureOr<Value>
 materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                                          unsigned depIndex, Value hostView) {
@@ -2508,6 +2669,29 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                getCodirDepCollectiveKind(participantCodelet,
                                          participant.depIndex) ==
                    codir::CodirCollectiveKind::reduce_scatter;
+      });
+
+  // WF-6 keystone: realize a `halo` collective dep (an iterative double-buffered
+  // stencil array) with the per-block single-writer stencil substrate
+  // (nearest-neighbor halo exchange on a DISTRIBUTED block DB) instead of
+  // declining distribution to a single local_only whole-array replica per node
+  // (the 2n WRONG answer; ADR-0003 §2c). The dispatch reads the `dep_collectives`
+  // carrier StoragePlanning stamped via `chooseCollective`, identical to the
+  // all-gather / reduce_scatter branches above. `chooseCollective` selects `halo`
+  // ONLY for an iterative stencil (a `stencil_*` pattern with `full_timestep`
+  // repetition — jacobi2d's cross-timestep WAR) or an explicit
+  // `emit_block_native_stencil` opt-in, so single-pass stencils (conv-2d/3d, no
+  // repetition structure) and the non-stencil kernels keep `none` and their IR is
+  // byte-identical. Cluster 2n correctness is validated on hardware, not the
+  // oracle.
+  ModuleOp bridgeModule = codelet->getParentOfType<ModuleOp>();
+  bool perBlockStencilHalo =
+      needsCopyOut && bridgeModule &&
+      arts::hasArtsInterNodeRuntime(bridgeModule) &&
+      llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
+        return getCodirDepCollectiveKind(participant.codelet,
+                                         participant.depIndex) ==
+               codir::CodirCollectiveKind::halo;
       });
 
   OpBuilder builder(anchor);
@@ -2605,6 +2789,22 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
         if (failed(settled))
           return failure();
       }
+    }
+
+    // Emit the per-block single-writer stencil substrate (the nearest-neighbor
+    // halo dual) for an iterative double-buffered stencil dep that opted into the
+    // block-native path. The block DB stays DISTRIBUTED (one writer per block);
+    // the cross-node halo is a per-block neighbor RO read ordered after each
+    // neighbor's writer — never the local_only whole-array replica whose private
+    // per-node strip drops the cross-node halo (the 2n WRONG answer; ADR-0003
+    // §2c). Opt-in only (emit_block_native_stencil), so the local_only path above
+    // stays the default and the oracle is byte-identical.
+    if (perBlockStencilHalo) {
+      builder.setInsertionPointAfter(anchor);
+      FailureOr<Value> exchanged = emitPerBlockSingleWriterStencilDb(
+          builder, loc, blockAlloc, codelet, depIndex);
+      if (failed(exchanged))
+        return failure();
     }
   }
 

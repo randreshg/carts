@@ -349,6 +349,16 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
   if (!facts.hasInternodeEdtUse)
     return {false, DistributedDbEligibilityRejectReason::NoInternodeEdtUse};
   if (facts.hasStencilReadInternodeUse) {
+    /// WF-6: a per-block single-writer stencil DB (jacobi2d's iterative double-
+    /// buffered array) is BLOCK-distributable even though it is both stencil-read
+    /// and written internode: the per-block single-writer substrate
+    /// (emitPerBlockSingleWriterStencilDb) resolves the cross-node halo with an
+    /// explicit nearest-neighbor exchange (each block its own writer frontier),
+    /// so the historical `stencil_read_internode_use` rejection — which exists
+    /// only because the legacy path had no halo exchange and fell back to a
+    /// local_only whole-array replica — no longer applies. Distribute it.
+    if (alloc.getPerBlockSingleWriterStencil().value_or(false))
+      return {true, DistributedDbEligibilityRejectReason::None};
     /// EXT-DIST-1: Allow read-only stencil DBs as replicated distributed DBs.
     /// CODIR storage planning marks acquires with `replicatedRead` when the
     /// codelet wants the whole DB on every node (DT-5 emits PREFER_DUPLICATE

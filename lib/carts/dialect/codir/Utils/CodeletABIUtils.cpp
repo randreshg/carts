@@ -163,6 +163,34 @@ CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex) {
   if (codeletIsCrossOwnerTransposeReduce(codelet) ||
       coarseBridgeTargetHasCrossOwnerReduceConsumer(codelet, depIndex))
     return CodirCollectiveKind::reduce_scatter;
+  // WF-6: an ITERATIVE double-buffered stencil array (read with a halo on one
+  // half-step and WRITTEN the next, across timesteps) selects the `halo`
+  // collective so the buffer stays a per-block single-writer DISTRIBUTED DB with
+  // a nearest-neighbor halo exchange, instead of declining distribution to one
+  // local_only whole-array replica per node (the 2n WRONG answer; ADR-0003 §2c).
+  //
+  // The trigger is the iterative-stencil SHAPE — a `stencil_*` pattern whose
+  // repetition is `full_timestep` (the cross-timestep WAR). This fires on
+  // jacobi2d's stencil-write codelets and ONLY those: single-pass stencils
+  // (conv-2d/3d) carry NO repetition structure (no WAR on the read buffer), and
+  // the non-stencil kernels are not stencil patterns, so the 8 other oracle
+  // baselines are byte-identical. `emit_block_native_stencil` is an additional
+  // manual opt-in for shapes the auto-trigger does not yet cover.
+  bool isStencilPattern = false;
+  if (auto pattern = codelet.getPatternAttr()) {
+    CodirPattern p = pattern.getValue();
+    isStencilPattern = p == CodirPattern::stencil_tiling_nd ||
+                       p == CodirPattern::cross_dim_stencil_3d ||
+                       p == CodirPattern::higher_order_stencil;
+  }
+  if (isStencilPattern) {
+    bool iterativeWar = false;
+    if (auto rep = codelet.getRepetitionStructureAttr())
+      iterativeWar =
+          rep.getValue() == CodirRepetitionStructure::full_timestep;
+    if (iterativeWar || codelet.getEmitBlockNativeStencilAttr())
+      return CodirCollectiveKind::halo;
+  }
   return CodirCollectiveKind::none;
 }
 

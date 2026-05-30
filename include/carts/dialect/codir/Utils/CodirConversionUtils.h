@@ -81,6 +81,7 @@ createCodirCodelet(OpBuilder &builder, Location loc, ArrayAttr depModes,
   return codir::CodeletOp::create(
       builder, loc, depModes, depStorageViews, /*dep_collectives=*/ArrayAttr{},
       /*emit_block_native_settle=*/UnitAttr{},
+      /*emit_block_native_stencil=*/UnitAttr{},
       /*dep_owner_dims=*/ArrayAttr{}, taskDepend,
       orderedTaskDepend, completionBarrier, metadata.pattern,
       metadata.reductionStrategy, metadata.partialReduction,

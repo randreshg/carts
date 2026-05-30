@@ -42,6 +42,17 @@ def CartsCodir_CodeletOp
     // opted in. The block-native settle becomes the default once the per-tile
     // partial producers are materialized for atax/bicg/3mm.
     OptionalAttr<UnitAttr>:$emit_block_native_settle,
+    // WF-6 opt-in: realize a `halo` collective dep (an iterative double-buffered
+    // stencil array, read with a halo and written across timesteps) with the
+    // block-native per-block SINGLE-WRITER stencil substrate
+    // (emitPerBlockSingleWriterStencilDb) instead of declining distribution to a
+    // single `local_only` whole-array replica per node. ADDITIVE: absent on every
+    // kernel today (chooseCollective never selects `halo`), so the local_only
+    // path and the 18 oracle baselines are unchanged; the substrate fires only
+    // where a producer has explicitly opted in. Cluster 2n correctness of the
+    // iterative-stencil cross-node halo exchange is validated on hardware, not in
+    // the byte-identical oracle.
+    OptionalAttr<UnitAttr>:$emit_block_native_stencil,
     OptionalAttr<ArrayAttr>:$dep_owner_dims,
     OptionalAttr<UnitAttr>:$task_depend,
     OptionalAttr<UnitAttr>:$ordered_task_depend,
