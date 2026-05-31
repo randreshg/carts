@@ -7,9 +7,10 @@
 ///==========================================================================///
 #ifndef CARTS_DIALECT_CODIR_UTILS_CODIRCONVERSIONUTILS_H
 #define CARTS_DIALECT_CODIR_UTILS_CODIRCONVERSIONUTILS_H
+#include "carts/dialect/codir/Utils/CodirAttrNames.h"
+#include "carts/dialect/codir/Utils/CodeletABIUtils.h"
 #include "carts/dialect/codir/Utils/SdeToCodirMetadataUtils.h"
 #include "carts/dialect/codir/Utils/TaskDepSliceUtils.h"
-#include "carts/dialect/codir/Utils/CodeletABIUtils.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
@@ -78,7 +79,7 @@ createCodirCodelet(OpBuilder &builder, Location loc, ArrayAttr depModes,
                    ValueRange params, const CodirCodeletMetadata &metadata = {},
                    UnitAttr taskDepend = {}, UnitAttr orderedTaskDepend = {},
                    UnitAttr completionBarrier = {}) {
-  return codir::CodeletOp::create(
+  codir::CodeletOp codelet = codir::CodeletOp::create(
       builder, loc, depModes, depStorageViews, /*dep_collectives=*/ArrayAttr{},
       /*emit_block_native_settle=*/UnitAttr{},
       /*emit_block_native_stencil=*/UnitAttr{},
@@ -95,6 +96,13 @@ createCodirCodelet(OpBuilder &builder, Location loc, ArrayAttr depModes,
       metadata.spatialDims, metadata.writeFootprint, metadata.inPlaceSafe,
       metadata.inPlaceSharedState, metadata.arrayLayout,
       metadata.layoutsDisagree, metadata.commVolumeBytes, deps, params);
+  if (metadata.partitionGraph)
+    codelet->setAttr(codir::AttrNames::PartitionGraph,
+                     metadata.partitionGraph);
+  if (metadata.partitionScore)
+    codelet->setAttr(codir::AttrNames::PartitionScore,
+                     metadata.partitionScore);
+  return codelet;
 }
 
 static inline Value materializeIndexFoldResult(OpBuilder &builder, Location loc,

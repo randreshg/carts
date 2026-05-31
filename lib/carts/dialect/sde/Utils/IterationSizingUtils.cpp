@@ -21,6 +21,14 @@ using namespace mlir::carts;
 
 namespace mlir::carts::sde {
 
+static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
+  if (lhs <= 0 || rhs <= 0)
+    return 0;
+  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
+    return std::numeric_limits<int64_t>::max();
+  return lhs * rhs;
+}
+
 int64_t ceilDivPositive(int64_t value, int64_t divisor) {
   return llvm::divideCeil(std::max<int64_t>(1, value),
                           std::max<int64_t>(1, divisor));
@@ -130,14 +138,9 @@ int64_t haloExpandedTileBytes(ArrayRef<int64_t> extents,
                               ArrayRef<int64_t> haloRadii,
                               ArrayRef<int64_t> physicalBlockShape,
                               int64_t elemBytes) {
-  if (elemBytes <= 0)
+  int64_t ownedBytes = tilePayloadBytes(physicalBlockShape, elemBytes);
+  if (ownedBytes <= 0)
     return 0;
-  int64_t ownedBytes = elemBytes;
-  for (int64_t dim : physicalBlockShape) {
-    if (dim <= 0)
-      return 0;
-    ownedBytes *= dim;
-  }
   SmallVector<int64_t, 4> grid;
   grid.reserve(extents.size());
   for (auto [idx, extent] : llvm::enumerate(extents)) {
@@ -153,6 +156,45 @@ int64_t haloExpandedTileBytes(ArrayRef<int64_t> extents,
   if (expanded > static_cast<long double>(std::numeric_limits<int64_t>::max()))
     return std::numeric_limits<int64_t>::max();
   return static_cast<int64_t>(expanded);
+}
+
+int64_t tilePayloadBytes(ArrayRef<int64_t> physicalBlockShape,
+                         int64_t elemBytes) {
+  if (elemBytes <= 0)
+    return 0;
+  int64_t bytes = elemBytes;
+  for (int64_t dim : physicalBlockShape) {
+    if (dim <= 0)
+      return 0;
+    bytes = saturatingMultiplyPositive(bytes, dim);
+  }
+  return bytes;
+}
+
+int64_t coarsenWorkersToTileByteFloor(
+    int64_t workers, ArrayRef<int64_t> physicalBlockShape, int64_t elemBytes,
+    int64_t minTileBytes, int64_t minWorkers,
+    llvm::function_ref<bool(int64_t, SmallVectorImpl<int64_t> &)> rebuild) {
+  if (minTileBytes <= 0 || workers <= 1 || elemBytes <= 0)
+    return workers;
+
+  int64_t currentWorkers = std::max<int64_t>(1, workers);
+  int64_t workerFloor =
+      std::clamp<int64_t>(minWorkers, int64_t{1}, currentWorkers);
+  SmallVector<int64_t, 4> currentShape(physicalBlockShape.begin(),
+                                       physicalBlockShape.end());
+  while (currentWorkers > workerFloor &&
+         tilePayloadBytes(currentShape, elemBytes) < minTileBytes) {
+    int64_t nextWorkers = std::max<int64_t>(workerFloor, currentWorkers / 2);
+    if (nextWorkers == currentWorkers)
+      break;
+    SmallVector<int64_t, 4> candidateShape;
+    if (!rebuild(nextWorkers, candidateShape))
+      break;
+    currentWorkers = nextWorkers;
+    currentShape = std::move(candidateShape);
+  }
+  return currentWorkers;
 }
 
 int64_t coarsenStencilWorkersToFloor(

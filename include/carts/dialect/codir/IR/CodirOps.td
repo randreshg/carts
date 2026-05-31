@@ -42,16 +42,15 @@ def CartsCodir_CodeletOp
     // opted in. The block-native settle becomes the default once the per-tile
     // partial producers are materialized for atax/bicg/3mm.
     OptionalAttr<UnitAttr>:$emit_block_native_settle,
-    // WF-6 opt-in: realize a `halo` collective dep (an iterative double-buffered
+    // WF-6: realize a `halo` collective dep (an iterative double-buffered
     // stencil array, read with a halo and written across timesteps) with the
     // block-native per-block SINGLE-WRITER stencil substrate
     // (emitPerBlockSingleWriterStencilDb) instead of declining distribution to a
-    // single `local_only` whole-array replica per node. ADDITIVE: absent on every
-    // kernel today (chooseCollective never selects `halo`), so the local_only
-    // path and the 18 oracle baselines are unchanged; the substrate fires only
-    // where a producer has explicitly opted in. Cluster 2n correctness of the
-    // iterative-stencil cross-node halo exchange is validated on hardware, not in
-    // the byte-identical oracle.
+    // single `local_only` whole-array replica per node. StoragePlanning selects
+    // `halo` for full-timestep stencil producers; `emit_block_native_stencil`
+    // remains an explicit override for shapes outside the auto-trigger.
+    // Cluster 2n correctness of the iterative-stencil cross-node halo exchange
+    // is validated on hardware, not in the byte-identical oracle.
     OptionalAttr<UnitAttr>:$emit_block_native_stencil,
     OptionalAttr<ArrayAttr>:$dep_owner_dims,
     OptionalAttr<UnitAttr>:$task_depend,
@@ -88,9 +87,10 @@ def CartsCodir_CodeletOp
     // per-array BLOCK decision survives into CODIR instead of being dropped at
     // the SDE -> CODIR boundary. These are pure element-space DATA-LAYOUT facts
     // (no runtime nodes/routes/collective names); see SdeOps.td $arrayLayout,
-    // $layoutsDisagree, $commVolumeBytes for the exact schema. ADDITIVE:
-    // codir-to-arts lowering ignores them unless a consumer opts in, so IR for
-    // kernels whose greedy plan already matches the SDE choice is byte-identical.
+    // $layoutsDisagree, $commVolumeBytes for the exact schema. CODIR planning
+    // consumes the resulting storage-view/collective facts; ARTS materialization
+    // may also consult forwarded partition scores when batching bridge EDTs so
+    // runtime launch amortization does not erase SDE-exposed concurrency.
     OptionalAttr<ArrayAttr>:$array_layout,
     OptionalAttr<ArrayAttr>:$layouts_disagree,
     OptionalAttr<I64Attr>:$comm_volume_bytes,

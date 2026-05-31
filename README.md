@@ -107,10 +107,18 @@ probing subproject-local build or install directories.
 
 ## ARTS Transport
 
-`dekk carts build --arts` builds the ARTS runtime with RDMA/RoCE RSockets
-enabled by default, matching the production multinode transport. Use
+`dekk carts build --arts` builds ARTS with the current RDMA/RoCE rsocket
+compatibility transport enabled and requires the production RDMA provider
+development stack (`librdmacm`, UCX, and libfabric) to be present. For production
+multinode runs, the supported rsocket profile is deliberately bounded: one port
+per rank pair, one sender thread, one receiver thread, accept-thread enabled,
+serialized active connects, and close-after-send unless provider-triage knobs
+explicitly opt out. Multi-port or persistent-rsocket fanout is treated as
+experimental until the transport has fail-fast connection warm-up, per-port
+telemetry, and repeated Slurm/RDMA coverage. Use
 `dekk carts build --arts --no-rdma` when working on a non-RDMA developer system
-or when running an intentional TCP fallback experiment. Benchmark runs use TCP
-for single-node configs and use the requested `--rdma/--no-rdma` transport only
-for multinode configs. Likewise, benchmark `--distributed-db` compile args are
-multinode-only and are stripped from single-node benchmark builds.
+or when running an intentional TCP fallback experiment.
+Benchmark runs use TCP for single-node configs and use the requested
+`--rdma/--no-rdma` transport only for multinode configs. Likewise, benchmark
+`--distributed-db` compile args are multinode-only and are stripped from
+single-node benchmark builds.

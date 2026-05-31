@@ -1,4 +1,5 @@
 add_mlir_dialect_library(MLIRCartsSdeUtils
+  CuMuGraphPartitioning.cpp
   IterationSizingUtils.cpp
 
   ADDITIONAL_HEADER_DIRS

@@ -96,11 +96,12 @@ def LayoutAssignment
       INPUTS), plus a per-edge `layoutsDisagree` geometric mismatch marker and
       an abstract `commVolumeBytes`.
 
-    This pass is ADDITIVE: it only ADDS SDE-level attrs. It does NOT rewire the
-    per-codelet physical stampers and nothing downstream consumes `arrayLayout`
-    yet, so post-SDE (codir-to-arts) IR stays byte-identical. The future
-    integration step (after the serial CODIR/ARTS core lands) will have the
-    physical stampers + `needsSharedRootRedistribution` consume `arrayLayout`.
+    The attrs are planning inputs, not decorative breadcrumbs: SDE distribution
+    planning consumes the abstract communication volume when choosing
+    concurrency-preserving block shapes, and CODIR storage planning uses the
+    carried layout/storage facts to select compute-block, phase-redistributed,
+    replicated-read, and collective-family carriers without moving runtime
+    policy into SDE.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createLayoutAssignmentPass()";

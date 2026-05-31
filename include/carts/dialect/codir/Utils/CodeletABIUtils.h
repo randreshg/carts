@@ -35,19 +35,19 @@ std::optional<CodirStorageViewKind> getDepStorageViewKind(CodeletOp codelet,
 /// making the refactor byte-identical by construction.
 
 /// True when |producer|'s |depIndex| coarse intermediate buffer is read by a
-/// sibling `replicated_read` consumer (3mm's F contracted over its row dim by
-/// G). This is the all-gather signature.
+/// sibling `replicated_read` contraction consumer. This is the all-gather
+/// signature.
 bool coarseBridgeTargetHasReplicatedReadConsumer(CodeletOp producer,
                                                  unsigned depIndex);
 
 /// True when |consumer| reads a dependency as a cross-owner transpose
-/// reduction (atax y = A^T(Ax), bicg s = A^T r): a rank-2 matrix dep mapped
+/// reduction: a rank-2 matrix dep mapped
 /// `[-1, ownerDim]` (leading row dim reduces, a trailing dim carries the
 /// result-owner mapping).
 bool codeletIsCrossOwnerTransposeReduce(CodeletOp consumer);
 
 /// True when |producer|'s |depIndex| coarse buffer is read by a cross-owner
-/// transpose reduction consumer (atax/bicg step2 gathered intermediate).
+/// transpose reduction consumer.
 bool coarseBridgeTargetHasCrossOwnerReduceConsumer(CodeletOp producer,
                                                    unsigned depIndex);
 
@@ -58,6 +58,8 @@ bool coarseBridgeTargetHasCrossOwnerReduceConsumer(CodeletOp producer,
 ///   reduce_scatter iff the cross-owner transpose-reduce gate fires
 ///                  (codeletIsCrossOwnerTransposeReduce on this codelet, or its
 ///                   coarse target is read by one);
+///   halo           iff an iterative stencil producer carries full-timestep
+///                  repetition, or explicitly requests native stencil exchange;
 ///   none           otherwise.
 CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex);
 

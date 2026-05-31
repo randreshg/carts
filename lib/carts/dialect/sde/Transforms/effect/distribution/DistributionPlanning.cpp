@@ -4,8 +4,8 @@
 /// SDE distribution planning. This pass keeps distribution intent on the SDE
 /// side of the boundary by wrapping eligible `sde.su_iterate` operations in
 /// `sde.su_distribute`; it uses SDE pattern/effect facts plus abstract worker
-/// capacity/locality. Concrete DB ownership, EDT placement, routes, and runtime
-/// memory-model choices remain ARTS decisions.
+/// capacity/locality. Concrete storage ownership, task placement, routes, and
+/// runtime memory-model choices remain ARTS decisions.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -16,8 +16,10 @@ namespace mlir::carts::sde {
 
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
+#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/LoopUtils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -44,6 +46,10 @@ struct PlannedDistribution {
 };
 
 static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs);
+static void
+alignLateOwnerPlanToExistingStep(sde::SdeSuIterateOp op,
+                                 ArrayRef<int64_t> ownerPhysicalDims,
+                                 MutableArrayRef<int64_t> physicalBlockShape);
 
 static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
   return saturatingMultiplyPositive(costModel.getLogicalWorkerCapacity(),
@@ -51,12 +57,9 @@ static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
 }
 
 // Worker target for the stencil physical-plan stamper. Caps at logical
-// worker capacity (no inter-locality wave multiplier) because stencil DBs
-// today cannot cross a node boundary without halo-exchange lowering, so
-// the inter-locality wave headroom turns into tile inflation paid on the
-// single executing node after `DistributedLaunchConsistency` demotes the
-// EDT from `internode` back to `<intranode>`. Revisit once
-// `arts.halo_exchange` makes stencil DBs distributable end-to-end.
+// worker capacity because stencil halo ownership is currently planned as a
+// single-locality layout fact. Inter-locality expansion belongs after the
+// CODIR/ARTS boundary has a concrete halo-realization path.
 static int64_t getStencilWorkerTarget(sde::SDECostModel &costModel) {
   return costModel.getLogicalWorkerCapacity();
 }
@@ -69,6 +72,8 @@ static int64_t outputElementBytes(Value root) {
   if (!memrefTy)
     return 0;
   Type elt = memrefTy.getElementType();
+  while (auto nested = dyn_cast<MemRefType>(elt))
+    elt = nested.getElementType();
   if (!elt.isIntOrFloat())
     return 0;
   return llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
@@ -201,6 +206,303 @@ static bool buildOwnerDimPlan(const sde::LoopIndexedOutputPlan &outputPlan,
   }
 
   return true;
+}
+
+static int64_t getDistributedTileParallelismFloor(sde::SDECostModel &costModel,
+                                                  int64_t workers) {
+  return std::clamp<int64_t>(costModel.getLogicalWorkerCapacity(), int64_t{1},
+                             std::max<int64_t>(1, workers));
+}
+
+static int64_t readAbstractCommVolumeBytes(sde::SdeSuIterateOp op) {
+  if (auto attr = op.getCommVolumeBytesAttr())
+    return std::max<int64_t>(0, attr.getInt());
+  return 0;
+}
+
+static sde::CuMuComputeUnitTarget
+buildCuMuComputeTarget(sde::SDECostModel &costModel, int64_t workers) {
+  sde::CuMuComputeUnitTarget target;
+  target.requestedComputeUnits = std::max<int64_t>(1, workers);
+  target.minComputeUnits =
+      getDistributedTileParallelismFloor(costModel, workers);
+  target.logicalWorkerCapacity =
+      std::max<int64_t>(1, costModel.getLogicalWorkerCapacity());
+  target.taskCreationCost = costModel.getTaskCreationCost();
+  target.taskSyncCost = costModel.getTaskSyncCost();
+  target.dataAccessCost = costModel.getDataAccessCost();
+  return target;
+}
+
+static std::optional<sde::CuMuPartitionPlan> chooseCuMuTileFloorPlan(
+    ArrayRef<int64_t> shape, ArrayRef<int64_t> ownerPhysicalDims,
+    int64_t elemBytes, int64_t abstractCommVolumeBytes,
+    sde::SDECostModel &costModel, int64_t workers,
+    ArrayRef<int64_t> physicalBlockShape,
+    llvm::function_ref<bool(int64_t, SmallVectorImpl<int64_t> &)> rebuild) {
+  int64_t minTileBytes = costModel.getMinDistributedTileBytes();
+  if (minTileBytes <= 0 || elemBytes <= 0 || workers <= 1)
+    return std::nullopt;
+
+  sde::CuMuMemoryUnit memory;
+  memory.shape = shape;
+  memory.ownerPhysicalDims = ownerPhysicalDims;
+  memory.elementBytes = elemBytes;
+  memory.abstractCommVolumeBytes = abstractCommVolumeBytes;
+
+  sde::CuMuPartitionObjective objective;
+  objective.targetTileBytes = minTileBytes;
+  return sde::chooseCuMuGraphPartition(
+      memory, buildCuMuComputeTarget(costModel, workers), objective,
+      physicalBlockShape, rebuild);
+}
+
+static void stampCuMuPartitionGraphAttrs(sde::SdeSuIterateOp op,
+                                         sde::SDECostModel &costModel) {
+  auto blockShape = readI64ArrayAttr(op.getPhysicalBlockShapeAttr());
+  auto ownerDims = readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
+  if (!blockShape || blockShape->empty() || !ownerDims || ownerDims->empty())
+    return;
+
+  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
+      sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op);
+  if (!outputPlan)
+    outputPlan = sde::findLoopIndexedOutputPlan(op);
+  if (!outputPlan || outputPlan->shape.empty() ||
+      outputPlan->shape.size() != blockShape->size())
+    return;
+
+  int64_t elemBytes = outputElementBytes(outputPlan->root);
+  if (elemBytes <= 0)
+    return;
+
+  MLIRContext *ctx = op.getContext();
+  Builder builder(ctx);
+  auto i64Ty = builder.getIntegerType(64);
+  auto i64Attr = [&](int64_t value) { return IntegerAttr::get(i64Ty, value); };
+  auto readI64Array =
+      [](ArrayAttr attr) -> std::optional<SmallVector<int64_t, 4>> {
+    return readI64ArrayAttr(attr);
+  };
+
+  int64_t tileBytes = sde::tilePayloadBytes(*blockShape, elemBytes);
+  int64_t cuCount = sde::inferCuCountFromMuPartition(outputPlan->shape,
+                                                     *ownerDims, *blockShape);
+  int64_t targetWorkers =
+      std::max<int64_t>(1, costModel.getLogicalWorkerCapacity());
+  int64_t exposedCuCount =
+      std::min<int64_t>(std::max<int64_t>(1, cuCount), targetWorkers);
+  int64_t commBytes = readAbstractCommVolumeBytes(op);
+
+  SmallVector<NamedAttribute, 8> scoreAttrs;
+  scoreAttrs.push_back(builder.getNamedAttr(
+      sde::AttrNames::PartitionScoreKeys::Objective,
+      builder.getStringAttr(sde::AttrNames::PartitionGraphValues::
+                                ObjectiveMaxConcurrencyCommAware)));
+  scoreAttrs.push_back(builder.getNamedAttr(
+      sde::AttrNames::PartitionScoreKeys::TargetLogicalWorkers,
+      i64Attr(targetWorkers)));
+  scoreAttrs.push_back(
+      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::ExposedCuCount,
+                           i64Attr(exposedCuCount)));
+  scoreAttrs.push_back(builder.getNamedAttr(
+      sde::AttrNames::PartitionScoreKeys::RequestedCuCount,
+      i64Attr(std::max<int64_t>(1, getInterLocalityTargetWorkers(costModel)))));
+  scoreAttrs.push_back(
+      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::ChosenCuCount,
+                           i64Attr(std::max<int64_t>(1, cuCount))));
+  scoreAttrs.push_back(
+      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::MinTileBytes,
+                           i64Attr(costModel.getMinDistributedTileBytes())));
+  scoreAttrs.push_back(builder.getNamedAttr(
+      sde::AttrNames::PartitionScoreKeys::ChosenTileBytes, i64Attr(tileBytes)));
+  scoreAttrs.push_back(builder.getNamedAttr(
+      sde::AttrNames::PartitionScoreKeys::CommVolumeBytes, i64Attr(commBytes)));
+  scoreAttrs.push_back(
+      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::OwnerDims,
+                           buildI64ArrayAttr(ctx, *ownerDims)));
+  scoreAttrs.push_back(
+      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::BlockShape,
+                           buildI64ArrayAttr(ctx, *blockShape)));
+  op->setAttr(sde::AttrNames::PartitionScore,
+              DictionaryAttr::get(ctx, scoreAttrs));
+
+  SmallVector<Attribute, 4> graphEntries;
+  auto appendGraphEntry = [&](int64_t muId, StringRef role,
+                              StringRef layoutKind, ArrayAttr entryOwnerDims,
+                              ArrayAttr entryBlockShape, int64_t edgeCommBytes,
+                              StringRef edgeClass) {
+    int64_t entryTileBytes = tileBytes;
+    if (auto entryShape = readI64Array(entryBlockShape))
+      entryTileBytes = sde::tilePayloadBytes(*entryShape, elemBytes);
+    SmallVector<NamedAttribute, 8> attrs;
+    attrs.push_back(builder.getNamedAttr(
+        sde::AttrNames::PartitionGraphKeys::MuId, i64Attr(muId)));
+    attrs.push_back(builder.getNamedAttr(
+        sde::AttrNames::PartitionGraphKeys::Role, builder.getStringAttr(role)));
+    attrs.push_back(
+        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::LayoutKind,
+                             builder.getStringAttr(layoutKind)));
+    attrs.push_back(builder.getNamedAttr(
+        sde::AttrNames::PartitionGraphKeys::OwnerDims, entryOwnerDims));
+    attrs.push_back(builder.getNamedAttr(
+        sde::AttrNames::PartitionGraphKeys::BlockShape, entryBlockShape));
+    attrs.push_back(builder.getNamedAttr(
+        sde::AttrNames::PartitionGraphKeys::TilePayloadBytes,
+        i64Attr(entryTileBytes)));
+    attrs.push_back(
+        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::EdgeCommBytes,
+                             i64Attr(edgeCommBytes)));
+    attrs.push_back(
+        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::EdgeClass,
+                             builder.getStringAttr(edgeClass)));
+    graphEntries.push_back(DictionaryAttr::get(ctx, attrs));
+  };
+
+  bool addedFromArrayLayout = false;
+  if (ArrayAttr layout = op.getArrayLayoutAttr()) {
+    for (auto [idx, attr] : llvm::enumerate(layout)) {
+      auto dict = dyn_cast<DictionaryAttr>(attr);
+      if (!dict)
+        continue;
+      int64_t muId = static_cast<int64_t>(idx);
+      if (auto arrayId = dyn_cast_or_null<IntegerAttr>(
+              dict.get(sde::AttrNames::LayoutGraph::ArrayId)))
+        muId = arrayId.getInt();
+      auto kind = dyn_cast_or_null<StringAttr>(
+          dict.get(sde::AttrNames::LayoutGraph::Kind));
+      auto layoutOwnerDims = dyn_cast_or_null<ArrayAttr>(
+          dict.get(sde::AttrNames::LayoutGraph::OwnerDims));
+      auto layoutBlockShape = dyn_cast_or_null<ArrayAttr>(
+          dict.get(sde::AttrNames::LayoutGraph::BlockShape));
+      if (!layoutOwnerDims || !layoutBlockShape)
+        continue;
+      auto roleAttr = dyn_cast_or_null<StringAttr>(
+          dict.get(sde::AttrNames::LayoutGraph::Role));
+      StringRef role =
+          roleAttr ? roleAttr.getValue()
+                   : StringRef(sde::AttrNames::LayoutGraphValues::RoleUnknown);
+      StringRef layoutKind =
+          kind ? kind.getValue()
+               : StringRef(sde::AttrNames::PartitionGraphValues::UnknownLayout);
+      int64_t edgeCommBytes = 0;
+      if (auto edgeBytes = dyn_cast_or_null<IntegerAttr>(
+              dict.get(sde::AttrNames::LayoutGraph::CommVolumeBytes)))
+        edgeCommBytes = std::max<int64_t>(0, edgeBytes.getInt());
+      StringRef edgeClass =
+          edgeCommBytes > 0
+              ? StringRef(
+                    sde::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
+              : StringRef(sde::AttrNames::PartitionGraphValues::EdgeAligned);
+      appendGraphEntry(muId, role, layoutKind, layoutOwnerDims,
+                       layoutBlockShape, edgeCommBytes, edgeClass);
+      addedFromArrayLayout = true;
+    }
+  }
+
+  if (!addedFromArrayLayout) {
+    StringRef edgeClass =
+        commBytes > 0
+            ? StringRef(
+                  sde::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
+            : StringRef(sde::AttrNames::PartitionGraphValues::EdgeAligned);
+    appendGraphEntry(
+        /*muId=*/0, sde::AttrNames::LayoutGraphValues::RoleWrite,
+        sde::AttrNames::PartitionGraphValues::OwnerBlock,
+        buildI64ArrayAttr(ctx, *ownerDims), buildI64ArrayAttr(ctx, *blockShape),
+        commBytes, edgeClass);
+  }
+
+  if (!graphEntries.empty())
+    op->setAttr(sde::AttrNames::PartitionGraph,
+                ArrayAttr::get(ctx, graphEntries));
+}
+
+static int64_t coarsenLoopIndexedOwnerPlanToTileFloor(
+    const sde::LoopIndexedOutputPlan &outputPlan, sde::SDECostModel &costModel,
+    int64_t workers, int64_t abstractCommVolumeBytes,
+    SmallVectorImpl<int64_t> &ownerPhysicalDims,
+    SmallVectorImpl<int64_t> &physicalBlockShape) {
+  int64_t elemBytes = outputElementBytes(outputPlan.root);
+  if (costModel.getMinDistributedTileBytes() <= 0 || elemBytes <= 0)
+    return workers;
+
+  auto rebuild = [&](int64_t candidateWorkers,
+                     SmallVectorImpl<int64_t> &candidateShape) {
+    SmallVector<int64_t, 4> tmpOwnerDims;
+    SmallVector<int64_t, 4> tmpBlockShape;
+    if (!buildOwnerDimPlan(outputPlan, candidateWorkers, tmpOwnerDims,
+                           tmpBlockShape))
+      return false;
+    candidateShape.assign(tmpBlockShape.begin(), tmpBlockShape.end());
+    return true;
+  };
+
+  std::optional<sde::CuMuPartitionPlan> selected = chooseCuMuTileFloorPlan(
+      outputPlan.shape, outputPlan.ownerPhysicalDims, elemBytes,
+      abstractCommVolumeBytes, costModel, workers, physicalBlockShape, rebuild);
+  if (!selected)
+    return workers;
+
+  ownerPhysicalDims.clear();
+  ownerPhysicalDims.assign(outputPlan.ownerPhysicalDims.begin(),
+                           outputPlan.ownerPhysicalDims.end());
+  physicalBlockShape.assign(selected->physicalBlockShape.begin(),
+                            selected->physicalBlockShape.end());
+  return selected->computeUnits;
+}
+
+static void
+coarsenExistingLoopIndexedOwnerPlanToTileFloor(sde::SdeSuIterateOp op,
+                                               sde::SDECostModel &costModel) {
+  if (costModel.getMinDistributedTileBytes() <= 0 ||
+      !op.getPhysicalOwnerDimsAttr() || !op.getPhysicalBlockShapeAttr())
+    return;
+
+  auto classification = op.getStructuredClassification();
+  if (classification &&
+      *classification == sde::SdeStructuredClassification::stencil)
+    return;
+
+  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
+      sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op);
+  if (!outputPlan)
+    outputPlan = sde::findLoopIndexedOutputPlan(op);
+  if (!outputPlan || outputPlan->shape.empty())
+    return;
+
+  std::optional<SmallVector<int64_t, 4>> ownerDims =
+      readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      readI64ArrayAttr(op.getPhysicalBlockShapeAttr());
+  if (!ownerDims || ownerDims->empty() || !blockShape ||
+      blockShape->size() != outputPlan->shape.size())
+    return;
+
+  sde::LoopIndexedOutputPlan plan = *outputPlan;
+  plan.ownerPhysicalDims.assign(ownerDims->begin(), ownerDims->end());
+  int64_t workers = sde::inferCuCountFromMuPartition(
+      plan.shape, plan.ownerPhysicalDims, *blockShape);
+  if (workers <= 1)
+    return;
+
+  SmallVector<int64_t, 4> coarsenedOwnerDims(ownerDims->begin(),
+                                             ownerDims->end());
+  SmallVector<int64_t, 4> coarsenedBlockShape(blockShape->begin(),
+                                              blockShape->end());
+  int64_t coarsenedWorkers = coarsenLoopIndexedOwnerPlanToTileFloor(
+      plan, costModel, workers, readAbstractCommVolumeBytes(op),
+      coarsenedOwnerDims, coarsenedBlockShape);
+  if (coarsenedWorkers >= workers)
+    return;
+
+  alignLateOwnerPlanToExistingStep(op, coarsenedOwnerDims, coarsenedBlockShape);
+  op.setPhysicalOwnerDimsAttr(
+      buildI64ArrayAttr(op.getContext(), coarsenedOwnerDims));
+  op.setPhysicalBlockShapeAttr(
+      buildI64ArrayAttr(op.getContext(), coarsenedBlockShape));
+  op.setLogicalWorkerSliceAttr(
+      buildI64ArrayAttr(op.getContext(), coarsenedBlockShape));
 }
 
 static SmallVector<Value, 4>
@@ -380,9 +682,9 @@ alignLateOwnerPlanToExistingStep(sde::SdeSuIterateOp op,
     return;
 
   // DistributionPlanning runs after SDE loop tiling. When it authors a physical
-  // owner plan late, the DB block for the owner dimension must cover the
-  // already-existing owner-loop step; otherwise a single EDT can index across
-  // multiple physical DB blocks after acquiring only one dependency.
+  // owner plan late, the element-space block for the owner dimension must cover
+  // the already-existing owner-loop step; otherwise one planned task slice can
+  // index outside the dependency window described by the SDE owner plan.
   physicalBlockShape[ownerPhysicalDim] = *ownerStep;
 }
 
@@ -613,6 +915,9 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
               std::max<int64_t>(1, getInterLocalityTargetWorkers(costModel));
           if (buildOwnerDimPlan(*multiOwnerPlan, workers, ownerDims,
                                 physicalBlockShape)) {
+            coarsenLoopIndexedOwnerPlanToTileFloor(
+                *multiOwnerPlan, costModel, workers,
+                readAbstractCommVolumeBytes(op), ownerDims, physicalBlockShape);
             applyPhysicalPlan(op, ownerDims, physicalBlockShape);
             return;
           }
@@ -655,6 +960,28 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
   physicalBlockShape[ownerPhysicalDim] =
       std::clamp(std::max(balancedOwnerIterations, minOwnerIterations),
                  int64_t{1}, outputPlan->shape[ownerPhysicalDim]);
+  int64_t elemBytes = outputElementBytes(outputPlan->root);
+  if (costModel.getMinDistributedTileBytes() > 0 && elemBytes > 0) {
+    auto rebuild = [&](int64_t candidateWorkers,
+                       SmallVectorImpl<int64_t> &candidateShape) {
+      candidateShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
+      int64_t candidateIterations = sde::ceilDivPositive(
+          outputPlan->shape[ownerPhysicalDim], candidateWorkers);
+      candidateShape[ownerPhysicalDim] =
+          std::clamp(std::max(candidateIterations, minOwnerIterations),
+                     int64_t{1}, outputPlan->shape[ownerPhysicalDim]);
+      return true;
+    };
+    std::optional<sde::CuMuPartitionPlan> selected = chooseCuMuTileFloorPlan(
+        outputPlan->shape, outputPlan->ownerPhysicalDims, elemBytes,
+        readAbstractCommVolumeBytes(op), costModel, workers, physicalBlockShape,
+        rebuild);
+    if (selected) {
+      workers = selected->computeUnits;
+      physicalBlockShape.assign(selected->physicalBlockShape.begin(),
+                                selected->physicalBlockShape.end());
+    }
+  }
   alignLateOwnerPlanToExistingStep(op, outputPlan->ownerPhysicalDims,
                                    physicalBlockShape);
 
@@ -695,46 +1022,39 @@ static void stampMatmulPhysicalPlan(sde::SdeSuIterateOp op,
 
   int64_t workers =
       std::max<int64_t>(1, getInterLocalityTargetWorkers(costModel));
-  SmallVector<int64_t, 4> physicalBlockShape(outputPlan->shape);
-  SmallVector<int64_t, 4> ownerExtents{outputPlan->shape[0],
-                                       outputPlan->shape[1]};
-  SmallVector<int64_t, 4> workerGrid =
-      sde::factorWorkersAcrossDims(workers, ownerExtents);
-  physicalBlockShape[0] =
-      sde::ceilDivPositive(outputPlan->shape[0], workerGrid[0]);
-  physicalBlockShape[1] =
-      sde::ceilDivPositive(outputPlan->shape[1], workerGrid[1]);
+  SmallVector<int64_t, 4> physicalBlockShape;
+  auto rebuild = [&](int64_t candidateWorkers,
+                     SmallVectorImpl<int64_t> &candidateShape) {
+    candidateShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
+    SmallVector<int64_t, 4> ownerExtents{outputPlan->shape[0],
+                                         outputPlan->shape[1]};
+    SmallVector<int64_t, 4> workerGrid = sde::factorWorkersAcrossDims(
+        std::max<int64_t>(1, candidateWorkers), ownerExtents);
+    candidateShape[0] =
+        sde::ceilDivPositive(outputPlan->shape[0], workerGrid[0]);
+    candidateShape[1] =
+        sde::ceilDivPositive(outputPlan->shape[1], workerGrid[1]);
+    return true;
+  };
+  if (!rebuild(workers, physicalBlockShape))
+    return;
 
-  // Optional payload-bytes floor: coarsen tiles until each carries at least
-  // `min-distributed-tile-bytes` of output. Shrinks the worker grid along
-  // whichever distributed axis is currently most subdivided. Default 0 keeps
-  // the prior plan untouched. Provides a single knob to trade per-EDT
-  // load-balance slack for fewer remote DB acquires when communication
-  // round-trips dominate the kernel.
-  int64_t minTileBytes = costModel.getMinDistributedTileBytes();
-  if (minTileBytes > 0) {
-    int64_t elemBytes = 0;
-    if (auto memrefTy = dyn_cast<MemRefType>(outputPlan->root.getType())) {
-      Type elt = memrefTy.getElementType();
-      if (elt.isIntOrFloat())
-        elemBytes = llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
-    }
+  // Optional payload-bytes floor. The floor coarsens only excess task waves:
+  // it never shrinks below the logical worker capacity, so SDE keeps blocked
+  // CDAG parallelism instead of replacing a distributed layout with a few
+  // oversized tiles that serialize the phase.
+  if (costModel.getMinDistributedTileBytes() > 0) {
+    int64_t elemBytes = outputElementBytes(outputPlan->root);
     if (elemBytes > 0) {
-      auto tileBytes = [&]() {
-        return elemBytes * physicalBlockShape[0] * physicalBlockShape[1];
-      };
-      while (tileBytes() < minTileBytes &&
-             (workerGrid[0] > 1 || workerGrid[1] > 1)) {
-        unsigned shrinkDim;
-        if (workerGrid[0] > 1 && workerGrid[1] > 1)
-          shrinkDim = workerGrid[0] >= workerGrid[1] ? 0 : 1;
-        else
-          shrinkDim = workerGrid[0] > 1 ? 0 : 1;
-        workerGrid[shrinkDim] = std::max<int64_t>(1, workerGrid[shrinkDim] / 2);
-        physicalBlockShape[0] =
-            sde::ceilDivPositive(outputPlan->shape[0], workerGrid[0]);
-        physicalBlockShape[1] =
-            sde::ceilDivPositive(outputPlan->shape[1], workerGrid[1]);
+      SmallVector<int64_t, 2> ownerDims{0, 1};
+      std::optional<sde::CuMuPartitionPlan> selected =
+          chooseCuMuTileFloorPlan(outputPlan->shape, ownerDims, elemBytes,
+                                  readAbstractCommVolumeBytes(op), costModel,
+                                  workers, physicalBlockShape, rebuild);
+      if (selected) {
+        workers = selected->computeUnits;
+        physicalBlockShape.assign(selected->physicalBlockShape.begin(),
+                                  selected->physicalBlockShape.end());
       }
     }
   }
@@ -778,13 +1098,16 @@ static void stampDirectRowMatmulPhysicalPlan(sde::SdeSuIterateOp op,
 
   int64_t workers =
       std::max<int64_t>(1, getInterLocalityTargetWorkers(costModel));
-  SmallVector<int64_t, 4> physicalBlockShape(outputPlan->shape);
-  physicalBlockShape[0] =
-      std::clamp(sde::ceilDivPositive(outputPlan->shape[0], workers),
-                 int64_t{1}, outputPlan->shape[0]);
+  SmallVector<int64_t, 4> ownerDims;
+  SmallVector<int64_t, 4> physicalBlockShape;
+  if (!buildOwnerDimPlan(*outputPlan, workers, ownerDims, physicalBlockShape))
+    return;
+  coarsenLoopIndexedOwnerPlanToTileFloor(*outputPlan, costModel, workers,
+                                         readAbstractCommVolumeBytes(op),
+                                         ownerDims, physicalBlockShape);
   alignLateOwnerPlanToExistingStep(op, outputPlan->ownerPhysicalDims,
                                    physicalBlockShape);
-  applyPhysicalPlan(op, outputPlan->ownerPhysicalDims, physicalBlockShape);
+  applyPhysicalPlan(op, ownerDims, physicalBlockShape);
 }
 
 /// Contraction tiling — refinement half (ADR-0003 §7d / §7a, SDE-decides).
@@ -887,8 +1210,13 @@ static void stampReductionTaskShapePlan(sde::SdeSuIterateOp op,
         if (rawDim < 0 ||
             static_cast<size_t>(rawDim) >= physicalBlockShape.size())
           return;
+      SmallVector<int64_t, 4> ownerDims(outputPlan->ownerPhysicalDims.begin(),
+                                        outputPlan->ownerPhysicalDims.end());
+      coarsenLoopIndexedOwnerPlanToTileFloor(
+          *outputPlan, costModel, targetTasks, readAbstractCommVolumeBytes(op),
+          ownerDims, physicalBlockShape);
       op.setPhysicalOwnerDimsAttr(
-          buildI64ArrayAttr(op.getContext(), outputPlan->ownerPhysicalDims));
+          buildI64ArrayAttr(op.getContext(), ownerDims));
       op.setPhysicalBlockShapeAttr(
           buildI64ArrayAttr(op.getContext(), physicalBlockShape));
       op.setLogicalWorkerSliceAttr(
@@ -1016,6 +1344,7 @@ struct DistributionPlanningPass
 
     SmallVector<PlannedDistribution> rewrites;
     getOperation().walk([&](sde::SdeSuIterateOp op) {
+      coarsenExistingLoopIndexedOwnerPlanToTileFloor(op, *costModel);
       stampStencilPhysicalPlan(op, *costModel);
       stampDirectRowMatmulPhysicalPlan(op, *costModel);
       stampMatmulPhysicalPlan(op, *costModel);
@@ -1023,6 +1352,7 @@ struct DistributionPlanningPass
       stampUniformPhysicalPlan(op, *costModel);
       stampReductionTaskShapePlan(op, *costModel);
       stampInPlaceSharedStencilSerialSlice(op, *costModel);
+      stampCuMuPartitionGraphAttrs(op, *costModel);
       if (auto kind = chooseDistributionKind(op, *costModel))
         rewrites.push_back({op, *kind});
     });

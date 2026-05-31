@@ -15,6 +15,7 @@
 
 #include "carts/dialect/codir/IR/CodirDialect.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
+#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/MLIRContext.h"
 
@@ -63,6 +64,8 @@ struct CodirCodeletMetadata {
   ArrayAttr arrayLayout;
   ArrayAttr layoutsDisagree;
   IntegerAttr commVolumeBytes;
+  Attribute partitionGraph;
+  Attribute partitionScore;
 };
 
 inline CodirCodeletMetadata getCodirMetadataFromTask(sde::SdeCuTaskOp task) {
@@ -128,6 +131,8 @@ getCodirMetadataFromSchedulingUnit(sde::SdeSuIterateOp source) {
   metadata.arrayLayout = source.getArrayLayoutAttr();
   metadata.layoutsDisagree = source.getLayoutsDisagreeAttr();
   metadata.commVolumeBytes = source.getCommVolumeBytesAttr();
+  metadata.partitionGraph = source->getAttr(sde::AttrNames::PartitionGraph);
+  metadata.partitionScore = source->getAttr(sde::AttrNames::PartitionScore);
   return metadata;
 }
 

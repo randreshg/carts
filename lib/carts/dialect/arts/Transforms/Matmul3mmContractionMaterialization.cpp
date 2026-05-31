@@ -352,6 +352,18 @@ static std::optional<Matmul3mmTarget> matchTarget(EdtOp edt) {
   std::optional<int64_t> numTiles = foldConst(replicaAlloc.getSizes().front());
   if (!numTiles || *numTiles <= 0)
     return std::nullopt;
+  std::optional<int64_t> totalNodes = getRuntimeTotalNodes(module);
+  if (!totalNodes || *totalNodes <= 1)
+    return std::nullopt;
+  // Production cost gate: this pass materializes one producer EDT per
+  // (G-block, F-replica-block). That is profitable only when the replica blocks
+  // already describe node-granular contraction tiles. If the F replica is much
+  // finer (standard 3mm: 64 F blocks on 2 nodes), the split explodes into
+  // thousands of tiny EDTs and loses to the coarser replicated-read path. CODIR
+  // still owns the all_gather decision; ARTS declines this extra tiling until the
+  // contraction tiler can group multiple F blocks into one node strip.
+  if (*numTiles > *totalNodes)
+    return std::nullopt;
 
   Matmul3mmTarget t;
   t.gEdt = edt;

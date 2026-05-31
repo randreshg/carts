@@ -7,6 +7,7 @@
 
 #include "carts/dialect/codir/Transforms/Passes.h"
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
+#include "carts/dialect/codir/Utils/CodirAttrNames.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -64,6 +65,25 @@ struct VerifyCodirPass : public codir::impl::VerifyCodirBase<VerifyCodirPass> {
           codelet.emitOpError()
               << "dep_storage_views entry #" << index
               << " must be a CODIR storage_view attribute, got " << attr;
+          failed = true;
+        }
+      }
+
+      ArrayAttr depCollectives = codelet.getDepCollectivesAttr();
+      if (depCollectives) {
+        if (depCollectives.size() != codelet.getDeps().size()) {
+          codelet.emitOpError() << "expects dep_collectives entry count ("
+                                << depCollectives.size()
+                                << ") to match dependency operand count ("
+                                << codelet.getDeps().size() << ")";
+          failed = true;
+        }
+        for (auto [index, attr] : llvm::enumerate(depCollectives)) {
+          if (isa<codir::CodirCollectiveKindAttr>(attr))
+            continue;
+          codelet.emitOpError()
+              << "dep_collectives entry #" << index
+              << " must be a CODIR collective attribute, got " << attr;
           failed = true;
         }
       }
@@ -146,6 +166,44 @@ struct VerifyCodirPass : public codir::impl::VerifyCodirBase<VerifyCodirPass> {
       verifyPositiveI64Attr(
           codelet.getPartialReductionSplitTargetWorkerCountAttr(),
           "partial_reduction_split_target_worker_count");
+
+      if (Attribute scoreAttr =
+              codelet->getAttr(codir::AttrNames::PartitionScore)) {
+        auto score = dyn_cast<DictionaryAttr>(scoreAttr);
+        if (!score) {
+          codelet.emitOpError()
+              << codir::AttrNames::PartitionScore
+              << " must be a dictionary attribute";
+          failed = true;
+        } else {
+          auto verifyPositiveScoreField = [&](StringRef key) -> bool {
+            Attribute value = score.get(key);
+            if (!value)
+              return false;
+            auto intAttr = dyn_cast<IntegerAttr>(value);
+            if (intAttr && intAttr.getInt() > 0)
+              return true;
+            codelet.emitOpError()
+                << codir::AttrNames::PartitionScore << "." << key
+                << " must be a positive integer attribute";
+            failed = true;
+            return true;
+          };
+          bool hasConcurrencyField = false;
+          hasConcurrencyField |= verifyPositiveScoreField(
+              codir::AttrNames::PartitionScoreKeys::TargetLogicalWorkers);
+          hasConcurrencyField |= verifyPositiveScoreField(
+              codir::AttrNames::PartitionScoreKeys::ExposedCuCount);
+          if (!hasConcurrencyField) {
+            codelet.emitOpError()
+                << codir::AttrNames::PartitionScore << " must contain "
+                << codir::AttrNames::PartitionScoreKeys::TargetLogicalWorkers
+                << " or "
+                << codir::AttrNames::PartitionScoreKeys::ExposedCuCount;
+            failed = true;
+          }
+        }
+      }
 
       if (codelet.getPartialReductionSplitRequiredAttr() &&
           !codelet.getPartialReductionAttr()) {

@@ -10,17 +10,15 @@
 // computes only its strip on a private replica and the neighbor strip on the
 // OTHER node is never observed (the 2n WRONG answer).
 //
-// When the producer OPTS IN via `emit_block_native_stencil` (+ a `halo` entry in
-// `dep_collectives`), the compiler keeps the buffer DISTRIBUTED (block-scattered,
-// one writer per block-GUID) and emits a per-block neighbor halo exchange: one
-// EDT per owner block, RO-acquiring its top/bottom neighbor single-writer blocks
-// (ordered after each neighbor's writer frontier) and writing this block's halo
-// region ONCE. Distinct DB per block => single uncontended writer => race-free
-// nearest-neighbor exchange, never a whole-array replica.
-//
-// ADDITIVE GUARD: without `emit_block_native_stencil` + `halo` this is
-// byte-identical to the legacy local_only path; `chooseCollective` never selects
-// `halo`, so no kernel sets the opt-in and the substrate fires only here.
+// When CODIR presents a `halo` entry in `dep_collectives` (auto-selected by
+// StoragePlanning for full-timestep stencil producers, or explicitly provided
+// in this direct conversion fixture), the compiler keeps the buffer DISTRIBUTED
+// (block-scattered, one writer per block-GUID) and emits a per-block neighbor
+// halo exchange: one EDT per owner block, RO-acquiring its top/bottom neighbor
+// single-writer blocks (ordered after each neighbor's writer frontier) and
+// writing this block's halo region ONCE. Distinct DB per block => single
+// uncontended writer => race-free nearest-neighbor exchange, never a whole-array
+// replica.
 
 module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_workers = 512 : i64} {
   func.func @per_block_single_writer_stencil() {

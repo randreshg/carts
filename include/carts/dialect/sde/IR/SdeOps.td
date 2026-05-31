@@ -450,8 +450,9 @@ def SdeSuIterateOp
     //   - `blockShape` (ArrayAttr<I64>): element-space per-block extents
     //                         (full extent on non-owner positions).
     // Element-space only: encodes NO runtime nodes, routes, ARTS worker
-    // placement, collective name, or split factor. ADDITIVE — nothing
-    // downstream consumes it yet, so lowering stays byte-identical.
+    // placement, collective name, or split factor. Downstream consumers use the
+    // facts through SDE/CODIR planning carriers; CODIR still owns storage-view
+    // and collective-family selection, and ARTS still owns DB/EDT realization.
     OptionalAttr<ArrayAttr>:$arrayLayout,
     // Per-edge geometric layouts-disagree marker (WF-5a). An ArrayAttr of the
     // `arrayId`s (I64) whose chosen layout on this scheduling unit is a pure

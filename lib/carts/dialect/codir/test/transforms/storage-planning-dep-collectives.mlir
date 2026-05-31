@@ -8,6 +8,7 @@
 //     (3mm's F) selects `all_gather`;
 //   - the cross-owner transpose-reduce step (atax/bicg A^T) selects
 //     `reduce_scatter`;
+//   - an iterative full-timestep stencil write selects `halo`;
 //   - owner-aligned deps select `none`.
 
 module {
@@ -79,6 +80,41 @@ module {
     }
     return
   }
+
+  // halo: an iterative full-timestep stencil producer writes the same
+  // block-distributed buffer it reads with a halo. StoragePlanning stamps the
+  // first-class halo carrier so ARTS can realize nearest-neighbor block exchange.
+  func.func @halo_collective(%A: memref<1024x1024xf64>, %base: index) {
+    %c16 = arith.constant 16 : index
+    %c1023 = arith.constant 1023 : index
+    scf.for %i = %base to %c1023 step %c16 {
+      codir.codelet deps(%A : memref<1024x1024xf64>)
+          params(%i : index)
+          attributes {access_max_offsets = [1, 0],
+                      access_min_offsets = [-1, 0],
+                      dep_modes = [#codir.access_mode<readwrite>],
+                      dep_storage_views = [#codir.storage_view<phase_redistributed>],
+                      iteration_topology = #codir.iteration_topology<owner_strip>,
+                      pattern = #codir.pattern<stencil_tiling_nd>,
+                      repetition_structure = #codir.repetition_structure<full_timestep>,
+                      tile_owner_dims = [0],
+                      tile_shape = [16, 1024],
+                      write_footprint = [1, 1024]} {
+      ^bb0(%arg0: memref<1024x1024xf64>, %owner: index):
+        %inner_c1 = arith.constant 1 : index
+        %row_p = arith.addi %owner, %inner_c1 : index
+        %row_m = arith.subi %owner, %inner_c1 : index
+        %v0 = memref.load %arg0[%owner, %owner] : memref<1024x1024xf64>
+        %v1 = memref.load %arg0[%row_p, %owner] : memref<1024x1024xf64>
+        %v2 = memref.load %arg0[%row_m, %owner] : memref<1024x1024xf64>
+        %s0 = arith.addf %v0, %v1 : f64
+        %s1 = arith.addf %s0, %v2 : f64
+        memref.store %s1, %arg0[%owner, %owner] : memref<1024x1024xf64>
+        codir.yield
+      }
+    }
+    return
+  }
 }
 
 // The all-gather producer writes %F (dep #0) consumed by the replicated_read
@@ -92,3 +128,8 @@ module {
 // CHECK-LABEL: func.func @reduce_scatter
 // CHECK: codir.codelet
 // CHECK-SAME: dep_collectives = [#codir.collective<reduce_scatter>, #codir.collective<none>]
+
+// The iterative stencil write selects halo without pre-seeding dep_collectives.
+// CHECK-LABEL: func.func @halo_collective
+// CHECK: codir.codelet
+// CHECK-SAME: dep_collectives = [#codir.collective<halo>]

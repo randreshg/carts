@@ -22,10 +22,17 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     lsb-release \
     software-properties-common \
+    pkg-config \
     autotools-dev \
     autoconf \
     automake \
     libtool \
+    rdma-core \
+    librdmacm-dev \
+    libibverbs-dev \
+    ibverbs-providers \
+    libucx-dev \
+    libfabric-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Miniforge so Docker follows the same conda-backed environment model
@@ -46,7 +53,8 @@ RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/nul
     apt-get update && apt-get install -y cmake && \
     rm -rf /var/lib/apt/lists/*
 
-# Install LLVM 18 (required by CARTS)
+# Install a bootstrap LLVM/Clang. CARTS builds and uses the repo-pinned LLVM
+# from external/Polygeist/llvm-project for the actual toolchain.
 RUN wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/llvm-snapshot.gpg && \
     echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" >> /etc/apt/sources.list && \
     apt-get update && apt-get install -y \

@@ -121,12 +121,15 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: local_only
 // CHECK-SAME: perBlockReplicated
 
-// Outer per-node loop then per-block loop: every node assembles all blocks.
-// CHECK: scf.for
+// Outer per-node loop: every node assembles all blocks. The block loop may
+// fold to one grouped iteration when the static block count is small; that is
+// still a per-block DB substrate because every lane acquires a distinct block.
 // CHECK: scf.for
 // The producer block is RO-acquired (<in>); the gathered block is acquired on
 // its OWN distinct block DB by exactly one EDT — single writer, no shared
 // exclusive-write frontier (contrast the coarse <inout> replica below).
+// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>)
+// CHECK: arts.db_acquire[<{{inout|out}}>] (%[[REPGUID]] : {{.*}}, %[[REPPTR]] : {{.*}}) partitioning(<block>)
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>)
 // CHECK: arts.db_acquire[<{{inout|out}}>] (%[[REPGUID]] : {{.*}}, %[[REPPTR]] : {{.*}}) partitioning(<block>)
 // CHECK: arts.edt <task>

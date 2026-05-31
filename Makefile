@@ -188,8 +188,8 @@ COUNTER_CONFIG_ABSPATH := $(abspath $(COUNTER_CONFIG_PATH))
 # jemalloc allocator (opt-in). OFF because ARTS's jemalloc uses an empty
 # symbol prefix, which crashes libarts on macOS via cross-allocator free.
 ARTS_USE_JEMALLOC ?= OFF
-# RDMA/RoCE transport via ARTS RSockets is the production/default transport.
-# Use ARTS_USE_RDMA=OFF for non-RDMA developer systems or TCP experiments.
+# RDMA transport is the default multinode build; TCP is available with
+# ARTS_USE_RDMA=OFF for non-RDMA developer systems or fallback experiments.
 ARTS_USE_RDMA ?= ON
 
 # Configuration hash file for ARTS build caching
@@ -199,7 +199,7 @@ ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
 COUNTER_CONFIG_HASH := $(shell md5sum "$(COUNTER_CONFIG_ABSPATH)" 2>/dev/null | cut -d' ' -f1 || echo "no-config")
 
 # Compute current configuration as a string for hashing
-ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_LOG_LEVEL)|$(COUNTER_CONFIG_ABSPATH)|$(COUNTER_CONFIG_HASH)|$(CARTS_LINKER_PATH)|$(ARTS_USE_JEMALLOC)|$(ARTS_USE_RDMA)|build-with-install-rpath
+ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_LOG_LEVEL)|$(COUNTER_CONFIG_ABSPATH)|$(COUNTER_CONFIG_HASH)|$(CARTS_LINKER_PATH)|$(ARTS_USE_JEMALLOC)|$(ARTS_USE_RDMA)|production-rdma-deps-required|build-with-install-rpath
 
 arts-download:
 	@if [ ! -d "$(ARTS_DIR)/.git" ]; then \

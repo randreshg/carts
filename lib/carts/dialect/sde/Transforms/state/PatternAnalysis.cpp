@@ -7,6 +7,7 @@
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -296,6 +297,8 @@ static void removeStaleShapePlanAttrs(sde::SdeSuIterateOp op) {
   op.removePhysicalHaloShapeAttr();
   op.removeIterationTopologyAttr();
   op.removeDistributionKindAttr();
+  op->removeAttr(sde::AttrNames::PartitionGraph);
+  op->removeAttr(sde::AttrNames::PartitionScore);
 }
 
 static void clonePromotedBody(OpBuilder &builder, Block *sourceBlock,
@@ -807,10 +810,10 @@ static void clearContractionTilingIntent(sde::SdeSuIterateOp op) {
 
 /// True when `root` is the output of a SIBLING `sde.su_iterate` (a distributed
 /// scheduling unit) — a computed distributed intermediate rather than a
-/// host-initialized array. The tight gate that distinguishes 3mm's F (= C*D,
-/// written by a sibling su_iterate) from a host-init loop output: only the
-/// former is block-distributed and demands cross-owner contraction tiling when
-/// consumed on its contraction axis.
+/// host-initialized array. The tight gate distinguishes a sibling-written
+/// intermediate from a host-init loop output: only the former is
+/// block-distributed and demands cross-owner contraction tiling when consumed on
+/// its contraction axis.
 static bool isSiblingDistributedIntermediate(sde::SdeSuIterateOp consumer,
                                              Value root) {
   if (!root)
@@ -839,12 +842,12 @@ static bool isSiblingDistributedIntermediate(sde::SdeSuIterateOp consumer,
 /// Contraction tiling as SDE intent — detection half (ADR-0003 §7d / §7a).
 ///
 /// SDE decides — pattern-free, from iterator types and affine access shapes —
-/// to tile the reduction axis k of a matmul-class scheduling unit when its
-/// contraction-dim input is a sibling-computed distributed intermediate (3mm's
-/// G = E*F, contracting F = C*D on F's owner/row dim). Detection runs in
-/// PatternAnalysis, while the loop nest is still the canonical (2-parallel,
-/// 1-reduction, 3-dim) matmul (later loop tiling/interchange splits the
-/// parallel axes and breaks canonical recovery). It stamps the inert
+/// to tile the reduction axis of a matmul-class scheduling unit when its
+/// contraction-dim input is a sibling-computed distributed intermediate.
+/// Detection runs in PatternAnalysis, while the loop nest is still the
+/// canonical (2-parallel, 1-reduction, 3-dim) matmul (later loop
+/// tiling/interchange splits the parallel axes and breaks canonical recovery).
+/// It stamps the inert
 /// declarative facts `partialReductionDims` / `partialReductionOwnerDims` (the
 /// reduction axis and the parallel owner axes), plus a PROVISIONAL element-space
 /// `contractionTileShape = [contractionExtent]`. DistributionPlanning later
@@ -860,11 +863,10 @@ static bool isSiblingDistributedIntermediate(sde::SdeSuIterateOp consumer,
 /// materializer exists yet for the cross-owner matmul k-tile case (WF-5b), so
 /// the facts stay inert and the consumer's lowering is byte-identical.
 ///
-/// The gate is tight: it fires ONLY for a canonical matmul whose contraction
-/// input is a sibling distributed intermediate. gemm's single matmul reads only
-/// host inputs; 2mm's intermediate feeds the second matmul on a parallel
-/// (owner) axis, not the contraction axis; correlation's self-Gram shape lacks
-/// distinct lhs/rhs roots; stencils are not matmul-class.
+/// The gate is tight: it fires only for a canonical matmul whose contraction
+/// input is a sibling distributed intermediate. Single contractions that read
+/// only host inputs, intermediates consumed on a parallel owner axis, self-Gram
+/// shapes without distinct lhs/rhs roots, and stencils do not satisfy it.
 static void
 stampContractionTilingIntent(sde::SdeSuIterateOp op,
                              sde::SdeStructuredClassification classification) {

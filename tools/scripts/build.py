@@ -1,6 +1,8 @@
 """Build command for CARTS CLI."""
 
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Optional
 
 from dekk import (
@@ -46,6 +48,43 @@ COUNTER_PROFILES = {
     3: "profile-overhead.cfg",   # Full overhead analysis at CLUSTER level
 }
 
+
+def _check_rdma_provider_deps() -> None:
+    """Fail early when a production RDMA build lacks provider dev packages."""
+    pkg_config = shutil.which("pkg-config")
+    if not pkg_config:
+        print_error(
+            "RDMA builds require pkg-config plus librdmacm, UCX, and libfabric "
+            "development files. Install pkg-config, librdmacm-dev, libucx-dev, "
+            "and libfabric-dev, then rerun `dekk carts build --arts`."
+        )
+        raise Exit(1)
+
+    missing: list[str] = []
+    for module, package in [
+        ("librdmacm", "librdmacm-dev / rdma-core"),
+        ("ucx", "libucx-dev"),
+        ("libfabric", "libfabric-dev"),
+    ]:
+        result = subprocess.run(
+            [pkg_config, "--exists", module],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode != 0:
+            missing.append(package)
+
+    if missing:
+        print_error(
+            "RDMA production dependencies are missing: "
+            + ", ".join(missing)
+            + ". Install them or build ARTS with `--no-rdma` for a TCP-only "
+              "developer runtime."
+        )
+        raise Exit(1)
+
+
 def build(
     clean: bool = Option(False, "--clean", "-c", help="Run make clean before building"),
     arts: bool = Option(False, "--arts", "-a", help="Build only ARTS (mutually exclusive target flag)"),
@@ -63,7 +102,7 @@ def build(
         help="Custom counter profile file path (overrides --counters)"),
     rdma: bool = Option(
         True, "--rdma/--no-rdma",
-        help="Build ARTS with RDMA RSockets transport by default; use --no-rdma for TCP fallback (--arts only)"),
+        help="Build ARTS with RDMA transport by default; use --no-rdma for TCP fallback (--arts only)"),
     cc: Optional[str] = Option(
         None, "--cc",
         help="C compiler for LLVM bootstrap (default: clang; use gcc on systems without clang)"),
@@ -104,6 +143,8 @@ def build(
     make_vars = configured_make_vars(config)
 
     if arts:
+        if rdma:
+            _check_rdma_provider_deps()
         # Expose the raw v2 ARTS runtime levels directly:
         #   0 -> ERROR only
         #   1 -> WARN

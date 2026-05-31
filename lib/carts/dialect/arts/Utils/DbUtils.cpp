@@ -468,8 +468,17 @@ bool DbUtils::isHostWholeToComputeBlockBridgeMovement(EdtOp edt) {
         dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
     PartitionMode partition =
         acquire.getPartitionMode().value_or(PartitionMode::coarse);
+    // Only treat this as a host-whole->compute-block bridge if the coarse host
+    // source is actually cross-node SERVABLE. A local_only coarse host (e.g. a
+    // single_block-rejected A) with no replicatedRead cannot be delivered to a
+    // remote node, so an <internode> bridge over it dereferences a NULL dep on
+    // the non-owning rank. Excluding it here lets DistributedLaunchConsistency
+    // localize the bridge to <intranode>+current-node, where each node
+    // materializes the block from its own local host copy.
     if (DbUtils::isCoarseUserDataDb(alloc) &&
-        partition == PartitionMode::coarse) {
+        partition == PartitionMode::coarse &&
+        (!alloc.getLocalOnly().value_or(false) ||
+         static_cast<bool>(acquire.getReplicatedReadAttr()))) {
       hasCoarseHost = true;
       continue;
     }

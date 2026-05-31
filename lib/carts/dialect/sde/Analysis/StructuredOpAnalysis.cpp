@@ -841,9 +841,8 @@ bool isOwnerLocalPipelineReduction(SdeSuIterateOp iterOp) {
   // Owner-local pipeline reductions may be materialized with compute-block
   // dependency views. Every external read therefore has to be provably inside
   // the same owner slice, not merely dependent on the owner IV. Triangular
-  // kernels such as correlation read both data[i, *] and data[j, *] for
-  // j > i; slicing those reads to the i owner block is out of bounds on
-  // multinode runs.
+  // self-Gram style kernels read both data[i, *] and data[j, *] for j > i;
+  // slicing those reads to the i owner block is out of bounds on multinode runs.
   for (Value read : effects.reads) {
     if (isDefinedInside(iterOp.getOperation(), read))
       continue;
@@ -1006,7 +1005,7 @@ findContractionTilingCandidate(SdeSuIterateOp iterOp) {
   }
 
   // The contraction-dim input must be a single distinct external root that is
-  // not also the lhs (rules out self-Gram correlation shapes).
+  // not also the lhs (rules out self-Gram shapes).
   if (!lhsRoot || !rhsRoot || lhsRoot == rhsRoot)
     return std::nullopt;
 
@@ -1015,9 +1014,9 @@ findContractionTilingCandidate(SdeSuIterateOp iterOp) {
   candidate.reductionLoopDim = reductionDims[0];
   candidate.parallelLoopDims.assign(parallelDims.begin(), parallelDims.end());
 
-  // Recover the static contraction extent from the reduction-axis extent of the
-  // contraction-dim input root. The rhs uses {reduction, parallel[1]}; the
-  // result position carrying the reduction dim indexes the contracted axis.
+  // Recover the physical contraction position and its static extent from the
+  // contraction-dim input root. The result position carrying the reduction dim
+  // indexes the contracted axis; do not assume a canonical operand order.
   if (auto rhsShape = getStaticShape(rhsRoot)) {
     for (const MemrefAccessEntry &read : summary->reads) {
       if (normalizeOutputRoot(read.memref) != rhsRoot)
@@ -1029,7 +1028,9 @@ findContractionTilingCandidate(SdeSuIterateOp iterOp) {
         auto dimOffset = extractDimOffset(result);
         if (dimOffset && dimOffset->dim &&
             *dimOffset->dim == reductionDims[0] && pos < rhsShape->size()) {
+          candidate.contractionInputPhysicalDim = static_cast<unsigned>(pos);
           candidate.contractionExtent = (*rhsShape)[pos];
+          break;
         }
       }
       break;
@@ -1292,8 +1293,7 @@ ModuleAccessRelations buildModuleAccessRelations(Operation *moduleOp) {
 
   // Assign stable codelet ids in walk order so writer/reader joins are
   // deterministic across runs.
-  moduleOp->walk(
-      [&](SdeSuIterateOp op) { relations.codelets.push_back(op); });
+  moduleOp->walk([&](SdeSuIterateOp op) { relations.codelets.push_back(op); });
 
   for (auto [codeletId, op] : llvm::enumerate(relations.codelets)) {
     std::optional<StructuredLoopSummary> summary = analyzeStructuredLoop(op);

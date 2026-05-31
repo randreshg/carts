@@ -108,17 +108,22 @@ dekk carts doctor
 
 # Rebuild a specific component
 dekk carts build --llvm      # Rebuild LLVM
-dekk carts build --arts      # Rebuild ARTS runtime with RDMA/RoCE enabled
+dekk carts build --arts      # Rebuild ARTS with RDMA/RoCE rsocket support
 dekk carts build --arts --no-rdma # Rebuild ARTS runtime for TCP fallback
 dekk carts build --polygeist # Rebuild Polygeist
 dekk carts build             # Rebuild CARTS compiler only
 dekk carts build --clean     # Clean rebuild of CARTS
 ```
 
-`dekk carts build --arts` defaults to the production RDMA/RoCE RSockets
-transport for multinode runs. Use `--no-rdma` only for non-RDMA developer
-machines or deliberate TCP fallback experiments. Benchmark runs use TCP for
-single-node configs and apply `--rdma/--no-rdma` only to multinode configs.
+`dekk carts build --arts` enables the current RDMA/RoCE rsocket compatibility
+transport and requires `librdmacm`, UCX, and libfabric development files. The
+supported multinode production profile is `port_count=1`,
+`sender_threads=1`, `receiver_threads=1`, accept-thread on, serialized active
+connects, and close-after-send. The runtime clamps unsafe multi-rank rsocket
+fanout by default; force knobs are for provider triage, not baseline performance
+runs. Use `--no-rdma` only for non-RDMA developer machines or deliberate TCP
+fallback experiments. Benchmark runs use TCP for single-node configs and apply
+`--rdma/--no-rdma` only to multinode configs.
 
 If you are updating an older checkout that previously built against LLVM 18,
 clean the LLVM and Polygeist build trees before rebuilding. The current

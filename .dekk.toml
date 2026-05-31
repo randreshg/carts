@@ -32,6 +32,7 @@ cmake       = { command = "cmake",        version = ">=3.20" }
 ninja       = { command = "ninja" }
 make        = { command = "make" }
 git         = { command = "git" }
+pkg-config  = { command = "pkg-config" }
 clang       = { command = "clang",        version = ">=18" }
 "clang++"   = { command = "clang++",      version = ">=18" }
 python      = { command = "python",       version = ">=3.11" }

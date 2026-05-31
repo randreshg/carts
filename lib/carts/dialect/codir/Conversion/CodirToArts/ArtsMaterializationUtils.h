@@ -18,7 +18,10 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "polygeist/Ops.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/MathExtras.h"
 #include <algorithm>
+#include <limits>
+#include <optional>
 
 namespace {
 
@@ -1083,7 +1086,8 @@ getCodirDepStorageViewKind(codir::CodeletOp codelet, unsigned depIndex) {
 /// produced through StoragePlanning), which keeps lowering unchanged.
 static inline codir::CodirCollectiveKind
 getCodirDepCollectiveKind(codir::CodeletOp codelet, unsigned depIndex) {
-  ArrayAttr collectives = codelet ? codelet.getDepCollectivesAttr() : ArrayAttr{};
+  ArrayAttr collectives =
+      codelet ? codelet.getDepCollectivesAttr() : ArrayAttr{};
   if (!collectives || depIndex >= collectives.size())
     return codir::CodirCollectiveKind::none;
   auto kind = dyn_cast<codir::CodirCollectiveKindAttr>(collectives[depIndex]);
@@ -1909,8 +1913,8 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
   // Cross-node gather (copy-out only): wrap the per-block copy in an outer
   // per-node loop so every node assembles the COMPLETE coarse buffer from all
   // producer blocks, pulling the blocks it did not produce through the existing
-  // cross-node read-only block acquire. This is the gather half of the
-  // transpose-matvec reduce (atax/bicg step2): once the coarse intermediate is
+  // cross-node read-only block acquire. This is the gather half of a
+  // transpose-style cross-owner reduction: once the coarse intermediate is
   // complete on every node, the cross-owner reduction reads correct values.
   // The default intranode copy-out (crossNodeGather == false) is byte-for-byte
   // unchanged, so every other kernel's lowering is preserved.
@@ -2053,16 +2057,16 @@ materializePerBlockCopyNest(OpBuilder &builder, Location loc, Value srcPayload,
 }
 
 /// Build the per-element summing nest that settles one output block by reducing
-/// the P per-tile partial payloads with `+=` (arith.addf) and writing the result
-/// ONCE. This is the addf dual of materializePerBlockCopyNest: instead of a
-/// single source copy, the leaf loads tile 0, accumulates tiles 1..P-1 with
-/// arith.addf, and stores once into the settled block. All payloads are block
-/// payloads indexed identically (no coarse host offset).
-static inline void
-materializePerBlockSumNest(OpBuilder &builder, Location loc,
-                           ArrayRef<Value> partialPayloads, Value dstPayload,
-                           ArrayRef<Value> copySizes,
-                           SmallVectorImpl<Value> &indices) {
+/// the P per-tile partial payloads with `+=` (arith.addf) and writing the
+/// result ONCE. This is the addf dual of materializePerBlockCopyNest: instead
+/// of a single source copy, the leaf loads tile 0, accumulates tiles 1..P-1
+/// with arith.addf, and stores once into the settled block. All payloads are
+/// block payloads indexed identically (no coarse host offset).
+static inline void materializePerBlockSumNest(OpBuilder &builder, Location loc,
+                                              ArrayRef<Value> partialPayloads,
+                                              Value dstPayload,
+                                              ArrayRef<Value> copySizes,
+                                              SmallVectorImpl<Value> &indices) {
   unsigned dim = indices.size();
   if (dim == copySizes.size()) {
     Value acc =
@@ -2084,6 +2088,112 @@ materializePerBlockSumNest(OpBuilder &builder, Location loc,
   materializePerBlockSumNest(builder, loc, partialPayloads, dstPayload,
                              copySizes, indices);
   indices.pop_back();
+}
+
+static inline int64_t getScalarElementBytes(Type elementType) {
+  if (!elementType || !elementType.isIntOrFloat())
+    return 0;
+  return llvm::divideCeil(elementType.getIntOrFloatBitWidth(), 8);
+}
+
+static inline int64_t saturatingMul(int64_t lhs, int64_t rhs) {
+  if (lhs <= 0 || rhs <= 0)
+    return 0;
+  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
+    return std::numeric_limits<int64_t>::max();
+  return lhs * rhs;
+}
+
+static inline std::optional<int64_t> getPositiveStaticIndex(Value value) {
+  std::optional<int64_t> folded =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value);
+  if (folded && *folded > 0)
+    return folded;
+  return std::nullopt;
+}
+
+static inline int64_t getStaticBlockPayloadBytes(arts::DbAllocOp blockAlloc) {
+  int64_t bytes = getScalarElementBytes(blockAlloc.getElementType());
+  if (bytes <= 0)
+    return 0;
+  for (Value size : blockAlloc.getElementSizes()) {
+    std::optional<int64_t> constant = getPositiveStaticIndex(size);
+    if (!constant)
+      return 0;
+    bytes = saturatingMul(bytes, *constant);
+  }
+  return bytes;
+}
+
+static inline std::optional<int64_t> readPositiveI64(DictionaryAttr dict,
+                                                     StringRef key) {
+  if (!dict)
+    return std::nullopt;
+  auto attr = dyn_cast_or_null<IntegerAttr>(dict.get(key));
+  if (!attr || attr.getInt() <= 0)
+    return std::nullopt;
+  return attr.getInt();
+}
+
+static inline int64_t
+readPartitionScoreConcurrencyFloor(codir::CodeletOp codelet) {
+  if (!codelet)
+    return 0;
+  auto score = dyn_cast_or_null<DictionaryAttr>(
+      codelet->getAttr(codir::AttrNames::PartitionScore));
+  if (!score)
+    return 0;
+
+  std::optional<int64_t> targetWorkers = readPositiveI64(
+      score, codir::AttrNames::PartitionScoreKeys::TargetLogicalWorkers);
+  std::optional<int64_t> exposedCuCount = readPositiveI64(
+      score, codir::AttrNames::PartitionScoreKeys::ExposedCuCount);
+  if (targetWorkers && exposedCuCount)
+    return std::min(*targetWorkers, *exposedCuCount);
+  if (targetWorkers)
+    return *targetWorkers;
+  if (exposedCuCount)
+    return *exposedCuCount;
+  return 0;
+}
+
+static inline int64_t chooseBridgeBlockGroupSize(arts::DbAllocOp blockAlloc,
+                                                 codir::CodeletOp codelet) {
+  constexpr int64_t kTargetBridgeTaskBytes = 256LL * 1024LL;
+  constexpr int64_t kMaxBridgeGroupBlocks = 8;
+
+  if (!blockAlloc || blockAlloc.getSizes().size() != 1)
+    return 1;
+  std::optional<int64_t> blockCount =
+      getPositiveStaticIndex(blockAlloc.getSizes().front());
+  if (!blockCount || *blockCount <= 1)
+    return 1;
+
+  int64_t blockBytes = getStaticBlockPayloadBytes(blockAlloc);
+  if (blockBytes <= 0 || blockBytes >= kTargetBridgeTaskBytes)
+    return 1;
+
+  int64_t desired = llvm::divideCeil(kTargetBridgeTaskBytes,
+                                     std::max<int64_t>(1, blockBytes));
+  desired = std::clamp<int64_t>(desired, 1, kMaxBridgeGroupBlocks);
+  desired = std::min<int64_t>(desired, *blockCount);
+
+  // SDE's partition score exposes the CU parallelism it preserved after
+  // communication-aware tile coarsening. Honor that signal when batching bridge
+  // copies so ARTS reduces launch overhead without collapsing the ready EDT
+  // count below the concurrency SDE intentionally surfaced.
+  int64_t concurrencyFloor = readPartitionScoreConcurrencyFloor(codelet);
+  if (concurrencyFloor > 0) {
+    int64_t desiredTasks = std::min<int64_t>(*blockCount, concurrencyFloor);
+    int64_t maxGroupForConcurrency =
+        *blockCount / std::max<int64_t>(1, desiredTasks);
+    desired = std::min(desired, std::max<int64_t>(1, maxGroupForConcurrency));
+  }
+
+  for (int64_t group = desired; group > 1; --group)
+    if (*blockCount % group == 0)
+      return group;
+  return 1;
 }
 
 /// WF-2 keystone: the per-block single-writer all-gather substrate.
@@ -2111,10 +2221,9 @@ materializePerBlockSumNest(OpBuilder &builder, Location loc,
 ///
 /// Returns the gathered replicated block DB's inner payload (a memref view) so
 /// the caller can decide whether a consumer can read it block-native. The
-/// existing coarse consumer (3mm's G, which reads the whole F on the
-/// contraction dim from one EDT) cannot read N per-block DBs without
-/// contraction tiling of its k-loop (WF-3); that boundary is reported, not
-/// papered over by re-coarsening.
+  /// existing coarse contraction consumers that read the whole intermediate from
+  /// one EDT cannot read N per-block DBs until their contraction loop is tiled
+  /// (WF-3); that boundary is reported, not papered over by re-coarsening.
 static inline FailureOr<Value>
 emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
                                arts::DbAllocOp producerBlockAlloc,
@@ -2166,6 +2275,9 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
   SmallVector<Value> blockElementSizes(
       producerBlockAlloc.getElementSizes().begin(),
       producerBlockAlloc.getElementSizes().end());
+  int64_t blockGroupSize =
+      chooseBridgeBlockGroupSize(producerBlockAlloc, codelet);
+  Value blockStep = createConstantIndex(builder, loc, blockGroupSize);
 
   // Outer per-node loop: every node assembles its OWN full set of gathered
   // blocks. Routing each block copy to the node ordinal keeps the gathered
@@ -2179,22 +2291,33 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
   builder.setInsertionPointToStart(nodeLoop.getBody());
   Value nodeOrdinal = nodeLoop.getInductionVar();
 
-  auto blockLoop = scf::ForOp::create(builder, loc, zero, blockCount, one);
+  auto blockLoop =
+      scf::ForOp::create(builder, loc, zero, blockCount, blockStep);
   builder.setInsertionPointToStart(blockLoop.getBody());
-  Value blockIndex = blockLoop.getInductionVar();
+  Value blockBase = blockLoop.getInductionVar();
 
-  // Source: producer block, read-only (cross-node RO acquire; PREFER_DUPLICATE
-  // is applied downstream because the producer DB is distributed/read).
-  auto srcAcquire = materializeBridgeAcquire(
-      builder, loc, producerBlockAlloc, arts::ArtsMode::in,
-      arts::PartitionMode::block, blockIndex, one);
-  // Destination: this gathered block, output-only. Distinct DB per block ⇒
-  // single writer ⇒ no shared EW frontier.
-  auto dstAcquire =
-      materializeBridgeAcquire(builder, loc, replicaAlloc, arts::ArtsMode::out,
-                               arts::PartitionMode::block, blockIndex, one);
-
-  SmallVector<Value> deps{srcAcquire.getPtr(), dstAcquire.getPtr()};
+  SmallVector<Value> deps;
+  deps.reserve(static_cast<size_t>(blockGroupSize) * 2);
+  for (int64_t lane = 0; lane < blockGroupSize; ++lane) {
+    Value blockIndex = blockBase;
+    if (lane != 0) {
+      Value laneValue = createConstantIndex(builder, loc, lane);
+      blockIndex = arith::AddIOp::create(builder, loc, blockBase, laneValue);
+    }
+    // Source: producer block, read-only (cross-node RO acquire;
+    // PREFER_DUPLICATE is applied downstream because the producer DB is
+    // distributed/read).
+    auto srcAcquire = materializeBridgeAcquire(
+        builder, loc, producerBlockAlloc, arts::ArtsMode::in,
+        arts::PartitionMode::block, blockIndex, one);
+    // Destination: this gathered block, output-only. Distinct DB per block ⇒
+    // single writer ⇒ no shared EW frontier.
+    auto dstAcquire = materializeBridgeAcquire(
+        builder, loc, replicaAlloc, arts::ArtsMode::out,
+        arts::PartitionMode::block, blockIndex, one);
+    deps.push_back(srcAcquire.getPtr());
+    deps.push_back(dstAcquire.getPtr());
+  }
   SmallVector<Value> params(blockElementSizes.begin(), blockElementSizes.end());
 
   arts::ArtsLaunchPolicy launch =
@@ -2215,17 +2338,22 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
     OpBuilder::InsertionGuard bodyGuard(builder);
     builder.setInsertionPointToStart(&body);
     Value bodyZero = createZeroIndex(builder, loc);
-    Value srcPayload = arts::DbRefOp::create(builder, loc, body.getArgument(0),
-                                             SmallVector<Value>{bodyZero});
-    Value dstPayload = arts::DbRefOp::create(builder, loc, body.getArgument(1),
-                                             SmallVector<Value>{bodyZero});
+    unsigned paramBase = deps.size();
     SmallVector<Value> bodyCopySizes;
     bodyCopySizes.reserve(blockElementSizes.size());
     for (size_t i = 0; i < blockElementSizes.size(); ++i)
-      bodyCopySizes.push_back(body.getArgument(2 + i));
-    SmallVector<Value> indices;
-    materializePerBlockCopyNest(builder, loc, srcPayload, dstPayload,
-                                bodyCopySizes, indices);
+      bodyCopySizes.push_back(body.getArgument(paramBase + i));
+    for (int64_t lane = 0; lane < blockGroupSize; ++lane) {
+      unsigned srcArg = static_cast<unsigned>(lane) * 2;
+      unsigned dstArg = srcArg + 1;
+      Value srcPayload = arts::DbRefOp::create(
+          builder, loc, body.getArgument(srcArg), SmallVector<Value>{bodyZero});
+      Value dstPayload = arts::DbRefOp::create(
+          builder, loc, body.getArgument(dstArg), SmallVector<Value>{bodyZero});
+      SmallVector<Value> indices;
+      materializePerBlockCopyNest(builder, loc, srcPayload, dstPayload,
+                                  bodyCopySizes, indices);
+    }
     arts::YieldOp::create(builder, loc);
   }
 
@@ -2240,35 +2368,37 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
 /// WF-3 keystone: the per-block single-writer summing settle — the `arith.addf`
 /// dual of emitPerBlockAllGatherWriteBack.
 ///
-/// A cross-owner reduction (atax/bicg's y = Aᵀ(Ax), 3mm's chained contraction,
-/// any reduce-scatter / allreduce) produces, per output block, P partial
-/// results — one per contraction tile / per node strip. The legacy coarse path
-/// funnels those partials through a single shared <inout> replica DB whose
-/// exclusive-write (EW) frontier serializes the disjoint partial writes (and
-/// un-ordered, races them): the same ADR-0001 phase-2 failure the all-gather
-/// removed at the root.
+/// A cross-owner reduction or chained contraction produces, per output block, P
+/// partial results — one per contraction tile / per node strip. The legacy
+/// coarse path funnels those partials through a single shared <inout> replica DB
+/// with an exclusive-write (EW) frontier that serializes the disjoint partial
+/// writes (and un-ordered, races them): the same ADR-0001 phase-2 failure the
+/// all-gather removed at the root.
 ///
 /// This emission realizes the architecture's central insight (§2c) for the
 /// reduction direction: every settled output block is its OWN distinct-GUID DB
 /// written ONCE by exactly one EDT. The P per-(block,tile) partials are
-/// themselves per-block single-writer DBs (each its own GUID via createMultiDbs,
-/// flat outer index `block * tileCount + tile`), and the settle DB is a `block`
-/// mode DB created REPLICATED on every node (perBlockReplicated: each node holds
-/// all settled blocks locally, exactly like an MPI rank's full recv buffer after
-/// an allreduce). For each settled block, exactly one EDT:
+/// themselves per-block single-writer DBs (each its own GUID via
+/// createMultiDbs, flat outer index `block * tileCount + tile`), and the settle
+/// DB is a `block` mode DB created REPLICATED on every node
+/// (perBlockReplicated: each node holds all settled blocks locally, exactly
+/// like an MPI rank's full recv buffer after an allreduce). For each settled
+/// block, exactly one EDT:
 ///   - RO-acquires (with PREFER_DUPLICATE via the read path) the P partial
-///     blocks it must sum — local fast, remote through the existing cross-node RO
-///     db acquire. The acquires are emitted OUTSIDE the EDT and delivered as
-///     block-args (the EdtLowering ABI forbids GEPing an outer DB alloc from the
-///     EDT body — every DB an EDT touches must arrive as a dep), exactly as the
-///     all-gather's producer side does.
-///   - writes its OWN settled block output-only (<out>) ONCE, accumulating the P
+///     blocks it must sum — local fast, remote through the existing cross-node
+///     RO db acquire. The acquires are emitted OUTSIDE the EDT and delivered as
+///     block-args (the EdtLowering ABI forbids GEPing an outer DB alloc from
+///     the EDT body — every DB an EDT touches must arrive as a dep), exactly as
+///     the all-gather's producer side does.
+///   - writes its OWN settled block output-only (<out>) ONCE, accumulating the
+///   P
 ///     partials with `+=` (arith.addf). NO RW accumulator, NO coarse DB.
-/// Because each settled block is a distinct DB, the EW frontier degenerates to a
-/// single uncontended writer: race-free by construction, and the N block settles
-/// run concurrently (no shared frontier). This is the phase-2 serialization
-/// removed at the root, not relaxed — the reduce-scatter/allreduce analogue of
-/// MPI's disjoint per-rank send/recv buffers.
+/// Because each settled block is a distinct DB, the EW frontier degenerates to
+/// a single uncontended writer: race-free by construction, and the N block
+/// settles run concurrently (no shared frontier). This is the phase-2
+/// serialization removed at the root, not relaxed — the
+/// reduce-scatter/allreduce analogue of MPI's disjoint per-rank send/recv
+/// buffers.
 ///
 /// `partialBlockAlloc` is the per-(block,tile) partials DB (outer dim =
 /// blockCount * tileCount, element block = one output block's footprint).
@@ -2325,8 +2455,8 @@ emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
   if (auto ownerDims =
           arts::getPlanOwnerDimsAttr(partialBlockAlloc.getOperation()))
     arts::setPlanOwnerDimsAttr(settleAlloc.getOperation(), ownerDims);
-  if (auto blockShape = arts::getPlanPhysicalBlockShapeAttr(
-          partialBlockAlloc.getOperation()))
+  if (auto blockShape =
+          arts::getPlanPhysicalBlockShapeAttr(partialBlockAlloc.getOperation()))
     arts::setPlanPhysicalBlockShapeAttr(settleAlloc.getOperation(), blockShape);
   // Replicated, not distributed: every settled block is local on every node, so
   // the distributed-ownership pass must not block-scatter it (that would defeat
@@ -2434,14 +2564,14 @@ emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
 /// distribution entirely: the buffer becomes a single `local_only` whole-array
 /// replica per node (`stencil_read_internode_use`), so on 2n each node computes
 /// only its strip on a private replica and the neighbor strip on the OTHER node
-/// is never observed — the 2n WRONG answer. That `local_only` replica is exactly
-/// the thing ADR-0003 declares cannot scale (it is the all-gather's coarse
-/// replica with a WAR bolted on).
+/// is never observed — the 2n WRONG answer. That `local_only` replica is
+/// exactly the thing ADR-0003 declares cannot scale (it is the all-gather's
+/// coarse replica with a WAR bolted on).
 ///
 /// This emission realizes the architecture's central insight (§2c) for the
-/// stencil direction: the buffer stays a `block`-mode DISTRIBUTED DB (each block
-/// its own GUID via createMultiDbs, block-scattered across nodes), so every
-/// block has exactly ONE writer — the owner EDT that produces it this
+/// stencil direction: the buffer stays a `block`-mode DISTRIBUTED DB (each
+/// block its own GUID via createMultiDbs, block-scattered across nodes), so
+/// every block has exactly ONE writer — the owner EDT that produces it this
 /// half-step. The cross-node halo is then a per-block neighbor RO read:
 ///   - the owner block, written output-only by its single writer, and
 ///   - its top/bottom neighbor blocks, RO-acquired (block partition, the
@@ -2477,8 +2607,8 @@ emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
 
   // Keep the stencil DB DISTRIBUTED (block-scattered): each block its own GUID,
   // one writer per block. Clearing local_only is what lets the
-  // distributed-ownership pass place blocks across nodes so a node owns only its
-  // strip; the neighbor halo then crosses the node boundary as a real RO
+  // distributed-ownership pass place blocks across nodes so a node owns only
+  // its strip; the neighbor halo then crosses the node boundary as a real RO
   // acquire, never a whole-array replica. The single-writer property holds per
   // block-GUID, so the EW frontier never serializes.
   blockAlloc.removeLocalOnlyAttr();
@@ -2508,9 +2638,8 @@ emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
   Value lastBlock = arith::SubIOp::create(builder, loc, blockCount, one);
   // top = max(block-1, 0); bottom = min(block+1, blockCount-1).
   Value rawTop = arith::SubIOp::create(builder, loc, blockIndex, one);
-  Value topHasPred =
-      arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ugt,
-                            blockIndex, zero);
+  Value topHasPred = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::ugt, blockIndex, zero);
   Value topIndex =
       arith::SelectOp::create(builder, loc, topHasPred, rawTop, zero);
   Value rawBottom = arith::AddIOp::create(builder, loc, blockIndex, one);
@@ -2518,8 +2647,8 @@ emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
       arith::MinUIOp::create(builder, loc, rawBottom, lastBlock);
   Value bottomIndex = bottomCapped;
 
-  // Destination: this owner block, output-only into its halo region. Distinct DB
-  // per block ⇒ single writer ⇒ no shared EW frontier.
+  // Destination: this owner block, output-only into its halo region. Distinct
+  // DB per block ⇒ single writer ⇒ no shared EW frontier.
   auto dstAcquire =
       materializeBridgeAcquire(builder, loc, blockAlloc, arts::ArtsMode::out,
                                arts::PartitionMode::block, blockIndex, one);
@@ -2538,8 +2667,8 @@ emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
 
   Value taskRoute = arts::createCurrentNodeRoute(builder, loc);
   auto haloTask = arts::EdtOp::create(builder, loc, arts::EdtType::task,
-                                      arts::EdtConcurrency::internode, taskRoute,
-                                      deps, params);
+                                      arts::EdtConcurrency::internode,
+                                      taskRoute, deps, params);
   haloTask.setStorageBridgeCopyAttr(UnitAttr::get(haloTask.getContext()));
   haloTask.setPerBlockHaloExchangeAttr(UnitAttr::get(haloTask.getContext()));
   Block &body = haloTask.getBody().front();
@@ -2562,8 +2691,8 @@ emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
     for (size_t i = 0; i < blockElementSizes.size(); ++i)
       bodyCopySizes.push_back(body.getArgument(3 + i));
     // Copy the neighbor boundary rows into this block's halo. The owner-dim
-    // halo width is the single padded cell on each side; the cross-dim extent is
-    // the full element size. Reuse the per-block copy nest over the boundary
+    // halo width is the single padded cell on each side; the cross-dim extent
+    // is the full element size. Reuse the per-block copy nest over the boundary
     // strip (the exact element layout is finalized by the stencil halo
     // consolidation in DbTransforms; here we materialize the nearest-neighbor
     // read so the dependency frontier and ABI are correct).
@@ -2627,18 +2756,23 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
   // First-class collective dispatch (ADR-0003 §7b). The all-gather and cross-
   // owner reduce realizations are selected by reading the `dep_collectives`
   // carrier StoragePlanning stamped via `chooseCollective` (the extracted gate
-  // bodies), not by re-evaluating the ad-hoc predicates here. `chooseCollective`
-  // already folds the per-dep write-mode guard, so this `any_of` over the bridge
-  // participants reproduces the historical gate decision byte-identically:
-  //   all_gather     -> 3mm's F (coarse intermediate read by a sibling
-  //                     `replicated_read` consumer): emit the per-block single-
-  //                     writer all-gather substrate. gemm/2mm/correlation
-  //                     outputs read only by the host select `none`, so the gate
-  //                     stays closed and their IR is unchanged.
-  //   reduce_scatter -> atax/bicg cross-owner transpose-reduce coarse buffers:
-  //                     fill cross-node so every node holds the complete result.
+  // bodies), not by re-evaluating the ad-hoc predicates here.
+  // `chooseCollective` already folds the per-dep write-mode guard, so this
+  // `any_of` over the bridge participants reproduces the historical gate
+  // decision byte-identically:
+  //   all_gather     -> coarse intermediate read by a sibling
+  //                     `replicated_read` contraction consumer: emit the
+  //                     per-block single-writer all-gather substrate. Outputs
+  //                     read only by the host select `none`, so the gate stays
+  //                     closed and their IR is unchanged.
+  //   reduce_scatter -> cross-owner transpose-reduce coarse buffers:
+  //                     fill cross-node so every node holds the complete
+  //                     result.
+  ModuleOp bridgeModule = codelet->getParentOfType<ModuleOp>();
+  bool hasInterNodeRuntime =
+      bridgeModule && arts::hasArtsInterNodeRuntime(bridgeModule);
   bool perBlockAllGather =
-      needsCopyOut &&
+      needsCopyOut && hasInterNodeRuntime &&
       llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
         return getCodirDepCollectiveKind(participant.codelet,
                                          participant.depIndex) ==
@@ -2671,23 +2805,21 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                    codir::CodirCollectiveKind::reduce_scatter;
       });
 
-  // WF-6 keystone: realize a `halo` collective dep (an iterative double-buffered
-  // stencil array) with the per-block single-writer stencil substrate
-  // (nearest-neighbor halo exchange on a DISTRIBUTED block DB) instead of
-  // declining distribution to a single local_only whole-array replica per node
-  // (the 2n WRONG answer; ADR-0003 §2c). The dispatch reads the `dep_collectives`
-  // carrier StoragePlanning stamped via `chooseCollective`, identical to the
-  // all-gather / reduce_scatter branches above. `chooseCollective` selects `halo`
-  // ONLY for an iterative stencil (a `stencil_*` pattern with `full_timestep`
-  // repetition — jacobi2d's cross-timestep WAR) or an explicit
-  // `emit_block_native_stencil` opt-in, so single-pass stencils (conv-2d/3d, no
-  // repetition structure) and the non-stencil kernels keep `none` and their IR is
-  // byte-identical. Cluster 2n correctness is validated on hardware, not the
-  // oracle.
-  ModuleOp bridgeModule = codelet->getParentOfType<ModuleOp>();
+  // WF-6 keystone: realize a `halo` collective dep (an iterative
+  // double-buffered stencil array) with the per-block single-writer stencil
+  // substrate (nearest-neighbor halo exchange on a DISTRIBUTED block DB)
+  // instead of declining distribution to a single local_only whole-array
+  // replica per node (the 2n WRONG answer; ADR-0003 §2c). The dispatch reads
+  // the `dep_collectives` carrier StoragePlanning stamped via
+  // `chooseCollective`, identical to the all-gather / reduce_scatter branches
+  // above. `chooseCollective` selects `halo` ONLY for an iterative stencil (a
+  // `stencil_*` pattern with `full_timestep` repetition — jacobi2d's
+  // cross-timestep WAR) or an explicit `emit_block_native_stencil` opt-in, so
+  // single-pass stencils (conv-2d/3d, no repetition structure) and the
+  // non-stencil kernels keep `none` and their IR is byte-identical. Cluster 2n
+  // correctness is validated on hardware, not the oracle.
   bool perBlockStencilHalo =
-      needsCopyOut && bridgeModule &&
-      arts::hasArtsInterNodeRuntime(bridgeModule) &&
+      needsCopyOut && hasInterNodeRuntime &&
       llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
         return getCodirDepCollectiveKind(participant.codelet,
                                          participant.depIndex) ==
@@ -2758,9 +2890,9 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
     // per-block replicated DBs (each its own GUID, written once, output-only),
     // RO-acquiring the producer's blocks — the race-free, concurrent collective
     // the coarse <inout> replica above could never be (ADR-0003 §2c). The
-    // coarse write-back is kept so the existing whole-array consumer (3mm's G)
-    // stays correct: rewiring that consumer to read the per-block DBs needs
-    // contraction tiling of its k-loop (WF-3), the precise boundary of D2.
+    // coarse write-back is kept so existing whole-array contraction consumers
+    // stay correct: rewiring those consumers to read the per-block DBs needs
+    // contraction tiling of the reduction loop (WF-3), the precise boundary of D2.
     if (perBlockAllGather) {
       builder.setInsertionPointAfter(anchor);
       FailureOr<Value> gathered = emitPerBlockAllGatherWriteBack(
@@ -2770,12 +2902,12 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
     }
 
     // Emit the per-block single-writer summing settle (the arith.addf dual) for
-    // a reduce_scatter/allreduce dep that opted into the block-native path. Each
-    // settled block is its OWN distinct-GUID DB written once with `+=` over the
-    // P per-tile partials — race-free and concurrent, never the coarse <inout>
-    // replica whose EW frontier serializes the partial writes (ADR-0001 phase 2;
-    // ADR-0003 §2c). Until per-tile partial producers are materialized for
-    // atax/bicg/3mm, this gate is opt-in only (emit_block_native_settle), so the
+    // a reduce_scatter/allreduce dep that opted into the block-native path.
+    // Each settled block is its OWN distinct-GUID DB written once with `+=`
+    // over the P per-tile partials — race-free and concurrent, never the coarse
+    // <inout> replica whose EW frontier serializes the partial writes (ADR-0001
+    // phase 2; ADR-0003 §2c). Until per-tile partial producers are materialized
+    // generically, this gate is opt-in only (emit_block_native_settle), so the
     // coarse gather above stays the default and the oracle is byte-identical.
     if (perBlockSummingSettle) {
       unsigned tileCount = 0;
@@ -2792,13 +2924,11 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
     }
 
     // Emit the per-block single-writer stencil substrate (the nearest-neighbor
-    // halo dual) for an iterative double-buffered stencil dep that opted into the
-    // block-native path. The block DB stays DISTRIBUTED (one writer per block);
-    // the cross-node halo is a per-block neighbor RO read ordered after each
-    // neighbor's writer — never the local_only whole-array replica whose private
-    // per-node strip drops the cross-node halo (the 2n WRONG answer; ADR-0003
-    // §2c). Opt-in only (emit_block_native_stencil), so the local_only path above
-    // stays the default and the oracle is byte-identical.
+    // halo dual) for a dep whose CODIR collective plan is `halo`. The block DB
+    // stays DISTRIBUTED (one writer per block); the cross-node halo is a
+    // per-block neighbor RO read ordered after each neighbor's writer — never
+    // the local_only whole-array replica whose private per-node strip drops the
+    // cross-node halo (the 2n WRONG answer; ADR-0003 §2c).
     if (perBlockStencilHalo) {
       builder.setInsertionPointAfter(anchor);
       FailureOr<Value> exchanged = emitPerBlockSingleWriterStencilDb(

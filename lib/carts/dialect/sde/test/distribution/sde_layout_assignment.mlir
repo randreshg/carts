@@ -4,16 +4,16 @@
 // `sde-layout-assignment` pass stamps one element-space BLOCK layout per array
 // root on BOTH the writer and every reader scheduling unit, plus a per-edge
 // geometric layouts-disagree marker and an abstract comm-volume estimate. It is
-// pattern-free and additive: it only ADDS SDE attrs, so codir-to-arts IR is
-// byte-identical.
+// pattern-free: SDE names data layouts and abstract edge pressure, not
+// collectives.
 //
 // This is a 3mm chain (E = A*B, F = C*D, G = E*F). The third matmul contracts
 // the sibling-computed intermediate F on its row axis. Expected layouts:
 //   - matmul outputs (E, F, G): block_parallel owner-tiled on [0, 1].
 //   - matmul inputs (A, C, E): block_parallel row-block on [0].
 //   - F as consumed by G on its contraction axis: block_contraction owner [0].
-//   - the G scheduling unit carries layoutsDisagree for E and F (the contraction
-//     reads) plus an abstract commVolumeBytes. NO collective name appears.
+//   - the G scheduling unit carries layoutsDisagree only for F's contraction
+//     read plus an abstract commVolumeBytes. NO collective name appears.
 
 // CHECK-LABEL: // -----// IR Dump After LayoutAssignment (sde-layout-assignment) //----- //
 // CHECK: func.func @three_mm
@@ -22,23 +22,33 @@
 // owner [0]; A row-block owner [0]; B col-block owner [1]. All aligned, so the
 // unit carries no layoutsDisagree and an abstract commVolumeBytes of 0. No
 // collective name appears anywhere.
-// CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}kind = "block_parallel", ownerDims = [0]}, {arrayId = 1 : i64, {{.*}}kind = "block_parallel", ownerDims = [0]}, {arrayId = 2 : i64, {{.*}}kind = "block_parallel", ownerDims = [1]}], commVolumeBytes = 0 : i64
+// CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [0], role = "write"}, {arrayId = 1 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [0], role = "read"}, {arrayId = 2 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [1], role = "read"}], commVolumeBytes = 0 : i64
 
 // Second matmul: F = C*D. F (arrayId 3) is consumed on its contraction axis by
 // G and is a sibling-distributed intermediate, so even on its own writer its
 // chosen home layout is block_contraction owner [0].
-// CHECK: arrayLayout = [{arrayId = 3 : i64, {{.*}}kind = "block_contraction", ownerDims = [0]}
+// CHECK: arrayLayout = [{arrayId = 3 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_contraction", ownerDims = [0], role = "write"}
 
 // Third matmul: G = E*F. F appears again as block_contraction; the G unit marks
-// layoutsDisagree for the contraction read of F.
-// CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}, {arrayId = 3 : i64, {{.*}}kind = "block_contraction", ownerDims = [0]}{{.*}}layoutsDisagree = [3]
+// layoutsDisagree for only the contraction read of F, not for aligned E/G.
+// CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [0, 1], role = "write"}], commVolumeBytes = 2097152 : i64
+// CHECK-SAME: layoutsDisagree = [3]
 
-// Additive proof: the per-array layout intent is consumed by nobody downstream
-// yet, so the codir codelets are unchanged (no arrayLayout leaks past SDE).
+// Boundary proof: CODIR receives the same neutral layout graph facts under CODIR
+// attr names; concrete collective selection remains a later CODIR decision.
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir
 // CHECK: func.func @three_mm
 // CHECK: codir.codelet
-// CHECK-NOT: arrayLayout
+// CHECK-SAME: array_layout = [
+// CHECK: codir.codelet
+// CHECK: codir.codelet
+// CHECK-SAME: partition_graph = [
+// CHECK-SAME: edgeClass = "aligned"
+// CHECK-SAME: edgeClass = "layout_mismatch"
+// CHECK-SAME: edgeCommBytes = 2097152 : i64
+// CHECK-SAME: role = "write"
+// CHECK-SAME: partition_score = {
+// CHECK-SAME: commVolumeBytes = 2097152 : i64
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,

@@ -98,19 +98,23 @@ bool isOwnerLocalPipelineReduction(SdeSuIterateOp op);
 /// Return true when a matmul-classified scheduling unit has separate external
 /// roots for the logical lhs and rhs input windows. Current owner-slice
 /// materialization has one physical dependency view per root, so self-Gram
-/// shapes such as correlation must stay on host-whole views until the boundary
-/// can represent both windows independently.
+/// shapes must stay on host-whole views until the boundary can represent both
+/// windows independently.
 bool hasDistinctExternalMatmulInputRoots(SdeSuIterateOp op);
 
 /// Contraction-tiling candidate facts for a matmul-class scheduling unit
 /// (ADR-0003 §7d). Pattern-free: derived from iterator types + affine access
 /// shapes only.
 struct ContractionTilingCandidate {
-  /// The external input root read on the {reduction, parallel[1]} window — the
-  /// rhs/contraction-dim input (3mm's F in G = E*F).
+  /// The external input root read on the reduction + parallel[1] window — the
+  /// rhs/contraction-dim input.
   Value contractionInputRoot;
   /// The single reduction loop dim that blocks the contraction axis.
   unsigned reductionLoopDim = 0;
+  /// Physical position of the contraction input indexed by `reductionLoopDim`.
+  /// This is derived from the actual input access map, not assumed from a
+  /// canonical operand order.
+  std::optional<unsigned> contractionInputPhysicalDim;
   /// The output (parallel) loop dims, in loop order.
   SmallVector<int64_t, 2> parallelLoopDims;
   /// The static contraction extent (the reduction trip count), if recoverable.
@@ -119,11 +123,11 @@ struct ContractionTilingCandidate {
 
 /// Recover the contraction-tiling candidate for a matmul-class scheduling unit:
 /// a canonical (2 parallel, 1 reduction, 3-dim) matmul with distinct external
-/// lhs/rhs roots whose rhs (contraction-dim) input is read on the
-/// {reduction, parallel[1]} window. Returns nullopt when the loop is not a
-/// canonical matmul or the contraction-dim input cannot be isolated. This does
-/// NOT decide that tiling should fire — the caller gates that on whether the
-/// contraction input is a sibling-computed distributed intermediate.
+/// lhs/rhs roots whose rhs (contraction-dim) input is read on the reduction +
+/// parallel[1] window. Returns nullopt when the loop is not a canonical matmul
+/// or the contraction-dim input cannot be isolated. This does NOT decide that
+/// tiling should fire — the caller gates that on whether the contraction input
+/// is a sibling-computed distributed intermediate.
 std::optional<ContractionTilingCandidate>
 findContractionTilingCandidate(SdeSuIterateOp op);
 
@@ -134,10 +138,12 @@ findContractionTilingCandidate(SdeSuIterateOp op);
 /// How one indexed position of an array is used by one scheduling unit's loop.
 /// Derived purely from affine access maps + iterator types — pattern-free.
 enum class ArrayDimKind {
-  /// The position is indexed by a single parallel loop IV (offset 0). This is an
+  /// The position is indexed by a single parallel loop IV (offset 0). This is
+  /// an
   /// owner-dim candidate (the position can be block-distributed).
   parallelIndexed,
-  /// The position is indexed by a single reduction loop IV. A position used this
+  /// The position is indexed by a single reduction loop IV. A position used
+  /// this
   /// way blocks the contraction axis when the array is a matmul rhs.
   reductionIndexed,
   /// The position is indexed by a parallel IV with a non-zero constant offset

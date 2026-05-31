@@ -11,14 +11,14 @@
 ///
 /// It is strictly DATA-LAYOUT: pattern-agnostic (driven only by affine maps,
 /// iterator types, and static shapes), it NAMES NO COLLECTIVE, and it knows
-/// nothing about DBs, EDTs, epochs, or runtime placement. It only ADDS the
-/// `arrayLayout`, `layoutsDisagree`, and `commVolumeBytes` SDE attrs; nothing
-/// downstream consumes them yet, so post-SDE lowering stays byte-identical.
+/// nothing about concrete storage, tasks, epochs, or runtime placement. It only
+/// adds the `arrayLayout`, `layoutsDisagree`, and `commVolumeBytes` SDE attrs.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
+#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -82,8 +82,9 @@ static int64_t integerLog2Ceil(int64_t value) {
 // True when at least one parallel-indexed WRITE use (offset 0) selects this
 // position: the writer's owner-computes axis. This is the primary (HPF
 // DISTRIBUTE) seed.
-static bool isWriterParallelOwnerPosition(const sde::ArrayAccessProfile &profile,
-                                          unsigned pos) {
+static bool
+isWriterParallelOwnerPosition(const sde::ArrayAccessProfile &profile,
+                              unsigned pos) {
   for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
     if (use.isWrite && use.kind == sde::ArrayDimKind::parallelIndexed)
       return true;
@@ -92,10 +93,9 @@ static bool isWriterParallelOwnerPosition(const sde::ArrayAccessProfile &profile
 }
 
 // True when some parallel-indexed use (writer OR reader) selects this position.
-// For a host input with no in-module writer (atax/bicg A, 3mm/correlation
-// inputs), the owner-dim candidate is the ALIGN target: the position a consumer
-// reads with a single parallel IV. Generalizes the output-only rule by also
-// offering readers a block layout.
+// For a host input with no in-module writer, the owner-dim candidate is the
+// ALIGN target: the position a consumer reads with a single parallel IV.
+// Generalizes the output-only rule by also offering readers a block layout.
 static bool isParallelOwnerPosition(const sde::ArrayAccessProfile &profile,
                                     unsigned pos) {
   // A writer owner position always wins as the seed.
@@ -112,8 +112,8 @@ static bool isParallelOwnerPosition(const sde::ArrayAccessProfile &profile,
 }
 
 // True when some reader indexes this position with a reduction IV: a
-// contraction axis. (Reused as one input alongside findContractionTilingCandidate
-// for the BlockContraction case.)
+// contraction axis. (Reused as one input alongside
+// findContractionTilingCandidate for the BlockContraction case.)
 static bool isReductionPosition(const sde::ArrayAccessProfile &profile,
                                 unsigned pos) {
   for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
@@ -155,10 +155,10 @@ makeReplicatedCandidate(const sde::ArrayAccessProfile &profile) {
 //
 // `contractionPosition`, when set, is the physical position on which some
 // sibling consumer contracts this array (from findContractionTilingCandidate +
-// isSiblingDistributedIntermediate). It is the explicit BlockContraction input
-// the capstone calls for: a sibling-distributed intermediate consumed on its
-// contraction axis (3mm's F) gets a contraction-axis owner candidate even
-// though its own writer indexes it in parallel.
+// isSiblingDistributedIntermediate). It is the explicit BlockContraction input:
+// a sibling-distributed intermediate consumed on its contraction axis gets a
+// contraction-axis owner candidate even though its own writer indexes it in
+// parallel.
 static SmallVector<sde::ArrayLayoutCandidate, 4>
 enumerateCandidates(const sde::ArrayAccessProfile &profile,
                     std::optional<unsigned> contractionPosition) {
@@ -172,16 +172,15 @@ enumerateCandidates(const sde::ArrayAccessProfile &profile,
       parallelOwner.push_back(static_cast<int64_t>(pos));
   if (!parallelOwner.empty()) {
     // The full owner-tile candidate (every parallel position distributed). Best
-    // when one consumer aligns on all of them (gemm output tiled on [0,1]).
-    candidates.push_back(makeBlockCandidate(profile, parallelOwner,
-                                            sde::ArrayLayoutKind::blockParallel));
+    // when one consumer aligns on all of them.
+    candidates.push_back(makeBlockCandidate(
+        profile, parallelOwner, sde::ArrayLayoutKind::blockParallel));
     // Single-position owner candidates (row-block / col-block). For an input
-    // read both ways (atax/bicg A: parallel on row in one matvec, parallel on
-    // col in the other), no single all-positions block aligns both; offering
-    // each axis lets PhaseC pick the row-block that aligns the dominant
-    // consumer and leaves only ONE redistribution edge — strictly better than
-    // replicated. The candidate is only meaningful when more than one parallel
-    // position exists.
+    // read with different parallel positions by different consumers, no single
+    // all-positions block aligns both; offering each axis lets PhaseC pick the
+    // block layout that aligns the dominant consumer and leaves only one
+    // redistribution edge. The candidate is only meaningful when more than one
+    // parallel position exists.
     if (parallelOwner.size() > 1) {
       for (int64_t pos : parallelOwner)
         candidates.push_back(makeBlockCandidate(
@@ -191,7 +190,8 @@ enumerateCandidates(const sde::ArrayAccessProfile &profile,
 
   // BlockContraction (explicit findContractionTilingCandidate input): a
   // sibling-distributed intermediate consumed on its contraction axis. This
-  // owner is the contraction position regardless of the writer's parallel index.
+  // owner is the contraction position regardless of the writer's parallel
+  // index.
   if (contractionPosition && *contractionPosition < profile.rank) {
     candidates.push_back(makeBlockCandidate(
         profile, {static_cast<int64_t>(*contractionPosition)},
@@ -204,9 +204,9 @@ enumerateCandidates(const sde::ArrayAccessProfile &profile,
         continue;
       if (!isReductionPosition(profile, pos))
         continue;
-      candidates.push_back(makeBlockCandidate(
-          profile, {static_cast<int64_t>(pos)},
-          sde::ArrayLayoutKind::blockContraction));
+      candidates.push_back(
+          makeBlockCandidate(profile, {static_cast<int64_t>(pos)},
+                             sde::ArrayLayoutKind::blockContraction));
     }
   }
 
@@ -228,11 +228,11 @@ enumerateCandidates(const sde::ArrayAccessProfile &profile,
 //     full-extent / owner-permuted read costs ~ N*(P-1)/P; a cross-owner
 //     reduction read (the contraction case) costs ~ output*logP.
 // P is the abstract block factor; aligned edges are exactly 0.
-static int64_t
-estimateCommVolume(const sde::ArrayAccessProfile &profile,
-                   const sde::ArrayLayoutCandidate &candidate,
-                   SmallVectorImpl<unsigned> &disagreeingReaders) {
-  disagreeingReaders.clear();
+static int64_t estimateCommVolume(
+    const sde::ArrayAccessProfile &profile,
+    const sde::ArrayLayoutCandidate &candidate,
+    SmallVectorImpl<std::pair<unsigned, int64_t>> &disagreeingReaderBytes) {
+  disagreeingReaderBytes.clear();
   int64_t elemBytes = std::max<int64_t>(1, elementBytes(profile.root));
   int64_t totalElements = productOf(profile.staticShape);
   int64_t totalBytes = totalElements * elemBytes;
@@ -301,9 +301,10 @@ estimateCommVolume(const sde::ArrayAccessProfile &profile,
     bool aligned = entry.second;
     if (aligned)
       continue;
-    disagreeingReaders.push_back(codeletId);
     bool crossReduce = readerCrossOwnerReduction.lookup(codeletId);
-    total += crossReduce ? crossOwnerReduceEdge : fullExtentEdge;
+    int64_t edgeBytes = crossReduce ? crossOwnerReduceEdge : fullExtentEdge;
+    disagreeingReaderBytes.push_back({codeletId, edgeBytes});
+    total += edgeBytes;
   }
 
   // A block layout that no reader can align to is no better than replicated for
@@ -317,7 +318,7 @@ estimateCommVolume(const sde::ArrayAccessProfile &profile,
 struct ChosenLayout {
   sde::ArrayLayoutCandidate layout;
   int64_t commVolumeBytes = 0;
-  SmallVector<unsigned, 2> disagreeingReaders;
+  SmallVector<std::pair<unsigned, int64_t>, 2> disagreeingReaderBytes;
 };
 
 // PhaseC: pick the minimum-cost candidate. Greedy seed = the writer's owner
@@ -328,11 +329,11 @@ struct ChosenLayout {
 // tiny).
 //
 // When `contractionPosition` is set the array is a sibling-distributed
-// intermediate consumed on its contraction axis (3mm's F); the contraction
-// consumption is the dominant edge, so a BlockContraction candidate aligned to
-// it wins ties and is preferred over a parallel home that would force every
-// contraction read to redistribute. Otherwise ties prefer block over
-// replicated, and parallel over contraction (the simpler edge).
+// intermediate consumed on its contraction axis; the contraction consumption is
+// the dominant edge, so a BlockContraction candidate aligned to it wins ties
+// and is preferred over a parallel home that would force every contraction read
+// to redistribute. Otherwise ties prefer block over replicated, and parallel
+// over contraction (the simpler edge).
 static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
                                  std::optional<unsigned> contractionPosition) {
   SmallVector<sde::ArrayLayoutCandidate, 4> candidates =
@@ -343,11 +344,11 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
   bool haveBest = false;
   int64_t bestSelectionCost = 0;
   for (const sde::ArrayLayoutCandidate &candidate : candidates) {
-    SmallVector<unsigned, 2> disagree;
+    SmallVector<std::pair<unsigned, int64_t>, 2> disagree;
     int64_t cost = estimateCommVolume(profile, candidate, disagree);
 
     // When the contraction gate fired, this array is a sibling-distributed
-    // intermediate consumed on its contraction axis (3mm's F): the contraction
+    // intermediate consumed on its contraction axis: the contraction
     // read is the INTENDED tiling, not a redistribution. The abstract cost
     // model otherwise undercounts a block_parallel[j] home that "aligns" the
     // parallel-j read while silently forcing the k-contraction to gather across
@@ -379,7 +380,7 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
     if (better) {
       best.layout = candidate;
       best.commVolumeBytes = cost;
-      best.disagreeingReaders.assign(disagree.begin(), disagree.end());
+      best.disagreeingReaderBytes.assign(disagree.begin(), disagree.end());
       bestSelectionCost = selectionCost;
       haveBest = true;
     }
@@ -394,28 +395,45 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
 static StringRef layoutKindString(sde::ArrayLayoutKind kind) {
   switch (kind) {
   case sde::ArrayLayoutKind::blockParallel:
-    return "block_parallel";
+    return sde::AttrNames::LayoutGraph::BlockParallel;
   case sde::ArrayLayoutKind::blockContraction:
-    return "block_contraction";
+    return sde::AttrNames::LayoutGraph::BlockContraction;
   case sde::ArrayLayoutKind::replicated:
-    return "replicated";
+    return sde::AttrNames::LayoutGraph::Replicated;
   }
-  return "replicated";
+  return sde::AttrNames::LayoutGraph::Replicated;
 }
 
 // One `arrayLayout` dictionary entry for an array on a scheduling unit.
 static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
-                                       const sde::ArrayLayoutCandidate &layout) {
+                                       const sde::ArrayLayoutCandidate &layout,
+                                       StringRef role, int64_t edgeCommBytes) {
   Builder b(ctx);
-  SmallVector<NamedAttribute, 4> fields;
-  fields.push_back(b.getNamedAttr("arrayId", b.getI64IntegerAttr(arrayId)));
+  SmallVector<NamedAttribute, 6> fields;
+  fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::ArrayId,
+                                  b.getI64IntegerAttr(arrayId)));
   fields.push_back(
-      b.getNamedAttr("kind", b.getStringAttr(layoutKindString(layout.kind))));
+      b.getNamedAttr(sde::AttrNames::LayoutGraph::Role, b.getStringAttr(role)));
   fields.push_back(
-      b.getNamedAttr("ownerDims", buildI64ArrayAttr(ctx, layout.ownerPositions)));
+      b.getNamedAttr(sde::AttrNames::LayoutGraph::Kind,
+                     b.getStringAttr(layoutKindString(layout.kind))));
   fields.push_back(
-      b.getNamedAttr("blockShape", buildI64ArrayAttr(ctx, layout.blockShape)));
+      b.getNamedAttr(sde::AttrNames::LayoutGraph::OwnerDims,
+                     buildI64ArrayAttr(ctx, layout.ownerPositions)));
+  fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::BlockShape,
+                                  buildI64ArrayAttr(ctx, layout.blockShape)));
+  fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::CommVolumeBytes,
+                                  b.getI64IntegerAttr(edgeCommBytes)));
   return b.getDictionaryAttr(fields);
+}
+
+static bool codeletWritesRoot(const sde::ArrayAccessProfile &profile,
+                              unsigned codeletId) {
+  for (const auto &posUses : profile.positionUses)
+    for (const sde::ArrayPositionUse &use : posUses)
+      if (use.codeletId == codeletId && use.isWrite)
+        return true;
+  return false;
 }
 
 struct LayoutAssignmentPass
@@ -441,12 +459,11 @@ struct LayoutAssignmentPass
       return;
 
     // Explicit BlockContraction input (PhaseB): per array root, the physical
-    // position on which a SIBLING consumer contracts it. Built from the existing
+    // position on which a SIBLING consumer contracts it. Built from
     // findContractionTilingCandidate, gated on the contraction input being a
     // sibling-distributed intermediate (written by a different codelet) — the
     // same gate the contraction-tiling intent uses. The contraction position is
-    // the rhs's reduction-axis physical position (position 0 for the canonical
-    // X[k,j] window).
+    // derived from the consumer's actual input access map.
     llvm::DenseMap<Value, unsigned> contractionPositionByRoot;
     for (auto [consumerId, consumer] : llvm::enumerate(relations.codelets)) {
       std::optional<sde::ContractionTilingCandidate> cand =
@@ -461,9 +478,10 @@ struct LayoutAssignmentPass
       if (!inputProfile.hasWriter || !inputProfile.writerCodeletId ||
           *inputProfile.writerCodeletId == consumerId)
         continue;
-      // Physical position the consumer indexes with the contraction (reduction)
-      // loop dim: the rhs window {reduction, parallel[1]} — position 0.
-      contractionPositionByRoot.try_emplace(cand->contractionInputRoot, 0u);
+      if (!cand->contractionInputPhysicalDim)
+        continue;
+      contractionPositionByRoot.try_emplace(cand->contractionInputRoot,
+                                            *cand->contractionInputPhysicalDim);
     }
 
     // Stable arrayId per array root (MapVector preserves insertion order).
@@ -506,16 +524,23 @@ struct LayoutAssignmentPass
         for (const sde::ArrayPositionUse &use : posUses)
           accessors.insert(use.codeletId);
 
-      llvm::SmallDenseSet<unsigned, 2> disagreeSet(
-          chosen.disagreeingReaders.begin(), chosen.disagreeingReaders.end());
+      llvm::DenseMap<unsigned, int64_t> edgeBytesByReader;
+      for (auto [codeletId, edgeBytes] : chosen.disagreeingReaderBytes)
+        edgeBytesByReader[codeletId] += edgeBytes;
 
-      DictionaryAttr entry = buildLayoutEntry(ctx, arrayId, chosen.layout);
       for (unsigned codeletId : accessors) {
         if (codeletId >= stamps.size())
           continue;
+        bool isWrite = codeletWritesRoot(profile, codeletId);
+        int64_t edgeBytes = edgeBytesByReader.lookup(codeletId);
+        DictionaryAttr entry = buildLayoutEntry(
+            ctx, arrayId, chosen.layout,
+            isWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
+                    : sde::AttrNames::LayoutGraphValues::RoleRead,
+            edgeBytes);
         stamps[codeletId].entries.push_back(entry);
-        stamps[codeletId].commVolumeBytes += chosen.commVolumeBytes;
-        if (disagreeSet.contains(codeletId))
+        stamps[codeletId].commVolumeBytes += edgeBytes;
+        if (edgeBytes > 0)
           stamps[codeletId].disagree.push_back(arrayId);
       }
     }
@@ -543,8 +568,7 @@ private:
 
 namespace mlir::carts::sde {
 
-std::unique_ptr<Pass>
-createLayoutAssignmentPass(sde::SDECostModel *costModel) {
+std::unique_ptr<Pass> createLayoutAssignmentPass(sde::SDECostModel *costModel) {
   return std::make_unique<LayoutAssignmentPass>(costModel);
 }
 
