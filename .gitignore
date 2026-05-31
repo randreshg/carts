@@ -91,3 +91,6 @@ __pycache__/
 # macOS Finder metadata
 .DS_Store
 .investigation/
+
+# CARTS example build artifact (large binary)
+examples/tasking/cholesky/output
