@@ -256,30 +256,55 @@ static bool hasTileOwnerSlicePlan(codir::CodeletOp codelet) {
          codelet.getTileOwnerDimsAttr();
 }
 
-static std::optional<unsigned> getSingleTileOwnerDim(codir::CodeletOp codelet) {
+static std::optional<SmallVector<unsigned, 4>>
+getTileOwnerDims(codir::CodeletOp codelet) {
   if (!hasTileOwnerSlicePlan(codelet))
     return std::nullopt;
-  std::optional<SmallVector<int64_t, 4>> ownerDims =
+  std::optional<SmallVector<int64_t, 4>> rawDims =
       readI64ArrayAttr(codelet.getTileOwnerDimsAttr());
-  if (!ownerDims || ownerDims->size() != 1 || ownerDims->front() < 0)
+  if (!rawDims || rawDims->empty())
     return std::nullopt;
-  return static_cast<unsigned>(ownerDims->front());
+
+  SmallVector<unsigned, 4> dims;
+  dims.reserve(rawDims->size());
+  for (int64_t dim : *rawDims) {
+    if (dim < 0)
+      return std::nullopt;
+    dims.push_back(static_cast<unsigned>(dim));
+  }
+  return dims;
 }
 
-static Value getOwnerBaseArgument(codir::CodeletOp codelet) {
-  if (!codelet || codelet.getBody().empty() || codelet.getParams().empty())
-    return {};
+static std::optional<unsigned> getSingleTileOwnerDim(codir::CodeletOp codelet) {
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getTileOwnerDims(codelet);
+  if (!ownerDims || ownerDims->size() != 1)
+    return std::nullopt;
+  return ownerDims->front();
+}
+
+static SmallVector<Value, 4>
+getOwnerBaseArguments(codir::CodeletOp codelet, unsigned ownerDimCount) {
+  SmallVector<Value, 4> bases;
+  if (!codelet || codelet.getBody().empty() || ownerDimCount == 0 ||
+      codelet.getParams().size() < ownerDimCount)
+    return bases;
 
   Block &body = codelet.getBody().front();
   unsigned depCount = codelet.getDeps().size();
   unsigned paramCount = codelet.getParams().size();
   if (body.getNumArguments() < depCount + paramCount)
-    return {};
-  return body.getArgument(depCount + paramCount - 1);
+    return bases;
+
+  bases.reserve(ownerDimCount);
+  unsigned firstOwnerParam = paramCount - ownerDimCount;
+  for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+    bases.push_back(body.getArgument(depCount + firstOwnerParam + slot));
+  return bases;
 }
 
-static std::optional<unsigned> inferDepOwnerAccessDim(codir::CodeletOp codelet,
-                                                      unsigned depIndex) {
+static std::optional<SmallVector<unsigned, 4>>
+inferDepOwnerAccessDims(codir::CodeletOp codelet, unsigned depIndex) {
   if (!codelet || codelet.getBody().empty() ||
       depIndex >= codelet.getDeps().size())
     return std::nullopt;
@@ -293,13 +318,18 @@ static std::optional<unsigned> inferDepOwnerAccessDim(codir::CodeletOp codelet,
   if (!depType || depType.getRank() == 0)
     return std::nullopt;
 
-  Value ownerBase = getOwnerBaseArgument(codelet);
-  if (!ownerBase)
+  std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
+      getTileOwnerDims(codelet);
+  if (!tileOwnerDims)
+    return std::nullopt;
+  SmallVector<Value, 4> ownerBases =
+      getOwnerBaseArguments(codelet, tileOwnerDims->size());
+  if (ownerBases.size() != tileOwnerDims->size())
     return std::nullopt;
 
   bool sawDepAccess = false;
   bool rejected = false;
-  std::optional<unsigned> selectedDim;
+  std::optional<SmallVector<unsigned, 4>> selectedDims;
   body.walk([&](Operation *op) {
     if (rejected)
       return WalkResult::interrupt();
@@ -308,46 +338,55 @@ static std::optional<unsigned> inferDepOwnerAccessDim(codir::CodeletOp codelet,
     if (!access)
       return WalkResult::advance();
 
-    AccessOwnerDims traced =
-        traceAccessToRoot(access->memref, access->indices, depArg, ownerBase);
-    if (traced.status == AccessTraceStatus::NotRooted)
+    SmallVector<unsigned, 4> accessDims;
+    bool sawRootedAccess = false;
+    for (Value ownerBase : ownerBases) {
+      AccessOwnerDims traced =
+          traceAccessToRoot(access->memref, access->indices, depArg, ownerBase);
+      if (traced.status == AccessTraceStatus::NotRooted)
+        continue;
+      sawRootedAccess = true;
+      if (traced.status == AccessTraceStatus::Unsupported ||
+          traced.ownerDims.size() > 1) {
+        rejected = true;
+        return WalkResult::interrupt();
+      }
+      if (!traced.ownerDims.empty())
+        accessDims.push_back(traced.ownerDims.front());
+    }
+    if (!sawRootedAccess)
       return WalkResult::advance();
-    if (traced.status == AccessTraceStatus::Unsupported) {
-      rejected = true;
-      return WalkResult::interrupt();
-    }
-
     sawDepAccess = true;
-    if (traced.ownerDims.size() != 1) {
+    if (accessDims.empty()) {
       rejected = true;
       return WalkResult::interrupt();
     }
-    unsigned accessDim = traced.ownerDims.front();
-    if (selectedDim && *selectedDim != accessDim) {
+    if (selectedDims && *selectedDims != accessDims) {
       rejected = true;
       return WalkResult::interrupt();
     }
-    selectedDim = accessDim;
+    selectedDims = std::move(accessDims);
     return WalkResult::advance();
   });
 
   if (!sawDepAccess || rejected)
     return std::nullopt;
-  return selectedDim;
+  return selectedDims;
 }
 
-static std::optional<unsigned> getDepOwnerDim(codir::CodeletOp codelet,
-                                              unsigned depIndex) {
-  if (std::optional<unsigned> inferred =
-          inferDepOwnerAccessDim(codelet, depIndex))
+static std::optional<SmallVector<unsigned, 4>>
+getDepOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
+  if (std::optional<SmallVector<unsigned, 4>> inferred =
+          inferDepOwnerAccessDims(codelet, depIndex))
     return inferred;
-  return getSingleTileOwnerDim(codelet);
+  return getTileOwnerDims(codelet);
 }
 
 static bool depAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
                                                   unsigned depIndex) {
-  std::optional<unsigned> ownerDim = getDepOwnerDim(codelet, depIndex);
-  if (!ownerDim || !codelet || codelet.getBody().empty())
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->empty() || !codelet || codelet.getBody().empty())
     return false;
 
   Block &body = codelet.getBody().front();
@@ -357,11 +396,19 @@ static bool depAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
 
   Value depArg = body.getArgument(depIndex);
   auto depType = dyn_cast<MemRefType>(depArg.getType());
-  if (!depType || depType.getRank() == 0 || *ownerDim >= depType.getRank())
+  if (!depType || depType.getRank() == 0)
     return false;
+  for (unsigned ownerDim : *ownerDims)
+    if (ownerDim >= depType.getRank())
+      return false;
 
-  Value ownerBase = getOwnerBaseArgument(codelet);
-  if (!ownerBase)
+  std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
+      getTileOwnerDims(codelet);
+  if (!tileOwnerDims)
+    return false;
+  SmallVector<Value, 4> ownerBases =
+      getOwnerBaseArguments(codelet, tileOwnerDims->size());
+  if (ownerBases.size() != tileOwnerDims->size())
     return false;
 
   bool sawDepAccess = false;
@@ -374,17 +421,26 @@ static bool depAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
     if (!access)
       return WalkResult::advance();
 
-    AccessOwnerDims traced =
-        traceAccessToRoot(access->memref, access->indices, depArg, ownerBase);
-    if (traced.status == AccessTraceStatus::NotRooted)
-      return WalkResult::advance();
-    if (traced.status == AccessTraceStatus::Unsupported) {
-      rejected = true;
-      return WalkResult::interrupt();
+    SmallVector<unsigned, 4> accessDims;
+    bool sawRootedAccess = false;
+    for (Value ownerBase : ownerBases) {
+      AccessOwnerDims traced =
+          traceAccessToRoot(access->memref, access->indices, depArg, ownerBase);
+      if (traced.status == AccessTraceStatus::NotRooted)
+        continue;
+      sawRootedAccess = true;
+      if (traced.status == AccessTraceStatus::Unsupported ||
+          traced.ownerDims.size() > 1) {
+        rejected = true;
+        return WalkResult::interrupt();
+      }
+      if (!traced.ownerDims.empty())
+        accessDims.push_back(traced.ownerDims.front());
     }
-
+    if (!sawRootedAccess)
+      return WalkResult::advance();
     sawDepAccess = true;
-    if (!llvm::is_contained(traced.ownerDims, *ownerDim)) {
+    if (accessDims != *ownerDims) {
       rejected = true;
       return WalkResult::interrupt();
     }
@@ -441,10 +497,11 @@ static std::optional<int64_t> getStaticLogicalElementCount(Value value) {
 
 static bool isPerDependencyRedistribution(codir::CodeletOp codelet,
                                           unsigned depIndex) {
-  std::optional<unsigned> depOwnerDim =
-      inferDepOwnerAccessDim(codelet, depIndex);
-  std::optional<unsigned> codeletOwnerDim = getSingleTileOwnerDim(codelet);
-  return depOwnerDim && codeletOwnerDim && *depOwnerDim != *codeletOwnerDim;
+  std::optional<SmallVector<unsigned, 4>> depOwnerDims =
+      inferDepOwnerAccessDims(codelet, depIndex);
+  std::optional<SmallVector<unsigned, 4>> codeletOwnerDims =
+      getTileOwnerDims(codelet);
+  return depOwnerDims && codeletOwnerDims && *depOwnerDims != *codeletOwnerDims;
 }
 
 static bool isMatmulCodelet(codir::CodeletOp codelet) {
@@ -491,9 +548,11 @@ static bool hasSameBlockStoragePlan(codir::CodeletOp lhs, unsigned lhsDepIndex,
                                     unsigned rhsDepIndex) {
   if (!lhs || !rhs)
     return false;
-  std::optional<unsigned> lhsOwnerDim = getDepOwnerDim(lhs, lhsDepIndex);
-  std::optional<unsigned> rhsOwnerDim = getDepOwnerDim(rhs, rhsDepIndex);
-  return lhsOwnerDim && rhsOwnerDim && *lhsOwnerDim == *rhsOwnerDim &&
+  std::optional<SmallVector<unsigned, 4>> lhsOwnerDims =
+      getDepOwnerDims(lhs, lhsDepIndex);
+  std::optional<SmallVector<unsigned, 4>> rhsOwnerDims =
+      getDepOwnerDims(rhs, rhsDepIndex);
+  return lhsOwnerDims && rhsOwnerDims && *lhsOwnerDims == *rhsOwnerDims &&
          lhs.getTileShapeAttr() == rhs.getTileShapeAttr() &&
          lhs.getLogicalWorkerSliceAttr() == rhs.getLogicalWorkerSliceAttr();
 }
@@ -785,11 +844,16 @@ static bool shouldUseReplicatedReadDep(codir::CodeletOp codelet,
   return !depAccessesStayWithinSingleOwnerSlice(codelet, depIndex);
 }
 
-static ArrayAttr buildOwnerDimsAttr(MLIRContext *ctx,
-                                    std::optional<unsigned> ownerDim) {
-  if (!ownerDim)
+static ArrayAttr
+buildOwnerDimsAttr(MLIRContext *ctx,
+                   std::optional<SmallVector<unsigned, 4>> ownerDims) {
+  if (!ownerDims)
     return ArrayAttr::get(ctx, {});
-  return buildI64ArrayAttr(ctx, SmallVector<int64_t, 1>{*ownerDim});
+  SmallVector<int64_t, 4> values;
+  values.reserve(ownerDims->size());
+  for (unsigned dim : *ownerDims)
+    values.push_back(dim);
+  return buildI64ArrayAttr(ctx, values);
 }
 
 static codir::CodirStorageViewKind
@@ -871,7 +935,7 @@ struct StoragePlanningPass
           if (!viewAttr) {
             plannedViews.push_back(storageViews[index]);
             plannedOwnerDims.push_back(buildOwnerDimsAttr(
-                codelet.getContext(), getDepOwnerDim(codelet, index)));
+                codelet.getContext(), getDepOwnerDims(codelet, index)));
             continue;
           }
           requested = viewAttr.getValue();
@@ -890,7 +954,7 @@ struct StoragePlanningPass
         plannedViews.push_back(codir::CodirStorageViewKindAttr::get(
             codelet.getContext(), planned));
         plannedOwnerDims.push_back(buildOwnerDimsAttr(
-            codelet.getContext(), getDepOwnerDim(codelet, index)));
+            codelet.getContext(), getDepOwnerDims(codelet, index)));
       }
 
       if (storageViews && storageViews.size() > codelet.getDeps().size()) {
@@ -906,14 +970,10 @@ struct StoragePlanningPass
           ArrayAttr::get(codelet.getContext(), plannedOwnerDims));
     });
 
-    // First-class collective selection (ADR-0003 §7b). Stamp `dep_collectives`
-    // in a SECOND module walk, AFTER every codelet's `dep_storage_views` is
+    // Stamp `dep_collectives` after every codelet's `dep_storage_views` is
     // planned: `chooseCollective` consults consumers' planned storage views
     // (the all-gather gate looks for a sibling `replicated_read` reader), so it
-    // must run on the fully-planned module — exactly the state the historical
-    // ConvertCodirToArts gates observed. The selection is the extracted gate
-    // bodies, so the stamped kind reproduces today's gate decision; ARTS
-    // lowering reads it instead of re-evaluating the predicates, byte-identical.
+    // must run on the fully-planned module.
     getOperation().walk([&](codir::CodeletOp codelet) {
       unsigned depCount = codelet.getDeps().size();
       if (depCount == 0)
@@ -926,10 +986,7 @@ struct StoragePlanningPass
         collectives.push_back(
             codir::CodirCollectiveKindAttr::get(codelet.getContext(), kind));
       }
-      // Stamp the full per-dep vector (one entry per dep, `none` for aligned
-      // deps) so the carrier is uniform and self-describing. ADDITIVE: only the
-      // CODIR-stage IR gains the attribute; ARTS lowering reads it and produces
-      // byte-identical output.
+      // Stamp one entry per dep so the carrier is uniform and self-describing.
       codelet.setDepCollectivesAttr(
           ArrayAttr::get(codelet.getContext(), collectives));
     });

@@ -1,13 +1,8 @@
 // RUN: %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg --distributed-db \
 // RUN:   | %FileCheck %s
 
-// jacobi-style alternating-buffer stencils whose SDE→CODIR materializer
-// stamps the initial dep view as host_whole (pointer-of-pointer roots,
-// whole-storage tokens) must still emerge with block-distributed storage.
-// The storage planner promotes host_whole → compute_block via the stencil
-// demote predicates; the slice predicate would normally undo that promotion
-// (stencil halos cross the owner slice by construction), so the planner
-// must re-check the demote predicates in the slice fallback path.
+// Host-whole alternating-buffer stencils must still use block-distributed
+// compute storage with halo padding only on the read-side DB.
 
 module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_workers = 512 : i64} {
   func.func @jacobi_alternating_buffer_host_whole_promoted_to_block() {
@@ -59,7 +54,21 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 }
 
 // CHECK-LABEL: func.func @jacobi_alternating_buffer_host_whole_promoted_to_block
+// CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
+// CHECK-DAG: %[[C4:.*]] = arith.constant 4 : index
+// CHECK-DAG: %[[C8:.*]] = arith.constant 8 : index
+// CHECK-DAG: %[[C10:.*]] = arith.constant 10 : index
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
+// CHECK-SAME: elementSizes[%[[C10]], %[[C4]]]
+// CHECK-SAME: planHaloShape = [1]
+// CHECK-SAME: stencil_supported_block_halo
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
+// CHECK-SAME: elementSizes[%[[C8]], %[[C4]]]
+// CHECK-SAME: planPhysicalBlockShape = [8, 4], storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
 // CHECK: arts.edt <task> <internode>{{.*}}depPattern = #arts.dep_pattern<jacobi_alternating_buffers>
 // CHECK-SAME: distribution_kind = #arts.distribution_kind<block>
 // CHECK-SAME: planHaloShape = [1]
 // CHECK-SAME: stencil_supported_block_halo
+// CHECK: memref.store %{{.*}}, %{{.*}}[%[[C0]], %[[C0]]] : memref<?x?xf32>
+// CHECK: arts.barrier
+// CHECK: arts.edt <task> <intranode> route{{.*}}params(%{{.*}}, %[[C0]], %[[C0]], %[[C0]], %{{.*}}, %[[C4]]

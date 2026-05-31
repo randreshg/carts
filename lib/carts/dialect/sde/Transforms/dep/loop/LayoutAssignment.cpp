@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: LayoutAssignment.cpp
 ///
-/// Module-scoped affine-driven per-array BLOCK layout assignment (WF-5a).
+/// Module-scoped affine-driven per-array BLOCK layout assignment.
 ///
 /// This is the SDE DATA-LAYOUT engine in the spirit of HPF DISTRIBUTE/ALIGN.
 /// For every external array root accessed by the module's `sde.su_iterate`
@@ -13,10 +13,13 @@
 /// iterator types, and static shapes), it NAMES NO COLLECTIVE, and it knows
 /// nothing about concrete storage, tasks, epochs, or runtime placement. It only
 /// adds the `arrayLayout`, `layoutsDisagree`, and `commVolumeBytes` SDE attrs.
+/// `arrayLayout` also carries the implied memory-block count for downstream
+/// CU/MU planning evidence.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
@@ -32,9 +35,6 @@ namespace mlir::carts::sde {
 #define GEN_PASS_DEF_LAYOUTASSIGNMENT
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
-
-#include "carts/utils/Debug.h"
-ARTS_DEBUG_SETUP(layout_assignment);
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -53,6 +53,14 @@ static int64_t productOf(ArrayRef<int64_t> shape) {
   for (int64_t dim : shape)
     total = (dim > 0) ? total * dim : total;
   return total;
+}
+
+static int64_t computeMuBlockCount(ArrayRef<int64_t> shape,
+                                   ArrayRef<int64_t> ownerPositions,
+                                   ArrayRef<int64_t> blockShape) {
+  if (ownerPositions.empty())
+    return 1;
+  return sde::inferCuCountFromMuPartition(shape, ownerPositions, blockShape);
 }
 
 static int64_t elementBytes(Value root) {
@@ -406,10 +414,11 @@ static StringRef layoutKindString(sde::ArrayLayoutKind kind) {
 
 // One `arrayLayout` dictionary entry for an array on a scheduling unit.
 static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
+                                       ArrayRef<int64_t> staticShape,
                                        const sde::ArrayLayoutCandidate &layout,
                                        StringRef role, int64_t edgeCommBytes) {
   Builder b(ctx);
-  SmallVector<NamedAttribute, 6> fields;
+  SmallVector<NamedAttribute, 8> fields;
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::ArrayId,
                                   b.getI64IntegerAttr(arrayId)));
   fields.push_back(
@@ -422,6 +431,10 @@ static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
                      buildI64ArrayAttr(ctx, layout.ownerPositions)));
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::BlockShape,
                                   buildI64ArrayAttr(ctx, layout.blockShape)));
+  fields.push_back(b.getNamedAttr(
+      sde::AttrNames::LayoutGraph::MuBlockCount,
+      b.getI64IntegerAttr(computeMuBlockCount(
+          staticShape, layout.ownerPositions, layout.blockShape))));
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::CommVolumeBytes,
                                   b.getI64IntegerAttr(edgeCommBytes)));
   return b.getDictionaryAttr(fields);
@@ -534,7 +547,7 @@ struct LayoutAssignmentPass
         bool isWrite = codeletWritesRoot(profile, codeletId);
         int64_t edgeBytes = edgeBytesByReader.lookup(codeletId);
         DictionaryAttr entry = buildLayoutEntry(
-            ctx, arrayId, chosen.layout,
+            ctx, arrayId, profile.staticShape, chosen.layout,
             isWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
                     : sde::AttrNames::LayoutGraphValues::RoleRead,
             edgeBytes);

@@ -122,7 +122,7 @@ public:
   Value getTotalNodes(Location loc);
   Value getCurrentWorker(Location loc);
   Value getCurrentNode(Location loc);
-  void waitOnHandle(Value epochGuid, Location loc);
+  Value waitOnHandle(Value epochGuid, Location loc);
 
   /// Function creation
   func::FuncOp insertInitPerWorker(Location loc, func::FuncOp callback);

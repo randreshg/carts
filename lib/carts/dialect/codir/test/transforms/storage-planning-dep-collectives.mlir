@@ -1,7 +1,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,storage-planning)' \
 // RUN:   | %FileCheck %s
 
-// First-class CODIR collective dispatch (ADR-0003 §7b): StoragePlanning stamps a
+// First-class CODIR collective dispatch: StoragePlanning stamps a
 // per-dep `dep_collectives` array via `chooseCollective`, the name-free
 // extraction of the historical all-gather / cross-owner-reduce gate bodies.
 //   - the producer whose output is consumed by a `replicated_read` sibling

@@ -14,6 +14,7 @@
 // CHECK-SAME: partitionGraph = [
 // CHECK-SAME: edgeClass = "aligned"
 // CHECK-SAME: layoutKind = "block_parallel"
+// CHECK-SAME: muBlockCount = 4 : i64
 // CHECK-NOT: all_gather
 // CHECK-NOT: reduce_scatter
 // CHECK-NOT: allreduce
@@ -23,6 +24,7 @@
 // CHECK-SAME: chosenTileBytes = 524288 : i64
 // CHECK-SAME: exposedCuCount = 16 : i64
 // CHECK-SAME: minTileBytes = 4194304 : i64
+// CHECK-SAME: muBlockCount = 16 : i64
 // CHECK-SAME: objective = "max_concurrency_comm_aware"
 // CHECK-SAME: targetLogicalWorkers = 16 : i64
 // CHECK-SAME: physicalOwnerDims = [0]

@@ -1,7 +1,7 @@
 // RUN: %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg --distributed-db | %FileCheck %s
 
-// WF-2 keystone (ADR-0003 §2c): the per-block single-writer all-gather
-// substrate. This mirrors 3mm's shape: a producer writes F as a
+// Per-block single-writer all-gather substrate. This mirrors 3mm's shape:
+// a producer writes F as a
 // phase_redistributed (compute_block bridge) intermediate, and a sibling
 // matmul codelet reads the SAME buffer on the contraction dim as a
 // replicated_read operand (3mm's G = E*F). That read is the all-gather signal.
@@ -139,6 +139,6 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 
 // The existing whole-array consumer (3mm's G) still reads F via the coarse
 // replica (replicatedRead): rewiring it to read the per-block DBs needs
-// contraction tiling of its k-loop (WF-3). The substrate is proven; the
+// contraction tiling of its k-loop. The substrate is proven; the
 // consumer boundary is reported, not papered over by re-coarsening.
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<coarse>){{.*}}replicatedRead

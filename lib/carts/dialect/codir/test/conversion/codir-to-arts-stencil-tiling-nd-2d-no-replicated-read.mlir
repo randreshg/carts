@@ -67,6 +67,10 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 }
 
 // CHECK-LABEL: func.func @stencil_tiling_nd_2d_read_only_uses_block
+// CHECK: %[[DB_GUID:.*]], %[[DB_PTR:.*]] = arts.db_alloc{{.*}}<block>{{.*}}sizes[%{{[^,]+}}, %{{[^]]+}}]{{.*}}elementSizes[%{{[^,]+}}, %{{[^]]+}}]
+// CHECK-SAME: planOwnerDims = [0, 1]
+// CHECK-SAME: planPhysicalBlockShape = [16, 32]
+// CHECK: arts.db_acquire{{.*}}(%[[DB_GUID]] : {{.*}}, %[[DB_PTR]] : {{.*}}) partitioning(<block>), indices[], offsets[%{{[^,]+}}, %{{[^]]+}}], sizes[%{{[^,]+}}, %{{[^]]+}}]
 // CHECK: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK-SAME: planHaloShape = [1, 1]
 // CHECK-SAME: stencil_supported_block_halo

@@ -839,7 +839,7 @@ static bool isSiblingDistributedIntermediate(sde::SdeSuIterateOp consumer,
   return found;
 }
 
-/// Contraction tiling as SDE intent — detection half (ADR-0003 §7d / §7a).
+/// Contraction tiling as SDE intent.
 ///
 /// SDE decides — pattern-free, from iterator types and affine access shapes —
 /// to tile the reduction axis of a matmul-class scheduling unit when its
@@ -860,8 +860,8 @@ static bool isSiblingDistributedIntermediate(sde::SdeSuIterateOp consumer,
 /// SDE never names a collective, never emits the combine, and never encodes
 /// nodes/routes/the concrete split factor T. The `partialReduction` UNIT attr
 /// (CODIR ReductionPlanning's trigger) is deliberately NOT set: no CODIR
-/// materializer exists yet for the cross-owner matmul k-tile case (WF-5b), so
-/// the facts stay inert and the consumer's lowering is byte-identical.
+/// materializer exists yet for the cross-owner matmul k-tile case, so the facts
+/// stay inert.
 ///
 /// The gate is tight: it fires only for a canonical matmul whose contraction
 /// input is a sibling distributed intermediate. Single contractions that read

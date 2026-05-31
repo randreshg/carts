@@ -293,6 +293,20 @@ static void stampCuMuPartitionGraphAttrs(sde::SdeSuIterateOp op,
   int64_t exposedCuCount =
       std::min<int64_t>(std::max<int64_t>(1, cuCount), targetWorkers);
   int64_t commBytes = readAbstractCommVolumeBytes(op);
+  int64_t outputMuBlockCount = std::max<int64_t>(1, cuCount);
+  int64_t scoreMuBlockCount = outputMuBlockCount;
+  if (ArrayAttr layout = op.getArrayLayoutAttr()) {
+    for (Attribute attr : layout) {
+      auto dict = dyn_cast<DictionaryAttr>(attr);
+      if (!dict)
+        continue;
+      auto blocks = dyn_cast_or_null<IntegerAttr>(
+          dict.get(sde::AttrNames::LayoutGraph::MuBlockCount));
+      if (blocks && blocks.getInt() > 0)
+        scoreMuBlockCount =
+            std::max<int64_t>(scoreMuBlockCount, blocks.getInt());
+    }
+  }
 
   SmallVector<NamedAttribute, 8> scoreAttrs;
   scoreAttrs.push_back(builder.getNamedAttr(
@@ -312,6 +326,9 @@ static void stampCuMuPartitionGraphAttrs(sde::SdeSuIterateOp op,
       builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::ChosenCuCount,
                            i64Attr(std::max<int64_t>(1, cuCount))));
   scoreAttrs.push_back(
+      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::MuBlockCount,
+                           i64Attr(scoreMuBlockCount)));
+  scoreAttrs.push_back(
       builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::MinTileBytes,
                            i64Attr(costModel.getMinDistributedTileBytes())));
   scoreAttrs.push_back(builder.getNamedAttr(
@@ -330,8 +347,8 @@ static void stampCuMuPartitionGraphAttrs(sde::SdeSuIterateOp op,
   SmallVector<Attribute, 4> graphEntries;
   auto appendGraphEntry = [&](int64_t muId, StringRef role,
                               StringRef layoutKind, ArrayAttr entryOwnerDims,
-                              ArrayAttr entryBlockShape, int64_t edgeCommBytes,
-                              StringRef edgeClass) {
+                              ArrayAttr entryBlockShape, int64_t muBlockCount,
+                              int64_t edgeCommBytes, StringRef edgeClass) {
     int64_t entryTileBytes = tileBytes;
     if (auto entryShape = readI64Array(entryBlockShape))
       entryTileBytes = sde::tilePayloadBytes(*entryShape, elemBytes);
@@ -350,6 +367,9 @@ static void stampCuMuPartitionGraphAttrs(sde::SdeSuIterateOp op,
     attrs.push_back(builder.getNamedAttr(
         sde::AttrNames::PartitionGraphKeys::TilePayloadBytes,
         i64Attr(entryTileBytes)));
+    attrs.push_back(
+        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::MuBlockCount,
+                             i64Attr(std::max<int64_t>(1, muBlockCount))));
     attrs.push_back(
         builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::EdgeCommBytes,
                              i64Attr(edgeCommBytes)));
@@ -389,13 +409,18 @@ static void stampCuMuPartitionGraphAttrs(sde::SdeSuIterateOp op,
       if (auto edgeBytes = dyn_cast_or_null<IntegerAttr>(
               dict.get(sde::AttrNames::LayoutGraph::CommVolumeBytes)))
         edgeCommBytes = std::max<int64_t>(0, edgeBytes.getInt());
+      int64_t entryMuBlockCount = 1;
+      if (auto blocks = dyn_cast_or_null<IntegerAttr>(
+              dict.get(sde::AttrNames::LayoutGraph::MuBlockCount)))
+        entryMuBlockCount = std::max<int64_t>(1, blocks.getInt());
       StringRef edgeClass =
           edgeCommBytes > 0
               ? StringRef(
                     sde::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
               : StringRef(sde::AttrNames::PartitionGraphValues::EdgeAligned);
       appendGraphEntry(muId, role, layoutKind, layoutOwnerDims,
-                       layoutBlockShape, edgeCommBytes, edgeClass);
+                       layoutBlockShape, entryMuBlockCount, edgeCommBytes,
+                       edgeClass);
       addedFromArrayLayout = true;
     }
   }
@@ -410,7 +435,7 @@ static void stampCuMuPartitionGraphAttrs(sde::SdeSuIterateOp op,
         /*muId=*/0, sde::AttrNames::LayoutGraphValues::RoleWrite,
         sde::AttrNames::PartitionGraphValues::OwnerBlock,
         buildI64ArrayAttr(ctx, *ownerDims), buildI64ArrayAttr(ctx, *blockShape),
-        commBytes, edgeClass);
+        std::max<int64_t>(1, cuCount), commBytes, edgeClass);
   }
 
   if (!graphEntries.empty())
@@ -1110,14 +1135,14 @@ static void stampDirectRowMatmulPhysicalPlan(sde::SdeSuIterateOp op,
   applyPhysicalPlan(op, ownerDims, physicalBlockShape);
 }
 
-/// Contraction tiling — refinement half (ADR-0003 §7d / §7a, SDE-decides).
+/// Contraction tiling refinement.
 ///
 /// PatternAnalysis detects the contraction-tiling candidate while the matmul
 /// loop nest is still canonical and stamps a PROVISIONAL element-space
 /// `contractionTileShape = [contractionExtent]` plus the inert declarative
 /// facts. This pass, running after the matmul owner plan is stamped, refines
 /// that tile size to the producer's owner-block extent so each k-tile maps to
-/// exactly one producer block. CODIR (WF-5b) later derives the concrete split
+/// exactly one producer block. CODIR later derives the concrete split
 /// factor T = ceil(contractionExtent / tileSize) from this element-space shape.
 ///
 /// If no real tiling results (single tile / unrecoverable block), the

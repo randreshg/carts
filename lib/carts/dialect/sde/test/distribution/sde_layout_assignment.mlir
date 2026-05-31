@@ -1,6 +1,6 @@
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --start-from sde-planning --pipeline sde-to-codir --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Module-scoped affine-driven per-array BLOCK layout assignment (WF-5a). The
+// Module-scoped affine-driven per-array BLOCK layout assignment. The
 // `sde-layout-assignment` pass stamps one element-space BLOCK layout per array
 // root on BOTH the writer and every reader scheduling unit, plus a per-edge
 // geometric layouts-disagree marker and an abstract comm-volume estimate. It is
@@ -22,16 +22,16 @@
 // owner [0]; A row-block owner [0]; B col-block owner [1]. All aligned, so the
 // unit carries no layoutsDisagree and an abstract commVolumeBytes of 0. No
 // collective name appears anywhere.
-// CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [0], role = "write"}, {arrayId = 1 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [0], role = "read"}, {arrayId = 2 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [1], role = "read"}], commVolumeBytes = 0 : i64
+// CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}, {arrayId = 1 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 2 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [1], role = "read"}], commVolumeBytes = 0 : i64
 
 // Second matmul: F = C*D. F (arrayId 3) is consumed on its contraction axis by
 // G and is a sibling-distributed intermediate, so even on its own writer its
 // chosen home layout is block_contraction owner [0].
-// CHECK: arrayLayout = [{arrayId = 3 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_contraction", ownerDims = [0], role = "write"}
+// CHECK: arrayLayout = [{arrayId = 3 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}
 
 // Third matmul: G = E*F. F appears again as block_contraction; the G unit marks
 // layoutsDisagree for only the contraction read of F, not for aligned E/G.
-// CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", ownerDims = [0, 1], role = "write"}], commVolumeBytes = 2097152 : i64
+// CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}], commVolumeBytes = 2097152 : i64
 // CHECK-SAME: layoutsDisagree = [3]
 
 // Boundary proof: CODIR receives the same neutral layout graph facts under CODIR
@@ -49,6 +49,7 @@
 // CHECK-SAME: role = "write"
 // CHECK-SAME: partition_score = {
 // CHECK-SAME: commVolumeBytes = 2097152 : i64
+// CHECK-SAME: muBlockCount = 64 : i64
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,

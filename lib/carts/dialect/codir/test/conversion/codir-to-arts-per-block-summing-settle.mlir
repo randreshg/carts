@@ -2,7 +2,7 @@
 // RUN:   --pass-pipeline='builtin.module(reduction-planning,storage-planning,convert-codir-to-arts,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s
 
-// WF-3 keystone (ADR-0003 §2c): the per-block single-writer summing settle, the
+// Per-block single-writer summing settle, the
 // arith.addf dual of the per-block all-gather. This reuses the cross-owner
 // transpose-matvec reduce shape (atax y = A^T(Ax) / bicg s = A^T r): a producer
 // writes the intermediate `tmp` block-distributed by row; a transpose-reduce
@@ -18,9 +18,7 @@
 // concurrent (the coarse-replica serialization removed at the root, in the
 // reduction direction).
 //
-// ADDITIVE GUARD: without `emit_block_native_settle` this is byte-identical to
-// the legacy coarse gather (codir-to-arts-cross-owner-transpose-reduce-gather);
-// no kernel sets the opt-in, so the keystone fires only here.
+// Without `emit_block_native_settle`, this stays on the legacy coarse gather.
 
 module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_workers = 16 : i64} {
   func.func @per_block_summing_settle(%A: memref<128x128xf64>, %x: memref<128xf64>, %tmp: memref<128xf64>, %y: memref<128xf64>, %base: index) {

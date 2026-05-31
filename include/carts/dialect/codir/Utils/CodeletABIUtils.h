@@ -27,12 +27,11 @@ std::optional<CodirAccessMode> getDepAccessMode(CodeletOp codelet,
 std::optional<CodirStorageViewKind> getDepStorageViewKind(CodeletOp codelet,
                                                           unsigned depIndex);
 
-/// --- First-class CODIR collective selection (ADR-0003 §7b) ------------------
+/// --- First-class CODIR collective selection -------------------------------
 /// These predicates are the EXACT gate bodies that ConvertCodirToArts has
 /// historically used to decide the all-gather and cross-owner reduce
 /// realizations (ArtsMaterializationUtils.h). Hoisted here so StoragePlanning
-/// can stamp the first-class `dep_collectives` carrier from the SAME bodies,
-/// making the refactor byte-identical by construction.
+/// can stamp the first-class `dep_collectives` carrier from the same bodies.
 
 /// True when |producer|'s |depIndex| coarse intermediate buffer is read by a
 /// sibling `replicated_read` contraction consumer. This is the all-gather

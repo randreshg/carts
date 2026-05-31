@@ -94,6 +94,51 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
     return
   }
 
+  func.func @partition_score_groups_copy_like_bridge_without_collapsing_mus() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %c8 = arith.constant 8 : index
+    %c256 = arith.constant 256 : index
+    %F = memref.alloc() : memref<256x4xf32>
+
+    scf.for %i = %c0 to %c256 step %c8 {
+      codir.codelet deps(%F : memref<256x4xf32>) params(%i : index)
+          attributes {dep_collectives = [#codir.collective<all_gather>],
+                      dep_modes = [#codir.access_mode<write>],
+                      dep_storage_views = [#codir.storage_view<phase_redistributed>],
+                      distribution_kind = #codir.distribution_kind<blocked>,
+                      iteration_topology = #codir.iteration_topology<owner_strip>,
+                      logical_worker_slice = [8, 4],
+                      partition_graph = [{edgeClass = "layout_mismatch", muBlockCount = 32 : i64}],
+                      partition_score = {chosenCuCount = 32 : i64, exposedCuCount = 8 : i64, muBlockCount = 32 : i64, targetLogicalWorkers = 8 : i64},
+                      pattern = #codir.pattern<matmul>,
+                      tile_owner_dims = [0],
+                      tile_shape = [8, 4]} {
+      ^bb0(%arg0: memref<256x4xf32>, %base: index):
+        %inner_c0 = arith.constant 0 : index
+        %inner_c1 = arith.constant 1 : index
+        %inner_c4 = arith.constant 4 : index
+        %inner_c8 = arith.constant 8 : index
+        %inner_c256 = arith.constant 256 : index
+        %value = arith.constant 5.000000e+00 : f32
+        %end_raw = arith.addi %base, %inner_c8 : index
+        %end = arith.minui %end_raw, %inner_c256 : index
+        scf.for %row = %base to %end step %inner_c1 {
+          scf.for %col = %inner_c0 to %inner_c4 step %inner_c1 {
+            memref.store %value, %arg0[%row, %col] : memref<256x4xf32>
+          }
+        }
+        codir.yield
+      }
+    }
+
+    %result = memref.load %F[%c0, %c0] : memref<256x4xf32>
+    func.call @use(%result) : (f32) -> ()
+    memref.dealloc %F : memref<256x4xf32>
+    return
+  }
+
   func.func private @use(f32)
 }
 
@@ -111,5 +156,20 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: arts.runtime_query <total_nodes>
 // CHECK: scf.for {{.*}} step %c1
 // CHECK: scf.for {{.*}} step %c1
+// CHECK: arts.edt <task>
+// CHECK-SAME: perBlockAllGather
+
+// CHECK-LABEL: func.func @partition_score_groups_copy_like_bridge_without_collapsing_mus
+// CHECK: arts.runtime_query <total_nodes>
+// CHECK: scf.for {{.*}} step %c1
+// CHECK: scf.for {{.*}} step %c4
+// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>)
+// CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>)
+// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>)
+// CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>)
+// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>)
+// CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>)
+// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>)
+// CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>)
 // CHECK: arts.edt <task>
 // CHECK-SAME: perBlockAllGather

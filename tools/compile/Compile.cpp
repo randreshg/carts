@@ -1193,10 +1193,8 @@ void buildSdePlanningPipeline(PassManager &pm,
   // transforms then consume those SDE facts before effect passes make
   // scheduling decisions.
   pm.addPass(sde::createPatternAnalysisPass());
-  // Module-scoped per-array BLOCK layout assignment (WF-5a). Runs at
-  // PatternAnalysis time, before Tiling/Interchange split the parallel axes.
-  // ADDITIVE: only stamps `arrayLayout`/`layoutsDisagree`/`commVolumeBytes`;
-  // nothing downstream consumes them yet, so lowering stays byte-identical.
+  // Module-scoped per-array BLOCK layout assignment. Runs before
+  // Tiling/Interchange split the parallel axes.
   pm.addPass(sde::createLayoutAssignmentPass(costModel));
   pm.addPass(sde::createLoopInterchangePass());
   pm.addPass(sde::createTilingPass(costModel));

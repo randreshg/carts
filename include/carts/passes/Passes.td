@@ -102,8 +102,8 @@ def Matmul3mmContractionMaterialization
     : Pass<"matmul-3mm-contraction-materialization", "mlir::ModuleOp"> {
   let summary = "Split chained-matmul G contraction into per-tile producers";
   let description = [{
-    WF-3 (3mm scaler). Rewrites the chained-matmul G consumer that reads its
-    contraction operand F from the coarse `replicatedRead` copy into per-(G-block,
+    Rewrites the chained-matmul G consumer that reads its contraction operand F
+    from the coarse `replicatedRead` copy into per-(G-block,
     k-tile) partial-product producer EDTs reading F block-native from the
     `perBlockReplicated` all-gather replica, plus a per-block summing settle that
     reduces the partials into G's settled block with `arith.addf`. Each producer

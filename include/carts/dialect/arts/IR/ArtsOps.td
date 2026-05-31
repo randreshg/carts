@@ -138,14 +138,9 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<StorageBridgeAttr>:$storage_bridge,
     OptionalAttr<UnitAttr>:$local_only,
     OptionalAttr<UnitAttr>:$read_only_after_init,
-    // WF-2 per-block all-gather replica: this block DB must stay REPLICATED
-    // (every block on every node), so the distributed-ownership pass must not
-    // block-scatter it. See emitPerBlockAllGatherWriteBack / ADR-0003 §2c.
+    // Per-block all-gather replica: every block stays local on every node.
     OptionalAttr<UnitAttr>:$perBlockReplicated,
-    // WF-6 per-block single-writer stencil DB: this block DB stays DISTRIBUTED
-    // (block-scattered, one writer per block-GUID) and carries an iterative WAR
-    // resolved by a nearest-neighbor halo exchange instead of a local_only
-    // whole-array replica. See emitPerBlockSingleWriterStencilDb / ADR-0003 §2c.
+    // Per-block stencil DB: block-scattered, one writer per block GUID.
     OptionalAttr<UnitAttr>:$perBlockSingleWriterStencil,
     OptionalAttr<StrAttr>:$distributed_reject_reason
   );
@@ -679,23 +674,11 @@ def EdtOp : Arts_Op<"edt", [
     I32:$route,
     OptionalAttr<UnitAttr>:$nowait,
     OptionalAttr<UnitAttr>:$storageBridgeCopy,
-    // WF-2 per-block all-gather copy EDT: one EDT per gathered block, each
-    // writing its own distinct-GUID replica block (single writer). Marks the
-    // race-free collective substrate. See emitPerBlockAllGatherWriteBack.
+    // Per-block all-gather copy EDT.
     OptionalAttr<UnitAttr>:$perBlockAllGather,
-    // WF-3 per-block summing settle EDT: the arith.addf dual of the all-gather
-    // copy EDT. One EDT per settled output block, RO-acquiring the P per-tile
-    // single-writer partial DBs and writing its own distinct-GUID result block
-    // ONCE with `+=` (single writer, no RW accumulator, no coarse DB). Marks the
-    // race-free reduce-scatter/allreduce realization. See
-    // emitPerBlockSummingSettle.
+    // Per-block summing settle EDT.
     OptionalAttr<UnitAttr>:$perBlockSummingSettle,
-    // WF-6 per-block halo exchange EDT: one EDT per owner block, RO-acquiring its
-    // top/bottom neighbor single-writer block-GUIDs (ordered after each
-    // neighbor's writer frontier) and writing this block's halo region ONCE. The
-    // nearest-neighbor dual of the all-gather copy EDT — resolves the iterative
-    // stencil cross-node halo without a local_only replica. See
-    // emitPerBlockSingleWriterStencilDb.
+    // Per-block nearest-neighbor halo exchange EDT.
     OptionalAttr<UnitAttr>:$perBlockHaloExchange,
     UnitAttr:$inPlaceSafe,
     UnitAttr:$inPlaceSharedState,

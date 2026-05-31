@@ -1,11 +1,10 @@
 ///==========================================================================///
 /// File: Matmul3mmContractionMaterialization.cpp
 ///
-/// WF-3 (3mm scaler) — the 4th O(n^3) scaler. Materializes the chained-matmul
-/// G consumer's contraction reduction into per-(G-block, k-tile) partial-product
-/// producer EDTs plus a per-block summing settle (the arith.addf reduction dual
-/// of the per-block all-gather), so the cross-node contraction over F scales
-/// instead of funnelling through a single coarse <inout> replica.
+/// Materializes the chained-matmul G consumer's contraction reduction into
+/// per-(G-block, k-tile) partial-product producer EDTs plus a per-block summing
+/// settle, so the cross-node contraction over F avoids a single coarse
+/// <inout> replica.
 ///
 /// Why a dedicated ARTS pass (not the CodirToArts bridge, not the existing
 /// PartialReductionSplitMaterialization):
@@ -21,12 +20,8 @@
 ///     OUTSIDE-the-EDT block-arg acquires + a summing settle) for the matmul
 ///     block shape.
 ///
-/// ABI legality (the constraint that sank the earlier in-body-acquire attempt,
-/// ADR-0003 [D]): every DB an EDT touches must arrive as a block-arg dep backed
-/// by a db_acquire emitted OUTSIDE the EDT. Each per-tile producer EDT acquires
-/// its F replica strip, the E block, and its partial tile outside the EDT; the
-/// settle EDT acquires the P partial tiles + the settled G block outside the EDT.
-/// No EDT body GEPs an outer DB alloc.
+/// ABI legality: every DB an EDT touches must arrive as a block-arg dep backed
+/// by a db_acquire emitted outside the EDT.
 ///==========================================================================///
 
 #define GEN_PASS_DEF_MATMUL3MMCONTRACTIONMATERIALIZATION
@@ -235,7 +230,7 @@ static LogicalResult findContractionLoads(EdtOp gEdt, unsigned coarseFDep,
     if (!candidate || candidate.getInductionVar() != rowIdx)
       continue;
     if (fLoad)
-      return failure(); // ambiguous: refuse, stay byte-identical.
+      return failure();
     fLoad = load;
     kLoop = candidate;
   }
@@ -524,8 +519,7 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
 }
 
 /// Emit the per-block summing settle: sum the P partial tiles into G's settled
-/// block (the original result DB), written <out> once. Mirrors the keystone
-/// emitPerBlockSummingSettle, ARTS-local.
+/// block (the original result DB), written <out> once.
 static LogicalResult emitSettle(OpBuilder &builder, Location loc,
                                 Matmul3mmTarget &t, DbAllocOp partialsDb,
                                 Value ownerOrdinal) {

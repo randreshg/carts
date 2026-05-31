@@ -28,29 +28,12 @@ def CartsCodir_CodeletOp
   let arguments = (ins
     OptionalAttr<ArrayAttr>:$dep_modes,
     OptionalAttr<ArrayAttr>:$dep_storage_views,
-    // First-class CODIR collective family per dep (ADR-0003 §7b), one
-    // `CollectiveKindAttr` per dep, parallel to `dep_storage_views`. Stamped
-    // by `chooseCollective` during StoragePlanning; read by ConvertCodirToArts
-    // to dispatch the realization. ADDITIVE: ARTS lowering is unchanged for
-    // `none` deps, so kernels with no redistribution stay byte-identical.
+    // One CODIR collective family per dependency, parallel to
+    // `dep_storage_views`.
     OptionalAttr<ArrayAttr>:$dep_collectives,
-    // WF-3 opt-in: realize a `reduce_scatter`/`allreduce` dep with the
-    // block-native per-block summing settle (emitPerBlockSummingSettle) instead
-    // of the legacy coarse cross-node gather. ADDITIVE: absent on every kernel
-    // today (chooseCollective never sets it), so the coarse path and the 18
-    // oracle baselines are unchanged; the keystone fires only where explicitly
-    // opted in. The block-native settle becomes the default once the per-tile
-    // partial producers are materialized for atax/bicg/3mm.
+    // Opt-in for block-native per-block summing settle.
     OptionalAttr<UnitAttr>:$emit_block_native_settle,
-    // WF-6: realize a `halo` collective dep (an iterative double-buffered
-    // stencil array, read with a halo and written across timesteps) with the
-    // block-native per-block SINGLE-WRITER stencil substrate
-    // (emitPerBlockSingleWriterStencilDb) instead of declining distribution to a
-    // single `local_only` whole-array replica per node. StoragePlanning selects
-    // `halo` for full-timestep stencil producers; `emit_block_native_stencil`
-    // remains an explicit override for shapes outside the auto-trigger.
-    // Cluster 2n correctness of the iterative-stencil cross-node halo exchange
-    // is validated on hardware, not in the byte-identical oracle.
+    // Opt-in for block-native per-block stencil halo exchange.
     OptionalAttr<UnitAttr>:$emit_block_native_stencil,
     OptionalAttr<ArrayAttr>:$dep_owner_dims,
     OptionalAttr<UnitAttr>:$task_depend,
@@ -82,15 +65,9 @@ def CartsCodir_CodeletOp
     OptionalAttr<ArrayAttr>:$write_footprint,
     UnitAttr:$in_place_safe,
     UnitAttr:$in_place_shared_state,
-    // --- SDE module-scoped layout-assignment carriers (WF-5a). Threaded
-    // verbatim from the source `sde.su_iterate` so the SDE layout engine's
-    // per-array BLOCK decision survives into CODIR instead of being dropped at
-    // the SDE -> CODIR boundary. These are pure element-space DATA-LAYOUT facts
-    // (no runtime nodes/routes/collective names); see SdeOps.td $arrayLayout,
-    // $layoutsDisagree, $commVolumeBytes for the exact schema. CODIR planning
-    // consumes the resulting storage-view/collective facts; ARTS materialization
-    // may also consult forwarded partition scores when batching bridge EDTs so
-    // runtime launch amortization does not erase SDE-exposed concurrency.
+    // SDE layout evidence forwarded as element-space facts. CODIR may use them
+    // for storage and collective planning; ARTS may use partition scores to
+    // batch bridge EDTs without collapsing SDE-exposed concurrency.
     OptionalAttr<ArrayAttr>:$array_layout,
     OptionalAttr<ArrayAttr>:$layouts_disagree,
     OptionalAttr<I64Attr>:$comm_volume_bytes,

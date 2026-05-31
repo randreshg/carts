@@ -752,14 +752,9 @@ static LogicalResult createFinalCombineEdt(OpBuilder &builder, Location loc,
   copyCombineMetadata(sourceEdt, combineEdt);
   markMaterializedReductionDistribution(
       combineEdt.getOperation(), concurrency == EdtConcurrency::internode);
-  // The final combine is the allreduce of the per-node partial-y tiles: it
-  // RO-acquires the P per-tile partials and writes the result block once
-  // (single writer), summing with arith.addf. That is precisely the block-
-  // native per-block summing settle (the reduce_scatter/allreduce dual of the
-  // all-gather; ADR-0003 keystone emitPerBlockSummingSettle). Mark it so ARTS-RT
-  // and downstream coherence treat it as the race-free settle rather than a
-  // shared-frontier <inout> accumulate. Reached only for atax/bicg, the sole
-  // kernels carrying partialReductionSplitRequired into this pass.
+  // The final combine RO-acquires the per-tile partials and writes the result
+  // block once, so downstream lowering can treat it as a block-native settle
+  // rather than a shared-frontier <inout> accumulate.
   combineEdt.setPerBlockSummingSettleAttr(UnitAttr::get(combineEdt.getContext()));
   return createFinalCombineBody(combineEdt, scalarType, elementCount,
                                 inputCount == 2);

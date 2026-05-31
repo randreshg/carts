@@ -1,12 +1,8 @@
 // RUN: %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg --distributed-db \
 // RUN:   | %FileCheck %s --implicit-check-not=replicatedRead
 
-// Alternating-buffer stencils (jacobi-style) have writers in the same time
-// loop that produce the next iteration's reads. Promoting the read to
-// replicated_read would force a whole-array re-broadcast each step. The
-// storage planner must keep the read on block-owned storage so the EDT
-// emerges with `block` partitioning + `planHaloShape`, letting the
-// neighbor-tile halo path fire instead.
+// Alternating-buffer stencils stay block-owned; only the read-side DB carries
+// halo padding.
 
 module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_workers = 512 : i64} {
   func.func @jacobi_alternating_buffer_stays_block() {
@@ -60,7 +56,21 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 }
 
 // CHECK-LABEL: func.func @jacobi_alternating_buffer_stays_block
+// CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
+// CHECK-DAG: %[[C4:.*]] = arith.constant 4 : index
+// CHECK-DAG: %[[C8:.*]] = arith.constant 8 : index
+// CHECK-DAG: %[[C10:.*]] = arith.constant 10 : index
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
+// CHECK-SAME: elementSizes[%[[C10]], %[[C4]]]
+// CHECK-SAME: planHaloShape = [1]
+// CHECK-SAME: stencil_supported_block_halo
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
+// CHECK-SAME: elementSizes[%[[C8]], %[[C4]]]
+// CHECK-SAME: planPhysicalBlockShape = [8, 4], storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
 // CHECK: arts.edt <task> <internode>{{.*}}depPattern = #arts.dep_pattern<jacobi_alternating_buffers>
 // CHECK-SAME: distribution_kind = #arts.distribution_kind<block>
 // CHECK-SAME: planHaloShape = [1]
 // CHECK-SAME: stencil_supported_block_halo
+// CHECK: memref.store %{{.*}}, %{{.*}}[%[[C0]], %[[C0]]] : memref<?x?xf32>
+// CHECK: arts.barrier
+// CHECK: arts.edt <task> <intranode> route{{.*}}params(%{{.*}}, %[[C0]], %[[C0]], %[[C0]], %{{.*}}, %[[C4]]

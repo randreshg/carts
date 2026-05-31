@@ -2,7 +2,7 @@
 // RUN:   --start-from sde-planning --pipeline sde-planning \
 // RUN:   --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Contraction tiling as SDE intent (ADR-0003 §7d / §7a, the SDE-decides half).
+// Contraction tiling as SDE intent.
 //
 // This mirrors 3mm's third matmul G = E * F, where F = C * D is a sibling-
 // computed distributed intermediate that G reads on its CONTRACTION axis (the
@@ -11,8 +11,8 @@
 // (aligned to the producer owner block) plus the inert declarative facts
 // `partialReductionDims` / `partialReductionOwnerDims`. It must NOT set the
 // `partialReduction` UNIT attr (the CODIR ReductionPlanning trigger) — there is
-// no materializer for the cross-owner matmul k-tile case yet (WF-5b), so the
-// intent stays inert and the consumer's lowering is unchanged.
+// no materializer for the cross-owner matmul k-tile case yet, so the intent
+// stays inert and the consumer's lowering is unchanged.
 //
 // Phase 1: F = C * D            (sibling matmul, writes the intermediate F)
 // Phase 2: Out = E * F          (reads F on the contraction window {k, j})

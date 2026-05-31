@@ -233,7 +233,7 @@ struct ConvertCodirToArtsPass
     SmallVector<Value> taskDeps;
     SmallVector<Type> blockArgTypes;
     SmallVector<CodirDepSlice, 4> depSlices;
-    SmallVector<std::optional<unsigned>, 4> plannedBlockOwnerDims;
+    SmallVector<SmallVector<unsigned, 4>, 4> plannedBlockOwnerDims;
     SmallVector<Operation *, 4> depViewCleanup;
     taskDeps.reserve(codelet.getDeps().size());
     blockArgTypes.reserve(codelet.getDeps().size());
@@ -250,6 +250,7 @@ struct ConvertCodirToArtsPass
         return codelet.emitOpError()
                << "dependency #" << idx
                << " is not backed by SDE/CODIR DB materialization";
+      unsigned depIdx = static_cast<unsigned>(idx);
 
       CodirDepSlice slice = getCodirDepSlice(dep, builder, loc);
       std::optional<arts::PartitionMode> partitionMode;
@@ -261,31 +262,50 @@ struct ConvertCodirToArtsPass
         partitionSizes.assign(slice.sizes.begin(), slice.sizes.end());
       }
 
-      SmallVector<Value> dbOffsets{createZeroIndex(builder, loc)};
-      SmallVector<Value> dbSizes{createOneIndex(builder, loc)};
-      std::optional<unsigned> plannedBlockOwnerDim;
-      unsigned depIdx = static_cast<unsigned>(idx);
+      Value zero = createZeroIndex(builder, loc);
+      SmallVector<Value> dbOffsets(alloc.getSizes().size(), zero);
+      SmallVector<Value> dbSizes(alloc.getSizes().begin(),
+                                 alloc.getSizes().end());
+      if (dbOffsets.empty()) {
+        dbOffsets.push_back(zero);
+        dbSizes.push_back(createOneIndex(builder, loc));
+      }
+      SmallVector<unsigned, 4> plannedBlockOwnerDimsForDep;
       if (codirDepAllowsComputeBlockStorage(codelet, depIdx) &&
           canUseCodirOwnerSliceForAlloc(codelet, depIdx, alloc) &&
           codirDepAccessesStayWithinSingleOwnerSlice(codelet, depIdx) &&
           !codelet.getParams().empty()) {
-        if (std::optional<int64_t> blockSize = getSingleCodirTileOwnerBlockSize(
+        std::optional<SmallVector<unsigned, 4>> ownerDims =
+            getCodirDepOwnerDims(codelet, depIdx);
+        std::optional<SmallVector<int64_t, 4>> blockSizes =
+            getCodirTileOwnerBlockSizes(
                 codelet, depIdx,
-                static_cast<unsigned>(alloc.getElementSizes().size()))) {
-          Value blockSizeValue = createConstantIndex(builder, loc, *blockSize);
-          Value base = codelet.getParams().back();
-          Value domainBase =
-              materializeCodirOwnerDomainBase(builder, loc, codelet);
-          Value relativeBase =
-              ::mlir::carts::ValueAnalysis::sameValue(base, domainBase)
-                  ? createZeroIndex(builder, loc)
-                  : arith::SubIOp::create(builder, loc, base, domainBase)
-                        .getResult();
-          Value blockIndex = arith::DivUIOp::create(builder, loc, relativeBase,
-                                                    blockSizeValue);
-          dbOffsets.assign({blockIndex});
-          dbSizes.assign({createOneIndex(builder, loc)});
-          plannedBlockOwnerDim = getCodirDepOwnerDim(codelet, depIdx);
+                static_cast<unsigned>(alloc.getElementSizes().size()));
+        SmallVector<Value, 4> ownerParams =
+            getCodirDepOwnerParamValues(codelet, depIdx);
+        if (ownerDims && blockSizes &&
+            ownerDims->size() == blockSizes->size() &&
+            ownerParams.size() == ownerDims->size() &&
+            alloc.getSizes().size() == ownerDims->size()) {
+          dbOffsets.clear();
+          dbSizes.clear();
+          for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+            Value blockSizeValue =
+                createConstantIndex(builder, loc, (*blockSizes)[slot]);
+            Value base = ownerParams[slot];
+            Value domainBase =
+                materializeCodirOwnerDomainBase(builder, loc, codelet, base);
+            Value relativeBase =
+                ::mlir::carts::ValueAnalysis::sameValue(base, domainBase)
+                    ? createZeroIndex(builder, loc)
+                    : arith::SubIOp::create(builder, loc, base, domainBase)
+                          .getResult();
+            Value blockIndex = arith::DivUIOp::create(
+                builder, loc, relativeBase, blockSizeValue);
+            dbOffsets.push_back(blockIndex);
+            dbSizes.push_back(createOneIndex(builder, loc));
+            plannedBlockOwnerDimsForDep.push_back(ownerDim);
+          }
         }
       }
       auto acquire = arts::DbAcquireOp::create(
@@ -303,7 +323,7 @@ struct ConvertCodirToArtsPass
       taskDeps.push_back(acquire.getPtr());
       blockArgTypes.push_back(acquire.getPtr().getType());
       depSlices.push_back(std::move(slice));
-      plannedBlockOwnerDims.push_back(plannedBlockOwnerDim);
+      plannedBlockOwnerDims.push_back(std::move(plannedBlockOwnerDimsForDep));
     }
 
     SmallVector<Value> taskParams(codelet.getParams().begin(),
@@ -373,7 +393,8 @@ struct ConvertCodirToArtsPass
           if (it != paramBlockArgs.end())
             subindex = it->second;
           else if (std::optional<int64_t> constant =
-                       ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(subindex))
+                       ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
+                           subindex))
             subindex = createConstantIndex(builder, loc, *constant);
           payload = polygeist::SubIndexOp::create(builder, loc, depType,
                                                   payload, subindex);
@@ -389,20 +410,30 @@ struct ConvertCodirToArtsPass
           payload = memref::SubViewOp::create(builder, loc, resultType, payload,
                                               offsets, sizes, strides);
         }
-      } else if (plannedBlockOwnerDims[idx]) {
-        Value ownerBase = paramBlockArgs.lookup(codelet.getParams().back());
-        if (!ownerBase)
-          return codelet.emitOpError()
-                 << "failed to materialize owner-base parameter for planned "
-                    "block-local access rewrite";
+      } else if (!plannedBlockOwnerDims[idx].empty()) {
         auto payloadType = dyn_cast<MemRefType>(payload.getType());
         if (!payloadType)
           return codelet.emitOpError()
                  << "planned block-local dependency payload is not a memref";
-        CodirOwnerHaloWindow ownerHalo = getCodirOwnerHaloWindow(
-            codelet, idx, static_cast<unsigned>(payloadType.getRank()));
-        localAccessRewrites.push_back(
-            {payload, *plannedBlockOwnerDims[idx], ownerBase, ownerHalo.lower});
+        SmallVector<Value, 4> ownerParams =
+            getCodirDepOwnerParamValues(codelet, idx);
+        if (ownerParams.size() != plannedBlockOwnerDims[idx].size())
+          return codelet.emitOpError()
+                 << "failed to materialize owner-base parameters for planned "
+                    "block-local access rewrite";
+        for (auto [slot, ownerDim] :
+             llvm::enumerate(plannedBlockOwnerDims[idx])) {
+          Value ownerBase = paramBlockArgs.lookup(ownerParams[slot]);
+          if (!ownerBase)
+            return codelet.emitOpError()
+                   << "failed to materialize owner-base parameter for planned "
+                      "block-local access rewrite";
+          CodirOwnerHaloWindow ownerHalo = getCodirBlockStorageHaloWindowForDim(
+              codelet, idx, ownerDim,
+              static_cast<unsigned>(payloadType.getRank()));
+          localAccessRewrites.push_back(
+              {payload, ownerDim, ownerBase, ownerHalo.lower});
+        }
       }
       mapper.map(codeletBlock.getArgument(idx), payload);
     }
@@ -423,6 +454,7 @@ struct ConvertCodirToArtsPass
 
     arts::YieldOp::create(builder, loc);
 
+    Operation *barrierAnchor = nullptr;
     if (requiresOrderedDependBarrier) {
       OpBuilder barrierBuilder(task);
       barrierBuilder.setInsertionPointAfter(task);
@@ -430,7 +462,7 @@ struct ConvertCodirToArtsPass
           codelet.getContext(), arts::ArtsBarrierReason::required_memory);
       arts::BarrierOp::create(barrierBuilder, loc, reason);
     } else if (isTaskDepend || requiresCompletionBarrier) {
-      Operation *barrierAnchor = getCompletionBarrierAnchor(codelet, task);
+      barrierAnchor = getCompletionBarrierAnchor(codelet, task);
 
       if (barrierAnchor == task.getOperation() ||
           loopCompletionBarriers.insert(barrierAnchor).second) {

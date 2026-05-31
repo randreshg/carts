@@ -194,6 +194,10 @@ struct VerifyCodirPass : public codir::impl::VerifyCodirBase<VerifyCodirPass> {
               codir::AttrNames::PartitionScoreKeys::TargetLogicalWorkers);
           hasConcurrencyField |= verifyPositiveScoreField(
               codir::AttrNames::PartitionScoreKeys::ExposedCuCount);
+          verifyPositiveScoreField(
+              codir::AttrNames::PartitionScoreKeys::ChosenCuCount);
+          verifyPositiveScoreField(
+              codir::AttrNames::PartitionScoreKeys::MuBlockCount);
           if (!hasConcurrencyField) {
             codelet.emitOpError()
                 << codir::AttrNames::PartitionScore << " must contain "

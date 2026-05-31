@@ -30,8 +30,20 @@ module {
     }
     return
   }
+
+  func.func @codir_bad_partition_score_mu_blocks(%dep: memref<4xf32>) {
+    codir.codelet deps(%dep : memref<4xf32>)
+      attributes {dep_modes = [#codir.access_mode<read>],
+                  partition_score = {muBlockCount = 0 : i64,
+                                     targetLogicalWorkers = 1 : i64}} {
+    ^bb0(%dep_arg: memref<4xf32>):
+      codir.yield
+    }
+    return
+  }
 }
 
 // CHECK: partition_score must be a dictionary attribute
 // CHECK: partition_score.targetLogicalWorkers must be a positive integer attribute
 // CHECK: partition_score must contain targetLogicalWorkers or exposedCuCount
+// CHECK: partition_score.muBlockCount must be a positive integer attribute

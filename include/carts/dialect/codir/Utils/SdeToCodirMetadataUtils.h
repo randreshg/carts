@@ -60,7 +60,7 @@ struct CodirCodeletMetadata {
   ArrayAttr writeFootprint;
   UnitAttr inPlaceSafe;
   UnitAttr inPlaceSharedState;
-  // SDE module-scoped layout-assignment carriers (WF-5a), threaded verbatim.
+  // SDE module-scoped layout-assignment carriers, threaded verbatim.
   ArrayAttr arrayLayout;
   ArrayAttr layoutsDisagree;
   IntegerAttr commVolumeBytes;

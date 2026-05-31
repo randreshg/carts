@@ -317,7 +317,7 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
                                                     DbAnalysis &dbAnalysis) {
   if (!alloc)
     return {false, DistributedDbEligibilityRejectReason::UnsupportedShape};
-  // WF-2 per-block all-gather replica: keep it REPLICATED (every block on every
+  // Per-block all-gather replica: keep it REPLICATED (every block on every
   // node) so each node assembles its own full gathered set. Marking it
   // distributed would block-scatter the gathered blocks back across nodes,
   // defeating the all-gather. The single-writer property is preserved per
@@ -349,14 +349,9 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
   if (!facts.hasInternodeEdtUse)
     return {false, DistributedDbEligibilityRejectReason::NoInternodeEdtUse};
   if (facts.hasStencilReadInternodeUse) {
-    /// WF-6: a per-block single-writer stencil DB (jacobi2d's iterative double-
-    /// buffered array) is BLOCK-distributable even though it is both stencil-read
-    /// and written internode: the per-block single-writer substrate
-    /// (emitPerBlockSingleWriterStencilDb) resolves the cross-node halo with an
-    /// explicit nearest-neighbor exchange (each block its own writer frontier),
-    /// so the historical `stencil_read_internode_use` rejection — which exists
-    /// only because the legacy path had no halo exchange and fell back to a
-    /// local_only whole-array replica — no longer applies. Distribute it.
+    /// A per-block single-writer stencil DB is distributable even though it is
+    /// both stencil-read and written internode: the explicit halo exchange
+    /// keeps one writer frontier per block.
     if (alloc.getPerBlockSingleWriterStencil().value_or(false))
       return {true, DistributedDbEligibilityRejectReason::None};
     /// EXT-DIST-1: Allow read-only stencil DBs as replicated distributed DBs.

@@ -76,7 +76,7 @@ def LayoutAssignment
   let summary = "Module-scoped affine-driven per-array BLOCK layout assignment";
   let description = [{
     Assigns one element-space BLOCK layout to every external array root accessed
-    by the module's `sde.su_iterate` scheduling units (WF-5a). This is the
+    by the module's `sde.su_iterate` scheduling units. This is the
     DATA-LAYOUT decision in the spirit of HPF DISTRIBUTE/ALIGN: it chooses owner
     (distributed) positions and per-block extents for each array from its affine
     access relations, minimizing an ABSTRACT communication-volume cost. It is

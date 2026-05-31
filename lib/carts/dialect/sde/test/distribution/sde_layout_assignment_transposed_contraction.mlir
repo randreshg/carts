@@ -6,9 +6,9 @@
 
 // CHECK-LABEL: // -----// IR Dump After LayoutAssignment (sde-layout-assignment) //----- //
 // CHECK-LABEL: func.func @transposed_contraction_input
-// CHECK: arrayLayout = [{arrayId = [[FID:[0-9]+]] : i64, {{.*}}kind = "block_contraction", ownerDims = [1], role = "write"}
+// CHECK: arrayLayout = [{arrayId = [[FID:[0-9]+]] : i64, {{.*}}kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [1], role = "write"}
 // CHECK: arrayLayout = [
-// CHECK-SAME: {arrayId = [[FID]] : i64, {{.*}}kind = "block_contraction", ownerDims = [1], role = "read"}
+// CHECK-SAME: {arrayId = [[FID]] : i64, {{.*}}kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [1], role = "read"}
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,

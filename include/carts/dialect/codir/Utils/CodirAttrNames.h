@@ -17,10 +17,21 @@ namespace mlir::carts::codir::AttrNames {
 inline constexpr llvm::StringLiteral PartitionGraph = "partition_graph";
 inline constexpr llvm::StringLiteral PartitionScore = "partition_score";
 
+namespace PartitionGraphKeys {
+inline constexpr llvm::StringLiteral MuBlockCount = "muBlockCount";
+inline constexpr llvm::StringLiteral EdgeClass = "edgeClass";
+} // namespace PartitionGraphKeys
+
+namespace PartitionGraphValues {
+inline constexpr llvm::StringLiteral EdgeLayoutMismatch = "layout_mismatch";
+} // namespace PartitionGraphValues
+
 namespace PartitionScoreKeys {
 inline constexpr llvm::StringLiteral TargetLogicalWorkers =
     "targetLogicalWorkers";
 inline constexpr llvm::StringLiteral ExposedCuCount = "exposedCuCount";
+inline constexpr llvm::StringLiteral ChosenCuCount = "chosenCuCount";
+inline constexpr llvm::StringLiteral MuBlockCount = "muBlockCount";
 } // namespace PartitionScoreKeys
 
 } // namespace mlir::carts::codir::AttrNames

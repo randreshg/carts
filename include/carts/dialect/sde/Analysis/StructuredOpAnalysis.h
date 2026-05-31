@@ -102,9 +102,8 @@ bool isOwnerLocalPipelineReduction(SdeSuIterateOp op);
 /// windows independently.
 bool hasDistinctExternalMatmulInputRoots(SdeSuIterateOp op);
 
-/// Contraction-tiling candidate facts for a matmul-class scheduling unit
-/// (ADR-0003 §7d). Pattern-free: derived from iterator types + affine access
-/// shapes only.
+/// Contraction-tiling candidate facts for a matmul-class scheduling unit.
+/// Pattern-free: derived from iterator types + affine access shapes only.
 struct ContractionTilingCandidate {
   /// The external input root read on the reduction + parallel[1] window — the
   /// rhs/contraction-dim input.
@@ -132,7 +131,7 @@ std::optional<ContractionTilingCandidate>
 findContractionTilingCandidate(SdeSuIterateOp op);
 
 //===----------------------------------------------------------------------===//
-// Module-scoped layout-assignment access model (WF-5a)
+// Module-scoped layout-assignment access model.
 //===----------------------------------------------------------------------===//
 
 /// How one indexed position of an array is used by one scheduling unit's loop.
@@ -197,7 +196,7 @@ struct ModuleAccessRelations {
 /// relations used by layout assignment. Pattern-free.
 ModuleAccessRelations buildModuleAccessRelations(Operation *moduleOp);
 
-/// The geometric family of a chosen array layout (WF-5a). NAMES NO COLLECTIVE.
+/// The geometric family of a chosen array layout. Names no collective.
 enum class ArrayLayoutKind {
   /// Block-distributed on owner (parallel) positions — the common case.
   blockParallel,

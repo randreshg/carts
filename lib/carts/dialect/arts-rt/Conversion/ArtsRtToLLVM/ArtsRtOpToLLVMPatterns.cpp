@@ -97,7 +97,16 @@ struct WaitOnEpochPattern : public ArtsRtToLLVMPattern<WaitOnEpochOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering WaitOnEpoch Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    AC->waitOnHandle(op.getEpochGuid(), op.getLoc());
+    auto loc = op.getLoc();
+    Value waitOk = AC->waitOnHandle(op.getEpochGuid(), loc);
+    Value falseI1 = AC->create<arith::ConstantIntOp>(loc, 0, 1);
+    Value waitFailed = AC->create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, waitOk, falseI1);
+    auto failIf = AC->create<scf::IfOp>(loc, waitFailed, false);
+    rewriter.setInsertionPointToStart(&failIf.getThenRegion().front());
+    AC->createRuntimeCall(ARTSRTL_arts_shutdown, {}, loc);
+    AC->create<LLVM::Trap>(loc);
+    rewriter.setInsertionPointAfter(failIf);
     rewriter.eraseOp(op);
     ++numEpochOpsConverted;
     return success();

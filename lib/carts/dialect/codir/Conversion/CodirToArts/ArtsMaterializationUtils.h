@@ -346,40 +346,172 @@ static inline MemRefType getElementMemRefType(Type elementType, unsigned rank) {
 
 static inline Value materializeInnerPayload(OpBuilder &builder, Location loc,
                                             Value sourcePtr) {
-  Value zero = createZeroIndex(builder, loc);
-  return arts::DbRefOp::create(builder, loc, sourcePtr,
-                               SmallVector<Value>{zero});
+  unsigned rank = 1;
+  if (auto ptrType = dyn_cast<MemRefType>(sourcePtr.getType()))
+    rank = std::max<unsigned>(1, ptrType.getRank());
+  SmallVector<Value> indices;
+  indices.reserve(rank);
+  for (unsigned idx = 0; idx < rank; ++idx)
+    indices.push_back(createZeroIndex(builder, loc));
+  return arts::DbRefOp::create(builder, loc, sourcePtr, indices);
 }
 
 static inline bool hasCodirTileOwnerSlicePlan(codir::CodeletOp op) {
   return op && op.getTileShapeAttr() && op.getTileOwnerDimsAttr();
 }
 
-static inline std::optional<unsigned>
-getSingleCodirTileOwnerDim(codir::CodeletOp codelet) {
+static inline std::optional<SmallVector<unsigned, 4>>
+getCodirTileOwnerDims(codir::CodeletOp codelet) {
   if (!hasCodirTileOwnerSlicePlan(codelet))
     return std::nullopt;
-  std::optional<SmallVector<int64_t, 4>> ownerDims =
+  std::optional<SmallVector<int64_t, 4>> rawDims =
       readI64ArrayAttr(codelet.getTileOwnerDimsAttr());
-  if (!ownerDims || ownerDims->size() != 1 || ownerDims->front() < 0)
+  if (!rawDims || rawDims->empty())
     return std::nullopt;
-  return static_cast<unsigned>(ownerDims->front());
+
+  SmallVector<unsigned, 4> dims;
+  dims.reserve(rawDims->size());
+  for (int64_t dim : *rawDims) {
+    if (dim < 0)
+      return std::nullopt;
+    dims.push_back(static_cast<unsigned>(dim));
+  }
+  return dims;
 }
 
-static inline Value getCodirOwnerBaseArgument(codir::CodeletOp codelet) {
-  if (!codelet || codelet.getBody().empty() || codelet.getParams().empty())
-    return {};
+static inline std::optional<unsigned>
+getSingleCodirTileOwnerDim(codir::CodeletOp codelet) {
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirTileOwnerDims(codelet);
+  if (!ownerDims || ownerDims->size() != 1)
+    return std::nullopt;
+  return ownerDims->front();
+}
+
+static inline SmallVector<Value, 4>
+getCodirOwnerBaseArguments(codir::CodeletOp codelet, unsigned ownerDimCount) {
+  SmallVector<Value, 4> bases;
+  if (!codelet || codelet.getBody().empty() || ownerDimCount == 0 ||
+      codelet.getParams().size() < ownerDimCount)
+    return bases;
 
   Block &body = codelet.getBody().front();
   unsigned depCount = codelet.getDeps().size();
   unsigned paramCount = codelet.getParams().size();
   if (body.getNumArguments() < depCount + paramCount)
-    return {};
-  return body.getArgument(depCount + paramCount - 1);
+    return bases;
+
+  bases.reserve(ownerDimCount);
+  unsigned firstOwnerParam = paramCount - ownerDimCount;
+  for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+    bases.push_back(body.getArgument(depCount + firstOwnerParam + slot));
+  return bases;
 }
 
-static inline std::optional<unsigned>
-inferCodirDepOwnerAccessDim(codir::CodeletOp codelet, unsigned depIndex) {
+static inline SmallVector<Value, 4>
+getCodirOwnerParamValues(codir::CodeletOp codelet, unsigned ownerDimCount) {
+  SmallVector<Value, 4> params;
+  if (!codelet || ownerDimCount == 0 ||
+      codelet.getParams().size() < ownerDimCount)
+    return params;
+
+  params.reserve(ownerDimCount);
+  unsigned firstOwnerParam = codelet.getParams().size() - ownerDimCount;
+  for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+    params.push_back(codelet.getParams()[firstOwnerParam + slot]);
+  return params;
+}
+
+static inline std::optional<SmallVector<unsigned, 4>>
+getCodirDepOwnerDims(codir::CodeletOp codelet, unsigned depIndex);
+
+static inline SmallVector<Value, 4>
+getCodirDepOwnerParamValues(codir::CodeletOp codelet, unsigned depIndex) {
+  SmallVector<Value, 4> params;
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
+      getCodirTileOwnerDims(codelet);
+  if (!ownerDims || !tileOwnerDims)
+    return params;
+
+  if (codelet && !codelet.getBody().empty() &&
+      depIndex < codelet.getDeps().size()) {
+    Block &body = codelet.getBody().front();
+    unsigned depCount = codelet.getDeps().size();
+    unsigned paramCount = codelet.getParams().size();
+    if (depIndex < body.getNumArguments() &&
+        body.getNumArguments() >= depCount + paramCount) {
+      Value depArg = body.getArgument(depIndex);
+      SmallVector<std::optional<unsigned>, 4> paramSlots(ownerDims->size());
+      bool rejected = false;
+      body.walk([&](Operation *op) {
+        if (rejected)
+          return WalkResult::interrupt();
+
+        auto access = getCodirMemoryAccessInfo(op);
+        if (!access || access->memref != depArg)
+          return WalkResult::advance();
+
+        for (auto [ownerSlot, ownerDim] : llvm::enumerate(*ownerDims)) {
+          if (ownerDim >= access->indices.size())
+            continue;
+          std::optional<unsigned> selectedParam;
+          for (unsigned paramSlot = 0; paramSlot < paramCount; ++paramSlot) {
+            Value bodyParam = body.getArgument(depCount + paramSlot);
+            if (!indexSelectsOwnerSlice(access->indices[ownerDim], bodyParam))
+              continue;
+            if (selectedParam && *selectedParam != paramSlot) {
+              rejected = true;
+              return WalkResult::interrupt();
+            }
+            selectedParam = paramSlot;
+          }
+          if (!selectedParam)
+            continue;
+          if (paramSlots[ownerSlot] &&
+              *paramSlots[ownerSlot] != *selectedParam) {
+            rejected = true;
+            return WalkResult::interrupt();
+          }
+          paramSlots[ownerSlot] = *selectedParam;
+        }
+        return WalkResult::advance();
+      });
+
+      if (!rejected &&
+          llvm::all_of(paramSlots, [](const std::optional<unsigned> &slot) {
+            return slot.has_value();
+          })) {
+        params.reserve(ownerDims->size());
+        for (std::optional<unsigned> slot : paramSlots)
+          params.push_back(codelet.getParams()[*slot]);
+        return params;
+      }
+    }
+  }
+
+  SmallVector<Value, 4> tileParams =
+      getCodirOwnerParamValues(codelet, tileOwnerDims->size());
+  if (tileParams.empty())
+    return params;
+  if (tileParams.size() == ownerDims->size())
+    return tileParams;
+  if (tileParams.size() != tileOwnerDims->size())
+    return params;
+
+  params.reserve(ownerDims->size());
+  for (unsigned ownerDim : *ownerDims) {
+    auto it = llvm::find(*tileOwnerDims, ownerDim);
+    if (it == tileOwnerDims->end())
+      return {};
+    params.push_back(tileParams[std::distance(tileOwnerDims->begin(), it)]);
+  }
+  return params;
+}
+
+static inline std::optional<SmallVector<unsigned, 4>>
+inferCodirDepOwnerAccessDims(codir::CodeletOp codelet, unsigned depIndex) {
   if (!codelet || codelet.getBody().empty() ||
       depIndex >= codelet.getDeps().size())
     return std::nullopt;
@@ -393,13 +525,18 @@ inferCodirDepOwnerAccessDim(codir::CodeletOp codelet, unsigned depIndex) {
   if (!depType || depType.getRank() == 0)
     return std::nullopt;
 
-  Value ownerBase = getCodirOwnerBaseArgument(codelet);
-  if (!ownerBase)
+  std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
+      getCodirTileOwnerDims(codelet);
+  if (!tileOwnerDims)
+    return std::nullopt;
+  SmallVector<Value, 4> ownerBases =
+      getCodirOwnerBaseArguments(codelet, tileOwnerDims->size());
+  if (ownerBases.size() != tileOwnerDims->size())
     return std::nullopt;
 
   bool sawDirectRootAccess = false;
   bool rejected = false;
-  std::optional<unsigned> selectedDim;
+  std::optional<SmallVector<unsigned, 4>> selectedDims;
   body.walk([&](Operation *op) {
     if (rejected)
       return WalkResult::interrupt();
@@ -409,35 +546,45 @@ inferCodirDepOwnerAccessDim(codir::CodeletOp codelet, unsigned depIndex) {
       return WalkResult::advance();
 
     sawDirectRootAccess = true;
-    std::optional<unsigned> accessDim;
-    for (auto [dim, index] : llvm::enumerate(access->indices)) {
-      if (!indexSelectsOwnerSlice(index, ownerBase))
-        continue;
-      if (accessDim && *accessDim != dim) {
-        rejected = true;
-        return WalkResult::interrupt();
+    SmallVector<unsigned, 4> accessDims;
+    for (Value ownerBase : ownerBases) {
+      std::optional<unsigned> accessDim;
+      for (auto [dim, index] : llvm::enumerate(access->indices)) {
+        if (!indexSelectsOwnerSlice(index, ownerBase))
+          continue;
+        if (accessDim && *accessDim != dim) {
+          rejected = true;
+          return WalkResult::interrupt();
+        }
+        accessDim = static_cast<unsigned>(dim);
       }
-      accessDim = static_cast<unsigned>(dim);
+      if (accessDim) {
+        if (*accessDim >= depType.getRank()) {
+          rejected = true;
+          return WalkResult::interrupt();
+        }
+        accessDims.push_back(*accessDim);
+      }
     }
-    if (!accessDim || *accessDim >= depType.getRank()) {
+    if (accessDims.empty()) {
       rejected = true;
       return WalkResult::interrupt();
     }
-    if (selectedDim && *selectedDim != *accessDim) {
+    if (selectedDims && *selectedDims != accessDims) {
       rejected = true;
       return WalkResult::interrupt();
     }
-    selectedDim = *accessDim;
+    selectedDims = std::move(accessDims);
     return WalkResult::advance();
   });
 
   if (!sawDirectRootAccess || rejected)
     return std::nullopt;
-  return selectedDim;
+  return selectedDims;
 }
 
-static inline std::optional<unsigned>
-getPlannedCodirDepOwnerDim(codir::CodeletOp codelet, unsigned depIndex) {
+static inline std::optional<SmallVector<unsigned, 4>>
+getPlannedCodirDepOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
   ArrayAttr depOwnerDims =
       codelet ? codelet.getDepOwnerDimsAttr() : ArrayAttr{};
   if (!depOwnerDims || depIndex >= depOwnerDims.size())
@@ -447,29 +594,40 @@ getPlannedCodirDepOwnerDim(codir::CodeletOp codelet, unsigned depIndex) {
   if (!dims)
     return std::nullopt;
   std::optional<SmallVector<int64_t, 4>> values = readI64ArrayAttr(dims);
-  if (!values || values->size() != 1 || values->front() < 0)
+  if (!values || values->empty())
     return std::nullopt;
-  return static_cast<unsigned>(values->front());
+  SmallVector<unsigned, 4> ownerDims;
+  ownerDims.reserve(values->size());
+  for (int64_t dim : *values) {
+    if (dim < 0)
+      return std::nullopt;
+    ownerDims.push_back(static_cast<unsigned>(dim));
+  }
+  return ownerDims;
 }
 
-static inline std::optional<unsigned>
-getCodirDepOwnerDim(codir::CodeletOp codelet, unsigned depIndex) {
-  if (std::optional<unsigned> planned =
-          getPlannedCodirDepOwnerDim(codelet, depIndex))
+static inline std::optional<SmallVector<unsigned, 4>>
+getCodirDepOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
+  if (std::optional<SmallVector<unsigned, 4>> planned =
+          getPlannedCodirDepOwnerDims(codelet, depIndex))
     return planned;
-  if (std::optional<unsigned> inferred =
-          inferCodirDepOwnerAccessDim(codelet, depIndex))
+  if (std::optional<SmallVector<unsigned, 4>> inferred =
+          inferCodirDepOwnerAccessDims(codelet, depIndex))
     return inferred;
-  return getSingleCodirTileOwnerDim(codelet);
+  return getCodirTileOwnerDims(codelet);
 }
 
 static inline ArrayAttr getCodirDepOwnerDimsAttr(codir::CodeletOp codelet,
                                                  unsigned depIndex) {
-  std::optional<unsigned> ownerDim = getCodirDepOwnerDim(codelet, depIndex);
-  if (!ownerDim)
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims)
     return ArrayAttr{};
-  return buildI64ArrayAttr(codelet.getContext(),
-                           SmallVector<int64_t, 1>{*ownerDim});
+  SmallVector<int64_t, 4> values;
+  values.reserve(ownerDims->size());
+  for (unsigned dim : *ownerDims)
+    values.push_back(dim);
+  return buildI64ArrayAttr(codelet.getContext(), values);
 }
 
 static inline bool canUseCodirOwnerSliceForAlloc(codir::CodeletOp codelet,
@@ -498,11 +656,12 @@ static inline bool codirAccessMayRead(codir::CodirAccessMode mode);
 
 static inline bool codirAccessMayWrite(codir::CodirAccessMode mode);
 
-static inline std::optional<int64_t>
-getSingleCodirTileOwnerBlockSize(codir::CodeletOp codelet, unsigned depIndex,
-                                 unsigned memrefRank) {
-  std::optional<unsigned> ownerDim = getCodirDepOwnerDim(codelet, depIndex);
-  if (!ownerDim)
+static inline std::optional<SmallVector<int64_t, 4>>
+getCodirTileOwnerBlockSizes(codir::CodeletOp codelet, unsigned depIndex,
+                            unsigned memrefRank) {
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->empty())
     return std::nullopt;
 
   std::optional<SmallVector<int64_t, 4>> tileShape =
@@ -510,20 +669,34 @@ getSingleCodirTileOwnerBlockSize(codir::CodeletOp codelet, unsigned depIndex,
   if (!tileShape || tileShape->empty())
     return std::nullopt;
 
-  std::optional<int64_t> blockSize;
-  if (tileShape->size() == memrefRank) {
-    if (*ownerDim >= tileShape->size())
+  SmallVector<int64_t, 4> blockSizes;
+  blockSizes.reserve(ownerDims->size());
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    std::optional<int64_t> blockSize;
+    if (tileShape->size() == memrefRank) {
+      if (ownerDim >= tileShape->size())
+        return std::nullopt;
+      blockSize = (*tileShape)[ownerDim];
+    } else if (tileShape->size() == ownerDims->size()) {
+      blockSize = (*tileShape)[slot];
+    } else if (tileShape->size() == 1 && ownerDims->size() == 1) {
+      blockSize = tileShape->front();
+    }
+    if (!blockSize || *blockSize <= 0)
       return std::nullopt;
-    blockSize = (*tileShape)[*ownerDim];
-  } else {
-    // Compact owner-slot-shaped tile metadata stores the single owner block
-    // size at slot zero.
-    blockSize = tileShape->front();
+    blockSizes.push_back(*blockSize);
   }
+  return blockSizes;
+}
 
-  if (!blockSize || *blockSize <= 0)
+static inline std::optional<int64_t>
+getSingleCodirTileOwnerBlockSize(codir::CodeletOp codelet, unsigned depIndex,
+                                 unsigned memrefRank) {
+  std::optional<SmallVector<int64_t, 4>> blockSizes =
+      getCodirTileOwnerBlockSizes(codelet, depIndex, memrefRank);
+  if (!blockSizes || blockSizes->size() != 1)
     return std::nullopt;
-  return blockSize;
+  return blockSizes->front();
 }
 
 static inline scf::ForOp findCodirOwnerDispatchLoop(codir::CodeletOp codelet) {
@@ -536,10 +709,28 @@ static inline scf::ForOp findCodirOwnerDispatchLoop(codir::CodeletOp codelet) {
   return {};
 }
 
+static inline scf::ForOp findCodirOwnerDispatchLoop(codir::CodeletOp codelet,
+                                                    Value ownerParam) {
+  for (Operation *parent = codelet ? codelet->getParentOp() : nullptr; parent;
+       parent = parent->getParentOp()) {
+    auto loop = dyn_cast<scf::ForOp>(parent);
+    if (loop && loop.getInductionVar() == ownerParam)
+      return loop;
+  }
+  return {};
+}
+
 static inline Value getCodirOwnerDomainLower(codir::CodeletOp codelet) {
   if (auto loop = findCodirOwnerDispatchLoop(codelet))
     return loop.getLowerBound();
   return {};
+}
+
+static inline Value getCodirOwnerDomainLower(codir::CodeletOp codelet,
+                                             Value ownerParam) {
+  if (auto loop = findCodirOwnerDispatchLoop(codelet, ownerParam))
+    return loop.getLowerBound();
+  return getCodirOwnerDomainLower(codelet);
 }
 
 static inline Value getCodirOwnerDomainUpper(codir::CodeletOp codelet) {
@@ -549,6 +740,7 @@ static inline Value getCodirOwnerDomainUpper(codir::CodeletOp codelet) {
 }
 
 struct CodirOwnerHaloWindow {
+  unsigned ownerDim = 0;
   int64_t lower = 0;
   int64_t upper = 0;
 
@@ -581,32 +773,43 @@ getCodirOwnerDimValue(ArrayAttr attr, unsigned ownerDim,
   return std::nullopt;
 }
 
+static inline std::optional<unsigned>
+getSingleCodirDepOwnerDim(codir::CodeletOp codelet, unsigned depIndex) {
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->size() != 1)
+    return std::nullopt;
+  return ownerDims->front();
+}
+
 static inline CodirOwnerHaloWindow
-getCodirOwnerHaloWindow(codir::CodeletOp codelet, unsigned depIndex,
-                        unsigned memrefRank) {
+getCodirOwnerHaloWindowForDim(codir::CodeletOp codelet, unsigned depIndex,
+                              unsigned ownerDim, unsigned memrefRank,
+                              bool requireReadOnly = true) {
+  CodirOwnerHaloWindow window;
+  window.ownerDim = ownerDim;
+
   std::optional<codir::CodirAccessMode> mode =
       getCodirDepAccessMode(codelet, depIndex);
-  if (!mode || !codirAccessMayRead(*mode) || codirAccessMayWrite(*mode))
-    return {};
+  if (requireReadOnly &&
+      (!mode || !codirAccessMayRead(*mode) || codirAccessMayWrite(*mode)))
+    return window;
+  if (ownerDim >= memrefRank)
+    return window;
 
-  std::optional<unsigned> ownerDim = getCodirDepOwnerDim(codelet, depIndex);
-  if (!ownerDim || *ownerDim >= memrefRank)
-    return {};
-
-  std::optional<unsigned> ownerSlot = getCodirOwnerDimSlot(codelet, *ownerDim);
-  CodirOwnerHaloWindow window;
+  std::optional<unsigned> ownerSlot = getCodirOwnerDimSlot(codelet, ownerDim);
 
   if (auto minOffset = getCodirOwnerDimValue(codelet.getAccessMinOffsetsAttr(),
-                                             *ownerDim, ownerSlot, memrefRank))
+                                             ownerDim, ownerSlot, memrefRank))
     window.lower = std::max<int64_t>(0, -*minOffset);
   if (auto maxOffset = getCodirOwnerDimValue(codelet.getAccessMaxOffsetsAttr(),
-                                             *ownerDim, ownerSlot, memrefRank))
+                                             ownerDim, ownerSlot, memrefRank))
     window.upper = std::max<int64_t>(0, *maxOffset);
 
   if (!window.empty())
     return window;
 
-  if (auto halo = getCodirOwnerDimValue(codelet.getHaloShapeAttr(), *ownerDim,
+  if (auto halo = getCodirOwnerDimValue(codelet.getHaloShapeAttr(), ownerDim,
                                         ownerSlot, memrefRank)) {
     int64_t radius = std::max<int64_t>(0, *halo);
     window.lower = radius;
@@ -616,10 +819,37 @@ getCodirOwnerHaloWindow(codir::CodeletOp codelet, unsigned depIndex,
   return window;
 }
 
+static inline SmallVector<CodirOwnerHaloWindow, 4>
+getCodirOwnerHaloWindows(codir::CodeletOp codelet, unsigned depIndex,
+                         unsigned memrefRank, bool requireReadOnly = true) {
+  SmallVector<CodirOwnerHaloWindow, 4> windows;
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims)
+    return windows;
+
+  windows.reserve(ownerDims->size());
+  for (unsigned ownerDim : *ownerDims)
+    windows.push_back(getCodirOwnerHaloWindowForDim(
+        codelet, depIndex, ownerDim, memrefRank, requireReadOnly));
+  return windows;
+}
+
+static inline CodirOwnerHaloWindow
+getCodirOwnerHaloWindow(codir::CodeletOp codelet, unsigned depIndex,
+                        unsigned memrefRank) {
+  std::optional<unsigned> ownerDim =
+      getSingleCodirDepOwnerDim(codelet, depIndex);
+  if (!ownerDim)
+    return {};
+  return getCodirOwnerHaloWindowForDim(codelet, depIndex, *ownerDim,
+                                       memrefRank);
+}
+
 // Defined below (after findBackingDbAlloc); forward-declared so
 // createDbBackedMemref can use the unioned per-buffer halo window.
-static inline CodirOwnerHaloWindow
-codirBackingBufferHaloWindow(Value rootMemref, unsigned memrefRank);
+static inline SmallVector<CodirOwnerHaloWindow, 4>
+codirBackingBufferHaloWindows(Value rootMemref, unsigned memrefRank);
 
 // Predicates defined later in this header; forward-declared so the union helper
 // can replicate the exact block-vs-coarse materialization decision per read
@@ -663,6 +893,15 @@ static inline Value materializeCodirOwnerDomainBase(OpBuilder &builder,
   return createZeroIndex(builder, loc);
 }
 
+static inline Value materializeCodirOwnerDomainBase(OpBuilder &builder,
+                                                    Location loc,
+                                                    codir::CodeletOp codelet,
+                                                    Value ownerParam) {
+  if (Value lower = getCodirOwnerDomainLower(codelet, ownerParam))
+    return lower;
+  return createZeroIndex(builder, loc);
+}
+
 static inline Value
 materializeCodirBlockLocalBase(OpBuilder &builder, Location loc,
                                codir::CodeletOp codelet, unsigned depIndex,
@@ -677,8 +916,9 @@ materializeCodirBlockLocalBase(OpBuilder &builder, Location loc,
 static inline bool
 codirDepAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
                                            unsigned depIndex) {
-  std::optional<unsigned> ownerDim = getCodirDepOwnerDim(codelet, depIndex);
-  if (!ownerDim || !codelet || codelet.getBody().empty())
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->empty() || !codelet || codelet.getBody().empty())
     return false;
 
   Block &body = codelet.getBody().front();
@@ -688,11 +928,19 @@ codirDepAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
 
   Value depArg = body.getArgument(depIndex);
   auto depType = dyn_cast<MemRefType>(depArg.getType());
-  if (!depType || depType.getRank() == 0 || *ownerDim >= depType.getRank())
+  if (!depType || depType.getRank() == 0)
     return false;
+  for (unsigned ownerDim : *ownerDims)
+    if (ownerDim >= depType.getRank())
+      return false;
 
-  Value ownerBase = getCodirOwnerBaseArgument(codelet);
-  if (!ownerBase)
+  std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
+      getCodirTileOwnerDims(codelet);
+  if (!tileOwnerDims)
+    return false;
+  SmallVector<Value, 4> ownerBases =
+      getCodirOwnerBaseArguments(codelet, tileOwnerDims->size());
+  if (ownerBases.size() != tileOwnerDims->size())
     return false;
 
   bool sawDirectRootAccess = false;
@@ -708,8 +956,22 @@ codirDepAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
       return WalkResult::advance();
 
     sawDirectRootAccess = true;
-    if (access->indices.size() <= *ownerDim ||
-        !indexSelectsOwnerSlice(access->indices[*ownerDim], ownerBase)) {
+    SmallVector<unsigned, 4> accessDims;
+    for (Value ownerBase : ownerBases) {
+      std::optional<unsigned> accessDim;
+      for (auto [dim, index] : llvm::enumerate(access->indices)) {
+        if (!indexSelectsOwnerSlice(index, ownerBase))
+          continue;
+        if (accessDim && *accessDim != dim) {
+          rejected = true;
+          return WalkResult::interrupt();
+        }
+        accessDim = static_cast<unsigned>(dim);
+      }
+      if (accessDim)
+        accessDims.push_back(*accessDim);
+    }
+    if (accessDims.empty() || accessDims != *ownerDims) {
       rejected = true;
       return WalkResult::interrupt();
     }
@@ -777,7 +1039,6 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
         return WalkResult::interrupt();
       }
       indices[rewrite.ownerDim].set(*localIndex);
-      return WalkResult::advance();
     }
     return WalkResult::advance();
   };
@@ -878,28 +1139,20 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
   if (failed(physicalPlan))
     return failure();
 
-  CodirOwnerHaloWindow ownerHalo;
+  SmallVector<CodirOwnerHaloWindow, 4> ownerHalos;
   if (depIndex) {
-    // Pad for the union of every codelet that reads this backing buffer as a
-    // stencil halo input, not just the dependency that first triggered
-    // materialization. A double-buffered stencil array is read by one half-step
-    // and written by the other; if the write half-step materializes it first
-    // the single-dep window is empty and the buffer is left unpadded, breaking
-    // the symmetric block-halo read in the read half-step. The union folds in
-    // the read half-step's window. For single-pass stencils (write-only output
-    // re-read only by a metadata-free storageBridgeCopy) the union equals the
-    // single-dep window, so their layout is unchanged.
     Value backingRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
         planSource.getDeps()[*depIndex]);
-    ownerHalo = codirBackingBufferHaloWindow(
+    ownerHalos = codirBackingBufferHaloWindows(
         backingRoot, static_cast<unsigned>(memrefType.getRank()));
-    std::optional<unsigned> ownerDim =
-        getCodirDepOwnerDim(planSource, *depIndex);
-    if (!ownerHalo.empty() && ownerDim &&
-        *ownerDim < physicalPlan->innerSizes.size()) {
+    for (const CodirOwnerHaloWindow &ownerHalo : ownerHalos) {
+      if (ownerHalo.empty() ||
+          ownerHalo.ownerDim >= physicalPlan->innerSizes.size())
+        continue;
       Value haloWidth = createConstantIndex(builder, loc, ownerHalo.width());
-      physicalPlan->innerSizes[*ownerDim] = arith::AddIOp::create(
-          builder, loc, physicalPlan->innerSizes[*ownerDim], haloWidth);
+      physicalPlan->innerSizes[ownerHalo.ownerDim] = arith::AddIOp::create(
+          builder, loc, physicalPlan->innerSizes[ownerHalo.ownerDim],
+          haloWidth);
     }
   }
 
@@ -919,7 +1172,9 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
     arts::setPlanLogicalWorkerSliceAttr(dbAlloc.getOperation(), workerSlice);
   if (auto haloShape = planSource.getHaloShapeAttr())
     arts::setPlanHaloShapeAttr(dbAlloc.getOperation(), haloShape);
-  if (!ownerHalo.empty())
+  if (llvm::any_of(ownerHalos, [](const CodirOwnerHaloWindow &halo) {
+        return !halo.empty();
+      }))
     dbAlloc->setAttr(dbAlloc.getStencilSupportedBlockHaloAttrName(),
                      UnitAttr::get(dbAlloc.getContext()));
 
@@ -986,48 +1241,42 @@ static inline std::optional<codir::CodirStorageViewKind>
 getCodirDepStorageViewKind(codir::CodeletOp codelet, unsigned depIndex);
 static inline std::optional<codir::CodirAccessMode>
 getCodirDepAccessMode(codir::CodeletOp codelet, unsigned depIndex);
+static inline codir::CodirCollectiveKind
+getCodirDepCollectiveKind(codir::CodeletOp codelet, unsigned depIndex);
 static inline bool codirAccessMayRead(codir::CodirAccessMode mode);
+static inline bool codirAccessMayWrite(codir::CodirAccessMode mode);
 
-// The first-class collective gate predicates
-// (coarseBridgeTargetHasReplicatedReadConsumer / codeletIsCrossOwnerTranspose
-// Reduce / coarseBridgeTargetHasCrossOwnerReduceConsumer) and the name-free
-// chooseCollective selector now live in the shared codir Utils
-// (CodeletABIUtils.h). StoragePlanning stamps the result onto the per-dep
-// `dep_collectives` carrier; this file READS that carrier via
-// getCodirDepCollectiveKind (ADR-0003 §7b). Keeping the bodies in one place
-// guarantees the refactor is byte-identical with the historical gates.
+// StoragePlanning stamps collective selection onto `dep_collectives`; this
+// file reads that carrier instead of re-running CODIR predicates.
 
-// Compute the halo padding a single backing buffer needs by taking the union of
-// the owner halo windows of every codelet dependency that reads the SAME
-// backing buffer as a stencil halo input. A double-buffered stencil array (e.g.
-// jacobi2d's A/B) is read by one half-step and written by the other, but each
-// backing memref lowers to a single block db_alloc. Deciding halo padding from
-// only the dependency that first triggered materialization underpads a buffer
-// whose first appearance is a write (getCodirOwnerHaloWindow returns an empty
-// window for may-write deps), so the symmetric stencil EDT body then reads it
-// with the block-halo column shift against an unpadded block. Unioning over all
-// read deps backed by `rootMemref` makes the padding (and the
-// stencil_supported_block_halo attribute) match the access formula regardless
-// of which half-step materialized the buffer first.
-//
-// Write-only outputs (e.g. conv-2d/conv-3d's result buffer, only re-read by a
-// storageBridgeCopy codelet that carries no owner/halo metadata) contribute an
-// empty window, so this union reduces to the single-dep window for single-pass
-// stencils and leaves them unchanged.
-static inline CodirOwnerHaloWindow
-codirBackingBufferHaloWindow(Value rootMemref, unsigned memrefRank) {
-  CodirOwnerHaloWindow unionWindow;
+static inline void
+mergeCodirOwnerHaloWindow(SmallVectorImpl<CodirOwnerHaloWindow> &windows,
+                          CodirOwnerHaloWindow incoming) {
+  if (incoming.empty())
+    return;
+  for (CodirOwnerHaloWindow &window : windows) {
+    if (window.ownerDim != incoming.ownerDim)
+      continue;
+    window.lower = std::max(window.lower, incoming.lower);
+    window.upper = std::max(window.upper, incoming.upper);
+    return;
+  }
+  windows.push_back(incoming);
+}
+
+static inline SmallVector<CodirOwnerHaloWindow, 4>
+codirBackingBufferHaloWindows(Value rootMemref, unsigned memrefRank) {
+  SmallVector<CodirOwnerHaloWindow, 4> unionWindows;
   if (!rootMemref)
-    return unionWindow;
+    return unionWindows;
 
   Operation *defining = rootMemref.getDefiningOp();
   Operation *scope =
       defining ? defining : rootMemref.getParentBlock()->getParentOp();
   ModuleOp module = scope ? scope->getParentOfType<ModuleOp>() : ModuleOp{};
   if (!module)
-    return unionWindow;
+    return unionWindows;
 
-  std::optional<unsigned> unionOwnerDim;
   module.walk([&](codir::CodeletOp codelet) {
     for (auto [idx, dep] : llvm::enumerate(codelet.getDeps())) {
       if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != rootMemref)
@@ -1035,38 +1284,70 @@ codirBackingBufferHaloWindow(Value rootMemref, unsigned memrefRank) {
       unsigned depIdx = static_cast<unsigned>(idx);
       std::optional<codir::CodirAccessMode> mode =
           getCodirDepAccessMode(codelet, depIdx);
-      if (!mode || !codirAccessMayRead(*mode))
+      if (!mode)
         continue;
-      CodirOwnerHaloWindow window =
-          getCodirOwnerHaloWindow(codelet, depIdx, memrefRank);
-      if (window.empty())
+      bool haloStorageDep = getCodirDepCollectiveKind(codelet, depIdx) ==
+                                codir::CodirCollectiveKind::halo ||
+                            codelet.getEmitBlockNativeStencilAttr();
+      if (!codirAccessMayRead(*mode) && !haloStorageDep)
         continue;
-      // Only a read that is itself materialized as a block owner-slice view
-      // applies the block-halo column shift in its EDT body; such a read needs
-      // the buffer padded. Reads that fall back to a coarse host-whole view
-      // (e.g. tiles below the distribution threshold, as in jacobi2d small)
-      // index the buffer globally with no halo shift, so they must not pad it.
-      // This mirrors the usePlan decision in materializeRawCodirDependency so
-      // the padding and the body access formula stay in agreement.
       if (!canMaterializeRawCodirDependencyWithPlan(rootMemref, codelet))
         continue;
       if (rawCodirDependencyNeedsHostBridge(rootMemref) &&
           !codirDepRequiresPhaseRedistributionBridge(codelet, depIdx))
         continue;
-      std::optional<unsigned> ownerDim = getCodirDepOwnerDim(codelet, depIdx);
-      // A non-empty window always carries an owner dim; require all unioned
-      // read deps to agree on it so the padded dimension is unambiguous.
-      if (!ownerDim)
-        continue;
-      if (unionOwnerDim && *unionOwnerDim != *ownerDim)
-        continue;
-      unionOwnerDim = ownerDim;
-      unionWindow.lower = std::max(unionWindow.lower, window.lower);
-      unionWindow.upper = std::max(unionWindow.upper, window.upper);
+      for (CodirOwnerHaloWindow window :
+           getCodirOwnerHaloWindows(codelet, depIdx, memrefRank,
+                                    /*requireReadOnly=*/!haloStorageDep &&
+                                        !codirAccessMayWrite(*mode)))
+        mergeCodirOwnerHaloWindow(unionWindows, window);
     }
   });
 
-  return unionWindow;
+  return unionWindows;
+}
+
+static inline SmallVector<CodirOwnerHaloWindow, 4>
+getCodirBlockStorageHaloWindows(codir::CodeletOp codelet, unsigned depIndex,
+                                unsigned memrefRank) {
+  SmallVector<CodirOwnerHaloWindow, 4> windows;
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!codelet || depIndex >= codelet.getDeps().size() || !ownerDims)
+    return windows;
+
+  SmallVector<CodirOwnerHaloWindow, 4> storageWindows =
+      codirBackingBufferHaloWindows(
+          ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
+              codelet.getDeps()[depIndex]),
+          memrefRank);
+  windows.reserve(ownerDims->size());
+  for (unsigned ownerDim : *ownerDims) {
+    CodirOwnerHaloWindow resolved;
+    resolved.ownerDim = ownerDim;
+    for (const CodirOwnerHaloWindow &candidate : storageWindows) {
+      if (candidate.ownerDim == ownerDim) {
+        resolved = candidate;
+        break;
+      }
+    }
+    windows.push_back(resolved);
+  }
+  return windows;
+}
+
+static inline CodirOwnerHaloWindow
+getCodirBlockStorageHaloWindowForDim(codir::CodeletOp codelet,
+                                     unsigned depIndex, unsigned ownerDim,
+                                     unsigned memrefRank) {
+  for (const CodirOwnerHaloWindow &window :
+       getCodirBlockStorageHaloWindows(codelet, depIndex, memrefRank)) {
+    if (window.ownerDim == ownerDim)
+      return window;
+  }
+  CodirOwnerHaloWindow empty;
+  empty.ownerDim = ownerDim;
+  return empty;
 }
 
 static inline std::optional<codir::CodirStorageViewKind>
@@ -1080,10 +1361,8 @@ getCodirDepStorageViewKind(codir::CodeletOp codelet, unsigned depIndex) {
   return view.getValue();
 }
 
-/// First-class collective family for |codelet|'s |depIndex|, read from the
-/// `dep_collectives` carrier StoragePlanning stamped via `chooseCollective`
-/// (ADR-0003 §7b). Defaults to `none` when the carrier is absent (e.g. IR not
-/// produced through StoragePlanning), which keeps lowering unchanged.
+/// First-class collective family for |codelet|'s |depIndex|. Defaults to
+/// `none` when the carrier is absent.
 static inline codir::CodirCollectiveKind
 getCodirDepCollectiveKind(codir::CodeletOp codelet, unsigned depIndex) {
   ArrayAttr collectives =
@@ -1346,6 +1625,15 @@ filterHostBridgeReadSyncAnchors(Operation *anchor,
 static inline bool
 hostBridgeNeedsInitialCopyIn(Operation *anchor,
                              ArrayRef<HostBridgeParticipant> participants) {
+  if (llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
+        if (!codirAccessMayWrite(participant.mode))
+          return false;
+        return getCodirDepCollectiveKind(participant.codelet,
+                                         participant.depIndex) ==
+               codir::CodirCollectiveKind::halo;
+      }))
+    return true;
+
   bool hasReadParticipant =
       llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
         return codirAccessMayRead(participant.mode);
@@ -1703,8 +1991,9 @@ getBridgeLogicalElementSizes(OpBuilder &builder, Location loc, Value hostView) {
 
 static inline void materializeHostBlockElementCopyNest(
     OpBuilder &builder, Location loc, Value hostView, Value blockPayload,
-    ArrayRef<Value> copySizes, Value ownerOffset, unsigned ownerDim,
-    bool copyIntoBlock, SmallVectorImpl<Value> &indices) {
+    ArrayRef<Value> copySizes, ArrayRef<Value> hostOffsets,
+    ArrayRef<Value> blockOffsets, bool copyIntoBlock,
+    SmallVectorImpl<Value> &indices) {
   unsigned dim = indices.size();
   if (dim == copySizes.size()) {
     SmallVector<Value> hostIndices;
@@ -1712,10 +2001,15 @@ static inline void materializeHostBlockElementCopyNest(
     hostIndices.reserve(indices.size());
     blockIndices.reserve(indices.size());
     for (auto [idx, value] : llvm::enumerate(indices)) {
-      blockIndices.push_back(value);
-      if (idx == ownerDim) {
+      if (idx < blockOffsets.size() && blockOffsets[idx]) {
+        blockIndices.push_back(
+            arith::AddIOp::create(builder, loc, blockOffsets[idx], value));
+      } else {
+        blockIndices.push_back(value);
+      }
+      if (idx < hostOffsets.size() && hostOffsets[idx]) {
         hostIndices.push_back(
-            arith::AddIOp::create(builder, loc, ownerOffset, value));
+            arith::AddIOp::create(builder, loc, hostOffsets[idx], value));
         continue;
       }
       hostIndices.push_back(value);
@@ -1741,7 +2035,7 @@ static inline void materializeHostBlockElementCopyNest(
   builder.setInsertionPointToStart(loop.getBody());
   indices.push_back(loop.getInductionVar());
   materializeHostBlockElementCopyNest(builder, loc, hostView, blockPayload,
-                                      copySizes, ownerOffset, ownerDim,
+                                      copySizes, hostOffsets, blockOffsets,
                                       copyIntoBlock, indices);
   indices.pop_back();
 }
@@ -1856,19 +2150,52 @@ materializeCoarseHostDbForHostBridge(OpBuilder &builder, Location loc,
 static inline arts::DbAcquireOp
 materializeBridgeAcquire(OpBuilder &builder, Location loc,
                          arts::DbAllocOp alloc, arts::ArtsMode mode,
+                         arts::PartitionMode partitionMode,
+                         ArrayRef<Value> offsets, ArrayRef<Value> sizes,
+                         Value boundsValid = Value{}) {
+  return arts::DbAcquireOp::create(
+      builder, loc, mode, alloc.getGuid(), alloc.getPtr(), partitionMode,
+      /*indices=*/SmallVector<Value>{},
+      SmallVector<Value>(offsets.begin(), offsets.end()),
+      SmallVector<Value>(sizes.begin(), sizes.end()),
+      /*partitionIndices=*/SmallVector<Value>{},
+      /*partitionOffsets=*/SmallVector<Value>{},
+      /*partitionSizes=*/SmallVector<Value>{}, boundsValid,
+      /*elementOffsets=*/SmallVector<Value>{},
+      /*elementSizes=*/SmallVector<Value>{});
+}
+
+static inline arts::DbAcquireOp
+materializeBridgeAcquire(OpBuilder &builder, Location loc,
+                         arts::DbAllocOp alloc, arts::ArtsMode mode,
                          arts::PartitionMode partitionMode, Value offset,
-                         Value size) {
-  return arts::DbAcquireOp::create(builder, loc, mode, alloc.getGuid(),
-                                   alloc.getPtr(), partitionMode,
-                                   /*indices=*/SmallVector<Value>{},
-                                   /*offsets=*/SmallVector<Value>{offset},
-                                   /*sizes=*/SmallVector<Value>{size},
-                                   /*partitionIndices=*/SmallVector<Value>{},
-                                   /*partitionOffsets=*/SmallVector<Value>{},
-                                   /*partitionSizes=*/SmallVector<Value>{},
-                                   /*boundsValid=*/Value{},
-                                   /*elementOffsets=*/SmallVector<Value>{},
-                                   /*elementSizes=*/SmallVector<Value>{});
+                         Value size, Value boundsValid = Value{}) {
+  SmallVector<Value, 1> offsets{offset};
+  SmallVector<Value, 1> sizes{size};
+  return materializeBridgeAcquire(builder, loc, alloc, mode, partitionMode,
+                                  offsets, sizes, boundsValid);
+}
+
+static inline Value materializeProduct(OpBuilder &builder, Location loc,
+                                       ValueRange values) {
+  Value product = createOneIndex(builder, loc);
+  for (Value value : values)
+    product = arith::MulIOp::create(builder, loc, product, value);
+  return product;
+}
+
+static inline SmallVector<Value>
+materializeRowMajorCoordinates(OpBuilder &builder, Location loc, Value ordinal,
+                               ValueRange sizes) {
+  SmallVector<Value> coords(sizes.size());
+  Value remaining = ordinal;
+  for (int64_t dim = static_cast<int64_t>(sizes.size()) - 1; dim >= 0; --dim) {
+    Value size = sizes[dim];
+    coords[dim] = arith::RemUIOp::create(builder, loc, remaining, size);
+    if (dim != 0)
+      remaining = arith::DivUIOp::create(builder, loc, remaining, size);
+  }
+  return coords;
 }
 
 static inline LogicalResult
@@ -1883,10 +2210,14 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
   if (!hostAlloc)
     return failure();
 
-  std::optional<unsigned> ownerDim = getCodirDepOwnerDim(codelet, depIndex);
-  if (!ownerDim || *ownerDim >= static_cast<unsigned>(hostType.getRank()))
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->empty())
     return failure();
-  if (blockAlloc.getSizes().size() != 1 ||
+  for (unsigned ownerDim : *ownerDims)
+    if (ownerDim >= static_cast<unsigned>(hostType.getRank()))
+      return failure();
+  if (blockAlloc.getSizes().size() != ownerDims->size() ||
       blockAlloc.getElementSizes().size() !=
           static_cast<size_t>(hostType.getRank()))
     return failure();
@@ -1898,26 +2229,16 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
 
   Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
-  Value blockCount = blockAlloc.getSizes().front();
-  std::optional<int64_t> plannedBlockSize = getSingleCodirTileOwnerBlockSize(
-      codelet, depIndex, static_cast<unsigned>(hostType.getRank()));
-  Value ownerBlockSize =
-      plannedBlockSize ? createConstantIndex(builder, loc, *plannedBlockSize)
-                       : blockAlloc.getElementSizes()[*ownerDim];
-  CodirOwnerHaloWindow ownerHalo =
-      copyIntoBlock
-          ? getCodirOwnerHaloWindow(codelet, depIndex,
-                                    static_cast<unsigned>(hostType.getRank()))
-          : CodirOwnerHaloWindow{};
+  Value blockCount = materializeProduct(builder, loc, blockAlloc.getSizes());
+  std::optional<SmallVector<int64_t, 4>> plannedBlockSizes =
+      getCodirTileOwnerBlockSizes(codelet, depIndex,
+                                  static_cast<unsigned>(hostType.getRank()));
+  SmallVector<CodirOwnerHaloWindow, 4> ownerHalos =
+      getCodirBlockStorageHaloWindows(
+          codelet, depIndex, static_cast<unsigned>(hostType.getRank()));
+  SmallVector<Value, 4> ownerParams =
+      getCodirDepOwnerParamValues(codelet, depIndex);
 
-  // Cross-node gather (copy-out only): wrap the per-block copy in an outer
-  // per-node loop so every node assembles the COMPLETE coarse buffer from all
-  // producer blocks, pulling the blocks it did not produce through the existing
-  // cross-node read-only block acquire. This is the gather half of a
-  // transpose-style cross-owner reduction: once the coarse intermediate is
-  // complete on every node, the cross-owner reduction reads correct values.
-  // The default intranode copy-out (crossNodeGather == false) is byte-for-byte
-  // unchanged, so every other kernel's lowering is preserved.
   bool gatherAcrossNodes = crossNodeGather && !copyIntoBlock;
   OpBuilder::InsertionGuard guard(builder);
   Value gatherNodeOrdinal;
@@ -1934,34 +2255,53 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
 
   auto loop = scf::ForOp::create(builder, loc, zero, blockCount, one);
   builder.setInsertionPointToStart(loop.getBody());
-  Value blockIndex = loop.getInductionVar();
-  Value ownerDomainBase =
-      materializeCodirOwnerDomainBase(builder, loc, codelet);
-  Value ownerBlockOffset =
-      arith::MulIOp::create(builder, loc, blockIndex, ownerBlockSize);
-  Value ownerOffset =
-      arith::AddIOp::create(builder, loc, ownerDomainBase, ownerBlockOffset);
-  Value ownerCopyStart =
-      subtractClampZero(builder, loc, ownerOffset, ownerHalo.lower);
-  Value requestedEnd =
-      arith::AddIOp::create(builder, loc, ownerOffset, ownerBlockSize);
-  if (ownerHalo.upper > 0)
-    requestedEnd = arith::AddIOp::create(
-        builder, loc, requestedEnd,
-        createConstantIndex(builder, loc, ownerHalo.upper));
-  Value ownerCopyEnd = arith::MinUIOp::create(builder, loc, requestedEnd,
-                                              logicalSizes[*ownerDim]);
-  Value ownerCopySize = materializePositiveDifferenceOrZero(
-      builder, loc, ownerCopyEnd, ownerCopyStart);
+  Value blockOrdinal = loop.getInductionVar();
+  SmallVector<Value> blockCoords = materializeRowMajorCoordinates(
+      builder, loc, blockOrdinal, blockAlloc.getSizes());
 
-  SmallVector<Value> copySizes;
-  copySizes.reserve(hostType.getRank());
-  for (int64_t dim = 0, rank = hostType.getRank(); dim < rank; ++dim) {
-    if (static_cast<unsigned>(dim) == *ownerDim) {
-      copySizes.push_back(ownerCopySize);
-    } else {
-      copySizes.push_back(logicalSizes[dim]);
+  SmallVector<Value> hostOffsets(static_cast<size_t>(hostType.getRank()), zero);
+  SmallVector<Value> blockOffsets(static_cast<size_t>(hostType.getRank()),
+                                  zero);
+  SmallVector<Value> copySizes(logicalSizes.begin(), logicalSizes.end());
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    Value ownerBlockSize =
+        plannedBlockSizes && slot < plannedBlockSizes->size()
+            ? createConstantIndex(builder, loc, (*plannedBlockSizes)[slot])
+            : blockAlloc.getElementSizes()[ownerDim];
+    Value domainBase =
+        slot < ownerParams.size()
+            ? materializeCodirOwnerDomainBase(builder, loc, codelet,
+                                              ownerParams[slot])
+            : materializeCodirOwnerDomainBase(builder, loc, codelet);
+    Value ownerBlockOffset =
+        arith::MulIOp::create(builder, loc, blockCoords[slot], ownerBlockSize);
+    Value ownerOffset =
+        arith::AddIOp::create(builder, loc, domainBase, ownerBlockOffset);
+    CodirOwnerHaloWindow ownerHalo;
+    for (CodirOwnerHaloWindow candidate : ownerHalos) {
+      if (candidate.ownerDim == ownerDim) {
+        ownerHalo = candidate;
+        break;
+      }
     }
+    Value ownerCopyStart =
+        copyIntoBlock
+            ? subtractClampZero(builder, loc, ownerOffset, ownerHalo.lower)
+            : ownerOffset;
+    Value requestedEnd =
+        arith::AddIOp::create(builder, loc, ownerOffset, ownerBlockSize);
+    if (copyIntoBlock && ownerHalo.upper > 0)
+      requestedEnd = arith::AddIOp::create(
+          builder, loc, requestedEnd,
+          createConstantIndex(builder, loc, ownerHalo.upper));
+    Value ownerCopyEnd = arith::MinUIOp::create(builder, loc, requestedEnd,
+                                                logicalSizes[ownerDim]);
+    hostOffsets[ownerDim] = ownerCopyStart;
+    if (!copyIntoBlock && ownerHalo.lower > 0)
+      blockOffsets[ownerDim] =
+          createConstantIndex(builder, loc, ownerHalo.lower);
+    copySizes[ownerDim] = materializePositiveDifferenceOrZero(
+        builder, loc, ownerCopyEnd, ownerCopyStart);
   }
 
   arts::ArtsMode hostMode =
@@ -1971,20 +2311,22 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
   auto hostAcquire =
       materializeBridgeAcquire(builder, loc, hostAlloc, hostMode,
                                arts::PartitionMode::coarse, zero, one);
-  auto blockAcquire =
-      materializeBridgeAcquire(builder, loc, blockAlloc, blockMode,
-                               arts::PartitionMode::block, blockIndex, one);
+  SmallVector<Value> blockWindowSizes(blockCoords.size(), one);
+  auto blockAcquire = materializeBridgeAcquire(
+      builder, loc, blockAlloc, blockMode, arts::PartitionMode::block,
+      blockCoords, blockWindowSizes);
 
   SmallVector<Value> deps{hostAcquire.getPtr(), blockAcquire.getPtr()};
   SmallVector<Value> params;
-  params.reserve(copySizes.size() + 1);
-  params.push_back(ownerCopyStart);
+  params.reserve(hostOffsets.size() + blockOffsets.size() + copySizes.size());
+  params.append(hostOffsets.begin(), hostOffsets.end());
+  params.append(blockOffsets.begin(), blockOffsets.end());
   params.append(copySizes.begin(), copySizes.end());
 
   arts::ArtsLaunchPolicy launch;
   if (copyIntoBlock)
     launch = arts::resolveArtsOrdinalLaunchPolicy(
-        blockAlloc->getParentOfType<ModuleOp>(), blockIndex, builder, loc);
+        blockAlloc->getParentOfType<ModuleOp>(), blockOrdinal, builder, loc);
   else if (gatherAcrossNodes)
     launch = arts::resolveArtsOrdinalLaunchPolicy(
         blockAlloc->getParentOfType<ModuleOp>(), gatherNodeOrdinal, builder,
@@ -2003,20 +2345,27 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
   {
     OpBuilder::InsertionGuard bodyGuard(builder);
     builder.setInsertionPointToStart(&body);
-    Value bodyZero = createZeroIndex(builder, loc);
-    Value hostPayload = arts::DbRefOp::create(builder, loc, body.getArgument(0),
-                                              SmallVector<Value>{bodyZero});
-    Value blockPayload = arts::DbRefOp::create(
-        builder, loc, body.getArgument(1), SmallVector<Value>{bodyZero});
-    Value bodyOwnerOffset = body.getArgument(2);
+    Value hostPayload =
+        materializeInnerPayload(builder, loc, body.getArgument(0));
+    Value blockPayload =
+        materializeInnerPayload(builder, loc, body.getArgument(1));
+    unsigned rank = static_cast<unsigned>(hostType.getRank());
+    SmallVector<Value> bodyHostOffsets;
+    bodyHostOffsets.reserve(rank);
+    for (unsigned i = 0; i < rank; ++i)
+      bodyHostOffsets.push_back(body.getArgument(2 + i));
+    SmallVector<Value> bodyBlockOffsets;
+    bodyBlockOffsets.reserve(rank);
+    for (unsigned i = 0; i < rank; ++i)
+      bodyBlockOffsets.push_back(body.getArgument(2 + rank + i));
     SmallVector<Value> bodyCopySizes;
     bodyCopySizes.reserve(copySizes.size());
     for (size_t i = 0; i < copySizes.size(); ++i)
-      bodyCopySizes.push_back(body.getArgument(3 + i));
+      bodyCopySizes.push_back(body.getArgument(2 + rank * 2 + i));
     SmallVector<Value> indices;
-    materializeHostBlockElementCopyNest(builder, loc, hostPayload, blockPayload,
-                                        bodyCopySizes, bodyOwnerOffset,
-                                        *ownerDim, copyIntoBlock, indices);
+    materializeHostBlockElementCopyNest(
+        builder, loc, hostPayload, blockPayload, bodyCopySizes, bodyHostOffsets,
+        bodyBlockOffsets, copyIntoBlock, indices);
     arts::YieldOp::create(builder, loc);
   }
 
@@ -2053,6 +2402,37 @@ materializePerBlockCopyNest(OpBuilder &builder, Location loc, Value srcPayload,
   indices.push_back(loop.getInductionVar());
   materializePerBlockCopyNest(builder, loc, srcPayload, dstPayload, copySizes,
                               indices);
+  indices.pop_back();
+}
+
+static inline void materializePerBlockOffsetCopyNest(
+    OpBuilder &builder, Location loc, Value srcPayload, Value dstPayload,
+    ArrayRef<Value> copySizes, ArrayRef<Value> srcOffsets,
+    ArrayRef<Value> dstOffsets, SmallVectorImpl<Value> &indices) {
+  unsigned dim = indices.size();
+  if (dim == copySizes.size()) {
+    SmallVector<Value> srcIndices;
+    SmallVector<Value> dstIndices;
+    srcIndices.reserve(indices.size());
+    dstIndices.reserve(indices.size());
+    for (auto [idx, induction] : llvm::enumerate(indices)) {
+      srcIndices.push_back(
+          arith::AddIOp::create(builder, loc, srcOffsets[idx], induction));
+      dstIndices.push_back(
+          arith::AddIOp::create(builder, loc, dstOffsets[idx], induction));
+    }
+    Value loaded = memref::LoadOp::create(builder, loc, srcPayload, srcIndices);
+    memref::StoreOp::create(builder, loc, loaded, dstPayload, dstIndices);
+    return;
+  }
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  auto loop = scf::ForOp::create(builder, loc, zero, copySizes[dim], one);
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(loop.getBody());
+  indices.push_back(loop.getInductionVar());
+  materializePerBlockOffsetCopyNest(builder, loc, srcPayload, dstPayload,
+                                    copySizes, srcOffsets, dstOffsets, indices);
   indices.pop_back();
 }
 
@@ -2157,6 +2537,54 @@ readPartitionScoreConcurrencyFloor(codir::CodeletOp codelet) {
   return 0;
 }
 
+static inline int64_t readPartitionScoreMuBlockCount(codir::CodeletOp codelet) {
+  if (!codelet)
+    return 0;
+  auto score = dyn_cast_or_null<DictionaryAttr>(
+      codelet->getAttr(codir::AttrNames::PartitionScore));
+  if (!score)
+    return 0;
+
+  if (std::optional<int64_t> muBlocks = readPositiveI64(
+          score, codir::AttrNames::PartitionScoreKeys::MuBlockCount))
+    return *muBlocks;
+  if (std::optional<int64_t> chosenCu = readPositiveI64(
+          score, codir::AttrNames::PartitionScoreKeys::ChosenCuCount))
+    return *chosenCu;
+  return 0;
+}
+
+static inline int64_t readPartitionGraphMuBlockCount(codir::CodeletOp codelet) {
+  if (!codelet)
+    return 0;
+  auto graph = dyn_cast_or_null<ArrayAttr>(
+      codelet->getAttr(codir::AttrNames::PartitionGraph));
+  if (!graph)
+    return 0;
+
+  int64_t bestAny = 0;
+  int64_t bestMismatch = 0;
+  for (Attribute attr : graph) {
+    auto entry = dyn_cast<DictionaryAttr>(attr);
+    if (!entry)
+      continue;
+    auto blocks = dyn_cast_or_null<IntegerAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::MuBlockCount));
+    if (!blocks || blocks.getInt() <= 0)
+      continue;
+
+    int64_t count = blocks.getInt();
+    bestAny = std::max(bestAny, count);
+    auto edgeClass = dyn_cast_or_null<StringAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::EdgeClass));
+    if (edgeClass &&
+        edgeClass.getValue() ==
+            codir::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
+      bestMismatch = std::max(bestMismatch, count);
+  }
+  return bestMismatch > 0 ? bestMismatch : bestAny;
+}
+
 static inline int64_t chooseBridgeBlockGroupSize(arts::DbAllocOp blockAlloc,
                                                  codir::CodeletOp codelet) {
   constexpr int64_t kTargetBridgeTaskBytes = 256LL * 1024LL;
@@ -2178,11 +2606,17 @@ static inline int64_t chooseBridgeBlockGroupSize(arts::DbAllocOp blockAlloc,
   desired = std::clamp<int64_t>(desired, 1, kMaxBridgeGroupBlocks);
   desired = std::min<int64_t>(desired, *blockCount);
 
-  // SDE's partition score exposes the CU parallelism it preserved after
-  // communication-aware tile coarsening. Honor that signal when batching bridge
-  // copies so ARTS reduces launch overhead without collapsing the ready EDT
-  // count below the concurrency SDE intentionally surfaced.
+  int64_t muBlocks = std::max(readPartitionScoreMuBlockCount(codelet),
+                              readPartitionGraphMuBlockCount(codelet));
+  if (muBlocks > 0)
+    muBlocks = std::min<int64_t>(*blockCount, muBlocks);
+
+  // Keep MU block granularity independent from copy EDT granularity: the DBs
+  // stay per block, while bridge EDTs may cover block ranges when enough CU
+  // parallelism remains exposed.
   int64_t concurrencyFloor = readPartitionScoreConcurrencyFloor(codelet);
+  if (concurrencyFloor <= 0 && muBlocks > 0)
+    concurrencyFloor = muBlocks;
   if (concurrencyFloor > 0) {
     int64_t desiredTasks = std::min<int64_t>(*blockCount, concurrencyFloor);
     int64_t maxGroupForConcurrency =
@@ -2196,34 +2630,9 @@ static inline int64_t chooseBridgeBlockGroupSize(arts::DbAllocOp blockAlloc,
   return 1;
 }
 
-/// WF-2 keystone: the per-block single-writer all-gather substrate.
-///
-/// The coarse write-back (materializeHostBlockCopyLoop with allGather) made
-/// each node assemble a SINGLE coarse <inout> replica DB; the disjoint
-/// per-block strip writes then contend on that one DB's exclusive-write (EW)
-/// frontier and serialize (ADR-0001 phase 2; un-ordering it instead races).
-/// That coarse replica is the thing ADR-0003 declares cannot scale.
-///
-/// This emission realizes the architecture's central insight (§2c): every
-/// gathered output block is its OWN distinct-GUID DB written ONCE by exactly
-/// one EDT. The gathered replica is a `block`-mode DB (N per-block DBs, each
-/// reserved with its own GUID by createMultiDbs) created REPLICATED on every
-/// node (no distributed ownership: each node holds all blocks locally, exactly
-/// like an MPI rank's full recv buffer). Each copy EDT acquires:
-///   - the producer block  RO  (<in>, PREFER_DUPLICATE via the read path) —
-///     local fast, remote through the existing cross-node RO db acquire,
-///   - its OWN gathered block  output-only (<out>) — block partition by the
-///     block index, so it is one distinct DB, one writer.
-/// Because each gathered block is a distinct DB, the EW frontier degenerates to
-/// a single uncontended writer: race-free by construction, and the N block
-/// writes run concurrently (no shared frontier). This is the phase-2
-/// serialization removed at the root, not relaxed.
-///
-/// Returns the gathered replicated block DB's inner payload (a memref view) so
-/// the caller can decide whether a consumer can read it block-native. The
-  /// existing coarse contraction consumers that read the whole intermediate from
-  /// one EDT cannot read N per-block DBs until their contraction loop is tiled
-  /// (WF-3); that boundary is reported, not papered over by re-coarsening.
+/// Per-block single-writer all-gather substrate. Each gathered block is a
+/// distinct replicated DB written once, while the bridge EDT may group adjacent
+/// block copies to amortize launch overhead.
 static inline FailureOr<Value>
 emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
                                arts::DbAllocOp producerBlockAlloc,
@@ -2337,7 +2746,6 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
   {
     OpBuilder::InsertionGuard bodyGuard(builder);
     builder.setInsertionPointToStart(&body);
-    Value bodyZero = createZeroIndex(builder, loc);
     unsigned paramBase = deps.size();
     SmallVector<Value> bodyCopySizes;
     bodyCopySizes.reserve(blockElementSizes.size());
@@ -2346,10 +2754,10 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
     for (int64_t lane = 0; lane < blockGroupSize; ++lane) {
       unsigned srcArg = static_cast<unsigned>(lane) * 2;
       unsigned dstArg = srcArg + 1;
-      Value srcPayload = arts::DbRefOp::create(
-          builder, loc, body.getArgument(srcArg), SmallVector<Value>{bodyZero});
-      Value dstPayload = arts::DbRefOp::create(
-          builder, loc, body.getArgument(dstArg), SmallVector<Value>{bodyZero});
+      Value srcPayload =
+          materializeInnerPayload(builder, loc, body.getArgument(srcArg));
+      Value dstPayload =
+          materializeInnerPayload(builder, loc, body.getArgument(dstArg));
       SmallVector<Value> indices;
       materializePerBlockCopyNest(builder, loc, srcPayload, dstPayload,
                                   bodyCopySizes, indices);
@@ -2365,45 +2773,8 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
   return materializeInnerPayload(builder, loc, replicaAlloc.getPtr());
 }
 
-/// WF-3 keystone: the per-block single-writer summing settle — the `arith.addf`
-/// dual of emitPerBlockAllGatherWriteBack.
-///
-/// A cross-owner reduction or chained contraction produces, per output block, P
-/// partial results — one per contraction tile / per node strip. The legacy
-/// coarse path funnels those partials through a single shared <inout> replica DB
-/// with an exclusive-write (EW) frontier that serializes the disjoint partial
-/// writes (and un-ordered, races them): the same ADR-0001 phase-2 failure the
-/// all-gather removed at the root.
-///
-/// This emission realizes the architecture's central insight (§2c) for the
-/// reduction direction: every settled output block is its OWN distinct-GUID DB
-/// written ONCE by exactly one EDT. The P per-(block,tile) partials are
-/// themselves per-block single-writer DBs (each its own GUID via
-/// createMultiDbs, flat outer index `block * tileCount + tile`), and the settle
-/// DB is a `block` mode DB created REPLICATED on every node
-/// (perBlockReplicated: each node holds all settled blocks locally, exactly
-/// like an MPI rank's full recv buffer after an allreduce). For each settled
-/// block, exactly one EDT:
-///   - RO-acquires (with PREFER_DUPLICATE via the read path) the P partial
-///     blocks it must sum — local fast, remote through the existing cross-node
-///     RO db acquire. The acquires are emitted OUTSIDE the EDT and delivered as
-///     block-args (the EdtLowering ABI forbids GEPing an outer DB alloc from
-///     the EDT body — every DB an EDT touches must arrive as a dep), exactly as
-///     the all-gather's producer side does.
-///   - writes its OWN settled block output-only (<out>) ONCE, accumulating the
-///   P
-///     partials with `+=` (arith.addf). NO RW accumulator, NO coarse DB.
-/// Because each settled block is a distinct DB, the EW frontier degenerates to
-/// a single uncontended writer: race-free by construction, and the N block
-/// settles run concurrently (no shared frontier). This is the phase-2
-/// serialization removed at the root, not relaxed — the
-/// reduce-scatter/allreduce analogue of MPI's disjoint per-rank send/recv
-/// buffers.
-///
-/// `partialBlockAlloc` is the per-(block,tile) partials DB (outer dim =
-/// blockCount * tileCount, element block = one output block's footprint).
-/// Returns the settled replicated block DB's inner payload (a memref view) so a
-/// caller can wire a consumer to read it block-native.
+/// Per-block single-writer summing settle. Each output block is written once
+/// from the P per-(block,tile) partial blocks, all delivered as EDT deps.
 static inline FailureOr<Value>
 emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
                           arts::DbAllocOp partialBlockAlloc, unsigned tileCount,
@@ -2525,16 +2896,13 @@ emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
   {
     OpBuilder::InsertionGuard bodyGuard(builder);
     builder.setInsertionPointToStart(&body);
-    Value bodyZero = createZeroIndex(builder, loc);
-    // Block-args 0..tileCount-1 are the partial payloads; tileCount is the dst.
     SmallVector<Value> partialPayloads;
     partialPayloads.reserve(tileCount);
     for (unsigned tile = 0; tile < tileCount; ++tile)
-      partialPayloads.push_back(arts::DbRefOp::create(
-          builder, loc, body.getArgument(tile), SmallVector<Value>{bodyZero}));
+      partialPayloads.push_back(
+          materializeInnerPayload(builder, loc, body.getArgument(tile)));
     Value dstPayload =
-        arts::DbRefOp::create(builder, loc, body.getArgument(tileCount),
-                              SmallVector<Value>{bodyZero});
+        materializeInnerPayload(builder, loc, body.getArgument(tileCount));
     SmallVector<Value> bodyCopySizes;
     bodyCopySizes.reserve(blockElementSizes.size());
     for (size_t i = 0; i < blockElementSizes.size(); ++i)
@@ -2553,122 +2921,126 @@ emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
   return materializeInnerPayload(builder, loc, settleAlloc.getPtr());
 }
 
-/// WF-6 keystone: the per-block single-writer stencil substrate — the halo
-/// (neighbor-exchange) dual of emitPerBlockAllGatherWriteBack.
-///
-/// An iterative double-buffered stencil (jacobi2d's A/B re-used across
-/// timesteps) reads each owner block plus a one-cell halo of its top/bottom
-/// neighbor blocks, and WRITES the same block-distributed buffer the NEXT
-/// half-step (the WAR that the all-gather/summing-settle directions do not
-/// have). The legacy path resolves the cross-node halo by DECLINING
-/// distribution entirely: the buffer becomes a single `local_only` whole-array
-/// replica per node (`stencil_read_internode_use`), so on 2n each node computes
-/// only its strip on a private replica and the neighbor strip on the OTHER node
-/// is never observed — the 2n WRONG answer. That `local_only` replica is
-/// exactly the thing ADR-0003 declares cannot scale (it is the all-gather's
-/// coarse replica with a WAR bolted on).
-///
-/// This emission realizes the architecture's central insight (§2c) for the
-/// stencil direction: the buffer stays a `block`-mode DISTRIBUTED DB (each
-/// block its own GUID via createMultiDbs, block-scattered across nodes), so
-/// every block has exactly ONE writer — the owner EDT that produces it this
-/// half-step. The cross-node halo is then a per-block neighbor RO read:
-///   - the owner block, written output-only by its single writer, and
-///   - its top/bottom neighbor blocks, RO-acquired (block partition, the
-///     existing cross-node RO db acquire pulls the remote strip), each read
-///     ORDERED AFTER that neighbor's writer (the neighbor block's single-writer
-///     frontier) — the rec_dep slice the EdtLowering ABI records, never an
-///     in-body GEP of an outer alloc.
-/// Because each block is a distinct single-writer DB, the EW frontier
-/// degenerates to one uncontended writer per block and the halo is a read of an
-/// already-settled neighbor frontier: race-free by construction, the
-/// nearest-neighbor exchange of an MPI halo, not a whole-array replica.
-///
-/// `blockAlloc` is the block-distributed stencil DB (outer dim = blockCount,
-/// element block = one owner strip padded by the halo width via
-/// stencil_supported_block_halo). Returns the stencil DB's inner payload so the
-/// caller can wire the iterative consumer to read it block-native.
-///
-/// ABI legality (the constraint that sank the in-body-acquire attempt,
-/// ADR-0003 [D]): every neighbor block an EDT reads arrives as a block-arg dep
-/// backed by a db_acquire emitted OUTSIDE the EDT; the halo-copy EDT body only
-/// reads its delivered block-args. No EDT body GEPs an outer DB alloc.
-static inline FailureOr<Value>
-emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
-                                  arts::DbAllocOp blockAlloc,
-                                  codir::CodeletOp codelet, unsigned depIndex) {
-  ModuleOp module = blockAlloc->getParentOfType<ModuleOp>();
+static inline LogicalResult
+preparePerBlockSingleWriterStencilDb(arts::DbAllocOp blockAlloc) {
+  ModuleOp module = blockAlloc ? blockAlloc->getParentOfType<ModuleOp>()
+                               : ModuleOp{};
   if (!module || !arts::hasArtsInterNodeRuntime(module))
     return failure();
-  // Single-axis block DB whose element block carries one owner strip's
-  // footprint (already halo-padded on the owner dim by createDbBackedMemref).
-  if (blockAlloc.getSizes().size() != 1 || blockAlloc.getElementSizes().empty())
+  if (blockAlloc.getSizes().empty() || blockAlloc.getElementSizes().empty())
     return failure();
-
-  // Keep the stencil DB DISTRIBUTED (block-scattered): each block its own GUID,
-  // one writer per block. Clearing local_only is what lets the
-  // distributed-ownership pass place blocks across nodes so a node owns only
-  // its strip; the neighbor halo then crosses the node boundary as a real RO
-  // acquire, never a whole-array replica. The single-writer property holds per
-  // block-GUID, so the EW frontier never serializes.
   blockAlloc.removeLocalOnlyAttr();
   blockAlloc.setPerBlockSingleWriterStencilAttr(
       UnitAttr::get(blockAlloc.getContext()));
+  return success();
+}
+
+static inline FailureOr<Value>
+emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
+                                  arts::DbAllocOp blockAlloc,
+                                  codir::CodeletOp codelet, unsigned depIndex,
+                                  ValueRange phaseTokens = {}) {
+  if (failed(preparePerBlockSingleWriterStencilDb(blockAlloc)))
+    return failure();
+  ModuleOp module = blockAlloc->getParentOfType<ModuleOp>();
 
   OpBuilder::InsertionGuard topGuard(builder);
   Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
-  Value blockCount = blockAlloc.getSizes().front();
+  Value blockCount = materializeProduct(builder, loc, blockAlloc.getSizes());
 
   SmallVector<Value> blockElementSizes(blockAlloc.getElementSizes().begin(),
                                        blockAlloc.getElementSizes().end());
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<int64_t, 4>> ownerBlockSizes =
+      getCodirTileOwnerBlockSizes(
+          codelet, depIndex, static_cast<unsigned>(blockElementSizes.size()));
+  if (!ownerDims || !ownerBlockSizes ||
+      ownerDims->size() != blockAlloc.getSizes().size() ||
+      ownerDims->size() != ownerBlockSizes->size())
+    return failure();
 
-  // Per-block neighbor halo exchange. For each owner block, RO-acquire its
-  // top/bottom neighbor blocks (clamped to [0, blockCount)) OUTSIDE the EDT and
-  // deliver them as block-arg deps; the exchange EDT copies the one-cell halo
-  // boundary from each neighbor strip into this block's halo region. The
-  // neighbor RO acquire is ORDERED AFTER that neighbor's single writer (its
-  // block-GUID EW frontier), so each half-step observes the previous
-  // half-step's settled neighbor strip — the iterative WAR resolved as a
-  // nearest-neighbor read, not a replica broadcast.
+  SmallVector<CodirOwnerHaloWindow, 4> ownerHalos =
+      getCodirBlockStorageHaloWindows(
+          codelet, depIndex, static_cast<unsigned>(blockElementSizes.size()));
+  if (ownerHalos.size() != ownerDims->size())
+    return failure();
+
   auto blockLoop = scf::ForOp::create(builder, loc, zero, blockCount, one);
   builder.setInsertionPointToStart(blockLoop.getBody());
-  Value blockIndex = blockLoop.getInductionVar();
+  Value blockOrdinal = blockLoop.getInductionVar();
+  SmallVector<Value> blockCoords = materializeRowMajorCoordinates(
+      builder, loc, blockOrdinal, blockAlloc.getSizes());
+  SmallVector<Value> blockWindowSizes(blockCoords.size(), one);
 
-  Value lastBlock = arith::SubIOp::create(builder, loc, blockCount, one);
-  // top = max(block-1, 0); bottom = min(block+1, blockCount-1).
-  Value rawTop = arith::SubIOp::create(builder, loc, blockIndex, one);
-  Value topHasPred = arith::CmpIOp::create(
-      builder, loc, arith::CmpIPredicate::ugt, blockIndex, zero);
-  Value topIndex =
-      arith::SelectOp::create(builder, loc, topHasPred, rawTop, zero);
-  Value rawBottom = arith::AddIOp::create(builder, loc, blockIndex, one);
-  Value bottomCapped =
-      arith::MinUIOp::create(builder, loc, rawBottom, lastBlock);
-  Value bottomIndex = bottomCapped;
+  auto dstAcquire = materializeBridgeAcquire(
+      builder, loc, blockAlloc, arts::ArtsMode::out, arts::PartitionMode::block,
+      blockCoords, blockWindowSizes);
+  dstAcquire.setPreserveAccessMode();
+  SmallVector<Value> deps{dstAcquire.getPtr()};
+  struct HaloCopyAction {
+    unsigned depArg = 0;
+    unsigned ownerSlot = 0;
+    bool lower = true;
+    int64_t width = 0;
+    unsigned conditionParam = 0;
+  };
+  SmallVector<HaloCopyAction, 8> copyActions;
+  SmallVector<Value, 8> actionConditions;
+  for (auto [slot, coord] : llvm::enumerate(blockCoords)) {
+    CodirOwnerHaloWindow halo = ownerHalos[slot];
+    Value lastCoord =
+        arith::SubIOp::create(builder, loc, blockAlloc.getSizes()[slot], one);
+    Value lowerRaw = arith::SubIOp::create(builder, loc, coord, one);
+    Value hasLower = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::ugt, coord, zero);
+    Value lowerCoord =
+        arith::SelectOp::create(builder, loc, hasLower, lowerRaw, zero);
+    Value upperRaw = arith::AddIOp::create(builder, loc, coord, one);
+    Value hasUpper = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::ult, coord, lastCoord);
+    Value upperCoord =
+        arith::MinUIOp::create(builder, loc, upperRaw, lastCoord);
 
-  // Destination: this owner block, output-only into its halo region. Distinct
-  // DB per block ⇒ single writer ⇒ no shared EW frontier.
-  auto dstAcquire =
-      materializeBridgeAcquire(builder, loc, blockAlloc, arts::ArtsMode::out,
-                               arts::PartitionMode::block, blockIndex, one);
-  // Neighbor strips, read-only (cross-node RO acquire, ordered after each
-  // neighbor's writer frontier). Emitted OUTSIDE the EDT as block-arg deps.
-  auto topAcquire =
-      materializeBridgeAcquire(builder, loc, blockAlloc, arts::ArtsMode::in,
-                               arts::PartitionMode::block, topIndex, one);
-  auto bottomAcquire =
-      materializeBridgeAcquire(builder, loc, blockAlloc, arts::ArtsMode::in,
-                               arts::PartitionMode::block, bottomIndex, one);
+    SmallVector<Value> lowerCoords(blockCoords.begin(), blockCoords.end());
+    SmallVector<Value> upperCoords(blockCoords.begin(), blockCoords.end());
+    lowerCoords[slot] = lowerCoord;
+    upperCoords[slot] = upperCoord;
+    if (halo.lower > 0) {
+      auto lowerAcquire = materializeBridgeAcquire(
+          builder, loc, blockAlloc, arts::ArtsMode::in,
+          arts::PartitionMode::block, lowerCoords, blockWindowSizes, hasLower);
+      unsigned conditionParam = actionConditions.size();
+      actionConditions.push_back(hasLower);
+      copyActions.push_back({static_cast<unsigned>(deps.size()),
+                             static_cast<unsigned>(slot), true, halo.lower,
+                             conditionParam});
+      deps.push_back(lowerAcquire.getPtr());
+    }
+    if (halo.upper > 0) {
+      auto upperAcquire = materializeBridgeAcquire(
+          builder, loc, blockAlloc, arts::ArtsMode::in,
+          arts::PartitionMode::block, upperCoords, blockWindowSizes, hasUpper);
+      unsigned conditionParam = actionConditions.size();
+      actionConditions.push_back(hasUpper);
+      copyActions.push_back({static_cast<unsigned>(deps.size()),
+                             static_cast<unsigned>(slot), false, halo.upper,
+                             conditionParam});
+      deps.push_back(upperAcquire.getPtr());
+    }
+  }
+  SmallVector<Value> params(actionConditions.begin(), actionConditions.end());
+  params.append(blockElementSizes.begin(), blockElementSizes.end());
+  params.append(phaseTokens.begin(), phaseTokens.end());
 
-  SmallVector<Value> deps{dstAcquire.getPtr(), topAcquire.getPtr(),
-                          bottomAcquire.getPtr()};
-  SmallVector<Value> params(blockElementSizes.begin(), blockElementSizes.end());
-
-  Value taskRoute = arts::createCurrentNodeRoute(builder, loc);
-  auto haloTask = arts::EdtOp::create(builder, loc, arts::EdtType::task,
-                                      arts::EdtConcurrency::internode,
-                                      taskRoute, deps, params);
+  arts::ArtsLaunchPolicy launch =
+      arts::resolveArtsOrdinalLaunchPolicy(module, blockOrdinal, builder, loc);
+  Value taskRoute =
+      launch.route ? launch.route : arts::createCurrentNodeRoute(builder, loc);
+  auto haloTask =
+      arts::EdtOp::create(builder, loc, arts::EdtType::task, launch.concurrency,
+                          taskRoute, deps, params);
   haloTask.setStorageBridgeCopyAttr(UnitAttr::get(haloTask.getContext()));
   haloTask.setPerBlockHaloExchangeAttr(UnitAttr::get(haloTask.getContext()));
   Block &body = haloTask.getBody().front();
@@ -2679,29 +3051,52 @@ emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
   {
     OpBuilder::InsertionGuard bodyGuard(builder);
     builder.setInsertionPointToStart(&body);
-    Value bodyZero = createZeroIndex(builder, loc);
-    Value dstPayload = arts::DbRefOp::create(builder, loc, body.getArgument(0),
-                                             SmallVector<Value>{bodyZero});
-    Value topPayload = arts::DbRefOp::create(builder, loc, body.getArgument(1),
-                                             SmallVector<Value>{bodyZero});
-    Value bottomPayload = arts::DbRefOp::create(
-        builder, loc, body.getArgument(2), SmallVector<Value>{bodyZero});
+    Value dstPayload =
+        materializeInnerPayload(builder, loc, body.getArgument(0));
     SmallVector<Value> bodyCopySizes;
     bodyCopySizes.reserve(blockElementSizes.size());
+    unsigned sizeParamBase =
+        static_cast<unsigned>(deps.size() + actionConditions.size());
     for (size_t i = 0; i < blockElementSizes.size(); ++i)
-      bodyCopySizes.push_back(body.getArgument(3 + i));
-    // Copy the neighbor boundary rows into this block's halo. The owner-dim
-    // halo width is the single padded cell on each side; the cross-dim extent
-    // is the full element size. Reuse the per-block copy nest over the boundary
-    // strip (the exact element layout is finalized by the stencil halo
-    // consolidation in DbTransforms; here we materialize the nearest-neighbor
-    // read so the dependency frontier and ABI are correct).
-    SmallVector<Value> indices;
-    materializePerBlockCopyNest(builder, loc, topPayload, dstPayload,
-                                bodyCopySizes, indices);
-    indices.clear();
-    materializePerBlockCopyNest(builder, loc, bottomPayload, dstPayload,
-                                bodyCopySizes, indices);
+      bodyCopySizes.push_back(body.getArgument(sizeParamBase + i));
+    for (const HaloCopyAction &action : copyActions) {
+      Value condition = body.getArgument(deps.size() + action.conditionParam);
+      auto copyIf = scf::IfOp::create(builder, loc, TypeRange{}, condition,
+                                      /*withElseRegion=*/false);
+      OpBuilder::InsertionGuard ifGuard(builder);
+      builder.setInsertionPointToStart(&copyIf.getThenRegion().front());
+      Value srcPayload = materializeInnerPayload(
+          builder, loc, body.getArgument(action.depArg));
+      SmallVector<Value> copySizes(bodyCopySizes.begin(), bodyCopySizes.end());
+      SmallVector<Value> srcOffsets(blockElementSizes.size(),
+                                    createZeroIndex(builder, loc));
+      SmallVector<Value> dstOffsets(blockElementSizes.size(),
+                                    createZeroIndex(builder, loc));
+      for (auto [slot, halo] : llvm::enumerate(ownerHalos)) {
+        unsigned ownerDim = (*ownerDims)[slot];
+        if (ownerDim >= copySizes.size())
+          continue;
+        int64_t blockSize = (*ownerBlockSizes)[slot];
+        Value blockSizeValue = createConstantIndex(builder, loc, blockSize);
+        if (slot == action.ownerSlot) {
+          copySizes[ownerDim] = createConstantIndex(builder, loc, action.width);
+          int64_t srcStart =
+              action.lower ? halo.lower + blockSize - action.width : halo.lower;
+          int64_t dstStart = action.lower ? 0 : halo.lower + blockSize;
+          srcOffsets[ownerDim] = createConstantIndex(builder, loc, srcStart);
+          dstOffsets[ownerDim] = createConstantIndex(builder, loc, dstStart);
+        } else {
+          copySizes[ownerDim] = blockSizeValue;
+          Value haloLower = createConstantIndex(builder, loc, halo.lower);
+          srcOffsets[ownerDim] = haloLower;
+          dstOffsets[ownerDim] = haloLower;
+        }
+      }
+      SmallVector<Value> indices;
+      materializePerBlockOffsetCopyNest(builder, loc, srcPayload, dstPayload,
+                                        copySizes, srcOffsets, dstOffsets,
+                                        indices);
+    }
     arts::YieldOp::create(builder, loc);
   }
 
@@ -2711,6 +3106,78 @@ emitPerBlockSingleWriterStencilDb(OpBuilder &builder, Location loc,
   arts::BarrierOp::create(builder, loc, reason);
 
   return materializeInnerPayload(builder, loc, blockAlloc.getPtr());
+}
+
+static inline Operation *
+findCodirOwnerDispatchAnchor(codir::CodeletOp codelet, unsigned depIndex) {
+  SmallVector<Value, 4> ownerParams =
+      getCodirDepOwnerParamValues(codelet, depIndex);
+  Operation *anchor = nullptr;
+  bool matched = false;
+  for (Operation *parent = codelet ? codelet->getParentOp() : nullptr; parent;
+       parent = parent->getParentOp()) {
+    auto loop = dyn_cast<scf::ForOp>(parent);
+    if (!loop) {
+      if (matched)
+        break;
+      continue;
+    }
+    if (containsValue(ownerParams, loop.getInductionVar())) {
+      anchor = parent;
+      matched = true;
+      continue;
+    }
+    if (matched)
+      break;
+  }
+  return anchor ? anchor : findCodirDispatchBridgeAnchor(codelet);
+}
+
+static inline SmallVector<Value, 4>
+collectEnclosingControlTokens(Operation *op) {
+  SmallVector<Value, 4> tokens;
+  for (Operation *parent = op ? op->getParentOp() : nullptr; parent;
+       parent = parent->getParentOp()) {
+    if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+      tokens.push_back(loop.getInductionVar());
+      continue;
+    }
+    if (auto ifOp = dyn_cast<scf::IfOp>(parent))
+      tokens.push_back(ifOp.getCondition());
+  }
+  return tokens;
+}
+
+static inline bool isHaloReadParticipant(const HostBridgeParticipant &participant) {
+  return codirAccessMayRead(participant.mode);
+}
+
+static inline LogicalResult emitPerBlockStencilHaloBeforeReadPhases(
+    OpBuilder &builder, Location loc, arts::DbAllocOp blockAlloc,
+    ArrayRef<HostBridgeParticipant> participants) {
+  SmallVector<Operation *, 4> emittedAnchors;
+  bool emitted = false;
+  for (const HostBridgeParticipant &participant : participants) {
+    if (!isHaloReadParticipant(participant))
+      continue;
+    Operation *dispatchAnchor =
+        findCodirOwnerDispatchAnchor(participant.codelet, participant.depIndex);
+    if (!dispatchAnchor)
+      return failure();
+    if (llvm::is_contained(emittedAnchors, dispatchAnchor))
+      continue;
+    emittedAnchors.push_back(dispatchAnchor);
+
+    builder.setInsertionPoint(dispatchAnchor);
+    SmallVector<Value, 4> phaseTokens =
+        collectEnclosingControlTokens(dispatchAnchor);
+    if (failed(emitPerBlockSingleWriterStencilDb(
+            builder, loc, blockAlloc, participant.codelet, participant.depIndex,
+            phaseTokens)))
+      return failure();
+    emitted = true;
+  }
+  return success(emitted);
 }
 
 static inline FailureOr<Value>
@@ -2753,21 +3220,8 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
     return codirAccessMayWrite(participant.mode);
   });
 
-  // First-class collective dispatch (ADR-0003 §7b). The all-gather and cross-
-  // owner reduce realizations are selected by reading the `dep_collectives`
-  // carrier StoragePlanning stamped via `chooseCollective` (the extracted gate
-  // bodies), not by re-evaluating the ad-hoc predicates here.
-  // `chooseCollective` already folds the per-dep write-mode guard, so this
-  // `any_of` over the bridge participants reproduces the historical gate
-  // decision byte-identically:
-  //   all_gather     -> coarse intermediate read by a sibling
-  //                     `replicated_read` contraction consumer: emit the
-  //                     per-block single-writer all-gather substrate. Outputs
-  //                     read only by the host select `none`, so the gate stays
-  //                     closed and their IR is unchanged.
-  //   reduce_scatter -> cross-owner transpose-reduce coarse buffers:
-  //                     fill cross-node so every node holds the complete
-  //                     result.
+  // Dispatch the concrete bridge realization from CODIR's per-dep collective
+  // carrier.
   ModuleOp bridgeModule = codelet->getParentOfType<ModuleOp>();
   bool hasInterNodeRuntime =
       bridgeModule && arts::hasArtsInterNodeRuntime(bridgeModule);
@@ -2787,13 +3241,8 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                codir::CodirCollectiveKind::reduce_scatter;
       });
 
-  // WF-3 keystone opt-in: realize a reduce_scatter/allreduce dep with the
-  // block-native per-block summing settle instead of the legacy coarse gather.
-  // ADDITIVE: `emit_block_native_settle` is absent on every kernel today
-  // (chooseCollective never sets it), so this stays false for the 18 oracle
-  // baselines and the settle is emitted only where a producer has explicitly
-  // opted in. The number of per-block partials to sum is the contraction-tile /
-  // node-strip count carried on `partial_reduction_split_factor`.
+  // Optional block-native summing settle for reduce-scatter/allreduce-shaped
+  // deps. The split factor gives the number of partial blocks to sum.
   bool perBlockSummingSettle =
       needsCopyOut &&
       llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
@@ -2805,19 +3254,8 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                    codir::CodirCollectiveKind::reduce_scatter;
       });
 
-  // WF-6 keystone: realize a `halo` collective dep (an iterative
-  // double-buffered stencil array) with the per-block single-writer stencil
-  // substrate (nearest-neighbor halo exchange on a DISTRIBUTED block DB)
-  // instead of declining distribution to a single local_only whole-array
-  // replica per node (the 2n WRONG answer; ADR-0003 §2c). The dispatch reads
-  // the `dep_collectives` carrier StoragePlanning stamped via
-  // `chooseCollective`, identical to the all-gather / reduce_scatter branches
-  // above. `chooseCollective` selects `halo` ONLY for an iterative stencil (a
-  // `stencil_*` pattern with `full_timestep` repetition — jacobi2d's
-  // cross-timestep WAR) or an explicit `emit_block_native_stencil` opt-in, so
-  // single-pass stencils (conv-2d/3d, no repetition structure) and the
-  // non-stencil kernels keep `none` and their IR is byte-identical. Cluster 2n
-  // correctness is validated on hardware, not the oracle.
+  // Iterative stencil halo uses a distributed per-block DB plus
+  // nearest-neighbor RO reads.
   bool perBlockStencilHalo =
       needsCopyOut && hasInterNodeRuntime &&
       llvm::any_of(participants, [](const HostBridgeParticipant &participant) {
@@ -2885,14 +3323,8 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
             /*copyIntoBlock=*/false, crossNodeGatherCopyOut)))
       return failure();
 
-    // Emit the per-block single-writer all-gather substrate for the gated
-    // replicated-read consumer pattern. This assembles, on every node, N
-    // per-block replicated DBs (each its own GUID, written once, output-only),
-    // RO-acquiring the producer's blocks — the race-free, concurrent collective
-    // the coarse <inout> replica above could never be (ADR-0003 §2c). The
-    // coarse write-back is kept so existing whole-array contraction consumers
-    // stay correct: rewiring those consumers to read the per-block DBs needs
-    // contraction tiling of the reduction loop (WF-3), the precise boundary of D2.
+    // Keep the coarse write-back for whole-array consumers and add the
+    // block-native replicated DB substrate for tiled consumers.
     if (perBlockAllGather) {
       builder.setInsertionPointAfter(anchor);
       FailureOr<Value> gathered = emitPerBlockAllGatherWriteBack(
@@ -2901,14 +3333,7 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
         return failure();
     }
 
-    // Emit the per-block single-writer summing settle (the arith.addf dual) for
-    // a reduce_scatter/allreduce dep that opted into the block-native path.
-    // Each settled block is its OWN distinct-GUID DB written once with `+=`
-    // over the P per-tile partials — race-free and concurrent, never the coarse
-    // <inout> replica whose EW frontier serializes the partial writes (ADR-0001
-    // phase 2; ADR-0003 §2c). Until per-tile partial producers are materialized
-    // generically, this gate is opt-in only (emit_block_native_settle), so the
-    // coarse gather above stays the default and the oracle is byte-identical.
+    // Block-native summing settle writes one distinct result block per EDT.
     if (perBlockSummingSettle) {
       unsigned tileCount = 0;
       if (auto factor = codelet.getPartialReductionSplitFactorAttr())
@@ -2923,17 +3348,11 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
       }
     }
 
-    // Emit the per-block single-writer stencil substrate (the nearest-neighbor
-    // halo dual) for a dep whose CODIR collective plan is `halo`. The block DB
-    // stays DISTRIBUTED (one writer per block); the cross-node halo is a
-    // per-block neighbor RO read ordered after each neighbor's writer — never
-    // the local_only whole-array replica whose private per-node strip drops the
-    // cross-node halo (the 2n WRONG answer; ADR-0003 §2c).
     if (perBlockStencilHalo) {
-      builder.setInsertionPointAfter(anchor);
-      FailureOr<Value> exchanged = emitPerBlockSingleWriterStencilDb(
-          builder, loc, blockAlloc, codelet, depIndex);
-      if (failed(exchanged))
+      if (failed(preparePerBlockSingleWriterStencilDb(blockAlloc)))
+        return failure();
+      if (failed(emitPerBlockStencilHaloBeforeReadPhases(
+              builder, loc, blockAlloc, participants)))
         return failure();
     }
   }

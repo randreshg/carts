@@ -1,7 +1,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(matmul-3mm-contraction-materialization)' \
 // RUN:   | %FileCheck %s --implicit-check-not=partialReductionDims
 
-// WF-3 (3mm scaler, ADR-0003 [D]). The chained-matmul G consumer reads its
+// The chained-matmul G consumer reads its
 // contraction operand F from the coarse `replicatedRead` copy (guid_f). A sibling
 // `perBlockReplicated` all-gather replica (guid_rep) holds F cross-node-complete,
 // block by block. This pass splits G's k-loop into per-(G-block, k-tile)

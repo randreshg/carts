@@ -1196,7 +1196,7 @@ findCompatibleOutputLayoutPlan(SdeSuIterateOp op) {
 }
 
 //===----------------------------------------------------------------------===//
-// Module-scoped layout-assignment access model (WF-5a / PhaseA)
+// Module-scoped layout-assignment access model.
 //===----------------------------------------------------------------------===//
 
 namespace {

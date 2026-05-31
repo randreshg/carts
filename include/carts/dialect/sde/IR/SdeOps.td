@@ -409,13 +409,8 @@ def SdeSuIterateOp
     OptionalAttr<ArrayAttr>:$physicalBlockShape,
     // Element-space contraction-tile shape authored by SDE when a matmul-class
     // scheduling unit contracts a sibling-computed distributed intermediate on
-    // its reduction axis (ADR-0003 §7d / §7a). It declares "tile the reduction
-    // axis into element-space tiles of this shape; partials exist; combine =
-    // sum" so CODIR can materialize the per-block partial-product codelets and
-    // the cross-tile reduce. Like physicalBlockShape it is element-space only:
-    // it encodes NO runtime nodes, routes, ARTS worker placement, or the
-    // concrete split factor T (CODIR derives T from this shape and the static
-    // contraction extent).
+    // its reduction axis. CODIR derives the split factor and materializes the
+    // per-block partial-product codelets and cross-tile reduce.
     OptionalAttr<ArrayAttr>:$contractionTileShape,
     OptionalAttr<ArrayAttr>:$logicalWorkerSlice,
     OptionalAttr<ArrayAttr>:$physicalHaloShape,
@@ -431,7 +426,7 @@ def SdeSuIterateOp
     OptionalAttr<I64Attr>:$vectorizeWidth,
     OptionalAttr<I64Attr>:$unrollFactor,
     OptionalAttr<I64Attr>:$interleaveCount,
-    // --- Module-scoped layout assignment (WF-5a). Placed last so the positional
+    // --- Module-scoped layout assignment. Placed last so the positional
     // op builder stays additive: existing create() sites that stop at
     // interleaveCount keep compiling. ---
     // Per-array BLOCK layout authored by the `sde-layout-assignment` pass. Pure
@@ -449,12 +444,14 @@ def SdeSuIterateOp
     //                         positions of the array.
     //   - `blockShape` (ArrayAttr<I64>): element-space per-block extents
     //                         (full extent on non-owner positions).
+    //   - `muBlockCount` (I64): number of memory-unit blocks implied by the
+    //                         owner dims and block shape.
     // Element-space only: encodes NO runtime nodes, routes, ARTS worker
     // placement, collective name, or split factor. Downstream consumers use the
     // facts through SDE/CODIR planning carriers; CODIR still owns storage-view
     // and collective-family selection, and ARTS still owns DB/EDT realization.
     OptionalAttr<ArrayAttr>:$arrayLayout,
-    // Per-edge geometric layouts-disagree marker (WF-5a). An ArrayAttr of the
+    // Per-edge geometric layouts-disagree marker. An ArrayAttr of the
     // `arrayId`s (I64) whose chosen layout on this scheduling unit is a pure
     // GEOMETRIC mismatch against the array's home/writer layout (e.g. an input
     // read on a non-owner-aligned window, or a contraction-dim read of a
@@ -462,9 +459,7 @@ def SdeSuIterateOp
     // geometry only — NAMES NO COLLECTIVE and does not pick a remedy.
     OptionalAttr<ArrayAttr>:$layoutsDisagree,
     // Abstract communication-volume estimate (bytes) for this scheduling unit
-    // under the chosen layouts (WF-5a). Closed-form, pattern-free: aligned
-    // edges cost 0; a block read of a full extent / owner-dim permutation costs
-    // ~ N*(P-1)/P; a cross-owner reduction costs ~ output*logP. Advisory only.
+    // under the chosen layouts. Advisory only.
     OptionalAttr<I64Attr>:$commVolumeBytes
   );
 

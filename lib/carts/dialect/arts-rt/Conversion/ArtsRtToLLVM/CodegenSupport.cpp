@@ -416,8 +416,9 @@ Value ArtsCodegen::getCurrentNode(Location loc) {
   return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
-void ArtsCodegen::waitOnHandle(Value epochGuid, Location loc) {
-  createRuntimeCall(ARTSRTL_arts_wait_on_handle, {epochGuid}, loc);
+Value ArtsCodegen::waitOnHandle(Value epochGuid, Location loc) {
+  return createRuntimeCall(ARTSRTL_arts_wait_on_handle, {epochGuid}, loc)
+      .getResult(0);
 }
 
 func::FuncOp ArtsCodegen::insertInitPerWorker(Location loc,
