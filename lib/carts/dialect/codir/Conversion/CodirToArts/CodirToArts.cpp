@@ -378,6 +378,7 @@ struct ConvertCodirToArtsPass
           /*boundsValid=*/Value{},
           /*elementOffsets=*/SmallVector<Value>{},
           /*elementSizes=*/SmallVector<Value>{});
+      acquire.setPreserveAccessMode();
       if (isReplicatedReadDep(codelet, depIdx))
         acquire.setReplicatedReadAttr(UnitAttr::get(codelet.getContext()));
       taskDeps.push_back(acquire.getPtr());

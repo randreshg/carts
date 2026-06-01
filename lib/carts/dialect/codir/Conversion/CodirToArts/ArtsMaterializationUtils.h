@@ -864,7 +864,7 @@ codirDepAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
   if (ownerBases.size() != tileOwnerDims->size())
     return false;
 
-  bool sawDirectRootAccess = false;
+  bool sawDepAccess = false;
   bool rejected = false;
   body.walk([&](Operation *op) {
     if (rejected)
@@ -873,33 +873,34 @@ codirDepAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
     auto access = getCodirMemoryAccessInfo(op);
     if (!access)
       return WalkResult::advance();
-    if (access->memref != depArg)
-      return WalkResult::advance();
 
-    sawDirectRootAccess = true;
     SmallVector<unsigned, 4> accessDims;
+    bool sawRootedAccess = false;
     for (Value ownerBase : ownerBases) {
-      std::optional<unsigned> accessDim;
-      for (auto [dim, index] : llvm::enumerate(access->indices)) {
-        if (!indexSelectsOwnerSlice(index, ownerBase))
-          continue;
-        if (accessDim && *accessDim != dim) {
-          rejected = true;
-          return WalkResult::interrupt();
-        }
-        accessDim = static_cast<unsigned>(dim);
+      CodirAccessOwnerDims traced = traceCodirAccessToRoot(
+          access->memref, access->indices, depArg, ownerBase);
+      if (traced.status == CodirAccessTraceStatus::NotRooted)
+        continue;
+      sawRootedAccess = true;
+      if (traced.status == CodirAccessTraceStatus::Unsupported ||
+          traced.ownerDims.size() > 1) {
+        rejected = true;
+        return WalkResult::interrupt();
       }
-      if (accessDim)
-        accessDims.push_back(*accessDim);
+      if (!traced.ownerDims.empty())
+        accessDims.push_back(traced.ownerDims.front());
     }
-    if (accessDims.empty() || accessDims != *ownerDims) {
+    if (!sawRootedAccess)
+      return WalkResult::advance();
+    sawDepAccess = true;
+    if (accessDims != *ownerDims) {
       rejected = true;
       return WalkResult::interrupt();
     }
     return WalkResult::advance();
   });
 
-  return sawDirectRootAccess && !rejected;
+  return sawDepAccess && !rejected;
 }
 
 struct PlannedBlockLocalAccessRewrite {

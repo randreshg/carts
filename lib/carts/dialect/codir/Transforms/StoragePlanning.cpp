@@ -7,6 +7,7 @@
 #include "carts/dialect/codir/Transforms/Passes.h"
 
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
+#include "carts/dialect/codir/Utils/CodirConversionUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -30,18 +31,6 @@ namespace {
 static constexpr int64_t kMaxPhaseRedistributionBridgeElements =
     16LL * 1024LL * 1024LL;
 
-struct MemoryAccessInfo {
-  Value memref;
-  SmallVector<Value> indices;
-};
-
-enum class AccessTraceStatus { NotRooted, Unsupported, Rooted };
-
-struct AccessOwnerDims {
-  AccessTraceStatus status = AccessTraceStatus::NotRooted;
-  SmallVector<unsigned> ownerDims;
-};
-
 static Value stripStorageViews(Value value) {
   for (;;) {
     Operation *def = value ? value.getDefiningOp() : nullptr;
@@ -60,195 +49,6 @@ static Value stripStorageViews(Value value) {
 static bool isStorageView(Value value) {
   return isa_and_nonnull<memref::SubViewOp>(value ? value.getDefiningOp()
                                                   : nullptr);
-}
-
-static std::optional<MemoryAccessInfo> getMemoryAccessInfo(Operation *op) {
-  if (auto load = dyn_cast_or_null<memref::LoadOp>(op))
-    return MemoryAccessInfo{
-        load.getMemRef(),
-        SmallVector<Value>(load.getIndices().begin(), load.getIndices().end())};
-  if (auto store = dyn_cast_or_null<memref::StoreOp>(op))
-    return MemoryAccessInfo{store.getMemRef(),
-                            SmallVector<Value>(store.getIndices().begin(),
-                                               store.getIndices().end())};
-  return std::nullopt;
-}
-
-static bool indexSelectsOwnerSlice(Value index, Value ownerIv,
-                                   llvm::SmallPtrSetImpl<Value> &seen) {
-  if (!index || !ownerIv)
-    return false;
-  if (index == ownerIv)
-    return true;
-  if (ValueAnalysis::dependsOn(index, ownerIv))
-    return true;
-  if (!seen.insert(index).second)
-    return false;
-
-  auto blockArg = dyn_cast<BlockArgument>(index);
-  if (blockArg) {
-    auto loop =
-        dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
-    if (!loop || loop.getInductionVar() != index)
-      return false;
-
-    llvm::SmallPtrSet<Value, 8> lowerSeen;
-    llvm::SmallPtrSet<Value, 8> upperSeen;
-    for (Value value : seen) {
-      lowerSeen.insert(value);
-      upperSeen.insert(value);
-    }
-    return indexSelectsOwnerSlice(loop.getLowerBound(), ownerIv, lowerSeen) &&
-           indexSelectsOwnerSlice(loop.getUpperBound(), ownerIv, upperSeen);
-  }
-
-  Operation *def = index.getDefiningOp();
-  if (!isa_and_nonnull<
-          arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
-          arith::DivUIOp, arith::RemSIOp, arith::RemUIOp, arith::IndexCastOp,
-          arith::IndexCastUIOp, arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
-          arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp>(def))
-    return false;
-
-  for (Value operand : def->getOperands()) {
-    llvm::SmallPtrSet<Value, 8> operandSeen;
-    for (Value value : seen)
-      operandSeen.insert(value);
-    if (indexSelectsOwnerSlice(operand, ownerIv, operandSeen))
-      return true;
-  }
-  return false;
-}
-
-static bool indexSelectsOwnerSlice(Value index, Value ownerIv) {
-  llvm::SmallPtrSet<Value, 8> seen;
-  return indexSelectsOwnerSlice(index, ownerIv, seen);
-}
-
-static bool indexSelectsOwnerSlice(OpFoldResult index, Value ownerIv) {
-  if (auto value = dyn_cast<Value>(index))
-    return indexSelectsOwnerSlice(value, ownerIv);
-  return false;
-}
-
-static void addUniqueDim(SmallVectorImpl<unsigned> &dims, unsigned dim) {
-  if (!llvm::is_contained(dims, dim))
-    dims.push_back(dim);
-}
-
-static bool remapSubviewOwnerDims(memref::SubViewOp subview,
-                                  SmallVectorImpl<unsigned> &selectedDims,
-                                  Value ownerBase) {
-  std::optional<unsigned> sourceRank =
-      ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getSource());
-  std::optional<unsigned> resultRank =
-      ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getResult());
-  if (!sourceRank || !resultRank ||
-      subview.getMixedOffsets().size() != *sourceRank)
-    return false;
-
-  llvm::SmallBitVector droppedDims = subview.getDroppedDims();
-  if (droppedDims.size() != *sourceRank)
-    return false;
-
-  SmallVector<unsigned> remappedDims;
-  unsigned resultDim = 0;
-  for (auto [sourceDim, offset] : llvm::enumerate(subview.getMixedOffsets())) {
-    bool offsetSelectsOwner = indexSelectsOwnerSlice(offset, ownerBase);
-    if (droppedDims.test(sourceDim)) {
-      if (offsetSelectsOwner)
-        addUniqueDim(remappedDims, static_cast<unsigned>(sourceDim));
-      continue;
-    }
-
-    if (resultDim >= *resultRank)
-      return false;
-    if (offsetSelectsOwner || llvm::is_contained(selectedDims, resultDim))
-      addUniqueDim(remappedDims, static_cast<unsigned>(sourceDim));
-    ++resultDim;
-  }
-
-  if (resultDim != *resultRank)
-    return false;
-  selectedDims.assign(remappedDims.begin(), remappedDims.end());
-  return true;
-}
-
-static AccessOwnerDims traceAccessToRoot(Value memref, ArrayRef<Value> indices,
-                                         Value root, Value ownerBase) {
-  std::optional<unsigned> currentRank =
-      ::mlir::carts::ValueAnalysis::getMemrefRank(memref);
-  bool unsupportedMapping = !currentRank || indices.size() != *currentRank;
-  SmallVector<unsigned> selectedDims;
-  if (!unsupportedMapping)
-    for (auto [dim, index] : llvm::enumerate(indices))
-      if (indexSelectsOwnerSlice(index, ownerBase))
-        addUniqueDim(selectedDims, static_cast<unsigned>(dim));
-
-  Value current = memref;
-  llvm::SmallPtrSet<Value, 8> seen;
-  while (current != root) {
-    if (!current || !seen.insert(current).second)
-      return {AccessTraceStatus::Unsupported, {}};
-
-    Operation *def = current.getDefiningOp();
-    if (!def)
-      return {AccessTraceStatus::NotRooted, {}};
-
-    if (auto cast = dyn_cast<memref::CastOp>(def)) {
-      std::optional<unsigned> sourceRank =
-          ::mlir::carts::ValueAnalysis::getMemrefRank(cast.getSource());
-      if (!sourceRank || !currentRank || *sourceRank != *currentRank)
-        unsupportedMapping = true;
-      current = cast.getSource();
-      currentRank = sourceRank;
-      continue;
-    }
-
-    if (auto subview = dyn_cast<memref::SubViewOp>(def)) {
-      std::optional<unsigned> sourceRank =
-          ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getSource());
-      if (!unsupportedMapping &&
-          !remapSubviewOwnerDims(subview, selectedDims, ownerBase))
-        unsupportedMapping = true;
-      current = subview.getSource();
-      currentRank = sourceRank;
-      continue;
-    }
-
-    if (auto subindex = dyn_cast<polygeist::SubIndexOp>(def)) {
-      std::optional<unsigned> sourceRank =
-          ::mlir::carts::ValueAnalysis::getMemrefRank(subindex.getSource());
-      if (!sourceRank || !currentRank || *sourceRank != *currentRank + 1) {
-        unsupportedMapping = true;
-        current = subindex.getSource();
-        currentRank = sourceRank;
-        continue;
-      }
-
-      for (unsigned &dim : selectedDims)
-        ++dim;
-      if (indexSelectsOwnerSlice(subindex.getIndex(), ownerBase))
-        addUniqueDim(selectedDims, 0);
-      current = subindex.getSource();
-      currentRank = sourceRank;
-      continue;
-    }
-
-    if (ValueAnalysis::isDerivedFromPtr(current, root))
-      return {AccessTraceStatus::Unsupported, {}};
-    return {AccessTraceStatus::NotRooted, {}};
-  }
-
-  std::optional<unsigned> rootRank =
-      ::mlir::carts::ValueAnalysis::getMemrefRank(root);
-  if (!rootRank || !currentRank || *rootRank != *currentRank ||
-      unsupportedMapping)
-    return {AccessTraceStatus::Unsupported, {}};
-  for (unsigned dim : selectedDims)
-    if (dim >= *rootRank)
-      return {AccessTraceStatus::Unsupported, {}};
-  return {AccessTraceStatus::Rooted, std::move(selectedDims)};
 }
 
 static bool hasTileOwnerSlicePlan(codir::CodeletOp codelet) {
@@ -351,19 +151,19 @@ inferDepOwnerAccessDims(codir::CodeletOp codelet, unsigned depIndex) {
     if (rejected)
       return WalkResult::interrupt();
 
-    auto access = getMemoryAccessInfo(op);
+    auto access = getCodirMemoryAccessInfo(op);
     if (!access)
       return WalkResult::advance();
 
     SmallVector<unsigned, 4> accessDims;
     bool sawRootedAccess = false;
     for (Value ownerBase : ownerBases) {
-      AccessOwnerDims traced =
-          traceAccessToRoot(access->memref, access->indices, depArg, ownerBase);
-      if (traced.status == AccessTraceStatus::NotRooted)
+      CodirAccessOwnerDims traced = traceCodirAccessToRoot(
+          access->memref, access->indices, depArg, ownerBase);
+      if (traced.status == CodirAccessTraceStatus::NotRooted)
         continue;
       sawRootedAccess = true;
-      if (traced.status == AccessTraceStatus::Unsupported ||
+      if (traced.status == CodirAccessTraceStatus::Unsupported ||
           traced.ownerDims.size() > 1) {
         rejected = true;
         return WalkResult::interrupt();
@@ -438,19 +238,19 @@ static bool depAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
     if (rejected)
       return WalkResult::interrupt();
 
-    auto access = getMemoryAccessInfo(op);
+    auto access = getCodirMemoryAccessInfo(op);
     if (!access)
       return WalkResult::advance();
 
     SmallVector<unsigned, 4> accessDims;
     bool sawRootedAccess = false;
     for (Value ownerBase : ownerBases) {
-      AccessOwnerDims traced =
-          traceAccessToRoot(access->memref, access->indices, depArg, ownerBase);
-      if (traced.status == AccessTraceStatus::NotRooted)
+      CodirAccessOwnerDims traced = traceCodirAccessToRoot(
+          access->memref, access->indices, depArg, ownerBase);
+      if (traced.status == CodirAccessTraceStatus::NotRooted)
         continue;
       sawRootedAccess = true;
-      if (traced.status == AccessTraceStatus::Unsupported ||
+      if (traced.status == CodirAccessTraceStatus::Unsupported ||
           traced.ownerDims.size() > 1) {
         rejected = true;
         return WalkResult::interrupt();

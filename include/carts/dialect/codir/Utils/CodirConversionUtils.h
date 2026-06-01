@@ -7,8 +7,8 @@
 ///==========================================================================///
 #ifndef CARTS_DIALECT_CODIR_UTILS_CODIRCONVERSIONUTILS_H
 #define CARTS_DIALECT_CODIR_UTILS_CODIRCONVERSIONUTILS_H
-#include "carts/dialect/codir/Utils/CodirAttrNames.h"
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
+#include "carts/dialect/codir/Utils/CodirAttrNames.h"
 #include "carts/dialect/codir/Utils/SdeToCodirMetadataUtils.h"
 #include "carts/dialect/codir/Utils/TaskDepSliceUtils.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
@@ -27,6 +27,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include <functional>
 using namespace mlir;
 using namespace mlir::carts;
@@ -83,10 +84,10 @@ createCodirCodelet(OpBuilder &builder, Location loc, ArrayAttr depModes,
       builder, loc, depModes, depStorageViews, /*dep_collectives=*/ArrayAttr{},
       /*emit_block_native_settle=*/UnitAttr{},
       /*emit_block_native_stencil=*/UnitAttr{},
-      /*dep_owner_dims=*/ArrayAttr{}, taskDepend,
-      orderedTaskDepend, completionBarrier, metadata.pattern,
-      metadata.reductionStrategy, metadata.partialReduction,
-      metadata.partialReductionDims, metadata.partialReductionOwnerDims,
+      /*dep_owner_dims=*/ArrayAttr{}, taskDepend, orderedTaskDepend,
+      completionBarrier, metadata.pattern, metadata.reductionStrategy,
+      metadata.partialReduction, metadata.partialReductionDims,
+      metadata.partialReductionOwnerDims,
       metadata.partialReductionDepResultDimMaps, UnitAttr{}, ArrayAttr{},
       IntegerAttr{}, IntegerAttr{}, IntegerAttr{}, metadata.distributionKind,
       metadata.iterationTopology, metadata.repetitionStructure,
@@ -97,11 +98,9 @@ createCodirCodelet(OpBuilder &builder, Location loc, ArrayAttr depModes,
       metadata.inPlaceSharedState, metadata.arrayLayout,
       metadata.layoutsDisagree, metadata.commVolumeBytes, deps, params);
   if (metadata.partitionGraph)
-    codelet->setAttr(codir::AttrNames::PartitionGraph,
-                     metadata.partitionGraph);
+    codelet->setAttr(codir::AttrNames::PartitionGraph, metadata.partitionGraph);
   if (metadata.partitionScore)
-    codelet->setAttr(codir::AttrNames::PartitionScore,
-                     metadata.partitionScore);
+    codelet->setAttr(codir::AttrNames::PartitionScore, metadata.partitionScore);
   return codelet;
 }
 
@@ -114,18 +113,19 @@ static inline Value materializeIndexFoldResult(OpBuilder &builder, Location loc,
   return cast<Value>(value);
 }
 
-
 static inline bool
 isKnownZeroIndex(Value value,
                  const DenseMap<Value, Value> &sourceByBlockArgument) {
-  if (std::optional<int64_t> constant = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value))
+  if (std::optional<int64_t> constant =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value))
     return *constant == 0;
 
   auto it = sourceByBlockArgument.find(value);
   if (it == sourceByBlockArgument.end())
     return false;
 
-  if (std::optional<int64_t> constant = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(it->second))
+  if (std::optional<int64_t> constant =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(it->second))
     return *constant == 0;
   return false;
 }
@@ -133,7 +133,8 @@ isKnownZeroIndex(Value value,
 static inline OpFoldResult
 getStaticOrDynamicIndex(OpBuilder &builder, Value value, bool preferStatic) {
   if (preferStatic) {
-    if (std::optional<int64_t> constant = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value))
+    if (std::optional<int64_t> constant =
+            ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value))
       return builder.getIndexAttr(*constant);
   }
   return value;
@@ -157,7 +158,8 @@ remapIndexFoldResult(OpBuilder &builder, Location loc, OpFoldResult value,
   Value oldValue = cast<Value>(value);
   auto it = mapping.find(oldValue);
   if (it == mapping.end()) {
-    if (std::optional<int64_t> constant = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(oldValue))
+    if (std::optional<int64_t> constant =
+            ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(oldValue))
       return createConstantIndex(builder, loc, *constant);
     Operation *defOp = oldValue.getDefiningOp();
     if (defOp && defOp->hasTrait<OpTrait::ConstantLike>() &&
@@ -263,6 +265,142 @@ static inline bool indexSelectsOwnerSlice(Value index, Value ownerIv) {
   return indexSelectsOwnerSlice(index, ownerIv, seen);
 }
 
+static inline bool indexSelectsOwnerSlice(OpFoldResult index, Value ownerIv) {
+  if (auto value = dyn_cast<Value>(index))
+    return indexSelectsOwnerSlice(value, ownerIv);
+  return false;
+}
+
+enum class CodirAccessTraceStatus { NotRooted, Unsupported, Rooted };
+
+struct CodirAccessOwnerDims {
+  CodirAccessTraceStatus status = CodirAccessTraceStatus::NotRooted;
+  SmallVector<unsigned> ownerDims;
+};
+
+static inline void addUniqueCodirOwnerDim(SmallVectorImpl<unsigned> &dims,
+                                          unsigned dim) {
+  if (!llvm::is_contained(dims, dim))
+    dims.push_back(dim);
+}
+
+static inline bool
+remapCodirSubviewOwnerDims(memref::SubViewOp subview,
+                           SmallVectorImpl<unsigned> &selectedDims,
+                           Value ownerBase) {
+  std::optional<unsigned> sourceRank =
+      ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getSource());
+  std::optional<unsigned> resultRank =
+      ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getResult());
+  if (!sourceRank || !resultRank ||
+      subview.getMixedOffsets().size() != *sourceRank)
+    return false;
+
+  llvm::SmallBitVector droppedDims = subview.getDroppedDims();
+  if (droppedDims.size() != *sourceRank)
+    return false;
+
+  SmallVector<unsigned> remappedDims;
+  unsigned resultDim = 0;
+  for (auto [sourceDim, offset] : llvm::enumerate(subview.getMixedOffsets())) {
+    bool offsetSelectsOwner = indexSelectsOwnerSlice(offset, ownerBase);
+    if (droppedDims.test(sourceDim)) {
+      if (offsetSelectsOwner)
+        addUniqueCodirOwnerDim(remappedDims, static_cast<unsigned>(sourceDim));
+      continue;
+    }
+
+    if (resultDim >= *resultRank)
+      return false;
+    if (offsetSelectsOwner || llvm::is_contained(selectedDims, resultDim))
+      addUniqueCodirOwnerDim(remappedDims, static_cast<unsigned>(sourceDim));
+    ++resultDim;
+  }
+
+  if (resultDim != *resultRank)
+    return false;
+  selectedDims.assign(remappedDims.begin(), remappedDims.end());
+  return true;
+}
+
+static inline CodirAccessOwnerDims
+traceCodirAccessToRoot(Value memref, ArrayRef<Value> indices, Value root,
+                       Value ownerBase) {
+  std::optional<unsigned> currentRank =
+      ::mlir::carts::ValueAnalysis::getMemrefRank(memref);
+  bool unsupportedMapping = !currentRank || indices.size() != *currentRank;
+  SmallVector<unsigned> selectedDims;
+  if (!unsupportedMapping)
+    for (auto [dim, index] : llvm::enumerate(indices))
+      if (indexSelectsOwnerSlice(index, ownerBase))
+        addUniqueCodirOwnerDim(selectedDims, static_cast<unsigned>(dim));
+
+  Value current = memref;
+  llvm::SmallPtrSet<Value, 8> seen;
+  while (current != root) {
+    if (!current || !seen.insert(current).second)
+      return {CodirAccessTraceStatus::Unsupported, {}};
+
+    Operation *def = current.getDefiningOp();
+    if (!def)
+      return {CodirAccessTraceStatus::NotRooted, {}};
+
+    if (auto cast = dyn_cast<memref::CastOp>(def)) {
+      std::optional<unsigned> sourceRank =
+          ::mlir::carts::ValueAnalysis::getMemrefRank(cast.getSource());
+      if (!sourceRank || !currentRank || *sourceRank != *currentRank)
+        unsupportedMapping = true;
+      current = cast.getSource();
+      currentRank = sourceRank;
+      continue;
+    }
+
+    if (auto subview = dyn_cast<memref::SubViewOp>(def)) {
+      std::optional<unsigned> sourceRank =
+          ::mlir::carts::ValueAnalysis::getMemrefRank(subview.getSource());
+      if (!unsupportedMapping &&
+          !remapCodirSubviewOwnerDims(subview, selectedDims, ownerBase))
+        unsupportedMapping = true;
+      current = subview.getSource();
+      currentRank = sourceRank;
+      continue;
+    }
+
+    if (auto subindex = dyn_cast<polygeist::SubIndexOp>(def)) {
+      std::optional<unsigned> sourceRank =
+          ::mlir::carts::ValueAnalysis::getMemrefRank(subindex.getSource());
+      if (!sourceRank || !currentRank || *sourceRank != *currentRank + 1) {
+        unsupportedMapping = true;
+        current = subindex.getSource();
+        currentRank = sourceRank;
+        continue;
+      }
+
+      for (unsigned &dim : selectedDims)
+        ++dim;
+      if (indexSelectsOwnerSlice(subindex.getIndex(), ownerBase))
+        addUniqueCodirOwnerDim(selectedDims, 0);
+      current = subindex.getSource();
+      currentRank = sourceRank;
+      continue;
+    }
+
+    if (::mlir::carts::ValueAnalysis::isDerivedFromPtr(current, root))
+      return {CodirAccessTraceStatus::Unsupported, {}};
+    return {CodirAccessTraceStatus::NotRooted, {}};
+  }
+
+  std::optional<unsigned> rootRank =
+      ::mlir::carts::ValueAnalysis::getMemrefRank(root);
+  if (!rootRank || !currentRank || *rootRank != *currentRank ||
+      unsupportedMapping)
+    return {CodirAccessTraceStatus::Unsupported, {}};
+  for (unsigned dim : selectedDims)
+    if (dim >= *rootRank)
+      return {CodirAccessTraceStatus::Unsupported, {}};
+  return {CodirAccessTraceStatus::Rooted, std::move(selectedDims)};
+}
+
 static inline std::optional<unsigned>
 inferSingleOwnerAccessDim(sde::SdeSuIterateOp source, Value root) {
   if (!source || !root || source.getBody().empty())
@@ -355,7 +493,6 @@ static inline bool canAccessRootWithPlan(sde::SdeSuIterateOp source, Value root,
     return false;
   return allRootAccessesUseOwnerFirstDim(source, root);
 }
-
 
 static inline sde::SdeSuIterateOp getEnclosingSuIterate(Operation *op) {
   for (Operation *cur = op ? op->getParentOp() : nullptr; cur;
@@ -601,7 +738,8 @@ appendDynamicIndexFoldResultParams(ArrayRef<OpFoldResult> values,
   for (OpFoldResult valueOrAttr : values) {
     auto value = dyn_cast<Value>(valueOrAttr);
     if (!value || !isCodirScalarParamType(value.getType()) ||
-        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value) || containsValue(params, value))
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value) ||
+        containsValue(params, value))
       continue;
     params.push_back(value);
   }
@@ -621,11 +759,13 @@ appendDynamicCodirDepSliceParams(ArrayRef<Value> deps,
     if (auto subindex = dyn_cast_or_null<polygeist::SubIndexOp>(def)) {
       Value index = subindex.getIndex();
       if (isCodirScalarParamType(index.getType()) &&
-          !::mlir::carts::ValueAnalysis::tryFoldConstantIndex(index) && !containsValue(params, index))
+          !::mlir::carts::ValueAnalysis::tryFoldConstantIndex(index) &&
+          !containsValue(params, index))
         params.push_back(index);
       for (Value size : subindex.getSizes()) {
         if (!isCodirScalarParamType(size.getType()) ||
-            ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(size) || containsValue(params, size))
+            ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(size) ||
+            containsValue(params, size))
           continue;
         params.push_back(size);
       }
@@ -654,7 +794,8 @@ materializeCodeletOffset(codir::CodeletOp codelet, Value sourceOffset) {
   if (!sourceOffset)
     return failure();
 
-  if (std::optional<int64_t> constant = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(sourceOffset)) {
+  if (std::optional<int64_t> constant =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(sourceOffset)) {
     Block &body = codelet.getBody().front();
     OpBuilder builder(&body, body.begin());
     return createConstantIndex(builder, sourceOffset.getLoc(), *constant);
@@ -734,13 +875,16 @@ rewriteTokenLocalAccesses(codir::CodeletOp codelet,
   auto rewriteIndexValue = [&](Operation *op, Value index, Value sourceOffset,
                                Value offset,
                                ValueRange ignoredParams) -> FailureOr<Value> {
-    if (std::optional<int64_t> constant = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(sourceOffset);
+    if (std::optional<int64_t> constant =
+            ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(sourceOffset);
         constant && *constant == 0)
       return index;
 
     OpBuilder builder(op);
-    std::optional<int64_t> indexConstant = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(index);
-    std::optional<int64_t> offsetConstant = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(sourceOffset);
+    std::optional<int64_t> indexConstant =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(index);
+    std::optional<int64_t> offsetConstant =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(sourceOffset);
     if (indexConstant && offsetConstant)
       return createConstantIndex(builder, op->getLoc(),
                                  *indexConstant - *offsetConstant);
@@ -990,10 +1134,10 @@ static inline LogicalResult materializeCodirDeps(
       }
       deps.push_back(tokenOp.getSource());
       modes.push_back(codir::CodirAccessModeAttr::get(
-          builder.getContext(), static_cast<codir::CodirAccessMode>(tokenOp.getMode())));
-      storageViews.push_back(
-          codir::CodirStorageViewKindAttr::get(
-              builder.getContext(), codir::CodirStorageViewKind::host_whole));
+          builder.getContext(),
+          static_cast<codir::CodirAccessMode>(tokenOp.getMode())));
+      storageViews.push_back(codir::CodirStorageViewKindAttr::get(
+          builder.getContext(), codir::CodirStorageViewKind::host_whole));
       continue;
     }
 
@@ -1009,10 +1153,10 @@ static inline LogicalResult materializeCodirDeps(
         tokenOp.getSource(), offsets, sizes, strides);
     deps.push_back(subview.getResult());
     modes.push_back(codir::CodirAccessModeAttr::get(
-        builder.getContext(), static_cast<codir::CodirAccessMode>(tokenOp.getMode())));
-    storageViews.push_back(
-        codir::CodirStorageViewKindAttr::get(
-            builder.getContext(), codir::CodirStorageViewKind::compute_block));
+        builder.getContext(),
+        static_cast<codir::CodirAccessMode>(tokenOp.getMode())));
+    storageViews.push_back(codir::CodirStorageViewKindAttr::get(
+        builder.getContext(), codir::CodirStorageViewKind::compute_block));
 
     if (sliceType.getRank() > 0 &&
         tokenOp.getOffsets().size() ==
@@ -1141,7 +1285,9 @@ static inline bool hasOnlyScalarLoadsInTask(Value memref, Region &taskRegion) {
 
     if (load.getIndices().size() != 1)
       return false;
-    std::optional<int64_t> index = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(load.getIndices()[0]);
+    std::optional<int64_t> index =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
+            load.getIndices()[0]);
     if (!index || *index != 0)
       return false;
   }
@@ -1349,10 +1495,9 @@ static inline LogicalResult buildCodirTaskPlan(sde::SdeCuTaskOp task,
     codir::CodirStorageViewKind storageView =
         useTokenLocalView ? codir::CodirStorageViewKind::compute_block
                           : codir::CodirStorageViewKind::host_whole;
-    if (failed(addTaskDep(
-            codirDep,
-            static_cast<codir::CodirAccessMode>(muDep.getMode()),
-            storageView, plan)))
+    if (failed(addTaskDep(codirDep,
+                          static_cast<codir::CodirAccessMode>(muDep.getMode()),
+                          storageView, plan)))
       return muDep.emitOpError()
              << "source must be a memref for CODIR task dependency";
 
@@ -1688,7 +1833,8 @@ static inline Value buildSuDispatchStepFromExtent(sde::SdeSuIterateOp source,
   if (extent == 1)
     return step;
   Location loc = source.getLoc();
-  std::optional<int64_t> stepConst = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(step);
+  std::optional<int64_t> stepConst =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(step);
   if (!stepConst)
     stepConst = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(step);
   if (stepConst) {
