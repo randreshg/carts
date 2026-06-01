@@ -14,21 +14,21 @@
 // CHECK: codir.codelet
 // CHECK-SAME: partition_graph = [
 // CHECK-SAME: layoutKind = "owner_block"
-// CHECK-SAME: muBlockCount = 16 : i64
+// CHECK-SAME: muBlockCount = 32 : i64
 // CHECK-SAME: role = "write"
 // CHECK-SAME: layoutKind = "block_parallel"
 // CHECK-SAME: muBlockCount = 2 : i64
 // CHECK-SAME: role = "read"
 // CHECK-SAME: partition_score = {
-// CHECK-SAME: chosenCuCount = 16 : i64
-// CHECK-SAME: chosenTileBytes = 524288 : i64
+// CHECK-SAME: chosenCuCount = 32 : i64
+// CHECK-SAME: chosenTileBytes = 262144 : i64
 // CHECK-SAME: cuGroupCount = 16 : i64
-// CHECK-SAME: cuGroupSize = 1 : i64
-// CHECK-SAME: muBlockCount = 16 : i64
+// CHECK-SAME: cuGroupSize = 2 : i64
+// CHECK-SAME: muBlockCount = 32 : i64
 // CHECK-SAME: objective = "max_concurrency_comm_aware"
 // CHECK-SAME: targetLogicalWorkers = 16 : i64
 // CHECK-SAME: tile_owner_dims = [0]
-// CHECK-SAME: tile_shape = [64, 1024]
+// CHECK-SAME: tile_shape = [32, 1024]
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,

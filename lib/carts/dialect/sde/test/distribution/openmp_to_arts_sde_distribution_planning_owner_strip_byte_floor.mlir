@@ -11,7 +11,9 @@
 // Direct-row owner-strip plans use the same SDE tile-byte floor as owner-tile
 // plans. The floor may coarsen only excess inter-locality task waves; it keeps
 // at least one task per logical worker so blocked DB ownership still exposes
-// CDAG concurrency.
+// CDAG concurrency. Under two-level CU grouping the floor coarsens the CU wave
+// grain (cuGroupSize) rather than the owner block shape, so the per-worker
+// owner strip is preserved while the requested byte floor is honored.
 
 // BASE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // BASE: func.func @direct_row_matmul
@@ -23,8 +25,14 @@
 // COARSE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // COARSE: func.func @direct_row_matmul
 // COARSE: iterationTopology = #sde.iteration_topology<owner_strip>
-// COARSE-SAME: logicalWorkerSlice = [64, 1024]
-// COARSE-SAME: physicalBlockShape = [64, 1024]
+// COARSE-SAME: logicalWorkerSlice = [32, 1024]
+// The byte floor is honored by coarsening the CU wave grain, not the owner
+// block: the per-worker strip is preserved so one task per logical worker is
+// kept (muBlockCount stays 32) while cuGroupSize rises to 2.
+// COARSE-SAME: cuGroupCount = 16 : i64, cuGroupSize = 2 : i64
+// COARSE-SAME: minTileBytes = 4194304 : i64
+// COARSE-SAME: muBlockCount = 32 : i64
+// COARSE-SAME: physicalBlockShape = [32, 1024]
 // COARSE-SAME: physicalOwnerDims = [0]
 
 module attributes {

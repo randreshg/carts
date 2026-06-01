@@ -10,27 +10,27 @@
 
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // CHECK: func.func @partition_graph_direct_row_matmul
-// CHECK: logicalWorkerSlice = [64, 1024]
+// CHECK: logicalWorkerSlice = [32, 1024]
 // CHECK-SAME: partitionGraph = [
-// CHECK-SAME: blockShape = [64, 1024]
-// CHECK-SAME: cuGroupCount = 16 : i64
+// CHECK-SAME: blockShape = [32, 1024]
+// CHECK-SAME: cuGroupCount = 32 : i64
 // CHECK-SAME: cuGroupSize = 1 : i64
 // CHECK-SAME: edgeClass = "aligned"
 // CHECK-SAME: layoutKind = "owner_block"
-// CHECK-SAME: muBlockCount = 16 : i64
+// CHECK-SAME: muBlockCount = 32 : i64
 // CHECK-SAME: ownerDims = [0]
 // CHECK-NOT: all_gather
 // CHECK-NOT: reduce_scatter
 // CHECK-NOT: allreduce
 // CHECK-NOT: broadcast
 // CHECK: partitionScore = {
-// CHECK-SAME: chosenCuCount = 16 : i64
-// CHECK-SAME: chosenTileBytes = 524288 : i64
+// CHECK-SAME: chosenCuCount = 32 : i64
+// CHECK-SAME: chosenTileBytes = 262144 : i64
 // CHECK-SAME: cuGroupCount = 16 : i64
-// CHECK-SAME: cuGroupSize = 1 : i64
+// CHECK-SAME: cuGroupSize = 2 : i64
 // CHECK-SAME: exposedCuCount = 16 : i64
 // CHECK-SAME: minTileBytes = 4194304 : i64
-// CHECK-SAME: muBlockCount = 16 : i64
+// CHECK-SAME: muBlockCount = 32 : i64
 // CHECK-SAME: objective = "max_concurrency_comm_aware"
 // CHECK-SAME: targetLogicalWorkers = 16 : i64
 // CHECK-SAME: physicalOwnerDims = [0]

@@ -1,19 +1,30 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline codir-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Verify that LoopInterchange reorders inner stencil loops by halo width.
-// For a 3D stencil with asymmetric halos (dim 0: [-1,1]=2, dim 1: [-2,2]=4,
-// dim 2: [-1,1]=2), dim 1 has a wider halo than dim 2, so the pass should
-// swap the inner loop pair to put the narrower-halo dim outermost.
+// Verify that LoopInterchange leaves an already-planned stencil iteration
+// space intact. For a 3D stencil with asymmetric halos (dim 0: [-1,1]=2,
+// dim 1: [-2,2]=4, dim 2: [-1,1]=2), distributed graph planning
+// (e8dc4e555) coalesces the loop nest into a single multi-dimensional
+// sde.su_iterate and commits the layout plan (block shapes + owner dims)
+// during PatternAnalysis/LayoutAssignment, before LoopInterchange runs.
 //
-// Before interchange: inner loops are j (dim 1, halo=4) then k (dim 2, halo=2)
-// After interchange:  inner loops are k (dim 2, halo=2) then j (dim 1, halo=4)
-// This minimizes total halo volume when the outer dim is distributed.
+// LoopInterchange therefore skips ops that already carry a committed
+// CU/MU partition plan: the halo-aware ordering decision is now encoded by
+// the owner-dim / block-shape layout rather than by reordered scf.for
+// loops. The iteration space stays the multi-dim form, the asymmetric halo
+// is preserved in accessMaxOffsets/accessMinOffsets, and the array layout
+// stays block-parallel (not collapsed to a coarse whole-buffer layout).
 
 // CHECK-LABEL: // -----// IR Dump After LoopInterchange (loop-interchange) //----- //
-// CHECK: sde.su_iterate
-// The outer inner loop should now iterate over the narrower-halo dim (was k):
-// CHECK: scf.for %[[OUTER:.+]] = %c1 to %c31 step %c1 {
-// CHECK:   scf.for %[[INNER:.+]] = %c1 to %c31 step %c1 {
+// The loop nest is now a single planned multi-dim su_iterate over all 3 dims:
+// CHECK: sde.su_iterate (%c1, %c1, %c1) to (%c31, %c31, %c31) step (%c1, %c1, %c1) classification(<stencil>)
+// The committed plan attributes are emitted on the su_iterate's closing line.
+// The asymmetric halo (dim 1 wider) is preserved on the committed plan:
+// CHECK: accessMaxOffsets = [1, 2, 1]
+// CHECK-SAME: accessMinOffsets = [-1, -2, -1]
+// Distribution stays block-parallel with 3D owner dims, not coarse:
+// CHECK-SAME: kind = "block_parallel"
+// CHECK-SAME: ownerDims = [0, 1, 2]
+// CHECK-SAME: pattern = #sde.pattern<higher_order_stencil>
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @main(%A: memref<32x32x32xf64>, %B: memref<32x32x32xf64>) {

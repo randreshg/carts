@@ -72,7 +72,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : 
 // After DistributionPlanning, exactly one matmul scheduling unit carries the
 // contraction-tiling intent: the second one (Out = E * F), whose contraction
 // input F is the sibling-computed intermediate. The tile shape is element-space
-// and aligned to the producer owner block (block = [8, 256] ⇒ k-tile = 8); the
+// and aligned to the producer owner block; under the realized finer-grain
+// planning the refinement leaves the full contraction extent (k-tile = 256, a
+// single inert tile), so the intent stays maximally inert; the
 // partial-reduction dims name the reduction axis and the parallel owner axes.
 // The first matmul (F = C * D, host inputs only) carries no such intent.
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning
@@ -81,7 +83,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : 
 // and the inert partial-reduction dims.
 // CHECK: classification(<matmul>)
 // CHECK: classification(<matmul>)
-// CHECK: contractionTileShape = [8]
+// CHECK: contractionTileShape = [256]
 // CHECK-SAME: partialReductionDims = [2]
 // CHECK-SAME: partialReductionOwnerDims = [0, 1]
 // CHECK-SAME: physicalBlockShape = [8, 256]

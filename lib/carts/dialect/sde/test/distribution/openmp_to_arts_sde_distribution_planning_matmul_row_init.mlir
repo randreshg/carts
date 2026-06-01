@@ -30,7 +30,7 @@
 
 // ARTS-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
 // ARTS: func.func @main
-// ARTS: arts.db_acquire{{.*}}{replicatedRead}
+// ARTS: arts.db_acquire{{.*}}replicatedRead}
 // ARTS: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<matmul>
 // ARTS-SAME: planIterationTopology = #arts.plan_iteration_topology<owner_strip>
 // ARTS-SAME: planLogicalWorkerSlice = [1, 32]

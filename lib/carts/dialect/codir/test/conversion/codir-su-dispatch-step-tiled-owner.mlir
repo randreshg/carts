@@ -53,7 +53,8 @@ module {
         memref.store %v, %A[%i, %j] : memref<19200x19200xf32>
         sde.yield
       } {iterationTopology = #sde.iteration_topology<owner_tile>,
-         logicalWorkerSlice = [2400, 2400], pattern = #sde.pattern<stencil_tiling_nd>}
+         logicalWorkerSlice = [2400, 2400], physicalOwnerDims = [0, 1],
+         pattern = #sde.pattern<stencil_tiling_nd>}
       sde.yield
     }
     return

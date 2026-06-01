@@ -37,7 +37,13 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
 
 // CHECK-LABEL: func.func @owner_pipeline_nonleading_dep_dim
 // CHECK: codir.codelet
-// CHECK-SAME: dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>]
+// The realized plan keeps both arrays block_parallel and records the
+// per-dependency physical owner dim: dim 0 for the rank-1 owner result,
+// dim 1 for the higher-rank read whose owner index is non-leading.
+// CHECK-SAME: ownerDims = [0]
+// CHECK-SAME: ownerDims = [1]
+// CHECK-SAME: dep_owner_dims = {{\[}}[0], [1]]
+// CHECK-SAME: dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<host_whole>]
 // CHECK-SAME: logical_worker_slice = [{{[0-9]+}}]
 // CHECK-SAME: tile_owner_dims = [0]
 // CHECK-SAME: tile_shape = [{{[0-9]+}}]

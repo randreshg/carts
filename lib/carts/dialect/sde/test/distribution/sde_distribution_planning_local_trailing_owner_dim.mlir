@@ -1,20 +1,24 @@
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --start-from sde-planning --pipeline codir-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=SDE
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --start-from sde-planning --pipeline create-dbs --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=DB
 
-// Imperfect local stencil/update loops can carry owner-slice scheduling intent
-// when the local owner IV maps to the trailing physical output dimension, and
-// all output self-reads stay within that owner slice. CreateDbs keeps the
-// host-visible source allocation coarse and materializes a planned block DB for
-// the owner-slice task storage.
+// Imperfect local stencil/update loops carry owner-slice scheduling intent when
+// the local owner IV drives the trailing physical output dimension and all
+// output self-reads stay within that owner slice. DistributionPlanning names a
+// per-array block layout (block_parallel writes/reads with finite block shapes)
+// spanning the spatial owner dims. The standalone CreateDbs pipeline keeps the
+// host-visible source allocations coarse and carries the owner-dim plan forward
+// on the task EDT; the physical block storage is materialized later in the
+// SDE/CODIR/ARTS MU-token path, not in create-dbs.
 
 // SDE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // SDE: func.func @main
 // SDE: sde.su_iterate (%c2) to (%c62) step (%c1) schedule(<static>) classification(<stencil>) {
 // SDE: } {
-// SDE-SAME: iterationTopology = #sde.iteration_topology<owner_strip>
-// SDE-SAME: logicalWorkerSlice = [16, 16, 1]
-// SDE-SAME: physicalBlockShape = [16, 16, 1]
-// SDE-SAME: physicalOwnerDims = [2]
+// SDE-SAME: arrayLayout = [{arrayId = 0 : i64, blockShape = [8, 8, 32], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0, 1, 2], role = "write"}, {arrayId = 1 : i64, blockShape = [8, 8, 64], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"}]
+// SDE-SAME: inPlaceSharedState
+// SDE-SAME: ownerDims = [0, 1, 2]
+// SDE-SAME: pattern = #sde.pattern<stencil_tiling_nd>
+// SDE-SAME: spatialDims = [0, 1, 2]
 // SDE-LABEL: // -----// IR Dump After IterationSpaceDecomposition
 
 // DB-LABEL: // -----// IR Dump After CreateDbs
@@ -22,11 +26,10 @@
 // DB: arts.db_alloc
 // DB-SAME: <coarse>
 // DB: arts.db_alloc
-// DB-SAME: <block>
-// DB-SAME: planOwnerDims = [2]
-// DB-SAME: planPhysicalBlockShape = [16, 16, 1]
+// DB-SAME: <coarse>
 // DB: arts.edt <task>
-// DB-SAME: planOwnerDims = [2]
+// DB-SAME: inPlaceSharedState
+// DB-SAME: planOwnerDims = [0, 1, 2]
 // DB-SAME: stencil_owner_dims = [0, 1, 2]
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {

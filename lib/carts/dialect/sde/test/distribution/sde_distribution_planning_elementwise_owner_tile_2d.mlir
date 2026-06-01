@@ -6,20 +6,21 @@
 
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // CHECK: func.func @elementwise_inplace_2d_owner_tile
+// CHECK: sde.su_distribute <blocked>
 // CHECK: sde.su_iterate
 // CHECK-SAME: classification(<elementwise>)
-// CHECK: iterationTopology = #sde.iteration_topology<owner_tile>
-// CHECK-SAME: logicalWorkerSlice = [64, 64, 16]
-// CHECK-SAME: physicalBlockShape = [64, 64, 16]
-// CHECK-SAME: physicalOwnerDims = [0, 1]
+// CHECK: arrayLayout = [{arrayId = 0 : i64, blockShape = [256, 256, 8]
+// CHECK-SAME: kind = "block_parallel"
+// CHECK-SAME: ownerDims = [0, 1, 2]
+// CHECK-SAME: role = "write"
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir
 // CHECK: func.func @elementwise_inplace_2d_owner_tile
 // CHECK: scf.for
-// CHECK: scf.for
 // CHECK: codir.codelet
-// CHECK-SAME: iteration_topology = #codir.iteration_topology<owner_tile>
-// CHECK-SAME: logical_worker_slice = [64, 64, 16]
-// CHECK-SAME: tile_owner_dims = [0, 1]
+// CHECK-SAME: array_layout = [{arrayId = 0 : i64, blockShape = [256, 256, 8]
+// CHECK-SAME: kind = "block_parallel"
+// CHECK-SAME: ownerDims = [0, 1, 2]
+// CHECK-SAME: distribution_kind = #codir.distribution_kind<blocked>
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,

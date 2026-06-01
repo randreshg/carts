@@ -35,21 +35,20 @@
 // CHECK-SAME: layoutsDisagree = [3]
 
 // Boundary proof: CODIR receives the same neutral layout graph facts under CODIR
-// attr names; concrete collective selection remains a later CODIR decision.
+// attr names. The per-array layout graph (block kinds, owner dims, per-edge
+// commVolumeBytes) crosses the boundary verbatim as `array_layout`, the
+// aggregate edge pressure as `comm_volume_bytes`, and the disagreeing edge as
+// `layouts_disagree`. Concrete collective selection remains a later CODIR
+// decision, so no `dep_collectives` / collective name appears yet.
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir
 // CHECK: func.func @three_mm
 // CHECK: codir.codelet
 // CHECK-SAME: array_layout = [
 // CHECK: codir.codelet
 // CHECK: codir.codelet
-// CHECK-SAME: partition_graph = [
-// CHECK-SAME: edgeClass = "aligned"
-// CHECK-SAME: edgeClass = "layout_mismatch"
-// CHECK-SAME: edgeCommBytes = 2097152 : i64
-// CHECK-SAME: role = "write"
-// CHECK-SAME: partition_score = {
-// CHECK-SAME: commVolumeBytes = 2097152 : i64
-// CHECK-SAME: muBlockCount = 64 : i64
+// CHECK-SAME: array_layout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}]
+// CHECK-SAME: comm_volume_bytes = 2097152 : i64
+// CHECK-SAME: layouts_disagree = [3]
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,
