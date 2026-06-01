@@ -11,7 +11,7 @@
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/MetadataEnums.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"

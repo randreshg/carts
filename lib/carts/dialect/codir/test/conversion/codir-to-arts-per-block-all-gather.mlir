@@ -1,10 +1,10 @@
 // RUN: %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg --distributed-db | %FileCheck %s
 
-// Per-block single-writer all-gather substrate. This mirrors 3mm's shape:
+// Per-block single-writer all-gather substrate. This mirrors a chained matmul:
 // a producer writes F as a
 // phase_redistributed (compute_block bridge) intermediate, and a sibling
 // matmul codelet reads the SAME buffer on the contraction dim as a
-// replicated_read operand (3mm's G = E*F). That read is the all-gather signal.
+// replicated_read operand (G = E*F). That read is the all-gather signal.
 //
 // The compiler must emit, on top of the existing coarse owner-local write-back,
 // a per-block all-gather: an outer per-node loop driving one block loop, where
@@ -90,8 +90,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
       }
     }
 
-    // Host observes both arrays (3mm checksums F and G); this makes F a
-    // host-visible array, exactly as in the benchmark.
+    // Host observes both arrays; this makes F a host-visible array.
     %resultF = memref.load %F[%c0, %c0] : memref<24x4xf32>
     func.call @use(%resultF) : (f32) -> ()
     %result = memref.load %G[%c0, %c0] : memref<24x4xf32>
@@ -137,7 +136,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: storageBridgeCopy
 // CHECK: arts.barrier
 
-// The existing whole-array consumer (3mm's G) still reads F via the coarse
+// The existing whole-array consumer still reads F via the coarse
 // replica (replicatedRead): rewiring it to read the per-block DBs needs
 // contraction tiling of its k-loop. The substrate is proven; the
 // consumer boundary is reported, not papered over by re-coarsening.

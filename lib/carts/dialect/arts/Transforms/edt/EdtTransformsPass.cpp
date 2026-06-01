@@ -24,6 +24,10 @@
 ///              slots whose block arguments have zero uses or are only
 ///              consumed by cleanup or true-only compiler control-token stores.
 ///
+///   EXT-EDT-3: Mixed root dependency canonicalization -- collapse EDT
+///              dependencies that mix coarse parent and subpartitioned child
+///              acquires of the same root DB into one conservative coarse dep.
+///
 ///==========================================================================///
 
 /// LLVM ADT
@@ -41,8 +45,9 @@
 #include "carts/dialect/arts/Analysis/graphs/edt/EdtNode.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/RemovalUtils.h"
 /// Statistics
 #include "llvm/ADT/Statistic.h"
@@ -73,6 +78,9 @@ static llvm::Statistic numCriticalPathAnnotations{
 static llvm::Statistic numDeadDepsRemoved{
     "edt_transforms", "NumDeadDepsRemoved",
     "Number of EXT-EDT-2 dead deps removed"};
+static llvm::Statistic numMixedRootDepsCoarsened{
+    "edt_transforms", "NumMixedRootDepsCoarsened",
+    "Number of EXT-EDT-3 mixed root dependencies coarsened"};
 
 namespace {
 
@@ -111,6 +119,11 @@ private:
   /// EXT-EDT-2: Walk all EDTs and remove unused dependency slots.
   /// Returns the number of eliminated dependencies.
   unsigned eliminateDeadDependencies();
+
+  /// EXT-EDT-3: Collapse dependencies that mix parent/coarse and child/block
+  /// acquires of the same root DB into one conservative coarse dependency.
+  /// Returns the number of dependency slots removed from EDTs.
+  unsigned canonicalizeMixedRootDependencies();
 
   struct ModuleEdtMetrics {
     unsigned totalEdts = 0;
@@ -183,6 +196,19 @@ void EdtTransformsPass::runOnOperation() {
   if (et3Count > 0)
     ARTS_INFO("ET-3: narrowed " << et3Count
                                 << " dependency chains for stencil/wavefront");
+
+  ///===--------------------------------------------------------------------===///
+  /// EXT-EDT-3: Mixed root dependency canonicalization
+  ///
+  /// ARTS runtime dependencies must not mix a parent/coarse DB front with
+  /// child block fronts for the same root allocation on one EDT. Collapse that
+  /// unsafe shape to a single coarse dep with the combined access mode.
+  ///===--------------------------------------------------------------------===///
+  unsigned extEdt3Count = canonicalizeMixedRootDependencies();
+  numMixedRootDepsCoarsened += extEdt3Count;
+  if (extEdt3Count > 0)
+    ARTS_INFO("EXT-EDT-3: coarsened and merged " << extEdt3Count
+                                                 << " mixed-root dependencies");
 
   ///===--------------------------------------------------------------------===///
   /// EXT-EDT-2: Dead dependency elimination
@@ -316,58 +342,37 @@ unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
                              << "] critical_path_distance=" << dist);
   };
 
-  SmallVector<EdtNode *, 16> topoOrder;
-  SmallVector<EdtNode *, 8> leftoverNodes;
-  edtGraph.getDeterministicTopologicalOrder(topoOrder, leftoverNodes);
+  EdtCriticalPathResult criticalPath =
+      edtGraph.computeCriticalPathDistances();
 
-  if (topoOrder.empty() && leftoverNodes.empty())
+  if (criticalPath.empty())
     return 0;
 
   /// If topological sort did not cover all nodes, there is a cycle.
   /// Assign distance 0 to any remaining nodes (defensive).
-  if (!leftoverNodes.empty()) {
+  if (criticalPath.hasCycle()) {
     ARTS_WARN("ET-6: EDT dependency graph has a cycle in function "
               << func.getName() << "; assigning distance 0 to "
-              << leftoverNodes.size() << " unreachable EDTs");
-  }
-
-  /// Compute critical path distance in topological order.
-  /// Distance for root EDTs (no predecessors in the graph) is 0.
-  /// For others: max(predecessor distances) + 1.
-  DenseMap<EdtNode *, int64_t> distance;
-  int64_t maxDistance = 0;
-
-  for (auto *node : topoOrder) {
-    int64_t dist = 0;
-    for (auto *edge : node->getInEdges()) {
-      auto *predNode = dyn_cast<EdtNode>(edge->getFrom());
-      if (predNode) {
-        auto it = distance.find(predNode);
-        if (it != distance.end())
-          dist = std::max(dist, it->second + 1);
-      }
-    }
-    distance[node] = dist;
-    if (dist > maxDistance)
-      maxDistance = dist;
+              << criticalPath.cyclicNodes.size() << " unreachable EDTs");
   }
 
   /// Annotate each EDT with the critical_path_distance attribute and
   /// update any LoweringContractOps on its dependencies.
   unsigned annotated = 0;
-  for (auto *node : topoOrder) {
-    annotateNode(node, distance[node], annotated);
+  for (const EdtCriticalPathEntry &entry : criticalPath.orderedDistances) {
+    annotateNode(entry.node, entry.distance, annotated);
   }
 
-  if (!leftoverNodes.empty()) {
-    for (auto *node : leftoverNodes)
+  if (criticalPath.hasCycle()) {
+    for (auto *node : criticalPath.cyclicNodes)
       annotateNode(node, /*dist=*/0, annotated);
   }
 
   if (annotated > 0) {
     ARTS_INFO("ET-6: function "
               << func.getName() << ": " << annotated
-              << " EDTs annotated, max critical path depth=" << maxDistance);
+              << " EDTs annotated, max critical path depth="
+              << criticalPath.maxDistance);
   }
 
   return annotated;
@@ -581,6 +586,10 @@ unsigned EdtTransformsPass::narrowDepChains() {
   });
 
   return count;
+}
+
+unsigned EdtTransformsPass::canonicalizeMixedRootDependencies() {
+  return EdtUtils::canonicalizeMixedRootDependencies(getOperation());
 }
 
 ///===----------------------------------------------------------------------===///

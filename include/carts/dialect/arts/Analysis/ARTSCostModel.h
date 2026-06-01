@@ -9,8 +9,8 @@
 /// memory-model choices after CODIR materialization.
 ///==========================================================================///
 
-#ifndef CARTS_DIALECT_ARTS_UTILS_ARTSCOSTMODEL_H
-#define CARTS_DIALECT_ARTS_UTILS_ARTSCOSTMODEL_H
+#ifndef CARTS_DIALECT_ARTS_ANALYSIS_ARTSCOSTMODEL_H
+#define CARTS_DIALECT_ARTS_ANALYSIS_ARTSCOSTMODEL_H
 
 #include "carts/dialect/arts/Utils/RuntimeConfig.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
@@ -91,4 +91,4 @@ public:
 
 } // namespace mlir::carts::arts
 
-#endif // CARTS_DIALECT_ARTS_UTILS_ARTSCOSTMODEL_H
+#endif // CARTS_DIALECT_ARTS_ANALYSIS_ARTSCOSTMODEL_H

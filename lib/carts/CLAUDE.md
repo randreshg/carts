@@ -25,13 +25,15 @@ dialect/                     MLIR dialects (one subdirectory per CARTS dialect)
     Transforms/              CodirCodeletOpt, VerifyCodir
     Utils/                   CodeletABIUtils
   arts/                      ARTS dialect — abstract orchestration (DB, EDT, epoch)
-    Analysis/                All analysis (db, edt, graphs, heuristics, loop)
+    Analysis/                All analysis (db, edt, graphs, heuristics, loop,
+                             ARTSCostModel)
     IR/                      ARTS dialect definition
     Transforms/              All ARTS passes (db/, edt/, loop/, epoch/, verify/)
     Utils/                   ARTS-specific utilities (DbUtils, EdtUtils,
                              LoweringContractUtils, PartitionPredicates,
-                             BlockedAccessUtils, MetadataEnums, ARTSCostModel,
-                             RuntimeConfig, LocationMetadata)
+                             BlockedAccessUtils, MetadataEnums,
+                             StencilAttributes, RuntimeConfig,
+                             LocationMetadata)
   arts-rt/                   ARTS-RT dialect — runtime ABI
     IR/                      arts_rt dialect (RtDialect.cpp, RtOps.cpp)
     Conversion/
@@ -42,7 +44,6 @@ dialect/                     MLIR dialects (one subdirectory per CARTS dialect)
     Utils/                   ARTS-RT-specific utilities (IdRegistry)
 passes/                      Per-dialect pass library wiring
 utils/                       CARTS-shared utilities (Debug, LoopUtils,
-                             OperationAttributes, PassInstrumentation,
-                             RemovalUtils, StencilAttributes, Utils,
+                             PassInstrumentation, RemovalUtils, Utils,
                              ValueAnalysis, benchmarks, testing)
 ```

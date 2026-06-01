@@ -6,7 +6,7 @@
 
 #include "EpochOptInternal.h"
 #include "carts/utils/Debug.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 
 ARTS_DEBUG_SETUP(epoch_opt);
 

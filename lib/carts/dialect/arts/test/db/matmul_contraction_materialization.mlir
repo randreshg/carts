@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(matmul-3mm-contraction-materialization)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(matmul-contraction-materialization)' \
 // RUN:   | %FileCheck %s --implicit-check-not=partialReductionDims
 
 // The chained-matmul G consumer reads its
@@ -15,7 +15,7 @@
 
 module attributes {arts.runtime_total_nodes = 2 : i64,
                    arts.runtime_total_workers = 4 : i64} {
-  func.func @matmul_3mm_contraction() {
+  func.func @matmul_contraction() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c2 = arith.constant 2 : index
@@ -92,7 +92,7 @@ module attributes {arts.runtime_total_nodes = 2 : i64,
 // The original partial-reduction G EDT is retired (no partialReductionDims left,
 // enforced by --implicit-check-not above).
 
-// CHECK-LABEL: func.func @matmul_3mm_contraction
+// CHECK-LABEL: func.func @matmul_contraction
 
 // Per-(G-block, k-tile) partials DB: a replicated block DB, one block per tile.
 // CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>] {{.*}}{local_only, perBlockReplicated

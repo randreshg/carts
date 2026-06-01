@@ -35,9 +35,9 @@
 
 #define CARTS_BENCHMARK_STRING_ARG(name) ((uintptr_t)(const void *)(name))
 
-/// Single source of truth for the symbol name CARTS inserts to mark a binary
-/// as the host-OpenMP fallback. Compile.cpp creates the call; CartsBenchmarks
-/// defines it; tools/scripts/compile.py greps the LLVM IR for it.
+/// Single source of truth for the benchmark utility symbol that can mark a
+/// standalone binary as host OpenMP. The production compiler no longer inserts
+/// this call; the definition remains for benchmark harness compatibility.
 #define CARTS_BENCHMARKS_HOST_OPENMP_MARKER_NAME                               \
   "carts_benchmarks_mark_host_openmp"
 

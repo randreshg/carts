@@ -4,8 +4,8 @@
 // First-class CODIR collective dispatch: StoragePlanning stamps a
 // per-dep `dep_collectives` array via `chooseCollective`, the name-free
 // extraction of the historical all-gather / cross-owner-reduce gate bodies.
-//   - the producer whose output is consumed by a `replicated_read` sibling
-//     (3mm's F) selects `all_gather`;
+//   - the producer whose output is consumed by a contraction-axis
+//     `replicated_read` sibling selects `all_gather`;
 //   - the cross-owner transpose-reduce step (atax/bicg A^T) selects
 //     `reduce_scatter`;
 //   - an iterative full-timestep stencil write selects `halo`;
@@ -115,6 +115,78 @@ module {
     }
     return
   }
+
+  // Generic layout-mismatch redistribution: no matmul benchmark shape and no
+  // consumer-name heuristic. CODIR derives the all_gather family from neutral
+  // layout evidence on the dependency while preserving the upstream layout and
+  // grouping facts verbatim.
+  func.func @generic_layout_mismatch_all_gather(%tmp: memref<128xf32>) {
+    codir.codelet deps(%tmp : memref<128xf32>)
+        attributes {array_layout = [{arrayId = 7 : i64,
+                                     blockShape = [16],
+                                     commVolumeBytes = 4096 : i64,
+                                     kind = "block_contraction",
+                                     muBlockCount = 8 : i64,
+                                     ownerDims = [0],
+                                     role = "write"}],
+                    dep_modes = [#codir.access_mode<write>],
+                    dep_storage_views = [#codir.storage_view<phase_redistributed>],
+                    layouts_disagree = [7],
+                    partition_graph = [{cuGroupCount = 2 : i64,
+                                        cuGroupSize = 4 : i64,
+                                        edgeClass = "layout_mismatch",
+                                        edgeCommBytes = 4096 : i64,
+                                        layoutKind = "block_contraction",
+                                        muBlockCount = 8 : i64,
+                                        role = "write"}],
+                    partition_score = {chosenCuCount = 8 : i64,
+                                       cuGroupCount = 2 : i64,
+                                       cuGroupSize = 4 : i64,
+                                       exposedCuCount = 8 : i64,
+                                       muBlockCount = 8 : i64,
+                                       targetLogicalWorkers = 8 : i64},
+                    pattern = #codir.pattern<elementwise_pipeline>} {
+    ^bb0(%arg0: memref<128xf32>):
+      codir.yield
+    }
+    return
+  }
+
+  // The same neutral layout-mismatch evidence selects reduce_scatter when the
+  // compute pattern is reduction-like. This proves the derivation is based on
+  // compute family plus layout mismatch, not a benchmark name.
+  func.func @generic_layout_mismatch_reduce_scatter(%partial: memref<128xf32>) {
+    codir.codelet deps(%partial : memref<128xf32>)
+        attributes {array_layout = [{arrayId = 11 : i64,
+                                     blockShape = [16],
+                                     commVolumeBytes = 8192 : i64,
+                                     kind = "block_contraction",
+                                     muBlockCount = 8 : i64,
+                                     ownerDims = [0],
+                                     role = "write"}],
+                    dep_modes = [#codir.access_mode<readwrite>],
+                    dep_storage_views = [#codir.storage_view<phase_redistributed>],
+                    layouts_disagree = [11],
+                    partial_reduction,
+                    partition_graph = [{cuGroupCount = 2 : i64,
+                                        cuGroupSize = 4 : i64,
+                                        edgeClass = "layout_mismatch",
+                                        edgeCommBytes = 8192 : i64,
+                                        layoutKind = "block_contraction",
+                                        muBlockCount = 8 : i64,
+                                        role = "write"}],
+                    partition_score = {chosenCuCount = 8 : i64,
+                                       cuGroupCount = 2 : i64,
+                                       cuGroupSize = 4 : i64,
+                                       exposedCuCount = 8 : i64,
+                                       muBlockCount = 8 : i64,
+                                       targetLogicalWorkers = 8 : i64},
+                    pattern = #codir.pattern<reduction>} {
+    ^bb0(%arg0: memref<128xf32>):
+      codir.yield
+    }
+    return
+  }
 }
 
 // The all-gather producer writes %F (dep #0) consumed by the replicated_read
@@ -133,3 +205,34 @@ module {
 // CHECK-LABEL: func.func @halo_collective
 // CHECK: codir.codelet
 // CHECK-SAME: dep_collectives = [#codir.collective<halo>]
+
+// Generic layout mismatch selects all_gather without relying on a matmul
+// consumer predicate, and StoragePlanning does not rewrite the forwarded SDE
+// layout/grouping facts.
+// CHECK-LABEL: func.func @generic_layout_mismatch_all_gather
+// CHECK: codir.codelet
+// CHECK-SAME: array_layout = [{arrayId = 7 : i64
+// CHECK-SAME: commVolumeBytes = 4096 : i64
+// CHECK-SAME: kind = "block_contraction"
+// CHECK-SAME: dep_collectives = [#codir.collective<all_gather>]
+// CHECK-SAME: layouts_disagree = [7]
+// CHECK-SAME: partition_graph = [{cuGroupCount = 2 : i64
+// CHECK-SAME: cuGroupSize = 4 : i64
+// CHECK-SAME: edgeClass = "layout_mismatch"
+// CHECK-SAME: edgeCommBytes = 4096 : i64
+// CHECK-SAME: partition_score = {chosenCuCount = 8 : i64
+// CHECK-SAME: cuGroupSize = 4 : i64
+
+// Reduction-like layout mismatch selects reduce_scatter using the same
+// code-agnostic evidence path.
+// CHECK-LABEL: func.func @generic_layout_mismatch_reduce_scatter
+// CHECK: codir.codelet
+// CHECK-SAME: array_layout = [{arrayId = 11 : i64
+// CHECK-SAME: commVolumeBytes = 8192 : i64
+// CHECK-SAME: kind = "block_contraction"
+// CHECK-SAME: dep_collectives = [#codir.collective<reduce_scatter>]
+// CHECK-SAME: layouts_disagree = [11]
+// CHECK-SAME: partition_graph = [{cuGroupCount = 2 : i64
+// CHECK-SAME: cuGroupSize = 4 : i64
+// CHECK-SAME: edgeClass = "layout_mismatch"
+// CHECK-SAME: edgeCommBytes = 8192 : i64

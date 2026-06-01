@@ -16,6 +16,7 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
+#include "carts/dialect/sde/Utils/SdePlanUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/LoopUtils.h"
 #include "carts/utils/Utils.h"
@@ -520,10 +521,15 @@ buildStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
   if (op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr() ||
       op.getInPlaceSharedStateAttr())
     return std::nullopt;
+  if (auto ownerDims = readI64ArrayAttr(op.getOwnerDimsAttr()))
+    if (ownerDims->size() > op.getLowerBounds().size())
+      return std::nullopt;
   // The loop-indexed output helper proves the current SDE owner IV only. For
   // multi-dimensional/component stencils the final ND owner plan still belongs
   // to DistributionPlanning, which consumes the PatternAnalysis facts.
   if (op.getLowerBounds().size() != 1)
+    return std::nullopt;
+  if (sde::hasNestedStencilOwnerContract(op))
     return std::nullopt;
   auto effects = sde::collectStructuredMemoryEffects(op.getBody());
   bool ownerLocalPipeline =
@@ -628,7 +634,7 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
 
   // Apply the SDE stencil-tile-bytes floor before stamping. Halo-expanded tile
   // bytes < floor → halve the worker target and recompute the grid. Default
-  // 0 (off); set by --min-distributed-stencil-tile-bytes / arts.cfg.
+  // 0 (off); set by --min-distributed-stencil-tile-bytes or runtime config.
   int64_t stencilFloor = costModel.getMinDistributedStencilTileBytes();
   int64_t elemBytes = 0;
   if (stencilFloor > 0) {
@@ -902,6 +908,8 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
 
     SmallVector<sde::SdeSuIterateOp> rewrites;
     getOperation().walk([&](sde::SdeSuIterateOp op) {
+      if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
+        return;
       Block *body = sde::getSuIterateComputeBlock(op);
       if (!isTilingCandidate(op, *body))
         return;

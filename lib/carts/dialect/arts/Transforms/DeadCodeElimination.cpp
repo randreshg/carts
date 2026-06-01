@@ -134,7 +134,7 @@ struct DeadCodeEliminationPass
       unsigned removedDuplicateReleases = removeDuplicateDbReleases(module);
       /// Conservatively keep EDT dependency operands. Some control-only
       /// dependency edges encode ordering constraints even when the block
-      /// argument has no direct memory users (for example Jacobi-style
+      /// argument has no direct memory users (for example alternating-buffer
       /// alternating-buffer pipelines).
 
       unsigned removed = removedGeneric.total() + removedUndefs + removedEdts +

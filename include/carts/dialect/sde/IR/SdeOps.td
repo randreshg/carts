@@ -62,17 +62,6 @@ def SdeAccessMode
     ]>;
 def SdeAccessModeAttr : CartsSde_I32EnumAttr<"access_mode", SdeAccessMode>;
 
-def SdeStorageViewKind
-    : CartsSde_I32Enum<"SdeStorageViewKind",
-                      "SDE storage view contract", [
-      I32EnumAttrCase<"host_whole", 0, "host_whole">,
-      I32EnumAttrCase<"compute_block", 1, "compute_block">,
-      I32EnumAttrCase<"replicated_read", 2, "replicated_read">,
-      I32EnumAttrCase<"phase_redistributed", 3, "phase_redistributed">
-    ]>;
-def SdeStorageViewKindAttr
-    : CartsSde_I32EnumAttr<"storage_view", SdeStorageViewKind>;
-
 def SdeReductionKind
     : CartsSde_I32Enum<"SdeReductionKind", "Reduction operation kind", [
       I32EnumAttrCase<"add", 0, "add">,
@@ -117,8 +106,8 @@ def SdePattern
       I32EnumAttrCase<"cross_dim_stencil_3d", 2, "cross_dim_stencil_3d">,
       I32EnumAttrCase<"higher_order_stencil", 3, "higher_order_stencil">,
       I32EnumAttrCase<"wavefront_2d", 4, "wavefront_2d">,
-      I32EnumAttrCase<"jacobi_alternating_buffers", 5,
-                      "jacobi_alternating_buffers">,
+      I32EnumAttrCase<"alternating_buffer_stencil", 5,
+                      "alternating_buffer_stencil">,
       I32EnumAttrCase<"matmul", 6, "matmul">,
       I32EnumAttrCase<"elementwise_pipeline", 7, "elementwise_pipeline">,
       I32EnumAttrCase<"reduction", 8, "reduction">
@@ -207,7 +196,7 @@ def SdeResourceQueryOp : CartsSde_Op<"resource_query", [Pure]> {
   let description = [{
     Queries a runtime-neutral execution resource needed to build SDE-level
     symbolic grain expressions. The result is target-neutral SDE intent; the
-    ARTS lowering boundary binds it to the concrete runtime mechanism.
+    dialect boundary binds it to the concrete target mechanism.
 
     `logical_workers` is the number of logical execution slots available to an
     SDE scheduling unit. It does not name a concrete runtime worker,
@@ -240,7 +229,7 @@ def SdeCuRegionOp
     Captures `omp.parallel`, `omp.single`, `omp.master`. Represents a
     source-level compute region. The region kind records OpenMP execution
     semantics such as parallel, single, or task; concrete machine topology and
-    distributed placement are resolved later by ARTS.
+    distributed placement are resolved later.
 
     The `nowait` attribute preserves OpenMP nowait semantics. The
     Optional `iter_args` thread loop-carried SSA values through the region body.
@@ -292,8 +281,8 @@ def SdeControlTokenOp
   let description = [{
     Produces an SDE-level completion token for task and wait control edges.
     The token is consumed by SDE synchronization surfaces such as
-    `sde.su_barrier` and is erased during CODIR-to-ARTS materialization after
-    those control edges have been consumed.
+    `sde.su_barrier` and is erased during boundary materialization after those
+    control edges have been consumed.
   }];
 
   let results = (outs SdeCompletionType:$token);
@@ -404,13 +393,13 @@ def SdeSuIterateOp
     OptionalAttr<ArrayAttr>:$spatialDims,
     OptionalAttr<ArrayAttr>:$writeFootprint,
     // Element-space/storage layout facts authored by SDE. These do not encode
-    // runtime nodes, routes, or concrete ARTS worker placement.
+    // target nodes, routes, or concrete worker placement.
     OptionalAttr<ArrayAttr>:$physicalOwnerDims,
     OptionalAttr<ArrayAttr>:$physicalBlockShape,
     // Element-space contraction-tile shape authored by SDE when a matmul-class
     // scheduling unit contracts a sibling-computed distributed intermediate on
-    // its reduction axis. CODIR derives the split factor and materializes the
-    // per-block partial-product codelets and cross-tile reduce.
+    // its reduction axis. Later planning derives the split factor and
+    // materializes the concrete partial products and cross-tile reduce.
     OptionalAttr<ArrayAttr>:$contractionTileShape,
     OptionalAttr<ArrayAttr>:$logicalWorkerSlice,
     OptionalAttr<ArrayAttr>:$physicalHaloShape,
@@ -439,24 +428,25 @@ def SdeSuIterateOp
     //                         across the writer and all reader su_iterates.
     //   - `kind`       (StringAttr): "block_parallel", "block_contraction", or
     //                         "replicated" — geometric layout family only,
-    //                         NAMES NO COLLECTIVE, no DB/EDT, no pattern.
+    //                         geometric layout family only, no target object,
+    //                         no runtime communication operation, no pattern.
     //   - `ownerDims`  (ArrayAttr<I64>): the element-space owner (distributed)
     //                         positions of the array.
     //   - `blockShape` (ArrayAttr<I64>): element-space per-block extents
     //                         (full extent on non-owner positions).
     //   - `muBlockCount` (I64): number of memory-unit blocks implied by the
     //                         owner dims and block shape.
-    // Element-space only: encodes NO runtime nodes, routes, ARTS worker
-    // placement, collective name, or split factor. Downstream consumers use the
-    // facts through SDE/CODIR planning carriers; CODIR still owns storage-view
-    // and collective-family selection, and ARTS still owns DB/EDT realization.
+    // Element-space only: encodes NO target nodes, routes, concrete worker
+    // placement, communication primitive, or split factor. Downstream consumers use the
+    // facts through boundary planning carriers; storage-view,
+    // communication-family, and target-object realization remain outside SDE.
     OptionalAttr<ArrayAttr>:$arrayLayout,
     // Per-edge geometric layouts-disagree marker. An ArrayAttr of the
     // `arrayId`s (I64) whose chosen layout on this scheduling unit is a pure
     // GEOMETRIC mismatch against the array's home/writer layout (e.g. an input
     // read on a non-owner-aligned window, or a contraction-dim read of a
     // row-block intermediate). Records WHERE a redistribution edge exists, as
-    // geometry only — NAMES NO COLLECTIVE and does not pick a remedy.
+    // geometry only and does not pick a concrete remedy.
     OptionalAttr<ArrayAttr>:$layoutsDisagree,
     // Abstract communication-volume estimate (bytes) for this scheduling unit
     // under the chosen layouts. Advisory only.
@@ -521,14 +511,14 @@ def SdeMuDepOp
     Declares a memory-unit dependency with access mode and region. This is the
     SDE representation of source dependency slices from `omp.task depend(...)`
     and of SDE-authored owner-slice dependencies for raw memref work that has
-    not yet been converted to token/codelet form.
+    not yet been converted to tokenized compute-unit form.
 
     This is distinct from `sde.control_token`, which carries ordering or
     completion semantics, and from `sde.mu_token`, which is the canonical
-    MU/codelet memref access token consumed by SDE materialization.
+    MU access token consumed by SDE materialization.
 
     `sde.mu_dep` is an SDE-only declaration. It must be consumed by SDE
-    materialization into memref-level `mu_data`/`mu_token`/`cu_codelet` form
+    materialization into memref-level `mu_data`/`mu_token`/`cu_work` form
     before the dialect boundary; later layers must see concrete storage and
     access-window requests, not dependency declarations.
   }];
@@ -537,8 +527,7 @@ def SdeMuDepOp
     SdeAccessModeAttr:$mode,
     AnyMemRef:$source,
     Variadic<Index>:$offsets,
-    Variadic<Index>:$sizes,
-    OptionalAttr<SdeStorageViewKindAttr>:$storageView
+    Variadic<Index>:$sizes
   );
 
   let results = (outs SdeDepType:$dep);
@@ -554,13 +543,13 @@ def SdeMuTokenOp
   let summary = "Produce an MU access token (whole storage or slice).";
   let description = [{
     Names a memref (or a rectangular slice of one) for consumption by a
-    `sde.cu_codelet`, with an explicit access mode. When `offsets` / `sizes`
+    `sde.cu_work`, with an explicit access mode. When `offsets` / `sizes`
     are omitted the token addresses the whole storage object.
 
     Tokens are the canonical SDE dependency surface for MU-backed work.
 
     Two tokens with disjoint slices of the same source expose slice
-    parallelism that would be serialized if codelets took raw storage
+    parallelism that would be serialized if compute units took raw storage
     operands; the SSA dep edge still flows through the parent storage value,
     but analyses see the disjointness.
   }];
@@ -569,8 +558,7 @@ def SdeMuTokenOp
     SdeAccessModeAttr:$mode,
     AnyMemRef:$source,
     Variadic<Index>:$offsets,
-    Variadic<Index>:$sizes,
-    OptionalAttr<SdeStorageViewKindAttr>:$storageView
+    Variadic<Index>:$sizes
   );
 
   let results = (outs SdeTokenType:$token);
@@ -583,14 +571,14 @@ def SdeMuTokenOp
   let hasVerifier = 1;
 }
 
-def SdeCuCodeletOp
-    : CartsSde_Op<"cu_codelet", [
+def SdeCuWorkOp
+    : CartsSde_Op<"cu_work", [
       IsolatedFromAbove,
       SingleBlock,
       RecursiveMemoryEffects,
       AttrSizedOperandSegments
     ]> {
-  let summary = "Dataflow codelet with MU tokens and explicit captures.";
+  let summary = "Dataflow compute unit with MU tokens and explicit captures.";
   let description = [{
     A compute unit whose only communication with the enclosing scope is
     through `sde.mu_token` operands and explicit capture operands. Memref
@@ -649,7 +637,7 @@ def SdeMuDataOp : CartsSde_Op<"mu_data", [Pure]> {
     of inheriting Polygeist `memref.alloca` for OMP-shared variables.
     Produced by `ConvertOpenMPToSde` for every variable named by an OMP
     `shared(...)` clause (or otherwise shared across tasks), consumed by SDE
-    MU/token/codelet planning.
+    MU/token compute-unit planning.
   }];
 
   let arguments = (ins

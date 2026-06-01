@@ -40,7 +40,7 @@ std::unique_ptr<Pass> createDbScratchEliminationPass();
 std::unique_ptr<Pass> createDbDistributedOwnershipPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createDbTransformsPass(AnalysisManager *AM);
 std::unique_ptr<Pass> createPartialReductionSplitMaterializationPass();
-std::unique_ptr<Pass> createMatmul3mmContractionMaterializationPass();
+std::unique_ptr<Pass> createMatmulContractionMaterializationPass();
 std::unique_ptr<Pass> createDistributedLaunchConsistencyPass();
 std::unique_ptr<Pass> createCreateEpochsPass();
 
@@ -66,6 +66,7 @@ std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
 std::unique_ptr<Pass> createVerifyEdtCreatedPass();
 std::unique_ptr<Pass> createVerifyEpochCreatedPass();
 std::unique_ptr<Pass> createVerifyArtsObjectsOnlyPass();
+std::unique_ptr<Pass> createVerifyDistributedDbPlacementPass();
 } // namespace carts::arts
 } // namespace mlir
 

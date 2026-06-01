@@ -5,14 +5,11 @@
 // RUN:   | awk '/IR Dump After ConvertOpenMPToSde/,/IR Dump After PatternAnalysis/' \
 // RUN:   | %FileCheck %s --check-prefix=MULTI
 
-// A bundle of independent one-dimensional floating-point maps with repeated
-// transcendental work uses the single-node host policy. Multinode runs still
-// enter SDE/CODIR/ARTS.
+// Benchmark-shaped transcendental bundles enter SDE regardless of benchmark markers or runtime node count.
 
 // SINGLE-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //
-// SINGLE: omp.parallel
-// SINGLE: sde.keep_host_openmp
-// SINGLE-NOT: sde.su_iterate
+// SINGLE-NOT: sde.keep_host_openmp
+// SINGLE: sde.su_iterate
 // SINGLE: func.func private @tanhf
 
 // MULTI-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //

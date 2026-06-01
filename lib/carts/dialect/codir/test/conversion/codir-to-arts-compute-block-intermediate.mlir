@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --arts-config %inputs_dir/arts_multinode_8x64.cfg \
-// RUN:   --pass-pipeline='builtin.module(convert-codir-to-arts,verify-arts-objects-only)' \
+// RUN:   --pass-pipeline='builtin.module(storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s
 
 module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_workers = 256 : i64} {

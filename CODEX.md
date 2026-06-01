@@ -144,4 +144,10 @@ Before editing CARTS sources, scan the Skills inventory below and read the SKILL
 | `carts-agentic-development` | Use when planning or executing CARTS work with multiple agents, independent tasks, implementation plans, code review checkpoints, or staged compiler/runtime investigations. | `carts-plugin/skills/carts-agentic-development/SKILL.md` |
 | `carts-skill-maintenance` | Use when creating, regenerating, validating, or hardening CARTS project skills and agent resources. | `carts-plugin/skills/carts-skill-maintenance/SKILL.md` |
 
+### Other
+
+| Skill | Description | Path |
+| --- | --- | --- |
+| `carts-worktrees` | Use when working on multiple CARTS/ARTS changes in parallel, isolating a risky compiler/runtime change, or running concurrent builds/benchmarks without clobbering the main checkout. Covers the carts-wt tool and the shared-LLVM/Polygeist worktree model. | `carts-plugin/skills/carts-worktrees/SKILL.md` |
+
 <!-- END SKILLS INVENTORY -->

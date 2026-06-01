@@ -956,7 +956,7 @@ hasConservativeReadWriteConflict(ArrayRef<Value> deps,
 }
 
 static inline LogicalResult materializeCodirDeps(
-    sde::SdeCuCodeletOp sdeCodelet, OpBuilder &builder,
+    sde::SdeCuWorkOp sdeCodelet, OpBuilder &builder,
     SmallVectorImpl<Value> &deps, SmallVectorImpl<Attribute> &modes,
     SmallVectorImpl<Attribute> &storageViews,
     SmallVectorImpl<SlicedTokenLocalIndexRewrite> &localIndexRewrites) {
@@ -991,12 +991,9 @@ static inline LogicalResult materializeCodirDeps(
       deps.push_back(tokenOp.getSource());
       modes.push_back(codir::CodirAccessModeAttr::get(
           builder.getContext(), static_cast<codir::CodirAccessMode>(tokenOp.getMode())));
-      codir::CodirStorageViewKind view =
-          tokenOp.getStorageViewAttr()
-              ? static_cast<codir::CodirStorageViewKind>(tokenOp.getStorageViewAttr().getValue())
-              : codir::CodirStorageViewKind::host_whole;
       storageViews.push_back(
-          codir::CodirStorageViewKindAttr::get(builder.getContext(), view));
+          codir::CodirStorageViewKindAttr::get(
+              builder.getContext(), codir::CodirStorageViewKind::host_whole));
       continue;
     }
 
@@ -1013,12 +1010,9 @@ static inline LogicalResult materializeCodirDeps(
     deps.push_back(subview.getResult());
     modes.push_back(codir::CodirAccessModeAttr::get(
         builder.getContext(), static_cast<codir::CodirAccessMode>(tokenOp.getMode())));
-    codir::CodirStorageViewKind view =
-        tokenOp.getStorageViewAttr()
-            ? static_cast<codir::CodirStorageViewKind>(tokenOp.getStorageViewAttr().getValue())
-            : codir::CodirStorageViewKind::compute_block;
     storageViews.push_back(
-        codir::CodirStorageViewKindAttr::get(builder.getContext(), view));
+        codir::CodirStorageViewKindAttr::get(
+            builder.getContext(), codir::CodirStorageViewKind::compute_block));
 
     if (sliceType.getRank() > 0 &&
         tokenOp.getOffsets().size() ==
@@ -1353,11 +1347,8 @@ static inline LogicalResult buildCodirTaskPlan(sde::SdeCuTaskOp task,
     }
 
     codir::CodirStorageViewKind storageView =
-        muDep.getStorageViewAttr()
-            ? static_cast<codir::CodirStorageViewKind>(
-                  muDep.getStorageViewAttr().getValue())
-            : (useTokenLocalView ? codir::CodirStorageViewKind::compute_block
-                                 : codir::CodirStorageViewKind::host_whole);
+        useTokenLocalView ? codir::CodirStorageViewKind::compute_block
+                          : codir::CodirStorageViewKind::host_whole;
     if (failed(addTaskDep(
             codirDep,
             static_cast<codir::CodirAccessMode>(muDep.getMode()),

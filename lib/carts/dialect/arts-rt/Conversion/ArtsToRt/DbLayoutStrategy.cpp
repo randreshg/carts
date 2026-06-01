@@ -16,9 +16,9 @@
 #include "../ArtsRtToLLVM/CodegenInternal.h"
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
-#include "carts/utils/OperationAttributes.h"
-#include "carts/utils/ValueAnalysis.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -31,11 +31,8 @@ PartitionMode getLoweredDbPartitionMode(DbAllocOp alloc) {
   if (auto mode = getPartitionMode(alloc.getOperation()))
     return *mode;
 
-  bool singleOuterSlot = llvm::all_of(alloc.getSizes(), [](Value size) {
-    int64_t value;
-    return ValueAnalysis::getConstantIndex(size, value) && value == 1;
-  });
-  return singleOuterSlot ? PartitionMode::coarse : PartitionMode::fine_grained;
+  llvm::report_fatal_error(
+      "arts-rt DB layout lowering requires upstream partition_mode");
 }
 
 } // namespace

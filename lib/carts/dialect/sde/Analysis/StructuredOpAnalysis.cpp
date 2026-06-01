@@ -1157,6 +1157,9 @@ findCompatibleOutputLayoutPlan(const StructuredLoopSummary &summary) {
     Value root = normalizeOutputRoot(write.memref);
     if (!root || isDefinedInside(rootOp, root))
       continue;
+    auto memrefType = dyn_cast<MemRefType>(root.getType());
+    if (!memrefType || memrefType.getRank() == 0)
+      continue;
 
     std::optional<SmallVector<int64_t, 4>> shape = getStaticShape(root);
     if (!shape || shape->empty())
@@ -1207,9 +1210,9 @@ namespace {
 // any constant offset.
 static ArrayPositionUse
 classifyPositionUse(AffineExpr result, ArrayRef<utils::IteratorType> iterTypes,
-                    unsigned codeletId, bool isWrite) {
+                    unsigned suId, bool isWrite) {
   ArrayPositionUse use;
-  use.codeletId = codeletId;
+  use.suId = suId;
   use.isWrite = isWrite;
 
   std::optional<AffineDimOffset> dimOffset = extractDimOffset(result);
@@ -1239,13 +1242,13 @@ classifyPositionUse(AffineExpr result, ArrayRef<utils::IteratorType> iterTypes,
 static void recordAccessEntry(ModuleAccessRelations &relations,
                               const MemrefAccessEntry &entry,
                               ArrayRef<utils::IteratorType> iterTypes,
-                              unsigned codeletId, bool isWrite) {
+                              unsigned suId, bool isWrite) {
   Value root = normalizeOutputRoot(entry.memref);
   if (!root)
     return;
-  // External arrays only: scratch defined inside the codelet is not a
+  // External arrays only: scratch defined inside the scheduling unit is not a
   // distribution candidate.
-  if (isDefinedInside(relations.codelets[codeletId].getOperation(), root))
+  if (isDefinedInside(relations.schedulingUnits[suId].getOperation(), root))
     return;
 
   std::optional<SmallVector<int64_t, 4>> shape = getStaticShape(root);
@@ -1267,10 +1270,10 @@ static void recordAccessEntry(ModuleAccessRelations &relations,
 
   if (isWrite) {
     profile.hasWriter = true;
-    if (!profile.writerCodeletId)
-      profile.writerCodeletId = codeletId;
-    else if (*profile.writerCodeletId != codeletId)
-      // More than one writer scheduling unit: leave writerCodeletId as the
+    if (!profile.writerSuId)
+      profile.writerSuId = suId;
+    else if (*profile.writerSuId != suId)
+      // More than one writer scheduling unit: leave writerSuId as the
       // first; assignment seeds from it but readers still align to it.
       ;
   } else {
@@ -1279,7 +1282,7 @@ static void recordAccessEntry(ModuleAccessRelations &relations,
 
   for (unsigned pos = 0; pos < rank; ++pos) {
     ArrayPositionUse use = classifyPositionUse(entry.indexingMap.getResult(pos),
-                                               iterTypes, codeletId, isWrite);
+                                               iterTypes, suId, isWrite);
     profile.positionUses[pos].push_back(use);
   }
 }
@@ -1291,20 +1294,22 @@ ModuleAccessRelations buildModuleAccessRelations(Operation *moduleOp) {
   if (!moduleOp)
     return relations;
 
-  // Assign stable codelet ids in walk order so writer/reader joins are
+  // Assign stable scheduling-unit ids in walk order so writer/reader joins are
   // deterministic across runs.
-  moduleOp->walk([&](SdeSuIterateOp op) { relations.codelets.push_back(op); });
+  moduleOp->walk([&](SdeSuIterateOp op) {
+    relations.schedulingUnits.push_back(op);
+  });
 
-  for (auto [codeletId, op] : llvm::enumerate(relations.codelets)) {
+  for (auto [suId, op] : llvm::enumerate(relations.schedulingUnits)) {
     std::optional<StructuredLoopSummary> summary = analyzeStructuredLoop(op);
     if (!summary)
       continue;
     for (const MemrefAccessEntry &write : summary->writes)
       recordAccessEntry(relations, write, summary->iterTypes,
-                        static_cast<unsigned>(codeletId), /*isWrite=*/true);
+                        static_cast<unsigned>(suId), /*isWrite=*/true);
     for (const MemrefAccessEntry &read : summary->reads)
       recordAccessEntry(relations, read, summary->iterTypes,
-                        static_cast<unsigned>(codeletId), /*isWrite=*/false);
+                        static_cast<unsigned>(suId), /*isWrite=*/false);
   }
 
   return relations;

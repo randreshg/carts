@@ -3,7 +3,7 @@
 ### instead of a project-wide aggregate.
 ###===---------------------------------------------------------------===###
 
-set(_carts_common_link_libs
+set(_carts_common_mlir_link_libs
   MLIRAffineDialect
   MLIRAffineUtils
   MLIRArithDialect
@@ -29,9 +29,24 @@ set(_carts_common_link_libs
   MLIRTargetLLVMIRImport
   MLIRTensorDialect
   MLIRTransformUtils
+)
+
+set(_carts_sde_link_libs
+  ${_carts_common_mlir_link_libs}
+  MLIRCartsSde
+)
+
+set(_carts_arts_link_libs
+  ${_carts_common_mlir_link_libs}
   MLIRCartsArts
   MLIRCartsArtsRt
   MLIRCartsSde
+)
+
+set(_carts_arts_rt_link_libs
+  ${_carts_common_mlir_link_libs}
+  MLIRCartsArts
+  MLIRCartsArtsRt
 )
 
 ###===---------------------------------------------------------------===###
@@ -45,14 +60,11 @@ add_mlir_dialect_library(MLIRCartsSdeTransforms
   ${CARTS_SDE_VERIFY_SOURCE_FILES}
 
 DEPENDS
-  MLIRArtsOpsIncGen
-  MLIRCartsArtsPassIncGen
   MLIRCartsSdePassIncGen
-  MLIRArtsRtOpsIncGen
   MLIRSdeOpsIncGen
 
 LINK_LIBS PUBLIC
-  ${_carts_common_link_libs}
+  ${_carts_sde_link_libs}
   MLIRCartsSdeUtils
 )
 
@@ -74,7 +86,7 @@ DEPENDS
   MLIRSdeOpsIncGen
 
 LINK_LIBS PUBLIC
-  ${_carts_common_link_libs}
+  ${_carts_arts_link_libs}
   MLIRCartsArtsUtils
 )
 
@@ -92,7 +104,7 @@ DEPENDS
   MLIRArtsRtOpsIncGen
 
 LINK_LIBS PUBLIC
-  ${_carts_common_link_libs}
+  ${_carts_arts_rt_link_libs}
   MLIRCartsArtsRtUtils
 )
 

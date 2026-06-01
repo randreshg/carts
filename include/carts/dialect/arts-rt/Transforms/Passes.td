@@ -234,9 +234,8 @@ def AttachFastMathOnEdt
     already carry a non-none fastmath attribute. `reassoc` lets the LLVM
     loop vectorizer reorder FP reductions; `contract` lets it fuse mul+add
     into FMA. The unsafe `nnan`, `ninf`, `nsz`, `arcp`, and `afn` flags are
-    deliberately omitted: enabling them produced checksum drift on multiple
-    Polybench kernels whose parallelized init/reduction paths inside
-    `__arts_edt_*` touched values the unsafe assumptions break.
+    deliberately omitted because generated initialization and reduction paths
+    can still observe strict FP semantics that those flags would invalidate.
   }];
   let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
   let constructor = "mlir::carts::arts_rt::createAttachFastMathOnEdtPass()";

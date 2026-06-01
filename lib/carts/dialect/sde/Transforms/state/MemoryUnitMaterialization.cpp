@@ -7,6 +7,7 @@
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Utils/SdePlanUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_MEMORYUNITMATERIALIZATION
@@ -130,17 +131,24 @@ static bool canMaterializePlannedOwnerSlices(sde::SdeSuIterateOp op) {
   return false;
 }
 
-static void demoteUnsupportedPhysicalStoragePlan(sde::SdeSuIterateOp op) {
+static LogicalResult demoteUnsupportedPhysicalStoragePlan(sde::SdeSuIterateOp op) {
   if (!op || !hasPhysicalOwnerSlicePlan(op) ||
       canMaterializePlannedOwnerSlices(op))
-    return;
+    return success();
 
-  // Physical storage attrs are a promise that the SDE/CODIR boundary can
-  // materialize token-local views. Keep logical scheduling intent, but do not
-  // export an unsupported DB layout to the residual raw CreateDbs bridge.
+  if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
+    return op.emitOpError()
+           << "has a committed CU/MU physical storage plan that this pass "
+              "cannot materialize; refusing to demote or strip upstream "
+              "optimized layout evidence";
+
+  // Physical storage attrs are a promise that boundary lowering can materialize
+  // token-local views. Keep logical scheduling intent, but do not export an
+  // unsupported concrete storage layout to the residual raw bridge.
   op.removePhysicalOwnerDimsAttr();
   op.removePhysicalBlockShapeAttr();
   op.removePhysicalHaloShapeAttr();
+  return success();
 }
 
 static void collectSchedulingUnitMemrefRoots(sde::SdeSuIterateOp op,
@@ -223,10 +231,15 @@ struct MemoryUnitMaterializationPass
     ModuleOp module = getOperation();
 
     SetVector<Value> roots;
+    bool failedDemotion = false;
     module.walk([&](sde::SdeSuIterateOp op) {
       collectSchedulingUnitMemrefRoots(op, roots);
-      demoteUnsupportedPhysicalStoragePlan(op);
+      failedDemotion |= failed(demoteUnsupportedPhysicalStoragePlan(op));
     });
+    if (failedDemotion) {
+      signalPassFailure();
+      return;
+    }
 
     PatternRewriter rewriter(module.getContext());
     for (Value root : roots) {

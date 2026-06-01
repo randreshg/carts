@@ -22,14 +22,6 @@ inline constexpr llvm::StringLiteral RuntimeTotalNodes =
 inline constexpr llvm::StringLiteral RuntimeStaticWorkers =
     "arts.runtime_static_workers";
 
-/// Host target CPU and feature set promoted from the upstream
-/// `polygeist.target-cpu` / `polygeist.target-features` module attrs so
-/// downstream CARTS passes do not depend on a non-ARTS attribute surviving
-/// every conversion pipeline. Populated by PromoteTargetAttrs at the start
-/// of `sde-input-normalization`.
-inline constexpr llvm::StringLiteral TargetCpu = "arts.target-cpu";
-inline constexpr llvm::StringLiteral TargetFeatures = "arts.target-features";
-
 } // namespace Module
 
 /// Operation-level marker attributes attached to non-ARTS ops (func.func,
@@ -47,9 +39,7 @@ inline constexpr llvm::StringLiteral ArtsId = "arts.id";
 inline constexpr llvm::StringLiteral ArtsCreateId = "arts.create_id";
 
 /// Symbol of the outlined EDT body function carried on the launch op.
-/// Intentionally unprefixed for legacy compatibility with the host call
-/// shim.
-inline constexpr llvm::StringLiteral OutlinedFunc = "outlined_func";
+inline constexpr llvm::StringLiteral OutlinedFunc = "arts.outlined_func";
 
 /// PatternAnalysis revision counter used to invalidate downstream caches
 /// when the semantic pattern family on a producer op changes.

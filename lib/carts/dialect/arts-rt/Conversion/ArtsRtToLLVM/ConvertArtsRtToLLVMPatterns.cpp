@@ -11,10 +11,12 @@
 #include "CodegenInternal.h"
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
+#include "carts/dialect/arts/Utils/RuntimeConfig.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
-#include "carts/utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Conversion/LLVMCommon/StructBuilder.h"
@@ -408,9 +410,8 @@ struct DbAllocPattern : public ArtsRtToLLVMPattern<DbAllocOp> {
     Value totalDbSize =
         AC->create<arith::MulIOp>(loc, elementSize, payloadSize);
     std::optional<int64_t> nextId;
-    if (auto createIdAttr =
-            op->getAttrOfType<IntegerAttr>(
-                arts::AttrNames::Operation::ArtsCreateId))
+    if (auto createIdAttr = op->getAttrOfType<IntegerAttr>(
+            arts::AttrNames::Operation::ArtsCreateId))
       nextId = createIdAttr.getInt();
     else
       nextId = getArtsId(op);
@@ -481,6 +482,34 @@ struct DbAllocPattern : public ArtsRtToLLVMPattern<DbAllocOp> {
 
 private:
   enum class DbMemoryPlacement { Default, Interleaved };
+
+  std::optional<DbOwnerMapPlan> requireOwnerMapPlan(DbAllocOp op) const {
+    DbOwnerMapContractFailure contractFailure =
+        getDistributedDbOwnerMapContractFailure(op);
+    if (contractFailure != DbOwnerMapContractFailure::None) {
+      op.emitOpError()
+          << "distributed DB lowering requires a verified owner-map plan: "
+          << toString(contractFailure);
+      return std::nullopt;
+    }
+
+    auto plan = getDbOwnerMapPlan(op);
+    if (!plan) {
+      op.emitOpError()
+          << "distributed DB lowering requires a verified owner-map plan";
+      return std::nullopt;
+    }
+    return plan;
+  }
+
+  Value computeOwnerRouteForLinearIndex(ArrayRef<Value> dbSizes,
+                                        Value linearIndex,
+                                        const DbOwnerMapPlan &plan,
+                                        Location loc) const {
+    return createDbOwnerRouteForLinearIndex(AC->getBuilder(), loc, dbSizes,
+                                            linearIndex, AC->getTotalNodes(loc),
+                                            plan);
+  }
 
   LogicalResult linearizeRankedHandleUses(Value original, Value flatMemref,
                                           ArrayRef<Value> dbSizes,
@@ -562,10 +591,26 @@ private:
     std::string baseName = "__carts_dist_alloc_" + std::to_string(baseId);
     std::string guidHolderSymbol = baseName + "_guid_holder";
     std::string ptrHolderSymbol = baseName + "_ptr_holder";
-    bool parallelInit = AC->useDistributedInitInWorkers();
+    bool explicitSingleNode = false;
+    bool hasExplicitNodeCount = false;
+    if (const arts::RuntimeConfig *machine = AC->getRuntimeConfig()) {
+      hasExplicitNodeCount = machine->hasValidNodeCount();
+      explicitSingleNode = hasExplicitNodeCount && machine->getNodeCount() <= 1;
+    }
+    if (!hasExplicitNodeCount) {
+      std::optional<int64_t> totalNodes =
+          arts::getRuntimeTotalNodes(AC->getModule());
+      hasExplicitNodeCount = totalNodes.has_value();
+      if (totalNodes)
+        explicitSingleNode = *totalNodes <= 1;
+    }
+    bool parallelInit = !explicitSingleNode;
     std::string nodeInitSymbol =
         baseName + (parallelInit ? "_reserve_init" : "_init");
     std::string workerInitSymbol = baseName + "_worker_init";
+    std::optional<DbOwnerMapPlan> ownerMap = requireOwnerMapPlan(op);
+    if (!ownerMap)
+      return failure();
 
     auto guidDynamicType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
     auto ptrDynamicType = MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
@@ -714,19 +759,24 @@ private:
           op.getLoc(), callbackElementSize, callbackPayloadSize);
       Value callbackRoute = AC->createIntConstant(0, AC->Int32, op.getLoc());
       std::optional<int64_t> callbackNextId = nextId;
+      Value callbackNodeId = initFn.getArgument(0);
 
       if (!parallelInit) {
         if (isSingleElement) {
           createSingleDb(
               ptrBuffer, guidBuffer, callbackRoute, callbackTotalDbSize,
               callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
-              /*distributedOwnership=*/true);
+              /*distributedOwnership=*/true,
+              /*createDb=*/true, DbMemoryPlacement::Default, callbackDbSizes,
+              /*indices=*/{}, std::nullopt, &*ownerMap, callbackNodeId);
         } else {
           createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
                          callbackTotalDbSize,
                          callbackNextId ? &callbackNextId : nullptr,
                          op.getLoc(),
-                         /*distributedOwnership=*/true);
+                         /*distributedOwnership=*/true,
+                         /*createDb=*/true, DbMemoryPlacement::Default,
+                         &*ownerMap, callbackNodeId);
         }
         AC->create<func::ReturnOp>(op.getLoc());
       } else {
@@ -737,14 +787,15 @@ private:
               ptrBuffer, guidBuffer, callbackRoute, callbackTotalDbSize,
               callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
               /*distributedOwnership=*/true,
-              /*createDb=*/false);
+              /*createDb=*/false, DbMemoryPlacement::Default, callbackDbSizes,
+              /*indices=*/{}, std::nullopt, &*ownerMap);
         } else {
-          createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
-                         callbackTotalDbSize,
-                         callbackNextId ? &callbackNextId : nullptr,
-                         op.getLoc(),
-                         /*distributedOwnership=*/true,
-                         /*createDb=*/false);
+          createMultiDbs(
+              ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
+              callbackTotalDbSize, callbackNextId ? &callbackNextId : nullptr,
+              op.getLoc(),
+              /*distributedOwnership=*/true,
+              /*createDb=*/false, DbMemoryPlacement::Default, &*ownerMap);
         }
         AC->create<func::ReturnOp>(op.getLoc());
 
@@ -883,18 +934,49 @@ private:
           AC->setInsertionPointToStart(
               &primaryWorkerIf.getThenRegion().front());
           Value workerNodeIndex = AC->castToIndex(workerNodeId, op.getLoc());
-          Value workerTotalNodes =
-              AC->castToIndex(AC->getTotalNodes(op.getLoc()), op.getLoc());
-          auto workerLoop = AC->create<scf::ForOp>(
-              op.getLoc(), workerNodeIndex, workerTotalElems, workerTotalNodes);
-          AC->setInsertionPointToStart(&workerLoop.getRegion().front());
-          Value linearIndex = workerLoop.getInductionVar();
-          Value reservedGuid = AC->create<memref::LoadOp>(
-              op.getLoc(), workerGuidBuffer, ValueRange{linearIndex});
-          createDbFromGuidAtIndex(workerPtrBuffer, reservedGuid, linearIndex,
-                                  workerTotalDbSize, callbackNextId,
-                                  op.getLoc(), DbMemoryPlacement::Default);
-          AC->setInsertionPointAfter(workerLoop);
+          if (ownerMap->kind == DbOwnerMapKind::linear_mod_nodes) {
+            Value workerTotalNodes =
+                AC->castToIndex(AC->getTotalNodes(op.getLoc()), op.getLoc());
+            auto workerLoop =
+                AC->create<scf::ForOp>(op.getLoc(), workerNodeIndex,
+                                       workerTotalElems, workerTotalNodes);
+            AC->setInsertionPointToStart(&workerLoop.getRegion().front());
+            Value linearIndex = workerLoop.getInductionVar();
+            Value reservedGuid = AC->create<memref::LoadOp>(
+                op.getLoc(), workerGuidBuffer, ValueRange{linearIndex});
+            createDbFromGuidAtIndex(workerPtrBuffer, reservedGuid, linearIndex,
+                                    workerTotalDbSize, callbackNextId,
+                                    op.getLoc(), DbMemoryPlacement::Default,
+                                    workerNodeId,
+                                    /*requireLocalOwner=*/true);
+            AC->setInsertionPointAfter(workerLoop);
+          } else {
+            auto lowerBound = AC->createIndexConstant(0, op.getLoc());
+            auto step = AC->createIndexConstant(1, op.getLoc());
+            auto workerLoop = AC->create<scf::ForOp>(op.getLoc(), lowerBound,
+                                                     workerTotalElems, step);
+            AC->setInsertionPointToStart(&workerLoop.getRegion().front());
+            Value linearIndex = workerLoop.getInductionVar();
+            Value ownerRoute = computeOwnerRouteForLinearIndex(
+                workerDbSizes, linearIndex, *ownerMap, op.getLoc());
+            if (!ownerRoute)
+              return failure();
+            Value workerRoute =
+                AC->castToInt(AC->Int32, workerNodeId, op.getLoc());
+            Value ownsBlock = AC->create<arith::CmpIOp>(
+                op.getLoc(), arith::CmpIPredicate::eq, ownerRoute, workerRoute);
+            auto ownerIf = AC->create<scf::IfOp>(op.getLoc(), ownsBlock, false);
+            AC->setInsertionPointToStart(&ownerIf.getThenRegion().front());
+            Value reservedGuid = AC->create<memref::LoadOp>(
+                op.getLoc(), workerGuidBuffer, ValueRange{linearIndex});
+            createDbFromGuidAtIndex(workerPtrBuffer, reservedGuid, linearIndex,
+                                    workerTotalDbSize, callbackNextId,
+                                    op.getLoc(), DbMemoryPlacement::Default,
+                                    ownerRoute,
+                                    /*requireLocalOwner=*/true);
+            AC->setInsertionPointAfter(ownerIf);
+            AC->setInsertionPointAfter(workerLoop);
+          }
           AC->setInsertionPointAfter(primaryWorkerIf);
           AC->create<func::ReturnOp>(op.getLoc());
         }
@@ -923,8 +1005,9 @@ private:
 
   void createDbFromGuidAtIndex(Value dbMemref, Value guid, Value linearIndex,
                                Value elementSize, std::optional<int64_t> nextId,
-                               Location loc,
-                               DbMemoryPlacement memoryPlacement) const {
+                               Location loc, DbMemoryPlacement memoryPlacement,
+                               Value hintRoute = {},
+                               bool requireLocalOwner = false) const {
     Value elemSize64 = AC->ensureI64(elementSize, loc);
 
     /// Build arts_hint_t with arts_id if available.
@@ -937,8 +1020,9 @@ private:
     } else {
       artsIdValue = AC->createIntConstant(0, AC->Int64, loc);
     }
-    Value zeroRoute = AC->createIntConstant(0, AC->Int32, loc);
-    Value hintMemref = buildArtsHintMemref(AC, zeroRoute, artsIdValue, loc);
+    if (!hintRoute)
+      hintRoute = AC->createIntConstant(0, AC->Int32, loc);
+    Value hintMemref = buildArtsHintMemref(AC, hintRoute, artsIdValue, loc);
     Value dbType = AC->createIntConstant(ARTS_DB_DEFAULT, AC->Int32, loc);
     Value nullPtr = AC->create<LLVM::ZeroOp>(loc, AC->llvmPtr);
     Value nullData =
@@ -946,8 +1030,11 @@ private:
 
     ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
     auto runtimeFn = types::ARTSRTL_arts_db_create_with_guid;
-    if (memoryPlacement == DbMemoryPlacement::Interleaved)
+    if (requireLocalOwner) {
+      runtimeFn = types::ARTSRTL_arts_db_create_with_guid_local;
+    } else if (memoryPlacement == DbMemoryPlacement::Interleaved) {
       runtimeFn = types::ARTSRTL_arts_db_create_with_guid_interleaved;
+    }
     auto dbCall =
         RCB.callOp(runtimeFn, {guid, elemSize64, dbType, nullData, hintMemref});
 
@@ -955,13 +1042,16 @@ private:
                                 ValueRange{linearIndex});
   }
 
-  void createSingleDb(
-      Value dbMemref, Value guidMemref, Value route, Value elementSize,
-      std::optional<int64_t> *nextId, Location loc,
-      bool distributedOwnership = false, bool createDb = true,
-      DbMemoryPlacement memoryPlacement = DbMemoryPlacement::Default,
-      ArrayRef<Value> sizes = {}, ArrayRef<Value> indices = {},
-      std::optional<Value> linearIndexOverride = std::nullopt) const {
+  void
+  createSingleDb(Value dbMemref, Value guidMemref, Value route,
+                 Value elementSize, std::optional<int64_t> *nextId,
+                 Location loc, bool distributedOwnership = false,
+                 bool createDb = true,
+                 DbMemoryPlacement memoryPlacement = DbMemoryPlacement::Default,
+                 ArrayRef<Value> sizes = {}, ArrayRef<Value> indices = {},
+                 std::optional<Value> linearIndexOverride = std::nullopt,
+                 const DbOwnerMapPlan *ownerMap = nullptr,
+                 Value localNodeForCreate = {}) const {
     Value linearIndex;
     if (linearIndexOverride.has_value()) {
       linearIndex = *linearIndexOverride;
@@ -973,10 +1063,12 @@ private:
 
     Value reserveRoute = route;
     if (distributedOwnership) {
-      Value linearIndexI32 = AC->castToInt(AC->Int32, linearIndex, loc);
-      Value totalNodes = AC->getTotalNodes(loc);
+      if (!ownerMap)
+        return;
       reserveRoute =
-          AC->create<arith::RemUIOp>(loc, linearIndexI32, totalNodes);
+          computeOwnerRouteForLinearIndex(sizes, linearIndex, *ownerMap, loc);
+      if (!reserveRoute)
+        return;
     }
 
     /// Reserve GUID for the DB (v2: use ARTS_DB type for all datablocks)
@@ -999,16 +1091,34 @@ private:
           baseId = **nextId;
         }
       }
-      createDbFromGuidAtIndex(dbMemref, guid, linearIndex, elementSize, baseId,
-                              loc, memoryPlacement);
+      auto createDbBody = [&]() {
+        createDbFromGuidAtIndex(dbMemref, guid, linearIndex, elementSize,
+                                baseId, loc, memoryPlacement, reserveRoute,
+                                /*requireLocalOwner=*/distributedOwnership &&
+                                    static_cast<bool>(localNodeForCreate));
+      };
+      if (distributedOwnership && localNodeForCreate) {
+        Value localRoute = AC->castToInt(AC->Int32, localNodeForCreate, loc);
+        Value isLocal = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                  reserveRoute, localRoute);
+        auto guard = AC->create<scf::IfOp>(loc, isLocal, false);
+        AC->setInsertionPointToStart(&guard.getThenRegion().front());
+        createDbBody();
+        AC->setInsertionPointAfter(guard);
+      } else {
+        createDbBody();
+      }
     }
   }
 
-  void createMultiDbs(
-      Value dbMemref, Value guidMemref, ArrayRef<Value> sizes, Value route,
-      Value elementSize, std::optional<int64_t> *nextId, Location loc,
-      bool distributedOwnership = false, bool createDb = true,
-      DbMemoryPlacement memoryPlacement = DbMemoryPlacement::Default) const {
+  void
+  createMultiDbs(Value dbMemref, Value guidMemref, ArrayRef<Value> sizes,
+                 Value route, Value elementSize, std::optional<int64_t> *nextId,
+                 Location loc, bool distributedOwnership = false,
+                 bool createDb = true,
+                 DbMemoryPlacement memoryPlacement = DbMemoryPlacement::Default,
+                 const DbOwnerMapPlan *ownerMap = nullptr,
+                 Value localNodeForCreate = {}) const {
     Value totalElems = AC->computeTotalElements(sizes, loc);
     /// Keep DB creation always linearized here. The dedicated GuidRangeCallOpt
     /// pass handles reserve->reserve_range promotion centrally after
@@ -1021,8 +1131,9 @@ private:
     Value linearIndex = linearLoop.getInductionVar();
     createSingleDb(dbMemref, guidMemref, route, elementSize, nextId, loc,
                    distributedOwnership, createDb, memoryPlacement,
-                   /*sizes=*/{},
-                   /*indices=*/{}, /*linearIndexOverride=*/linearIndex);
+                   /*sizes=*/sizes,
+                   /*indices=*/{}, /*linearIndexOverride=*/linearIndex,
+                   ownerMap, localNodeForCreate);
     AC->setInsertionPointAfter(linearLoop);
   }
 

@@ -11,4 +11,5 @@ module {
   }
 }
 
-// CHECK: SDE operation 'sde.cu_task' survived past boundary conversion
+// CHECK: SDE operation reached CODIR-to-ARTS
+// CHECK-SAME: materialize-sde-boundary-to-arts

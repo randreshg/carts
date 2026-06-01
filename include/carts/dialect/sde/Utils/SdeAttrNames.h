@@ -25,8 +25,7 @@ inline constexpr llvm::StringLiteral CpsCandidateRequiresTokenizedDataflow =
 
 /// Runtime-neutral CU/MU graph partition evidence stamped by SDE distribution
 /// planning. These attrs carry only geometry, abstract cost, and concurrency
-/// facts. They must not name collectives, concrete storage objects, tasks,
-/// routes, ranks, or runtime transports.
+/// facts.
 inline constexpr llvm::StringLiteral PartitionGraph = "partitionGraph";
 inline constexpr llvm::StringLiteral PartitionScore = "partitionScore";
 
@@ -57,6 +56,8 @@ inline constexpr llvm::StringLiteral OwnerDims = "ownerDims";
 inline constexpr llvm::StringLiteral BlockShape = "blockShape";
 inline constexpr llvm::StringLiteral TilePayloadBytes = "tilePayloadBytes";
 inline constexpr llvm::StringLiteral MuBlockCount = "muBlockCount";
+inline constexpr llvm::StringLiteral CuGroupSize = "cuGroupSize";
+inline constexpr llvm::StringLiteral CuGroupCount = "cuGroupCount";
 inline constexpr llvm::StringLiteral EdgeCommBytes = "edgeCommBytes";
 inline constexpr llvm::StringLiteral EdgeClass = "edgeClass";
 } // namespace PartitionGraphKeys
@@ -69,6 +70,8 @@ inline constexpr llvm::StringLiteral ExposedCuCount = "exposedCuCount";
 inline constexpr llvm::StringLiteral RequestedCuCount = "requestedCuCount";
 inline constexpr llvm::StringLiteral ChosenCuCount = "chosenCuCount";
 inline constexpr llvm::StringLiteral MuBlockCount = "muBlockCount";
+inline constexpr llvm::StringLiteral CuGroupSize = "cuGroupSize";
+inline constexpr llvm::StringLiteral CuGroupCount = "cuGroupCount";
 inline constexpr llvm::StringLiteral MinTileBytes = "minTileBytes";
 inline constexpr llvm::StringLiteral ChosenTileBytes = "chosenTileBytes";
 inline constexpr llvm::StringLiteral CommVolumeBytes = "commVolumeBytes";

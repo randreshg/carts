@@ -1,8 +1,8 @@
 ///==========================================================================///
 /// Dep passes — structural transforms (loop interchange, tiling, fusion)
 ///==========================================================================///
-#ifndef ARTS_DIALECT_SDE_TRANSFORMS_DEP_PASSES
-#define ARTS_DIALECT_SDE_TRANSFORMS_DEP_PASSES
+#ifndef CARTS_DIALECT_SDE_TRANSFORMS_DEP_PASSES
+#define CARTS_DIALECT_SDE_TRANSFORMS_DEP_PASSES
 
 include "mlir/Pass/PassBase.td"
 
@@ -34,9 +34,10 @@ def Tiling : Pass<"tiling", "mlir::ModuleOp"> {
     The current implementation focuses on the first executable subset:
     one-dimensional elementwise loops are strip-mined into logical-capacity
     tiles and owner-local elementwise pipelines are coarsened with the SDE cost
-    model so codelets amortize local pipeline stages before CODIR lowering. The
-    surrounding sde.su_iterate step is rewritten so the transformed loop nest
-    survives into later lowering.
+    model so SDE compute units amortize local pipeline stages before boundary
+    lowering.
+    The surrounding sde.su_iterate step is rewritten so the transformed loop
+    nest survives into later lowering.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::arith::ArithDialect",
@@ -81,8 +82,8 @@ def LayoutAssignment
     (distributed) positions and per-block extents for each array from its affine
     access relations, minimizing an ABSTRACT communication-volume cost. It is
     pattern-free (driven only by affine maps, iterator types, and static
-    shapes), names no collective, and knows nothing about DBs, EDTs, or runtime
-    placement.
+    shapes), names no communication operation, and knows nothing about target
+    objects or placement.
 
     Four phases:
     - PhaseA builds module-wide per-array access profiles
@@ -98,10 +99,9 @@ def LayoutAssignment
 
     The attrs are planning inputs, not decorative breadcrumbs: SDE distribution
     planning consumes the abstract communication volume when choosing
-    concurrency-preserving block shapes, and CODIR storage planning uses the
-    carried layout/storage facts to select compute-block, phase-redistributed,
-    replicated-read, and collective-family carriers without moving runtime
-    policy into SDE.
+    concurrency-preserving block shapes. Later planning uses the carried
+    layout facts to select concrete storage and communication carriers without
+    moving target policy into SDE.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createLayoutAssignmentPass()";
@@ -134,8 +134,8 @@ def Vectorization
     scheduling unit.
 
     This pass does not raise to tensor/linalg, does not create target vector
-    IR, and does not cross the dialect boundary. Later ARTS/ARTS-RT lowering may
-    translate the SDE hints into target loop metadata after storage and task
+    IR, and does not cross the dialect boundary. Later lowering may translate
+    the SDE hints into target loop metadata after storage and task
     materialization are fixed.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
@@ -164,4 +164,4 @@ def IterationSpaceDecomposition
   let constructor = "mlir::carts::sde::createIterationSpaceDecompositionPass()";
 }
 
-#endif // ARTS_DIALECT_SDE_TRANSFORMS_DEP_PASSES
+#endif // CARTS_DIALECT_SDE_TRANSFORMS_DEP_PASSES

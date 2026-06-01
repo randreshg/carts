@@ -25,8 +25,7 @@
 
 // After ConvertCodirToArts: stencil contract with spatial metadata.
 // CHECK: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
-// CHECK: arts.edt <task>
-// CHECK-SAME: depPattern = #arts.dep_pattern<stencil_tiling_nd>
+// CHECK: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK-SAME: planIterationTopology = #arts.plan_iteration_topology<owner_tile>
 // CHECK-SAME: planLogicalWorkerSlice = [16, 32]
 // CHECK-SAME: stencil_max_offsets = [1, 1]

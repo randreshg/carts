@@ -8,7 +8,7 @@ include "mlir/Pass/PassBase.td"
 
 def PromoteTargetAttrs
     : Pass<"sde-promote-target-attrs", "mlir::ModuleOp"> {
-  let summary = "Promote polygeist target-cpu/features to ARTS-owned module attrs";
+  let summary = "Promote polygeist target-cpu/features to CARTS target attrs";
   let description = [{
     cgeist stamps `polygeist.target-cpu` and `polygeist.target-features` on
     the top-level module. Downstream conversion passes (notably the LLVM
@@ -16,11 +16,11 @@ def PromoteTargetAttrs
     CARTS pass that reads them in the LLVM-facing stages observes a default
     x86-64 target and emits SSE-width vector hints on AVX/AVX-512 hosts.
 
-    This pass copies the polygeist attrs into ARTS-owned
-    `arts.target-cpu` / `arts.target-features` on the same module before
-    any other CARTS pass runs. The ARTS attrs become the single source of
+    This pass copies the polygeist attrs into target-neutral
+    `carts.target-cpu` / `carts.target-features` on the same module before
+    any other CARTS pass runs. The CARTS attrs become the single source of
     truth consumers must read. The pass is a no-op when the polygeist attrs
-    are absent and idempotent when the ARTS attrs are already present.
+    are absent and idempotent when the CARTS attrs are already present.
   }];
 }
 
@@ -48,8 +48,8 @@ def SdeDeadStateCleanupPass
     normalization: unused memref loads, dead stack stores/allocas, no-op
     load/store self writes, unused pure leaf operations, and private symbols.
 
-    This pass intentionally does not inspect ARTS DB, EDT, epoch, placement,
-    or runtime lowering objects.
+    This pass intentionally does not inspect target storage, task, placement,
+    or lowering objects.
   }];
   let dependentDialects = ["::mlir::memref::MemRefDialect",
                            "::mlir::arith::ArithDialect",
@@ -61,16 +61,16 @@ def MemoryUnitMaterialization
   let summary = "Materialize SDE shared memrefs as memory units";
   let description = [{
     Rewrites shared memref allocations used by SDE scheduling units into
-    `sde.mu_alloc` storage before the SDE/CODIR/ARTS boundary. This pass is
+    `sde.mu_alloc` storage before the dialect boundary. This pass is
     intentionally SDE-local: it creates target-neutral MU storage declarations
-    and leaves conversion to ARTS DB objects to CODIR-to-ARTS lowering.
+    and leaves conversion to concrete target objects to boundary lowering.
 
     Physical layout and owner-slice facts stay on the scheduling unit and are
     consumed at boundary conversion to form acquire windows for supported
     elementwise/matmul owner slices. Stencil, reduction, halo, and other
     complex blocked plans remain on the raw bridge until their SDE-local view
-    rewrite exists. The pass does not rediscover DB layouts or perform ARTS
-    index rewriting.
+    rewrite exists. The pass does not rediscover target-object layouts or
+    perform concrete index rewriting.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];

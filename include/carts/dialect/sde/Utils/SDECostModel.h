@@ -1,9 +1,9 @@
 ///==========================================================================///
 /// File: SDECostModel.h
 ///
-/// Runtime-agnostic planning model for SDE optimization decisions.
+/// Target-agnostic planning model for SDE optimization decisions.
 /// The dialect boundary provides a concrete implementation. SDE passes see
-/// ONLY this interface, never target-runtime types.
+/// ONLY this interface, never target object types.
 ///
 /// All methods use SDE-level concepts: tasks, barriers, data movement.
 /// Target object terminology belongs at the dialect boundary.
@@ -43,7 +43,7 @@ public:
   virtual int getLogicalWorkerCapacity() const = 0;
 
   // --- Abstract execution topology ---
-  // SDE may use these runtime-neutral locality groups to choose enough source
+  // SDE may use these target-neutral locality groups to choose enough source
   // tasks for both intra-group and inter-group parallelism. The model is
   // intentionally abstract: target dialects map locality groups to concrete
   // concepts such as nodes, sockets, or accelerator islands, while SDE only
@@ -86,7 +86,7 @@ public:
                                                   (getDataAccessCost() + 1.0)));
   }
 
-  // Owner-local pipeline codelets execute multiple local stages before exposing
+  // Owner-local pipeline compute units execute multiple local stages before exposing
   // completion. Keep their owner slices large enough to amortize task lifecycle
   // and synchronization, while scaling the floor sublinearly with logical
   // capacity so large runs do not create one tiny pipeline task per worker.
@@ -108,8 +108,8 @@ public:
     if (localityGroups <= 1)
       return 1;
     // Cross-locality launches need at least one spare wave so every locality
-    // can receive work while earlier tasks are paying runtime/communication
-    // startup costs. Scale sublinearly to avoid exploding tiny kernels.
+    // can receive work while earlier tasks are paying cross-locality startup
+    // costs. Scale sublinearly to avoid exploding tiny kernels.
     return std::max<int64_t>(
         2, 1 + static_cast<int64_t>(std::ceil(std::log2(static_cast<double>(
                    std::max<int64_t>(2, localityGroups))))));
@@ -117,9 +117,10 @@ public:
 
   virtual int64_t getOwnerLocalPipelineTargetTaskWaves() const {
     // Owner-local pipelines already perform multiple local stages per owner
-    // slice. Additional launch waves increase EDT and DB-acquire pressure
-    // without exposing more machine concurrency: a single wave still provides
-    // one task per logical worker when the owner domain is large enough.
+    // slice. Additional launch waves increase downstream materialization
+    // pressure without exposing more machine concurrency: a single wave still
+    // provides one task per logical worker when the owner domain is large
+    // enough.
     return 1;
   }
 

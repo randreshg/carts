@@ -77,8 +77,8 @@ def CodirPattern
       I32EnumAttrCase<"cross_dim_stencil_3d", 2, "cross_dim_stencil_3d">,
       I32EnumAttrCase<"higher_order_stencil", 3, "higher_order_stencil">,
       I32EnumAttrCase<"wavefront_2d", 4, "wavefront_2d">,
-      I32EnumAttrCase<"jacobi_alternating_buffers", 5,
-                      "jacobi_alternating_buffers">,
+      I32EnumAttrCase<"alternating_buffer_stencil", 5,
+                      "alternating_buffer_stencil">,
       I32EnumAttrCase<"matmul", 6, "matmul">,
       I32EnumAttrCase<"elementwise_pipeline", 7, "elementwise_pipeline">,
       I32EnumAttrCase<"reduction", 8, "reduction">

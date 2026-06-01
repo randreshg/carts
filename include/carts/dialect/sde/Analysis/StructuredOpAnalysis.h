@@ -156,7 +156,7 @@ enum class ArrayDimKind {
 /// One scheduling unit's use of one array-root position.
 struct ArrayPositionUse {
   /// Stable per-module id of the scheduling unit that produced this use.
-  unsigned codeletId = 0;
+  unsigned suId = 0;
   /// How the loop indexes this physical position.
   ArrayDimKind kind = ArrayDimKind::broadcast;
   /// The loop dim doing the indexing (when kind selects a single dim).
@@ -177,18 +177,18 @@ struct ArrayAccessProfile {
   bool hasWriter = false;
   /// True when at least one scheduling unit reads this root.
   bool hasReader = false;
-  /// The codeletId of the (single) writer scheduling unit, if exactly one.
-  std::optional<unsigned> writerCodeletId;
+  /// The suId of the (single) writer scheduling unit, if exactly one.
+  std::optional<unsigned> writerSuId;
 };
 
 /// Module-wide access relations: one profile per accessed external array root,
-/// plus the codeletId assigned to every analyzed `sde.su_iterate`. Pattern-free
+/// plus the suId assigned to every analyzed `sde.su_iterate`. Pattern-free
 /// (built only from affine access maps, iterator types, and static shapes).
 struct ModuleAccessRelations {
   /// Profiles keyed by the array root SSA value (post view-strip).
   llvm::MapVector<Value, ArrayAccessProfile> profiles;
-  /// The scheduling-unit ops in stable id order; index == codeletId.
-  SmallVector<SdeSuIterateOp> codelets;
+  /// The scheduling-unit ops in stable id order; index == suId.
+  SmallVector<SdeSuIterateOp> schedulingUnits;
 };
 
 /// Walk every `sde.su_iterate` under `moduleOp`, run `analyzeStructuredLoop`,
@@ -196,7 +196,8 @@ struct ModuleAccessRelations {
 /// relations used by layout assignment. Pattern-free.
 ModuleAccessRelations buildModuleAccessRelations(Operation *moduleOp);
 
-/// The geometric family of a chosen array layout. Names no collective.
+/// The geometric family of a chosen array layout. Names no communication
+/// operation.
 enum class ArrayLayoutKind {
   /// Block-distributed on owner (parallel) positions — the common case.
   blockParallel,

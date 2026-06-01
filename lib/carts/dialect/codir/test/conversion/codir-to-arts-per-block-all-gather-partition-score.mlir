@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-codir-to-arts,verify-arts-objects-only)' --distributed-db | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' | %FileCheck %s
 
 // The all-gather bridge may batch adjacent blocks to amortize launch overhead,
 // but a forwarded SDE partition_score is an executable concurrency floor: when
@@ -19,6 +19,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
           attributes {dep_collectives = [#codir.collective<all_gather>],
                       dep_modes = [#codir.access_mode<write>],
                       dep_storage_views = [#codir.storage_view<phase_redistributed>],
+                      dep_owner_dims = [[0]],
                       distribution_kind = #codir.distribution_kind<blocked>,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [8, 4],
@@ -63,6 +64,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
           attributes {dep_collectives = [#codir.collective<all_gather>],
                       dep_modes = [#codir.access_mode<write>],
                       dep_storage_views = [#codir.storage_view<phase_redistributed>],
+                      dep_owner_dims = [[0]],
                       distribution_kind = #codir.distribution_kind<blocked>,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [8, 4],
@@ -107,6 +109,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
           attributes {dep_collectives = [#codir.collective<all_gather>],
                       dep_modes = [#codir.access_mode<write>],
                       dep_storage_views = [#codir.storage_view<phase_redistributed>],
+                      dep_owner_dims = [[0]],
                       distribution_kind = #codir.distribution_kind<blocked>,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [8, 4],

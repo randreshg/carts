@@ -1,7 +1,8 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(edt-lowering)' | %FileCheck %s
 
-// Planned coarse, local, write-only owner-strip EDTs may use unordered
-// DB_MODE_RW on a single node. True read-modify-write bodies keep ordered EW.
+// ARTS-RT consumes explicit runtime DB mode verdicts stamped by ARTS.
+// Write-only planned coarse deps use RW only when the acquire carries that
+// verdict; read-modify-write deps can carry the ordered EW verdict.
 
 // CHECK-LABEL: func.func @planned_coarse_inout_write_only_uses_rw
 // CHECK: arts_rt.rec_dep
@@ -26,7 +27,7 @@ module attributes {
     %value = arith.constant 1.0 : f32
 
     %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%route : i32) sizes[%c1] elementType(f32) elementSizes[%c64] {local_only} : (memref<?xi64>, memref<?xmemref<?xf32>>)
-    %acq_guid, %acq_ptr = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf32>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?xf32>>)
+    %acq_guid, %acq_ptr = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf32>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] {runtime_db_mode = #arts.runtime_db_mode<rw>} -> (memref<?xi64>, memref<?xmemref<?xf32>>)
 
     arts.edt <task> <intranode> route(%route) (%acq_ptr) : memref<?xmemref<?xf32>> params(%c0 : index) attributes {planIterationTopology = #arts.plan_iteration_topology<owner_strip>, planLogicalWorkerSlice = [16]} {
     ^bb0(%dep: memref<?xmemref<?xf32>>, %base: index):
@@ -46,7 +47,7 @@ module attributes {
     %c64 = arith.constant 64 : index
 
     %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%route : i32) sizes[%c1] elementType(f32) elementSizes[%c64] {local_only} : (memref<?xi64>, memref<?xmemref<?xf32>>)
-    %acq_guid, %acq_ptr = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf32>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?xf32>>)
+    %acq_guid, %acq_ptr = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf32>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] {runtime_db_mode = #arts.runtime_db_mode<ew>} -> (memref<?xi64>, memref<?xmemref<?xf32>>)
 
     arts.edt <task> <intranode> route(%route) (%acq_ptr) : memref<?xmemref<?xf32>> params(%c0 : index) attributes {planIterationTopology = #arts.plan_iteration_topology<owner_strip>, planLogicalWorkerSlice = [16]} {
     ^bb0(%dep: memref<?xmemref<?xf32>>, %base: index):

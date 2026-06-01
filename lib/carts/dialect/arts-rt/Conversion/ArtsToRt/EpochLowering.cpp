@@ -21,7 +21,7 @@ namespace mlir::carts::arts_rt {
 #include "../ArtsRtToLLVM/CodegenInternal.h"
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/passes/Passes.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"

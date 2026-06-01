@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,storage-planning,convert-codir-to-arts)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
 // RUN:   --arts-config %inputs_dir/arts_multinode_8x64.cfg | %FileCheck %s
 
 // Unclassified write-only compute-block codelets may update only part of the

@@ -11,9 +11,121 @@ namespace mlir::carts::codir {
 #include "carts/dialect/codir/Conversion/Passes.h.inc"
 } // namespace mlir::carts::codir
 namespace {
+
+static LogicalResult rejectResidualSdeOps(ModuleOp module) {
+  bool found = false;
+  module.walk([&](Operation *op) {
+    if (!op->getDialect() || op->getDialect()->getNamespace() != "sde")
+      return;
+    op->emitError() << "SDE operation reached CODIR-to-ARTS; run "
+                       "`materialize-sde-boundary-to-arts` before "
+                       "`convert-codir-to-arts`";
+    found = true;
+  });
+  return failure(found);
+}
+
 struct ConvertCodirToArtsPass
     : public codir::impl::ConvertCodirToArtsBase<ConvertCodirToArtsPass> {
   llvm::SmallDenseSet<Operation *, 16> loopCompletionBarriers;
+
+  LogicalResult requireOnePlanningEntryPerDependency(codir::CodeletOp codelet,
+                                                     ArrayAttr attr,
+                                                     StringRef attrName) {
+    if (codelet.getDeps().size() == (attr ? attr.size() : 0))
+      return success();
+    return codelet.emitOpError()
+           << "requires one " << attrName
+           << " entry per dependency before CODIR-to-ARTS materialization";
+  }
+
+  LogicalResult requireDepModes(codir::CodeletOp codelet) {
+    StringRef attrName = codelet.getDepModesAttrName();
+    ArrayAttr modes = codelet.getDepModesAttr();
+    if (failed(requireOnePlanningEntryPerDependency(codelet, modes, attrName)))
+      return failure();
+    if (!modes)
+      return success();
+    for (auto [index, attr] : llvm::enumerate(modes)) {
+      if (isa<codir::CodirAccessModeAttr>(attr))
+        continue;
+      return codelet.emitOpError()
+             << attrName << " entry #" << index
+             << " must be a CODIR access_mode attribute, got " << attr;
+    }
+    return success();
+  }
+
+  LogicalResult requireDepStorageViews(codir::CodeletOp codelet) {
+    StringRef attrName = codelet.getDepStorageViewsAttrName();
+    ArrayAttr storageViews = codelet.getDepStorageViewsAttr();
+    if (failed(requireOnePlanningEntryPerDependency(codelet, storageViews,
+                                                    attrName)))
+      return failure();
+    if (!storageViews)
+      return success();
+    for (auto [index, attr] : llvm::enumerate(storageViews)) {
+      if (isa<codir::CodirStorageViewKindAttr>(attr))
+        continue;
+      return codelet.emitOpError()
+             << attrName << " entry #" << index
+             << " must be a CODIR storage_view attribute, got " << attr;
+    }
+    return success();
+  }
+
+  LogicalResult requireDepOwnerDims(codir::CodeletOp codelet) {
+    StringRef attrName = codelet.getDepOwnerDimsAttrName();
+    ArrayAttr ownerDims = codelet.getDepOwnerDimsAttr();
+    if (failed(
+            requireOnePlanningEntryPerDependency(codelet, ownerDims, attrName)))
+      return failure();
+    if (!ownerDims)
+      return success();
+    for (auto [index, attr] : llvm::enumerate(ownerDims)) {
+      auto dims = dyn_cast<ArrayAttr>(attr);
+      if (!dims)
+        return codelet.emitOpError()
+               << attrName << " entry #" << index
+               << " must be an array attribute, got " << attr;
+      for (Attribute dim : dims)
+        if (!isa<IntegerAttr>(dim))
+          return codelet.emitOpError()
+                 << attrName << " entry #" << index
+                 << " must contain integer attributes, got " << dim;
+    }
+    return success();
+  }
+
+  LogicalResult requireDepCollectives(codir::CodeletOp codelet) {
+    StringRef attrName = codelet.getDepCollectivesAttrName();
+    ArrayAttr collectives = codelet.getDepCollectivesAttr();
+    if (failed(requireOnePlanningEntryPerDependency(codelet, collectives,
+                                                    attrName)))
+      return failure();
+    if (!collectives)
+      return success();
+    for (auto [index, attr] : llvm::enumerate(collectives)) {
+      if (isa<codir::CodirCollectiveKindAttr>(attr))
+        continue;
+      return codelet.emitOpError()
+             << attrName << " entry #" << index
+             << " must be a CODIR collective attribute, got " << attr;
+    }
+    return success();
+  }
+
+  LogicalResult requireFinalizedPlanningFacts(codir::CodeletOp codelet) {
+    if (failed(requireDepModes(codelet)))
+      return failure();
+    if (failed(requireDepStorageViews(codelet)))
+      return failure();
+    if (failed(requireDepOwnerDims(codelet)))
+      return failure();
+    if (failed(requireDepCollectives(codelet)))
+      return failure();
+    return success();
+  }
 
   bool hasGenericWorkerPlan(codir::CodeletOp codelet) const {
     if (!codelet)
@@ -114,37 +226,20 @@ struct ConvertCodirToArtsPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-
-    SmallVector<sde::SdeMuDataOp> muDatas;
-    module.walk([&](sde::SdeMuDataOp op) { muDatas.push_back(op); });
-    for (sde::SdeMuDataOp op : muDatas) {
-      if (failed(lowerMuData(op))) {
-        signalPassFailure();
-        return;
-      }
-    }
-
-    SmallVector<sde::SdeMuAllocOp> muAllocs;
-    module.walk([&](sde::SdeMuAllocOp op) { muAllocs.push_back(op); });
-    for (sde::SdeMuAllocOp op : muAllocs) {
-      if (failed(lowerMuAlloc(op))) {
-        signalPassFailure();
-        return;
-      }
-    }
-
-    SmallVector<sde::SdeResourceQueryOp> resourceQueries;
-    module.walk(
-        [&](sde::SdeResourceQueryOp op) { resourceQueries.push_back(op); });
-    for (sde::SdeResourceQueryOp op : resourceQueries) {
-      if (failed(lowerSdeResourceQuery(op))) {
-        signalPassFailure();
-        return;
-      }
+    if (failed(rejectResidualSdeOps(module))) {
+      signalPassFailure();
+      return;
     }
 
     SmallVector<codir::CodeletOp> codelets;
     module.walk([&](codir::CodeletOp op) { codelets.push_back(op); });
+    for (codir::CodeletOp codelet : codelets) {
+      if (failed(requireFinalizedPlanningFacts(codelet))) {
+        signalPassFailure();
+        return;
+      }
+    }
+
     for (codir::CodeletOp codelet : codelets) {
       for (auto [depIndex, dep] : llvm::enumerate(codelet.getDeps())) {
         unsigned depIdx = static_cast<unsigned>(depIndex);
@@ -185,39 +280,6 @@ struct ConvertCodirToArtsPass
         return;
       }
     }
-
-    SmallVector<sde::SdeSuBarrierOp> controlBarriers;
-    module.walk([&](sde::SdeSuBarrierOp op) { controlBarriers.push_back(op); });
-    for (sde::SdeSuBarrierOp op : controlBarriers) {
-      if (failed(lowerSdeControlBarrier(op))) {
-        signalPassFailure();
-        return;
-      }
-    }
-
-    SmallVector<sde::SdeControlTokenOp> controlTokens;
-    module.walk(
-        [&](sde::SdeControlTokenOp op) { controlTokens.push_back(op); });
-    for (sde::SdeControlTokenOp op : controlTokens) {
-      if (failed(eraseConsumedSdeControlToken(op))) {
-        signalPassFailure();
-        return;
-      }
-    }
-
-    SmallVector<sde::SdeMuTokenOp> tokens;
-    module.walk([&](sde::SdeMuTokenOp op) { tokens.push_back(op); });
-    for (sde::SdeMuTokenOp token : tokens) {
-      if (!token.getToken().use_empty()) {
-        token.emitOpError()
-            << "survived CODIR-to-ARTS materialization; run "
-               "`convert-sde-to-codir` before `convert-codir-to-arts` so SDE "
-               "codelets become CODIR codelets before ARTS lowering";
-        signalPassFailure();
-        return;
-      }
-      token.erase();
-    }
   }
 
   LogicalResult lowerCodelet(codir::CodeletOp codelet) {
@@ -225,10 +287,8 @@ struct ConvertCodirToArtsPass
     OpBuilder builder(codelet);
 
     ArrayAttr depModes = codelet.getDepModesAttr();
-    if (codelet.getDeps().size() != (depModes ? depModes.size() : 0))
-      return codelet.emitOpError()
-             << "requires one dep_modes entry per dependency before "
-                "CODIR-to-ARTS materialization";
+    if (failed(requireFinalizedPlanningFacts(codelet)))
+      return failure();
 
     SmallVector<Value> taskDeps;
     SmallVector<Type> blockArgTypes;

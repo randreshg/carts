@@ -1,5 +1,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,verify-codir)' \
 // RUN:   | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,reduction-planning,verify-codir)' \
+// RUN:   | %FileCheck %s
 
 module {
   func.func @partial_reduction_maps(%A: memref<128x128xf64>, %x: memref<128xf64>, %y: memref<128xf64>, %base: index) {

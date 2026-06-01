@@ -7,12 +7,11 @@
 /// carry a non-`none` `fastmathFlags` attribute. `reassoc` lets the LLVM
 /// vectorizer reorder reductions; `contract` lets it fuse mul+add into FMA.
 ///
-/// We deliberately omit `nnan`, `ninf`, `nsz`, `arcp`, `afn`: those produced
-/// 100×–6500× checksum drift on Polybench 2mm/3mm/jacobi2d/seidel-2d/correlation
-/// where the parallelized `init_array` and reduction paths inside __arts_edt_*
-/// touched values the unsafe assumptions break. The OMP baseline only sees
-/// `-ffast-math` at link time, after cgeist already emitted strict scalar IR,
-/// so symmetry with OMP does not require the full `fast` set.
+/// We deliberately omit `nnan`, `ninf`, `nsz`, `arcp`, `afn`: those can break
+/// generated initialization and reduction code that still observes strict FP
+/// semantics. The OMP baseline only sees `-ffast-math` at link time, after
+/// cgeist already emitted strict scalar IR, so symmetry with OMP does not
+/// require the full `fast` set.
 ///==========================================================================///
 
 #include "carts/dialect/arts-rt/Transforms/Passes.h"

@@ -5,9 +5,9 @@
 /// These helpers carry source scheduling intent into CODIR without creating
 /// ARTS runtime/orchestration objects.
 ///
-/// The SDE and CODIR enum classes for AccessMode, StorageViewKind, Pattern,
-/// DistributionKind, IterationTopology, RepetitionStructure, AsyncStrategy,
-/// and ReductionStrategy have identical case sets and integer codes
+/// The SDE and CODIR enum classes for AccessMode, Pattern, DistributionKind,
+/// IterationTopology, RepetitionStructure, AsyncStrategy, and
+/// ReductionStrategy have identical case sets and integer codes
 /// (audit-verified). Translation across the boundary is a static_cast.
 ///==========================================================================///
 #ifndef CARTS_DIALECT_CODIR_UTILS_SDETOCODIRMETADATAUTILS_H
@@ -23,8 +23,6 @@ namespace mlir::carts::codir::sde_to_codir {
 
 static_assert(static_cast<int>(sde::SdeAccessMode::readwrite) ==
               static_cast<int>(CodirAccessMode::readwrite));
-static_assert(static_cast<int>(sde::SdeStorageViewKind::phase_redistributed) ==
-              static_cast<int>(CodirStorageViewKind::phase_redistributed));
 static_assert(static_cast<int>(sde::SdePattern::reduction) ==
               static_cast<int>(CodirPattern::reduction));
 static_assert(static_cast<int>(sde::SdeDistributionKind::cyclic) ==

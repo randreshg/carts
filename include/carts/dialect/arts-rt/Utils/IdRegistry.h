@@ -6,7 +6,7 @@
 #ifndef CARTS_DIALECT_ARTS_RT_UTILS_IDREGISTRY_H
 #define CARTS_DIALECT_ARTS_RT_UTILS_IDREGISTRY_H
 
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"

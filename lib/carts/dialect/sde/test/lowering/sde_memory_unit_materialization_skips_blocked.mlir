@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,convert-codir-to-arts)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
 // RUN:   | %FileCheck %s --implicit-check-not=sde. --implicit-check-not=codir.codelet
 
 // Blocked owner-slice layouts materialize through SDE MU storage, CODIR

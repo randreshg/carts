@@ -1,8 +1,8 @@
 ///==========================================================================///
-/// File: Matmul3mmContractionMaterialization.cpp
+/// File: MatmulContractionMaterialization.cpp
 ///
-/// Materializes the chained-matmul G consumer's contraction reduction into
-/// per-(G-block, k-tile) partial-product producer EDTs plus a per-block summing
+/// Materializes a planned block-matmul contraction reduction into
+/// per-(owner-block, k-tile) partial-product producer EDTs plus a per-block summing
 /// settle, so the cross-node contraction over F avoids a single coarse
 /// <inout> replica.
 ///
@@ -13,25 +13,23 @@
 ///     emitted by emitPerBlockAllGatherWriteBack) can only run AFTER lowerCodelet
 ///     when G is an arts.edt. This pass runs at post-db-refinement, after the
 ///     replica exists.
-///   - PartialReductionSplitMaterialization splits a SCALAR rank-1 add reduction
-///     (atax/bicg y = A^T(Ax)). 3mm's G is a 2D-block matmul whose contraction is
-///     a k-loop reading F[k, col]; its result is a rank-2 owner block, not a
-///     scalar element. This pass mirrors that machinery (per-tile EDTs with
-///     OUTSIDE-the-EDT block-arg acquires + a summing settle) for the matmul
-///     block shape.
+///   - PartialReductionSplitMaterialization splits scalar rank-1 add reductions.
+///     This pass handles rank-2 block matmul contractions whose result is an
+///     owner block rather than a scalar element, using the same per-tile EDT and
+///     outside-the-EDT block-arg acquire discipline.
 ///
 /// ABI legality: every DB an EDT touches must arrive as a block-arg dep backed
 /// by a db_acquire emitted outside the EDT.
 ///==========================================================================///
 
-#define GEN_PASS_DEF_MATMUL3MMCONTRACTIONMATERIALIZATION
+#define GEN_PASS_DEF_MATMULCONTRACTIONMATERIALIZATION
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -59,7 +57,7 @@ namespace {
 ///   replicaAlloc : the matching `perBlockReplicated` all-gather replica of F.
 ///   blockRows    : replica owner-block extent along the contraction dim.
 ///   numTiles     : number of replica blocks (= contraction length / blockRows).
-struct Matmul3mmTarget {
+struct MatmulContractionTarget {
   EdtOp gEdt;
   scf::ForOp ownerLoop;
   unsigned resultDep = 0;
@@ -200,7 +198,8 @@ static DbAllocOp findMatchingReplica(ModuleOp module, DbAllocOp coarseFAlloc) {
 /// Inside G's EDT body, find the contraction k-loop (the scf.for whose IV is the
 /// row index of a load from the coarse-F payload) and the paired E/F loads.
 static LogicalResult findContractionLoads(EdtOp gEdt, unsigned coarseFDep,
-                                          unsigned eDep, Matmul3mmTarget &t) {
+                                          unsigned eDep,
+                                          MatmulContractionTarget &t) {
   Block &body = gEdt.getBody().front();
   BlockArgument fArg = body.getArgument(coarseFDep);
   BlockArgument eArg = body.getArgument(eDep);
@@ -268,7 +267,7 @@ static LogicalResult findContractionLoads(EdtOp gEdt, unsigned coarseFDep,
 }
 
 /// Identify a chained-matmul G EDT eligible for contraction split.
-static std::optional<Matmul3mmTarget> matchTarget(EdtOp edt) {
+static std::optional<MatmulContractionTarget> matchTarget(EdtOp edt) {
   if (!edt.getPartialReductionDimsAttr())
     return std::nullopt;
   ModuleOp module = edt->getParentOfType<ModuleOp>();
@@ -347,20 +346,20 @@ static std::optional<Matmul3mmTarget> matchTarget(EdtOp edt) {
   std::optional<int64_t> numTiles = foldConst(replicaAlloc.getSizes().front());
   if (!numTiles || *numTiles <= 0)
     return std::nullopt;
-  std::optional<int64_t> totalNodes = getRuntimeTotalNodes(module);
+  std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
   if (!totalNodes || *totalNodes <= 1)
     return std::nullopt;
   // Production cost gate: this pass materializes one producer EDT per
-  // (G-block, F-replica-block). That is profitable only when the replica blocks
-  // already describe node-granular contraction tiles. If the F replica is much
-  // finer (standard 3mm: 64 F blocks on 2 nodes), the split explodes into
-  // thousands of tiny EDTs and loses to the coarser replicated-read path. CODIR
-  // still owns the all_gather decision; ARTS declines this extra tiling until the
-  // contraction tiler can group multiple F blocks into one node strip.
+  // (owner-block, replica-block). That is profitable only when the replica
+  // blocks already describe node-granular contraction tiles. If the replica is
+  // much finer than the node count, the split explodes into thousands of tiny
+  // EDTs and loses to the coarser replicated-read path. CODIR still owns the
+  // all_gather decision; ARTS declines this extra tiling until the contraction
+  // tiler can group multiple replica blocks into one node strip.
   if (*numTiles > *totalNodes)
     return std::nullopt;
 
-  Matmul3mmTarget t;
+  MatmulContractionTarget t;
   t.gEdt = edt;
   t.ownerLoop = ownerLoop;
   t.resultDep = *resultDep;
@@ -403,7 +402,7 @@ static DbAllocOp createPartialsDb(OpBuilder &builder, Location loc,
 /// the partial tile `tileIdx` (<out>). Its body recomputes the matmul over the
 /// k' rows of the tile, accumulating into the partial.
 static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
-                                      Matmul3mmTarget &t, int64_t tileIdx,
+                                      MatmulContractionTarget &t, int64_t tileIdx,
                                       DbAllocOp partialsDb, Value ownerOrdinal) {
   ModuleOp module = t.gEdt->getParentOfType<ModuleOp>();
   Value one = createOneIndex(builder, loc);
@@ -521,7 +520,7 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
 /// Emit the per-block summing settle: sum the P partial tiles into G's settled
 /// block (the original result DB), written <out> once.
 static LogicalResult emitSettle(OpBuilder &builder, Location loc,
-                                Matmul3mmTarget &t, DbAllocOp partialsDb,
+                                MatmulContractionTarget &t, DbAllocOp partialsDb,
                                 Value ownerOrdinal) {
   ModuleOp module = t.gEdt->getParentOfType<ModuleOp>();
   DbAllocOp resultAlloc = getDepAlloc(t.gEdt, t.resultDep);
@@ -587,7 +586,7 @@ static LogicalResult emitSettle(OpBuilder &builder, Location loc,
   return success();
 }
 
-static LogicalResult materializeTarget(Matmul3mmTarget &t) {
+static LogicalResult materializeTarget(MatmulContractionTarget &t) {
   EdtOp gEdt = t.gEdt;
   Location loc = gEdt.getLoc();
   DbAllocOp resultAlloc = getDepAlloc(gEdt, t.resultDep);
@@ -634,19 +633,19 @@ static LogicalResult materializeTarget(Matmul3mmTarget &t) {
   return success();
 }
 
-struct Matmul3mmContractionMaterializationPass
-    : public impl::Matmul3mmContractionMaterializationBase<
-          Matmul3mmContractionMaterializationPass> {
+struct MatmulContractionMaterializationPass
+    : public impl::MatmulContractionMaterializationBase<
+          MatmulContractionMaterializationPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    SmallVector<Matmul3mmTarget, 2> targets;
+    SmallVector<MatmulContractionTarget, 2> targets;
     module.walk([&](EdtOp edt) {
-      if (std::optional<Matmul3mmTarget> t = matchTarget(edt))
+      if (std::optional<MatmulContractionTarget> t = matchTarget(edt))
         targets.push_back(*t);
     });
-    for (Matmul3mmTarget &t : targets)
+    for (MatmulContractionTarget &t : targets)
       if (failed(materializeTarget(t))) {
-        t.gEdt.emitError() << "failed to materialize 3mm contraction split";
+        t.gEdt.emitError() << "failed to materialize matmul contraction split";
         signalPassFailure();
         return;
       }
@@ -656,6 +655,6 @@ struct Matmul3mmContractionMaterializationPass
 } // namespace
 
 std::unique_ptr<Pass>
-mlir::carts::arts::createMatmul3mmContractionMaterializationPass() {
-  return std::make_unique<Matmul3mmContractionMaterializationPass>();
+mlir::carts::arts::createMatmulContractionMaterializationPass() {
+  return std::make_unique<MatmulContractionMaterializationPass>();
 }

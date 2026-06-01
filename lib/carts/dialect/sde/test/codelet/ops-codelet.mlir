@@ -4,7 +4,7 @@
 //   - !sde.token<memref<...>> types
 //   - sde.mu_data (declarative SDE shared-data handle)
 //   - sde.mu_token (MU storage access token producer)
-//   - sde.cu_codelet (dataflow-isolated compute unit)
+//   - sde.cu_work (dataflow-isolated compute unit)
 //
 // The initial-cleanup stage only parses, verifies, and prints these ops.
 
@@ -19,8 +19,8 @@ module {
     %token = sde.mu_token <readwrite> %m [%c0] size [%c4]
       : memref<8xi32> -> !sde.token<memref<4xi32>>
 
-    // CHECK: sde.cu_codelet(%[[TOK]] : !sde.token<memref<4xi32>>)
-    sde.cu_codelet (%token : !sde.token<memref<4xi32>>) {
+    // CHECK: sde.cu_work(%[[TOK]] : !sde.token<memref<4xi32>>)
+    sde.cu_work (%token : !sde.token<memref<4xi32>>) {
     // CHECK: ^bb0(%[[ARG:.*]]: memref<4xi32>)
     ^bb0(%arg: memref<4xi32>):
       %local_c0 = arith.constant 0 : index
@@ -49,8 +49,8 @@ module {
     %token = sde.mu_token <readwrite> %m
       : memref<8xi32> -> !sde.token<memref<8xi32>>
 
-    // CHECK: sde.cu_codelet(%[[TOK]] : !sde.token<memref<8xi32>>)
-    sde.cu_codelet (%token : !sde.token<memref<8xi32>>) {
+    // CHECK: sde.cu_work(%[[TOK]] : !sde.token<memref<8xi32>>)
+    sde.cu_work (%token : !sde.token<memref<8xi32>>) {
     ^bb0(%arg: memref<8xi32>):
       %local_c0 = arith.constant 0 : index
       %v = memref.load %arg[%local_c0] : memref<8xi32>
@@ -69,8 +69,8 @@ module {
     %token = sde.mu_token <readwrite> %m
       : memref<8xi32> -> !sde.token<memref<8xi32>>
 
-    // CHECK: sde.cu_codelet(%[[TOK]] : !sde.token<memref<8xi32>>)
-    sde.cu_codelet (%token : !sde.token<memref<8xi32>>) {
+    // CHECK: sde.cu_work(%[[TOK]] : !sde.token<memref<8xi32>>)
+    sde.cu_work (%token : !sde.token<memref<8xi32>>) {
     // CHECK: ^bb0(%[[ARG:.*]]: memref<8xi32>)
     ^bb0(%arg: memref<8xi32>):
       %c0 = arith.constant 0 : index

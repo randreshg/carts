@@ -2,6 +2,11 @@
 
 // CHECK-LABEL: func.func @db_lowering_keeps_owner_slice_plan
 // CHECK: arts.db_alloc
+// CHECK-SAME: distributed
+// CHECK-SAME: owner_block_shape = [4]
+// CHECK-SAME: owner_map_dims = [0]
+// CHECK-SAME: owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>
+// CHECK-SAME: owner_map_version = 1 : i32
 // CHECK-SAME: planOwnerDims = [0]
 // CHECK-SAME: planPhysicalBlockShape = [4]
 // CHECK-SAME: memref<?x!llvm.ptr>
@@ -20,7 +25,7 @@ module attributes {
   func.func @db_lowering_keeps_owner_slice_plan() {
     %route = arith.constant -1 : i32
     %c4 = arith.constant 4 : index
-    %guid, %ptr = arts.db_alloc[<out>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c4] {planOwnerDims = [0], planPhysicalBlockShape = [4]} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid, %ptr = arts.db_alloc[<out>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c4] {distributed, owner_block_shape = [4], owner_map_dims = [0], owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>, owner_map_version = 1 : i32, planOwnerDims = [0], planPhysicalBlockShape = [4]} : (memref<?xi64>, memref<?xmemref<?xf64>>)
     return
   }
 

@@ -8,9 +8,9 @@
 // RUN:   --mlir-print-ir-after-all 2>&1 \
 // RUN:   | %FileCheck %s --check-prefix=COARSE
 
-// Multidimensional owner-tile elementwise plans use the same generic
-// tile-byte floor as owner-strip plans. The coarsening is graph-neutral: it
-// only changes SDE block layout and leaves collective selection to CODIR.
+// Multidimensional owner-tile elementwise plans are upstream SDE block-layout
+// decisions. DistributionPlanning may add graph evidence around the realized
+// block shape, but it must not coarsen or rewrite an already tiled owner plan.
 
 // BASE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // BASE: func.func @elementwise_inplace_2d_owner_tile
@@ -22,8 +22,37 @@
 // COARSE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // COARSE: func.func @elementwise_inplace_2d_owner_tile
 // COARSE: iterationTopology = #sde.iteration_topology<owner_tile>
-// COARSE-SAME: logicalWorkerSlice = [128, 128, 16]
-// COARSE-SAME: physicalBlockShape = [128, 128, 16]
+// COARSE-SAME: logicalWorkerSlice = [64, 128, 16]
+// COARSE-SAME: physicalBlockShape = [64, 128, 16]
+// COARSE-SAME: physicalOwnerDims = [0, 1]
+// COARSE: func.func @precommitted_owner_tile
+// COARSE: iterationTopology = #sde.iteration_topology<owner_tile>
+// COARSE-SAME: logicalWorkerSlice = [64, 128, 16]
+// COARSE-SAME: partitionGraph = [
+// COARSE-SAME: blockShape = [64, 128, 16]
+// COARSE-SAME: partitionScore = {
+// COARSE-SAME: blockShape = [64, 128, 16]
+// COARSE-SAME: physicalBlockShape = [64, 128, 16]
+// COARSE-SAME: physicalOwnerDims = [0, 1]
+// COARSE: func.func @physical_only_owner_tile
+// COARSE: iterationTopology = #sde.iteration_topology<owner_tile>
+// COARSE-SAME: logicalWorkerSlice = [64, 128, 16]
+// COARSE-SAME: physicalBlockShape = [64, 128, 16]
+// COARSE-SAME: physicalOwnerDims = [0, 1]
+// COARSE-LABEL: // -----// IR Dump After VerifySdeCpsPlan (verify-sde-cps-plan) //----- //
+// COARSE: func.func @precommitted_owner_tile
+// COARSE: iterationTopology = #sde.iteration_topology<owner_tile>
+// COARSE-SAME: logicalWorkerSlice = [64, 128, 16]
+// COARSE-SAME: partitionGraph = [
+// COARSE-SAME: blockShape = [64, 128, 16]
+// COARSE-SAME: partitionScore = {
+// COARSE-SAME: blockShape = [64, 128, 16]
+// COARSE-SAME: physicalBlockShape = [64, 128, 16]
+// COARSE-SAME: physicalOwnerDims = [0, 1]
+// COARSE: func.func @physical_only_owner_tile
+// COARSE: iterationTopology = #sde.iteration_topology<owner_tile>
+// COARSE-SAME: logicalWorkerSlice = [64, 128, 16]
+// COARSE-SAME: physicalBlockShape = [64, 128, 16]
 // COARSE-SAME: physicalOwnerDims = [0, 1]
 
 module attributes {
@@ -47,6 +76,74 @@ module attributes {
         }
         sde.yield
       }
+      sde.yield
+    }
+    return
+  }
+
+  func.func @precommitted_owner_tile(%A: memref<512x512x16xf32>, %B: memref<512x512x16xf32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c16 = arith.constant 16 : index
+    %c512 = arith.constant 512 : index
+    sde.cu_region <parallel> {
+      sde.su_iterate (%c0, %c0) to (%c512, %c512) step (%c1, %c1) classification(<elementwise>) {
+      ^bb0(%b: index, %c: index):
+        scf.for %i = %c0 to %c16 step %c1 {
+          %old = memref.load %A[%b, %c, %i] : memref<512x512x16xf32>
+          %bias = memref.load %B[%b, %c, %i] : memref<512x512x16xf32>
+          %next = arith.addf %old, %bias : f32
+          memref.store %next, %A[%b, %c, %i] : memref<512x512x16xf32>
+        }
+        sde.yield
+      } {iterationTopology = #sde.iteration_topology<owner_tile>,
+         logicalWorkerSlice = [64, 128, 16],
+         partitionGraph = [{blockShape = [64, 128, 16],
+                            edgeClass = "aligned",
+                            edgeCommBytes = 0 : i64,
+                            layoutKind = "owner_block",
+                            muBlockCount = 64 : i64,
+                            muId = 0 : i64,
+                            ownerDims = [0, 1],
+                            role = "write",
+                            tilePayloadBytes = 524288 : i64}],
+         partitionScore = {blockShape = [64, 128, 16],
+                           chosenCuCount = 64 : i64,
+                           chosenTileBytes = 524288 : i64,
+                           commVolumeBytes = 0 : i64,
+                           exposedCuCount = 64 : i64,
+                           minTileBytes = 0 : i64,
+                           muBlockCount = 64 : i64,
+                           objective = "max_concurrency_comm_aware",
+                           ownerDims = [0, 1],
+                           requestedCuCount = 64 : i64,
+                           targetLogicalWorkers = 64 : i64},
+         physicalBlockShape = [64, 128, 16],
+         physicalOwnerDims = [0, 1]}
+      sde.yield
+    }
+    return
+  }
+
+  func.func @physical_only_owner_tile(%A: memref<512x512x16xf32>, %B: memref<512x512x16xf32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c16 = arith.constant 16 : index
+    %c512 = arith.constant 512 : index
+    sde.cu_region <parallel> {
+      sde.su_iterate (%c0, %c0) to (%c512, %c512) step (%c1, %c1) classification(<elementwise>) {
+      ^bb0(%b: index, %c: index):
+        scf.for %i = %c0 to %c16 step %c1 {
+          %old = memref.load %A[%b, %c, %i] : memref<512x512x16xf32>
+          %bias = memref.load %B[%b, %c, %i] : memref<512x512x16xf32>
+          %next = arith.addf %old, %bias : f32
+          memref.store %next, %A[%b, %c, %i] : memref<512x512x16xf32>
+        }
+        sde.yield
+      } {iterationTopology = #sde.iteration_topology<owner_tile>,
+         logicalWorkerSlice = [64, 128, 16],
+         physicalBlockShape = [64, 128, 16],
+         physicalOwnerDims = [0, 1]}
       sde.yield
     }
     return

@@ -21,6 +21,8 @@ enum class DistributedDbEligibilityRejectReason {
   GlobalAllocType,
   SingleBlock,
   UnsupportedShape,
+  MissingOwnerMapPlan,
+  UnsupportedOwnerMapShape,
   StencilReadInternodeUse,
   UnsupportedPtrUsers,
   UnsupportedGuidUsers,

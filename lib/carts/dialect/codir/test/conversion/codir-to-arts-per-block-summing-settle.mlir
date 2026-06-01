@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --arts-config %inputs_dir/arts_multinode.cfg \
-// RUN:   --pass-pipeline='builtin.module(reduction-planning,storage-planning,convert-codir-to-arts,verify-arts-objects-only)' \
+// RUN:   --pass-pipeline='builtin.module(reduction-planning,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
 // RUN:   | %FileCheck %s
 
 // Per-block single-writer summing settle, the
@@ -33,6 +33,7 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
       codir.codelet deps(%tmp, %A, %x : memref<128xf64>, memref<128x128xf64>, memref<128xf64>)
           params(%i : index)
           attributes {dep_modes = [#codir.access_mode<write>, #codir.access_mode<read>, #codir.access_mode<read>],
+                      dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<replicated_read>, #codir.storage_view<replicated_read>],
                       distribution_kind = #codir.distribution_kind<blocked>,
                       emit_block_native_settle,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
@@ -66,7 +67,7 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
       codir.codelet deps(%y, %A, %tmp : memref<128xf64>, memref<128x128xf64>, memref<128xf64>)
           params(%jb : index)
           attributes {dep_modes = [#codir.access_mode<readwrite>, #codir.access_mode<read>, #codir.access_mode<read>],
-                      dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>, #codir.storage_view<host_whole>],
+                      dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<replicated_read>, #codir.storage_view<host_whole>],
                       distribution_kind = #codir.distribution_kind<blocked>,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [16],
@@ -106,8 +107,8 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
 
 // Outer per-node loop then per-block loop: every node settles all blocks.
 // CHECK: arts.runtime_query <total_nodes>
-// CHECK: scf.for
-// CHECK: scf.for
+// CHECK: scf.for {{.*}} step %c1
+// CHECK: scf.for {{.*}} step %c4
 // The P per-tile partials are RO-acquired (<in>) on distinct block GUIDs; the
 // settled block is acquired output-only on its OWN distinct block DB by exactly
 // one EDT (single writer, no shared exclusive-write frontier).

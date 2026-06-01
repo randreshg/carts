@@ -110,8 +110,8 @@ struct ReductionStrategyPass
                      })) {
         double atomicCost =
             static_cast<double>(workerCount) * costModel->getAtomicUpdateCost();
-        double collectiveCost = costModel->getReductionCost(workerCount);
-        if (atomicCost <= collectiveCost)
+        double treeCost = costModel->getReductionCost(workerCount);
+        if (atomicCost <= treeCost)
           strategy = sde::SdeReductionStrategy::atomic;
       }
 

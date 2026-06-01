@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,convert-codir-to-arts)' | %FileCheck %s --implicit-check-not=codir.codelet --implicit-check-not=sde.
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' | %FileCheck %s --implicit-check-not=codir.codelet --implicit-check-not=sde.
 
 module {
   func.func @codir_to_arts_materializes_arts(%param: index) {

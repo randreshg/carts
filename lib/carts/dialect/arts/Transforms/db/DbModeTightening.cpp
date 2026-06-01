@@ -23,22 +23,23 @@
 #include "mlir/IR/Dominance.h"
 /// Arts
 #include "carts/dialect/arts/Analysis/AnalysisManager.h"
+#include "carts/dialect/arts/Analysis/db/DbAnalysis.h"
 #include "carts/dialect/arts/Analysis/db/OwnershipProof.h"
-#include "carts/dialect/arts/Analysis/graphs/db/DbGraph.h"
 #include "carts/dialect/arts/Analysis/loop/LoopAnalysis.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/passes/Passes.h"
 #include "mlir/Pass/Pass.h"
 /// Debug
-#include "carts/dialect/arts/Analysis/graphs/db/DbNode.h"
 #include "carts/dialect/arts/Utils/BlockedAccessUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 #include "carts/utils/Debug.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -175,54 +176,38 @@ static bool isIndexFullCoverage(Value idx, Value dimSize,
 }
 
 static SmallVector<Value> getEffectiveSliceDimSizes(DbAnalysis &dbAnalysis,
-                                                    DbAcquireNode *acqNode,
+                                                    DbAcquireOp acquire,
                                                     DbAllocOp allocOp) {
-  SmallVector<Value> dimSizes(allocOp.getElementSizes().begin(),
-                              allocOp.getElementSizes().end());
-  if (!acqNode || !allocOp || dimSizes.empty())
-    return dimSizes;
-
-  DbAcquireOp acquire = acqNode->getDbAcquireOp();
-  if (!acquire)
-    return dimSizes;
-
-  OpBuilder builder(acquire);
-  DbAnalysis::AcquirePartitionSummary partitionSummary =
-      dbAnalysis.analyzeAcquirePartition(acquire, builder);
-
-  for (auto [idx, size] : llvm::enumerate(partitionSummary.partitionSizes)) {
-    if (!size || idx >= partitionSummary.partitionDims.size())
-      continue;
-    unsigned dim = partitionSummary.partitionDims[idx];
-    if (dim < dimSizes.size())
-      dimSizes[dim] = size;
-  }
-
-  return dimSizes;
+  return dbAnalysis.getEffectiveAcquireSliceDimSizes(acquire, allocOp);
 }
 
-static bool writesFullAllocation(DbAnalysis &dbAnalysis, DbAcquireNode *acqNode,
+static bool writesFullAllocation(DbAnalysis &dbAnalysis, DbAcquireOp acquire,
                                  DbAllocOp allocOp,
                                  LoopAnalysis &loopAnalysis) {
-  if (!acqNode || !allocOp)
-    return true;
-  if (!acqNode->hasStores())
+  if (!acquire || !allocOp)
     return true;
 
-  EdtOp edt = acqNode->getEdtUser();
+  std::optional<DbAnalysis::AcquireAccessSummary> accessSummary =
+      dbAnalysis.getAcquireAccessSummary(acquire);
+  if (!accessSummary)
+    return true;
+  if (!accessSummary->hasStores)
+    return true;
+
+  EdtOp edt = accessSummary->edtUser;
   if (!edt)
     return true;
 
   SmallVector<LoopNode *> loops;
   loopAnalysis.collectLoopsInOperation(edt, loops);
 
-  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
-  acqNode->collectAccessOperations(dbRefToMemOps);
+  DbAnalysis::AcquireAccessOperationMap dbRefToMemOps;
+  dbAnalysis.collectAcquireAccessOperations(acquire, dbRefToMemOps);
   if (dbRefToMemOps.empty())
     return true;
 
   SmallVector<Value> dimSizes =
-      getEffectiveSliceDimSizes(dbAnalysis, acqNode, allocOp);
+      getEffectiveSliceDimSizes(dbAnalysis, acquire, allocOp);
   if (dimSizes.empty())
     return true;
 
@@ -284,6 +269,189 @@ static bool canPreserveProofTrustedPartitionedWrite(DbAcquireOp acquire) {
   return proof.partitionAccessMapping && proof.depSliceSoundness;
 }
 
+static bool getBoolAttr(Operation *op, llvm::StringLiteral name) {
+  if (!op)
+    return false;
+  if (auto attr = op->getAttrOfType<BoolAttr>(name))
+    return attr.getValue();
+  return false;
+}
+
+static RuntimeDbMode getOrderedRuntimeDbMode(ArtsMode mode) {
+  return mode == ArtsMode::in ? RuntimeDbMode::ro : RuntimeDbMode::ew;
+}
+
+static bool hasTrustedPartitionedWriteContract(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+
+  auto mode = acquire.getPartitionMode().value_or(PartitionMode::coarse);
+  if (!usesBlockLayout(mode))
+    return false;
+
+  bool hasPartitionWindow =
+      (!acquire.getPartitionOffsets().empty() &&
+       !acquire.getPartitionSizes().empty()) ||
+      (!acquire.getOffsets().empty() && !acquire.getSizes().empty());
+  if (!hasPartitionWindow)
+    return false;
+
+  if (auto contract = resolveAcquireContract(acquire))
+    if (contract->hasExplicitStencilContract() &&
+        contract->supportsBlockHalo() && contract->hasOwnerDims())
+      return true;
+
+  LoweringContractOp contractOp = getLoweringContractOp(acquire.getPtr());
+  if (!contractOp)
+    contractOp = getLoweringContractOp(acquire.getSourcePtr());
+  if (!contractOp)
+    return false;
+
+  Operation *contract = contractOp.getOperation();
+  return getBoolAttr(contract,
+                     ::mlir::carts::arts::AttrNames::Proof::
+                         OwnerDimReachability) &&
+         getBoolAttr(contract,
+                     ::mlir::carts::arts::AttrNames::Proof::
+                         PartitionAccessMapping) &&
+         getBoolAttr(contract,
+                     ::mlir::carts::arts::AttrNames::Proof::HaloLegality);
+}
+
+static bool canUseUnorderedLocalWrite(DbAcquireOp acquire, EdtOp edtOp,
+                                      ModuleOp module) {
+  if (!acquire || !edtOp)
+    return false;
+  if (acquire.getMode() != ArtsMode::out &&
+      acquire.getMode() != ArtsMode::inout)
+    return false;
+  if (edtOp.getConcurrency() != EdtConcurrency::intranode)
+    return false;
+  auto totalNodes = arts::getRuntimeTotalNodes(module);
+  if (!totalNodes || *totalNodes != 1)
+    return false;
+  return hasTrustedPartitionedWriteContract(acquire);
+}
+
+static bool canUsePlannedCoarseUnorderedOutWrite(DbAcquireOp acquire,
+                                                 EdtOp edtOp,
+                                                 ModuleOp module,
+                                                 bool payloadMayRead) {
+  if (!acquire || !edtOp)
+    return false;
+  if (acquire.getMode() != ArtsMode::out &&
+      acquire.getMode() != ArtsMode::inout)
+    return false;
+  if (edtOp.getConcurrency() != EdtConcurrency::intranode)
+    return false;
+  auto totalNodes = arts::getRuntimeTotalNodes(module);
+  if (!totalNodes || *totalNodes != 1)
+    return false;
+  if (acquire.getPartitionMode().value_or(PartitionMode::coarse) !=
+      PartitionMode::coarse)
+    return false;
+  auto alloc = dyn_cast_or_null<DbAllocOp>(
+      DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
+  if (!alloc || !alloc.getLocalOnly().value_or(false))
+    return false;
+  if (!edtOp.getPlanLogicalWorkerSliceAttr() ||
+      !edtOp.getPlanIterationTopologyAttr())
+    return false;
+
+  if (acquire.getMode() == ArtsMode::inout && payloadMayRead)
+    return false;
+
+  return true;
+}
+
+static bool isInPlaceSafeUnorderedPattern(ArtsDepPattern pattern) {
+  switch (pattern) {
+  case ArtsDepPattern::matmul:
+  case ArtsDepPattern::uniform:
+  case ArtsDepPattern::elementwise_pipeline:
+    return true;
+  case ArtsDepPattern::unknown:
+  case ArtsDepPattern::stencil:
+  case ArtsDepPattern::triangular:
+  case ArtsDepPattern::wavefront_2d:
+  case ArtsDepPattern::alternating_buffer_stencil:
+  case ArtsDepPattern::stencil_tiling_nd:
+  case ArtsDepPattern::cross_dim_stencil_3d:
+  case ArtsDepPattern::higher_order_stencil:
+  case ArtsDepPattern::reduction:
+    return false;
+  }
+  return false;
+}
+
+static std::optional<unsigned> getDependencyIndex(EdtOp edtOp,
+                                                  DbAcquireOp acquire) {
+  if (!edtOp || !acquire)
+    return std::nullopt;
+  for (auto [idx, dep] : llvm::enumerate(edtOp.getDependencies()))
+    if (dep.getDefiningOp<DbAcquireOp>() == acquire)
+      return idx;
+  return std::nullopt;
+}
+
+static bool canUseInPlaceSafeCoarseUnorderedWrite(DbAcquireOp acquire,
+                                                  EdtOp edtOp,
+                                                  ModuleOp module,
+                                                  unsigned depIndex) {
+  if (!acquire || !edtOp)
+    return false;
+  if (depIndex != 0)
+    return false;
+  if (acquire.getMode() != ArtsMode::out &&
+      acquire.getMode() != ArtsMode::inout)
+    return false;
+  if (edtOp.getConcurrency() != EdtConcurrency::intranode)
+    return false;
+  auto totalNodes = arts::getRuntimeTotalNodes(module);
+  if (!totalNodes || *totalNodes != 1)
+    return false;
+  if (acquire.getPartitionMode().value_or(PartitionMode::coarse) !=
+      PartitionMode::coarse)
+    return false;
+  auto alloc = dyn_cast_or_null<DbAllocOp>(
+      DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
+  if (!alloc || !alloc.getLocalOnly().value_or(false))
+    return false;
+  auto depPattern = getDepPattern(edtOp.getOperation());
+  if (!depPattern || !isInPlaceSafeUnorderedPattern(*depPattern))
+    return false;
+  if (!edtOp.getInPlaceSafeAttr())
+    return false;
+  return true;
+}
+
+static RuntimeDbMode selectRuntimeDbModeVerdict(DbAnalysis &dbAnalysis,
+                                                DbAcquireOp acquire,
+                                                ModuleOp module) {
+  if (!acquire)
+    return RuntimeDbMode::ew;
+
+  RuntimeDbMode orderedMode = getOrderedRuntimeDbMode(acquire.getMode());
+  if (orderedMode == RuntimeDbMode::ro)
+    return orderedMode;
+
+  std::optional<DbAnalysis::AcquireAccessSummary> accessSummary =
+      dbAnalysis.getAcquireAccessSummary(acquire);
+  EdtOp edtOp = accessSummary ? accessSummary->edtUser : EdtOp();
+  bool payloadMayRead = !accessSummary || accessSummary->hasLoads;
+  std::optional<unsigned> depIndex = getDependencyIndex(edtOp, acquire);
+
+  if (canUseUnorderedLocalWrite(acquire, edtOp, module) ||
+      canUsePlannedCoarseUnorderedOutWrite(acquire, edtOp, module,
+                                           payloadMayRead) ||
+      (depIndex &&
+       canUseInPlaceSafeCoarseUnorderedWrite(acquire, edtOp, module,
+                                             *depIndex)))
+    return RuntimeDbMode::rw;
+
+  return orderedMode;
+}
+
 struct MemAccessSite {
   Value source;
   SmallVector<Value, 4> fullIndexChain;
@@ -328,13 +496,14 @@ static bool sameMemAccessSite(const MemAccessSite &lhs,
   return true;
 }
 
-static bool loadsAreSatisfiedByDominatingStores(DbAcquireNode *acqNode,
+static bool loadsAreSatisfiedByDominatingStores(DbAnalysis &dbAnalysis,
+                                                DbAcquireOp acquire,
                                                 func::FuncOp func) {
-  if (!acqNode || !func)
+  if (!acquire || !func)
     return false;
 
-  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
-  acqNode->collectAccessOperations(dbRefToMemOps);
+  DbAnalysis::AcquireAccessOperationMap dbRefToMemOps;
+  dbAnalysis.collectAcquireAccessOperations(acquire, dbRefToMemOps);
   if (dbRefToMemOps.empty())
     return false;
 
@@ -375,52 +544,6 @@ static bool loadsAreSatisfiedByDominatingStores(DbAcquireNode *acqNode,
   return true;
 }
 
-/// Recursively collect combined access modes from all acquire levels.
-static void collectModesRecursive(DbAcquireNode *acqNode, ArtsMode &combined) {
-  ArtsMode mode = acqNode->getDbAcquireOp().getMode();
-  combined = combineAccessModes(combined, mode);
-  acqNode->forEachChildNode([&](NodeBase *child) {
-    if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
-      collectModesRecursive(nestedAcq, combined);
-  });
-}
-
-/// Recursively check whether any acquire has a distribution contract.
-static void checkDistributedRecursive(DbAcquireNode *acqNode,
-                                      DbAnalysis &dbAnalysis,
-                                      bool &isLocalOnly) {
-  if (!isLocalOnly)
-    return;
-  DbAcquireOp acquire = acqNode ? acqNode->getDbAcquireOp() : DbAcquireOp();
-  if (auto summary = dbAnalysis.getAcquireContractSummary(acquire);
-      summary && summary->hasDistributionContract()) {
-    isLocalOnly = false;
-    return;
-  }
-  acqNode->forEachChildNode([&](NodeBase *child) {
-    if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
-      checkDistributedRecursive(nestedAcq, dbAnalysis, isLocalOnly);
-  });
-}
-
-/// Entry for collectAcquiresRecursive: acquire info with program order.
-struct AcquireOrderEntry {
-  unsigned order;
-  DbAcquireNode *node;
-};
-
-/// Recursively collect all acquire nodes with their program order.
-static void collectAcquiresRecursive(DbAcquireNode *acqNode, DbGraph &graph,
-                                     SmallVectorImpl<AcquireOrderEntry> &out) {
-  DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-  unsigned order = graph.getOpOrder(acqOp.getOperation());
-  out.push_back({order, acqNode});
-  acqNode->forEachChildNode([&](NodeBase *child) {
-    if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
-      collectAcquiresRecursive(nestedAcq, graph, out);
-  });
-}
-
 static bool isInsideRepeatableControl(Operation *op) {
   if (!op)
     return false;
@@ -458,6 +581,9 @@ struct DbModeTighteningPass
   /// DB storage-type inference annotations
   void inferDbStorageTypes();
 
+  /// Runtime dependency DB mode verdict annotations
+  bool stampRuntimeDbModeVerdicts();
+
   /// Graph rebuild
   void invalidateAndRebuildGraph();
 
@@ -493,6 +619,10 @@ void DbModeTighteningPass::runOnOperation() {
   /// Infer DB storage-type annotations (local_only, read_only_after_init)
   inferDbStorageTypes();
 
+  bool verdictsChanged = stampRuntimeDbModeVerdicts();
+  if (verdictsChanged)
+    AM->invalidate();
+
   ARTS_INFO_FOOTER(DbModeTighteningPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
@@ -508,14 +638,14 @@ bool DbModeTighteningPass::adjustDbModes() {
 
   module.walk([&](func::FuncOp func) {
     DbAnalysis &dbAnalysis = AM->getDbAnalysis();
-    DbGraph &graph = dbAnalysis.getOrCreateGraph(func);
 
     /// First, adjust per-acquire modes
-    graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
-      bool hasLoads = acqNode->hasLoads();
-      bool hasStores = acqNode->hasStores();
+    dbAnalysis.forEachDbAcquire(func, [&](DbAcquireOp acqOp) {
+      std::optional<DbAnalysis::AcquireAccessSummary> accessSummary =
+          dbAnalysis.getAcquireAccessSummary(acqOp);
+      bool hasLoads = accessSummary && accessSummary->hasLoads;
+      bool hasStores = accessSummary && accessSummary->hasStores;
 
-      DbAcquireOp acqOp = acqNode->getDbAcquireOp();
       /// Some acquires already carry an authoritative dependency mode
       /// (explicit control dependencies, worker-local partial reductions).
       /// Do not re-infer or optimize those modes from local memory accesses.
@@ -541,7 +671,7 @@ bool DbModeTighteningPass::adjustDbModes() {
 
       bool loadsCoveredByLocalStores =
           hasLoads && hasStores &&
-          loadsAreSatisfiedByDominatingStores(acqNode, func);
+          loadsAreSatisfiedByDominatingStores(dbAnalysis, acqOp, func);
 
       ArtsMode originalMode = acqOp.getMode();
       ArtsMode newMode = ArtsMode::in;
@@ -572,12 +702,12 @@ bool DbModeTighteningPass::adjustDbModes() {
       }
 
       if (newMode == ArtsMode::out) {
-        DbAllocNode *allocNode = acqNode->getRootAlloc();
-        DbAllocOp allocOp = allocNode ? allocNode->getDbAllocOp() : DbAllocOp();
+        DbAllocOp allocOp =
+            accessSummary ? accessSummary->rootAlloc : DbAllocOp();
         LoopAnalysis &loopAnalysis = AM->getLoopAnalysis();
         bool fullWrite =
             !allocOp ||
-            writesFullAllocation(dbAnalysis, acqNode, allocOp, loopAnalysis);
+            writesFullAllocation(dbAnalysis, acqOp, allocOp, loopAnalysis);
         bool proofTrustedPartitionedWrite =
             allocOp && !fullWrite &&
             canPreserveProofTrustedPartitionedWrite(acqOp);
@@ -594,8 +724,8 @@ bool DbModeTighteningPass::adjustDbModes() {
         }
       }
 
-      /// Each DbAcquireNode's mode is derived from its own accesses only.
-      /// Nested acquires will be processed separately by forEachAcquireNode.
+      /// Each acquire's mode is derived from its own accesses only.
+      /// Nested acquires will be processed separately by DbAnalysis iteration.
       if (newMode == acqOp.getMode())
         return;
 
@@ -610,36 +740,28 @@ bool DbModeTighteningPass::adjustDbModes() {
     });
 
     /// Then, adjust alloc dbMode - collect modes from all acquires in hierarchy
-    graph.forEachAllocNode([&](DbAllocNode *allocNode) {
-      ArtsMode maxMode = ArtsMode::in;
-      bool sawAcquireMode = false;
-
-      allocNode->forEachChildNode([&](NodeBase *child) {
-        if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
-          sawAcquireMode = true;
-          collectModesRecursive(acqNode, maxMode);
-        }
-      });
-
-      if (!sawAcquireMode) {
-        ARTS_DEBUG("AllocOp: " << allocNode->getDbAllocOp()
+    dbAnalysis.forEachDbAlloc(func, [&](DbAllocOp allocOp) {
+      std::optional<ArtsMode> maxMode =
+          dbAnalysis.getCombinedAcquireModeForAlloc(allocOp);
+      if (!maxMode) {
+        ARTS_DEBUG("AllocOp: " << allocOp
                                << " has no child acquires with visible modes; "
                                   "preserving existing alloc mode");
         return;
       }
 
       /// Update the alloc mode
-      DbAllocOp allocOp = allocNode->getDbAllocOp();
       ArtsMode currentDbMode = allocOp.getMode();
-      if (currentDbMode != maxMode) {
+      if (currentDbMode != *maxMode) {
         ARTS_DEBUG("AllocOp: " << allocOp << " from " << currentDbMode << " to "
-                               << maxMode);
-        allocOp.setModeAttr(ArtsModeAttr::get(allocOp.getContext(), maxMode));
+                               << *maxMode);
+        allocOp.setModeAttr(
+            ArtsModeAttr::get(allocOp.getContext(), *maxMode));
         ++numAllocModesAdjusted;
         changed = true;
       }
 
-      DbMode targetDbMode = DbUtils::convertArtsModeToDbMode(maxMode);
+      DbMode targetDbMode = DbUtils::convertArtsModeToDbMode(*maxMode);
       if (allocOp.getDbMode() != targetDbMode) {
         ARTS_DEBUG("AllocOp: " << allocOp << " dbMode from "
                                << allocOp.getDbMode() << " to "
@@ -668,11 +790,9 @@ void DbModeTighteningPass::inferDbStorageTypes() {
   ARTS_DEBUG_HEADER(InferDbStorageTypes);
 
   module.walk([&](func::FuncOp func) {
-    DbGraph &graph = AM->getDbAnalysis().getOrCreateGraph(func);
     DbAnalysis &dbAnalysis = AM->getDbAnalysis();
 
-    graph.forEachAllocNode([&](DbAllocNode *allocNode) {
-      DbAllocOp allocOp = allocNode->getDbAllocOp();
+    dbAnalysis.forEachDbAlloc(func, [&](DbAllocOp allocOp) {
       if (!allocOp)
         return;
 
@@ -683,13 +803,9 @@ void DbModeTighteningPass::inferDbStorageTypes() {
       /// ---------------------------------------------------------------
       bool isLocalOnly = !hasDistributedDbAllocation(allocOp.getOperation());
 
-      if (isLocalOnly) {
-        /// Check all acquire children (recursively) for distribution contracts
-        allocNode->forEachChildNode([&](NodeBase *child) {
-          if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
-            checkDistributedRecursive(acqNode, dbAnalysis, isLocalOnly);
-        });
-      }
+      if (isLocalOnly &&
+          dbAnalysis.allocationHasDistributedAcquireContract(allocOp))
+        isLocalOnly = false;
 
       if (isLocalOnly) {
         allocOp.setLocalOnly(true);
@@ -702,22 +818,12 @@ void DbModeTighteningPass::inferDbStorageTypes() {
       ///    Collect all acquires with their program order, then check if
       ///    after the first writer, every subsequent acquire is read-only.
       /// ---------------------------------------------------------------
-      SmallVector<AcquireOrderEntry> orderedAcquires;
-
-      allocNode->forEachChildNode([&](NodeBase *child) {
-        if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
-          collectAcquiresRecursive(acqNode, graph, orderedAcquires);
-      });
+      SmallVector<DbAnalysis::OrderedAcquireSummary, 16> orderedAcquires =
+          dbAnalysis.getOrderedAcquiresForAlloc(allocOp);
 
       /// Need at least one acquire to reason about
       if (orderedAcquires.empty())
         return;
-
-      /// Sort by program order
-      llvm::sort(orderedAcquires,
-                 [](const AcquireOrderEntry &a, const AcquireOrderEntry &b) {
-                   return a.order < b.order;
-                 });
 
       /// Find the first writer and check all subsequent acquires. The
       /// read_only_after_init runtime hint is only valid when the initializer
@@ -730,7 +836,7 @@ void DbModeTighteningPass::inferDbStorageTypes() {
       bool writerInRepeatableControl = false;
 
       for (const auto &entry : orderedAcquires) {
-        DbAcquireOp acquireOp = entry.node->getDbAcquireOp();
+        DbAcquireOp acquireOp = entry.acquire;
         ArtsMode mode = acquireOp.getMode();
         bool isWriter = DbUtils::isWriterMode(mode);
 
@@ -764,6 +870,41 @@ void DbModeTighteningPass::inferDbStorageTypes() {
   });
 
   ARTS_DEBUG_FOOTER(InferDbStorageTypes);
+}
+
+///===----------------------------------------------------------------------===///
+/// Stamp runtime dependency DB mode verdicts.
+/// The ARTS layer owns policy decisions that can select unordered local
+/// DB_MODE_RW. ARTS-RT lowering consumes this attr mechanically and no longer
+/// re-discovers policy from dependency pattern/body facts.
+///===----------------------------------------------------------------------===///
+bool DbModeTighteningPass::stampRuntimeDbModeVerdicts() {
+  ARTS_DEBUG_HEADER(StampRuntimeDBModeVerdicts);
+  bool changed = false;
+
+  module.walk([&](func::FuncOp func) {
+    DbAnalysis &dbAnalysis = AM->getDbAnalysis();
+
+    dbAnalysis.forEachDbAcquire(func, [&](DbAcquireOp acqOp) {
+      if (!acqOp)
+        return;
+
+      RuntimeDbMode verdict =
+          selectRuntimeDbModeVerdict(dbAnalysis, acqOp, module);
+      if (acqOp.getRuntimeDbMode() &&
+          *acqOp.getRuntimeDbMode() == verdict)
+        return;
+
+      acqOp.setRuntimeDbModeAttr(
+          RuntimeDbModeAttr::get(acqOp.getContext(), verdict));
+      changed = true;
+      ARTS_DEBUG("AcquireOp: " << acqOp << " runtime DB mode verdict "
+                               << static_cast<int32_t>(verdict));
+    });
+  });
+
+  ARTS_DEBUG_FOOTER(StampRuntimeDBModeVerdicts);
+  return changed;
 }
 
 ///===----------------------------------------------------------------------===///

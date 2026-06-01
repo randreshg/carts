@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --arts-config %inputs_dir/arts_multinode.cfg \
-// RUN:   --pass-pipeline='builtin.module(reduction-planning,storage-planning,convert-codir-to-arts,verify-arts-objects-only)' \
+// RUN:   --pass-pipeline='builtin.module(reduction-planning,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
 // RUN:   | %FileCheck %s
 
 // Cross-owner transpose-matvec reduce (atax y = A^T(Ax) / bicg s = A^T r).

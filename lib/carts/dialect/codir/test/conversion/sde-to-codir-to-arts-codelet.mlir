@@ -2,7 +2,7 @@
 // into ARTS core:
 //   - sde.mu_data     : memref<...> -> arts.db_alloc + arts.db_ref
 //   - sde.mu_token    <mode>        -> codir dep view -> arts.db_acquire <mode>
-//   - sde.cu_codelet  token body    -> codir.codelet -> arts.edt
+//   - sde.cu_work  token body    -> codir.codelet -> arts.edt
 //
 // RUN: %carts-compile %s --arts-config %arts_config \
 // RUN:   --pipeline codir-to-arts --start-from sde-planning \
@@ -23,7 +23,7 @@ module {
     %t = sde.mu_token <readwrite> %d
       : memref<8xi32> -> !sde.token<memref<8xi32>>
 
-    sde.cu_codelet (%t : !sde.token<memref<8xi32>>) {
+    sde.cu_work (%t : !sde.token<memref<8xi32>>) {
     ^bb0(%arg: memref<8xi32>):
       %c0 = arith.constant 0 : index
       %v = memref.load %arg[%c0] : memref<8xi32>
@@ -51,7 +51,7 @@ module {
     %t = sde.mu_token <read> %d [%c16] size [%c512]
       : memref<1024xf32> -> !sde.token<memref<?xf32, strided<[1], offset: ?>>>
 
-    sde.cu_codelet (%t : !sde.token<memref<?xf32, strided<[1], offset: ?>>>) {
+    sde.cu_work (%t : !sde.token<memref<?xf32, strided<[1], offset: ?>>>) {
     ^bb0(%arg: memref<?xf32, strided<[1], offset: ?>>):
       %zero = arith.constant 0 : index
       %v = memref.load %arg[%zero] : memref<?xf32, strided<[1], offset: ?>>
@@ -78,7 +78,7 @@ module {
     %t = sde.mu_token <read> %d [%c16] size [%c512]
       : memref<1024xf32> -> !sde.token<memref<?xf32, strided<[1], offset: ?>>>
 
-    sde.cu_codelet (%t : !sde.token<memref<?xf32, strided<[1], offset: ?>>>) captures(%global_i : index) {
+    sde.cu_work (%t : !sde.token<memref<?xf32, strided<[1], offset: ?>>>) captures(%global_i : index) {
     ^bb0(%arg: memref<?xf32, strided<[1], offset: ?>>, %global_i_arg: index):
       %c0 = arith.constant 0 : index
       %v = memref.load %arg[%global_i_arg] : memref<?xf32, strided<[1], offset: ?>>
@@ -106,7 +106,7 @@ module {
     %tdst = sde.mu_token <write> %dst
       : memref<8xi32> -> !sde.token<memref<8xi32>>
 
-    sde.cu_codelet (%tsrc, %tdst
+    sde.cu_work (%tsrc, %tdst
           : !sde.token<memref<8xi32>>,
             !sde.token<memref<8xi32>>) {
     ^bb0(%ain: memref<8xi32>, %aout: memref<8xi32>):

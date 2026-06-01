@@ -10,11 +10,12 @@
 
 #include "CodegenInternal.h"
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
+#include "carts/dialect/arts-rt/Utils/ArtsRtAttrNames.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
-#include "carts/utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Conversion/LLVMCommon/StructBuilder.h"
@@ -100,8 +101,8 @@ struct WaitOnEpochPattern : public ArtsRtToLLVMPattern<WaitOnEpochOp> {
     auto loc = op.getLoc();
     Value waitOk = AC->waitOnHandle(op.getEpochGuid(), loc);
     Value falseI1 = AC->create<arith::ConstantIntOp>(loc, 0, 1);
-    Value waitFailed = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, waitOk, falseI1);
+    Value waitFailed = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                 waitOk, falseI1);
     auto failIf = AC->create<scf::IfOp>(loc, waitFailed, false);
     rewriter.setInsertionPointToStart(&failIf.getThenRegion().front());
     AC->createRuntimeCall(ARTSRTL_arts_shutdown, {}, loc);
@@ -312,7 +313,8 @@ private:
     auto funcNameAttr = op->getAttrOfType<StringAttr>(
         ::mlir::carts::arts::AttrNames::Operation::OutlinedFunc);
     if (!funcNameAttr)
-      op.emitError("Missing outlined_func attribute for ready-local launch");
+      op.emitError(
+          "Missing arts.outlined_func attribute for ready-local launch");
 
     auto outlined =
         AC->getModule().lookupSymbol<func::FuncOp>(funcNameAttr.getValue());
@@ -1687,7 +1689,7 @@ struct EdtCreatePattern : public ArtsRtToLLVMPattern<EdtCreateOp> {
     auto funcNameAttr = op->getAttrOfType<StringAttr>(
         ::mlir::carts::arts::AttrNames::Operation::OutlinedFunc);
     if (!funcNameAttr)
-      return op.emitError("Missing outlined_func attribute");
+      return op.emitError("Missing arts.outlined_func attribute");
 
     auto outlined =
         AC->getModule().lookupSymbol<func::FuncOp>(funcNameAttr.getValue());

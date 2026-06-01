@@ -9,7 +9,9 @@
 
 #include "carts/dialect/arts/Analysis/graphs/base/EdgeBase.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/SmallVector.h"
 #include <cstdint>
 
 namespace mlir {
@@ -35,12 +37,18 @@ struct DbEdge {
 class EdtDepEdge : public EdgeBase {
 public:
   EdtDepEdge(NodeBase *from, NodeBase *to, const DbEdge &edge);
+  EdtDepEdge(NodeBase *from, NodeBase *to, ArrayRef<DbEdge> edges);
 
   NodeBase *getFrom() const override { return from; }
   NodeBase *getTo() const override { return to; }
+  ArrayRef<DbEdge> getDbEdges() const { return dbEdges; }
+  unsigned getMultiplicity() const { return dbEdges.size(); }
+  unsigned getWeight() const { return getMultiplicity(); }
+  void appendDbEdges(ArrayRef<DbEdge> edges);
 
 private:
   NodeBase *from, *to;
+  SmallVector<DbEdge, 2> dbEdges;
 };
 
 } // namespace carts::arts

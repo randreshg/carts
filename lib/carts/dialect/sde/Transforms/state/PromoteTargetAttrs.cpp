@@ -2,11 +2,10 @@
 /// File: PromoteTargetAttrs.cpp
 ///
 /// Copy `polygeist.target-cpu` / `polygeist.target-features` from the
-/// frontend-emitted module attrs into ARTS-owned `arts.target-cpu` /
-/// `arts.target-features` so downstream CARTS passes (LoopVectorizationHints
-/// and friends in the LLVM-facing pipeline) observe a stable, CARTS-owned
-/// target description after the upstream LLVM-conversion passes strip
-/// foreign module attrs.
+/// frontend-emitted module attrs into target-neutral `carts.target-cpu` /
+/// `carts.target-features` so downstream CARTS passes observe a stable target
+/// description after the upstream LLVM-conversion passes strip foreign module
+/// attrs.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -16,7 +15,7 @@ namespace mlir::carts::sde {
 } // namespace mlir::carts::sde
 
 #include "carts/utils/Debug.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/utils/TargetAttributes.h"
 
 ARTS_DEBUG_SETUP(sde_promote_target_attrs);
 
@@ -34,20 +33,20 @@ struct PromoteTargetAttrsPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
-    if (!arts::getTargetCpu(module)) {
+    if (!target::getTargetCpu(module)) {
       if (auto attr =
               module->getAttrOfType<StringAttr>(kPolygeistTargetCpu)) {
-        arts::setTargetCpu(module, attr.getValue());
+        target::setTargetCpu(module, attr.getValue());
         ARTS_DEBUG("Promoted polygeist.target-cpu='" << attr.getValue()
-                                                     << "' to arts.target-cpu");
+                                                     << "' to carts.target-cpu");
       }
     }
 
-    if (!arts::getTargetFeatures(module)) {
+    if (!target::getTargetFeatures(module)) {
       if (auto attr =
               module->getAttrOfType<StringAttr>(kPolygeistTargetFeatures)) {
-        arts::setTargetFeatures(module, attr.getValue());
-        ARTS_DEBUG("Promoted polygeist.target-features to arts.target-features ("
+        target::setTargetFeatures(module, attr.getValue());
+        ARTS_DEBUG("Promoted polygeist.target-features to carts.target-features ("
                    << attr.getValue().size() << " bytes)");
       }
     }

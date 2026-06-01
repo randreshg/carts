@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir)' | %FileCheck %s --implicit-check-not=sde.cu_codelet
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir)' | %FileCheck %s --implicit-check-not=sde.cu_work
 
 module {
   func.func @sde_sliced_token_global_index_to_local(%mem: memref<8xi32>,
@@ -8,7 +8,7 @@ module {
     %token = sde.mu_token <readwrite> %mem[%c4] size[%c4]
       : memref<8xi32> -> !sde.token<memref<4xi32, strided<[1], offset: 4>>>
 
-    sde.cu_codelet (%token : !sde.token<memref<4xi32, strided<[1], offset: 4>>>)
+    sde.cu_work (%token : !sde.token<memref<4xi32, strided<[1], offset: 4>>>)
       captures(%global_i, %scale : index, i32) {
     ^bb0(%view: memref<4xi32, strided<[1], offset: 4>>, %global_i_arg: index, %scale_arg: i32):
       %value = memref.load %view[%global_i_arg] : memref<4xi32, strided<[1], offset: 4>>
@@ -26,7 +26,7 @@ module {
     %token = sde.mu_token <read> %mem[%off] size[%c4]
       : memref<16xi32> -> !sde.token<memref<4xi32, strided<[1], offset: ?>>>
 
-    sde.cu_codelet (%token : !sde.token<memref<4xi32, strided<[1], offset: ?>>>)
+    sde.cu_work (%token : !sde.token<memref<4xi32, strided<[1], offset: ?>>>)
       captures(%global_i : index) {
     ^bb0(%view: memref<4xi32, strided<[1], offset: ?>>, %global_i_arg: index):
       %c0 = arith.constant 0 : index
@@ -46,7 +46,7 @@ module {
     %token = sde.mu_token <readwrite> %mem[%c2, %c4] size[%c4, %c4]
       : memref<8x8xi32> -> !sde.token<memref<4x4xi32, strided<[8, 1], offset: 20>>>
 
-    sde.cu_codelet (%token : !sde.token<memref<4x4xi32, strided<[8, 1], offset: 20>>>)
+    sde.cu_work (%token : !sde.token<memref<4x4xi32, strided<[8, 1], offset: 20>>>)
       captures(%global_i, %global_j : index, index) {
     ^bb0(%view: memref<4x4xi32, strided<[8, 1], offset: 20>>, %global_i_arg: index, %global_j_arg: index):
       %one = arith.constant 1 : i32
@@ -67,7 +67,7 @@ module {
     %token = sde.mu_token <read> %mem[%row_off, %col_off] size[%c4, %c4]
       : memref<16x16xi32> -> !sde.token<memref<4x4xi32, strided<[16, 1], offset: ?>>>
 
-    sde.cu_codelet (%token : !sde.token<memref<4x4xi32, strided<[16, 1], offset: ?>>>)
+    sde.cu_work (%token : !sde.token<memref<4x4xi32, strided<[16, 1], offset: ?>>>)
       captures(%global_i, %global_j : index, index) {
     ^bb0(%view: memref<4x4xi32, strided<[16, 1], offset: ?>>, %global_i_arg: index, %global_j_arg: index):
       %c0 = arith.constant 0 : index

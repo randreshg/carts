@@ -18,7 +18,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
   func.func @dynamic_route_preserved(%route: i32, %epoch: i64) -> i64 {
     %c0_i32 = arith.constant 0 : i32
     %params = memref.alloca() : memref<0xi64>
-    %guid = arts_rt.edt_create(%params : memref<0xi64>) depCount(%c0_i32) route(%route) epoch(%epoch : i64) {arts.create_id = 42 : i64, outlined_func = "__arts_edt"}
+    %guid = arts_rt.edt_create(%params : memref<0xi64>) depCount(%c0_i32) route(%route) epoch(%epoch : i64) {arts.create_id = 42 : i64, arts.outlined_func = "__arts_edt"}
     return %guid : i64
   }
 }

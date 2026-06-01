@@ -12,9 +12,13 @@
 // CHECK: func.func @partition_graph_direct_row_matmul
 // CHECK: logicalWorkerSlice = [64, 1024]
 // CHECK-SAME: partitionGraph = [
+// CHECK-SAME: blockShape = [64, 1024]
+// CHECK-SAME: cuGroupCount = 16 : i64
+// CHECK-SAME: cuGroupSize = 1 : i64
 // CHECK-SAME: edgeClass = "aligned"
-// CHECK-SAME: layoutKind = "block_parallel"
-// CHECK-SAME: muBlockCount = 4 : i64
+// CHECK-SAME: layoutKind = "owner_block"
+// CHECK-SAME: muBlockCount = 16 : i64
+// CHECK-SAME: ownerDims = [0]
 // CHECK-NOT: all_gather
 // CHECK-NOT: reduce_scatter
 // CHECK-NOT: allreduce
@@ -22,6 +26,8 @@
 // CHECK: partitionScore = {
 // CHECK-SAME: chosenCuCount = 16 : i64
 // CHECK-SAME: chosenTileBytes = 524288 : i64
+// CHECK-SAME: cuGroupCount = 16 : i64
+// CHECK-SAME: cuGroupSize = 1 : i64
 // CHECK-SAME: exposedCuCount = 16 : i64
 // CHECK-SAME: minTileBytes = 4194304 : i64
 // CHECK-SAME: muBlockCount = 16 : i64

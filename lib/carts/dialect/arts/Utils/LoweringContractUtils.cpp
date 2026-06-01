@@ -10,8 +10,8 @@
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
 #include "carts/dialect/arts/Analysis/AnalysisManager.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
-#include "carts/utils/OperationAttributes.h"
-#include "carts/utils/StencilAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/StencilAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -166,7 +166,7 @@ ContractKind LoweringContractInfo::getEffectiveKind() const {
   case ArtsDepPattern::cross_dim_stencil_3d:
   case ArtsDepPattern::higher_order_stencil:
   case ArtsDepPattern::wavefront_2d:
-  case ArtsDepPattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::alternating_buffer_stencil:
     return ContractKind::Stencil;
   case ArtsDepPattern::uniform:
   case ArtsDepPattern::elementwise_pipeline:

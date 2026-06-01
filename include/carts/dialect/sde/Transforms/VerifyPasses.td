@@ -13,7 +13,7 @@ def VerifySdeLowered : Pass<"verify-sde-lowered", "mlir::ModuleOp"> {
 }
 
 def VerifySdeCpsPlan : Pass<"verify-sde-cps-plan", "mlir::ModuleOp"> {
-  let summary = "Verify SDE CPS stage groups before CODIR/ARTS conversion";
+  let summary = "Verify SDE CPS stage groups and committed CU/MU partition plans before boundary conversion";
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createVerifySdeCpsPlanPass()";
 }

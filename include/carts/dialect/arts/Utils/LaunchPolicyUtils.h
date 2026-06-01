@@ -8,7 +8,7 @@
 #define CARTS_DIALECT_ARTS_UTILS_LAUNCHPOLICYUTILS_H
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
@@ -25,7 +25,7 @@ struct ArtsLaunchPolicy {
 };
 
 inline bool hasArtsInterNodeRuntime(ModuleOp module) {
-  std::optional<int64_t> totalNodes = getRuntimeTotalNodes(module);
+  std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
   return totalNodes && *totalNodes > 1;
 }
 

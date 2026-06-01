@@ -5,6 +5,9 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts/Utils/EdtUtils.h"
+#include "carts/dialect/arts/Utils/ArtsAttrNames.h"
+#include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -14,7 +17,9 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include <algorithm>
+#include <functional>
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -100,6 +105,197 @@ void EdtUtils::classifyArgAccesses(EdtOp edt, SmallVectorImpl<bool> &reads,
     else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(nested))
       markWrite(affineStore.getMemRef());
   });
+}
+
+namespace {
+
+static bool acquireHasCoarseEntry(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+  if (!acquire.hasMultiplePartitionEntries())
+    return acquire.getPartitionModeOr() == PartitionMode::coarse;
+  for (size_t i = 0, e = acquire.getNumPartitionEntries(); i < e; ++i)
+    if (acquire.getPartitionEntryMode(i) == PartitionMode::coarse)
+      return true;
+  return false;
+}
+
+static bool acquireHasSubpartitionEntry(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+  if (!acquire.hasMultiplePartitionEntries())
+    return acquire.getPartitionModeOr() != PartitionMode::coarse;
+  for (size_t i = 0, e = acquire.getNumPartitionEntries(); i < e; ++i)
+    if (acquire.getPartitionEntryMode(i) != PartitionMode::coarse)
+      return true;
+  return false;
+}
+
+static bool acquireCarriesPlannedSubpartitionEvidence(DbAcquireOp acquire) {
+  if (!acquire)
+    return false;
+
+  if (acquire.getPreserveDepEdge() || acquire.getReplicatedRead() ||
+      acquire.getDepPatternAttr() || acquire.getDistributionKindAttr() ||
+      acquire.getDistributionPatternAttr() ||
+      acquire.getDistributionVersionAttr())
+    return true;
+
+  if (acquire.getStencilCenterOffsetAttr() ||
+      acquire.getStencilMinOffsetsAttr() ||
+      acquire.getStencilMaxOffsetsAttr() ||
+      acquire.getStencilSpatialDimsAttr() ||
+      acquire.getStencilOwnerDimsAttr() ||
+      acquire.getStencilBlockShapeAttr() ||
+      acquire.getStencilWriteFootprintAttr() ||
+      acquire.getStencilSupportedBlockHaloAttr())
+    return true;
+
+  Operation *root = DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr());
+  auto alloc = dyn_cast_or_null<DbAllocOp>(root);
+  return alloc &&
+         (alloc.getDistributedAttr() || alloc.getOwnerMapKindAttr() ||
+          alloc.getOwnerMapVersionAttr() || alloc.getOwnerMapDimsAttr() ||
+          alloc.getOwnerBlockShapeAttr() || alloc.getOwnerNodeShapeAttr() ||
+          alloc.getPlanOwnerDimsAttr() ||
+          alloc.getPlanPhysicalBlockShapeAttr() ||
+          alloc.getPlanLogicalWorkerSliceAttr() ||
+          alloc.getPlanHaloShapeAttr() ||
+          alloc.getPlanIterationTopologyAttr() ||
+          alloc.getPlanRepetitionStructureAttr() ||
+          alloc.getPlanAsyncStrategyAttr() ||
+          alloc->hasAttr("perBlockReplicated") ||
+          alloc->hasAttr("perBlockSingleWriterStencil") ||
+          alloc.getStencilOwnerDimsAttr() ||
+          alloc.getStencilBlockShapeAttr() ||
+          alloc.getStencilSupportedBlockHaloAttr());
+}
+
+static void forceCoarseAcquire(DbAcquireOp acquire) {
+  acquire.clearPartitionHints();
+  acquire.setPartitionModeAttr(
+      PartitionModeAttr::get(acquire.getContext(), PartitionMode::coarse));
+  if (auto contractOp = getLoweringContractOp(acquire.getPtr()))
+    contractOp->removeAttr(AttrNames::Contract::NarrowableDep);
+}
+
+struct RootDepInfo {
+  unsigned index = 0;
+  DbAcquireOp acquire;
+};
+
+struct RootDepGroup {
+  SmallVector<RootDepInfo, 4> deps;
+  bool hasCoarse = false;
+  bool hasSubpartition = false;
+  bool hasProtectedSubpartition = false;
+  ArtsMode combinedMode = ArtsMode::uninitialized;
+};
+
+} // namespace
+
+unsigned EdtUtils::canonicalizeMixedRootDependencies(ModuleOp module) {
+  if (!module)
+    return 0;
+
+  unsigned changedDeps = 0;
+
+  module.walk([&](EdtOp edt) {
+    Block &body = edt.getBody().front();
+    ValueRange deps = edt.getDependencies();
+    if (deps.size() > body.getNumArguments())
+      return;
+
+    DenseMap<Operation *, RootDepGroup> byRoot;
+    for (auto [idx, dep] : llvm::enumerate(deps)) {
+      auto acquire = dep.getDefiningOp<DbAcquireOp>();
+      if (!acquire)
+        continue;
+      Operation *root = DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr());
+      if (!root)
+        continue;
+      RootDepGroup &group = byRoot[root];
+      group.deps.push_back({static_cast<unsigned>(idx), acquire});
+      group.hasCoarse |= acquireHasCoarseEntry(acquire);
+      group.hasSubpartition |= acquireHasSubpartitionEntry(acquire);
+      group.hasProtectedSubpartition |=
+          acquireHasSubpartitionEntry(acquire) &&
+          acquireCarriesPlannedSubpartitionEvidence(acquire);
+      group.combinedMode =
+          combineAccessModes(group.combinedMode, acquire.getMode());
+    }
+
+    DenseSet<unsigned> removeIndices;
+    for (auto &entry : byRoot) {
+      RootDepGroup &group = entry.second;
+      if (!group.hasCoarse || !group.hasSubpartition || group.deps.size() < 2)
+        continue;
+      if (group.hasProtectedSubpartition)
+        continue;
+
+      unsigned repPos = 0;
+      bool foundWriter = false;
+      for (auto [pos, depInfo] : llvm::enumerate(group.deps)) {
+        if (!acquireHasCoarseEntry(depInfo.acquire))
+          continue;
+        if (DbUtils::isWriterMode(depInfo.acquire.getMode())) {
+          repPos = static_cast<unsigned>(pos);
+          foundWriter = true;
+          break;
+        }
+        if (!foundWriter)
+          repPos = static_cast<unsigned>(pos);
+      }
+      if (!foundWriter) {
+        for (auto [pos, depInfo] : llvm::enumerate(group.deps)) {
+          if (DbUtils::isWriterMode(depInfo.acquire.getMode())) {
+            repPos = static_cast<unsigned>(pos);
+            break;
+          }
+        }
+      }
+
+      RootDepInfo representative = group.deps[repPos];
+      BlockArgument representativeArg = body.getArgument(representative.index);
+      representative.acquire.setModeAttr(ArtsModeAttr::get(
+          representative.acquire.getContext(), group.combinedMode));
+      forceCoarseAcquire(representative.acquire);
+
+      for (RootDepInfo depInfo : group.deps) {
+        forceCoarseAcquire(depInfo.acquire);
+        if (depInfo.index == representative.index)
+          continue;
+        if (depInfo.acquire.getPreserveDepEdge())
+          continue;
+        BlockArgument arg = body.getArgument(depInfo.index);
+        if (arg.getType() != representativeArg.getType())
+          continue;
+        arg.replaceAllUsesWith(representativeArg);
+        removeIndices.insert(depInfo.index);
+      }
+    }
+
+    if (removeIndices.empty())
+      return;
+
+    SmallVector<Value> newDeps;
+    newDeps.reserve(deps.size() - removeIndices.size());
+    for (auto [idx, dep] : llvm::enumerate(deps)) {
+      if (!removeIndices.contains(static_cast<unsigned>(idx)))
+        newDeps.push_back(dep);
+    }
+
+    SmallVector<unsigned, 4> sortedRemove(removeIndices.begin(),
+                                          removeIndices.end());
+    llvm::sort(sortedRemove, std::greater<>());
+    for (unsigned idx : sortedRemove)
+      body.eraseArgument(idx);
+    edt.setDependencies(newDeps);
+
+    changedDeps += sortedRemove.size();
+  });
+
+  return changedDeps;
 }
 
 namespace {

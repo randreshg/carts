@@ -9,9 +9,9 @@ module {
       : memref<8xi32> -> !sde.token<memref<8xi32>>
 
     // CHECK: sde.mu_token
-    // CHECK: survived CODIR-to-ARTS materialization
-    // CHECK: sde.cu_codelet
-    sde.cu_codelet (%t : !sde.token<memref<8xi32>>) {
+    // CHECK: survived SDE boundary materialization
+    // CHECK: sde.cu_work
+    sde.cu_work (%t : !sde.token<memref<8xi32>>) {
     ^bb0(%arg0: memref<8xi32>):
       sde.yield
     }

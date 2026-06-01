@@ -4,7 +4,8 @@
 /// Plan SDE barriers between scheduling units. Independent barriers are marked
 /// for elimination. Required timestep barriers are annotated as stage
 /// boundaries, and SDE-owned CPS candidates get explicit completion tokens so
-/// ARTS can consume the plan without re-discovering the dataflow shape.
+/// boundary lowering can consume the plan without re-discovering the dataflow
+/// shape.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -17,6 +18,7 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
+#include "carts/dialect/sde/Utils/SdePlanUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
@@ -204,7 +206,7 @@ isOutOfPlaceStencilStage(sde::SdeSuIterateOp op,
     return false;
   auto family = op.getPattern();
   return !family || *family == sde::SdePattern::stencil_tiling_nd ||
-         *family == sde::SdePattern::jacobi_alternating_buffers;
+         *family == sde::SdePattern::alternating_buffer_stencil;
 }
 
 static bool isWavefrontFrontierStage(sde::SdeSuIterateOp op) {
@@ -225,6 +227,8 @@ static void stampRepeatedTimestepPlan(sde::SdeSuIterateOp op) {
 
 static void coarsenRepeatedStencilSlice(sde::SdeSuIterateOp op) {
   if (!op)
+    return;
+  if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
     return;
   auto topology = op.getIterationTopology();
   if (!topology || *topology != sde::SdeIterationTopology::owner_tile)
@@ -650,7 +654,7 @@ static bool isTimestepInterstitialOp(Operation *op) {
   return !sde::hasUnmodeledMemoryEffect(op);
 }
 
-static void stampJacobiTimestepPlan(sde::SdeSuIterateOp predecessor,
+static void stampAlternatingBufferTimestepPlan(sde::SdeSuIterateOp predecessor,
                                     sde::SdeSuIterateOp successor,
                                     bool predecessorIsStencil,
                                     bool successorIsStencil) {
@@ -658,10 +662,10 @@ static void stampJacobiTimestepPlan(sde::SdeSuIterateOp predecessor,
   stampRepeatedTimestepPlan(successor);
   if (predecessorIsStencil)
     predecessor.setPatternAttr(sde::SdePatternAttr::get(
-        predecessor.getContext(), sde::SdePattern::jacobi_alternating_buffers));
+        predecessor.getContext(), sde::SdePattern::alternating_buffer_stencil));
   if (successorIsStencil)
     successor.setPatternAttr(sde::SdePatternAttr::get(
-        successor.getContext(), sde::SdePattern::jacobi_alternating_buffers));
+        successor.getContext(), sde::SdePattern::alternating_buffer_stencil));
 }
 
 static bool stampTimestepPlanIfRecognized(
@@ -706,7 +710,7 @@ static bool stampTimestepPlanIfRecognized(
   if (((predStencil && succUniform) || (predUniform && succStencil)) &&
       (compatibleIterationPlan ||
        haveSameStaticWrittenShape(predEffects, succEffects))) {
-    stampJacobiTimestepPlan(predecessor, successor, predStencil, succStencil);
+    stampAlternatingBufferTimestepPlan(predecessor, successor, predStencil, succStencil);
     coarsenRepeatedStencilSlice(predecessor);
     coarsenRepeatedStencilSlice(successor);
     return true;
@@ -930,7 +934,7 @@ struct BarrierEliminationPass
         barrier.setBarrierEliminatedAttr(UnitAttr::get(barrier.getContext()));
         setBarrierReason(barrier, sde::SdeBarrierReason::required_memory);
         eliminated++;
-        ARTS_DEBUG("Eliminated required-memory barrier: token-local DB "
+        ARTS_DEBUG("Eliminated required-memory barrier: token-local storage "
                    "dependencies preserve the inter-phase order");
         return;
       }

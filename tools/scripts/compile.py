@@ -1002,44 +1002,6 @@ def _build_link_cmd(
     return cmd
 
 
-def _llvm_ir_marks_host_openmp(ll_file: Path) -> bool:
-    try:
-        # MUST match CARTS_BENCHMARKS_HOST_OPENMP_MARKER_NAME in
-        # include/carts/utils/benchmarks/CartsBenchmarks.h.
-        return "carts_benchmarks_mark_host_openmp" in ll_file.read_text(
-            errors="ignore")
-    except OSError:
-        return False
-
-
-def _build_host_openmp_link_cmd(
-    config: CartsConfig,
-    input_file: Path,
-    output_file: Path,
-    optimize: bool,
-    debug: bool,
-    link_args: List[str],
-) -> List[str]:
-    """Build clang link command for SDE host-fallback OpenMP LLVM IR."""
-    cmd = [str(config.get_llvm_tool(TOOL_CLANG))]
-    cmd.extend(config.runtime_flags)
-    cmd.extend(config.include_flags)
-    cmd.extend(config.clang_sysroot_flags)
-    cmd.extend(config.clang_library_flags)
-    cmd.extend(config.linker_flags)
-    cmd.append("-fopenmp")
-    cmd.append(str(input_file))
-    cmd.extend(config.clang_libraries)
-    cmd.extend(["-o", str(output_file)])
-    if optimize:
-        cmd.append("-O3")
-    if debug:
-        cmd.append("-g")
-    cmd.extend(link_args)
-    cmd.extend(["-lm", "-lcartsbenchmarks"])
-    return cmd
-
-
 def _compile_c_pipeline(
     config: CartsConfig,
     input_file: Path,
@@ -1138,25 +1100,11 @@ def _compile_c_pipeline(
             ))
             return
 
-        # Step 3: Link with ARTS runtime, or preserve selected host OpenMP.
+        # Step 3: Link with ARTS runtime.
         task = progress.add_task(f"[3{step_label} Final linking...", total=None)
-        if _llvm_ir_marks_host_openmp(ll_file):
-            host_openmp_ll = Path(f"{base_name}-host-openmp.ll")
-            cmd = _build_cgeist_cmd(
-                config, input_file, std_flag, passthrough_args,
-                with_openmp=True, with_debug_info=debug,
-                emit_llvm=True, optimize=enable_pipeline_o3,
-                output_file=host_openmp_ll)
-            if run_command_with_output(cmd, host_openmp_ll) != 0:
-                print_error("Failed host OpenMP fallback emission")
-                raise Exit(1)
-            cmd = _build_host_openmp_link_cmd(
-                config, host_openmp_ll, output_name, enable_pipeline_o3, debug,
-                link_args)
-        else:
-            cmd = _build_link_cmd(
-                config, ll_file, output_name, enable_pipeline_o3, debug,
-                link_args)
+        cmd = _build_link_cmd(
+            config, ll_file, output_name, enable_pipeline_o3, debug,
+            link_args)
         if run_subprocess(cmd, check=False).returncode != 0:
             print_error("Failed final linking")
             raise Exit(1)

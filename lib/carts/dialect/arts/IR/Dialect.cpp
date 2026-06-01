@@ -3,7 +3,7 @@
 /// Defines the Arts dialect and the operations within it.
 ///==========================================================================///
 
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/DialectImplementation.h"
@@ -18,6 +18,7 @@
 
 #include "carts/dialect/arts/Analysis/db/DbAnalysis.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
@@ -103,12 +104,12 @@ struct FoldKnownRuntimeQuery : public OpRewritePattern<RuntimeQueryOp> {
     case RuntimeQueryKind::totalWorkers:
       /// Keep worker count dynamic unless the module explicitly requests
       /// compile-time worker folding (e.g., benchmarking reproducibility).
-      if (!getRuntimeStaticWorkers(module))
+      if (!arts::getRuntimeStaticWorkers(module))
         return failure();
-      foldedValue = getRuntimeTotalWorkers(module);
+      foldedValue = arts::getRuntimeTotalWorkers(module);
       break;
     case RuntimeQueryKind::totalNodes:
-      foldedValue = getRuntimeTotalNodes(module);
+      foldedValue = arts::getRuntimeTotalNodes(module);
       break;
     default:
       return failure();
@@ -584,6 +585,52 @@ LogicalResult DbAllocOp::verify() {
   if (getElementSizes().empty())
     return emitOpError(
         "elementSizes must be non-empty; use a single size of 1 for scalars");
+  if (!getDistributed().value_or(false))
+    return success();
+
+  auto plan = getDbOwnerMapPlan(*this);
+  if (!plan)
+    return emitOpError()
+           << "with distributed ownership requires owner_map_kind, "
+              "owner_map_version, owner_map_dims, and owner_block_shape";
+
+  auto version = getOwnerMapVersionAttr();
+  if (!version || version.getInt() != kDbOwnerMapVersion)
+    return emitOpError() << "has unsupported owner_map_version";
+
+  if (getLocalOnly().value_or(false))
+    return emitOpError()
+           << "cannot be both distributed and local_only";
+  if (getDistributedRejectReasonAttr())
+    return emitOpError()
+           << "cannot be both distributed and rejected for distributed "
+              "ownership";
+
+  if (!ownerMapPreservesPlanOwnerDims(*this, *plan))
+    return emitOpError()
+           << "owner_map_dims must preserve planOwnerDims for distributed "
+              "ownership";
+  if (!ownerMapPreservesPlanBlockShape(*this, *plan))
+    return emitOpError()
+           << "owner_block_shape must preserve planPhysicalBlockShape for "
+              "distributed ownership";
+
+  switch (plan->kind) {
+  case DbOwnerMapKind::linear_mod_nodes:
+    if (!ownerDimsAddressDbRank(plan->dims, getSizes().size()))
+      return emitOpError()
+             << "linear_mod_nodes owner_map_dims must address DB dimensions";
+    break;
+  case DbOwnerMapKind::owner_dim_contiguous:
+    if (!ownerDimsAddressDbRank(plan->dims, getSizes().size()))
+      return emitOpError()
+             << "owner_dim_contiguous owner_map_dims must address DB "
+                "dimensions";
+    break;
+  case DbOwnerMapKind::owner_dim_grid:
+  case DbOwnerMapKind::explicit_rank_table:
+    return emitOpError() << "uses an owner_map_kind that is not yet lowered";
+  }
   return success();
 }
 

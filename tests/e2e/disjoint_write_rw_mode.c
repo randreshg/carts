@@ -1,7 +1,6 @@
 // RUN: rm -rf %t.pipes
-// RUN: %carts compile %s --all-pipelines -O3 --arts-config %arts_config -o
-// %t.pipes RUN: %FileCheck %s
-// --input-file=%t.pipes/5_rt/stages/12_pre-lowering.mlir
+// RUN: %carts compile %s --all-pipelines -O3 --arts-config %arts_config -o %t.pipes
+// RUN: %FileCheck %s --input-file=%t.pipes/5_rt/stages/12_pre-lowering.mlir
 
 // A coarse pointer-table DB does not carry the trusted partitioned-write
 // contract required for unordered local DB_MODE_RW. Keep the dependency in

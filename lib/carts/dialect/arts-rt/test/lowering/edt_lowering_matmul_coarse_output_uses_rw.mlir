@@ -1,9 +1,8 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(edt-lowering)' | %FileCheck %s
 
-// Row-owned matmul EDTs read their output after initializing it inside the
-// task, so generic payload-read detection must not force the coarse output DB
-// through ordered EW. The matmul pattern plus inPlaceSafe marks the first
-// dependency as row-disjoint across EDT instances.
+// ARTS-RT maps ARTS-level unordered DB mode verdicts to DB_MODE_RW. Pattern
+// attrs remain present on the EDT, but this pass does not re-derive RW from
+// them.
 
 // CHECK-LABEL: func.func @matmul_coarse_output_uses_unordered_rw
 // CHECK: arts_rt.rec_dep
@@ -31,7 +30,7 @@ module attributes {
     %lhs_guid, %lhs_ptr = arts.db_alloc[<in>, <heap>, <read>, <coarse>] route(%route : i32) sizes[%c1] elementType(f64) elementSizes[%c4, %c4] {local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
     %rhs_guid, %rhs_ptr = arts.db_alloc[<in>, <heap>, <read>, <coarse>] route(%route : i32) sizes[%c1] elementType(f64) elementSizes[%c4, %c4] {local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
 
-    %out_acq_guid, %out_acq_ptr = arts.db_acquire[<inout>] (%out_guid : memref<?xi64>, %out_ptr : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+    %out_acq_guid, %out_acq_ptr = arts.db_acquire[<inout>] (%out_guid : memref<?xi64>, %out_ptr : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] {runtime_db_mode = #arts.runtime_db_mode<rw>} -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
     %lhs_acq_guid, %lhs_acq_ptr = arts.db_acquire[<in>] (%lhs_guid : memref<?xi64>, %lhs_ptr : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
     %rhs_acq_guid, %rhs_acq_ptr = arts.db_acquire[<in>] (%rhs_guid : memref<?xi64>, %rhs_ptr : memref<?xmemref<?x?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)
 
@@ -65,7 +64,7 @@ module attributes {
     %out_guid, %out_ptr = arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%route : i32) sizes[%c1] elementType(f64) elementSizes[%c4] {local_only} : (memref<?xi64>, memref<?xmemref<?xf64>>)
     %in_guid, %in_ptr = arts.db_alloc[<in>, <heap>, <read>, <coarse>] route(%route : i32) sizes[%c1] elementType(f64) elementSizes[%c4] {local_only} : (memref<?xi64>, memref<?xmemref<?xf64>>)
 
-    %out_acq_guid, %out_acq_ptr = arts.db_acquire[<inout>] (%out_guid : memref<?xi64>, %out_ptr : memref<?xmemref<?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %out_acq_guid, %out_acq_ptr = arts.db_acquire[<inout>] (%out_guid : memref<?xi64>, %out_ptr : memref<?xmemref<?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] {runtime_db_mode = #arts.runtime_db_mode<rw>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
     %in_acq_guid, %in_acq_ptr = arts.db_acquire[<in>] (%in_guid : memref<?xi64>, %in_ptr : memref<?xmemref<?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?xf64>>)
 
     arts.edt <task> <intranode> route(%route) (%out_acq_ptr, %in_acq_ptr) : memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> params(%c0 : index) attributes {depPattern = #arts.dep_pattern<uniform>, inPlaceSafe} {

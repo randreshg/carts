@@ -7,8 +7,8 @@
 // pattern-free: SDE names data layouts and abstract edge pressure, not
 // collectives.
 //
-// This is a 3mm chain (E = A*B, F = C*D, G = E*F). The third matmul contracts
-// the sibling-computed intermediate F on its row axis. Expected layouts:
+// This is a chained matmul (E = A*B, F = C*D, G = E*F). The third matmul
+// contracts the sibling-computed intermediate F on its row axis. Expected layouts:
 //   - matmul outputs (E, F, G): block_parallel owner-tiled on [0, 1].
 //   - matmul inputs (A, C, E): block_parallel row-block on [0].
 //   - F as consumed by G on its contraction axis: block_contraction owner [0].

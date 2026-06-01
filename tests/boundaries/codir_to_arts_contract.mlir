@@ -1,6 +1,9 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,storage-planning,convert-codir-to-arts,verify-arts-objects-only)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
 // RUN:   --arts-config %inputs_dir/arts_8t.cfg \
 // RUN:   | %FileCheck %s --implicit-check-not=codir.
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
+// RUN:   --arts-config %inputs_dir/arts_8t.cfg 2>&1 \
+// RUN:   | %FileCheck %s --check-prefix=UNPLANNED
 
 // Per-dialect handoff contract: after `convert-codir-to-arts` runs and
 // `verify-arts-objects-only` accepts the result, no `codir.*` op may
@@ -13,6 +16,8 @@
 // CHECK: arts.db_alloc
 // CHECK: arts.db_acquire
 // CHECK: arts.edt
+
+// UNPLANNED: requires one dep_owner_dims entry per dependency before CODIR-to-ARTS materialization
 
 module {
   func.func @codir_to_arts_contract() {

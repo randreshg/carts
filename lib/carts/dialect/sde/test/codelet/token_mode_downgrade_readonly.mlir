@@ -12,8 +12,8 @@ module {
     %token = sde.mu_token <read> %m
       : memref<8xi32> -> !sde.token<memref<8xi32>>
 
-    // CHECK: sde.cu_codelet
-    sde.cu_codelet (%token : !sde.token<memref<8xi32>>) {
+    // CHECK: sde.cu_work
+    sde.cu_work (%token : !sde.token<memref<8xi32>>) {
     ^bb0(%arg: memref<8xi32>):
       %c0 = arith.constant 0 : index
       %val = memref.load %arg[%c0] : memref<8xi32>
@@ -33,8 +33,8 @@ module {
     %token = sde.mu_token <readwrite> %m
       : memref<8xi32> -> !sde.token<memref<8xi32>>
 
-    // CHECK: sde.cu_codelet
-    sde.cu_codelet (%token : !sde.token<memref<8xi32>>) {
+    // CHECK: sde.cu_work
+    sde.cu_work (%token : !sde.token<memref<8xi32>>) {
     ^bb0(%arg: memref<8xi32>):
       %c0 = arith.constant 0 : index
       %val = memref.load %arg[%c0] : memref<8xi32>

@@ -14,11 +14,11 @@
 // CHECK: arts.db_alloc{{.*}}<coarse>
 // CHECK-SAME: elementSizes[%c2048{{(_[0-9]+)?}}, %c64{{(_[0-9]+)?}}]
 // CHECK: arts.db_alloc{{.*}}<block>
-// CHECK-SAME: planPhysicalBlockShape = [256, 64]
+// CHECK-SAME: planPhysicalBlockShape = [16, 64]
 // CHECK: scf.for
 // CHECK: arts.db_acquire[<in>]{{.*}}partitioning(<block>)
 // CHECK: arts.db_acquire[<inout>]{{.*}}partitioning(<block>)
-// CHECK: arts.edt <task> <intranode>{{.*}}planPhysicalBlockShape = [256, 64]
+// CHECK: arts.edt <task> <intranode>{{.*}}planPhysicalBlockShape = [16, 64]
 // CHECK: arts.db_ref
 // CHECK: memref.load
 // CHECK: memref.store

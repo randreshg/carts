@@ -1,6 +1,6 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir)' \
 // RUN:   | %FileCheck %s --check-prefix=CODIR
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,storage-planning,convert-codir-to-arts)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
 // RUN:   | %FileCheck %s --check-prefix=ARTS
 
 // CODIR remains machine-generic: it carries logical worker and physical owner

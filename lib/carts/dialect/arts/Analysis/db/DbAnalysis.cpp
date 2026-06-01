@@ -14,7 +14,7 @@
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
@@ -864,6 +864,166 @@ DbAcquireNode *DbAnalysis::getDbAcquireNode(DbAcquireOp acquire) {
   if (!func)
     return nullptr;
   return getOrCreateGraph(func).getDbAcquireNode(acquire);
+}
+
+void DbAnalysis::forEachDbAlloc(
+    func::FuncOp func, const std::function<void(DbAllocOp)> &fn) {
+  if (!func || !fn)
+    return;
+
+  DbGraph &graph = getOrCreateGraph(func);
+  graph.forEachAllocNode([&](DbAllocNode *allocNode) {
+    if (!allocNode)
+      return;
+    DbAllocOp alloc = allocNode->getDbAllocOp();
+    if (alloc)
+      fn(alloc);
+  });
+}
+
+void DbAnalysis::forEachDbAcquire(
+    func::FuncOp func, const std::function<void(DbAcquireOp)> &fn) {
+  if (!func || !fn)
+    return;
+
+  DbGraph &graph = getOrCreateGraph(func);
+  graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
+    if (!acqNode)
+      return;
+    DbAcquireOp acquire = acqNode->getDbAcquireOp();
+    if (acquire)
+      fn(acquire);
+  });
+}
+
+std::optional<DbAnalysis::AcquireAccessSummary>
+DbAnalysis::getAcquireAccessSummary(DbAcquireOp acquire) {
+  DbAcquireNode *acqNode = getDbAcquireNode(acquire);
+  if (!acqNode)
+    return std::nullopt;
+
+  AcquireAccessSummary summary;
+  summary.acquire = acqNode->getDbAcquireOp();
+  if (DbAllocNode *rootAlloc = acqNode->getRootAlloc())
+    summary.rootAlloc = rootAlloc->getDbAllocOp();
+  summary.edtUser = acqNode->getEdtUser();
+  summary.hasLoads = acqNode->hasLoads();
+  summary.hasStores = acqNode->hasStores();
+  return summary;
+}
+
+bool DbAnalysis::collectAcquireAccessOperations(
+    DbAcquireOp acquire, AcquireAccessOperationMap &accesses) {
+  DbAcquireNode *acqNode = getDbAcquireNode(acquire);
+  if (!acqNode)
+    return false;
+  acqNode->collectAccessOperations(accesses);
+  return true;
+}
+
+std::optional<ArtsMode>
+DbAnalysis::getCombinedAcquireModeForAlloc(DbAllocOp alloc) {
+  if (!alloc)
+    return std::nullopt;
+
+  DbAllocNode *allocNode = getDbAllocNode(alloc);
+  if (!allocNode)
+    return std::nullopt;
+
+  ArtsMode combined = ArtsMode::in;
+  bool sawAcquire = false;
+  for (DbAcquireNode *acqNode : allocNode->collectAllAcquireNodes()) {
+    if (!acqNode)
+      continue;
+    DbAcquireOp acquire = acqNode->getDbAcquireOp();
+    if (!acquire)
+      continue;
+    combined = combineAccessModes(combined, acquire.getMode());
+    sawAcquire = true;
+  }
+
+  if (!sawAcquire)
+    return std::nullopt;
+  return combined;
+}
+
+bool DbAnalysis::allocationHasDistributedAcquireContract(DbAllocOp alloc) {
+  if (!alloc)
+    return false;
+
+  DbAllocNode *allocNode = getDbAllocNode(alloc);
+  if (!allocNode)
+    return false;
+
+  for (DbAcquireNode *acqNode : allocNode->collectAllAcquireNodes()) {
+    if (!acqNode)
+      continue;
+    DbAcquireOp acquire = acqNode->getDbAcquireOp();
+    if (!acquire)
+      continue;
+    if (auto summary = getAcquireContractSummary(acquire);
+        summary && summary->hasDistributionContract())
+      return true;
+  }
+
+  return false;
+}
+
+SmallVector<DbAnalysis::OrderedAcquireSummary, 16>
+DbAnalysis::getOrderedAcquiresForAlloc(DbAllocOp alloc) {
+  SmallVector<OrderedAcquireSummary, 16> ordered;
+  if (!alloc)
+    return ordered;
+
+  func::FuncOp func = alloc->getParentOfType<func::FuncOp>();
+  if (!func)
+    return ordered;
+
+  DbGraph &graph = getOrCreateGraph(func);
+  DbAllocNode *allocNode = graph.getDbAllocNode(alloc);
+  if (!allocNode)
+    return ordered;
+
+  for (DbAcquireNode *acqNode : allocNode->collectAllAcquireNodes()) {
+    if (!acqNode)
+      continue;
+    DbAcquireOp acquire = acqNode->getDbAcquireOp();
+    if (!acquire)
+      continue;
+    ordered.push_back(
+        {graph.getOpOrder(acquire.getOperation()), acquire});
+  }
+
+  llvm::sort(ordered, [](const OrderedAcquireSummary &lhs,
+                         const OrderedAcquireSummary &rhs) {
+    return lhs.order < rhs.order;
+  });
+  return ordered;
+}
+
+SmallVector<Value>
+DbAnalysis::getEffectiveAcquireSliceDimSizes(DbAcquireOp acquire,
+                                             DbAllocOp alloc) {
+  SmallVector<Value> dimSizes;
+  if (alloc)
+    dimSizes.append(alloc.getElementSizes().begin(),
+                    alloc.getElementSizes().end());
+  if (!acquire || !alloc || dimSizes.empty())
+    return dimSizes;
+
+  OpBuilder builder(acquire);
+  AcquirePartitionSummary partitionSummary =
+      analyzeAcquirePartition(acquire, builder);
+
+  for (auto [idx, size] : llvm::enumerate(partitionSummary.partitionSizes)) {
+    if (!size || idx >= partitionSummary.partitionDims.size())
+      continue;
+    unsigned dim = partitionSummary.partitionDims[idx];
+    if (dim < dimSizes.size())
+      dimSizes[dim] = size;
+  }
+
+  return dimSizes;
 }
 
 bool DbAnalysis::hasDbConflict(Operation *a, Operation *b) {

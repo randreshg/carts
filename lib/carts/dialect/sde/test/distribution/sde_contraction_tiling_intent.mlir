@@ -4,7 +4,7 @@
 
 // Contraction tiling as SDE intent.
 //
-// This mirrors 3mm's third matmul G = E * F, where F = C * D is a sibling-
+// This mirrors a chained matmul G = E * F, where F = C * D is a sibling-
 // computed distributed intermediate that G reads on its CONTRACTION axis (the
 // reduction loop dim k). SDE decides — pattern-free, from the canonical matmul
 // access shapes — to tile k: it stamps the element-space `contractionTileShape`

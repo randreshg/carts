@@ -9,7 +9,8 @@
 #include "carts/dialect/arts/Analysis/graphs/db/DbGraph.h"
 #include "carts/dialect/arts/Analysis/graphs/db/DbNode.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseSet.h"
@@ -61,6 +62,29 @@ static bool hasSupportedAllocationShape(DbAllocOp alloc) {
     if (!isPositiveOrDynamic(size))
       return false;
   return true;
+}
+
+static bool hasOwnerMapSeedPlan(DbAllocOp alloc) {
+  return static_cast<bool>(getPlanOwnerDimsAttr(alloc.getOperation())) &&
+         static_cast<bool>(getPlanPhysicalBlockShapeAttr(alloc.getOperation()));
+}
+
+static bool hasSupportedOwnerMapSeedPlan(DbAllocOp alloc) {
+  auto blockShape = readI64ArrayAttr(getPlanPhysicalBlockShapeAttr(alloc));
+  if (!blockShape || blockShape->empty())
+    return false;
+
+  auto ownerBlockShape = getDbOwnerBlockShapeFromPlan(alloc);
+  if (!ownerBlockShape || ownerBlockShape->empty())
+    return false;
+
+  if (auto kind = getEdtDistributionKind(alloc.getOperation());
+      kind && *kind == EdtDistributionKind::block_cyclic)
+    return !alloc.getSizes().empty();
+
+  auto dbOwnerDims = getDbOwnerMapDimsFromPlan(alloc);
+  return dbOwnerDims &&
+         ownerDimsAddressDbRank(*dbOwnerDims, alloc.getSizes().size());
 }
 
 static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
@@ -296,6 +320,10 @@ mlir::carts::arts::toString(DistributedDbEligibilityRejectReason reason) {
     return "single_block";
   case DistributedDbEligibilityRejectReason::UnsupportedShape:
     return "unsupported_shape";
+  case DistributedDbEligibilityRejectReason::MissingOwnerMapPlan:
+    return "missing_owner_map_plan";
+  case DistributedDbEligibilityRejectReason::UnsupportedOwnerMapShape:
+    return "unsupported_owner_map_shape";
   case DistributedDbEligibilityRejectReason::StencilReadInternodeUse:
     return "stencil_read_internode_use";
   case DistributedDbEligibilityRejectReason::UnsupportedPtrUsers:
@@ -332,6 +360,11 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
     return {false, DistributedDbEligibilityRejectReason::SingleBlock};
   if (!hasSupportedAllocationShape(alloc))
     return {false, DistributedDbEligibilityRejectReason::UnsupportedShape};
+  if (!hasOwnerMapSeedPlan(alloc))
+    return {false, DistributedDbEligibilityRejectReason::MissingOwnerMapPlan};
+  if (!hasSupportedOwnerMapSeedPlan(alloc))
+    return {false,
+            DistributedDbEligibilityRejectReason::UnsupportedOwnerMapShape};
   if (!hasOnlyAllowedHandleUsers(alloc.getPtr()))
     return {false, DistributedDbEligibilityRejectReason::UnsupportedPtrUsers};
   if (!hasOnlyAllowedHandleUsers(alloc.getGuid()))

@@ -276,15 +276,32 @@ getTileOwnerDims(codir::CodeletOp codelet) {
 }
 
 static std::optional<unsigned> getSingleTileOwnerDim(codir::CodeletOp codelet) {
-  std::optional<SmallVector<unsigned, 4>> ownerDims =
-      getTileOwnerDims(codelet);
+  std::optional<SmallVector<unsigned, 4>> ownerDims = getTileOwnerDims(codelet);
   if (!ownerDims || ownerDims->size() != 1)
     return std::nullopt;
   return ownerDims->front();
 }
 
-static SmallVector<Value, 4>
-getOwnerBaseArguments(codir::CodeletOp codelet, unsigned ownerDimCount) {
+static bool isStencilPattern(codir::CodirPattern pattern) {
+  switch (pattern) {
+  case codir::CodirPattern::stencil_tiling_nd:
+  case codir::CodirPattern::cross_dim_stencil_3d:
+  case codir::CodirPattern::higher_order_stencil:
+  case codir::CodirPattern::wavefront_2d:
+  case codir::CodirPattern::alternating_buffer_stencil:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool isStencilCodelet(codir::CodeletOp codelet) {
+  auto pattern = codelet ? codelet.getPatternAttr() : nullptr;
+  return pattern && isStencilPattern(pattern.getValue());
+}
+
+static SmallVector<Value, 4> getOwnerBaseArguments(codir::CodeletOp codelet,
+                                                   unsigned ownerDimCount) {
   SmallVector<Value, 4> bases;
   if (!codelet || codelet.getBody().empty() || ownerDimCount == 0 ||
       codelet.getParams().size() < ownerDimCount)
@@ -376,10 +393,14 @@ inferDepOwnerAccessDims(codir::CodeletOp codelet, unsigned depIndex) {
 
 static std::optional<SmallVector<unsigned, 4>>
 getDepOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
+  std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
+      getTileOwnerDims(codelet);
+  if (isStencilCodelet(codelet) && tileOwnerDims && tileOwnerDims->size() > 1)
+    return tileOwnerDims;
   if (std::optional<SmallVector<unsigned, 4>> inferred =
           inferDepOwnerAccessDims(codelet, depIndex))
     return inferred;
-  return getTileOwnerDims(codelet);
+  return tileOwnerDims;
 }
 
 static bool depAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
@@ -507,22 +528,6 @@ static bool isPerDependencyRedistribution(codir::CodeletOp codelet,
 static bool isMatmulCodelet(codir::CodeletOp codelet) {
   auto pattern = codelet ? codelet.getPatternAttr() : nullptr;
   return pattern && pattern.getValue() == codir::CodirPattern::matmul;
-}
-
-static bool isStencilCodelet(codir::CodeletOp codelet) {
-  auto pattern = codelet ? codelet.getPatternAttr() : nullptr;
-  if (!pattern)
-    return false;
-  switch (pattern.getValue()) {
-  case codir::CodirPattern::stencil_tiling_nd:
-  case codir::CodirPattern::cross_dim_stencil_3d:
-  case codir::CodirPattern::higher_order_stencil:
-  case codir::CodirPattern::wavefront_2d:
-  case codir::CodirPattern::jacobi_alternating_buffers:
-    return true;
-  default:
-    return false;
-  }
 }
 
 static std::optional<unsigned>
@@ -703,7 +708,7 @@ static bool stencilWriteFitsInTile(codir::CodeletOp codelet) {
 
 /// True iff `root` (the allocation underlying a codelet dep) is written by
 /// some other CodeletOp in the same function. Walks `root`'s users
-/// transitively through memref-forwarding ops so jacobi-style swap loops,
+/// transitively through memref-forwarding ops so alternating-buffer swap loops,
 /// where the same outer alloc reaches both a write codelet and a read
 /// codelet via casts or subviews, are classified as having a sibling
 /// writer. Bare memref.store users (sequential init code outside any
@@ -746,7 +751,7 @@ static bool isWrittenByAnotherCodelet(Value root, codir::CodeletOp self) {
 
 /// A stencil codelet's read dep is replicate-eligible iff (a) the codelet
 /// pattern is a halo-style stencil whose reads may cross a tile boundary
-/// (wavefront and jacobi-alternating patterns are excluded by enum), and
+/// (wavefront and alternating-buffer patterns are excluded by enum), and
 /// (b) the dep's underlying allocation is not written by any sibling
 /// codelet in the same function. Condition (b) distinguishes the
 /// read-only stencil case (replicate-safe) from the alternating-buffer
@@ -781,7 +786,7 @@ static bool isStencilDepReplicateEligible(codir::CodeletOp codelet,
     break;
   case codir::CodirPattern::cross_dim_stencil_3d:
   case codir::CodirPattern::wavefront_2d:
-  case codir::CodirPattern::jacobi_alternating_buffers:
+  case codir::CodirPattern::alternating_buffer_stencil:
     return false;
   default:
     return false;
@@ -856,9 +861,43 @@ buildOwnerDimsAttr(MLIRContext *ctx,
   return buildI64ArrayAttr(ctx, values);
 }
 
+static bool hasFinalizedStoragePlanningFacts(codir::CodeletOp codelet) {
+  if (!codelet)
+    return false;
+  unsigned depCount = codelet.getDeps().size();
+  ArrayAttr storageViews = codelet.getDepStorageViewsAttr();
+  ArrayAttr ownerDims = codelet.getDepOwnerDimsAttr();
+  ArrayAttr collectives = codelet.getDepCollectivesAttr();
+  if (!storageViews || !ownerDims || !collectives ||
+      storageViews.size() != depCount || ownerDims.size() != depCount ||
+      collectives.size() != depCount)
+    return false;
+
+  for (unsigned index = 0; index < depCount; ++index) {
+    if (!isa<codir::CodirStorageViewKindAttr>(storageViews[index]) ||
+        !isa<ArrayAttr>(ownerDims[index]) ||
+        !isa<codir::CodirCollectiveKindAttr>(collectives[index]))
+      return false;
+  }
+  return true;
+}
+
+static LogicalResult
+verifyFinalizedStoragePlanningAttr(codir::CodeletOp codelet, ArrayAttr existing,
+                                   ArrayAttr desired, StringRef attrName) {
+  if (existing == desired)
+    return success();
+  return codelet.emitOpError()
+         << "existing " << attrName
+         << " does not match recomputed CODIR storage plan";
+}
+
 static codir::CodirStorageViewKind
 chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
                   codir::CodirStorageViewKind requested) {
+  bool stencilRequiresComputeBlock =
+      shouldDemoteStencilWriteToComputeBlock(codelet, depIndex) ||
+      shouldDemoteStencilHaloReadToComputeBlock(codelet, depIndex);
   /// Replicated-read eligibility is a semantic property of the dep (matmul
   /// inner operand, or stencil read with halo crossing). The initial view the
   /// SDE→CODIR materializer stamps (host_whole for whole-storage tokens,
@@ -869,8 +908,7 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
       shouldUseReplicatedReadDep(codelet, depIndex))
     return codir::CodirStorageViewKind::replicated_read;
   if (requested == codir::CodirStorageViewKind::host_whole &&
-      (shouldDemoteStencilWriteToComputeBlock(codelet, depIndex) ||
-       shouldDemoteStencilHaloReadToComputeBlock(codelet, depIndex)))
+      stencilRequiresComputeBlock)
     requested = codir::CodirStorageViewKind::compute_block;
   if (requested != codir::CodirStorageViewKind::compute_block)
     return requested;
@@ -885,14 +923,18 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
     // Stencil halo accesses cross the owner slice by construction; keep
     // compute_block when the stencil demote predicates authorize block-owned
     // storage with halo-fetched neighbors.
-    if (shouldDemoteStencilWriteToComputeBlock(codelet, depIndex) ||
-        shouldDemoteStencilHaloReadToComputeBlock(codelet, depIndex))
+    if (stencilRequiresComputeBlock)
       return codir::CodirStorageViewKind::compute_block;
     return codir::CodirStorageViewKind::host_whole;
   }
 
   Value root = stripStorageViews(dep);
-  if (shouldUseHostWholeReadOnlyDep(codelet, depIndex, dep))
+  if (stencilRequiresComputeBlock)
+    return codir::CodirStorageViewKind::compute_block;
+
+  bool needsHostBridge = isa_and_nonnull<BlockArgument>(root) ||
+                         hasHostMemrefAccessOutsideCodelet(root);
+  if (needsHostBridge && shouldUseHostWholeReadOnlyDep(codelet, depIndex, dep))
     return codir::CodirStorageViewKind::host_whole;
 
   if (needsSharedRootRedistribution(codelet, depIndex, dep)) {
@@ -901,8 +943,6 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
     return codir::CodirStorageViewKind::phase_redistributed;
   }
 
-  bool needsHostBridge = isa_and_nonnull<BlockArgument>(root) ||
-                         hasHostMemrefAccessOutsideCodelet(root);
   if (!needsHostBridge)
     return codir::CodirStorageViewKind::compute_block;
 
@@ -914,7 +954,12 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
 struct StoragePlanningPass
     : public codir::impl::StoragePlanningBase<StoragePlanningPass> {
   void runOnOperation() override {
+    bool hadFailure = false;
+    llvm::SmallPtrSet<Operation *, 16> finalizedPlans;
     getOperation().walk([&](codir::CodeletOp codelet) {
+      bool finalized = hasFinalizedStoragePlanningFacts(codelet);
+      if (finalized)
+        finalizedPlans.insert(codelet.getOperation());
       ArrayAttr storageViews = codelet.getDepStorageViewsAttr();
 
       SmallVector<Attribute> plannedViews;
@@ -963,18 +1008,39 @@ struct StoragePlanningPass
           plannedViews.push_back(storageViews[index]);
       }
 
+      ArrayAttr plannedViewsAttr =
+          ArrayAttr::get(codelet.getContext(), plannedViews);
+      ArrayAttr plannedOwnerDimsAttr =
+          ArrayAttr::get(codelet.getContext(), plannedOwnerDims);
+      if (finalized) {
+        if (failed(verifyFinalizedStoragePlanningAttr(
+                codelet, codelet.getDepStorageViewsAttr(), plannedViewsAttr,
+                codelet.getDepStorageViewsAttrName())) ||
+            failed(verifyFinalizedStoragePlanningAttr(
+                codelet, codelet.getDepOwnerDimsAttr(), plannedOwnerDimsAttr,
+                codelet.getDepOwnerDimsAttrName()))) {
+          hadFailure = true;
+          return;
+        }
+      }
+
+      if (finalized)
+        return;
       if (changed)
-        codelet.setDepStorageViewsAttr(
-            ArrayAttr::get(codelet.getContext(), plannedViews));
-      codelet.setDepOwnerDimsAttr(
-          ArrayAttr::get(codelet.getContext(), plannedOwnerDims));
+        codelet.setDepStorageViewsAttr(plannedViewsAttr);
+      codelet.setDepOwnerDimsAttr(plannedOwnerDimsAttr);
     });
+    if (hadFailure) {
+      signalPassFailure();
+      return;
+    }
 
     // Stamp `dep_collectives` after every codelet's `dep_storage_views` is
     // planned: `chooseCollective` consults consumers' planned storage views
     // (the all-gather gate looks for a sibling `replicated_read` reader), so it
     // must run on the fully-planned module.
     getOperation().walk([&](codir::CodeletOp codelet) {
+      bool finalized = finalizedPlans.contains(codelet.getOperation());
       unsigned depCount = codelet.getDeps().size();
       if (depCount == 0)
         return;
@@ -987,9 +1053,21 @@ struct StoragePlanningPass
             codir::CodirCollectiveKindAttr::get(codelet.getContext(), kind));
       }
       // Stamp one entry per dep so the carrier is uniform and self-describing.
-      codelet.setDepCollectivesAttr(
-          ArrayAttr::get(codelet.getContext(), collectives));
+      ArrayAttr plannedCollectives =
+          ArrayAttr::get(codelet.getContext(), collectives);
+      if (finalized) {
+        if (failed(verifyFinalizedStoragePlanningAttr(
+                codelet, codelet.getDepCollectivesAttr(), plannedCollectives,
+                codelet.getDepCollectivesAttrName()))) {
+          hadFailure = true;
+          return;
+        }
+        return;
+      }
+      codelet.setDepCollectivesAttr(plannedCollectives);
     });
+    if (hadFailure)
+      signalPassFailure();
   }
 };
 

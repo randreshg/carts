@@ -13,7 +13,7 @@
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "llvm/ADT/DenseSet.h"
 
@@ -182,7 +182,7 @@ inferMappedDimFromDepPattern(const DbAcquirePartitionFacts &facts) {
   case ArtsDepPattern::stencil_tiling_nd:
   case ArtsDepPattern::cross_dim_stencil_3d:
   case ArtsDepPattern::higher_order_stencil:
-  case ArtsDepPattern::jacobi_alternating_buffers:
+  case ArtsDepPattern::alternating_buffer_stencil:
     if (!facts.stencilOwnerDims.empty())
       return facts.stencilOwnerDims.front();
     return std::nullopt;

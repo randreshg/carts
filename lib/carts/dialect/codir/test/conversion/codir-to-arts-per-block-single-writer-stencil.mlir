@@ -79,8 +79,9 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: %[[UPPER_OK:.*]] = arith.cmpi ult
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[LOWER_OK]])
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[UPPER_OK]])
-// CHECK: %[[ORD_I32:.*]] = arith.index_cast %{{.*}} : index to i32
-// CHECK: %[[ROUTE:.*]] = arith.remui %[[ORD_I32]], {{%.*}} : i32
+// CHECK: %[[SCALED:.*]] = arith.muli %{{.*}}, %[[C8]] : index
+// CHECK: %[[ROUTE_IDX:.*]] = arith.divui %[[SCALED]], %{{.*}} : index
+// CHECK: %[[ROUTE:.*]] = arith.index_cast %[[ROUTE_IDX]] : index to i32
 // CHECK: arts.edt <task> <internode> route(%[[ROUTE]])
 // CHECK-SAME: perBlockHaloExchange
 // CHECK-SAME: storageBridgeCopy

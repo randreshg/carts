@@ -1,11 +1,11 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,verify-codir)' \
 // RUN:   | %FileCheck %s --check-prefix=CODIR
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,storage-planning,convert-codir-to-arts,verify-arts-objects-only)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s --check-prefix=ARTS
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,storage-planning,convert-codir-to-arts,partial-reduction-split-materialization,verify-arts-objects-only)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,partial-reduction-split-materialization,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s --check-prefix=MATERIALIZED --implicit-check-not=partialReductionSplitRequired
 
-module attributes {arts.runtime_total_workers = 4096 : i64} {
+module attributes {carts.logical_total_workers = 4096 : i64} {
   func.func @partial_reduction_split_plan(%A: memref<1920x16xf32>, %y: memref<1920xf32>, %base: index) {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index

@@ -1,7 +1,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(edt-lowering)' | %FileCheck %s
 
-// A block owner-slice plan alone is not enough to use runtime DB_MODE_RW.
-// Unordered local writes require the stronger lowering-contract proof path.
+// ARTS-RT does not infer DB_MODE_RW from owner-slice plan attrs. Unordered
+// local writes require an explicit ARTS-level runtime DB mode verdict.
 
 // CHECK-LABEL: func.func @owner_slice_plan_only_uses_ordered_ew
 // CHECK: arts_rt.rec_dep

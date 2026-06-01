@@ -5,13 +5,11 @@
 // RUN:   | awk '/IR Dump After ConvertOpenMPToSde/,/IR Dump After PatternAnalysis/' \
 // RUN:   | %FileCheck %s --check-prefix=MULTI
 
-// Unsupported triangular scatter writes use the single-node host policy.
-// Multinode runs still enter SDE/CODIR/ARTS.
+// Triangular scatter-shaped regions enter SDE regardless of benchmark markers or runtime node count.
 
 // SINGLE-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //
-// SINGLE: omp.parallel
-// SINGLE: sde.keep_host_openmp
-// SINGLE-NOT: sde.su_iterate
+// SINGLE-NOT: sde.keep_host_openmp
+// SINGLE: sde.su_iterate
 
 // MULTI-LABEL: // -----// IR Dump After ConvertOpenMPToSde (convert-openmp-to-sde) //----- //
 // MULTI-NOT: sde.keep_host_openmp

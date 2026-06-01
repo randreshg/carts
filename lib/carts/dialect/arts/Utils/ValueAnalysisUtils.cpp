@@ -6,7 +6,7 @@
 
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -37,9 +37,9 @@ static std::optional<int64_t> foldRuntimeQuery(Value value, unsigned) {
 
   switch (query.getKind()) {
   case RuntimeQueryKind::totalWorkers:
-    return getRuntimeTotalWorkers(module);
+    return arts::getRuntimeTotalWorkers(module);
   case RuntimeQueryKind::totalNodes:
-    return getRuntimeTotalNodes(module);
+    return arts::getRuntimeTotalNodes(module);
   default:
     return std::nullopt;
   }

@@ -11,8 +11,8 @@ module {
     %token = sde.mu_token <readwrite> %m
       : memref<16xf64> -> !sde.token<memref<16xf64>>
 
-    // CHECK: sde.cu_codelet
-    sde.cu_codelet (%token : !sde.token<memref<16xf64>>) {
+    // CHECK: sde.cu_work
+    sde.cu_work (%token : !sde.token<memref<16xf64>>) {
     ^bb0(%arg: memref<16xf64>):
       %c0 = arith.constant 0 : index
       %val = memref.load %arg[%c0] : memref<16xf64>

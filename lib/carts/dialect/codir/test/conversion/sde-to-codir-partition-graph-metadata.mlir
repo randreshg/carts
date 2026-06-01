@@ -13,14 +13,17 @@
 // CHECK-LABEL: func.func @sde_partition_graph_to_codir
 // CHECK: codir.codelet
 // CHECK-SAME: partition_graph = [
-// CHECK-SAME: layoutKind = "block_parallel"
-// CHECK-SAME: muBlockCount = 4 : i64
+// CHECK-SAME: layoutKind = "owner_block"
+// CHECK-SAME: muBlockCount = 16 : i64
 // CHECK-SAME: role = "write"
+// CHECK-SAME: layoutKind = "block_parallel"
 // CHECK-SAME: muBlockCount = 2 : i64
 // CHECK-SAME: role = "read"
 // CHECK-SAME: partition_score = {
 // CHECK-SAME: chosenCuCount = 16 : i64
 // CHECK-SAME: chosenTileBytes = 524288 : i64
+// CHECK-SAME: cuGroupCount = 16 : i64
+// CHECK-SAME: cuGroupSize = 1 : i64
 // CHECK-SAME: muBlockCount = 16 : i64
 // CHECK-SAME: objective = "max_concurrency_comm_aware"
 // CHECK-SAME: targetLogicalWorkers = 16 : i64

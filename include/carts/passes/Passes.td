@@ -98,25 +98,26 @@ def PartialReductionSplitMaterialization
       "mlir::carts::arts::createPartialReductionSplitMaterializationPass()";
 }
 
-def Matmul3mmContractionMaterialization
-    : Pass<"matmul-3mm-contraction-materialization", "mlir::ModuleOp"> {
+def MatmulContractionMaterialization
+    : Pass<"matmul-contraction-materialization", "mlir::ModuleOp"> {
   let summary = "Split chained-matmul G contraction into per-tile producers";
   let description = [{
-    Rewrites the chained-matmul G consumer that reads its contraction operand F
-    from the coarse `replicatedRead` copy into per-(G-block,
-    k-tile) partial-product producer EDTs reading F block-native from the
-    `perBlockReplicated` all-gather replica, plus a per-block summing settle that
-    reduces the partials into G's settled block with `arith.addf`. Each producer
-    and the settle acquire every DB OUTSIDE the EDT as a block-arg dependency, so
-    no EDT body GEPs an outer DB alloc (the ARTS-RT lowering ABI). Tightly gated
-    to the matmul-G shape; no other kernel's IR is touched.
+    Rewrites a block matmul consumer marked with contraction split facts that
+    reads its contraction operand from a coarse `replicatedRead` copy into
+    per-(owner-block, k-tile) partial-product producer EDTs reading block-native
+    from the `perBlockReplicated` all-gather replica, plus a per-block summing
+    settle that reduces the partials into the settled block with `arith.addf`.
+    Each producer and the settle acquire every DB outside the EDT as a block-arg
+    dependency, so no EDT body GEPs an outer DB alloc. The trigger is the generic
+    ARTS plan shape (`partialReductionDims`, block dependencies, and a matching
+    per-block replica), not benchmark names or source paths.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
        "::mlir::arith::ArithDialect", "::mlir::memref::MemRefDialect",
        "::mlir::carts::arts::ArtsDialect"];
   let constructor =
-      "mlir::carts::arts::createMatmul3mmContractionMaterializationPass()";
+      "mlir::carts::arts::createMatmulContractionMaterializationPass()";
 }
 
 def DistributedLaunchConsistency
@@ -133,6 +134,20 @@ def DistributedLaunchConsistency
        "::mlir::memref::MemRefDialect", "::mlir::carts::arts::ArtsDialect"];
   let constructor =
       "mlir::carts::arts::createDistributedLaunchConsistencyPass()";
+}
+
+def VerifyDistributedDbPlacement
+    : Pass<"verify-distributed-db-placement", "mlir::ModuleOp"> {
+  let summary = "Verify distributed DB owner-map placement contracts";
+  let description = [{
+    Rejects distributed DB allocations that reach the ARTS/ARTS-RT boundary
+    without an explicit owner-map policy, owner-map version, owner dimensions,
+    block shape, and non-rejected distributed ownership status.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
+  let constructor =
+      "mlir::carts::arts::createVerifyDistributedDbPlacementPass()";
 }
 
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {

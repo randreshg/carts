@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-codir-to-arts)' | %FileCheck %s --implicit-check-not=codir.codelet
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' | %FileCheck %s --implicit-check-not=codir.codelet
 
 module {
   func.func @dynamic_sliced_dep_remaps_edt_params(%n: index, %off: index,

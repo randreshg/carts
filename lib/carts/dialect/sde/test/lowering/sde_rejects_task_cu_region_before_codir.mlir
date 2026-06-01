@@ -3,7 +3,7 @@
 // RUN:   | %FileCheck %s
 
 // CODIR-to-ARTS rejects any unconverted SDE operation at the boundary.
-// CHECK: SDE operation 'sde.cu_region' survived past boundary conversion
+// CHECK: SDE operation reached CODIR-to-ARTS; run `materialize-sde-boundary-to-arts` before `convert-codir-to-arts`
 
 module {
   func.func @reject_task_cu_region() {

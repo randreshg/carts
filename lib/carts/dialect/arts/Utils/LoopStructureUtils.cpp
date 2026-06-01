@@ -8,7 +8,6 @@
 
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
 namespace mlir {
@@ -18,7 +17,7 @@ unsigned getLoopDepth(Operation *op) {
   unsigned depth = 0;
   for (Operation *parent = op ? op->getParentOp() : nullptr; parent;
        parent = parent->getParentOp()) {
-    if (isa<LoopLikeOpInterface>(parent) || isa<omp::WsloopOp>(parent))
+    if (isa<LoopLikeOpInterface>(parent))
       ++depth;
   }
   return depth;

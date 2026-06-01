@@ -5,7 +5,7 @@
 // compute storage with halo padding only on the read-side DB.
 
 module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_workers = 512 : i64} {
-  func.func @jacobi_alternating_buffer_host_whole_promoted_to_block() {
+  func.func @alternating_buffer_stencil_host_whole_promoted_to_block() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c8 = arith.constant 8 : index
@@ -25,7 +25,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
                       halo_shape = [1],
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [8, 4],
-                      pattern = #codir.pattern<jacobi_alternating_buffers>,
+                      pattern = #codir.pattern<alternating_buffer_stencil>,
                       plan_owner_dims = [0, 1],
                       spatial_dims = [0, 1],
                       tile_owner_dims = [0],
@@ -53,7 +53,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
   func.func private @use(f32)
 }
 
-// CHECK-LABEL: func.func @jacobi_alternating_buffer_host_whole_promoted_to_block
+// CHECK-LABEL: func.func @alternating_buffer_stencil_host_whole_promoted_to_block
 // CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
 // CHECK-DAG: %[[C4:.*]] = arith.constant 4 : index
 // CHECK-DAG: %[[C8:.*]] = arith.constant 8 : index
@@ -65,7 +65,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
 // CHECK-SAME: elementSizes[%[[C8]], %[[C4]]]
 // CHECK-SAME: planPhysicalBlockShape = [8, 4], storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
-// CHECK: arts.edt <task> <internode>{{.*}}depPattern = #arts.dep_pattern<jacobi_alternating_buffers>
+// CHECK: arts.edt <task> <internode>{{.*}}depPattern = #arts.dep_pattern<alternating_buffer_stencil>
 // CHECK-SAME: distribution_kind = #arts.distribution_kind<block>
 // CHECK-SAME: planHaloShape = [1]
 // CHECK-SAME: stencil_supported_block_halo

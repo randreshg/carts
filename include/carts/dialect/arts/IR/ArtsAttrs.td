@@ -76,6 +76,20 @@ def DbMode : Arts_I32Enum<"DbMode", "ARTS DB access mode", [
 /// Enum attribute for DB allocation modes
 def DbModeAttr : Arts_I32EnumAttr<"db_mode", DbMode>;
 
+/// Enum info for runtime DB dependency mode verdicts.
+/// Integer values intentionally match the ARTS runtime dependency constants:
+/// `DB_MODE_RO` (1), `DB_MODE_EW` (2), and `DB_MODE_RW` (3).
+def RuntimeDbMode
+    : Arts_I32Enum<"RuntimeDbMode", "ARTS runtime DB dependency mode verdict", [
+      I32EnumAttrCase<"ro", 1, "ro">,
+      I32EnumAttrCase<"ew", 2, "ew">,
+      I32EnumAttrCase<"rw", 3, "rw">
+    ]>;
+
+/// Enum attribute for runtime DB dependency mode verdicts.
+def RuntimeDbModeAttr
+    : Arts_I32EnumAttr<"runtime_db_mode", RuntimeDbMode>;
+
 /// Enum info for DB release types
 def DbReleaseType : Arts_I32Enum<"DbReleaseType", "ARTS DB release type", [
   I32EnumAttrCase<"normal", 0, "normal">,
@@ -94,6 +108,19 @@ def StorageBridge : Arts_I32Enum<"StorageBridge", "ARTS storage-bridge tag", [
 
 /// Enum attribute for storage-bridge tags on `arts.db_alloc`.
 def StorageBridgeAttr : Arts_I32EnumAttr<"storage_bridge", StorageBridge>;
+
+/// DB owner-map policy carried on distributed `arts.db_alloc` operations.
+/// ARTS owns this because DB homes, writer routes, and GUID reservation are
+/// runtime-realization facts, not SDE/CODIR layout facts.
+def DbOwnerMapKind
+    : Arts_I32Enum<"DbOwnerMapKind", "distributed DB owner-map kind", [
+      I32EnumAttrCase<"linear_mod_nodes", 0, "linear_mod_nodes">,
+      I32EnumAttrCase<"owner_dim_contiguous", 1, "owner_dim_contiguous">,
+      I32EnumAttrCase<"owner_dim_grid", 2, "owner_dim_grid">,
+      I32EnumAttrCase<"explicit_rank_table", 3, "explicit_rank_table">
+    ]>;
+def DbOwnerMapKindAttr
+    : Arts_I32EnumAttr<"owner_map_kind", DbOwnerMapKind>;
 
 def ArtsPlanIterationTopology
     : Arts_I32Enum<"ArtsPlanIterationTopology",
@@ -235,8 +262,8 @@ def ArtsDepPattern
       I32EnumAttrCase<"matmul", 3, "matmul">,
       I32EnumAttrCase<"triangular", 4, "triangular">,
       I32EnumAttrCase<"wavefront_2d", 5, "wavefront_2d">,
-      I32EnumAttrCase<"jacobi_alternating_buffers", 6,
-                      "jacobi_alternating_buffers">,
+      I32EnumAttrCase<"alternating_buffer_stencil", 6,
+                      "alternating_buffer_stencil">,
       I32EnumAttrCase<"elementwise_pipeline", 7, "elementwise_pipeline">,
       I32EnumAttrCase<"stencil_tiling_nd", 8, "stencil_tiling_nd">,
       I32EnumAttrCase<"cross_dim_stencil_3d", 9, "cross_dim_stencil_3d">,

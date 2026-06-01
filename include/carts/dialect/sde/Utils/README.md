@@ -10,5 +10,5 @@ Current utility groups:
 - `IterationSizingUtils.h` builds SDE trip-count and logical-worker sizing
   values used by SDE scheduling, tiling, and distribution passes.
 
-Do not place CODIR codelet ABI helpers, ARTS runtime object helpers, or
-ARTS-RT runtime-call lowering helpers here.
+Do not place boundary ABI helpers, target object helpers, or runtime-call
+lowering helpers here.

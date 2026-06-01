@@ -33,7 +33,7 @@
 /// Arts
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/RuntimeConfig.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 /// Debug
 
@@ -375,7 +375,7 @@ Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
 }
 
 Value ArtsCodegen::getTotalWorkers(Location loc) {
-  bool staticWorkers = getRuntimeStaticWorkers(module);
+  bool staticWorkers = arts::getRuntimeStaticWorkers(module);
   if (staticWorkers && runtimeConfig && runtimeConfig->hasValidThreads()) {
     int runtimeWorkers = runtimeConfig->getRuntimeTotalWorkers();
     if (runtimeWorkers > 0)

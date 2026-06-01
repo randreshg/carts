@@ -13,11 +13,11 @@ namespace {
 struct ConvertSdeToCodirPass
     : public codir::impl::ConvertSdeToCodirBase<ConvertSdeToCodirPass> {
   void runOnOperation() override {
-    SmallVector<sde::SdeCuCodeletOp> codelets;
+    SmallVector<sde::SdeCuWorkOp> codelets;
     getOperation().walk(
-        [&](sde::SdeCuCodeletOp codelet) { codelets.push_back(codelet); });
+        [&](sde::SdeCuWorkOp codelet) { codelets.push_back(codelet); });
 
-    for (sde::SdeCuCodeletOp sdeCodelet : codelets) {
+    for (sde::SdeCuWorkOp sdeCodelet : codelets) {
       SmallVector<Value> deps;
       SmallVector<Attribute> depModes;
       SmallVector<Attribute> depStorageViews;

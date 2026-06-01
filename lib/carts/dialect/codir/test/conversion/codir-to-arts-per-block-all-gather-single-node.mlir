@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-codir-to-arts,verify-arts-objects-only)' | %FileCheck %s --implicit-check-not=perBlockAllGather
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' | %FileCheck %s --implicit-check-not=perBlockAllGather
 
 module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_workers = 64 : i64} {
   func.func @single_node_all_gather_collective_is_local_bridge_only() {
@@ -14,6 +14,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
           attributes {dep_collectives = [#codir.collective<all_gather>],
                       dep_modes = [#codir.access_mode<write>],
                       dep_storage_views = [#codir.storage_view<phase_redistributed>],
+                      dep_owner_dims = [[0]],
                       distribution_kind = #codir.distribution_kind<blocked>,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [8, 4],
@@ -44,6 +45,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
           attributes {dep_collectives = [#codir.collective<none>, #codir.collective<none>],
                       dep_modes = [#codir.access_mode<write>, #codir.access_mode<read>],
                       dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<replicated_read>],
+                      dep_owner_dims = [[0], []],
                       distribution_kind = #codir.distribution_kind<blocked>,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [8, 4],

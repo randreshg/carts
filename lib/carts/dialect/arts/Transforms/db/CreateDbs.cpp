@@ -50,7 +50,7 @@
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/RemovalUtils.h"
 #include "carts/utils/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"

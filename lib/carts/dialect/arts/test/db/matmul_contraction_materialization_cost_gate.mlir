@@ -1,15 +1,15 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(matmul-3mm-contraction-materialization)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(matmul-contraction-materialization)' \
 // RUN:   | %FileCheck %s --implicit-check-not=perBlockSummingSettle
 
-// The 3mm contraction materializer must not split one G owner block into one
+// The contraction materializer must not split one G owner block into one
 // producer per fine-grain F replica block when the replica block count is larger
-// than the node count. Standard 3mm on 2 nodes has this shape (many F blocks, two
+// than the node count. A chained matmul on 2 nodes has this shape (many F blocks, two
 // nodes); materializing all fine-grain tiles creates thousands of tiny EDTs and
 // loses to the coarser replicated-read path.
 
 module attributes {arts.runtime_total_nodes = 2 : i64,
                    arts.runtime_total_workers = 4 : i64} {
-  func.func @matmul_3mm_contraction_cost_gate() {
+  func.func @matmul_contraction_cost_gate() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c2 = arith.constant 2 : index
@@ -79,6 +79,6 @@ module attributes {arts.runtime_total_nodes = 2 : i64,
   }
 }
 
-// CHECK-LABEL: func.func @matmul_3mm_contraction_cost_gate
+// CHECK-LABEL: func.func @matmul_contraction_cost_gate
 // CHECK: arts.edt <task>
 // CHECK-SAME: partialReductionDims = [2]

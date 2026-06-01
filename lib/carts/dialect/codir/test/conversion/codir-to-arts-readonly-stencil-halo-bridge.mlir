@@ -60,7 +60,8 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: local_only
 // CHECK: arts.db_acquire[<in>]
 // CHECK-SAME: partitioning(<coarse>)
-// CHECK-SAME: {replicatedRead}
+// CHECK-SAME: {replicatedRead
+// CHECK-SAME: runtime_db_mode = #arts.runtime_db_mode<ro>
 // CHECK: arts.edt <task> <internode>
 // CHECK-SAME: distribution_kind = #arts.distribution_kind<block>
 // CHECK-SAME: planHaloShape = [1]

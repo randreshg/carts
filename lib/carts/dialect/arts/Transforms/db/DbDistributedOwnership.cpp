@@ -16,12 +16,12 @@
 #include "carts/dialect/arts/Analysis/db/DbAnalysis.h"
 #include "carts/dialect/arts/Analysis/db/DbDistributedEligibility.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
-#include <cassert>
 
 #include "carts/utils/Debug.h"
 ARTS_DEBUG_SETUP(db_distributed_ownership);
@@ -35,12 +35,20 @@ namespace {
 struct DbDistributedOwnershipPass
     : public impl::DbDistributedOwnershipBase<DbDistributedOwnershipPass> {
   explicit DbDistributedOwnershipPass(mlir::carts::arts::AnalysisManager *AM)
-      : AM(AM) {
-    assert(AM && "AnalysisManager must be provided externally");
-  }
+      : AM(AM) {}
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    if (!AM) {
+      module.emitError()
+          << "db-distributed-ownership requires the staged compiler pipeline; "
+             "textual --pass-pipeline use cannot provide the ARTS "
+             "AnalysisManager, runtime configuration, or --distributed-db "
+             "ownership wiring";
+      signalPassFailure();
+      return;
+    }
+
     auto *machine = &AM->getRuntimeConfig();
     if (!machine->hasConfigFile() || !machine->hasValidNodeCount() ||
         !machine->hasValidThreads()) {
@@ -55,7 +63,10 @@ struct DbDistributedOwnershipPass
 
     unsigned totalAllocs = 0;
     unsigned markedDistributed = 0;
+    bool failed = false;
     module.walk([&](DbAllocOp alloc) {
+      if (failed)
+        return;
       ++totalAllocs;
       auto eligibility = evaluateDistributedDbEligibility(alloc, dbAnalysis);
       setDistributedDbAllocation(alloc.getOperation(), eligibility.eligible);
@@ -68,6 +79,13 @@ struct DbDistributedOwnershipPass
         if (eligibility.distributionKind)
           setEdtDistributionKind(alloc.getOperation(),
                                  *eligibility.distributionKind);
+        if (!stampDbOwnerMapFromPlan(alloc)) {
+          alloc.emitError()
+              << "distributed DB ownership accepted without a usable owner-map "
+                 "seed plan";
+          failed = true;
+          return;
+        }
       } else {
         alloc.setDistributedRejectReason(toString(eligibility.reason));
         ARTS_DEBUG("Reject DbAlloc arts.id=" << getArtsId(alloc.getOperation())
@@ -75,6 +93,11 @@ struct DbDistributedOwnershipPass
                                              << toString(eligibility.reason));
       }
     });
+
+    if (failed) {
+      signalPassFailure();
+      return;
+    }
 
     ARTS_INFO("DbDistributedOwnership marked " << markedDistributed << " / "
                                                << totalAllocs

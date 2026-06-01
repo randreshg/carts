@@ -27,6 +27,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
+#include <functional>
 #include <optional>
 #include <shared_mutex>
 
@@ -135,6 +137,24 @@ public:
     }
   };
 
+  struct AcquireAccessSummary {
+    DbAcquireOp acquire;
+    DbAllocOp rootAlloc;
+    EdtOp edtUser;
+    bool hasLoads = false;
+    bool hasStores = false;
+
+    bool hasVisibleAccesses() const { return hasLoads || hasStores; }
+  };
+
+  struct OrderedAcquireSummary {
+    unsigned order = 0;
+    DbAcquireOp acquire;
+  };
+
+  using AcquireAccessOperationMap =
+      DenseMap<DbRefOp, SetVector<Operation *>>;
+
   DbAnalysis(AnalysisManager &AM);
 
   ~DbAnalysis();
@@ -161,6 +181,20 @@ public:
   buildCanonicalAcquireContractSummary(DbAcquireOp acquire);
   std::optional<AcquireContractSummary>
   getAcquireContractSummary(DbAcquireOp acquire);
+  void forEachDbAlloc(func::FuncOp func,
+                      const std::function<void(DbAllocOp)> &fn);
+  void forEachDbAcquire(func::FuncOp func,
+                        const std::function<void(DbAcquireOp)> &fn);
+  std::optional<AcquireAccessSummary>
+  getAcquireAccessSummary(DbAcquireOp acquire);
+  bool collectAcquireAccessOperations(DbAcquireOp acquire,
+                                      AcquireAccessOperationMap &accesses);
+  std::optional<ArtsMode> getCombinedAcquireModeForAlloc(DbAllocOp alloc);
+  bool allocationHasDistributedAcquireContract(DbAllocOp alloc);
+  SmallVector<OrderedAcquireSummary, 16>
+  getOrderedAcquiresForAlloc(DbAllocOp alloc);
+  SmallVector<Value> getEffectiveAcquireSliceDimSizes(DbAcquireOp acquire,
+                                                      DbAllocOp alloc);
   AccessPattern resolveCanonicalAcquireAccessPattern(
       DbAcquireOp acquire, const AcquireContractSummary *summary = nullptr);
   ArtsDepPattern resolveCanonicalAcquireDepPattern(

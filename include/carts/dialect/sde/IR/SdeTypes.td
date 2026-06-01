@@ -35,10 +35,11 @@ def TokenType : CartsSde_Type<"Token", "token"> {
   let summary = "Handle to a (sub)region of shared memref storage.";
   let description = [{
     `!sde.token` names a subset of an MU-backed memref with a declared access
-    mode. It is the canonical SDE access handle for codelet memory operands.
+    mode. It is the canonical SDE access handle for compute-unit memory
+    operands.
 
     The `slice_type` parameter records the shape of the addressed region so
-    codelet block arguments can be typed directly.
+    compute-unit block arguments can be typed directly.
   }];
   let parameters = (ins "::mlir::MemRefType":$slice_type);
   let assemblyFormat = "`<` $slice_type `>`";

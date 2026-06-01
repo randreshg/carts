@@ -1,6 +1,6 @@
 // RUN: %carts-compile %s --arts-config %arts_config --pipeline initial-cleanup --start-from initial-cleanup 2>&1 | %FileCheck %s
 
-// Rank-0 memref support through mu_data / mu_token / cu_codelet.
+// Rank-0 memref support through mu_data / mu_token / cu_work.
 
 module {
   // Rank-0 mu_data roundtrip.
@@ -20,8 +20,8 @@ module {
     %token = sde.mu_token <readwrite> %m
       : memref<i32> -> !sde.token<memref<i32>>
 
-    // CHECK: sde.cu_codelet(%[[TOK]] : !sde.token<memref<i32>>)
-    sde.cu_codelet (%token : !sde.token<memref<i32>>) {
+    // CHECK: sde.cu_work(%[[TOK]] : !sde.token<memref<i32>>)
+    sde.cu_work (%token : !sde.token<memref<i32>>) {
     // CHECK: ^bb0(%[[ARG:.*]]: memref<i32>)
     ^bb0(%arg: memref<i32>):
       %val = memref.load %arg[] : memref<i32>
@@ -41,8 +41,8 @@ module {
     %token = sde.mu_token <read> %m
       : memref<i32> -> !sde.token<memref<i32>>
 
-    // CHECK: sde.cu_codelet
-    sde.cu_codelet (%token : !sde.token<memref<i32>>) {
+    // CHECK: sde.cu_work
+    sde.cu_work (%token : !sde.token<memref<i32>>) {
     ^bb0(%arg: memref<i32>):
       %val = memref.load %arg[] : memref<i32>
       %buf = memref.alloca() : memref<i32>

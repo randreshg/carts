@@ -4,9 +4,9 @@
 //
 // The rules exercised here are:
 //   V2  — rank mismatch between `mu_token` offsets/sizes and the source rank.
-//   V7  — `cu_codelet` block arguments must match token slice types.
+//   V7  — `cu_work` block arguments must match token slice types.
 //   V10 — memref codelets must not yield replacement values.
-//   V11 — `cu_codelet` captures must be scalar values.
+//   V11 — `cu_work` captures must be scalar values.
 //
 // RUN: not %carts-compile %s --arts-config %arts_config --pipeline initial-cleanup --start-from initial-cleanup 2>&1 | %FileCheck %s --check-prefix=V2
 // RUN: not %carts-compile %S/Inputs/codelet-invalid-v7.mlir --arts-config %arts_config --pipeline initial-cleanup --start-from initial-cleanup 2>&1 | %FileCheck %s --check-prefix=V7
@@ -15,11 +15,11 @@
 
 // V2: 'sde.mu_token' op expects offsets/sizes count (2) to match source rank (1)
 
-// V7: 'sde.cu_codelet' op block argument #0 type ('memref<8xi32>') does not match token slice type ('memref<4xi32>')
+// V7: 'sde.cu_work' op block argument #0 type ('memref<8xi32>') does not match token slice type ('memref<4xi32>')
 
-// V10: 'sde.cu_codelet' op expects memref codelet yield to carry no values
+// V10: 'sde.cu_work' op expects memref compute-unit yield to carry no values
 
-// V11: 'sde.cu_codelet' op capture operand #0 must be an integer, index, or float scalar
+// V11: 'sde.cu_work' op capture operand #0 must be an integer, index, or float scalar
 
 module {
   func.func @v2_rank_mismatch(%m: memref<8xi32>) {

@@ -36,7 +36,8 @@ namespace mlir::carts::arts_rt {
 } // namespace mlir::carts::arts_rt
 
 #include "carts/utils/Debug.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts-rt/Utils/ArtsRtAttrNames.h"
+#include "carts/utils/TargetAttributes.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
@@ -48,7 +49,6 @@ ARTS_DEBUG_SETUP(loop_vectorization_hints);
 
 using namespace mlir;
 using namespace mlir::carts;
-using namespace mlir::carts::arts;
 
 namespace {
 
@@ -170,16 +170,12 @@ static unsigned getTargetVectorBits(ModuleOp module) {
   unsigned bits = 128;
 
   // PromoteTargetAttrs copies the polygeist module attrs into
-  // arts.target-features at the start of `sde-input-normalization` so the
-  // ARTS-owned name is what survives the LLVM-conversion passes that strip
-  // foreign module attrs. Fall back to the polygeist attr only as a
-  // compatibility path for tests that hand-craft a module without running
-  // the full pipeline.
+  // carts.target-features at the start of `sde-input-normalization` so the
+  // target-neutral name is what survives the LLVM-conversion passes that strip
+  // foreign module attrs.
   StringAttr features;
-  if (auto promoted = arts::getTargetFeatures(module))
+  if (auto promoted = target::getTargetFeatures(module))
     features = StringAttr::get(module.getContext(), *promoted);
-  else
-    features = module->getAttrOfType<StringAttr>("polygeist.target-features");
   if (!features)
     return bits;
 
@@ -204,8 +200,8 @@ static unsigned getTargetMaxVectorWidth(ModuleOp module,
 
 /// Resolve the per-loop vectorize width to the host vector lane count for the
 /// loop's dominant FP element type. The only target-aware signal available at
-/// this stage is `arts.target-features`, promoted from the upstream polygeist
-/// module attrs by PromoteTargetAttrs so the ARTS-owned name survives the
+/// this stage is `carts.target-features`, promoted from the upstream polygeist
+/// module attrs by PromoteTargetAttrs so the target-neutral name survives the
 /// LLVM-conversion passes that strip foreign module attrs. Returning the
 /// target-derived width pins the hint to the host's native lane count both
 /// when the conservative SSE2-shaped default from `analyzeLoadTypes` is too

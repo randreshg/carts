@@ -22,8 +22,8 @@
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
-#include "carts/utils/OperationAttributes.h"
-#include "carts/utils/StencilAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/StencilAttributes.h"
 #include "mlir/Pass/Pass.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"

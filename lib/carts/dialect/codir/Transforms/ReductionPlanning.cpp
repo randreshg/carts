@@ -7,7 +7,7 @@
 #include "carts/dialect/codir/Transforms/Passes.h"
 
 #include "carts/utils/ArrayAttrUtils.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/utils/ExecutionResourceAttrs.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -156,8 +156,8 @@ static ArrayAttr buildDepResultDimMaps(codir::CodeletOp codelet) {
   return ArrayAttr::get(ctx, maps);
 }
 
-static std::optional<int64_t> getRuntimeTotalWorkers(ModuleOp module) {
-  return mlir::carts::arts::getRuntimeTotalWorkers(module);
+static std::optional<int64_t> getPlanningWorkerCapacity(ModuleOp module) {
+  return mlir::carts::getLogicalTotalWorkers(module);
 }
 
 static std::optional<int64_t> multiplyPositive(int64_t lhs, int64_t rhs) {
@@ -253,67 +253,116 @@ static ArrayAttr getDeclaredPartialReductionDims(codir::CodeletOp codelet) {
   return codelet.getPartialReductionDimsAttr();
 }
 
-static void
+static LogicalResult setOrVerifyReductionPlanAttr(Operation *op,
+                                                  StringRef attrName,
+                                                  Attribute desired,
+                                                  StringRef planName) {
+  Attribute existing = op->getAttr(attrName);
+  if (desired) {
+    if (existing && existing != desired)
+      return op->emitError()
+             << "existing " << planName
+             << " does not match recomputed CODIR reduction plan";
+    if (!existing)
+      op->setAttr(attrName, desired);
+    return success();
+  }
+
+  if (existing)
+    return op->emitError()
+           << "existing " << planName
+           << " is set but recomputed CODIR reduction plan has no value";
+  return success();
+}
+
+static LogicalResult
 stampPartialReductionSplitPlan(codir::CodeletOp codelet,
                                ArrayAttr depResultDimMaps,
                                std::optional<int64_t> targetWorkerCount) {
-  codelet->removeAttr(codelet.getPartialReductionSplitRequiredAttrName());
-  codelet->removeAttr(codelet.getPartialReductionSplitDimsAttrName());
-  codelet->removeAttr(codelet.getPartialReductionSplitFactorAttrName());
-  codelet->removeAttr(codelet.getPartialReductionSplitOwnerTaskCountAttrName());
-  codelet->removeAttr(
-      codelet.getPartialReductionSplitTargetWorkerCountAttrName());
+  MLIRContext *ctx = codelet.getContext();
+  Attribute splitRequired;
+  Attribute splitDims;
+  Attribute splitFactorAttr;
+  Attribute ownerTaskCountAttr;
+  Attribute targetWorkerCountAttr;
+
+  auto verifyAll = [&]() -> LogicalResult {
+    if (failed(setOrVerifyReductionPlanAttr(
+            codelet.getOperation(),
+            codelet.getPartialReductionSplitOwnerTaskCountAttrName(),
+            ownerTaskCountAttr, "partial-reduction owner task count")))
+      return failure();
+    if (failed(setOrVerifyReductionPlanAttr(
+            codelet.getOperation(),
+            codelet.getPartialReductionSplitTargetWorkerCountAttrName(),
+            targetWorkerCountAttr, "partial-reduction target worker count")))
+      return failure();
+    if (failed(setOrVerifyReductionPlanAttr(
+            codelet.getOperation(),
+            codelet.getPartialReductionSplitRequiredAttrName(), splitRequired,
+            "partial-reduction split-required flag")))
+      return failure();
+    if (failed(setOrVerifyReductionPlanAttr(
+            codelet.getOperation(),
+            codelet.getPartialReductionSplitDimsAttrName(), splitDims,
+            "partial-reduction split dims")))
+      return failure();
+    if (failed(setOrVerifyReductionPlanAttr(
+            codelet.getOperation(),
+            codelet.getPartialReductionSplitFactorAttrName(), splitFactorAttr,
+            "partial-reduction split factor")))
+      return failure();
+    return success();
+  };
 
   if (!targetWorkerCount || *targetWorkerCount <= 1)
-    return;
+    return verifyAll();
 
   SmallVector<CodirAccessInfo, 8> accesses = collectDirectDepAccesses(codelet);
   std::optional<CodirAccessInfo> resultAccess =
       selectResultAccess(codelet, accesses);
   if (!resultAccess)
-    return;
+    return verifyAll();
 
-  std::optional<int64_t> ownerTaskCount =
+  std::optional<int64_t> computedOwnerTaskCount =
       computeStaticResultOwnerTaskCount(codelet, *resultAccess);
-  if (!ownerTaskCount || *ownerTaskCount <= 0)
-    return;
+  if (!computedOwnerTaskCount || *computedOwnerTaskCount <= 0)
+    return verifyAll();
 
-  MLIRContext *ctx = codelet.getContext();
-  codelet.setPartialReductionSplitOwnerTaskCountAttr(
-      IntegerAttr::get(IntegerType::get(ctx, 64), *ownerTaskCount));
-  codelet.setPartialReductionSplitTargetWorkerCountAttr(
-      IntegerAttr::get(IntegerType::get(ctx, 64), *targetWorkerCount));
+  ownerTaskCountAttr =
+      IntegerAttr::get(IntegerType::get(ctx, 64), *computedOwnerTaskCount);
+  targetWorkerCountAttr =
+      IntegerAttr::get(IntegerType::get(ctx, 64), *targetWorkerCount);
 
-  if (*ownerTaskCount >= *targetWorkerCount)
-    return;
+  if (*computedOwnerTaskCount >= *targetWorkerCount)
+    return verifyAll();
 
   SmallVector<int64_t, 4> inferredSplitDims;
   std::optional<int64_t> reductionVolume = computeStaticReductionVolume(
       codelet, depResultDimMaps, inferredSplitDims);
   if (!reductionVolume || *reductionVolume <= 1)
-    return;
+    return verifyAll();
 
   int64_t requestedFactor =
-      ceilDivPositive(*targetWorkerCount, *ownerTaskCount);
+      ceilDivPositive(*targetWorkerCount, *computedOwnerTaskCount);
   int64_t splitFactor = std::min<int64_t>(requestedFactor, *reductionVolume);
   if (splitFactor <= 1)
-    return;
+    return verifyAll();
 
-  codelet.setPartialReductionSplitRequiredAttr(UnitAttr::get(ctx));
+  splitRequired = UnitAttr::get(ctx);
   if (ArrayAttr declaredDims = getDeclaredPartialReductionDims(codelet))
-    codelet.setPartialReductionSplitDimsAttr(declaredDims);
+    splitDims = declaredDims;
   else
-    codelet.setPartialReductionSplitDimsAttr(
-        buildI64ArrayAttr(ctx, inferredSplitDims));
-  codelet.setPartialReductionSplitFactorAttr(
-      IntegerAttr::get(IntegerType::get(ctx, 64), splitFactor));
+    splitDims = buildI64ArrayAttr(ctx, inferredSplitDims);
+  splitFactorAttr = IntegerAttr::get(IntegerType::get(ctx, 64), splitFactor);
+  return verifyAll();
 }
 
 struct ReductionPlanningPass
     : public codir::impl::ReductionPlanningBase<ReductionPlanningPass> {
   void runOnOperation() override {
     std::optional<int64_t> targetWorkerCount =
-        getRuntimeTotalWorkers(getOperation());
+        getPlanningWorkerCapacity(getOperation());
     getOperation().walk([&](codir::CodeletOp codelet) {
       if (!codelet.getPartialReductionAttr())
         return;
@@ -325,8 +374,19 @@ struct ReductionPlanningPass
       }
 
       ArrayAttr depMaps = buildDepResultDimMaps(codelet);
-      codelet.setPartialReductionDepResultDimMapsAttr(depMaps);
-      stampPartialReductionSplitPlan(codelet, depMaps, targetWorkerCount);
+      if (failed(setOrVerifyReductionPlanAttr(
+              codelet.getOperation(),
+              codelet.getPartialReductionDepResultDimMapsAttrName(), depMaps,
+              "partial-reduction dep/result dimension maps"))) {
+        signalPassFailure();
+        return;
+      }
+      if (failed(
+              stampPartialReductionSplitPlan(codelet, depMaps,
+                                             targetWorkerCount))) {
+        signalPassFailure();
+        return;
+      }
     });
   }
 };

@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,convert-codir-to-arts)' | %FileCheck %s --implicit-check-not=sde.cu_task --implicit-check-not=sde.mu_dep --implicit-check-not=codir.codelet
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' | %FileCheck %s --implicit-check-not=sde.cu_task --implicit-check-not=sde.mu_dep --implicit-check-not=codir.codelet
 
 module {
   func.func @task_dynamic_mu_dep_exact_body_subview_to_arts(%arg0: index,

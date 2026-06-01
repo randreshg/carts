@@ -13,6 +13,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -74,6 +75,11 @@ public:
   /// back to their block arguments.
   static void classifyArgAccesses(EdtOp edt, SmallVectorImpl<bool> &reads,
                                   SmallVectorImpl<bool> &writes);
+
+  /// Collapse dependencies on each EDT that mix coarse and subpartitioned
+  /// acquires of the same root DB into one conservative coarse dependency.
+  /// Returns the number of dependency slots removed.
+  static unsigned canonicalizeMixedRootDependencies(ModuleOp module);
 
   /// Return true when an alloca initialization store can be cloned into an EDT
   /// body without needing its surrounding control flow. This accepts constant

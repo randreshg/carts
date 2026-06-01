@@ -4,6 +4,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
+#include "carts/utils/ArrayAttrUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -565,6 +566,35 @@ LogicalResult SdeSuIterateOp::verify() {
     return emitOpError()
            << "sde.async_strategy cps_chain requires a sde.cps stage plan";
 
+  if (auto topology = getIterationTopology();
+      topology && (*topology == SdeIterationTopology::owner_tile ||
+                   *topology == SdeIterationTopology::owner_tile_2d)) {
+    if (getLowerBounds().size() < 2 || getUpperBounds().size() < 2 ||
+        getSteps().size() < 2)
+      return emitOpError()
+             << "owner-tile iteration topology requires at least two SDE "
+                "loop dimensions";
+
+    auto logicalSlice = readI64ArrayAttr(getLogicalWorkerSliceAttr());
+    if (!logicalSlice)
+      return emitOpError()
+             << "owner-tile iteration topology requires logicalWorkerSlice";
+    unsigned positiveSliceDims = 0;
+    for (int64_t extent : *logicalSlice)
+      if (extent > 0)
+        ++positiveSliceDims;
+    if (positiveSliceDims < 2)
+      return emitOpError()
+             << "owner-tile iteration topology requires at least two positive "
+                "logicalWorkerSlice entries";
+
+    auto physicalOwnerDims = readI64ArrayAttr(getPhysicalOwnerDimsAttr());
+    if (!physicalOwnerDims || physicalOwnerDims->size() < 2)
+      return emitOpError()
+             << "owner-tile iteration topology requires at least two "
+                "physicalOwnerDims entries";
+  }
+
   return success();
 }
 
@@ -697,9 +727,9 @@ LogicalResult SdeMuTokenOp::verify() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// SdeCuCodeletOp verifier.
+/// SdeCuWorkOp verifier.
 ///===----------------------------------------------------------------------===///
-LogicalResult SdeCuCodeletOp::verify() {
+LogicalResult SdeCuWorkOp::verify() {
   auto tokens = getTokens();
   auto captures = getCaptures();
 
@@ -754,13 +784,14 @@ LogicalResult SdeCuCodeletOp::verify() {
     }
   }
 
-  // Terminator is sde.yield with no values. Memref codelets update through
+  // Terminator is sde.yield with no values. Memref compute units update through
   // token block arguments directly.
   auto yield = llvm::dyn_cast_or_null<SdeYieldOp>(entry.getTerminator());
   if (!yield)
     return emitOpError() << "expects body to terminate with sde.yield";
   if (!yield.getValues().empty())
-    return emitOpError() << "expects memref codelet yield to carry no values";
+    return emitOpError()
+           << "expects memref compute-unit yield to carry no values";
 
   // Best-effort check for conflicting modes on statically-overlapping slices
   // of the same source storage value. Non-constant slices are delegated to

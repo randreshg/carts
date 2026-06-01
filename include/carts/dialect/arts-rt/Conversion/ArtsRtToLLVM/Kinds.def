@@ -355,6 +355,16 @@ __ARTS_RTL_ATTRS(arts_db_create_with_guid, AllocAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs, SExt, ReadOnlyPtrAttrs,
                             ReadOnlyPtrAttrs))
 
+/// void *arts_db_create_with_guid_local(arts_guid_t guid, uint64_t len,
+///                                      arts_db_types_t db_type,
+///                                      const void *data,
+///                                      const arts_hint_t *hint);
+__ARTS_RTL(arts_db_create_with_guid_local, RawPtr, ArtsGuid, Int64, Int32,
+           VoidPtr, ArtsHintTypePtr)
+__ARTS_RTL_ATTRS(arts_db_create_with_guid_local, AllocAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, SExt, ReadOnlyPtrAttrs,
+                            ReadOnlyPtrAttrs))
+
 /// void *arts_db_create_with_guid_interleaved(arts_guid_t guid, uint64_t len,
 ///                                            arts_db_types_t db_type,
 ///                                            const void *data,

@@ -15,7 +15,7 @@
 #include "carts/dialect/arts/Analysis/loop/LoopNode.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/LocationMetadata.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -100,8 +100,13 @@ void EdtGraph::forEachNode(const std::function<void(NodeBase *)> &fn) const {
 
 bool EdtGraph::addEdge(NodeBase *from, NodeBase *to, EdgeBase *edge) {
   auto key = std::make_pair(from, to);
-  if (edges.count(key))
+  auto it = edges.find(key);
+  if (it != edges.end()) {
+    auto *existingDep = static_cast<EdtDepEdge *>(it->second.get());
+    auto *incomingDep = static_cast<EdtDepEdge *>(edge);
+    existingDep->appendDbEdges(incomingDep->getDbEdges());
     return false;
+  }
   edges[key] = std::unique_ptr<EdgeBase>(edge);
   from->addOutEdge(edge);
   to->addInEdge(edge);
@@ -195,6 +200,38 @@ void EdtGraph::getDeterministicTopologicalOrder(
       leftoverNodes.push_back(node);
   }
   sortEdtNodesByHierId(leftoverNodes);
+}
+
+EdtCriticalPathResult EdtGraph::computeCriticalPathDistances() const {
+  EdtCriticalPathResult result;
+  DenseMap<EdtNode *, int64_t> distance;
+  SmallVector<EdtNode *, 16> topoOrder;
+
+  distance.clear();
+  getDeterministicTopologicalOrder(topoOrder, result.cyclicNodes);
+
+  result.orderedDistances.reserve(topoOrder.size());
+  for (auto *node : topoOrder) {
+    int64_t dist = 0;
+    for (auto *edge : node->getInEdges()) {
+      auto *predNode = dyn_cast<EdtNode>(edge->getFrom());
+      if (!predNode)
+        continue;
+      auto it = distance.find(predNode);
+      if (it != distance.end()) {
+        int64_t edgeWeight = 1;
+        auto *depEdge = static_cast<EdtDepEdge *>(edge);
+        edgeWeight = std::max<int64_t>(1, depEdge->getWeight());
+        dist = std::max(dist, it->second + edgeWeight);
+      }
+    }
+    distance[node] = dist;
+    result.orderedDistances.push_back({node, dist});
+    if (dist > result.maxDistance)
+      result.maxDistance = dist;
+  }
+
+  return result;
 }
 
 bool EdtGraph::areEdtsIndependent(EdtOp a, EdtOp b) {
@@ -338,7 +375,7 @@ void EdtGraph::buildDependencies() {
     if (!fromNode || !toNode)
       continue;
 
-    auto *edge = new EdtDepEdge(fromNode, toNode, dep.edges.front());
+    auto *edge = new EdtDepEdge(fromNode, toNode, dep.edges);
     if (addEdge(fromNode, toNode, edge)) {
       ++created;
     } else {

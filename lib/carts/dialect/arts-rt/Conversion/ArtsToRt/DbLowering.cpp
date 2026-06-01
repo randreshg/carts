@@ -28,11 +28,12 @@ namespace mlir::carts::arts_rt {
 } // namespace mlir::carts::arts_rt
 #include "carts/dialect/arts-rt/Utils/IdRegistry.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/utils/Debug.h"
-#include "carts/utils/OperationAttributes.h"
 #include "carts/utils/RemovalUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -217,6 +218,18 @@ void DbLoweringPass::convertDbAllocOps() {
       continue;
     }
 
+    if (hasDistributedDbAllocation(oldOp.getOperation())) {
+      DbOwnerMapContractFailure contractFailure =
+          getDistributedDbOwnerMapContractFailure(oldOp);
+      if (contractFailure != DbOwnerMapContractFailure::None) {
+        oldOp.emitOpError()
+            << "cannot lower distributed DB with unverified owner-map plan: "
+            << toString(contractFailure);
+        signalPassFailure();
+        return;
+      }
+    }
+
     SmallVector<Value> sizes(oldOp.getSizes().begin(), oldOp.getSizes().end());
     SmallVector<Value> elementSizes(oldOp.getElementSizes().begin(),
                                     oldOp.getElementSizes().end());
@@ -226,12 +239,18 @@ void DbLoweringPass::convertDbAllocOps() {
     SmallVector<int64_t> shape;
     shape.assign(sizes.size(), ShapedType::kDynamic);
     auto ptrType = MemRefType::get(shape, elementType);
-    PartitionMode partitionMode =
-        getPartitionMode(oldOp.getOperation()).value_or(PartitionMode::coarse);
+    std::optional<PartitionMode> partitionMode =
+        getPartitionMode(oldOp.getOperation());
+    if (!partitionMode) {
+      oldOp.emitOpError()
+          << "requires upstream partition_mode before db-lowering";
+      signalPassFailure();
+      return;
+    }
     DbAllocOp newOp = AC->create<DbAllocOp>(
         oldOp.getLoc(), oldOp.getMode(), oldOp.getRoute(), DbAllocType::heap,
         oldOp.getDbMode(), oldOp.getElementType(), ptrType, sizes, elementSizes,
-        partitionMode);
+        *partitionMode);
     ARTS_DEBUG("  - New DbAllocOp: " << newOp);
     for (auto &attr : oldOp->getAttrs()) {
       if (!attr.getName().getValue().starts_with("arts."))
@@ -250,6 +269,7 @@ void DbLoweringPass::convertDbAllocOps() {
       setPlanLogicalWorkerSliceAttr(newOp.getOperation(), workerSlice);
     if (auto haloShape = getPlanHaloShapeAttr(oldOp))
       setPlanHaloShapeAttr(newOp.getOperation(), haloShape);
+    copyDbOwnerMapAttrs(oldOp, newOp);
     /// Preserve non-arts distributed ownership marker so ConvertArtsRtToLLVM
     /// can route datablock reservation by node.
     if (hasDistributedDbAllocation(oldOp.getOperation()))

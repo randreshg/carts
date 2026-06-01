@@ -13,7 +13,6 @@ add_mlir_dialect_library(MLIRCartsArtsUtils
 
   DEPENDS
     MLIRArtsOpsIncGen
-    MLIRSdeOpsIncGen
 
   LINK_LIBS PUBLIC
     MLIRAffineDialect
@@ -26,7 +25,6 @@ add_mlir_dialect_library(MLIRCartsArtsUtils
     MLIRSideEffectInterfaces
     MLIRTransformUtils
     MLIRCartsArts
-    MLIRCartsSde
 )
 
 target_link_libraries(MLIRCartsArtsUtils PRIVATE ${MLIR_POLYGEIST_LIB})

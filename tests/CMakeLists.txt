@@ -48,3 +48,8 @@ carts_lit_test(NAME carts-e2e-tests
   TEST_DIR ${CMAKE_SOURCE_DIR}/tests/e2e
   LABELS e2e
   DEPENDS carts-compile)
+
+carts_lit_test(NAME carts-e2e-multinode-tests
+  TEST_DIR ${CMAKE_SOURCE_DIR}/tests/e2e_multinode
+  LABELS e2e multinode
+  DEPENDS carts-compile)

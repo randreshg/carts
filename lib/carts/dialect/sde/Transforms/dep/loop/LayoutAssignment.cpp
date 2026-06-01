@@ -264,7 +264,7 @@ static int64_t estimateCommVolume(
   // alignment geometrically: the reader is aligned if it parallel-indexes every
   // owner position with offset 0; it disagrees otherwise.
   int64_t total = 0;
-  // Distinct reader codelets and their worst-case per-position use.
+  // Distinct reader scheduling units and their worst-case per-position use.
   llvm::DenseMap<unsigned, bool> readerAligned;
   llvm::DenseMap<unsigned, bool> readerCrossOwnerReduction;
   for (unsigned pos = 0; pos < profile.rank; ++pos) {
@@ -273,9 +273,9 @@ static int64_t estimateCommVolume(
       if (use.isWrite)
         continue;
       bool &aligned =
-          readerAligned.try_emplace(use.codeletId, true).first->second;
+          readerAligned.try_emplace(use.suId, true).first->second;
       bool &crossReduce =
-          readerCrossOwnerReduction.try_emplace(use.codeletId, false)
+          readerCrossOwnerReduction.try_emplace(use.suId, false)
               .first->second;
       if (!ownerPos)
         continue;
@@ -305,13 +305,13 @@ static int64_t estimateCommVolume(
   int64_t crossOwnerReduceEdge = outputBytes * integerLog2Ceil(blockFactor);
 
   for (auto &entry : readerAligned) {
-    unsigned codeletId = entry.first;
+    unsigned suId = entry.first;
     bool aligned = entry.second;
     if (aligned)
       continue;
-    bool crossReduce = readerCrossOwnerReduction.lookup(codeletId);
+    bool crossReduce = readerCrossOwnerReduction.lookup(suId);
     int64_t edgeBytes = crossReduce ? crossOwnerReduceEdge : fullExtentEdge;
-    disagreeingReaderBytes.push_back({codeletId, edgeBytes});
+    disagreeingReaderBytes.push_back({suId, edgeBytes});
     total += edgeBytes;
   }
 
@@ -440,11 +440,11 @@ static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
   return b.getDictionaryAttr(fields);
 }
 
-static bool codeletWritesRoot(const sde::ArrayAccessProfile &profile,
-                              unsigned codeletId) {
+static bool schedulingUnitWritesRoot(const sde::ArrayAccessProfile &profile,
+                                     unsigned suId) {
   for (const auto &posUses : profile.positionUses)
     for (const sde::ArrayPositionUse &use : posUses)
-      if (use.codeletId == codeletId && use.isWrite)
+      if (use.suId == suId && use.isWrite)
         return true;
   return false;
 }
@@ -474,11 +474,12 @@ struct LayoutAssignmentPass
     // Explicit BlockContraction input (PhaseB): per array root, the physical
     // position on which a SIBLING consumer contracts it. Built from
     // findContractionTilingCandidate, gated on the contraction input being a
-    // sibling-distributed intermediate (written by a different codelet) — the
-    // same gate the contraction-tiling intent uses. The contraction position is
-    // derived from the consumer's actual input access map.
+    // sibling-distributed intermediate written by a different scheduling unit.
+    // This is the same gate the contraction-tiling intent uses. The contraction
+    // position is derived from the consumer's actual input access map.
     llvm::DenseMap<Value, unsigned> contractionPositionByRoot;
-    for (auto [consumerId, consumer] : llvm::enumerate(relations.codelets)) {
+    for (auto [consumerId, consumer] :
+         llvm::enumerate(relations.schedulingUnits)) {
       std::optional<sde::ContractionTilingCandidate> cand =
           sde::findContractionTilingCandidate(consumer);
       if (!cand || !cand->contractionInputRoot)
@@ -487,9 +488,10 @@ struct LayoutAssignmentPass
       if (it == relations.profiles.end())
         continue;
       const sde::ArrayAccessProfile &inputProfile = it->second;
-      // Sibling-distributed intermediate: produced by some OTHER codelet.
-      if (!inputProfile.hasWriter || !inputProfile.writerCodeletId ||
-          *inputProfile.writerCodeletId == consumerId)
+      // Sibling-distributed intermediate: produced by some OTHER scheduling
+      // unit.
+      if (!inputProfile.hasWriter || !inputProfile.writerSuId ||
+          *inputProfile.writerSuId == consumerId)
         continue;
       if (!cand->contractionInputPhysicalDim)
         continue;
@@ -501,14 +503,14 @@ struct LayoutAssignmentPass
     llvm::DenseMap<Value, int64_t> arrayIds;
     int64_t nextArrayId = 0;
 
-    // Accumulate per-codelet stamps before applying so each su_iterate gets one
+    // Accumulate per-SU stamps before applying so each su_iterate gets one
     // combined `arrayLayout` array of all its accessed roots.
-    struct CodeletStamp {
+    struct SchedulingUnitStamp {
       SmallVector<DictionaryAttr, 4> entries;
       SmallVector<int64_t, 2> disagree;
       int64_t commVolumeBytes = 0;
     };
-    SmallVector<CodeletStamp> stamps(relations.codelets.size());
+    SmallVector<SchedulingUnitStamp> stamps(relations.schedulingUnits.size());
 
     for (auto &kv : relations.profiles) {
       const sde::ArrayAccessProfile &profile = kv.second;
@@ -535,32 +537,32 @@ struct LayoutAssignmentPass
       llvm::SmallDenseSet<unsigned, 4> accessors;
       for (const auto &posUses : profile.positionUses)
         for (const sde::ArrayPositionUse &use : posUses)
-          accessors.insert(use.codeletId);
+          accessors.insert(use.suId);
 
       llvm::DenseMap<unsigned, int64_t> edgeBytesByReader;
-      for (auto [codeletId, edgeBytes] : chosen.disagreeingReaderBytes)
-        edgeBytesByReader[codeletId] += edgeBytes;
+      for (auto [suId, edgeBytes] : chosen.disagreeingReaderBytes)
+        edgeBytesByReader[suId] += edgeBytes;
 
-      for (unsigned codeletId : accessors) {
-        if (codeletId >= stamps.size())
+      for (unsigned suId : accessors) {
+        if (suId >= stamps.size())
           continue;
-        bool isWrite = codeletWritesRoot(profile, codeletId);
-        int64_t edgeBytes = edgeBytesByReader.lookup(codeletId);
+        bool isWrite = schedulingUnitWritesRoot(profile, suId);
+        int64_t edgeBytes = edgeBytesByReader.lookup(suId);
         DictionaryAttr entry = buildLayoutEntry(
             ctx, arrayId, profile.staticShape, chosen.layout,
             isWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
                     : sde::AttrNames::LayoutGraphValues::RoleRead,
             edgeBytes);
-        stamps[codeletId].entries.push_back(entry);
-        stamps[codeletId].commVolumeBytes += edgeBytes;
+        stamps[suId].entries.push_back(entry);
+        stamps[suId].commVolumeBytes += edgeBytes;
         if (edgeBytes > 0)
-          stamps[codeletId].disagree.push_back(arrayId);
+          stamps[suId].disagree.push_back(arrayId);
       }
     }
 
     // Apply accumulated stamps.
-    for (auto [codeletId, op] : llvm::enumerate(relations.codelets)) {
-      CodeletStamp &stamp = stamps[codeletId];
+    for (auto [suId, op] : llvm::enumerate(relations.schedulingUnits)) {
+      SchedulingUnitStamp &stamp = stamps[suId];
       if (stamp.entries.empty())
         continue;
       SmallVector<Attribute, 4> entryAttrs(stamp.entries.begin(),

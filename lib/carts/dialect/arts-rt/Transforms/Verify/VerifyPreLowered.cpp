@@ -10,6 +10,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts-rt/Transforms/Passes.h"
+#include "carts/dialect/arts/IR/ArtsDialect.h"
 namespace mlir::carts::arts_rt {
 #define GEN_PASS_DEF_VERIFYPRELOWERED
 #include "carts/dialect/arts-rt/Transforms/Passes.h.inc"
@@ -28,6 +29,18 @@ struct VerifyPreLoweredPass
       if (isa<arts::EdtOp, arts::EpochOp>(op)) {
         op->emitError(
             "high-level scheduler op survived past pre-lowering step");
+        found = true;
+      }
+      if (auto alloc = dyn_cast<arts::DbAllocOp>(op);
+          alloc && !alloc.getPartitionMode()) {
+        alloc.emitOpError()
+            << "missing required partition_mode before ABI lowering";
+        found = true;
+      }
+      if (auto acquire = dyn_cast<arts::DbAcquireOp>(op);
+          acquire && !acquire.getPartitionMode()) {
+        acquire.emitOpError()
+            << "missing required partition_mode before ABI lowering";
         found = true;
       }
     });

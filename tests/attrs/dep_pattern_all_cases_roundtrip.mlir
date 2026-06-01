@@ -12,7 +12,7 @@
 // CHECK: depPattern = #arts.dep_pattern<matmul>
 // CHECK: depPattern = #arts.dep_pattern<triangular>
 // CHECK: depPattern = #arts.dep_pattern<wavefront_2d>
-// CHECK: depPattern = #arts.dep_pattern<jacobi_alternating_buffers>
+// CHECK: depPattern = #arts.dep_pattern<alternating_buffer_stencil>
 // CHECK: depPattern = #arts.dep_pattern<elementwise_pipeline>
 // CHECK: depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK: depPattern = #arts.dep_pattern<cross_dim_stencil_3d>
@@ -61,7 +61,7 @@ module {
       arts.yield
     }
     arts.edt <task> <intranode> route(%route) (%ap) : memref<?xmemref<?xi32>>
-        attributes {depPattern = #arts.dep_pattern<jacobi_alternating_buffers>} {
+        attributes {depPattern = #arts.dep_pattern<alternating_buffer_stencil>} {
     ^bb0(%a: memref<?xmemref<?xi32>>):
       arts.yield
     }

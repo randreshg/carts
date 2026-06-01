@@ -10,6 +10,9 @@
 ///         back to IR via upsertLoweringContract().
 ///   DT-2: Stencil halo consolidation -- unify halo bounds from graph
 ///         analysis, raw IR attrs, and contract into unified min/max offsets.
+///   DT-3: Mixed root dependency canonicalization -- collapse EDT
+///         dependencies that mix coarse parent and subpartitioned child
+///         acquires of the same root DB into one conservative coarse dep.
 ///   DT-6: DB lifetime shortening -- remove cleanup-only acquire chains once
 ///         the reachable DB-use graph proves they feed no computation.
 ///   DT-7: Dead DB elimination -- remove root DBs whose reachable use graph is
@@ -21,6 +24,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseSet.h"
 /// Arts
 #include "carts/dialect/arts/Analysis/AnalysisManager.h"
 #include "carts/dialect/arts/Analysis/db/DbAnalysis.h"
@@ -30,12 +34,13 @@
 #include "carts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_DBTRANSFORMS
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/RemovalUtils.h"
-#include "carts/utils/StencilAttributes.h"
+#include "carts/dialect/arts/Utils/StencilAttributes.h"
 #include "carts/utils/Utils.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/Statistic.h"
@@ -50,6 +55,9 @@ static llvm::Statistic numContractsPersisted{
 static llvm::Statistic numStencilHalosConsolidated{
     "db_transforms", "NumStencilHalosConsolidated",
     "Number of stencil acquires whose halo bounds were consolidated"};
+static llvm::Statistic numMixedRootDepsCanonicalized{
+    "db_transforms", "NumMixedRootDepsCanonicalized",
+    "Number of mixed parent/child root DB dependencies canonicalized"};
 static llvm::Statistic numCleanupOnlyAcquireChainsRemoved{
     "db_transforms", "NumCleanupOnlyAcquireChainsRemoved",
     "Number of cleanup-only acquire chains removed from the DB graph"};
@@ -78,6 +86,9 @@ private:
 
   /// DT-2: Stencil halo consolidation
   unsigned consolidateStencilHalos();
+
+  /// DT-3: Mixed root dependency canonicalization
+  unsigned canonicalizeMixedRootDependencies();
 
   /// DT-6: Cleanup-only acquire elimination
   unsigned shortenDbLifetimes();
@@ -122,6 +133,20 @@ void DbTransformsPass::runOnOperation() {
   if (dt2Count > 0)
     ARTS_INFO("DT-2: consolidated stencil halos on " << dt2Count
                                                      << " acquires");
+
+  ///===------------------------------------------------------------------===///
+  /// DT-3: Mixed root dependency canonicalization
+  ///
+  /// Avoid runtime dependency records that mix parent/coarse and child/block
+  /// fronts for the same root DB on one EDT.  After DB contract refinement has
+  /// selected the concrete acquire windows, collapse that unsafe shape to one
+  /// conservative coarse dependency with the combined access mode.
+  ///===------------------------------------------------------------------===///
+  unsigned dt3Count = canonicalizeMixedRootDependencies();
+  numMixedRootDepsCanonicalized += dt3Count;
+  if (dt3Count > 0)
+    ARTS_INFO("DT-3: canonicalized " << dt3Count
+                                     << " mixed root DB dependencies");
 
   ///===------------------------------------------------------------------===///
   /// DT-6: DB lifetime shortening
@@ -316,6 +341,18 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
   });
 
   return count;
+}
+
+unsigned DbTransformsPass::canonicalizeMixedRootDependencies() {
+  unsigned changedDeps =
+      EdtUtils::canonicalizeMixedRootDependencies(getOperation());
+
+  if (changedDeps > 0) {
+    AM->getEdtAnalysis().invalidate();
+    AM->getDbAnalysis().invalidate();
+  }
+
+  return changedDeps;
 }
 
 ///===----------------------------------------------------------------------===///

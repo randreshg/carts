@@ -21,6 +21,8 @@ Current utility groups:
   structure and lowering contracts while the IR is still in the ARTS dialect.
 - `LoopStructureUtils` and `ValueAnalysisUtils` provide ARTS-aware analysis
   extensions over the shared `carts/utils` layer.
-- `RuntimeConfig`, `RuntimeOpUtils`, `LocationMetadata`, `MetadataEnums`, and
-  `ARTSCostModel` carry ARTS-level configuration, query, metadata, and cost
-  decisions.
+- `RuntimeConfig`, `RuntimeOpUtils`, `LocationMetadata`, and `MetadataEnums`
+  carry ARTS-level configuration, query, and metadata decisions.
+- `OperationAttributes` and `StencilAttributes` are ARTS-object attribute
+  helpers. Keep them under this dialect utility layer; generic `carts/utils`
+  headers must not include ARTS dialect types.

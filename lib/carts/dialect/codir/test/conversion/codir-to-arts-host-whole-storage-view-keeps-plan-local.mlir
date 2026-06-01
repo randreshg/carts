@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-codir-to-arts)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
 // RUN:   --arts-config %inputs_dir/arts_multinode_8x64.cfg | %FileCheck %s
 
 // Even with an owner/block plan and owner-local indexing, host_whole is not a
@@ -12,6 +12,8 @@ module {
       codir.codelet deps(%A : memref<128xf32>) params(%i : index)
           attributes {dep_modes = [#codir.access_mode<readwrite>],
                       dep_storage_views = [#codir.storage_view<host_whole>],
+                      dep_owner_dims = [[]],
+                      dep_collectives = [#codir.collective<none>],
                       distribution_kind = #codir.distribution_kind<owner_compute>,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [16],

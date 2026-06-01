@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir)' | %FileCheck %s --implicit-check-not=sde.cu_codelet
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir)' | %FileCheck %s --implicit-check-not=sde.cu_work
 
 module {
   func.func @sde_sliced_token_to_codir(%mem: memref<8xi32>, %scale: i32) {
@@ -7,7 +7,7 @@ module {
     %token = sde.mu_token <readwrite> %mem[%c0] size[%c4]
       : memref<8xi32> -> !sde.token<memref<4xi32>>
 
-    sde.cu_codelet (%token : !sde.token<memref<4xi32>>)
+    sde.cu_work (%token : !sde.token<memref<4xi32>>)
       captures(%scale : i32) {
     ^bb0(%view: memref<4xi32>, %scale_arg: i32):
       %local_c0 = arith.constant 0 : index

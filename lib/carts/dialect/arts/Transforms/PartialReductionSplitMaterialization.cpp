@@ -8,11 +8,12 @@
 #define GEN_PASS_DEF_PARTIALREDUCTIONSPLITMATERIALIZATION
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
 #include "carts/utils/ArrayAttrUtils.h"
-#include "carts/utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -86,14 +87,14 @@ rematerializeIndicesDominating(ValueRange indices, Operation *insertBefore,
 
 static bool hasMultinodeRuntime(EdtOp edt) {
   ModuleOp module = edt->getParentOfType<ModuleOp>();
-  std::optional<int64_t> totalNodes = getRuntimeTotalNodes(module);
+  std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
   return totalNodes && *totalNodes > 1;
 }
 
 static std::optional<int64_t> getRuntimeWorkersPerNode(EdtOp edt) {
   ModuleOp module = edt->getParentOfType<ModuleOp>();
-  std::optional<int64_t> totalWorkers = getRuntimeTotalWorkers(module);
-  std::optional<int64_t> totalNodes = getRuntimeTotalNodes(module);
+  std::optional<int64_t> totalWorkers = arts::getRuntimeTotalWorkers(module);
+  std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
   if (!totalWorkers || !totalNodes || *totalWorkers <= 0 || *totalNodes <= 0)
     return std::nullopt;
   return (*totalWorkers + *totalNodes - 1) / *totalNodes;
@@ -592,6 +593,7 @@ static DbAllocOp createReductionBufferDb(OpBuilder &builder, Location loc,
   markMaterializedReductionDistribution(db.getOperation(), distributed);
   if (distributed) {
     setDistributedDbAllocation(db.getOperation(), /*enabled=*/true);
+    stampDbOwnerMapFromPlan(db);
     db.removeLocalOnlyAttr();
     db.removeDistributedRejectReasonAttr();
   }
