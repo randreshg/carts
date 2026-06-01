@@ -1,7 +1,6 @@
 """Build command for CARTS CLI."""
 
 from pathlib import Path
-import shutil
 import subprocess
 from typing import Optional
 
@@ -50,38 +49,17 @@ COUNTER_PROFILES = {
 
 
 def _check_rdma_provider_deps() -> None:
-    """Fail early when a production RDMA build lacks provider dev packages."""
-    pkg_config = shutil.which("pkg-config")
-    if not pkg_config:
-        print_error(
-            "RDMA builds require pkg-config plus librdmacm, UCX, and libfabric "
-            "development files. Install pkg-config, librdmacm-dev, libucx-dev, "
-            "and libfabric-dev, then rerun `dekk carts build --arts`."
-        )
-        raise Exit(1)
+    """Ensure a production RDMA build has its provider dev packages.
 
-    missing: list[str] = []
-    for module, package in [
-        ("librdmacm", "librdmacm-dev / rdma-core"),
-        ("ucx", "libucx-dev"),
-        ("libfabric", "libfabric-dev"),
-    ]:
-        result = subprocess.run(
-            [pkg_config, "--exists", module],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        if result.returncode != 0:
-            missing.append(package)
-
-    if missing:
-        print_error(
-            "RDMA production dependencies are missing: "
-            + ", ".join(missing)
-            + ". Install them or build ARTS with `--no-rdma` for a TCP-only "
-              "developer runtime."
-        )
+    Delegates to tools/scripts/ensure-rdma-deps.sh (the single source of truth,
+    also run by the Makefile `arts:` target), which probes pkg-config and
+    auto-installs librdmacm-dev/libucx-dev/libfabric-dev on Debian/Ubuntu. The
+    build fails with guidance only when auto-install is unavailable.
+    """
+    script = Path(__file__).resolve().parent / "ensure-rdma-deps.sh"
+    if not script.is_file():
+        return
+    if subprocess.run(["bash", str(script)], check=False).returncode != 0:
         raise Exit(1)
 
 

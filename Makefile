@@ -209,6 +209,9 @@ arts-download:
 		echo "ARTS submodule already initialized."; \
 	fi
 arts:
+	@if [ "$(ARTS_USE_RDMA)" = "ON" ]; then \
+		bash "$(CARTS_DIR)/tools/scripts/ensure-rdma-deps.sh" || exit 1; \
+	fi
 	@if [ "$(ARTS_USE_JEMALLOC)" = "ON" ] && [ ! -f "$(ARTS_DIR)/third_party/jemalloc/autogen.sh" ]; then \
 		echo "Initializing jemalloc submodule..."; \
 		cd $(ARTS_DIR) && git submodule update --init --depth 1 third_party/jemalloc; \
