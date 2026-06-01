@@ -889,19 +889,16 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
   return applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape);
 }
 
-// N-node migration Step 2 (flag-gated, default-off): consume the ONE committed
-// node-agnostic budget layout for every SU that writes a multi-owner-distributed
-// array, so copy and stencil siblings on the same array shape carry IDENTICAL
-// physicalOwnerDims + physicalBlockShape (+ logicalWorkerSlice). That is exactly
-// the equality hasSameHostBridgePlan (ArtsMaterializationUtils.h:1741) requires,
-// so the per-timestep host bridge hoists and the iterative double-buffer stencils
-// (jacobi-for, poisson-for) stop materializing a coarse per-timestep copy. This
-// subsumes the per-pattern stampers for such SUs and replaces the pattern-
-// specific stencil-coupled gate with a layout query. Realization is NOT gated on
-// the loop step: the committed layout is the authority (the loop may be untiled
-// with a dynamic-but-statically-known bound, as in the jagged double** stencils),
-// and the downstream iteration-space decomposition re-tiles to the block.
-// Enabled by CARTS_BUDGET_GRAIN; OFF by default so production stays byte-identical.
+// Consume the one committed node-agnostic budget layout for every SU that writes
+// a multi-owner-distributed data-parallel array, stamping identical
+// physicalOwnerDims + physicalBlockShape (+ logicalWorkerSlice) across all
+// writers of that array. That equality is what hasSameHostBridgePlan
+// (ArtsMaterializationUtils.h) requires, so the per-timestep host bridge hoists
+// and the iterative double-buffer stencils stop materializing a coarse
+// per-timestep copy. Runs first in the stamper dispatch and is the default for
+// the multi-owner data-parallel family (matmul/contraction excluded). Realization
+// is not gated on the loop step: the committed layout is the authority and the
+// iteration-space decomposition re-tiles to the block.
 static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
                                       sde::SDECostModel &costModel) {
   (void)costModel;
@@ -1731,9 +1728,10 @@ struct DistributionPlanningPass
       }
 
       coarsenExistingLoopIndexedOwnerPlanToTileFloor(op, *costModel);
-      // Step 2 (flag-gated): when on, the budget-reconciled layout is authored
-      // first so the per-pattern stampers below see an already-planned SU and
-      // skip it. Off by default -> the pattern stampers run unchanged.
+      // Budget-reconciled layout is authored first so the per-pattern stampers
+      // below see an already-planned multi-owner data-parallel SU and skip it;
+      // they still run for the families budget declines (single-owner, matmul,
+      // reduction, in-place). The committed budget layout is the authority.
       stampBudgetReconciledPlan(op, *costModel);
       stampStencilPhysicalPlan(op, *costModel);
       stampDirectRowMatmulPhysicalPlan(op, *costModel);
