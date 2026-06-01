@@ -1808,36 +1808,6 @@ struct StatePackPattern : public ArtsRtToLLVMPattern<StatePackOp> {
   }
 };
 
-/// Pattern to lower arts.state_unpack to loads + casts.
-/// Each i64 element is loaded from the state memref and cast back to the
-/// target type.
-struct StateUnpackPattern : public ArtsRtToLLVMPattern<StateUnpackOp> {
-  using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
-
-  LogicalResult matchAndRewrite(StateUnpackOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering StateUnpack Op " << op);
-    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto stateMemref = op.getState();
-    auto results = op.getValues();
-
-    SmallVector<Value> newResults;
-    for (unsigned i = 0; i < results.size(); ++i) {
-      auto idx = AC->createIndexConstant(i, op.getLoc());
-      auto loadedVal =
-          AC->create<memref::LoadOp>(op.getLoc(), stateMemref, ValueRange{idx});
-      auto castedVal =
-          AC->castParameter(results[i].getType(), loadedVal, op.getLoc(),
-                            ArtsCodegen::ParameterCastMode::Bitwise);
-      newResults.push_back(castedVal);
-    }
-
-    rewriter.replaceOp(op, newResults);
-    ++numMiscOpsConverted;
-    return success();
-  }
-};
-
 /// Pattern to lower arts.dep_bind to a pass-through.
 /// At LLVM level, the GUID itself is the slot identifier.
 struct DepBindPattern : public ArtsRtToLLVMPattern<DepBindOp> {
@@ -1847,20 +1817,6 @@ struct DepBindPattern : public ArtsRtToLLVMPattern<DepBindOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering DepBind Op " << op);
     rewriter.replaceOp(op, op.getGuid());
-    ++numMiscOpsConverted;
-    return success();
-  }
-};
-
-/// Pattern to lower arts.dep_forward to identity (pass-through).
-/// At runtime level the forwarded dependency slot value is unchanged.
-struct DepForwardPattern : public ArtsRtToLLVMPattern<DepForwardOp> {
-  using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
-
-  LogicalResult matchAndRewrite(DepForwardOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering DepForward Op " << op);
-    rewriter.replaceOp(op, op.getSlot());
     ++numMiscOpsConverted;
     return success();
   }
@@ -1890,8 +1846,8 @@ void populateArtsRtOpToLLVMPatterns(RewritePatternSet &patterns,
   patterns.add<DbGepOpPattern>(context, AC);
 
   /// State and bind patterns
-  patterns.add<StatePackPattern, StateUnpackPattern>(context, AC);
-  patterns.add<DepBindPattern, DepForwardPattern>(context, AC);
+  patterns.add<StatePackPattern>(context, AC);
+  patterns.add<DepBindPattern>(context, AC);
 }
 
 } // namespace mlir::carts::arts_rt::convert_arts_rt_to_llvm

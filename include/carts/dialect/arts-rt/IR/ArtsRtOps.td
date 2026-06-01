@@ -203,14 +203,6 @@ def StatePackOp : ArtsRt_Op<"state_pack", [MemoryEffects<[MemWrite]>]> {
       "`(` $values `)` attr-dict `:` type($values) `->` type($state)";
 }
 
-def StateUnpackOp : ArtsRt_Op<"state_unpack", [Pure]> {
-  let summary = "Unpack values from a state channel";
-  let arguments = (ins MemRefOf<[I64]>:$state);
-  let results = (outs Variadic<AnyType>:$values);
-  let assemblyFormat =
-      "$state `:` type($state) attr-dict `:` `(` type($values) `)`";
-}
-
 def DepBindOp : ArtsRt_Op<"dep_bind", [MemoryEffects<[MemWrite]>]> {
   let summary = "Bind a DB GUID to a dependency slot";
   let arguments = (ins I64:$guid, I64:$mode);
@@ -218,17 +210,6 @@ def DepBindOp : ArtsRt_Op<"dep_bind", [MemoryEffects<[MemWrite]>]> {
   let assemblyFormat = "`(` $guid `,` $mode `)` attr-dict";
   let builders = [OpBuilder<(ins "Value":$guid, "Value":$mode), [{
     $_state.addOperands({guid, mode});
-    $_state.addTypes($_builder.getI64Type());
-  }]>];
-}
-
-def DepForwardOp : ArtsRt_Op<"dep_forward", [Pure]> {
-  let summary = "Forward a dependency slot";
-  let arguments = (ins I64:$slot);
-  let results = (outs I64:$forwarded);
-  let assemblyFormat = "$slot attr-dict";
-  let builders = [OpBuilder<(ins "Value":$slot), [{
-    $_state.addOperands(slot);
     $_state.addTypes($_builder.getI64Type());
   }]>];
 }
