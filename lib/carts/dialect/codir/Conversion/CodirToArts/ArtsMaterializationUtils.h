@@ -1377,6 +1377,20 @@ static inline bool codirDepAllowsComputeBlockStorage(codir::CodeletOp codelet,
   return view && codirStorageViewUsesComputeBlock(*view);
 }
 
+// An iterative-stencil dep carrying a committed `halo` collective legitimately
+// reads neighbor tiles OUTSIDE its owner slice; the per-block halo exchange
+// supplies those neighbors, so it qualifies for block-native distributed storage
+// even though its accesses cross the owner slice. This is the ARTS dual of
+// StoragePlanning's stencil-halo compute_block demotion: without it ARTS
+// re-derives single-owner-slice containment, rejects the committed
+// compute_block+halo plan, and coarse-falls-back the stencil buffer to a single
+// local_only block (correct-but-not-distributed).
+static inline bool codirDepIsHaloStencilStorage(codir::CodeletOp codelet,
+                                                 unsigned depIndex) {
+  return getFinalizedCodirDepCollectiveKind(codelet, depIndex) ==
+         codir::CodirCollectiveKind::halo;
+}
+
 static inline bool codirDepRequiresComputeBlockStorage(codir::CodeletOp codelet,
                                                        unsigned depIndex) {
   std::optional<codir::CodirStorageViewKind> view =
@@ -3859,7 +3873,13 @@ materializeExistingDbHostBridgeIfNeeded(codir::CodeletOp codelet,
   arts::DbAllocOp hostAlloc = findBackingDbAlloc(dep);
   if (!hostAlloc)
     return success();
-  if (!codirDepRequiresPhaseRedistributionBridge(codelet, depIndex))
+  // Phase-redistributed deps AND iterative-stencil halo deps both need the
+  // host-whole -> compute-block bridge: the bridge is where the per-block
+  // single-writer stencil DB + halo exchange are realized (perBlockStencilHalo).
+  // A committed compute_block+halo stencil with a coarse backing host DB would
+  // otherwise never reach the bridge and stay coarse local_only (not distributed).
+  if (!codirDepRequiresPhaseRedistributionBridge(codelet, depIndex) &&
+      !codirDepIsHaloStencilStorage(codelet, depIndex))
     return success();
   if (failed(requireFinalizedCodirDepOwnerDimsForMaterialization(codelet,
                                                                  depIndex)))
