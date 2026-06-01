@@ -133,19 +133,11 @@ static bool isReductionPosition(const sde::ArrayAccessProfile &profile,
   return false;
 }
 
-// Node-agnostic target block-byte budget for the DB/MU grain. Unlike
-// kAbstractBlockFactor (a fixed 2-way proxy that caps owner-block count at
-// 2^owner-dims regardless of problem size or N), the budget produces a block
-// COUNT that grows with the problem and is independent of node/worker count;
-// node count enters only later, in the runtime owner map (block -> i % N).
-// Step-0 scaffold value (2 MiB); a later step derives it from the cost model's
-// getMinDistributedTileBytes band. See
-// distribution-architecture-n-node-general-2026-06-01.md.
+// Node-agnostic DB/MU block-byte budget: block count grows with problem size,
+// not node/worker count (N enters only in the runtime owner map, block % N).
 static constexpr int64_t kTargetBlockBytes = 2 * 1024 * 1024;
 
-// Budget-sized owner-block shape: split each owner dim so each block's byte
-// footprint sits near kTargetBlockBytes. Pure function of (problem size, element
-// bytes, target budget) — no node/worker count. Non-owner dims keep full extent.
+// Owner-block shape sized so each block's footprint nears kTargetBlockBytes.
 static SmallVector<int64_t, 4>
 blockShapeFromBudget(ArrayRef<int64_t> staticShape, int64_t elemBytes,
                      ArrayRef<int64_t> ownerPositions, int64_t targetBytes) {
@@ -633,14 +625,9 @@ struct LayoutAssignmentPass
           IntegerAttr::get(IntegerType::get(ctx, 64), stamp.commVolumeBytes));
     }
 
-    // N-node migration Step 1 (shadow mode): exercise the previously-dead
-    // weighted CU/MU hypergraph population path (buildLayoutGraph +
-    // buildCuMuHypergraphStorage had ZERO callers) and log the connectivity cut
-    // as evidence. This consumes NOTHING: CuMuMemoryUnit::typedHypergraph is
-    // never populated, so the live consumer scoreRemoteFanout
-    // (CuMuGraphPartitioning.cpp:461) still takes its abstract branch and plan
-    // selection is unchanged. Gated on CARTS_DIAG_HYPERGRAPH so production runs
-    // are byte-identical. See distribution-architecture-n-node-general.
+    // Shadow-mode: exercise the CU/MU hypergraph population and log its cut as
+    // evidence; consumes nothing (typedHypergraph stays empty), gated so runs
+    // are byte-identical.
     if (::getenv("CARTS_DIAG_HYPERGRAPH")) {
       sde::LayoutGraph layoutGraph = sde::buildLayoutGraph(relations);
       sde::CuMuHypergraphStorage storage =
