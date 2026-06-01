@@ -905,10 +905,16 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
 static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
                                       sde::SDECostModel &costModel) {
   (void)costModel;
-  if (!::getenv("CARTS_BUDGET_GRAIN"))
-    return false;
   if (!op || hasPhysicalLayoutPlan(op) ||
       sde::hasCommittedCuMuPartitionEvidence(op.getOperation()))
+    return false;
+  // Matmul/contraction keeps its dedicated contraction-tiling plan: its CU-task
+  // grain is the reduction-aware worker grain, not the data-parallel block grain
+  // reconciled here. This is the one genuinely layout-irreducible family.
+  if (auto cls = op.getStructuredClassification();
+      cls && *cls == sde::SdeStructuredClassification::matmul)
+    return false;
+  if (auto pat = op.getPattern(); pat && *pat == sde::SdePattern::matmul)
     return false;
   std::optional<sde::LayoutGraphFact> writeLayout =
       selectSingleWriteLayoutFact(op);
