@@ -364,6 +364,26 @@ tryFoldConstantIndexWithImpl(Value v, unsigned depth,
   if (auto folded = extraFolder(v, depth))
     return folded;
 
+  // Fold scf.if with a compile-time-constant condition to the live branch's
+  // yielded value. Dataset-selection macros (e.g. polybench's SMALL_DATASET)
+  // wrap the size constant in `scf.if %true { yield N }`, which otherwise blocks
+  // constant recovery of array extents before canonicalization runs.
+  if (auto result = dyn_cast<OpResult>(v))
+    if (auto ifOp = dyn_cast<scf::IfOp>(result.getOwner()))
+      if (auto cst =
+              ifOp.getCondition().getDefiningOp<arith::ConstantOp>())
+        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
+          Region &live = intAttr.getValue().isZero() ? ifOp.getElseRegion()
+                                                     : ifOp.getThenRegion();
+          if (!live.empty())
+            if (auto yield =
+                    dyn_cast<scf::YieldOp>(live.front().getTerminator()))
+              if (result.getResultNumber() < yield.getResults().size())
+                return tryFoldConstantIndexWithImpl(
+                    yield.getResults()[result.getResultNumber()], depth + 1,
+                    extraFolder);
+        }
+
   if (auto typeSizeOp = v.getDefiningOp<polygeist::TypeSizeOp>())
     return tryFoldTypeSizeBytes(typeSizeOp);
 
@@ -426,6 +446,19 @@ tryFoldConstantIndexWithImpl(Value v, unsigned depth,
       uint64_t ulhs = static_cast<uint64_t>(*lhs);
       uint64_t urhs = static_cast<uint64_t>(*rhs);
       return static_cast<int64_t>(ulhs / urhs);
+    }
+    // Algebraic divui(muli(a, b), b) == a (and divui(muli(a, b), a) == b),
+    // matched through numeric/index casts so the common factor need not itself
+    // be a foldable constant. This recovers the element count from the
+    // byte-count idiom (count = bytes*size/size) emitted by jagged double**
+    // allocations (e.g. polybench_alloc_data with a non-folding typeSize).
+    Value num = ValueAnalysis::stripNumericCasts(div.getLhs());
+    Value den = ValueAnalysis::stripNumericCasts(div.getRhs());
+    if (auto mul = num.getDefiningOp<arith::MulIOp>()) {
+      if (ValueAnalysis::stripNumericCasts(mul.getRhs()) == den)
+        return tryFoldConstantIndexWithImpl(mul.getLhs(), depth + 1, extraFolder);
+      if (ValueAnalysis::stripNumericCasts(mul.getLhs()) == den)
+        return tryFoldConstantIndexWithImpl(mul.getRhs(), depth + 1, extraFolder);
     }
     return std::nullopt;
   }
