@@ -8,6 +8,7 @@
 
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
 #include "carts/dialect/codir/Utils/CodirAccessTraceUtils.h"
+#include "carts/dialect/codir/Utils/CodirAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -191,8 +192,69 @@ inferDepOwnerAccessDims(codir::CodeletOp codelet, unsigned depIndex) {
   return selectedDims;
 }
 
+/// A cross-owner transpose-reduce (e.g. `y = A^T tmp` with `A` distributed along
+/// the reduction axis) reads each reduced input along that array's NATIVE
+/// distribution axis: the per-node reduction split (`reduce_scatter`, already
+/// selected by `chooseCollective`) then sums each node's native block instead of
+/// gathering the input to a coarse `host_whole` aggregate. The reduced inputs are
+/// the read deps whose `partial_reduction_dep_result_dim_maps` entry carries a
+/// reduced (`-1`) array dim. This is the reduction dual of the stencil
+/// native-read (`shouldDemoteStencilHaloReadToComputeBlock`) path.
+static bool isCrossOwnerReduceReducedReadInput(codir::CodeletOp codelet,
+                                               unsigned depIndex) {
+  if (!codir::codeletIsCrossOwnerTransposeReduce(codelet))
+    return false;
+  std::optional<codir::CodirAccessMode> mode =
+      getDepAccessMode(codelet, depIndex);
+  if (!mode || *mode != codir::CodirAccessMode::read)
+    return false;
+  ArrayAttr depMaps = codelet.getPartialReductionDepResultDimMapsAttr();
+  if (!depMaps || depIndex >= depMaps.size())
+    return false;
+  auto depMap = dyn_cast<ArrayAttr>(depMaps[depIndex]);
+  if (!depMap)
+    return false;
+  for (Attribute dim : depMap)
+    if (auto intAttr = dyn_cast<IntegerAttr>(dim))
+      if (intAttr.getInt() < 0)
+        return true;
+  return false;
+}
+
+/// The committed, dep-indexed `array_layout` owner dims for `depIndex` (the SDE
+/// global distribution truth for the array), or nullopt when unavailable.
+static std::optional<SmallVector<unsigned, 4>>
+getCommittedLayoutOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
+  ArrayAttr layout = codelet ? codelet.getArrayLayoutAttr() : ArrayAttr{};
+  if (!layout || depIndex >= layout.size())
+    return std::nullopt;
+  auto entry = dyn_cast<DictionaryAttr>(layout[depIndex]);
+  if (!entry)
+    return std::nullopt;
+  auto ownerDims = dyn_cast_or_null<ArrayAttr>(
+      entry.get(codir::AttrNames::LayoutGraphKeys::OwnerDims));
+  if (!ownerDims || ownerDims.empty())
+    return std::nullopt;
+  SmallVector<unsigned, 4> dims;
+  for (Attribute dim : ownerDims) {
+    auto intAttr = dyn_cast<IntegerAttr>(dim);
+    if (!intAttr || intAttr.getInt() < 0)
+      return std::nullopt;
+    dims.push_back(static_cast<unsigned>(intAttr.getInt()));
+  }
+  return dims;
+}
+
 static std::optional<SmallVector<unsigned, 4>>
 getDepOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
+  // Reduced inputs of a cross-owner transpose-reduce are owned along the array's
+  // committed native distribution axis so the reduce_scatter realization reads
+  // each node's native block (not a coarse host_whole gather of the whole array).
+  if (isCrossOwnerReduceReducedReadInput(codelet, depIndex))
+    if (std::optional<SmallVector<unsigned, 4>> nativeDims =
+            getCommittedLayoutOwnerDims(codelet, depIndex))
+      return nativeDims;
+
   std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
       getTileOwnerDims(codelet);
   if (isStencilCodelet(codelet) && tileOwnerDims && tileOwnerDims->size() > 1)
@@ -705,6 +767,13 @@ verifyFinalizedStoragePlanningAttr(codir::CodeletOp codelet, ArrayAttr existing,
 static codir::CodirStorageViewKind
 chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
                   codir::CodirStorageViewKind requested) {
+  // Reduced inputs of a cross-owner transpose-reduce stay block-distributed on
+  // their native axis regardless of the materializer's initial view (whole-token
+  // reads default to host_whole): the per-node reduce_scatter combine consumes
+  // each node's own block, so they must never collapse to a coarse host_whole
+  // gather. Mirrors the stencil halo native-read demotion, for the reduction.
+  if (isCrossOwnerReduceReducedReadInput(codelet, depIndex))
+    return codir::CodirStorageViewKind::compute_block;
   bool stencilRequiresComputeBlock =
       shouldDemoteStencilWriteToComputeBlock(codelet, depIndex) ||
       shouldDemoteStencilHaloReadToComputeBlock(codelet, depIndex);

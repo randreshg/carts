@@ -6,6 +6,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #define GEN_PASS_DEF_VERIFYDISTRIBUTEDDBPLACEMENT
@@ -13,12 +14,50 @@
 #include "carts/passes/Passes.h.inc"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 using namespace mlir;
 using namespace mlir::carts;
 using namespace mlir::carts::arts;
 
 namespace {
+
+/// No internode ARTS task may depend on a coarse single-block aggregate user DB:
+/// distributed execution requires block DB storage (or a per-node-localized host
+/// bridge / small replicated read). This runs after DbDistributedOwnership and
+/// DistributedLaunchConsistency, so coarse host sources are already marked
+/// local_only and their bridges localized to intranode; a coarse internode dep
+/// surviving to this point is a genuine un-materialized distribution.
+static void verifyDistributedDbDeps(EdtOp edt, bool &found) {
+  if (!edt || edt.getConcurrency() != EdtConcurrency::internode)
+    return;
+
+  llvm::SmallPtrSet<Operation *, 4> reported;
+  for (Value dep : edt.getDependencies()) {
+    auto alloc =
+        dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
+    if (!DbUtils::isCoarseUserDataDb(alloc))
+      continue;
+    if (DbUtils::isAllowedReadOnlyCoarseDep(dep, alloc))
+      continue;
+    if (DbUtils::isHostWholeToComputeBlockBridgeMovement(edt))
+      continue;
+    if (!reported.insert(alloc.getOperation()).second)
+      continue;
+
+    InFlightDiagnostic diag =
+        edt.emitError()
+        << "internode ARTS task depends on a coarse single-block aggregate "
+           "user DB";
+    diag.attachNote(alloc.getLoc())
+        << "coarse DB allocation feeding the distributed task";
+    diag.attachNote(edt.getLoc())
+        << "SDE/CODIR must materialize block DB storage before ARTS "
+           "distributed execution; CreateDbs is only a coarse raw-memref "
+           "fallback";
+    found = true;
+  }
+}
 
 static LogicalResult verifyDistributedDbAlloc(DbAllocOp alloc) {
   if (!hasDistributedDbAllocation(alloc.getOperation()))
@@ -80,6 +119,7 @@ struct VerifyDistributedDbPlacementPass
       if (mlir::failed(verifyDistributedDbAlloc(alloc)))
         failed = true;
     });
+    getOperation().walk([&](EdtOp edt) { verifyDistributedDbDeps(edt, failed); });
     if (failed)
       signalPassFailure();
   }

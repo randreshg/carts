@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-arts-objects-only)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-distributed-db-placement)' 2>&1 | %FileCheck %s
 
 module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_workers = 64 : i64} {
   func.func @internode_planned_task_rejects_coarse_db() {

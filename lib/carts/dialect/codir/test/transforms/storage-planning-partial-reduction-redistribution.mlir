@@ -1,8 +1,14 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(reduction-planning,storage-planning,verify-codir)' \
 // RUN:   | %FileCheck %s
 
+// A cross-owner transpose-reduce (reduced input accessed across the owner slice,
+// `[-1, 0]` dep/result map) keeps that input block-distributed (compute_block) on
+// its native axis: the per-node reduce_scatter combine consumes each node's own
+// block. It must NOT collapse the reduced input to a coarse host_whole gather --
+// that would defeat distribution (the source would fall back to a single coarse
+// block and reject internode execution).
 module {
-  func.func @partial_reduction_defers_huge_source_redistribution(%A: memref<1024x32768xf32>, %y: memref<32768xf32>, %base: index) {
+  func.func @partial_reduction_reads_reduced_input_block_native(%A: memref<1024x32768xf32>, %y: memref<32768xf32>, %base: index) {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c16 = arith.constant 16 : index
@@ -35,8 +41,8 @@ module {
   }
 }
 
-// CHECK-LABEL: func.func @partial_reduction_defers_huge_source_redistribution
+// CHECK-LABEL: func.func @partial_reduction_reads_reduced_input_block_native
 // CHECK: codir.codelet
 // CHECK-SAME: dep_owner_dims = [{{\[}}0], [1]]
-// CHECK-SAME: dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<host_whole>]
+// CHECK-SAME: dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<compute_block>]
 // CHECK-SAME: partial_reduction_dep_result_dim_maps = {{\[\[}}0], [-1, 0]]

@@ -5,7 +5,6 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
-#include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #define GEN_PASS_DEF_VERIFYARTSOBJECTSONLY
@@ -13,7 +12,6 @@
 #include "carts/passes/Passes.h.inc"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
 
 using namespace mlir;
@@ -29,36 +27,11 @@ static bool isInsideHostOpenMPIsland(Operation *op) {
   return false;
 }
 
-static void verifyDistributedDbDeps(EdtOp edt, bool &found) {
-  if (!edt || edt.getConcurrency() != EdtConcurrency::internode)
-    return;
-
-  llvm::SmallPtrSet<Operation *, 4> reported;
-  for (Value dep : edt.getDependencies()) {
-    auto alloc =
-        dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
-    if (!DbUtils::isCoarseUserDataDb(alloc))
-      continue;
-    if (DbUtils::isAllowedReadOnlyCoarseDep(dep, alloc))
-      continue;
-    if (DbUtils::isHostWholeToComputeBlockBridgeMovement(edt))
-      continue;
-    if (!reported.insert(alloc.getOperation()).second)
-      continue;
-
-    InFlightDiagnostic diag =
-        edt.emitError()
-        << "internode ARTS task depends on a coarse single-block aggregate "
-           "user DB";
-    diag.attachNote(alloc.getLoc())
-        << "coarse DB allocation feeding the distributed task";
-    diag.attachNote(edt.getLoc())
-        << "SDE/CODIR must materialize block DB storage before ARTS "
-           "distributed execution; CreateDbs is only a coarse raw-memref "
-           "fallback";
-    found = true;
-  }
-}
+// The "no internode task depends on a coarse aggregate DB" invariant is verified
+// in VerifyDistributedDbPlacement: it must run AFTER DbDistributedOwnership marks
+// local_only and DistributedLaunchConsistency localizes host-bridge EDTs to
+// intranode, which only happen in post-db-refinement. Checking it here (end of
+// codir-to-arts) would reject bridges that are legitimately localized downstream.
 
 static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
   auto *sdeDialect =
@@ -71,9 +44,6 @@ static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
                       << "' remains after the CODIR-to-ARTS boundary";
       found = true;
     }
-
-    if (auto edt = dyn_cast<EdtOp>(op))
-      verifyDistributedDbDeps(edt, found);
 
     if (op->getDialect() && op->getDialect()->getNamespace() == "omp") {
       if (isInsideHostOpenMPIsland(op))
