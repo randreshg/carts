@@ -472,6 +472,10 @@ static void clonePromotedBody(OpBuilder &builder, sde::SdeSuIterateOp owner,
 // libm-call rejection + read/write disjointness with rank>=2), so the two are
 // kept as two flat predicates: factoring only the prologue saved <25 lines
 // while forcing readers to context-switch to verify the invariants.
+static bool hasSiblingStencilConsumingWrittenRoot(sde::SdeSuIterateOp writer,
+                                                  Value writtenRoot);
+static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op);
+
 static bool
 isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
                                      const sde::StructuredLoopSummary &summary,
@@ -528,15 +532,40 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
     return std::max<int64_t>(0, (*ubConst - *lbConst + *stepConst - 1) /
                                     *stepConst);
   };
+  // SDE-5 reconciliation: an elementwise writer whose output is consumed by a
+  // sibling stencil (the double-buffer copy `u = unew`, with the stencil reading
+  // `u` on a halo) MUST adopt the stencil's owner_tile layout, or `u` carries
+  // two layouts and the per-timestep host bridge cannot hoist. For that single
+  // coupled case the rank-2 floor and the iteration-extent cap (both default
+  // guards against promoting unrelated/huge elementwise spaces) are lifted: the
+  // owner_tile of a rank-2 stencil array is required regardless of extent. The
+  // gate is tight — a host-init copy no stencil consumes never qualifies, so the
+  // ordinary uniform-promotion behavior is unchanged.
+  bool stencilCoupledOwnerTile = false;
+  if (Value writtenRoot = elementwiseExternalWrittenRoot(op))
+    if (auto writtenType = dyn_cast<MemRefType>(writtenRoot.getType()))
+      stencilCoupledOwnerTile =
+          writtenType.getRank() == 2 &&
+          hasSiblingStencilConsumingWrittenRoot(op, writtenRoot);
+
+  const int64_t rankFloor = stencilCoupledOwnerTile ? 2 : 3;
   constexpr int64_t kMaxPromotedOwnerExtent = 1024;
   std::optional<int64_t> outerTrip =
       staticTripCount(op.getLowerBounds().front(), op.getUpperBounds().front(),
                       op.getSteps().front());
   std::optional<int64_t> innerTrip = staticTripCount(
       innerFor.getLowerBound(), innerFor.getUpperBound(), innerFor.getStep());
-  if (!outerTrip || !innerTrip || *outerTrip > kMaxPromotedOwnerExtent ||
-      *innerTrip > kMaxPromotedOwnerExtent)
-    return false;
+  // The static trip bound only feeds the iteration-extent cap, a guard against
+  // promoting unrelated/huge elementwise spaces. A stencil-coupled writer must
+  // adopt owner_tile regardless of extent and regardless of whether the bound is
+  // a runtime value (the double-buffer size is dynamic), so both the
+  // static-trip requirement and the cap are lifted only for that case.
+  if (!stencilCoupledOwnerTile) {
+    if (!outerTrip || !innerTrip ||
+        *outerTrip > kMaxPromotedOwnerExtent ||
+        *innerTrip > kMaxPromotedOwnerExtent)
+      return false;
+  }
 
   auto effects = sde::collectStructuredMemoryEffects(op.getBody());
   if (effects.hasUnknownEffects || effects.writes.empty())
@@ -553,7 +582,13 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
     if (sde::isDefinedInside(op.getOperation(), root))
       return WalkResult::advance();
     auto type = dyn_cast<MemRefType>(root.getType());
-    if (!type || type.getRank() < 3 ||
+    // A stencil-coupled double-buffer copy also stores a loop-carried control
+    // flag (rank-0/1 `memref<i1>`); that flag is not the tiled data array and
+    // must be skipped, not treated as a disqualifying write. Outside the coupled
+    // case the original strict rejection is preserved.
+    if (type && stencilCoupledOwnerTile && type.getRank() < 2)
+      return WalkResult::advance();
+    if (!type || type.getRank() < rankFloor ||
         storeOp.getIndices().size() != static_cast<size_t>(type.getRank())) {
       rejected = true;
       return WalkResult::interrupt();
@@ -992,6 +1027,74 @@ static bool isSiblingDistributedIntermediate(sde::SdeSuIterateOp consumer,
       found = true;
   });
   return found;
+}
+
+/// True when a SIBLING `sde.su_iterate` consumes `writtenRoot` as a stencil
+/// (neighborhood) read. In an iterative double-buffer timestep, the elementwise
+/// copy `u[i][j] = unew[i][j]` writes `u`, and the stencil
+/// `unew[i][j] = f(u[i-1][j], u[i+1][j], ...)` reads `u` with halo access. The
+/// copy alone classifies as a 1-D owner_strip write, while the stencil consumer
+/// fixes `u` as a 2-D owner_tile array. Unless the elementwise writer adopts the
+/// same owner_tile layout, `u` carries two layouts and the host bridge cannot
+/// hoist out of the timestep loop (the SDE-5 divergence). This predicate is the
+/// tight, order-independent gate that authorizes promoting such a writer to the
+/// owner_tile of its stencil consumer; it never fires for a host-init copy whose
+/// output no stencil reads with a neighborhood.
+static bool hasSiblingStencilConsumingWrittenRoot(sde::SdeSuIterateOp writer,
+                                                  Value writtenRoot) {
+  if (!writtenRoot)
+    return false;
+  Operation *scope = writer->getParentOfType<ModuleOp>();
+  if (!scope)
+    return false;
+  bool found = false;
+  scope->walk([&](sde::SdeSuIterateOp consumer) {
+    if (found || consumer == writer)
+      return;
+    std::optional<sde::StructuredLoopSummary> summary =
+        sde::analyzeStructuredLoop(consumer);
+    if (!summary ||
+        summary->classification != sde::SdeStructuredClassification::stencil)
+      return;
+    consumer.getBody().walk([&](memref::LoadOp loadOp) {
+      if (found)
+        return;
+      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(loadOp.getMemref()) ==
+          writtenRoot)
+        found = true;
+    });
+  });
+  return found;
+}
+
+/// The external (op-output) ranked memref root an elementwise loop writes, used
+/// to test stencil-consumer coupling before deciding promotion legality. Returns
+/// the single distinct ranked root stored to a memref defined outside `op`, or
+/// null if there is not exactly one.
+static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
+  Value root;
+  bool ambiguous = false;
+  op.getBody().walk([&](memref::StoreOp storeOp) {
+    if (ambiguous)
+      return;
+    Value candidate =
+        ::mlir::carts::ValueAnalysis::stripMemrefViewOps(storeOp.getMemref());
+    if (sde::isDefinedInside(op.getOperation(), candidate))
+      return;
+    auto type = dyn_cast<MemRefType>(candidate.getType());
+    // Only the distributed data array matters here. Rank-0/rank-1 loop-carried
+    // control flags (e.g. the timestep `memref<i1>`) are not subject to owner
+    // tiling and must not make the data root look ambiguous.
+    if (!type || type.getRank() < 2)
+      return;
+    if (root && root != candidate) {
+      ambiguous = true;
+      root = nullptr;
+      return;
+    }
+    root = candidate;
+  });
+  return ambiguous ? Value() : root;
 }
 
 /// Contraction tiling as SDE intent.
