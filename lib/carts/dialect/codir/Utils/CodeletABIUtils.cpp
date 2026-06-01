@@ -290,6 +290,16 @@ CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex) {
       return CodirCollectiveKind::halo;
     if (isReductionLike(codelet))
       return CodirCollectiveKind::reduce_scatter;
+    // An all-gather presupposes the dep is block-distributed (owner-tiled) so
+    // there are per-owner blocks to gather. An in-place shared-state codelet
+    // deliberately keeps its backing store as a single coarse host_whole
+    // readwrite buffer with no owner-tiled blocks, so all-gather does not
+    // apply: leave it a plain coarse readwrite dep that lowers to
+    // inPlaceSharedState. Stamping all_gather here would pair a distribution
+    // collective with the empty dep_owner_dims an in-place dep has (and must
+    // keep), which the ARTS materializer fail-closes on.
+    if (codelet.getInPlaceSharedStateAttr())
+      return CodirCollectiveKind::none;
     return CodirCollectiveKind::all_gather;
   }
   if (coarseBridgeTargetHasReplicatedReadConsumer(codelet, depIndex))
