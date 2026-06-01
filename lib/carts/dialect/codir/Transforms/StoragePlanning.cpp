@@ -7,7 +7,7 @@
 #include "carts/dialect/codir/Transforms/Passes.h"
 
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
-#include "carts/dialect/codir/Utils/CodirConversionUtils.h"
+#include "carts/dialect/codir/Utils/CodirAccessTraceUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
