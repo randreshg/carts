@@ -33,7 +33,6 @@ module {}
 // MANIFEST: "name": "codir-to-arts"
 // MANIFEST-NOT: "ReductionPlanning"
 // MANIFEST-NOT: "StoragePlanning"
-// MANIFEST: "VerifyCodir"
 // MANIFEST: "MaterializeSdeBoundaryToArts"
 // MANIFEST: "ConvertCodirToArts"
 // MANIFEST-NOT: "ConvertSdeToArts"

@@ -301,8 +301,7 @@ static const std::array<llvm::StringLiteral, 5> kSdeToCodirPasses = {
     "ReductionPlanning",
     "StoragePlanning",
     "VerifyCodir"};
-static const std::array<llvm::StringLiteral, 8> kCodirToArtsPasses = {
-    "VerifyCodir",
+static const std::array<llvm::StringLiteral, 7> kCodirToArtsPasses = {
     "MaterializeSdeBoundaryToArts",
     "ConvertCodirToArts",
     "VerifySdeLowered",
@@ -1163,7 +1162,11 @@ void buildSdeToCodirPipeline(PassManager &pm) {
 /// CODIR-to-ARTS materialization. Every ARTS EDT must come from a CODIR
 /// codelet; any remaining SDE op is a boundary error.
 void buildCodirToArtsPipeline(PassManager &pm) {
-  pm.addPass(codir::createVerifyCodirPass());
+  // VerifyCodir is intentionally NOT re-run here: the immediately preceding
+  // `sde-to-codir` stage ends with createVerifyCodirPass() over this exact
+  // module, and the stage loop threads the same IR between consecutive stages
+  // with no mutating pass in between. Re-verifying byte-identical CODIR is pure
+  // duplication.
   pm.addPass(codir::createMaterializeSdeBoundaryToArtsPass());
   pm.addPass(codir::createConvertCodirToArtsPass());
   pm.addPass(sde::createVerifySdeLoweredPass());

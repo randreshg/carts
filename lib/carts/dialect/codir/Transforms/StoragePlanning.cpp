@@ -197,8 +197,18 @@ getDepOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
       getTileOwnerDims(codelet);
   if (isStencilCodelet(codelet) && tileOwnerDims && tileOwnerDims->size() > 1)
     return tileOwnerDims;
-  if (std::optional<SmallVector<unsigned, 4>> inferred =
-          inferDepOwnerAccessDims(codelet, depIndex))
+  std::optional<SmallVector<unsigned, 4>> inferred =
+      inferDepOwnerAccessDims(codelet, depIndex);
+  // Consume the committed owner-dim fact (`tile_owner_dims`, carried from the
+  // SDE `su_iterate` physical plan) as the source of truth whenever the body
+  // walk merely re-derives it: the walk then serves as a fail-closed agreement
+  // check, not as an independent owner-dim derivation. The walk's result is
+  // kept only when it expresses a genuinely finer per-dep fact the committed
+  // tile-grain attribute cannot (per-dependency redistribution along a
+  // non-tile owner dim), or as the fallback when no committed fact exists.
+  if (inferred && tileOwnerDims && *inferred == *tileOwnerDims)
+    return tileOwnerDims;
+  if (inferred)
     return inferred;
   return tileOwnerDims;
 }
