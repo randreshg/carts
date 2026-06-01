@@ -624,6 +624,15 @@ getUniqueStaticWrittenShape(const sde::StructuredMemoryEffectSummary &effects) {
     if (!memrefType || !memrefType.hasStaticShape())
       return std::nullopt;
 
+    // Rank-0 (scalar) memrefs are loop-carried control state (predicate flags,
+    // counters), not the distributed data array being double-buffered across
+    // timesteps. They must not pollute the data-shape comparison: a guarded
+    // jacobi copy/stencil stage writes both its data array and a `memref<i1>`
+    // continue-flag, and including the flag makes the written shapes differ,
+    // defeating timestep-pair recognition.
+    if (memrefType.getRank() == 0)
+      continue;
+
     SmallVector<int64_t, 4> shape(memrefType.getShape().begin(),
                                   memrefType.getShape().end());
     if (!selectedShape) {
