@@ -182,6 +182,11 @@ static LayoutGraphFact parseLayoutCommon(DictionaryAttr dict,
     fact.layoutKind = parseLayoutKind(*kind);
   fact.ownerDims = getI64Array(dict, AttrNames::LayoutGraph::OwnerDims);
   fact.blockShape = getI64Array(dict, AttrNames::LayoutGraph::BlockShape);
+  fact.budgetBlockShape =
+      getI64Array(dict, AttrNames::LayoutGraph::BudgetBlockShape);
+  if (std::optional<int64_t> value =
+          getI64(dict, AttrNames::LayoutGraph::BudgetMuBlockCount))
+    fact.budgetMuBlockCount = std::max<int64_t>(1, *value);
   if (std::optional<int64_t> value =
           getI64(dict, AttrNames::LayoutGraph::MuBlockCount))
     fact.muBlockCount = std::max<int64_t>(1, *value);

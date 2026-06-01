@@ -123,6 +123,11 @@ struct LayoutGraphFact {
   ArrayLayoutKind layoutKind = ArrayLayoutKind::replicated;
   SmallVector<int64_t, 4> ownerDims;
   SmallVector<int64_t, 4> blockShape;
+  // Node-agnostic, budget-sized DB/MU grain (a function of problem size + a
+  // target block-byte budget, not of node/worker count). Empty/1 on facts that
+  // predate the N-node migration or carry no budget grain.
+  SmallVector<int64_t, 4> budgetBlockShape;
+  int64_t budgetMuBlockCount = 1;
   int64_t tilePayloadBytes = 0;
   int64_t muBlockCount = 1;
   int64_t cuGroupSize = 1;
