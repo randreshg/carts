@@ -307,22 +307,15 @@ CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex) {
   if (codeletIsCrossOwnerTransposeReduce(codelet) ||
       coarseBridgeTargetHasCrossOwnerReduceConsumer(codelet, depIndex))
     return CodirCollectiveKind::reduce_scatter;
-  // Iterative stencil writes select nearest-neighbor halo exchange so the
-  // buffer remains a per-block single-writer distributed DB.
-  bool isStencilPattern = false;
-  if (auto pattern = codelet.getPatternAttr()) {
-    CodirPattern p = pattern.getValue();
-    isStencilPattern = p == CodirPattern::stencil_tiling_nd ||
-                       p == CodirPattern::cross_dim_stencil_3d ||
-                       p == CodirPattern::higher_order_stencil;
-  }
-  if (isStencilPattern) {
-    bool iterativeWar = false;
-    if (auto rep = codelet.getRepetitionStructureAttr())
-      iterativeWar = rep.getValue() == CodirRepetitionStructure::full_timestep;
-    if (iterativeWar || codelet.getEmitBlockNativeStencilAttr())
-      return CodirCollectiveKind::halo;
-  }
+  // Iterative stencil writes select nearest-neighbor halo exchange even without
+  // a layout mismatch, so the buffer stays a per-block single-writer distributed
+  // DB across timesteps. This covers BOTH in-place (stencil_tiling_nd) and
+  // double-buffered (alternating_buffer_stencil) iterative stencils -- the same
+  // set isStencilCollectiveLike already recognizes in the layout-mismatch branch
+  // above. Without this, a same-layout double-buffer jacobi stencil falls to
+  // `none` and is realized via a per-timestep host_whole<->block bridge copy.
+  if (isStencilCollectiveLike(codelet))
+    return CodirCollectiveKind::halo;
   return CodirCollectiveKind::none;
 }
 
