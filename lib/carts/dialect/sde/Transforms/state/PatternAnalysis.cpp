@@ -623,14 +623,31 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
 }
 
 static sde::SdeSuIterateOp
-promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor) {
+promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor,
+                                bool outerFirst = false) {
   OpBuilder builder(op);
   Location loc = op.getLoc();
-  SmallVector<Value, 2> lowerBounds{innerFor.getLowerBound(),
-                                    op.getLowerBounds().front()};
-  SmallVector<Value, 2> upperBounds{innerFor.getUpperBound(),
-                                    op.getUpperBounds().front()};
-  SmallVector<Value, 2> steps{innerFor.getStep(), op.getSteps().front()};
+  // Default order places the promoted inner loop as su_iterate dim 0 and the
+  // original owner loop as dim 1 (inner, outer). `outerFirst` flips this to
+  // (outer, inner) so the promoted owner-dim ORDER matches a sibling stencil
+  // that already iterates (outer, inner): without it the elementwise copy's
+  // per-dep owner dims lower to the reversed array order ([1,0] vs the stencil's
+  // [0,1]) and hasSameHostBridgePlan rejects the host-bridge hoist. Used for the
+  // stencil-coupled double-buffer copy (SDE-5 reconciliation).
+  SmallVector<Value, 2> lowerBounds =
+      outerFirst ? SmallVector<Value, 2>{op.getLowerBounds().front(),
+                                         innerFor.getLowerBound()}
+                 : SmallVector<Value, 2>{innerFor.getLowerBound(),
+                                         op.getLowerBounds().front()};
+  SmallVector<Value, 2> upperBounds =
+      outerFirst ? SmallVector<Value, 2>{op.getUpperBounds().front(),
+                                         innerFor.getUpperBound()}
+                 : SmallVector<Value, 2>{innerFor.getUpperBound(),
+                                         op.getUpperBounds().front()};
+  SmallVector<Value, 2> steps =
+      outerFirst
+          ? SmallVector<Value, 2>{op.getSteps().front(), innerFor.getStep()}
+          : SmallVector<Value, 2>{innerFor.getStep(), op.getSteps().front()};
 
   auto newOp = sde::SdeSuIterateOp::create(
       builder, loc, /*resultTypes=*/TypeRange{}, ValueRange(lowerBounds),
@@ -661,8 +678,12 @@ promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor) {
     newBody.addArgument(builder.getIndexType(), loc);
 
   IRMapping mapping;
-  mapping.map(op.getBody().front().getArgument(0), newBody.getArgument(1));
-  mapping.map(innerFor.getInductionVar(), newBody.getArgument(0));
+  // Keep the IV->block-arg mapping consistent with the chosen dim order: with
+  // outerFirst the outer owner IV is dim 0 and the promoted inner IV is dim 1.
+  mapping.map(op.getBody().front().getArgument(0),
+              newBody.getArgument(outerFirst ? 0 : 1));
+  mapping.map(innerFor.getInductionVar(),
+              newBody.getArgument(outerFirst ? 1 : 0));
 
   Block *oldComputeBlock = sde::getSuIterateComputeBlock(op);
   auto oldCuRegion =
@@ -822,7 +843,17 @@ tryPromoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op,
       findPromotableInnerForChain(op, computeBlock);
   if (!isSafeElementwiseInnerOwnerPromotion(op, summary, innerForChain))
     return op;
-  return promoteElementwiseInnerOwnerLoop(op, innerForChain.front());
+  // Stencil-coupled double-buffer copies must adopt the (outer, inner) owner-dim
+  // order of their stencil consumer so the per-dep owner dims lower in the same
+  // array order (SDE-5 reconciliation). The signal is the same committed-layout
+  // coupling used to admit the rank-2 promotion; recompute it here (cheap) to
+  // pick the dim order without widening promoteElementwiseInnerOwnerLoop's API.
+  bool outerFirst = false;
+  if (Value writtenRoot = elementwiseExternalWrittenRoot(op))
+    if (auto t = dyn_cast<MemRefType>(writtenRoot.getType()))
+      outerFirst = t.getRank() == 2 &&
+                   hasSiblingStencilConsumingWrittenRoot(op, writtenRoot);
+  return promoteElementwiseInnerOwnerLoop(op, innerForChain.front(), outerFirst);
 }
 
 static sde::SdeSuIterateOp
