@@ -889,6 +889,52 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
   return applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape);
 }
 
+// N-node migration Step 2 (flag-gated, default-off): consume the ONE committed
+// node-agnostic budget layout for every SU that writes a multi-owner-distributed
+// array, so copy and stencil siblings on the same array shape carry IDENTICAL
+// physicalOwnerDims + physicalBlockShape (+ logicalWorkerSlice). That is exactly
+// the equality hasSameHostBridgePlan (ArtsMaterializationUtils.h:1741) requires,
+// so the per-timestep host bridge hoists and the iterative double-buffer stencils
+// (jacobi-for, poisson-for) stop materializing a coarse per-timestep copy. This
+// subsumes the per-pattern stampers for such SUs and replaces the pattern-
+// specific stencil-coupled gate with a layout query. Realization is NOT gated on
+// the loop step: the committed layout is the authority (the loop may be untiled
+// with a dynamic-but-statically-known bound, as in the jagged double** stencils),
+// and the downstream iteration-space decomposition re-tiles to the block.
+// Enabled by CARTS_BUDGET_GRAIN; OFF by default so production stays byte-identical.
+static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
+                                      sde::SDECostModel &costModel) {
+  (void)costModel;
+  if (!::getenv("CARTS_BUDGET_GRAIN"))
+    return false;
+  if (!op || hasPhysicalLayoutPlan(op) ||
+      sde::hasCommittedCuMuPartitionEvidence(op.getOperation()))
+    return false;
+  std::optional<sde::LayoutGraphFact> writeLayout =
+      selectSingleWriteLayoutFact(op);
+  if (!writeLayout || writeLayout->ownerDims.size() < 2 ||
+      writeLayout->budgetBlockShape.empty())
+    return false;
+  SmallVector<int64_t, 4> ownerDims(writeLayout->ownerDims.begin(),
+                                    writeLayout->ownerDims.end());
+  SmallVector<int64_t, 4> blockShape(writeLayout->budgetBlockShape.begin(),
+                                     writeLayout->budgetBlockShape.end());
+  // Per-owner-dim halo from the op's stencil access offsets (0 for non-stencils).
+  // Not compared by hasSameHostBridgePlan, but needed for correct halo exchange.
+  SmallVector<int64_t, 4> haloShape;
+  bool anyHalo = false;
+  for (int64_t od : ownerDims) {
+    int64_t h = od >= 0
+                    ? readStencilHaloForOwnerDim(op, static_cast<unsigned>(od))
+                    : 0;
+    haloShape.push_back(std::max<int64_t>(0, h));
+    anyHalo |= h > 0;
+  }
+  applyPhysicalPlan(op, ownerDims, blockShape,
+                    anyHalo ? ArrayRef<int64_t>(haloShape) : ArrayRef<int64_t>{});
+  return true;
+}
+
 static bool mayRefineExistingPhysicalLayoutPlan(sde::SdeSuIterateOp op) {
   if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
     return false;
@@ -1673,6 +1719,10 @@ struct DistributionPlanningPass
       }
 
       coarsenExistingLoopIndexedOwnerPlanToTileFloor(op, *costModel);
+      // Step 2 (flag-gated): when on, the budget-reconciled layout is authored
+      // first so the per-pattern stampers below see an already-planned SU and
+      // skip it. Off by default -> the pattern stampers run unchanged.
+      stampBudgetReconciledPlan(op, *costModel);
       stampStencilPhysicalPlan(op, *costModel);
       stampDirectRowMatmulPhysicalPlan(op, *costModel);
       stampMatmulPhysicalPlan(op, *costModel);
