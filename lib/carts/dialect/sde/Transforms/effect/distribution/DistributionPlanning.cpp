@@ -915,6 +915,12 @@ static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
   if (!writeLayout || writeLayout->ownerDims.size() < 2 ||
       writeLayout->budgetBlockShape.empty())
     return false;
+  // owner_tile needs one realized SDE loop dimension per owner dim. A 1-D loop
+  // (e.g. a residual/reduction loop over the same array) that did not get
+  // promoted cannot carry a multi-owner tile; leave it to the pattern stampers
+  // rather than stamping an unverifiable owner_tile plan.
+  if (op.getLowerBounds().size() < writeLayout->ownerDims.size())
+    return false;
   SmallVector<int64_t, 4> ownerDims(writeLayout->ownerDims.begin(),
                                     writeLayout->ownerDims.end());
   SmallVector<int64_t, 4> blockShape(writeLayout->budgetBlockShape.begin(),
