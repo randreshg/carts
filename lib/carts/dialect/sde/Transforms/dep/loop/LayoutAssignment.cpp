@@ -20,6 +20,7 @@
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
+#include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
@@ -129,6 +130,46 @@ static bool isReductionPosition(const sde::ArrayAccessProfile &profile,
       return true;
   }
   return false;
+}
+
+// Node-agnostic target block-byte budget for the DB/MU grain. Unlike
+// kAbstractBlockFactor (a fixed 2-way proxy that caps owner-block count at
+// 2^owner-dims regardless of problem size or N), the budget produces a block
+// COUNT that grows with the problem and is independent of node/worker count;
+// node count enters only later, in the runtime owner map (block -> i % N).
+// Step-0 scaffold value (2 MiB); a later step derives it from the cost model's
+// getMinDistributedTileBytes band. See
+// distribution-architecture-n-node-general-2026-06-01.md.
+static constexpr int64_t kTargetBlockBytes = 2 * 1024 * 1024;
+
+// Budget-sized owner-block shape: split each owner dim so each block's byte
+// footprint sits near kTargetBlockBytes. Pure function of (problem size, element
+// bytes, target budget) — no node/worker count. Non-owner dims keep full extent.
+static SmallVector<int64_t, 4>
+blockShapeFromBudget(ArrayRef<int64_t> staticShape, int64_t elemBytes,
+                     ArrayRef<int64_t> ownerPositions, int64_t targetBytes) {
+  SmallVector<int64_t, 4> blockShape(staticShape.begin(), staticShape.end());
+  if (ownerPositions.empty() || elemBytes <= 0 || targetBytes <= 0)
+    return blockShape;
+  int64_t totalBytes = productOf(staticShape) * elemBytes;
+  int64_t desiredBlocks =
+      std::max<int64_t>(1, llvm::divideCeil(totalBytes, targetBytes));
+  SmallVector<int64_t, 4> ownerExtents;
+  for (int64_t pos : ownerPositions)
+    if (pos >= 0 && static_cast<size_t>(pos) < staticShape.size())
+      ownerExtents.push_back(staticShape[pos]);
+  if (ownerExtents.empty())
+    return blockShape;
+  // Reuse the tested owner-dim factoring: spread desiredBlocks across owner dims.
+  SmallVector<int64_t, 4> grid =
+      sde::factorWorkersAcrossDims(desiredBlocks, ownerExtents);
+  for (auto [idx, pos] : llvm::enumerate(ownerPositions)) {
+    if (pos < 0 || static_cast<size_t>(pos) >= blockShape.size())
+      continue;
+    int64_t g = (idx < grid.size()) ? std::max<int64_t>(1, grid[idx]) : 1;
+    blockShape[pos] = std::max<int64_t>(1, llvm::divideCeil(staticShape[pos], g));
+  }
+  return blockShape;
 }
 
 static sde::ArrayLayoutCandidate
@@ -416,7 +457,8 @@ static StringRef layoutKindString(sde::ArrayLayoutKind kind) {
 static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
                                        ArrayRef<int64_t> staticShape,
                                        const sde::ArrayLayoutCandidate &layout,
-                                       StringRef role, int64_t edgeCommBytes) {
+                                       StringRef role, int64_t edgeCommBytes,
+                                       int64_t elemBytes) {
   Builder b(ctx);
   SmallVector<NamedAttribute, 8> fields;
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::ArrayId,
@@ -437,6 +479,22 @@ static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
           staticShape, layout.ownerPositions, layout.blockShape))));
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::CommVolumeBytes,
                                   b.getI64IntegerAttr(edgeCommBytes)));
+  // Node-agnostic budget grain, emitted alongside the abstract grain (Step 0 of
+  // the N-node-general migration). Not yet consumed; downstream still reads
+  // BlockShape/MuBlockCount. For block layouts only — replicated/contraction
+  // keep the abstract grain mirrored so the field is always present.
+  SmallVector<int64_t, 4> budgetShape(layout.blockShape.begin(),
+                                      layout.blockShape.end());
+  if (layout.kind == sde::ArrayLayoutKind::blockParallel &&
+      !layout.ownerPositions.empty())
+    budgetShape = blockShapeFromBudget(staticShape, elemBytes,
+                                       layout.ownerPositions, kTargetBlockBytes);
+  fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::BudgetBlockShape,
+                                  buildI64ArrayAttr(ctx, budgetShape)));
+  fields.push_back(b.getNamedAttr(
+      sde::AttrNames::LayoutGraph::BudgetMuBlockCount,
+      b.getI64IntegerAttr(
+          computeMuBlockCount(staticShape, layout.ownerPositions, budgetShape))));
   return b.getDictionaryAttr(fields);
 }
 
@@ -552,7 +610,7 @@ struct LayoutAssignmentPass
             ctx, arrayId, profile.staticShape, chosen.layout,
             isWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
                     : sde::AttrNames::LayoutGraphValues::RoleRead,
-            edgeBytes);
+            edgeBytes, std::max<int64_t>(1, elementBytes(profile.root)));
         stamps[suId].entries.push_back(entry);
         stamps[suId].commVolumeBytes += edgeBytes;
         if (edgeBytes > 0)

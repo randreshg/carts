@@ -14,7 +14,7 @@
 // SDE: func.func @main
 // SDE: sde.su_iterate (%c2) to (%c62) step (%c1) schedule(<static>) classification(<stencil>) {
 // SDE: } {
-// SDE-SAME: arrayLayout = [{arrayId = 0 : i64, blockShape = [8, 8, 32], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0, 1, 2], role = "write"}, {arrayId = 1 : i64, blockShape = [8, 8, 64], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"}]
+// SDE-SAME: arrayLayout = [{arrayId = 0 : i64, blockShape = [8, 8, 32], budgetBlockShape = [16, 16, 64], budgetMuBlockCount = 1 : i64, commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0, 1, 2], role = "write"}, {arrayId = 1 : i64, blockShape = [8, 8, 64], budgetBlockShape = [16, 16, 64], budgetMuBlockCount = 1 : i64, commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"}]
 // SDE-SAME: inPlaceSharedState
 // SDE-SAME: ownerDims = [0, 1, 2]
 // SDE-SAME: pattern = #sde.pattern<stencil_tiling_nd>

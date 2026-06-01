@@ -37,6 +37,13 @@ inline constexpr llvm::StringLiteral OwnerDims = "ownerDims";
 inline constexpr llvm::StringLiteral BlockShape = "blockShape";
 inline constexpr llvm::StringLiteral MuBlockCount = "muBlockCount";
 inline constexpr llvm::StringLiteral CommVolumeBytes = "commVolumeBytes";
+// Node-agnostic, budget-sized DB/MU block grain: a function of problem size and
+// a target block-byte budget, NOT of node/worker count. Emitted alongside the
+// abstract BlockShape/MuBlockCount during the N-node-general distribution
+// migration (Step 0); not yet consumed. See
+// distribution-architecture-n-node-general-2026-06-01.md.
+inline constexpr llvm::StringLiteral BudgetBlockShape = "budgetBlockShape";
+inline constexpr llvm::StringLiteral BudgetMuBlockCount = "budgetMuBlockCount";
 inline constexpr llvm::StringLiteral BlockParallel = "block_parallel";
 inline constexpr llvm::StringLiteral BlockContraction = "block_contraction";
 inline constexpr llvm::StringLiteral Replicated = "replicated";
