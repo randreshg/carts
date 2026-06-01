@@ -17,6 +17,7 @@
 /// CU/MU planning evidence.
 ///==========================================================================///
 
+#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
@@ -630,6 +631,39 @@ struct LayoutAssignmentPass
         op.setLayoutsDisagreeAttr(buildI64ArrayAttr(ctx, stamp.disagree));
       op.setCommVolumeBytesAttr(
           IntegerAttr::get(IntegerType::get(ctx, 64), stamp.commVolumeBytes));
+    }
+
+    // N-node migration Step 1 (shadow mode): exercise the previously-dead
+    // weighted CU/MU hypergraph population path (buildLayoutGraph +
+    // buildCuMuHypergraphStorage had ZERO callers) and log the connectivity cut
+    // as evidence. This consumes NOTHING: CuMuMemoryUnit::typedHypergraph is
+    // never populated, so the live consumer scoreRemoteFanout
+    // (CuMuGraphPartitioning.cpp:461) still takes its abstract branch and plan
+    // selection is unchanged. Gated on CARTS_DIAG_HYPERGRAPH so production runs
+    // are byte-identical. See distribution-architecture-n-node-general.
+    if (::getenv("CARTS_DIAG_HYPERGRAPH")) {
+      sde::LayoutGraph layoutGraph = sde::buildLayoutGraph(relations);
+      sde::CuMuHypergraphStorage storage =
+          sde::buildCuMuHypergraphStorage(layoutGraph);
+      sde::CuMuTypedHypergraph view = storage.view();
+      if (!view.vertices.empty() && !view.nets.empty()) {
+        unsigned partCount = std::min<unsigned>(
+            static_cast<unsigned>(view.vertices.size()), 2u);
+        SmallVector<unsigned, 8> assignment =
+            sde::buildContiguousCuPartAssignment(
+                static_cast<unsigned>(view.vertices.size()),
+                std::max<unsigned>(1u, partCount));
+        int64_t cutBytes =
+            sde::computeCuMuHypergraphCutBytes(view, assignment);
+        llvm::errs() << "[HYPERGRAPH-SHADOW] vertices=" << view.vertices.size()
+                     << " nets=" << view.nets.size()
+                     << " parts=" << std::max<unsigned>(1u, partCount)
+                     << " cutBytes=" << cutBytes << "\n";
+      } else {
+        llvm::errs() << "[HYPERGRAPH-SHADOW] empty graph (vertices="
+                     << view.vertices.size() << " nets=" << view.nets.size()
+                     << ")\n";
+      }
     }
   }
 
