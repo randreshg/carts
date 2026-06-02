@@ -16,6 +16,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/STLExtras.h"
 
 #include "carts/utils/Debug.h"
 
@@ -47,30 +48,137 @@ static Value createBlockCoordFromElementOffset(OpBuilder &builder, Location loc,
   return arith::DivUIOp::create(builder, loc, offset, blockSizeValue);
 }
 
-static Value getPartitionOwnerCoord(OpBuilder &builder, DbAllocOp alloc,
-                                    DbAcquireOp acquire,
-                                    const DbOwnerMapPlan &plan,
-                                    unsigned ownerSlot) {
-  ValueRange partitionOffsets = acquire.getPartitionOffsets();
-  if (partitionOffsets.empty() || ownerSlot >= plan.blockShape.size())
-    return {};
+static std::optional<unsigned> getOwnerSlotForDbDim(const DbOwnerMapPlan &plan,
+                                                    unsigned dbDim) {
+  if (plan.kind == DbOwnerMapKind::linear_mod_nodes) {
+    if (dbDim < plan.blockShape.size())
+      return dbDim;
+    return std::nullopt;
+  }
 
-  Location loc = acquire.getLoc();
+  for (auto [ownerSlot, rawDim] : llvm::enumerate(plan.dims)) {
+    if (rawDim >= 0 && static_cast<unsigned>(rawDim) == dbDim &&
+        ownerSlot < plan.blockShape.size())
+      return static_cast<unsigned>(ownerSlot);
+  }
+  return std::nullopt;
+}
+
+static std::optional<unsigned>
+getPartitionPhysicalDimForOwnerSlot(DbAllocOp alloc, unsigned ownerSlot,
+                                    unsigned partitionRank) {
   if (auto planOwnerDims = readI64ArrayAttr(getPlanOwnerDimsAttr(alloc))) {
     if (ownerSlot < planOwnerDims->size()) {
       int64_t physicalDim = (*planOwnerDims)[ownerSlot];
       if (physicalDim >= 0 &&
-          static_cast<size_t>(physicalDim) < partitionOffsets.size())
-        return createBlockCoordFromElementOffset(builder, loc,
-                                                 partitionOffsets[physicalDim],
-                                                 plan.blockShape[ownerSlot]);
+          static_cast<unsigned>(physicalDim) < partitionRank)
+        return static_cast<unsigned>(physicalDim);
     }
   }
 
-  if (ownerSlot < partitionOffsets.size())
-    return createBlockCoordFromElementOffset(
-        builder, loc, partitionOffsets[ownerSlot], plan.blockShape[ownerSlot]);
-  return {};
+  if (ownerSlot < partitionRank)
+    return ownerSlot;
+  return std::nullopt;
+}
+
+struct OwnerCoordKey {
+  Value value;
+  int64_t divisor = 1;
+  bool implicitZero = false;
+};
+
+static std::optional<OwnerCoordKey>
+getPartitionOwnerCoordKeyForEntry(DbAllocOp alloc, DbAcquireOp acquire,
+                                  const DbOwnerMapPlan &plan, unsigned dbDim,
+                                  size_t entryIdx) {
+  std::optional<unsigned> ownerSlot = getOwnerSlotForDbDim(plan, dbDim);
+  if (!ownerSlot || *ownerSlot >= plan.blockShape.size())
+    return std::nullopt;
+
+  SmallVector<Value> partitionOffsets =
+      acquire.getPartitionOffsetsForEntry(entryIdx);
+  if (partitionOffsets.empty())
+    return std::nullopt;
+
+  std::optional<unsigned> physicalDim = getPartitionPhysicalDimForOwnerSlot(
+      alloc, *ownerSlot, partitionOffsets.size());
+  if (!physicalDim)
+    return std::nullopt;
+
+  int64_t blockSize = plan.blockShape[*ownerSlot];
+  if (blockSize <= 0)
+    return std::nullopt;
+
+  return OwnerCoordKey{partitionOffsets[*physicalDim], blockSize, false};
+}
+
+static bool equivalentIndexValues(Value lhs, Value rhs) {
+  if (lhs == rhs)
+    return true;
+  if (!lhs || !rhs)
+    return false;
+
+  int64_t lhsConstant = 0;
+  int64_t rhsConstant = 0;
+  bool lhsIsConstant = ValueAnalysis::getConstantIndex(
+      ValueAnalysis::stripNumericCasts(lhs), lhsConstant);
+  bool rhsIsConstant = ValueAnalysis::getConstantIndex(
+      ValueAnalysis::stripNumericCasts(rhs), rhsConstant);
+  return lhsIsConstant && rhsIsConstant && lhsConstant == rhsConstant;
+}
+
+static std::optional<int64_t>
+getNormalizedOwnerCoordConstant(OwnerCoordKey key) {
+  if (key.implicitZero)
+    return int64_t{0};
+  if (!key.value || key.divisor <= 0)
+    return std::nullopt;
+
+  int64_t constant = 0;
+  if (!ValueAnalysis::getConstantIndex(
+          ValueAnalysis::stripNumericCasts(key.value), constant))
+    return std::nullopt;
+  if (constant < 0)
+    return std::nullopt;
+  return constant / key.divisor;
+}
+
+static bool equivalentOwnerCoord(OwnerCoordKey lhs, OwnerCoordKey rhs) {
+  if (lhs.implicitZero || rhs.implicitZero) {
+    std::optional<int64_t> lhsConstant = getNormalizedOwnerCoordConstant(lhs);
+    std::optional<int64_t> rhsConstant = getNormalizedOwnerCoordConstant(rhs);
+    return lhsConstant && rhsConstant && *lhsConstant == *rhsConstant;
+  }
+
+  if (lhs.divisor == rhs.divisor && equivalentIndexValues(lhs.value, rhs.value))
+    return true;
+
+  std::optional<int64_t> lhsConstant = getNormalizedOwnerCoordConstant(lhs);
+  std::optional<int64_t> rhsConstant = getNormalizedOwnerCoordConstant(rhs);
+  return lhsConstant && rhsConstant && *lhsConstant == *rhsConstant;
+}
+
+static std::optional<OwnerCoordKey>
+getStablePartitionOwnerCoordKey(DbAllocOp alloc, DbAcquireOp acquire,
+                                const DbOwnerMapPlan &plan, unsigned dbDim) {
+  size_t entries = acquire.getNumPartitionEntries();
+  if (entries == 0)
+    return std::nullopt;
+
+  std::optional<OwnerCoordKey> selected;
+  for (size_t entryIdx = 0; entryIdx < entries; ++entryIdx) {
+    std::optional<OwnerCoordKey> current = getPartitionOwnerCoordKeyForEntry(
+        alloc, acquire, plan, dbDim, entryIdx);
+    if (!current)
+      return std::nullopt;
+    if (!selected) {
+      selected = *current;
+      continue;
+    }
+    if (!equivalentOwnerCoord(*selected, *current))
+      return std::nullopt;
+  }
+  return selected;
 }
 
 static SmallVector<Value, 4>
@@ -89,20 +197,17 @@ getAcquireOwnerCoords(OpBuilder &builder, DbAllocOp alloc, DbAcquireOp acquire,
       coords.push_back(indices[i]);
       continue;
     }
-    if (Value partitionCoord =
-            getPartitionOwnerCoord(builder, alloc, acquire, plan, i)) {
-      coords.push_back(partitionCoord);
+    if (std::optional<OwnerCoordKey> partitionKey =
+            getStablePartitionOwnerCoordKey(alloc, acquire, plan, i)) {
+      coords.push_back(createBlockCoordFromElementOffset(
+          builder, acquire.getLoc(), partitionKey->value,
+          partitionKey->divisor));
       continue;
     }
     coords.push_back(createIndexConstant(builder, acquire.getLoc(), 0));
   }
   return coords;
 }
-
-struct OwnerCoordKey {
-  Value value;
-  bool implicitZero = false;
-};
 
 struct WriterOwnerTarget {
   DbAllocOp alloc;
@@ -112,22 +217,31 @@ struct WriterOwnerTarget {
   SmallVector<OwnerCoordKey, 4> coords;
 };
 
-static SmallVector<OwnerCoordKey, 4>
-getAcquireOwnerCoordKeys(DbAcquireOp acquire, unsigned rank) {
+static std::optional<SmallVector<OwnerCoordKey, 4>>
+getAcquireOwnerCoordKeys(DbAllocOp alloc, DbAcquireOp acquire,
+                         const DbOwnerMapPlan &plan, unsigned rank) {
   SmallVector<OwnerCoordKey, 4> coords;
   ValueRange offsets = acquire.getOffsets();
   ValueRange indices = acquire.getIndices();
   coords.reserve(rank);
   for (unsigned i = 0; i < rank; ++i) {
     if (i < offsets.size()) {
-      coords.push_back({offsets[i], false});
+      coords.push_back({offsets[i], 1, false});
       continue;
     }
     if (i < indices.size()) {
-      coords.push_back({indices[i], false});
+      coords.push_back({indices[i], 1, false});
       continue;
     }
-    coords.push_back({Value{}, true});
+    if (std::optional<OwnerCoordKey> partitionKey =
+            getStablePartitionOwnerCoordKey(alloc, acquire, plan, i)) {
+      coords.push_back(*partitionKey);
+      continue;
+    }
+    if (acquire.getNumPartitionEntries() > 0 &&
+        getOwnerSlotForDbDim(plan, i).has_value())
+      return std::nullopt;
+    coords.push_back({Value{}, 1, true});
   }
   return coords;
 }
@@ -139,40 +253,6 @@ static bool sameOwnerRoutePlan(const DbOwnerMapPlan &lhs,
   if (lhs.kind == DbOwnerMapKind::linear_mod_nodes)
     return true;
   return sameI64Values(lhs.dims, rhs.dims);
-}
-
-static bool equivalentIndexValues(Value lhs, Value rhs) {
-  if (lhs == rhs)
-    return true;
-  if (!lhs || !rhs)
-    return false;
-
-  int64_t lhsConstant = 0;
-  int64_t rhsConstant = 0;
-  bool lhsIsConstant = ValueAnalysis::getConstantIndex(
-      ValueAnalysis::stripNumericCasts(lhs), lhsConstant);
-  bool rhsIsConstant = ValueAnalysis::getConstantIndex(
-      ValueAnalysis::stripNumericCasts(rhs), rhsConstant);
-  return lhsIsConstant && rhsIsConstant && lhsConstant == rhsConstant;
-}
-
-static bool equivalentOwnerCoord(OwnerCoordKey lhs, OwnerCoordKey rhs) {
-  if (lhs.implicitZero && rhs.implicitZero)
-    return true;
-
-  auto isConstantZero = [](Value value) {
-    int64_t constant = 0;
-    return value &&
-           ValueAnalysis::getConstantIndex(
-               ValueAnalysis::stripNumericCasts(value), constant) &&
-           constant == 0;
-  };
-
-  if (lhs.implicitZero)
-    return isConstantZero(rhs.value);
-  if (rhs.implicitZero)
-    return isConstantZero(lhs.value);
-  return equivalentIndexValues(lhs.value, rhs.value);
 }
 
 static SmallVector<unsigned, 4>
@@ -256,7 +336,12 @@ static std::optional<WriterOwnerTarget> getWriterOwnerTarget(Value dep) {
   target.acquire = acquire;
   target.plan = *ownerMap;
   target.dbSizes = std::move(dbSizes);
-  target.coords = getAcquireOwnerCoordKeys(acquire, target.dbSizes.size());
+  std::optional<SmallVector<OwnerCoordKey, 4>> coords =
+      getAcquireOwnerCoordKeys(alloc, acquire, target.plan,
+                               target.dbSizes.size());
+  if (!coords)
+    return std::nullopt;
+  target.coords = std::move(*coords);
   return target;
 }
 

@@ -83,6 +83,35 @@ module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_worker
     }
     return
   }
+
+  func.func @does_not_route_conflicting_partition_offset_writers() {
+    %route = arith.constant 0 : i32
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c6 = arith.constant 6 : index
+    %c8 = arith.constant 8 : index
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>]
+      route(%route : i32) sizes[%c8] elementType(f64) elementSizes[%c1]
+      {distributed, owner_block_shape = [1], owner_map_dims = [0],
+       owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>,
+       owner_map_version = 1 : i32, planOwnerDims = [0],
+       planPhysicalBlockShape = [1]}
+      : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %acq_guid0, %acq_ptr0 = arts.db_acquire[<out>]
+      (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>)
+      partitioning(<block>, indices[], offsets[%c2], sizes[%c1]), indices[]
+      -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %acq_guid1, %acq_ptr1 = arts.db_acquire[<out>]
+      (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>)
+      partitioning(<block>, indices[], offsets[%c6], sizes[%c1]), indices[]
+      -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+    arts.edt <task> <internode> route(%route) (%acq_ptr0, %acq_ptr1)
+        : memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> {
+    ^bb0(%dep0: memref<?xmemref<?xf64>>, %dep1: memref<?xmemref<?xf64>>):
+      arts.yield
+    }
+    return
+  }
 }
 
 // CHECK-LABEL: func.func @routes_writer_to_owner_dim_contiguous_db
@@ -103,3 +132,8 @@ module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_worker
 // CHECK: %[[PARTITION_ROUTE_IDX:.*]] = arith.divui %[[SCALED_PARTITION]], %{{.*}} : index
 // CHECK: %[[PARTITION_ROUTE:.*]] = arith.index_cast %[[PARTITION_ROUTE_IDX]] : index to i32
 // CHECK: arts.edt <task> <internode> route(%[[PARTITION_ROUTE]])
+
+// CHECK-LABEL: func.func @does_not_route_conflicting_partition_offset_writers
+// CHECK: %[[ORIGINAL_ROUTE:.*]] = arith.constant 0 : i32
+// CHECK-NOT: arts.runtime_query
+// CHECK: arts.edt <task> <internode> route(%[[ORIGINAL_ROUTE]]) (%{{.*}}, %{{.*}})
