@@ -1,6 +1,6 @@
 ---
 name: carts-vision
-description: Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, state/dependency/effect value optimization, hypergraph planning, DB/CU grain, distributed DBs, RDMA scaling, or asks where a fix belongs.
+description: Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, RDMA scaling, or asks where a fix belongs.
 ---
 
 # CARTS Vision
@@ -13,8 +13,8 @@ distributed execution, optimization placement, or benchmark scaling.
 - **SDE commits real layout/tiling facts.** SDE owns OpenMP semantics,
   HPF-style `DISTRIBUTE`/`ALIGN`, per-array block layouts from affine access
   relations, abstract communication-volume cost, and real source/SU/CU/MU
-  loop/layout transformations. It names no collectives, DBs, EDTs, routes,
-  GUIDs, or runtime policy.
+  loop/layout transformations. It names no collectives, DBs, EDTs, owner maps,
+  routes, GUIDs, or runtime policy.
 - **CODIR commits collectives/bridges.** CODIR owns isolated codelets, explicit
   deps/params, first-class MPI distribution patterns
   (`all_gather`, `all_to_all`, `reduce_scatter`, `allreduce`, `broadcast`,
@@ -39,16 +39,20 @@ families, owner maps, DB grain, or runtime modes.
 
 ## Value Optimization Lanes
 
-Use the SDE state/dependency/effect split to decide where value is created:
+Optimize state, dependency, effect, compute, memory, and sync by changing real
+IR shape in the owning layer:
 
 | Lane | Optimizes | Real transformations |
 |---|---|---|
 | State | Memory shape and value movement | memref normalization, pointer-of-pointer flattening, scalar forwarding, MU/block materialization, access windows, layout assignment, owner dims, in-place safety classification |
 | Dependency | Communication and legality | explicit deps/params, storage views that consume committed owner dims, collective/bridge selection, halo/contraction/reduction materialization, control-token boundaries |
-| Effect | Compute and sync | scheduling plans, distribution plans, loop tiling, barrier elimination, CU grouping, bridge grouping, epoch/sync reduction |
+| Effect | Observable semantics and legal ordering | effect summaries, in-place legality, source dependency preservation, and rejection of transforms that would change visible ordering |
+| Compute | Work shape and locality | loop tiling/interchange/fusion when legal, owner-local compute grouping, contraction tiling, and bridge/communication CU grouping without changing DB grain |
+| Memory | Storage grain and movement | per-block DB realization, compact read-only bridge slices, DB modes, owner maps, cache behavior, and block-range materialization from committed facts |
+| Sync | Runtime frontier and epoch pressure | barrier/epoch reduction, dependency fanout reduction, grouped bridge launch, and runtime synchronization cleanup using explicit ARTS verdicts |
 
-Do not use an effect pass to compensate for wrong state facts, or an ARTS pass
-to compensate for missing CODIR collective intent.
+Do not use an effect, memory, sync, or ARTS-RT pass to compensate for wrong
+state facts or missing CODIR collective/bridge intent.
 
 ## Grain Rule
 
@@ -62,16 +66,20 @@ DB/MU grain and CU/bridge grain are distinct:
 
 ## Hypergraph Rule
 
-Use the CU/MU hypergraph to investigate grouping and partition quality:
+Use the CU/MU hypergraph to investigate grouping and partition quality over
+committed layout facts:
 
-- CU vertices model compute/bridge/communication work.
+- CU vertices model owner-local work candidates over committed MUs. Bridge and
+  communication CU grouping is materialized later, after CODIR has committed
+  bridge/collective intent and ARTS realizes DB/EDT ownership.
 - MU hyperedges model memory blocks and dependency fanout, weighted by abstract
   communication volume, byte traffic, halo/collective cost, or remote fanout.
 - The hypergraph can guide CU grouping, bridge coalescing, and partition
   quality over committed MU facts.
-- It must not become a benchmark-name shortcut for owner dims, block shape, or
-  storage grain. Owner dims come from SDE affine layout facts; collective
-  families come from CODIR layout mismatch plus compute pattern.
+- It must not become a benchmark-name shortcut for owner dims, owner maps,
+  block shape, or storage grain. Owner dims come from SDE affine layout facts;
+  collective families come from CODIR layout mismatch plus compute pattern, and
+  owner maps belong to ARTS realization.
 
 Useful diagnostic hook:
 

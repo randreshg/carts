@@ -10,6 +10,7 @@
 
 #include "carts/dialect/arts/Utils/DbLayoutPlanUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
@@ -1473,8 +1474,16 @@ codirRootHasHaloStencilStorageParticipant(codir::CodeletOp codelet,
 
 static inline bool codirDepCanUseBlockStorageAccess(codir::CodeletOp codelet,
                                                     unsigned depIndex) {
-  return codirDepAccessesStayWithinSingleOwnerSlice(codelet, depIndex) ||
-         codirDepUsesHaloStencilStorage(codelet, depIndex);
+  if (!codirDepRequiresComputeBlockStorage(codelet, depIndex) ||
+      !hasCodirTileOwnerSlicePlan(codelet) ||
+      !getCodirDepOwnerDims(codelet, depIndex))
+    return false;
+
+  // CODIR's storage plan is the committed layout fact. Do not silently
+  // coarse-fallback here because the local access tracer is conservative; the
+  // block-local index rewrite below is the fail-closed verifier for the actual
+  // transformed body.
+  return true;
 }
 
 static inline bool codirAccessMayWrite(codir::CodirAccessMode mode) {
@@ -1526,7 +1535,9 @@ enum class BridgeRoutingMode {
 
 struct BridgeOwnerMap {
   SmallVector<unsigned, 4> ownerDims;
+  SmallVector<int64_t, 4> ownerMapDims;
   SmallVector<int64_t, 4> physicalBlockShape;
+  std::optional<arts::DbOwnerMapKind> ownerMapKind;
   int64_t flatBlockCount = 0;
 };
 
@@ -1576,6 +1587,10 @@ struct HostBridgeUseCollection {
 static inline BridgeWorkGroupPlan
 planBridgeWorkGroups(const BridgePlan &plan, BridgeWorkloadKind workloadKind,
                      bool crossNodeGather = false);
+
+static inline arts::ArtsLaunchPolicy resolveBridgeBlockOrdinalLaunchPolicy(
+    ModuleOp module, const BridgePlan *plan, arts::DbAllocOp blockAlloc,
+    Value blockOrdinal, OpBuilder &builder, Location loc);
 
 static inline std::optional<unsigned>
 getCodeletDepOperandIndex(codir::CodeletOp codelet, OpOperand &use);
@@ -2342,6 +2357,10 @@ materializeCoarseHostDbForHostBridge(OpBuilder &builder, Location loc,
     dynamicSizes.assign(alloca.getDynamicSizes().begin(),
                         alloca.getDynamicSizes().end());
     builder.setInsertionPointAfter(alloca);
+  } else if (auto muAlloc = dyn_cast<sde::SdeMuAllocOp>(def)) {
+    dynamicSizes.assign(muAlloc.getDynamicSizes().begin(),
+                        muAlloc.getDynamicSizes().end());
+    builder.setInsertionPointAfter(muAlloc);
   } else {
     return failure();
   }
@@ -2366,12 +2385,11 @@ materializeCoarseHostDbForHostBridge(OpBuilder &builder, Location loc,
   return replacement;
 }
 
-static inline arts::DbAcquireOp
-materializeBridgeAcquire(OpBuilder &builder, Location loc,
-                         arts::DbAllocOp alloc, arts::ArtsMode mode,
-                         arts::PartitionMode partitionMode,
-                         ArrayRef<Value> offsets, ArrayRef<Value> sizes,
-                         Value boundsValid = Value{}) {
+static inline arts::DbAcquireOp materializeBridgeAcquire(
+    OpBuilder &builder, Location loc, arts::DbAllocOp alloc,
+    arts::ArtsMode mode, arts::PartitionMode partitionMode,
+    ArrayRef<Value> offsets, ArrayRef<Value> sizes, Value boundsValid = Value{},
+    ArrayRef<Value> elementOffsets = {}, ArrayRef<Value> elementSizes = {}) {
   return arts::DbAcquireOp::create(
       builder, loc, mode, alloc.getGuid(), alloc.getPtr(), partitionMode,
       /*indices=*/SmallVector<Value>{},
@@ -2380,19 +2398,22 @@ materializeBridgeAcquire(OpBuilder &builder, Location loc,
       /*partitionIndices=*/SmallVector<Value>{},
       /*partitionOffsets=*/SmallVector<Value>{},
       /*partitionSizes=*/SmallVector<Value>{}, boundsValid,
-      /*elementOffsets=*/SmallVector<Value>{},
-      /*elementSizes=*/SmallVector<Value>{});
+      /*elementOffsets=*/
+      SmallVector<Value>(elementOffsets.begin(), elementOffsets.end()),
+      /*elementSizes=*/
+      SmallVector<Value>(elementSizes.begin(), elementSizes.end()));
 }
 
-static inline arts::DbAcquireOp
-materializeBridgeAcquire(OpBuilder &builder, Location loc,
-                         arts::DbAllocOp alloc, arts::ArtsMode mode,
-                         arts::PartitionMode partitionMode, Value offset,
-                         Value size, Value boundsValid = Value{}) {
+static inline arts::DbAcquireOp materializeBridgeAcquire(
+    OpBuilder &builder, Location loc, arts::DbAllocOp alloc,
+    arts::ArtsMode mode, arts::PartitionMode partitionMode, Value offset,
+    Value size, Value boundsValid = Value{},
+    ArrayRef<Value> elementOffsets = {}, ArrayRef<Value> elementSizes = {}) {
   SmallVector<Value, 1> offsets{offset};
   SmallVector<Value, 1> sizes{size};
   return materializeBridgeAcquire(builder, loc, alloc, mode, partitionMode,
-                                  offsets, sizes, boundsValid);
+                                  offsets, sizes, boundsValid, elementOffsets,
+                                  elementSizes);
 }
 
 static inline Value materializeProduct(OpBuilder &builder, Location loc,
@@ -2581,8 +2602,9 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
 
   arts::ArtsLaunchPolicy launch;
   if (copyIntoBlock)
-    launch = arts::resolveArtsOrdinalLaunchPolicy(
-        blockAlloc->getParentOfType<ModuleOp>(), blockBase, builder, loc);
+    launch = resolveBridgeBlockOrdinalLaunchPolicy(
+        blockAlloc->getParentOfType<ModuleOp>(), bridgePlan, blockAlloc,
+        blockBase, builder, loc);
   else if (gatherAcrossNodes)
     launch = arts::resolveArtsOrdinalLaunchPolicy(
         blockAlloc->getParentOfType<ModuleOp>(), gatherNodeOrdinal, builder,
@@ -2765,6 +2787,64 @@ static inline int64_t getStaticBlockPayloadBytes(arts::DbAllocOp blockAlloc) {
   return bytes;
 }
 
+static inline int64_t getStaticHaloPayloadBytes(const BridgePlan &plan,
+                                                arts::DbAllocOp blockAlloc) {
+  if (!plan.seedCodelet || !blockAlloc)
+    return 0;
+  int64_t bytes = getScalarElementBytes(blockAlloc.getElementType());
+  if (bytes <= 0)
+    return 0;
+
+  unsigned rank = static_cast<unsigned>(blockAlloc.getElementSizes().size());
+  if (rank == 0)
+    return 0;
+  SmallVector<CodirOwnerHaloWindow, 4> ownerHalos =
+      getCodirBlockStorageHaloWindows(plan.seedCodelet, plan.seedDepIndex,
+                                      rank);
+  std::optional<SmallVector<int64_t, 4>> ownerBlockSizes =
+      getCodirTileOwnerBlockSizes(plan.seedCodelet, plan.seedDepIndex, rank);
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(plan.seedCodelet, plan.seedDepIndex);
+  if (!ownerBlockSizes || !ownerDims ||
+      ownerBlockSizes->size() != ownerHalos.size() ||
+      ownerDims->size() != ownerHalos.size())
+    return 0;
+
+  int64_t haloBytes = 0;
+  for (auto [slot, halo] : llvm::enumerate(ownerHalos)) {
+    int64_t width = halo.lower + halo.upper;
+    if (width <= 0)
+      continue;
+    int64_t faceElements = width;
+    for (auto [otherSlot, otherHalo] : llvm::enumerate(ownerHalos)) {
+      (void)otherHalo;
+      if (otherSlot == slot)
+        continue;
+      if ((*ownerBlockSizes)[otherSlot] <= 0)
+        return 0;
+      faceElements = saturatingMul(faceElements, (*ownerBlockSizes)[otherSlot]);
+    }
+    int64_t faceBytes = saturatingMul(faceElements, bytes);
+    if (haloBytes > std::numeric_limits<int64_t>::max() - faceBytes)
+      haloBytes = std::numeric_limits<int64_t>::max();
+    else
+      haloBytes += faceBytes;
+  }
+  return haloBytes;
+}
+
+static inline int64_t
+getBridgeWorkloadPayloadBytes(const BridgePlan &plan,
+                              const BridgeWorkloadEvidence &evidence,
+                              arts::DbAllocOp blockAlloc) {
+  if (evidence.workloadKind == BridgeWorkloadKind::halo) {
+    int64_t haloBytes = getStaticHaloPayloadBytes(plan, blockAlloc);
+    if (haloBytes > 0)
+      return haloBytes;
+  }
+  return getStaticBlockPayloadBytes(blockAlloc);
+}
+
 static inline std::optional<int64_t> readPositiveI64(DictionaryAttr dict,
                                                      StringRef key) {
   if (!dict)
@@ -2903,6 +2983,76 @@ static inline int64_t getStaticFlatBlockCount(arts::DbAllocOp blockAlloc) {
   return count;
 }
 
+static inline SmallVector<int64_t, 4>
+getStaticRowMajorBlockStrides(arts::DbAllocOp blockAlloc) {
+  SmallVector<int64_t, 4> strides;
+  if (!blockAlloc)
+    return strides;
+  strides.assign(blockAlloc.getSizes().size(), 0);
+  int64_t stride = 1;
+  for (int64_t dim = static_cast<int64_t>(blockAlloc.getSizes().size()) - 1;
+       dim >= 0; --dim) {
+    strides[dim] = stride;
+    std::optional<int64_t> size =
+        getPositiveStaticIndex(blockAlloc.getSizes()[dim]);
+    if (!size) {
+      strides.clear();
+      return strides;
+    }
+    stride = saturatingMul(stride, *size);
+  }
+  return strides;
+}
+
+static inline bool
+isStaticContiguousElementSlice(ArrayRef<int64_t> offsets,
+                               ArrayRef<int64_t> sizes,
+                               ArrayRef<int64_t> elementSizes) {
+  if (offsets.size() != sizes.size() || offsets.size() != elementSizes.size() ||
+      offsets.empty())
+    return false;
+
+  bool narrowerThanBlock = false;
+  for (auto [offset, size, extent] :
+       llvm::zip_equal(offsets, sizes, elementSizes)) {
+    if (extent <= 0 || size <= 0 || offset < 0 || offset + size > extent)
+      return false;
+    narrowerThanBlock |= offset != 0 || size != extent;
+  }
+  if (!narrowerThanBlock)
+    return false;
+
+  for (size_t pivot = 0; pivot < sizes.size(); ++pivot) {
+    bool contiguous = true;
+    for (size_t dim = 0; dim < sizes.size(); ++dim) {
+      if (dim < pivot) {
+        contiguous &= sizes[dim] == 1;
+        continue;
+      }
+      if (dim > pivot)
+        contiguous &= offsets[dim] == 0 && sizes[dim] == elementSizes[dim];
+    }
+    if (contiguous)
+      return true;
+  }
+  return false;
+}
+
+static inline std::optional<SmallVector<int64_t, 4>>
+getStaticElementSizes(arts::DbAllocOp blockAlloc) {
+  if (!blockAlloc)
+    return std::nullopt;
+  SmallVector<int64_t, 4> elementSizes;
+  elementSizes.reserve(blockAlloc.getElementSizes().size());
+  for (Value size : blockAlloc.getElementSizes()) {
+    std::optional<int64_t> constant = getPositiveStaticIndex(size);
+    if (!constant)
+      return std::nullopt;
+    elementSizes.push_back(*constant);
+  }
+  return elementSizes;
+}
+
 static inline BridgeOwnerMap buildBridgeOwnerMap(codir::CodeletOp codelet,
                                                  unsigned depIndex,
                                                  arts::DbAllocOp blockAlloc) {
@@ -2911,6 +3061,16 @@ static inline BridgeOwnerMap buildBridgeOwnerMap(codir::CodeletOp codelet,
           getCodirDepOwnerDims(codelet, depIndex))
     ownerMap.ownerDims.assign(ownerDims->begin(), ownerDims->end());
   if (blockAlloc) {
+    if (std::optional<arts::DbOwnerMapPlan> plan =
+            arts::getDbOwnerMapPlan(blockAlloc)) {
+      ownerMap.ownerMapKind = plan->kind;
+      ownerMap.ownerMapDims.assign(plan->dims.begin(), plan->dims.end());
+    } else {
+      ownerMap.ownerMapKind = arts::chooseDbOwnerMapKind(blockAlloc);
+      if (std::optional<SmallVector<int64_t, 4>> dims =
+              arts::getDbOwnerMapDimsFromPlan(blockAlloc))
+        ownerMap.ownerMapDims.assign(dims->begin(), dims->end());
+    }
     if (auto blockShape = readI64ArrayAttr(
             arts::getPlanPhysicalBlockShapeAttr(blockAlloc.getOperation())))
       ownerMap.physicalBlockShape.assign(blockShape->begin(),
@@ -3055,6 +3215,64 @@ getBridgeWorkloadRoutingMode(const BridgePlan &plan,
   return plan.routingMode;
 }
 
+static inline bool
+bridgeOwnerMapUsesContiguousRowMajorDbSpace(const BridgePlan &plan,
+                                            arts::DbAllocOp blockAlloc) {
+  if (!blockAlloc || !plan.ownerMap.ownerMapKind ||
+      *plan.ownerMap.ownerMapKind != arts::DbOwnerMapKind::owner_dim_contiguous)
+    return false;
+  unsigned dbRank = blockAlloc.getSizes().size();
+  if (dbRank == 0 || plan.ownerMap.ownerMapDims.size() != dbRank)
+    return false;
+  for (auto [index, dim] : llvm::enumerate(plan.ownerMap.ownerMapDims))
+    if (dim != static_cast<int64_t>(index))
+      return false;
+  return true;
+}
+
+static inline std::optional<int64_t>
+getContiguousOwnerRouteSpan(const BridgePlan &plan, arts::DbAllocOp blockAlloc,
+                            int64_t blockCount) {
+  if (!blockAlloc || blockCount <= 0)
+    return std::nullopt;
+  if (!plan.hasInterNodeRuntime)
+    return blockCount;
+  if (!bridgeOwnerMapUsesContiguousRowMajorDbSpace(plan, blockAlloc))
+    return std::nullopt;
+
+  ModuleOp module = blockAlloc->getParentOfType<ModuleOp>();
+  std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
+  if (!totalNodes || *totalNodes <= 1)
+    return blockCount;
+  if (blockCount % *totalNodes != 0)
+    return std::nullopt;
+  return blockCount / *totalNodes;
+}
+
+static inline bool bridgeBlockOrdinalCanGroupAdjacentBlocks(
+    const BridgePlan &plan, arts::DbAllocOp blockAlloc, int64_t blockCount) {
+  if (!blockAlloc || blockCount <= 1)
+    return false;
+  if (!plan.hasInterNodeRuntime)
+    return true;
+  return getContiguousOwnerRouteSpan(plan, blockAlloc, blockCount).has_value();
+}
+
+static inline bool
+bridgeGroupPreservesBlockOrdinalRoute(const BridgePlan &plan,
+                                      arts::DbAllocOp blockAlloc,
+                                      int64_t blockCount, int64_t groupSize) {
+  if (groupSize <= 1)
+    return true;
+  if (!blockAlloc || blockCount <= 1)
+    return false;
+  if (!plan.hasInterNodeRuntime)
+    return blockCount % groupSize == 0;
+  std::optional<int64_t> routeSpan =
+      getContiguousOwnerRouteSpan(plan, blockAlloc, blockCount);
+  return routeSpan && *routeSpan > 0 && *routeSpan % groupSize == 0;
+}
+
 static inline BridgeWorkloadEvidence
 buildBridgeWorkloadEvidence(const BridgePlan &plan,
                             BridgeWorkloadKind workloadKind,
@@ -3088,16 +3306,21 @@ buildBridgeWorkloadEvidence(const BridgePlan &plan,
 
   // Grouping is only a launch-shaping decision: each lane keeps its own block
   // DB acquire, so per-block DB grain and single-writer evidence remain intact.
-  // Avoid grouping block-ordinal work because adjacent blocks may have
-  // different owner routes.
+  // Block-ordinal work may group only when committed owner-map facts prove
+  // adjacent block ordinals stay inside one contiguous owner-route range.
   bool reductionSettleLike =
       workloadKind == BridgeWorkloadKind::summing_settle &&
       evidence.readOnlySource && evidence.preservesPerBlockDbGrain;
+  arts::DbAllocOp blockAlloc = getBridgePlanSizingAlloc(plan, workloadKind);
+  int64_t blockCount = blockAlloc ? getStaticFlatBlockCount(blockAlloc) : 0;
+  bool blockOrdinalGroupable =
+      evidence.routingMode != BridgeRoutingMode::block_ordinal ||
+      bridgeBlockOrdinalCanGroupAdjacentBlocks(plan, blockAlloc, blockCount);
   evidence.mayGroupAdjacentBlocks =
-      ((evidence.copyLike && evidence.readOnlySource &&
-        evidence.preservesPerBlockDbGrain) ||
+      (((evidence.copyLike || evidence.haloExchange) &&
+        evidence.readOnlySource && evidence.preservesPerBlockDbGrain) ||
        reductionSettleLike) &&
-      evidence.routingMode != BridgeRoutingMode::block_ordinal;
+      blockOrdinalGroupable;
   return evidence;
 }
 
@@ -3112,12 +3335,12 @@ chooseBridgeGroupSize(const BridgePlan &plan,
 
   arts::DbAllocOp blockAlloc =
       getBridgePlanSizingAlloc(plan, evidence.workloadKind);
-  if (!blockAlloc || blockAlloc.getSizes().size() != 1)
+  if (!blockAlloc)
     return 1;
-  std::optional<int64_t> blockCount =
-      getPositiveStaticIndex(blockAlloc.getSizes().front());
-  if (!blockCount || *blockCount <= 1)
+  int64_t flatBlockCount = getStaticFlatBlockCount(blockAlloc);
+  if (flatBlockCount <= 1)
     return 1;
+  std::optional<int64_t> blockCount = flatBlockCount;
   if (evidence.workloadKind == BridgeWorkloadKind::summing_settle) {
     if (plan.tileCount <= 1 ||
         *blockCount % static_cast<int64_t>(plan.tileCount) != 0)
@@ -3127,7 +3350,8 @@ chooseBridgeGroupSize(const BridgePlan &plan,
       return 1;
   }
 
-  int64_t blockBytes = getStaticBlockPayloadBytes(blockAlloc);
+  int64_t blockBytes =
+      getBridgeWorkloadPayloadBytes(plan, evidence, blockAlloc);
   if (blockBytes <= 0 || blockBytes >= kTargetBridgeTaskBytes)
     return 1;
 
@@ -3161,7 +3385,10 @@ chooseBridgeGroupSize(const BridgePlan &plan,
     desired = std::min<int64_t>(desired, authoredGroupSize);
 
   for (int64_t group = desired; group > 1; --group)
-    if (*blockCount % group == 0)
+    if (*blockCount % group == 0 &&
+        (evidence.routingMode != BridgeRoutingMode::block_ordinal ||
+         bridgeGroupPreservesBlockOrdinalRoute(plan, blockAlloc, *blockCount,
+                                               group)))
       return group;
   return 1;
 }
@@ -3176,6 +3403,39 @@ planBridgeWorkGroups(const BridgePlan &plan, BridgeWorkloadKind workloadKind,
     groupPlan.staticBlockCount = getStaticFlatBlockCount(blockAlloc);
   groupPlan.groupSize = chooseBridgeGroupSize(plan, groupPlan.evidence);
   return groupPlan;
+}
+
+static inline arts::ArtsLaunchPolicy resolveBridgeBlockOrdinalLaunchPolicy(
+    ModuleOp module, const BridgePlan *plan, arts::DbAllocOp blockAlloc,
+    Value blockOrdinal, OpBuilder &builder, Location loc) {
+  arts::ArtsLaunchPolicy policy;
+  if (!module || !arts::hasArtsInterNodeRuntime(module) || !blockOrdinal)
+    return policy;
+
+  if (plan && blockAlloc && plan->ownerMap.ownerMapKind &&
+      !plan->ownerMap.ownerMapDims.empty()) {
+    arts::DbOwnerMapPlan ownerPlan;
+    ownerPlan.kind = *plan->ownerMap.ownerMapKind;
+    ownerPlan.dims.assign(plan->ownerMap.ownerMapDims.begin(),
+                          plan->ownerMap.ownerMapDims.end());
+    ownerPlan.blockShape.assign(plan->ownerMap.physicalBlockShape.begin(),
+                                plan->ownerMap.physicalBlockShape.end());
+    SmallVector<Value, 4> dbSizes(blockAlloc.getSizes().begin(),
+                                  blockAlloc.getSizes().end());
+    Value totalNodes = arts::RuntimeQueryOp::create(
+                           builder, loc, arts::RuntimeQueryKind::totalNodes)
+                           .getResult();
+    Value ownerRoute = arts::createDbOwnerRouteForLinearIndex(
+        builder, loc, dbSizes, blockOrdinal, totalNodes, ownerPlan);
+    if (ownerRoute) {
+      policy.concurrency = arts::EdtConcurrency::internode;
+      policy.route = ownerRoute;
+      return policy;
+    }
+  }
+
+  return arts::resolveArtsOrdinalLaunchPolicy(module, blockOrdinal, builder,
+                                              loc);
 }
 
 /// Per-block single-writer all-gather substrate. Each gathered block is a
@@ -3509,7 +3769,8 @@ preparePerBlockSingleWriterStencilDb(arts::DbAllocOp blockAlloc) {
 
 static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
     OpBuilder &builder, Location loc, arts::DbAllocOp blockAlloc,
-    codir::CodeletOp codelet, unsigned depIndex, ValueRange phaseTokens = {}) {
+    codir::CodeletOp codelet, unsigned depIndex, ValueRange phaseTokens = {},
+    const BridgePlan *bridgePlan = nullptr) {
   if (failed(preparePerBlockSingleWriterStencilDb(blockAlloc)))
     return failure();
   ModuleOp module = blockAlloc->getParentOfType<ModuleOp>();
@@ -3537,75 +3798,188 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
   if (ownerHalos.size() != ownerDims->size())
     return failure();
 
-  auto blockLoop = scf::ForOp::create(builder, loc, zero, blockCount, one);
-  builder.setInsertionPointToStart(blockLoop.getBody());
-  Value blockOrdinal = blockLoop.getInductionVar();
-  SmallVector<Value> blockCoords = materializeRowMajorCoordinates(
-      builder, loc, blockOrdinal, blockAlloc.getSizes());
-  SmallVector<Value> blockWindowSizes(blockCoords.size(), one);
+  BridgeWorkGroupPlan groupPlan;
+  if (bridgePlan)
+    groupPlan = planBridgeWorkGroups(*bridgePlan, BridgeWorkloadKind::halo);
+  int64_t blockGroupSize = std::max<int64_t>(1, groupPlan.groupSize);
+  Value blockStep = createConstantIndex(builder, loc, blockGroupSize);
 
-  auto dstAcquire = materializeBridgeAcquire(
-      builder, loc, blockAlloc, arts::ArtsMode::out, arts::PartitionMode::block,
-      blockCoords, blockWindowSizes);
-  dstAcquire.setPreserveAccessMode();
-  SmallVector<Value> deps{dstAcquire.getPtr()};
+  auto blockLoop =
+      scf::ForOp::create(builder, loc, zero, blockCount, blockStep);
+  builder.setInsertionPointToStart(blockLoop.getBody());
+  Value blockBase = blockLoop.getInductionVar();
   struct HaloCopyAction {
+    unsigned dstArg = 0;
     unsigned depArg = 0;
     unsigned ownerSlot = 0;
     bool lower = true;
     int64_t width = 0;
     unsigned conditionParam = 0;
+    bool compactSource = false;
+  };
+  struct HaloLanePlan {
+    SmallVector<Value, 4> blockCoords;
+    SmallVector<Value, 4> blockWindowSizes;
+    unsigned dstArg = 0;
+  };
+  struct HaloSlicePlan {
+    SmallVector<Value, 4> elementOffsets;
+    SmallVector<Value, 4> elementSizes;
+    bool compact = false;
   };
   SmallVector<HaloCopyAction, 8> copyActions;
   SmallVector<Value, 8> actionConditions;
-  for (auto [slot, coord] : llvm::enumerate(blockCoords)) {
-    CodirOwnerHaloWindow halo = ownerHalos[slot];
-    Value lastCoord =
-        arith::SubIOp::create(builder, loc, blockAlloc.getSizes()[slot], one);
-    Value lowerRaw = arith::SubIOp::create(builder, loc, coord, one);
-    Value hasLower = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::ugt, coord, zero);
-    Value lowerCoord =
-        arith::SelectOp::create(builder, loc, hasLower, lowerRaw, zero);
-    Value upperRaw = arith::AddIOp::create(builder, loc, coord, one);
-    Value hasUpper = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::ult, coord, lastCoord);
-    Value upperCoord =
-        arith::MinUIOp::create(builder, loc, upperRaw, lastCoord);
-
-    SmallVector<Value> lowerCoords(blockCoords.begin(), blockCoords.end());
-    SmallVector<Value> upperCoords(blockCoords.begin(), blockCoords.end());
-    lowerCoords[slot] = lowerCoord;
-    upperCoords[slot] = upperCoord;
-    if (halo.lower > 0) {
-      auto lowerAcquire = materializeBridgeAcquire(
-          builder, loc, blockAlloc, arts::ArtsMode::in,
-          arts::PartitionMode::block, lowerCoords, blockWindowSizes, hasLower);
-      unsigned conditionParam = actionConditions.size();
-      actionConditions.push_back(hasLower);
-      copyActions.push_back({static_cast<unsigned>(deps.size()),
-                             static_cast<unsigned>(slot), true, halo.lower,
-                             conditionParam});
-      deps.push_back(lowerAcquire.getPtr());
+  SmallVector<Value> deps;
+  deps.reserve(static_cast<size_t>(blockGroupSize) *
+               (1 + ownerHalos.size() * 2));
+  SmallVector<HaloLanePlan, 8> lanes;
+  lanes.reserve(static_cast<size_t>(blockGroupSize));
+  SmallVector<int64_t, 4> blockStrides =
+      getStaticRowMajorBlockStrides(blockAlloc);
+  for (int64_t lane = 0; lane < blockGroupSize; ++lane) {
+    Value blockOrdinal = blockBase;
+    if (lane != 0) {
+      Value laneValue = createConstantIndex(builder, loc, lane);
+      blockOrdinal = arith::AddIOp::create(builder, loc, blockBase, laneValue);
     }
-    if (halo.upper > 0) {
-      auto upperAcquire = materializeBridgeAcquire(
-          builder, loc, blockAlloc, arts::ArtsMode::in,
-          arts::PartitionMode::block, upperCoords, blockWindowSizes, hasUpper);
-      unsigned conditionParam = actionConditions.size();
-      actionConditions.push_back(hasUpper);
-      copyActions.push_back({static_cast<unsigned>(deps.size()),
-                             static_cast<unsigned>(slot), false, halo.upper,
-                             conditionParam});
-      deps.push_back(upperAcquire.getPtr());
+    SmallVector<Value> blockCoords = materializeRowMajorCoordinates(
+        builder, loc, blockOrdinal, blockAlloc.getSizes());
+    SmallVector<Value> blockWindowSizes(blockCoords.size(), one);
+
+    auto dstAcquire = materializeBridgeAcquire(
+        builder, loc, blockAlloc, arts::ArtsMode::out,
+        arts::PartitionMode::block, blockCoords, blockWindowSizes);
+    dstAcquire.setPreserveAccessMode();
+    unsigned dstArg = static_cast<unsigned>(deps.size());
+    deps.push_back(dstAcquire.getPtr());
+
+    lanes.push_back(
+        {std::move(blockCoords), std::move(blockWindowSizes), dstArg});
+  }
+
+  auto getInGroupSourceArg = [&](int64_t lane, unsigned slot,
+                                 bool lower) -> std::optional<unsigned> {
+    if (blockGroupSize <= 1 || slot >= blockStrides.size())
+      return std::nullopt;
+    int64_t stride = blockStrides[slot];
+    if (stride <= 0)
+      return std::nullopt;
+    int64_t sourceLane = lower ? lane - stride : lane + stride;
+    if (sourceLane < 0 || sourceLane >= static_cast<int64_t>(lanes.size()))
+      return std::nullopt;
+    return lanes[static_cast<size_t>(sourceLane)].dstArg;
+  };
+  std::optional<SmallVector<int64_t, 4>> staticElementSizes =
+      getStaticElementSizes(blockAlloc);
+  auto buildSourceSlicePlan = [&](unsigned actionSlot, bool lower,
+                                  int64_t width) {
+    HaloSlicePlan slice;
+    if (!staticElementSizes)
+      return slice;
+    SmallVector<int64_t, 4> staticOffsets(staticElementSizes->size(), 0);
+    SmallVector<int64_t, 4> staticSizes(staticElementSizes->begin(),
+                                        staticElementSizes->end());
+    for (auto [slot, halo] : llvm::enumerate(ownerHalos)) {
+      unsigned ownerDim = (*ownerDims)[slot];
+      if (ownerDim >= staticSizes.size())
+        return HaloSlicePlan{};
+      int64_t blockSize = (*ownerBlockSizes)[slot];
+      if (slot == actionSlot) {
+        staticSizes[ownerDim] = width;
+        staticOffsets[ownerDim] =
+            lower ? halo.lower + blockSize - width : halo.lower;
+      } else {
+        staticSizes[ownerDim] = blockSize;
+        staticOffsets[ownerDim] = halo.lower;
+      }
+    }
+    if (!isStaticContiguousElementSlice(staticOffsets, staticSizes,
+                                        *staticElementSizes))
+      return slice;
+    slice.compact = true;
+    slice.elementOffsets.reserve(staticOffsets.size());
+    slice.elementSizes.reserve(staticSizes.size());
+    for (int64_t offset : staticOffsets)
+      slice.elementOffsets.push_back(createConstantIndex(builder, loc, offset));
+    for (int64_t size : staticSizes)
+      slice.elementSizes.push_back(createConstantIndex(builder, loc, size));
+    return slice;
+  };
+
+  for (auto [lane, lanePlan] : llvm::enumerate(lanes)) {
+    for (auto [slot, coord] : llvm::enumerate(lanePlan.blockCoords)) {
+      CodirOwnerHaloWindow halo = ownerHalos[slot];
+      Value lastCoord =
+          arith::SubIOp::create(builder, loc, blockAlloc.getSizes()[slot], one);
+      Value lowerRaw = arith::SubIOp::create(builder, loc, coord, one);
+      Value hasLower = arith::CmpIOp::create(
+          builder, loc, arith::CmpIPredicate::ugt, coord, zero);
+      Value lowerCoord =
+          arith::SelectOp::create(builder, loc, hasLower, lowerRaw, zero);
+      Value upperRaw = arith::AddIOp::create(builder, loc, coord, one);
+      Value hasUpper = arith::CmpIOp::create(
+          builder, loc, arith::CmpIPredicate::ult, coord, lastCoord);
+      Value upperCoord =
+          arith::MinUIOp::create(builder, loc, upperRaw, lastCoord);
+
+      SmallVector<Value> lowerCoords(lanePlan.blockCoords.begin(),
+                                     lanePlan.blockCoords.end());
+      SmallVector<Value> upperCoords(lanePlan.blockCoords.begin(),
+                                     lanePlan.blockCoords.end());
+      lowerCoords[slot] = lowerCoord;
+      upperCoords[slot] = upperCoord;
+      if (halo.lower > 0) {
+        std::optional<unsigned> sourceArg = getInGroupSourceArg(
+            static_cast<int64_t>(lane), static_cast<unsigned>(slot), true);
+        bool compactSource = false;
+        if (!sourceArg) {
+          HaloSlicePlan sourceSlice = buildSourceSlicePlan(
+              static_cast<unsigned>(slot), true, halo.lower);
+          auto lowerAcquire = materializeBridgeAcquire(
+              builder, loc, blockAlloc, arts::ArtsMode::in,
+              arts::PartitionMode::block, lowerCoords,
+              lanePlan.blockWindowSizes, hasLower, sourceSlice.elementOffsets,
+              sourceSlice.elementSizes);
+          compactSource = sourceSlice.compact;
+          sourceArg = static_cast<unsigned>(deps.size());
+          deps.push_back(lowerAcquire.getPtr());
+        }
+        unsigned conditionParam = actionConditions.size();
+        actionConditions.push_back(hasLower);
+        copyActions.push_back({lanePlan.dstArg, *sourceArg,
+                               static_cast<unsigned>(slot), true, halo.lower,
+                               conditionParam, compactSource});
+      }
+      if (halo.upper > 0) {
+        std::optional<unsigned> sourceArg = getInGroupSourceArg(
+            static_cast<int64_t>(lane), static_cast<unsigned>(slot), false);
+        bool compactSource = false;
+        if (!sourceArg) {
+          HaloSlicePlan sourceSlice = buildSourceSlicePlan(
+              static_cast<unsigned>(slot), false, halo.upper);
+          auto upperAcquire = materializeBridgeAcquire(
+              builder, loc, blockAlloc, arts::ArtsMode::in,
+              arts::PartitionMode::block, upperCoords,
+              lanePlan.blockWindowSizes, hasUpper, sourceSlice.elementOffsets,
+              sourceSlice.elementSizes);
+          compactSource = sourceSlice.compact;
+          sourceArg = static_cast<unsigned>(deps.size());
+          deps.push_back(upperAcquire.getPtr());
+        }
+        unsigned conditionParam = actionConditions.size();
+        actionConditions.push_back(hasUpper);
+        copyActions.push_back({lanePlan.dstArg, *sourceArg,
+                               static_cast<unsigned>(slot), false, halo.upper,
+                               conditionParam, compactSource});
+      }
     }
   }
   SmallVector<Value> params(actionConditions.begin(), actionConditions.end());
   params.append(blockElementSizes.begin(), blockElementSizes.end());
   params.append(phaseTokens.begin(), phaseTokens.end());
 
-  arts::ArtsLaunchPolicy launch =
-      arts::resolveArtsOrdinalLaunchPolicy(module, blockOrdinal, builder, loc);
+  arts::ArtsLaunchPolicy launch = resolveBridgeBlockOrdinalLaunchPolicy(
+      module, bridgePlan, blockAlloc, blockBase, builder, loc);
   Value taskRoute =
       launch.route ? launch.route : arts::createCurrentNodeRoute(builder, loc);
   auto haloTask =
@@ -3621,8 +3995,6 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
   {
     OpBuilder::InsertionGuard bodyGuard(builder);
     builder.setInsertionPointToStart(&body);
-    Value dstPayload =
-        materializeInnerPayload(builder, loc, body.getArgument(0));
     SmallVector<Value> bodyCopySizes;
     bodyCopySizes.reserve(blockElementSizes.size());
     unsigned sizeParamBase =
@@ -3635,6 +4007,8 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
                                       /*withElseRegion=*/false);
       OpBuilder::InsertionGuard ifGuard(builder);
       builder.setInsertionPointToStart(&copyIf.getThenRegion().front());
+      Value dstPayload = materializeInnerPayload(
+          builder, loc, body.getArgument(action.dstArg));
       Value srcPayload = materializeInnerPayload(
           builder, loc, body.getArgument(action.depArg));
       SmallVector<Value> copySizes(bodyCopySizes.begin(), bodyCopySizes.end());
@@ -3653,12 +4027,14 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
           int64_t srcStart =
               action.lower ? halo.lower + blockSize - action.width : halo.lower;
           int64_t dstStart = action.lower ? 0 : halo.lower + blockSize;
-          srcOffsets[ownerDim] = createConstantIndex(builder, loc, srcStart);
+          if (!action.compactSource)
+            srcOffsets[ownerDim] = createConstantIndex(builder, loc, srcStart);
           dstOffsets[ownerDim] = createConstantIndex(builder, loc, dstStart);
         } else {
           copySizes[ownerDim] = blockSizeValue;
           Value haloLower = createConstantIndex(builder, loc, halo.lower);
-          srcOffsets[ownerDim] = haloLower;
+          if (!action.compactSource)
+            srcOffsets[ownerDim] = haloLower;
           dstOffsets[ownerDim] = haloLower;
         }
       }
@@ -3727,7 +4103,8 @@ isHaloReadParticipant(const HostBridgeParticipant &participant) {
 
 static inline LogicalResult emitPerBlockStencilHaloBeforeReadPhases(
     OpBuilder &builder, Location loc, arts::DbAllocOp blockAlloc,
-    ArrayRef<HostBridgeParticipant> participants) {
+    ArrayRef<HostBridgeParticipant> participants,
+    const BridgePlan *bridgePlan = nullptr) {
   SmallVector<Operation *, 4> emittedAnchors;
   for (const HostBridgeParticipant &participant : participants) {
     if (!isHaloReadParticipant(participant))
@@ -3745,7 +4122,7 @@ static inline LogicalResult emitPerBlockStencilHaloBeforeReadPhases(
         collectEnclosingControlTokens(dispatchAnchor);
     if (failed(emitPerBlockSingleWriterStencilDb(
             builder, loc, blockAlloc, participant.codelet, participant.depIndex,
-            phaseTokens)))
+            phaseTokens, bridgePlan)))
       return failure();
   }
   return success();
@@ -3929,7 +4306,7 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
       if (failed(preparePerBlockSingleWriterStencilDb(blockAlloc)))
         return failure();
       if (failed(emitPerBlockStencilHaloBeforeReadPhases(
-              builder, loc, blockAlloc, participants)))
+              builder, loc, blockAlloc, participants, &bridgePlan)))
         return failure();
     }
   }
@@ -3958,9 +4335,13 @@ materializeExistingDbHostBridgeIfNeeded(codir::CodeletOp codelet,
   bool needsBridgeForRootHaloParticipant =
       codirDepRequiresComputeBlockStorage(codelet, depIndex) &&
       codirRootHasHaloStencilStorageParticipant(codelet, depIndex);
+  bool needsBridgeForCommittedComputeBlock =
+      codirDepRequiresComputeBlockStorage(codelet, depIndex) &&
+      !canUseCodirOwnerSliceForAlloc(codelet, depIndex, hostAlloc);
   if (!codirDepRequiresPhaseRedistributionBridge(codelet, depIndex) &&
       !codirDepUsesHaloStencilStorage(codelet, depIndex) &&
-      !needsBridgeForRootHaloParticipant)
+      !needsBridgeForRootHaloParticipant &&
+      !needsBridgeForCommittedComputeBlock)
     return success();
   if (failed(requireFinalizedCodirDepOwnerDimsForMaterialization(codelet,
                                                                  depIndex)))

@@ -159,7 +159,7 @@ Before editing CARTS sources, scan the Skills inventory below and read the SKILL
 
 | Skill | Description | Path |
 | --- | --- | --- |
-| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, state/dependency/effect value optimization, hypergraph planning, DB/CU grain, distributed DBs, RDMA scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
+| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, RDMA scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
 | `carts-worktrees` | Use when working on multiple CARTS/ARTS changes in parallel, isolating a risky compiler/runtime change, or running concurrent builds/benchmarks without clobbering the main checkout. Covers the carts-wt tool and the shared-LLVM/Polygeist worktree model. | `carts-plugin/skills/carts-worktrees/SKILL.md` |
 
 <!-- END SKILLS INVENTORY -->

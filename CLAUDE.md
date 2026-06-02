@@ -44,7 +44,8 @@ CARTS is migrating toward four project dialect layers:
 - SDE (`sde`) - HPF-style `DISTRIBUTE`/`ALIGN`: source semantics, per-array
   block layouts from affine access relations, abstract communication-volume
   cost, PatternAnalysis, and real source/SU/CU/MU loop/layout transformations.
-  It names no collectives, DBs, EDTs, routes, GUIDs, or runtime policy.
+  It names no collectives, DBs, EDTs, owner maps, routes, GUIDs, or runtime
+  policy.
 - CODIR (`codir`) - isolated codelets, explicit deps/params, token-local
   memref views, first-class MPI distribution patterns, collective/bridge
   selection from SDE layout mismatch plus compute pattern, and materialized
@@ -77,8 +78,12 @@ skills disagree with the compiler, the live compiler manifest wins.
 - Keep DB grain separate from CU/bridge grain. Production distributed shape is a
   two-level graph: MU/DB blocks fine enough for single-writer concurrency, plus
   grouped compute/bridge/communication CUs for read-only or copy-like edges.
+- Value optimization spans state, dependencies, effects, compute, memory, and
+  sync. Optimize by changing real IR shape in the owning layer, not by stamping
+  a promise for ARTS-RT or the runtime to reinterpret later.
 - Use hypergraph partitioning as CU grouping/partition evidence over committed
-  MU facts, not as benchmark-specific owner-dim or storage-grain repair.
+  MU facts, not as benchmark-specific owner-dim, owner-map, or storage-grain
+  repair.
 - Passes, operations, attributes, and dialect-owned IR metadata must be
   declared through the owning TableGen/ODS files first. C++ code should consume
   generated declarations/accessors instead of adding manual pass/attribute
@@ -181,7 +186,7 @@ Match verification to the change:
 
 | Skill | Description | Path |
 | --- | --- | --- |
-| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, state/dependency/effect value optimization, hypergraph planning, DB/CU grain, distributed DBs, RDMA scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
+| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, RDMA scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
 | `carts-worktrees` | Use when working on multiple CARTS/ARTS changes in parallel, isolating a risky compiler/runtime change, or running concurrent builds/benchmarks without clobbering the main checkout. Covers the carts-wt tool and the shared-LLVM/Polygeist worktree model. | `carts-plugin/skills/carts-worktrees/SKILL.md` |
 
 <!-- END SKILLS INVENTORY -->

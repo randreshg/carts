@@ -735,9 +735,8 @@ static bool shouldDemoteStencilWriteToComputeBlock(codir::CodeletOp codelet,
 /// Stencil reads on patterns that have writers in the same time loop
 /// (alternating buffers, wavefront) must stay block-distributed. SDE may stamp
 /// `host_whole` as the initial view; demote it so the resulting DB is
-/// distributed and the existing halo-exchange machinery
-/// (`kArtsDepFlagPreserveShape` + `arts_add_dependence_at_ex`) fires for the
-/// neighbor-tile slices.
+/// distributed and the halo-exchange bridge can commit compact element slices
+/// that ARTS-RT mechanically lowers to sliced read-only dependencies.
 static bool shouldDemoteStencilHaloReadToComputeBlock(codir::CodeletOp codelet,
                                                       unsigned depIndex) {
   if (!isStencilCodelet(codelet) || !hasTileOwnerSlicePlan(codelet))

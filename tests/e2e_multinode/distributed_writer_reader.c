@@ -32,8 +32,9 @@ int main(void) {
 
   long long expected = (long long)n * (n + 1);
   if (checksum != expected) {
-    printf("[CARTS] distributed writer-reader: FAIL checksum=%lld expected=%lld\n",
-           checksum, expected);
+    printf(
+        "[CARTS] distributed writer-reader: FAIL checksum=%lld expected=%lld\n",
+        checksum, expected);
     free(written);
     free(observed);
     return 1;

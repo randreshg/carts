@@ -44,7 +44,8 @@ CARTS is migrating toward four project dialect layers:
 - SDE (`sde`) - HPF-style `DISTRIBUTE`/`ALIGN`: source semantics, per-array
   block layouts from affine access relations, abstract communication-volume
   cost, PatternAnalysis, and real source/SU/CU/MU loop/layout transformations.
-  It names no collectives, DBs, EDTs, routes, GUIDs, or runtime policy.
+  It names no collectives, DBs, EDTs, owner maps, routes, GUIDs, or runtime
+  policy.
 - CODIR (`codir`) - isolated codelets, explicit deps/params, token-local
   memref views, first-class MPI distribution patterns, collective/bridge
   selection from SDE layout mismatch plus compute pattern, and materialized
@@ -77,8 +78,12 @@ skills disagree with the compiler, the live compiler manifest wins.
 - Keep DB grain separate from CU/bridge grain. Production distributed shape is a
   two-level graph: MU/DB blocks fine enough for single-writer concurrency, plus
   grouped compute/bridge/communication CUs for read-only or copy-like edges.
+- Value optimization spans state, dependencies, effects, compute, memory, and
+  sync. Optimize by changing real IR shape in the owning layer, not by stamping
+  a promise for ARTS-RT or the runtime to reinterpret later.
 - Use hypergraph partitioning as CU grouping/partition evidence over committed
-  MU facts, not as benchmark-specific owner-dim or storage-grain repair.
+  MU facts, not as benchmark-specific owner-dim, owner-map, or storage-grain
+  repair.
 - Passes, operations, attributes, and dialect-owned IR metadata must be
   declared through the owning TableGen/ODS files first. C++ code should consume
   generated declarations/accessors instead of adding manual pass/attribute

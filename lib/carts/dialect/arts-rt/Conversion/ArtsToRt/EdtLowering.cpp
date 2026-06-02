@@ -1153,20 +1153,6 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
       byteSize = zeroIdx;
       hasExplicitSlice = false;
     }
-    Operation *patternSource =
-        dbAcquireOp
-            ? dbAcquireOp.getOperation()
-            : (depDbAcquireOp ? depDbAcquireOp.getOperation() : nullptr);
-    if (patternSource && hasExplicitSlice && dbMode == DbMode::read) {
-      if (auto depPattern = getEffectiveDepPattern(patternSource);
-          depPattern && isStencilHaloDepPattern(*depPattern)) {
-        /// Halo-exchange stencil consumers keep full block coordinates in the
-        /// lowered worker body. Mark explicit byte slices as preserve-shape so
-        /// the final lowering can keep them on the whole-block dependency path
-        /// instead of compacting them into a shifted payload.
-        depFlagBits |= kArtsDepFlagPreserveShape;
-      }
-    }
     /// Explicit element slices already encode the producer/consumer contract.
     /// When upstream rewrites localize the consumer to a compact halo view,
     /// forcing "preserve shape" here would discard the byte slice later in
