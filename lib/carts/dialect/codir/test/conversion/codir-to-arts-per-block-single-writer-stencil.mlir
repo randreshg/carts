@@ -14,10 +14,10 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
     scf.for %i = %c0 to %c24 step %c8 {
       codir.codelet deps(%A : memref<24x4xf32>) params(%i : index)
           attributes {dep_modes = [#codir.access_mode<readwrite>],
+                      dep_owner_dims = [[0]],
                       dep_storage_views = [#codir.storage_view<phase_redistributed>],
                       dep_collectives = [#codir.collective<halo>],
                       distribution_kind = #codir.distribution_kind<blocked>,
-                      emit_block_native_stencil,
                       halo_shape = [1, 0],
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [8, 4],
@@ -66,10 +66,10 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
     scf.for %i = %c0 to %c128 step %c8 {
       codir.codelet deps(%A : memref<128x4xf32>) params(%i : index)
           attributes {dep_modes = [#codir.access_mode<readwrite>],
+                      dep_owner_dims = [[0]],
                       dep_storage_views = [#codir.storage_view<phase_redistributed>],
                       dep_collectives = [#codir.collective<halo>],
                       distribution_kind = #codir.distribution_kind<blocked>,
-                      emit_block_native_stencil,
                       halo_shape = [1, 0],
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [8, 4],

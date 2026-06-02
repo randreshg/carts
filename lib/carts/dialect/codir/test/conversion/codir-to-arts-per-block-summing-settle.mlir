@@ -26,7 +26,6 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
                       dep_owner_dims = [[0]],
                       dep_storage_views = [#codir.storage_view<phase_redistributed>],
                       distribution_kind = #codir.distribution_kind<blocked>,
-                      emit_block_native_settle,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
                       logical_worker_slice = [16],
                       partial_reduction_split_factor = 2,

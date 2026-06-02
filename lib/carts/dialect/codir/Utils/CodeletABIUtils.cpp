@@ -305,7 +305,7 @@ static bool isStencilPatternKind(CodeletOp codelet) {
 static bool codeletHasHaloAccessWindow(CodeletOp codelet) {
   if (!codelet)
     return false;
-  auto hasHaloWindow = [](ArrayAttr offsets) {
+  auto hasNonZeroEntry = [](ArrayAttr offsets) {
     if (!offsets)
       return false;
     for (Attribute offset : offsets) {
@@ -315,8 +315,9 @@ static bool codeletHasHaloAccessWindow(CodeletOp codelet) {
     }
     return false;
   };
-  return hasHaloWindow(codelet.getAccessMinOffsetsAttr()) ||
-         hasHaloWindow(codelet.getAccessMaxOffsetsAttr());
+  return hasNonZeroEntry(codelet.getAccessMinOffsetsAttr()) ||
+         hasNonZeroEntry(codelet.getAccessMaxOffsetsAttr()) ||
+         hasNonZeroEntry(codelet.getHaloShapeAttr());
 }
 
 static bool isStencilReadHaloCandidate(CodeletOp codelet) {
@@ -326,8 +327,6 @@ static bool isStencilReadHaloCandidate(CodeletOp codelet) {
 static bool isStencilCollectiveLike(CodeletOp codelet) {
   if (!isStencilPatternKind(codelet))
     return false;
-  if (codelet.getEmitBlockNativeStencilAttr())
-    return true;
   if (codelet.getInPlaceSafeAttr() && codelet.getTileOwnerDimsAttr() &&
       codelet.getTileShapeAttr() && stencilWriteFitsInTile(codelet) &&
       codeletHasHaloAccessWindow(codelet))

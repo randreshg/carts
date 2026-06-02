@@ -1500,10 +1500,26 @@ static inline bool codirDepUsesHaloStencilStorage(codir::CodeletOp codelet,
   if (!codirDepRequiresComputeBlockStorage(codelet, depIndex) ||
       !isCodirStencilPattern(codelet))
     return false;
-  return (getFinalizedCodirDepCollectiveKind(codelet, depIndex) ==
-              codir::CodirCollectiveKind::halo ||
-          codelet.getEmitBlockNativeStencilAttr()) &&
+  return getFinalizedCodirDepCollectiveKind(codelet, depIndex) ==
+             codir::CodirCollectiveKind::halo &&
          codirDepHasHaloWindow(codelet, depIndex);
+}
+
+static inline bool codirDepUsesBlockNativeSettle(codir::CodeletOp codelet,
+                                                 unsigned depIndex) {
+  if (!codelet || depIndex >= codelet.getDeps().size())
+    return false;
+  if (getFinalizedCodirDepCollectiveKind(codelet, depIndex) !=
+      codir::CodirCollectiveKind::reduce_scatter)
+    return false;
+  std::optional<codir::CodirStorageViewKind> view =
+      getCodirDepStorageViewKind(codelet, depIndex);
+  if (!view || *view != codir::CodirStorageViewKind::phase_redistributed)
+    return false;
+  if (!codirDepRequiresComputeBlockStorage(codelet, depIndex))
+    return false;
+  auto factor = codelet.getPartialReductionSplitFactorAttr();
+  return factor && factor.getInt() > 0;
 }
 
 static inline bool
@@ -3356,7 +3372,7 @@ buildBridgePlan(codir::CodeletOp seedCodelet, unsigned seedDepIndex,
 
   if (plan.collectiveKind == codir::CodirCollectiveKind::all_gather ||
       (plan.collectiveKind == codir::CodirCollectiveKind::reduce_scatter &&
-       seedCodelet && seedCodelet.getEmitBlockNativeSettleAttr()))
+       codirDepUsesBlockNativeSettle(seedCodelet, seedDepIndex)))
     plan.replicationPolicy = BridgeReplicationPolicy::replicated_local;
 
   if (plan.collectiveKind == codir::CodirCollectiveKind::all_gather ||
@@ -4405,18 +4421,15 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
       bridgePlanHasCollective(bridgePlan,
                               codir::CodirCollectiveKind::reduce_scatter);
 
-  // Optional block-native summing settle for reduce-scatter/allreduce-shaped
-  // deps. The split factor gives the number of partial blocks to sum.
+  // Block-native summing settle follows from CODIR's committed reduce_scatter
+  // storage transition. The split factor gives the number of partial blocks to
+  // sum.
   bool perBlockSummingSettle =
       bridgePlan.needsCopyOut &&
       llvm::any_of(bridgePlan.participants,
                    [](const HostBridgeParticipant &participant) {
-                     codir::CodeletOp participantCodelet = participant.codelet;
-                     return participantCodelet &&
-                            participantCodelet.getEmitBlockNativeSettleAttr() &&
-                            getFinalizedCodirDepCollectiveKind(
-                                participantCodelet, participant.depIndex) ==
-                                codir::CodirCollectiveKind::reduce_scatter;
+                     return codirDepUsesBlockNativeSettle(participant.codelet,
+                                                          participant.depIndex);
                    });
 
   // Iterative stencil halo uses a distributed per-block DB plus

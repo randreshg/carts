@@ -31,10 +31,6 @@ def CartsCodir_CodeletOp
     // One CODIR collective family per dependency, parallel to
     // `dep_storage_views`.
     OptionalAttr<ArrayAttr>:$dep_collectives,
-    // Opt-in for block-native per-block summing settle.
-    OptionalAttr<UnitAttr>:$emit_block_native_settle,
-    // Opt-in for block-native per-block stencil halo exchange.
-    OptionalAttr<UnitAttr>:$emit_block_native_stencil,
     OptionalAttr<ArrayAttr>:$dep_owner_dims,
     OptionalAttr<UnitAttr>:$task_depend,
     OptionalAttr<UnitAttr>:$ordered_task_depend,
