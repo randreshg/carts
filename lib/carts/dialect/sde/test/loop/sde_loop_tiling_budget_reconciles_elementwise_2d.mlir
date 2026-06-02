@@ -15,7 +15,7 @@
 // CHECK: sde.su_iterate (%c0, %c0) to (%c5120, %c5120) step (%c512{{(_[0-9]+)?}}, %c512{{(_[0-9]+)?}}) classification(<elementwise>) {
 // CHECK: } {
 // CHECK-SAME: iterationTopology = #sde.iteration_topology<owner_tile>
-// CHECK-SAME: logicalWorkerSlice = [512, 512]
+// CHECK-SAME: logicalWorkerSlice = [1024, 512]
 // CHECK-SAME: physicalBlockShape = [512, 512]
 // CHECK-SAME: physicalOwnerDims = [0, 1]
 
@@ -28,7 +28,7 @@
 // CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %c1
 // CHECK: codir.codelet
 // CHECK-SAME: iteration_topology = #codir.iteration_topology<owner_tile>
-// CHECK-SAME: logical_worker_slice = [512, 512]
+// CHECK-SAME: logical_worker_slice = [1024, 512]
 // CHECK-SAME: tile_shape = [512, 512]
 
 module {

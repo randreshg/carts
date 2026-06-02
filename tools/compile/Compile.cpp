@@ -171,17 +171,6 @@ static cl::opt<int64_t> MinDistributedTileBytes(
              "0 disables (default)."),
     cl::init(0));
 
-/// Stencil-specific per-tile byte floor. Mirrors --min-distributed-tile-bytes
-/// but applies only to stencil patterns, which carry perimeter halo overhead
-/// the matmul planner does not pay. The compared metric is
-/// `owned_tile_bytes * expansion_ratio`, where the ratio captures the
-/// per-direction halo footprint.
-static cl::opt<int64_t> MinDistributedStencilTileBytes(
-    "min-distributed-stencil-tile-bytes",
-    cl::desc("Per-EDT stencil tile byte floor (halo-expanded) for SDE "
-             "distribution planning; 0 disables (default)."),
-    cl::init(0));
-
 ///===----------------------------------------------------------------------===///
 /// Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
@@ -1597,8 +1586,6 @@ buildPassManager(ModuleOp module, MLIRContext &context,
 
   if (MinDistributedTileBytes.getNumOccurrences() > 0)
     machine.setMinDistributedTileBytes(MinDistributedTileBytes);
-  if (MinDistributedStencilTileBytes.getNumOccurrences() > 0)
-    machine.setMinDistributedStencilTileBytes(MinDistributedStencilTileBytes);
 
   /// Embed config file contents into the module so generated binaries are
   /// self-contained — no external config file needed at runtime.

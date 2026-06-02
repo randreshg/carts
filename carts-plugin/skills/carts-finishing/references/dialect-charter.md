@@ -95,7 +95,9 @@ tensor/linalg carriers survive the SDE-to-CODIR / CODIR-to-ARTS boundary.
 
 **Owns:** thin 1:1 mapping to ARTS C runtime calls + final low-level passes immediately before LLVM.
 
-- 14 ops mapping directly to runtime: `arts_rt.edt_create`, `record_dep`, `dep_gep`, `state_pack`, `create_epoch`, `wait_on_epoch`, etc.
+- Runtime-shaped ops mapping directly to runtime calls, such as
+  `arts_rt.edt_create`, `record_dep`, `dep_gep`, `db_gep`, `create_epoch`, and
+  `wait_on_epoch`.
 - 4 passes: `DataPtrHoisting`, `GuidRangeCallOpt`, `RuntimeCallOpt`, `VerifyLowered`
 - Pure code-gen intermediates with no semantic meaning of their own
 

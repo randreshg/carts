@@ -589,7 +589,8 @@ struct ConvertCodirToArtsPass
           localAccessRewrites.push_back(
               {payload, ownerDim, ownerBase, ownerHalo.lower,
                taskBlock.getArgument(idx), static_cast<unsigned>(slot),
-               accessPlan.blockSizes[slot], accessPlan.grouped});
+               accessPlan.blockSizes[slot], accessPlan.groupBlockCounts[slot],
+               accessPlan.grouped});
         }
       }
       mapper.map(codeletBlock.getArgument(idx), payload);

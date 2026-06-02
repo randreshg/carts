@@ -105,8 +105,10 @@
 // NODE4: arts.runtime_total_workers = 256
 // NODE4-LABEL: func.func @elementwise_inplace_3d_owner_tile
 // NODE4: codir.codelet
-// NODE4-SAME: logical_worker_slice = [13, 13, 13]
+// NODE4-SAME: logical_worker_slice = [26, 26, 13]
 // NODE4-SAME: partition_graph = [{blockShape = [13, 13, 13]
+// NODE4-SAME: cuGroupCount = 250 : i64
+// NODE4-SAME: cuGroupSize = 4 : i64
 // NODE4-SAME: muBlockCount = 1000 : i64
 // NODE4-SAME: ownerDims = [0, 1, 2]
 // NODE4-SAME: partition_score = {
@@ -116,8 +118,10 @@
 // NODE4-SAME: tile_shape = [13, 13, 13]
 // NODE4-LABEL: func.func @elementwise_inplace_3d_transposed_owner_tile
 // NODE4: codir.codelet
-// NODE4-SAME: logical_worker_slice = [13, 13, 13]
+// NODE4-SAME: logical_worker_slice = [13, 26, 26]
 // NODE4-SAME: partition_graph = [{blockShape = [13, 13, 13]
+// NODE4-SAME: cuGroupCount = 250 : i64
+// NODE4-SAME: cuGroupSize = 4 : i64
 // NODE4-SAME: muBlockCount = 1000 : i64
 // NODE4-SAME: ownerDims = [2, 1, 0]
 // NODE4-SAME: partition_score = {
@@ -127,8 +131,10 @@
 // NODE4-SAME: tile_shape = [13, 13, 13]
 // NODE4-LABEL: func.func @elementwise_outofplace_3d_owner_tile
 // NODE4: codir.codelet
-// NODE4-SAME: logical_worker_slice = [11, 16, 16]
+// NODE4-SAME: logical_worker_slice = [33, 16, 16]
 // NODE4-SAME: partition_graph = [{blockShape = [11, 16, 16]
+// NODE4-SAME: cuGroupCount = 256 : i64
+// NODE4-SAME: cuGroupSize = 3 : i64
 // NODE4-SAME: muBlockCount = 768 : i64
 // NODE4-SAME: ownerDims = [0, 1, 2]
 // NODE4-SAME: partition_score = {
@@ -138,8 +144,10 @@
 // NODE4-SAME: tile_shape = [11, 16, 16]
 // NODE4-LABEL: func.func @elementwise_outofplace_3d_transposed_owner_tile
 // NODE4: codir.codelet
-// NODE4-SAME: logical_worker_slice = [16, 16, 11]
+// NODE4-SAME: logical_worker_slice = [16, 16, 33]
 // NODE4-SAME: partition_graph = [{blockShape = [16, 16, 11]
+// NODE4-SAME: cuGroupCount = 256 : i64
+// NODE4-SAME: cuGroupSize = 3 : i64
 // NODE4-SAME: muBlockCount = 768 : i64
 // NODE4-SAME: ownerDims = [2, 1, 0]
 // NODE4-SAME: partition_score = {

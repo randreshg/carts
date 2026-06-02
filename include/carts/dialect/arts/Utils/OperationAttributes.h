@@ -212,15 +212,6 @@ setPlanRepetitionStructureAttr(Operation *op,
     dbAllocOp.setPlanRepetitionStructureAttr(attr);
 }
 
-/// Check whether a CARTS operation carries any structured plan attr. This is a
-/// generic contract-presence test; callers that need semantic families should
-/// consume explicit dep/distribution contract attrs instead.
-inline bool hasStructuredPlanAttrs(Operation *op) {
-  return getPlanOwnerDimsAttr(op) || getPlanPhysicalBlockShapeAttr(op) ||
-         getPlanLogicalWorkerSliceAttr(op) || getPlanHaloShapeAttr(op) ||
-         getPlanIterationTopologyAttr(op) || getPlanRepetitionStructureAttr(op);
-}
-
 inline std::optional<StringRef> getRuntimeConfigPath(ModuleOp module) {
   if (!module)
     return std::nullopt;

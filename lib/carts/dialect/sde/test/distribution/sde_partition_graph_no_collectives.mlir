@@ -13,8 +13,8 @@
 // CHECK: logicalWorkerSlice = [32, 1024]
 // CHECK-SAME: partitionGraph = [
 // CHECK-SAME: blockShape = [32, 1024]
-// CHECK-SAME: cuGroupCount = 32 : i64
-// CHECK-SAME: cuGroupSize = 1 : i64
+// CHECK-SAME: cuGroupCount = 16 : i64
+// CHECK-SAME: cuGroupSize = 2 : i64
 // CHECK-SAME: edgeClass = "aligned"
 // CHECK-SAME: layoutKind = "owner_block"
 // CHECK-SAME: muBlockCount = 32 : i64

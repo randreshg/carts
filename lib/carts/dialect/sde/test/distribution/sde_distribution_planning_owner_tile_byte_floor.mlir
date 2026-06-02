@@ -9,18 +9,23 @@
 // RUN:   | %FileCheck %s --check-prefix=COARSE
 
 // Multidimensional owner-tile elementwise plans are upstream SDE block-layout
-// decisions. DistributionPlanning may add graph evidence around the realized
-// block shape, but it must not coarsen or rewrite an already tiled owner plan.
+// decisions. DistributionPlanning may add graph evidence and a grouped logical
+// CU slice around the realized physical block shape, but it must not coarsen or
+// rewrite the committed DB/MU grain.
 
 // BASE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // BASE: func.func @elementwise_inplace_2d_owner_tile
 // BASE: iterationTopology = #sde.iteration_topology<owner_tile>
-// BASE-SAME: logicalWorkerSlice = [86, 86, 16]
+// BASE-SAME: logicalWorkerSlice = [258, 86, 16]
 // BASE-SAME: partitionGraph = [
 // BASE-SAME: blockShape = [86, 86, 16]
+// BASE-SAME: cuGroupCount = 12 : i64
+// BASE-SAME: cuGroupSize = 3 : i64
 // BASE-SAME: muBlockCount = 36 : i64
 // BASE-SAME: partitionScore = {
 // BASE-SAME: blockShape = [86, 86, 16]
+// BASE-SAME: cuGroupCount = 12 : i64
+// BASE-SAME: cuGroupSize = 3 : i64
 // BASE-SAME: exposedCuCount = 16 : i64
 // BASE-SAME: muBlockCount = 36 : i64
 // BASE-SAME: physicalBlockShape = [86, 86, 16]
@@ -39,12 +44,14 @@
 // COARSE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // COARSE: func.func @elementwise_inplace_2d_owner_tile
 // COARSE: iterationTopology = #sde.iteration_topology<owner_tile>
-// COARSE-SAME: logicalWorkerSlice = [86, 86, 16]
+// COARSE-SAME: logicalWorkerSlice = [258, 86, 16]
 // COARSE-SAME: partitionGraph = [{blockShape = [86, 86, 16]
+// COARSE-SAME: cuGroupCount = 12 : i64
+// COARSE-SAME: cuGroupSize = 3 : i64
 // COARSE-SAME: muBlockCount = 36 : i64
 // COARSE-SAME: partitionScore = {blockShape = [86, 86, 16]
-// COARSE-SAME: cuGroupCount = 18 : i64
-// COARSE-SAME: cuGroupSize = 2 : i64
+// COARSE-SAME: cuGroupCount = 12 : i64
+// COARSE-SAME: cuGroupSize = 3 : i64
 // COARSE-SAME: minTileBytes = 1048576 : i64
 // COARSE-SAME: muBlockCount = 36 : i64
 // COARSE-SAME: physicalBlockShape = [86, 86, 16]

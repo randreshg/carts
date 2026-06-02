@@ -164,29 +164,82 @@ bool enforceOwnerBlockConcurrencyFloor(
   return true;
 }
 
-int64_t haloExpandedTileBytes(ArrayRef<int64_t> extents,
-                              ArrayRef<int64_t> haloRadii,
-                              ArrayRef<int64_t> physicalBlockShape,
-                              int64_t elemBytes) {
-  int64_t ownedBytes = tilePayloadBytes(physicalBlockShape, elemBytes);
-  if (ownedBytes <= 0)
-    return 0;
-  SmallVector<int64_t, 4> grid;
-  grid.reserve(extents.size());
-  for (auto [idx, extent] : llvm::enumerate(extents)) {
-    if (extent <= 0 || idx >= physicalBlockShape.size() ||
-        physicalBlockShape[idx] <= 0)
-      return 0;
-    grid.push_back(ceilDivPositive(extent, physicalBlockShape[idx]));
+bool buildBlockAlignedLogicalWorkerSlice(
+    ArrayRef<int64_t> shape, ArrayRef<int64_t> ownerPhysicalDims,
+    ArrayRef<int64_t> physicalBlockShape, int64_t targetComputeUnits,
+    SmallVectorImpl<int64_t> &logicalWorkerSlice) {
+  logicalWorkerSlice.assign(physicalBlockShape.begin(),
+                            physicalBlockShape.end());
+  if (shape.empty() || ownerPhysicalDims.empty() ||
+      shape.size() != physicalBlockShape.size())
+    return false;
+
+  SmallVector<int64_t, 4> ownerBlockCounts;
+  ownerBlockCounts.reserve(ownerPhysicalDims.size());
+  int64_t totalBlocks = 1;
+  for (int64_t physicalDim : ownerPhysicalDims) {
+    if (physicalDim < 0 || static_cast<size_t>(physicalDim) >= shape.size())
+      return false;
+    if (shape[physicalDim] <= 0 || physicalBlockShape[physicalDim] <= 0)
+      return false;
+    int64_t blocks =
+        ceilDivPositive(shape[physicalDim], physicalBlockShape[physicalDim]);
+    ownerBlockCounts.push_back(blocks);
+    totalBlocks = saturatingMultiplyPositive(totalBlocks, blocks);
   }
-  long double ratio =
-      estimateStencilExpandedTileRatio(extents, haloRadii, grid);
-  if (!std::isfinite(static_cast<double>(ratio)) || ratio <= 0.0L)
-    return ownedBytes;
-  long double expanded = static_cast<long double>(ownedBytes) * ratio;
-  if (expanded > static_cast<long double>(std::numeric_limits<int64_t>::max()))
-    return std::numeric_limits<int64_t>::max();
-  return static_cast<int64_t>(expanded);
+
+  int64_t target =
+      std::clamp<int64_t>(targetComputeUnits, int64_t{1}, totalBlocks);
+  if (totalBlocks <= target)
+    return true;
+
+  auto inferLogicalBlocks = [&]() {
+    int64_t logicalBlocks = 1;
+    for (int64_t physicalDim : ownerPhysicalDims) {
+      int64_t blocks =
+          ceilDivPositive(shape[physicalDim], logicalWorkerSlice[physicalDim]);
+      logicalBlocks = saturatingMultiplyPositive(logicalBlocks, blocks);
+    }
+    return logicalBlocks;
+  };
+
+  int64_t logicalBlocks = totalBlocks;
+  for (unsigned guard = 0; guard < ownerPhysicalDims.size() * 4; ++guard) {
+    if (logicalBlocks <= target)
+      break;
+    int64_t neededGroup = ceilDivPositive(logicalBlocks, target);
+    SmallVector<int64_t, 4> logicalBlockCounts;
+    logicalBlockCounts.reserve(ownerPhysicalDims.size());
+    for (int64_t physicalDim : ownerPhysicalDims)
+      logicalBlockCounts.push_back(
+          ceilDivPositive(shape[physicalDim], logicalWorkerSlice[physicalDim]));
+
+    SmallVector<int64_t, 4> groupGrid =
+        factorWorkersAcrossDims(neededGroup, logicalBlockCounts);
+    bool changed = false;
+    for (auto [slot, physicalDim] : llvm::enumerate(ownerPhysicalDims)) {
+      int64_t group = slot < groupGrid.size() ? groupGrid[slot] : 1;
+      if (group <= 1)
+        continue;
+      int64_t previous = logicalWorkerSlice[physicalDim];
+      int64_t grown = previous;
+      if (previous > std::numeric_limits<int64_t>::max() / group)
+        grown = std::numeric_limits<int64_t>::max();
+      else
+        grown = previous * group;
+      logicalWorkerSlice[physicalDim] =
+          std::min<int64_t>(shape[physicalDim], grown);
+      changed |= logicalWorkerSlice[physicalDim] != previous;
+    }
+    if (!changed)
+      break;
+    int64_t updatedBlocks = inferLogicalBlocks();
+    if (updatedBlocks >= logicalBlocks)
+      break;
+    logicalBlocks = updatedBlocks;
+  }
+
+  return true;
 }
 
 int64_t tilePayloadBytes(ArrayRef<int64_t> physicalBlockShape,
@@ -217,31 +270,6 @@ int64_t coarsenWorkersToTileByteFloor(
   while (currentWorkers > workerFloor &&
          tilePayloadBytes(currentShape, elemBytes) < minTileBytes) {
     int64_t nextWorkers = std::max<int64_t>(workerFloor, currentWorkers / 2);
-    if (nextWorkers == currentWorkers)
-      break;
-    SmallVector<int64_t, 4> candidateShape;
-    if (!rebuild(nextWorkers, candidateShape))
-      break;
-    currentWorkers = nextWorkers;
-    currentShape = std::move(candidateShape);
-  }
-  return currentWorkers;
-}
-
-int64_t coarsenStencilWorkersToFloor(
-    int64_t workers, ArrayRef<int64_t> extents, ArrayRef<int64_t> haloRadii,
-    ArrayRef<int64_t> physicalBlockShape, int64_t elemBytes,
-    int64_t minTileBytes,
-    llvm::function_ref<bool(int64_t, SmallVectorImpl<int64_t> &)> rebuild) {
-  if (minTileBytes <= 0 || workers <= 1 || elemBytes <= 0)
-    return workers;
-  SmallVector<int64_t, 4> currentShape(physicalBlockShape.begin(),
-                                       physicalBlockShape.end());
-  int64_t currentWorkers = workers;
-  while (currentWorkers > 1 &&
-         haloExpandedTileBytes(extents, haloRadii, currentShape, elemBytes) <
-             minTileBytes) {
-    int64_t nextWorkers = std::max<int64_t>(1, currentWorkers / 2);
     if (nextWorkers == currentWorkers)
       break;
     SmallVector<int64_t, 4> candidateShape;

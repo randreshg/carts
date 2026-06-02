@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(edt-lowering)' | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(edt-lowering)' | %FileCheck %s --implicit-check-not=arts_rt.state_pack --implicit-check-not=arts_rt.dep_bind
 
 // ARTS-RT consumes explicit runtime DB mode verdicts stamped by ARTS.
 // Write-only planned coarse deps use RW only when the acquire carries that

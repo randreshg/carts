@@ -10,16 +10,15 @@
 
 // 1024x1024 f64 matmul on the two-node test config (16 workers across the
 // cluster). With no floor, DistributionPlanning factors workers across both
-// owner dims and produces a fine-grained tile shape. With a 4 MiB floor,
-// the writer shrinks only excess inter-locality task waves. It preserves at
-// least one blocked task per logical worker, so the byte floor is a target
-// rather than permission to serialize the graph below machine concurrency.
-// The floor is the only knob that changed between the two runs; everything
-// else is held constant so the two physicalBlockShape lines come from the same
-// writer.
+// owner dims and emits the same fine physical DB/MU grain as its logical CU
+// slice. With a 4 MiB floor, the writer groups the logical CU slice over whole
+// physical blocks instead of inflating physicalBlockShape. This preserves DB
+// concurrency while reducing excess inter-locality task waves.
 
-// BASE: physicalBlockShape = [128, 256]
-// COARSE: physicalBlockShape = [256, 256]
+// BASE: logicalWorkerSlice = [128, 256]
+// BASE-SAME: physicalBlockShape = [128, 256]
+// COARSE: logicalWorkerSlice = [256, 256]
+// COARSE-SAME: physicalBlockShape = [128, 256]
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @main(%A: memref<1024x1024xf64>, %B: memref<1024x1024xf64>, %C: memref<1024x1024xf64>) {

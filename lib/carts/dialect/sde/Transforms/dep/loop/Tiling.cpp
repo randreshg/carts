@@ -216,6 +216,7 @@ struct DirectMatmulTilePlan {
 struct PhysicalTilePlan {
   SmallVector<int64_t, 4> ownerPhysicalDims;
   SmallVector<int64_t, 4> blockShape;
+  SmallVector<int64_t, 4> logicalWorkerSlice;
   SmallVector<int64_t, 4> haloShape;
   SmallVector<int64_t, 4> tileIterations;
   sde::SdeIterationTopology topology = sde::SdeIterationTopology::owner_strip;
@@ -659,18 +660,6 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
   int64_t targetWorkers =
       std::max<int64_t>(1, getTargetTileTasks(op, costModel));
 
-  // Apply the SDE stencil-tile-bytes floor before stamping. Halo-expanded tile
-  // bytes < floor → halve the worker target and recompute the grid. Default
-  // 0 (off); set by --min-distributed-stencil-tile-bytes or runtime config.
-  int64_t stencilFloor = costModel.getMinDistributedStencilTileBytes();
-  int64_t elemBytes = 0;
-  if (stencilFloor > 0) {
-    if (auto memrefTy =
-            dyn_cast_or_null<MemRefType>(outputPlan->root.getType()))
-      if (Type elt = memrefTy.getElementType(); elt.isIntOrFloat())
-        elemBytes = llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
-  }
-
   auto computeBlockShape = [&](int64_t workers,
                                SmallVectorImpl<int64_t> &blockShape) {
     blockShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
@@ -684,26 +673,11 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
   SmallVector<int64_t, 4> initialBlockShape;
   computeBlockShape(targetWorkers, initialBlockShape);
 
-  // Build a per-physical-dim halo radius vector (0 for non-owner dims) so the
-  // expansion ratio reflects the full N-d tile, not just owner dims.
-  SmallVector<int64_t, 4> haloByPhysical(outputPlan->shape.size(), 0);
-  for (auto [idx, physDim] : llvm::enumerate(plan.ownerPhysicalDims)) {
-    if (physDim < 0 || static_cast<size_t>(physDim) >= haloByPhysical.size())
-      continue;
-    haloByPhysical[physDim] =
-        idx < plan.haloShape.size() ? plan.haloShape[idx] : 0;
-  }
-
-  int64_t coarsenedWorkers = sde::coarsenStencilWorkersToFloor(
-      targetWorkers, outputPlan->shape, haloByPhysical, initialBlockShape,
-      elemBytes, stencilFloor,
-      [&](int64_t candidateWorkers, SmallVectorImpl<int64_t> &candidateShape) {
-        computeBlockShape(candidateWorkers, candidateShape);
-        return true;
-      });
-
-  SmallVector<int64_t, 4> finalBlockShape;
-  computeBlockShape(coarsenedWorkers, finalBlockShape);
+  // Do not inflate halo stencil DB/MU grain to satisfy a tile-byte floor. Any
+  // coarser stencil compute slice needs lane-specific halo acquire support in
+  // ARTS before SDE can group the logical worker slice.
+  SmallVector<int64_t, 4> finalBlockShape(initialBlockShape.begin(),
+                                          initialBlockShape.end());
   for (auto [idx, physicalDim] : llvm::enumerate(plan.ownerPhysicalDims)) {
     int64_t tile = finalBlockShape[physicalDim];
     plan.blockShape[physicalDim] = tile;
@@ -724,8 +698,12 @@ static void stampPhysicalTilePlan(sde::SdeSuIterateOp op,
       buildI64ArrayAttr(op.getContext(), plan.ownerPhysicalDims));
   op.setPhysicalBlockShapeAttr(
       buildI64ArrayAttr(op.getContext(), plan.blockShape));
+  ArrayRef<int64_t> logicalSlice =
+      plan.logicalWorkerSlice.empty()
+          ? ArrayRef<int64_t>(plan.blockShape)
+          : ArrayRef<int64_t>(plan.logicalWorkerSlice);
   op.setLogicalWorkerSliceAttr(
-      buildI64ArrayAttr(op.getContext(), plan.blockShape));
+      buildI64ArrayAttr(op.getContext(), logicalSlice));
   if (llvm::any_of(plan.haloShape, [](int64_t halo) { return halo > 0; }))
     op.setPhysicalHaloShapeAttr(
         buildI64ArrayAttr(op.getContext(), plan.haloShape));
@@ -776,8 +754,14 @@ static bool isBudgetReconciledTileCandidate(sde::SdeSuIterateOp op) {
     return !op.getInPlaceSafeAttr();
   }
 
-  // Stencils use the stencil owner-block planner below. The byte-budget layout
-  // is CU grouping evidence, not a reason to inflate DB/MU block grain.
+  if (*classification == sde::SdeStructuredClassification::stencil) {
+    // Out-of-place stencils may consume the committed budget block as a cap on
+    // real DB/MU grain. They must not inflate a finer worker-balanced stencil
+    // tile to that budget: grouped halo compute needs lane-specific acquires
+    // in ARTS before SDE can coarsen stencil execution lanes.
+    return true;
+  }
+
   return false;
 }
 
@@ -899,10 +883,38 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
                                 orderedOwnerPhysicalDims.end());
   plan.blockShape.assign(writeLayout->budgetBlockShape.begin(),
                          writeLayout->budgetBlockShape.end());
-  if (!sde::enforceOwnerBlockConcurrencyFloor(
-          outputPlan->shape, plan.ownerPhysicalDims,
-          getTargetTileTasks(op, costModel), plan.blockShape))
+  bool isStencil = classification &&
+                   *classification == sde::SdeStructuredClassification::stencil;
+  if (isStencil) {
+    plan.haloShape =
+        getStencilHaloRadiiForOwnerDims(op, plan.ownerPhysicalDims.size());
+    SmallVector<int64_t, 4> ownerExtents;
+    ownerExtents.reserve(plan.ownerPhysicalDims.size());
+    for (int64_t physicalDim : plan.ownerPhysicalDims) {
+      if (physicalDim < 0 ||
+          static_cast<size_t>(physicalDim) >= outputPlan->shape.size())
+        return std::nullopt;
+      ownerExtents.push_back(outputPlan->shape[physicalDim]);
+    }
+    SmallVector<int64_t, 4> workerGrid = sde::factorStencilWorkersAcrossDims(
+        std::max<int64_t>(1, getTargetTileTasks(op, costModel)), ownerExtents,
+        plan.haloShape);
+    if (workerGrid.size() != plan.ownerPhysicalDims.size())
+      return std::nullopt;
+    for (auto [slot, physicalDim] : llvm::enumerate(plan.ownerPhysicalDims)) {
+      int64_t balancedBlock = sde::ceilDivPositive(
+          outputPlan->shape[physicalDim], workerGrid[slot]);
+      plan.blockShape[physicalDim] =
+          std::min<int64_t>(plan.blockShape[physicalDim], balancedBlock);
+    }
+    if (llvm::any_of(plan.blockShape,
+                     [](int64_t extent) { return extent <= 0; }))
+      return std::nullopt;
+  } else if (!sde::enforceOwnerBlockConcurrencyFloor(
+                 outputPlan->shape, plan.ownerPhysicalDims,
+                 getTargetTileTasks(op, costModel), plan.blockShape)) {
     return std::nullopt;
+  }
   plan.tileIterations.assign(numDims, 1);
 
   for (unsigned loopDim = 0; loopDim < numDims; ++loopDim) {
@@ -926,13 +938,20 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
   if (llvm::all_of(plan.tileIterations, [](int64_t tile) { return tile <= 1; }))
     return std::nullopt;
 
+  if (isStencil) {
+    plan.logicalWorkerSlice.assign(plan.blockShape.begin(),
+                                   plan.blockShape.end());
+  } else if (!sde::buildBlockAlignedLogicalWorkerSlice(
+                 outputPlan->shape, plan.ownerPhysicalDims, plan.blockShape,
+                 costModel.getLogicalWorkerCapacity(),
+                 plan.logicalWorkerSlice)) {
+    plan.logicalWorkerSlice.assign(plan.blockShape.begin(),
+                                   plan.blockShape.end());
+  }
+
   plan.topology = plan.ownerPhysicalDims.size() > 1
                       ? sde::SdeIterationTopology::owner_tile
                       : sde::SdeIterationTopology::owner_strip;
-  if (classification &&
-      *classification == sde::SdeStructuredClassification::stencil)
-    plan.haloShape =
-        getStencilHaloRadiiForOwnerDims(op, plan.ownerPhysicalDims.size());
   return plan;
 }
 

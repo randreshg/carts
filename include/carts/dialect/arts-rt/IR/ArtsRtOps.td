@@ -194,23 +194,4 @@ def DbGepOp : ArtsRt_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
                                  "SmallVector<Value>":$strides)>];
 }
 
-def StatePackOp : ArtsRt_Op<"state_pack", [MemoryEffects<[MemWrite]>]> {
-  let summary = "Pack scalar values into a state channel";
-  let arguments = (ins Variadic<AnyType>:$values);
-  let results = (outs MemRefOf<[I64]>:$state);
-  let assemblyFormat =
-      "`(` $values `)` attr-dict `:` type($values) `->` type($state)";
-}
-
-def DepBindOp : ArtsRt_Op<"dep_bind", [MemoryEffects<[MemWrite]>]> {
-  let summary = "Bind a DB GUID to a dependency slot";
-  let arguments = (ins I64:$guid, I64:$mode);
-  let results = (outs I64:$slot);
-  let assemblyFormat = "`(` $guid `,` $mode `)` attr-dict";
-  let builders = [OpBuilder<(ins "Value":$guid, "Value":$mode), [{
-    $_state.addOperands({guid, mode});
-    $_state.addTypes($_builder.getI64Type());
-  }]>];
-}
-
 #endif // ARTS_RT_OPS

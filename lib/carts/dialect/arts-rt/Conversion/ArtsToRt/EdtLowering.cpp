@@ -403,48 +403,6 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
     }
   }
 
-  /// When an SDE-authored structured plan is present, emit split state/dep ops
-  /// to make the state-vs-dependency separation explicit in the IR.
-  /// The generic path remains the fallback for unplanned EDTs.
-  if (hasStructuredPlanAttrs(edtOp.getOperation())) {
-    ARTS_DEBUG("Plan-aware path: structured plan attrs present");
-
-    /// Emit state_pack for scalar parameters (non-dep captured values).
-    SmallVector<Value> stateValues;
-    for (Value param : envManager.getParameters())
-      stateValues.push_back(param);
-    for (Value constant : envManager.getConstants())
-      stateValues.push_back(constant);
-
-    if (!stateValues.empty()) {
-      auto stateMemrefType = MemRefType::get(
-          {static_cast<int64_t>(stateValues.size())}, AC->Int64);
-      AC->create<StatePackOp>(loc, stateMemrefType, stateValues);
-      ARTS_DEBUG("  Emitted state_pack with " << stateValues.size()
-                                              << " values");
-    }
-
-    /// Emit dep_bind for each dependency to make slot assignment explicit.
-    for (Value dep : edtDeps) {
-      auto acquire = dep.getDefiningOp<DbAcquireOp>();
-      if (!acquire)
-        continue;
-      Value guidMemref = acquire.getGuid();
-      if (!guidMemref)
-        continue;
-      Value guidScalar = loadRepresentativeGuidScalar(AC, loc, guidMemref);
-      if (!guidScalar)
-        continue;
-      Value modeVal = AC->createIntConstant(
-          static_cast<int64_t>(acquire.getMode()), AC->Int64, loc);
-      AC->create<DepBindOp>(loc, guidScalar, modeVal);
-      ARTS_DEBUG("  Emitted dep_bind for dep");
-    }
-
-    /// Propagate plan attrs to the EdtCreateOp (set below).
-    /// Fall through to the generic EdtCreateOp emission.
-  }
-
   /// Calculate dependency count from the dependency view of each DB.
   Value depCount = computeDependencyCount(loc, edtDeps);
 

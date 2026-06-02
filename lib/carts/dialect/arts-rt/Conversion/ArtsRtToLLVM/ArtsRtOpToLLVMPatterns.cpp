@@ -45,9 +45,6 @@ static llvm::Statistic numDepOpsConverted{
 static llvm::Statistic numDbOpsConverted{
     "arts_rt_to_llvm", "NumDbOpsConverted",
     "Number of DataBlock operations converted to LLVM runtime calls"};
-static llvm::Statistic numMiscOpsConverted{
-    "arts_rt_to_llvm", "NumMiscOpsConverted",
-    "Number of miscellaneous ARTS operations converted"};
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -1480,65 +1477,6 @@ struct EdtCreatePattern : public ArtsRtToLLVMPattern<EdtCreateOp> {
 };
 
 ///===----------------------------------------------------------------------===///
-/// State and Bind Patterns
-///===----------------------------------------------------------------------===///
-
-struct StatePackPattern : public ArtsRtToLLVMPattern<StatePackOp> {
-  using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
-
-  LogicalResult matchAndRewrite(StatePackOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering StatePack Op " << op);
-    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-
-    auto loc = op.getLoc();
-    auto values = op.getValues();
-    auto resultType = dyn_cast<MemRefType>(op.getState().getType());
-    if (!resultType)
-      return op.emitError("Expected MemRef type for state result");
-
-    memref::AllocaOp allocOp;
-    if (values.empty()) {
-      auto dynamicType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
-      auto zeroIndex = AC->createIndexConstant(0, loc);
-      allocOp =
-          AC->create<memref::AllocaOp>(loc, dynamicType, ValueRange{zeroIndex});
-    } else if (resultType.getNumDynamicDims() > 0) {
-      auto numValues = AC->createIndexConstant(values.size(), loc);
-      allocOp =
-          AC->create<memref::AllocaOp>(loc, resultType, ValueRange{numValues});
-    } else {
-      allocOp = AC->create<memref::AllocaOp>(loc, resultType, ValueRange{});
-    }
-
-    for (unsigned i = 0; i < values.size(); ++i) {
-      auto index = AC->createIndexConstant(i, loc);
-      auto castVal = AC->castParameter(AC->Int64, values[i], loc,
-                                       ArtsCodegen::ParameterCastMode::Bitwise);
-      AC->create<memref::StoreOp>(loc, castVal, allocOp, ValueRange{index});
-    }
-
-    rewriter.replaceOp(op, allocOp);
-    ++numMiscOpsConverted;
-    return success();
-  }
-};
-
-/// Pattern to lower arts.dep_bind to a pass-through.
-/// At LLVM level, the GUID itself is the slot identifier.
-struct DepBindPattern : public ArtsRtToLLVMPattern<DepBindOp> {
-  using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
-
-  LogicalResult matchAndRewrite(DepBindOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering DepBind Op " << op);
-    rewriter.replaceOp(op, op.getGuid());
-    ++numMiscOpsConverted;
-    return success();
-  }
-};
-
-///===----------------------------------------------------------------------===///
 /// Pattern Population
 ///===----------------------------------------------------------------------===///
 
@@ -1560,10 +1498,6 @@ void populateArtsRtOpToLLVMPatterns(RewritePatternSet &patterns,
   patterns.add<RecordDepPattern>(context, AC);
   patterns.add<DepDbAcquireOpPattern>(context, AC);
   patterns.add<DbGepOpPattern>(context, AC);
-
-  /// State and bind patterns
-  patterns.add<StatePackPattern>(context, AC);
-  patterns.add<DepBindPattern>(context, AC);
 }
 
 } // namespace mlir::carts::arts_rt::convert_arts_rt_to_llvm

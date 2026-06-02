@@ -4,22 +4,20 @@
 // RUN:   | %FileCheck %s --check-prefix=BASE
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_multinode.cfg \
 // RUN:   --start-from sde-planning --pipeline codir-to-arts \
-// RUN:   --min-distributed-stencil-tile-bytes=8192 \
+// RUN:   --min-distributed-tile-bytes=8192 \
 // RUN:   --mlir-print-ir-after-all 2>&1 \
-// RUN:   | %FileCheck %s --check-prefix=COARSE
+// RUN:   | %FileCheck %s --check-prefix=FLOOR
 
 // 64x64 f64 5-point stencil on the two-node test config (16 logical workers).
-// Without a floor, the stencil planner factors workers across both owner dims
-// using factorStencilWorkersAcrossDims and produces an [8, 16] tile (1024 owned
-// bytes / ~1440 halo-expanded bytes). With an 8 KiB halo-expanded floor, the
-// writer halves the worker target until each tile's expanded footprint clears
-// the floor, landing on a 2x2 grid with [32, 32] tiles (8192 owned bytes /
-// ~9248 halo-expanded bytes). The floor is the only knob that changed between
-// the two runs; everything else is held constant so both physicalBlockShape
-// lines come from the same writer.
+// The stencil planner factors workers across both owner dims and produces an
+// [8, 16] physical DB/MU tile. A byte floor must not coarsen that physical
+// grain until ARTS can materialize grouped halo compute lanes with lane-specific
+// acquires, so the floor run keeps the same physical/logical stencil slice.
 
-// BASE: physicalBlockShape = [8, 16]
-// COARSE: physicalBlockShape = [32, 32]
+// BASE: logicalWorkerSlice = [8, 16]
+// BASE-SAME: physicalBlockShape = [8, 16]
+// FLOOR: logicalWorkerSlice = [8, 16]
+// FLOOR-SAME: physicalBlockShape = [8, 16]
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @main(%A: memref<64x64xf64>, %B: memref<64x64xf64>) {

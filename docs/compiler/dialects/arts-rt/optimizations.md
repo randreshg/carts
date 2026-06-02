@@ -5,7 +5,7 @@ ARTS-RT optimizations are ABI and LLVM-facing cleanup passes.
 Owned optimizations:
 
 - EDT launch and continuation overhead cleanup;
-- `edt_param_pack` and `state_pack` cleanup;
+- EDT parameter and dependency ABI cleanup;
 - dependency slot and depv pointer hoisting;
 - DB pointer/GUID GEP cleanup;
 - runtime call hoisting;

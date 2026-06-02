@@ -65,9 +65,6 @@ std::optional<NormalizedElementSlice>
 normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
                             DbAllocOp alloc);
 
-Value loadRepresentativeGuidScalar(ArtsCodegen *AC, Location loc,
-                                   Value guidStorage);
-
 DepSourceInfo resolveDepSource(Value dep);
 
 Operation *getCanonicalDependencySource(Value dep);

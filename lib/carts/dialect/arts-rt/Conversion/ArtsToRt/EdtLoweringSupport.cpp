@@ -296,28 +296,6 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   return slice;
 }
 
-///===----------------------------------------------------------------------===///
-/// loadRepresentativeGuidScalar
-///===----------------------------------------------------------------------===///
-
-Value loadRepresentativeGuidScalar(ArtsCodegen *AC, Location loc,
-                                   Value guidStorage) {
-  if (!AC || !guidStorage)
-    return {};
-
-  auto guidType = dyn_cast<MemRefType>(guidStorage.getType());
-  if (!guidType)
-    return {};
-
-  SmallVector<Value, 4> zeroIndices;
-  zeroIndices.reserve(guidType.getRank());
-  for (int64_t i = 0; i < guidType.getRank(); ++i)
-    zeroIndices.push_back(AC->createIndexConstant(0, loc));
-
-  return AC->create<memref::LoadOp>(loc, guidStorage, zeroIndices);
-}
-
-///===----------------------------------------------------------------------===///
 /// resolveDepSource
 ///===----------------------------------------------------------------------===///
 

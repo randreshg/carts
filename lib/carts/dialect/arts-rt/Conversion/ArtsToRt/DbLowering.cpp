@@ -252,13 +252,7 @@ void DbLoweringPass::convertDbAllocOps() {
         oldOp.getDbMode(), oldOp.getElementType(), ptrType, sizes, elementSizes,
         *partitionMode);
     ARTS_DEBUG("  - New DbAllocOp: " << newOp);
-    for (auto &attr : oldOp->getAttrs()) {
-      if (!attr.getName().getValue().starts_with("arts."))
-        continue;
-      if (attr.getName() == arts::AttrNames::Operation::ArtsCreateId)
-        continue;
-      newOp->setAttr(attr.getName(), attr.getValue());
-    }
+    copyArtsMetadataAttrs(oldOp.getOperation(), newOp.getOperation());
     if (auto bridge = oldOp.getStorageBridgeAttr())
       newOp.setStorageBridgeAttr(bridge);
     if (auto ownerDims = getPlanOwnerDimsAttr(oldOp))
@@ -443,10 +437,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
       acquireOp.getPartitionMode(), indices, offsets, sizes, partitionIndices,
       partitionOffsets, partitionSizes, boundsValid, elementOffsets,
       acquireElementSizes);
-  for (auto &attr : acquireOp->getAttrs()) {
-    if (attr.getName().getValue().starts_with("arts."))
-      newAcquireOp->setAttr(attr.getName(), attr.getValue());
-  }
+  copyArtsMetadataAttrs(acquireOp.getOperation(), newAcquireOp.getOperation());
   if (auto attr = acquireOp.getReplicatedReadAttr())
     newAcquireOp.setReplicatedReadAttr(attr);
   /// Rebuilt acquires must preserve the semantic stencil/distribution contract

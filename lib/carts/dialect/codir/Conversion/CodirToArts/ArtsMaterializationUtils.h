@@ -958,6 +958,7 @@ struct PlannedBlockLocalAccessRewrite {
   Value groupedSourcePtr;
   unsigned ownerSlot = 0;
   int64_t blockSize = 1;
+  int64_t groupBlockCount = 1;
   bool grouped = false;
 };
 
@@ -986,12 +987,64 @@ materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
   return arith::SubIOp::create(builder, loc, index, localOrigin).getResult();
 }
 
-static inline FailureOr<Value>
-materializeGroupedBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
-                                  Value ownerBase, int64_t blockSize,
-                                  Value &relativeBlock) {
-  if (!index || !ownerBase || blockSize <= 0)
+static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
+    OpBuilder &builder, Location loc, Value index, Value ownerBase,
+    int64_t blockSize, int64_t groupBlockCount, Value &relativeBlock) {
+  if (!index || !ownerBase || blockSize <= 0 || groupBlockCount <= 0)
     return failure();
+  if (groupBlockCount > std::numeric_limits<int64_t>::max() / blockSize)
+    return failure();
+  if (!indexSelectsOwnerSlice(index, ownerBase))
+    return failure();
+
+  int64_t windowExtent = blockSize * groupBlockCount;
+  auto getOwnerRelativeConstant =
+      [&](Value candidate) -> std::optional<int64_t> {
+    int64_t offset = 0;
+    Value base =
+        ::mlir::carts::ValueAnalysis::stripConstantOffset(candidate, &offset);
+    if (::mlir::carts::ValueAnalysis::sameValue(base, ownerBase))
+      return offset;
+    return std::nullopt;
+  };
+  auto pointStaysInWindow = [&](Value candidate) {
+    std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
+    return offset && *offset >= 0 && *offset < windowExtent;
+  };
+  auto upperOffsetStaysInWindow = [&](Value candidate) {
+    std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
+    return offset && *offset >= 0 && *offset <= windowExtent;
+  };
+  auto upperStaysInWindow = [&](Value candidate) {
+    if (upperOffsetStaysInWindow(candidate))
+      return true;
+    candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+    if (auto min = candidate.getDefiningOp<arith::MinUIOp>())
+      return upperOffsetStaysInWindow(min.getLhs()) ||
+             upperOffsetStaysInWindow(min.getRhs());
+    if (auto min = candidate.getDefiningOp<arith::MinSIOp>())
+      return upperOffsetStaysInWindow(min.getLhs()) ||
+             upperOffsetStaysInWindow(min.getRhs());
+    return false;
+  };
+
+  bool provenInWindow = pointStaysInWindow(index);
+  if (!provenInWindow) {
+    if (auto blockArg = dyn_cast<BlockArgument>(index)) {
+      auto loop =
+          dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+      if (loop && loop.getInductionVar() == index &&
+          ::mlir::carts::ValueAnalysis::isConstantAtLeastOne(loop.getStep())) {
+        std::optional<int64_t> lower =
+            getOwnerRelativeConstant(loop.getLowerBound());
+        provenInWindow = lower && *lower >= 0 && *lower < windowExtent &&
+                         upperStaysInWindow(loop.getUpperBound());
+      }
+    }
+  }
+  if (!provenInWindow)
+    return failure();
+
   Value blockSizeValue = createConstantIndex(builder, loc, blockSize);
   Value relativeIndex =
       ::mlir::carts::ValueAnalysis::sameValue(index, ownerBase)
@@ -1031,7 +1084,8 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
       unsigned sourceRank = 0;
       for (const PlannedBlockLocalAccessRewrite *rewrite : matching) {
         if (!rewrite->grouped || rewrite->lowerHalo != 0 ||
-            !rewrite->groupedSourcePtr || rewrite->blockSize <= 0) {
+            !rewrite->groupedSourcePtr || rewrite->blockSize <= 0 ||
+            rewrite->groupBlockCount <= 0) {
           op->emitError("grouped planned block-local access requires "
                         "block-window facts for every owner dimension");
           return WalkResult::interrupt();
@@ -1063,7 +1117,8 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
         Value relativeBlock;
         FailureOr<Value> localIndex = materializeGroupedBlockLocalIndex(
             builder, op->getLoc(), indices[rewrite->ownerDim].get(),
-            rewrite->ownerBase, rewrite->blockSize, relativeBlock);
+            rewrite->ownerBase, rewrite->blockSize, rewrite->groupBlockCount,
+            relativeBlock);
         if (failed(localIndex)) {
           op->emitError("grouped planned block-local access does not stay "
                         "within the block window");
@@ -4485,9 +4540,9 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
                    });
 
   // Iterative stencil halo uses a distributed per-block DB plus
-  // nearest-neighbor RO reads.
-  bool perBlockStencilHalo =
-      bridgePlan.needsCopyOut && bridgePlanHasHaloStencilStorage(bridgePlan);
+  // nearest-neighbor RO reads. This follows the committed CODIR `halo`
+  // participant, not the presence of a copy-out writer in the same bridge.
+  bool perBlockStencilHalo = bridgePlanHasHaloStencilStorage(bridgePlan);
 
   // Read-only stencil bridges with zero reach along the committed owner
   // dimensions are block-local after the host-whole -> compute-block copy-in.
@@ -4506,6 +4561,14 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
             builder, loc, hostView, blockAlloc, codelet, depIndex,
             /*copyIntoBlock=*/true,
             /*crossNodeGather=*/false, &bridgePlan)))
+      return failure();
+  }
+
+  if (perBlockStencilHalo) {
+    if (failed(preparePerBlockSingleWriterStencilDb(blockAlloc)))
+      return failure();
+    if (failed(emitPerBlockStencilHaloBeforeReadPhases(
+            builder, loc, blockAlloc, participants, &bridgePlan)))
       return failure();
   }
 
@@ -4555,14 +4618,6 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
         if (failed(settled))
           return failure();
       }
-    }
-
-    if (perBlockStencilHalo) {
-      if (failed(preparePerBlockSingleWriterStencilDb(blockAlloc)))
-        return failure();
-      if (failed(emitPerBlockStencilHaloBeforeReadPhases(
-              builder, loc, blockAlloc, participants, &bridgePlan)))
-        return failure();
     }
   }
 
