@@ -62,8 +62,8 @@ bool coarseBridgeTargetHasCrossOwnerReduceConsumer(CodeletOp producer,
 ///   reduce_scatter iff the cross-owner transpose-reduce gate fires
 ///                  (codeletIsCrossOwnerTransposeReduce on this codelet, or its
 ///                   coarse target is read by one);
-///   halo           iff an iterative stencil producer carries full-timestep
-///                  repetition, or explicitly requests native stencil exchange;
+///   halo           iff a block-storage stencil dependency reads shifted owner
+///                  indices and therefore needs neighbor exchange;
 ///   none           otherwise.
 CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex);
 

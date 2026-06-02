@@ -8,7 +8,8 @@
 //     `replicated_read` sibling selects `all_gather`;
 //   - the cross-owner transpose-reduce step (atax/bicg A^T) selects
 //     `reduce_scatter`;
-//   - an iterative full-timestep stencil write selects `halo`;
+//   - an iterative full-timestep stencil read with shifted owner indices
+//     selects `halo`;
 //   - an in-place safe readwrite halo stencil selects `halo` and block storage;
 //   - owner-aligned deps select `none`.
 
@@ -113,6 +114,52 @@ module {
         memref.store %s1, %arg0[%owner, %owner] : memref<1024x1024xf64>
         codir.yield
       }
+    }
+    return
+  }
+
+  // halo: in a double-buffer stencil, the input state read with shifted owner
+  // indices is the halo participant. The forcing read is owner-aligned and the
+  // output is write-only, so neither may inherit halo intent from codelet-wide
+  // stencil offsets.
+  func.func @alternating_buffer_halo_read_collective(
+      %f: memref<1024x1024xf64>, %unew: memref<1024x1024xf64>,
+      %u: memref<1024x1024xf64>, %base_i: index, %base_j: index) {
+    codir.codelet deps(%f, %unew, %u : memref<1024x1024xf64>, memref<1024x1024xf64>, memref<1024x1024xf64>)
+        params(%base_i, %base_j : index, index)
+        attributes {access_max_offsets = [1, 1],
+                    access_min_offsets = [-1, -1],
+                    dep_modes = [#codir.access_mode<read>, #codir.access_mode<write>, #codir.access_mode<read>],
+                    dep_storage_views = [#codir.storage_view<host_whole>, #codir.storage_view<host_whole>, #codir.storage_view<host_whole>],
+                    distribution_kind = #codir.distribution_kind<owner_compute>,
+                    halo_shape = [1, 1],
+                    iteration_topology = #codir.iteration_topology<owner_tile>,
+                    logical_worker_slice = [16, 32],
+                    pattern = #codir.pattern<alternating_buffer_stencil>,
+                    plan_owner_dims = [0, 1],
+                    repetition_structure = #codir.repetition_structure<full_timestep>,
+                    spatial_dims = [0, 1],
+                    tile_owner_dims = [0, 1],
+                    tile_shape = [16, 32],
+                    write_footprint = [1, 1]} {
+    ^bb0(%forcing: memref<1024x1024xf64>, %dst: memref<1024x1024xf64>,
+         %src: memref<1024x1024xf64>, %i: index, %j: index):
+      %inner_c1 = arith.constant 1 : index
+      %row_m = arith.subi %i, %inner_c1 : index
+      %row_p = arith.addi %i, %inner_c1 : index
+      %col_m = arith.subi %j, %inner_c1 : index
+      %col_p = arith.addi %j, %inner_c1 : index
+      %f0 = memref.load %forcing[%i, %j] : memref<1024x1024xf64>
+      %n = memref.load %src[%row_m, %j] : memref<1024x1024xf64>
+      %s = memref.load %src[%row_p, %j] : memref<1024x1024xf64>
+      %w = memref.load %src[%i, %col_m] : memref<1024x1024xf64>
+      %e = memref.load %src[%i, %col_p] : memref<1024x1024xf64>
+      %sum0 = arith.addf %n, %s : f64
+      %sum1 = arith.addf %w, %e : f64
+      %sum2 = arith.addf %sum0, %sum1 : f64
+      %sum = arith.addf %sum2, %f0 : f64
+      memref.store %sum, %dst[%i, %j] : memref<1024x1024xf64>
+      codir.yield
     }
     return
   }
@@ -268,6 +315,12 @@ module {
 // CHECK-LABEL: func.func @halo_collective
 // CHECK: codir.codelet
 // CHECK-SAME: dep_collectives = [#codir.collective<halo>]
+
+// The double-buffer stencil selects halo only for the shifted read-state dep.
+// CHECK-LABEL: func.func @alternating_buffer_halo_read_collective
+// CHECK: codir.codelet
+// CHECK-SAME: dep_collectives = [#codir.collective<none>, #codir.collective<none>, #codir.collective<halo>]
+// CHECK-SAME: dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>, #codir.storage_view<compute_block>]
 
 // The in-place safe halo stencil is planned as block storage and selects halo;
 // readwrite must not fall through to host_whole/all_gather.

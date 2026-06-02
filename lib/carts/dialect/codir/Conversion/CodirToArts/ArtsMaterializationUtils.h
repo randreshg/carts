@@ -778,6 +778,8 @@ codirBackingBufferHaloWindows(Value rootMemref, unsigned memrefRank);
 static inline bool
 codirDepRequiresPhaseRedistributionBridge(codir::CodeletOp codelet,
                                           unsigned depIndex);
+static inline bool codirDepUsesHaloStencilStorage(codir::CodeletOp codelet,
+                                                  unsigned depIndex);
 static inline bool
 canMaterializeRawCodirDependencyWithPlan(Value root,
                                          codir::CodeletOp planSource);
@@ -1214,15 +1216,7 @@ codirBackingBufferHaloWindows(Value rootMemref, unsigned memrefRank) {
       if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != rootMemref)
         continue;
       unsigned depIdx = static_cast<unsigned>(idx);
-      std::optional<codir::CodirAccessMode> mode =
-          getCodirDepAccessMode(codelet, depIdx);
-      if (!mode)
-        continue;
-      bool haloStorageDep =
-          getFinalizedCodirDepCollectiveKind(codelet, depIdx) ==
-              codir::CodirCollectiveKind::halo ||
-          codelet.getEmitBlockNativeStencilAttr();
-      if (!codirAccessMayRead(*mode) && !haloStorageDep)
+      if (!codirDepUsesHaloStencilStorage(codelet, depIdx))
         continue;
       if (!canMaterializeRawCodirDependencyWithPlan(rootMemref, codelet))
         continue;
@@ -1231,8 +1225,7 @@ codirBackingBufferHaloWindows(Value rootMemref, unsigned memrefRank) {
         continue;
       for (CodirOwnerHaloWindow window :
            getCodirOwnerHaloWindows(codelet, depIdx, memrefRank,
-                                    /*requireReadOnly=*/!haloStorageDep &&
-                                        !codirAccessMayWrite(*mode)))
+                                    /*requireReadOnly=*/false))
         mergeCodirOwnerHaloWindow(unionWindows, window);
     }
   });
@@ -1441,16 +1434,12 @@ static inline bool codirDepUsesHaloStencilStorage(codir::CodeletOp codelet,
                                                   unsigned depIndex) {
   if (!codelet || depIndex >= codelet.getDeps().size())
     return false;
-  if (getFinalizedCodirDepCollectiveKind(codelet, depIndex) ==
-          codir::CodirCollectiveKind::halo ||
-      codelet.getEmitBlockNativeStencilAttr())
-    return true;
   if (!codirDepRequiresComputeBlockStorage(codelet, depIndex) ||
       !isCodirStencilPattern(codelet))
     return false;
-  std::optional<codir::CodirAccessMode> mode =
-      getCodirDepAccessMode(codelet, depIndex);
-  return mode && codirAccessMayRead(*mode) &&
+  return (getFinalizedCodirDepCollectiveKind(codelet, depIndex) ==
+              codir::CodirCollectiveKind::halo ||
+          codelet.getEmitBlockNativeStencilAttr()) &&
          codirDepHasHaloWindow(codelet, depIndex);
 }
 
@@ -3508,9 +3497,7 @@ emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
 
 static inline LogicalResult
 preparePerBlockSingleWriterStencilDb(arts::DbAllocOp blockAlloc) {
-  ModuleOp module =
-      blockAlloc ? blockAlloc->getParentOfType<ModuleOp>() : ModuleOp{};
-  if (!module || !arts::hasArtsInterNodeRuntime(module))
+  if (!blockAlloc)
     return failure();
   if (blockAlloc.getSizes().empty() || blockAlloc.getElementSizes().empty())
     return failure();
@@ -3879,9 +3866,8 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
 
   // Iterative stencil halo uses a distributed per-block DB plus
   // nearest-neighbor RO reads.
-  bool perBlockStencilHalo = bridgePlan.needsCopyOut &&
-                             bridgePlan.hasInterNodeRuntime &&
-                             bridgePlanHasHaloStencilStorage(bridgePlan);
+  bool perBlockStencilHalo =
+      bridgePlan.needsCopyOut && bridgePlanHasHaloStencilStorage(bridgePlan);
 
   if (needsCopyIn) {
     if (failed(materializeHostBlockCopyLoop(

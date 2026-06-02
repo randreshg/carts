@@ -137,6 +137,7 @@ module {
 
 // CHECK-LABEL: func.func @multi_dimensional_alternating_stencil_preserves_tile_owner_dims
 // CHECK: codir.codelet
+// CHECK-SAME: dep_collectives = [#codir.collective<none>, #codir.collective<none>, #codir.collective<halo>]
 // CHECK-SAME: dep_owner_dims = [{{\[}}0, 1], [0, 1], [0, 1]]
 // CHECK-SAME: dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>, #codir.storage_view<compute_block>]
 

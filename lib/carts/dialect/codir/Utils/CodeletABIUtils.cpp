@@ -1,5 +1,6 @@
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
 
+#include "carts/dialect/codir/Utils/CodirAccessTraceUtils.h"
 #include "carts/dialect/codir/Utils/CodirAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -156,7 +157,133 @@ static bool depHasBlockStoragePlan(CodeletOp codelet, unsigned depIndex) {
   return dims && !dims.empty();
 }
 
-static bool isStencilCollectiveLike(CodeletOp codelet) {
+static std::optional<SmallVector<unsigned, 4>>
+readUnsignedDims(ArrayAttr attr) {
+  std::optional<SmallVector<int64_t, 4>> rawDims = readI64ArrayAttr(attr);
+  if (!rawDims || rawDims->empty())
+    return std::nullopt;
+
+  SmallVector<unsigned, 4> dims;
+  dims.reserve(rawDims->size());
+  for (int64_t dim : *rawDims) {
+    if (dim < 0)
+      return std::nullopt;
+    dims.push_back(static_cast<unsigned>(dim));
+  }
+  return dims;
+}
+
+static std::optional<SmallVector<unsigned, 4>>
+getTileOwnerDims(CodeletOp codelet) {
+  return codelet ? readUnsignedDims(codelet.getTileOwnerDimsAttr())
+                 : std::nullopt;
+}
+
+static std::optional<SmallVector<unsigned, 4>>
+getDepOwnerDims(CodeletOp codelet, unsigned depIndex) {
+  ArrayAttr ownerDims = codelet ? codelet.getDepOwnerDimsAttr() : ArrayAttr{};
+  if (!ownerDims || depIndex >= ownerDims.size())
+    return std::nullopt;
+  auto dims = dyn_cast<ArrayAttr>(ownerDims[depIndex]);
+  if (!dims)
+    return std::nullopt;
+  return readUnsignedDims(dims);
+}
+
+static SmallVector<Value, 4> getOwnerBaseArguments(CodeletOp codelet,
+                                                   unsigned ownerDimCount) {
+  SmallVector<Value, 4> bases;
+  if (!codelet || codelet.getBody().empty() || ownerDimCount == 0 ||
+      codelet.getParams().size() < ownerDimCount)
+    return bases;
+
+  Block &body = codelet.getBody().front();
+  unsigned depCount = codelet.getDeps().size();
+  unsigned paramCount = codelet.getParams().size();
+  if (body.getNumArguments() < depCount + paramCount)
+    return bases;
+
+  bases.reserve(ownerDimCount);
+  unsigned firstOwnerParam = paramCount - ownerDimCount;
+  for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+    bases.push_back(body.getArgument(depCount + firstOwnerParam + slot));
+  return bases;
+}
+
+static bool isReadAccess(Operation *op) {
+  return isa<memref::LoadOp, affine::AffineLoadOp, polygeist::DynLoadOp>(op);
+}
+
+static bool depHasShiftedOwnerDimRead(CodeletOp codelet, unsigned depIndex) {
+  if (!codelet || codelet.getBody().empty() ||
+      depIndex >= codelet.getDeps().size())
+    return false;
+
+  Block &body = codelet.getBody().front();
+  if (depIndex >= body.getNumArguments())
+    return false;
+  Value depArg = body.getArgument(depIndex);
+  auto depType = dyn_cast<MemRefType>(depArg.getType());
+  if (!depType || depType.getRank() == 0)
+    return false;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
+      getTileOwnerDims(codelet);
+  if (!ownerDims || ownerDims->empty() || !tileOwnerDims)
+    return false;
+  SmallVector<Value, 4> ownerBases =
+      getOwnerBaseArguments(codelet, tileOwnerDims->size());
+  if (ownerBases.size() != tileOwnerDims->size())
+    return false;
+
+  bool found = false;
+  body.walk([&](Operation *op) {
+    if (found)
+      return WalkResult::interrupt();
+    if (!isReadAccess(op))
+      return WalkResult::advance();
+
+    auto access = getCodirMemoryAccessInfo(op);
+    if (!access)
+      return WalkResult::advance();
+
+    for (unsigned ownerDim : *ownerDims) {
+      if (ownerDim >= access->indices.size())
+        continue;
+      auto slotIt = llvm::find(*tileOwnerDims, ownerDim);
+      if (slotIt == tileOwnerDims->end())
+        continue;
+      unsigned ownerSlot =
+          static_cast<unsigned>(std::distance(tileOwnerDims->begin(), slotIt));
+      if (ownerSlot >= ownerBases.size())
+        continue;
+
+      Value ownerBase = ownerBases[ownerSlot];
+      CodirAccessOwnerDims traced = traceCodirAccessToRoot(
+          access->memref, access->indices, depArg, ownerBase);
+      if (traced.status != CodirAccessTraceStatus::Rooted)
+        continue;
+
+      int64_t constantOffset = 0;
+      Value stripped = ::mlir::carts::ValueAnalysis::stripConstantOffset(
+          access->indices[ownerDim], &constantOffset);
+      if (constantOffset == 0)
+        continue;
+      if (!indexSelectsOwnerSlice(stripped, ownerBase) &&
+          !indexSelectsOwnerSlice(access->indices[ownerDim], ownerBase))
+        continue;
+
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
+static bool isStencilPatternKind(CodeletOp codelet) {
   if (!codelet)
     return false;
   auto pattern = codelet.getPatternAttr();
@@ -172,8 +299,12 @@ static bool isStencilCollectiveLike(CodeletOp codelet) {
   default:
     return false;
   }
-  if (codelet.getEmitBlockNativeStencilAttr())
-    return true;
+  return true;
+}
+
+static bool codeletHasHaloAccessWindow(CodeletOp codelet) {
+  if (!codelet)
+    return false;
   auto hasHaloWindow = [](ArrayAttr offsets) {
     if (!offsets)
       return false;
@@ -184,10 +315,22 @@ static bool isStencilCollectiveLike(CodeletOp codelet) {
     }
     return false;
   };
+  return hasHaloWindow(codelet.getAccessMinOffsetsAttr()) ||
+         hasHaloWindow(codelet.getAccessMaxOffsetsAttr());
+}
+
+static bool isStencilReadHaloCandidate(CodeletOp codelet) {
+  return isStencilPatternKind(codelet) && codeletHasHaloAccessWindow(codelet);
+}
+
+static bool isStencilCollectiveLike(CodeletOp codelet) {
+  if (!isStencilPatternKind(codelet))
+    return false;
+  if (codelet.getEmitBlockNativeStencilAttr())
+    return true;
   if (codelet.getInPlaceSafeAttr() && codelet.getTileOwnerDimsAttr() &&
       codelet.getTileShapeAttr() && stencilWriteFitsInTile(codelet) &&
-      (hasHaloWindow(codelet.getAccessMinOffsetsAttr()) ||
-       hasHaloWindow(codelet.getAccessMaxOffsetsAttr())))
+      codeletHasHaloAccessWindow(codelet))
     return true;
   auto repetition = codelet.getRepetitionStructureAttr();
   return repetition &&
@@ -331,17 +474,24 @@ bool coarseBridgeTargetHasCrossOwnerReduceConsumer(CodeletOp producer,
 CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex) {
   if (!codelet || depIndex >= codelet.getDeps().size())
     return CodirCollectiveKind::none;
+  std::optional<CodirAccessMode> mode = getDepAccessMode(codelet, depIndex);
+  if (!mode)
+    return CodirCollectiveKind::none;
+
+  if (codirAccessMayRead(*mode) && isStencilReadHaloCandidate(codelet) &&
+      depHasBlockStoragePlan(codelet, depIndex) &&
+      depHasShiftedOwnerDimRead(codelet, depIndex))
+    return CodirCollectiveKind::halo;
+
   // The all-gather and cross-owner reduce gates only fire for a dep the codelet
   // WRITES (the coarse copy-out producer); the materializer evaluates them on
   // write-mode participants only. Mirror that here so a read dep that happens
   // to share a root with a written one is never mislabeled.
-  std::optional<CodirAccessMode> mode = getDepAccessMode(codelet, depIndex);
-  if (!mode || !codirAccessMayWrite(*mode))
+  if (!codirAccessMayWrite(*mode))
     return CodirCollectiveKind::none;
+
   if (depHasLayoutMismatchEvidence(codelet, depIndex, *mode)) {
     if (isStencilCollectiveLike(codelet)) {
-      if (depHasBlockStoragePlan(codelet, depIndex))
-        return CodirCollectiveKind::halo;
       return CodirCollectiveKind::none;
     }
     if (isReductionLike(codelet))
@@ -363,17 +513,6 @@ CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex) {
   if (codeletIsCrossOwnerTransposeReduce(codelet) ||
       coarseBridgeTargetHasCrossOwnerReduceConsumer(codelet, depIndex))
     return CodirCollectiveKind::reduce_scatter;
-  // Iterative stencil writes select nearest-neighbor halo exchange even without
-  // a layout mismatch, so the buffer stays a per-block single-writer
-  // distributed DB across timesteps. This covers BOTH in-place
-  // (stencil_tiling_nd) and double-buffered (alternating_buffer_stencil)
-  // iterative stencils -- the same set isStencilCollectiveLike already
-  // recognizes in the layout-mismatch branch above. Without this, a same-layout
-  // double-buffer jacobi stencil falls to `none` and is realized via a
-  // per-timestep host_whole<->block bridge copy.
-  if (isStencilCollectiveLike(codelet) &&
-      depHasBlockStoragePlan(codelet, depIndex))
-    return CodirCollectiveKind::halo;
   return CodirCollectiveKind::none;
 }
 
