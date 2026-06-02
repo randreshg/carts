@@ -172,8 +172,8 @@ struct ConvertCodirToArtsPass
       if (!canUseCodirOwnerSliceForAlloc(codelet, static_cast<unsigned>(idx),
                                          alloc))
         return false;
-      if (!codirDepAccessesStayWithinSingleOwnerSlice(
-              codelet, static_cast<unsigned>(idx)))
+      if (!codirDepCanUseBlockStorageAccess(codelet,
+                                            static_cast<unsigned>(idx)))
         return false;
     }
     return true;
@@ -333,7 +333,7 @@ struct ConvertCodirToArtsPass
       SmallVector<unsigned, 4> plannedBlockOwnerDimsForDep;
       if (codirDepAllowsComputeBlockStorage(codelet, depIdx) &&
           canUseCodirOwnerSliceForAlloc(codelet, depIdx, alloc) &&
-          codirDepAccessesStayWithinSingleOwnerSlice(codelet, depIdx) &&
+          codirDepCanUseBlockStorageAccess(codelet, depIdx) &&
           !codelet.getParams().empty()) {
         std::optional<SmallVector<unsigned, 4>> ownerDims =
             getCodirDepOwnerDims(codelet, depIdx);

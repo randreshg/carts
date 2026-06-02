@@ -12,6 +12,7 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
 
+#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
@@ -728,6 +729,104 @@ static std::optional<unsigned> mapLoopDimToPhysicalDim(sde::SdeSuIterateOp op,
   return loopDim;
 }
 
+static bool isBudgetReconciledElementwiseCandidate(sde::SdeSuIterateOp op) {
+  if (!op || op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr() ||
+      op.getInPlaceSharedStateAttr() ||
+      op.getReductionAccumulators().size() != 0)
+    return false;
+
+  auto classification = op.getStructuredClassification();
+  if (!classification)
+    return false;
+
+  return *classification == sde::SdeStructuredClassification::elementwise ||
+         *classification ==
+             sde::SdeStructuredClassification::elementwise_pipeline;
+}
+
+static std::optional<sde::LayoutGraphFact>
+selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op) {
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return std::nullopt;
+
+  std::optional<sde::LayoutGraphFact> selected;
+  for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
+    if (fact.role != sde::LayoutGraphRole::write || fact.ownerDims.size() < 2 ||
+        fact.budgetBlockShape.empty())
+      continue;
+    if (selected)
+      return std::nullopt;
+    selected = fact;
+  }
+  return selected;
+}
+
+static std::optional<PhysicalTilePlan>
+buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op) {
+  if (!isBudgetReconciledElementwiseCandidate(op))
+    return std::nullopt;
+
+  std::optional<sde::LayoutGraphFact> writeLayout =
+      selectSingleBudgetWriteLayoutFact(op);
+  if (!writeLayout)
+    return std::nullopt;
+
+  unsigned numDims = op.getLowerBounds().size();
+  if (numDims < writeLayout->ownerDims.size() ||
+      op.getSteps().size() != numDims)
+    return std::nullopt;
+
+  std::optional<sde::StructuredOutputLayoutPlan> outputPlan =
+      sde::findCompatibleOutputLayoutPlan(op);
+  if (!outputPlan || outputPlan->shape.empty() ||
+      outputPlan->shape.size() != writeLayout->budgetBlockShape.size() ||
+      outputPlan->physicalDimToLoopDim.size() != outputPlan->shape.size())
+    return std::nullopt;
+
+  for (int64_t rawOwnerDim : writeLayout->ownerDims) {
+    if (rawOwnerDim < 0 || static_cast<size_t>(rawOwnerDim) >=
+                               outputPlan->physicalDimToLoopDim.size())
+      return std::nullopt;
+    int64_t loopDim = outputPlan->physicalDimToLoopDim[rawOwnerDim];
+    if (loopDim < 0 || static_cast<unsigned>(loopDim) >= numDims)
+      return std::nullopt;
+  }
+
+  PhysicalTilePlan plan;
+  plan.ownerPhysicalDims.assign(writeLayout->ownerDims.begin(),
+                                writeLayout->ownerDims.end());
+  plan.blockShape.assign(writeLayout->budgetBlockShape.begin(),
+                         writeLayout->budgetBlockShape.end());
+  plan.tileIterations.assign(numDims, 1);
+
+  for (unsigned loopDim = 0; loopDim < numDims; ++loopDim) {
+    if (loopDim >= outputPlan->loopDimToPhysicalDim.size())
+      return std::nullopt;
+    int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
+    if (physicalDim < 0)
+      continue;
+    if (static_cast<size_t>(physicalDim) >= plan.blockShape.size())
+      return std::nullopt;
+    int64_t tile = plan.blockShape[physicalDim];
+    if (tile <= 0)
+      return std::nullopt;
+    std::optional<int64_t> step =
+        getPositiveConstantIndex(op.getSteps()[loopDim]);
+    if (!step || *step != 1)
+      return std::nullopt;
+    plan.tileIterations[loopDim] = tile;
+  }
+
+  if (llvm::all_of(plan.tileIterations, [](int64_t tile) { return tile <= 1; }))
+    return std::nullopt;
+
+  plan.topology = plan.ownerPhysicalDims.size() > 1
+                      ? sde::SdeIterationTopology::owner_tile
+                      : sde::SdeIterationTopology::owner_strip;
+  return plan;
+}
+
 static std::optional<SmallVector<int64_t, 4>>
 alignStaticShapeAttrToSteps(sde::SdeSuIterateOp op, ArrayAttr attr,
                             ArrayRef<Value> tiledSteps,
@@ -939,10 +1038,17 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       // Determine which dims are parallel (should tile) vs reduction (skip).
       SmallVector<bool> parallelMask = getParallelDimMask(op);
 
+      std::optional<PhysicalTilePlan> physicalTilePlan;
+      if (!directMatmul)
+        physicalTilePlan = buildBudgetReconciledElementwiseTilePlan(op);
+
       // Compute per-dim tile iterations.
       SmallVector<Value> perDimTileIter;
       if (directMatmul) {
         perDimTileIter.push_back(directMatmulPlan->rowTileValue);
+      } else if (physicalTilePlan) {
+        for (int64_t tile : physicalTilePlan->tileIterations)
+          perDimTileIter.push_back(createConstantIndex(rewriter, loc, tile));
       } else if (numDims == 1) {
         // 1-D fast path: preserves existing static trip count optimization.
         if (!parallelMask[0]) {
@@ -978,8 +1084,8 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           continue;
       }
 
-      std::optional<PhysicalTilePlan> physicalTilePlan =
-          buildNdStencilPhysicalTilePlan(op, *costModel);
+      if (!physicalTilePlan)
+        physicalTilePlan = buildNdStencilPhysicalTilePlan(op, *costModel);
       if (physicalTilePlan) {
         perDimTileIter.clear();
         for (int64_t tile : physicalTilePlan->tileIterations)

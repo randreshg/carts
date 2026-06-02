@@ -192,14 +192,14 @@ inferDepOwnerAccessDims(codir::CodeletOp codelet, unsigned depIndex) {
   return selectedDims;
 }
 
-/// A cross-owner transpose-reduce (e.g. `y = A^T tmp` with `A` distributed along
-/// the reduction axis) reads each reduced input along that array's NATIVE
+/// A cross-owner transpose-reduce (e.g. `y = A^T tmp` with `A` distributed
+/// along the reduction axis) reads each reduced input along that array's NATIVE
 /// distribution axis: the per-node reduction split (`reduce_scatter`, already
-/// selected by `chooseCollective`) then sums each node's native block instead of
-/// gathering the input to a coarse `host_whole` aggregate. The reduced inputs are
-/// the read deps whose `partial_reduction_dep_result_dim_maps` entry carries a
-/// reduced (`-1`) array dim. This is the reduction dual of the stencil
-/// native-read (`shouldDemoteStencilHaloReadToComputeBlock`) path.
+/// selected by `chooseCollective`) then sums each node's native block instead
+/// of gathering the input to a coarse `host_whole` aggregate. The reduced
+/// inputs are the read deps whose `partial_reduction_dep_result_dim_maps` entry
+/// carries a reduced (`-1`) array dim. This is the reduction dual of the
+/// stencil native-read (`shouldDemoteStencilHaloReadToComputeBlock`) path.
 static bool isCrossOwnerReduceReducedReadInput(codir::CodeletOp codelet,
                                                unsigned depIndex) {
   if (!codir::codeletIsCrossOwnerTransposeReduce(codelet))
@@ -247,9 +247,10 @@ getCommittedLayoutOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
 
 static std::optional<SmallVector<unsigned, 4>>
 getDepOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
-  // Reduced inputs of a cross-owner transpose-reduce are owned along the array's
-  // committed native distribution axis so the reduce_scatter realization reads
-  // each node's native block (not a coarse host_whole gather of the whole array).
+  // Reduced inputs of a cross-owner transpose-reduce are owned along the
+  // array's committed native distribution axis so the reduce_scatter
+  // realization reads each node's native block (not a coarse host_whole gather
+  // of the whole array).
   if (isCrossOwnerReduceReducedReadInput(codelet, depIndex))
     if (std::optional<SmallVector<unsigned, 4>> nativeDims =
             getCommittedLayoutOwnerDims(codelet, depIndex))
@@ -420,6 +421,18 @@ static bool storageViewUsesComputeBlock(codir::CodirStorageViewKind view) {
          view == codir::CodirStorageViewKind::phase_redistributed;
 }
 
+static bool stencilDepRequiresComputeBlock(codir::CodeletOp codelet,
+                                           unsigned depIndex);
+
+static bool isFullTimestepUniformCodelet(codir::CodeletOp codelet) {
+  auto pattern = codelet ? codelet.getPatternAttr() : nullptr;
+  if (!pattern || pattern.getValue() != codir::CodirPattern::uniform)
+    return false;
+  auto repetition = codelet.getRepetitionStructureAttr();
+  return repetition && repetition.getValue() ==
+                           codir::CodirRepetitionStructure::full_timestep;
+}
+
 static bool hasSameBlockStoragePlan(codir::CodeletOp lhs, unsigned lhsDepIndex,
                                     codir::CodeletOp rhs,
                                     unsigned rhsDepIndex) {
@@ -434,6 +447,57 @@ static bool hasSameBlockStoragePlan(codir::CodeletOp lhs, unsigned lhsDepIndex,
          lhs.getLogicalWorkerSliceAttr() == rhs.getLogicalWorkerSliceAttr();
 }
 
+static bool rootHasCompatibleStencilBlockParticipant(codir::CodeletOp seed,
+                                                     unsigned seedDepIndex,
+                                                     Value root) {
+  if (!seed || !root)
+    return false;
+  Operation *scope = seed->getParentOfType<ModuleOp>();
+  if (!scope)
+    return false;
+
+  bool found = false;
+  scope->walk([&](codir::CodeletOp candidate) {
+    if (found || candidate == seed)
+      return;
+    for (auto [idx, dep] : llvm::enumerate(candidate.getDeps())) {
+      unsigned candidateDepIndex = static_cast<unsigned>(idx);
+      if (stripStorageViews(dep) != root)
+        continue;
+      if (!stencilDepRequiresComputeBlock(candidate, candidateDepIndex))
+        continue;
+      if (!hasSameBlockStoragePlan(seed, seedDepIndex, candidate,
+                                   candidateDepIndex))
+        continue;
+      found = true;
+      return;
+    }
+  });
+  return found;
+}
+
+static bool
+shouldDemoteFullTimestepUniformDepToComputeBlock(codir::CodeletOp codelet,
+                                                 unsigned depIndex) {
+  if (!isFullTimestepUniformCodelet(codelet) ||
+      !hasTileOwnerSlicePlan(codelet) || depIndex >= codelet.getDeps().size())
+    return false;
+  std::optional<codir::CodirAccessMode> mode =
+      getDepAccessMode(codelet, depIndex);
+  if (!mode)
+    return false;
+  if (!depAccessesStayWithinSingleOwnerSlice(codelet, depIndex))
+    return false;
+  return rootHasCompatibleStencilBlockParticipant(
+      codelet, depIndex, stripStorageViews(codelet.getDeps()[depIndex]));
+}
+
+static bool depSemanticallyRequiresComputeBlock(codir::CodeletOp codelet,
+                                                unsigned depIndex) {
+  return stencilDepRequiresComputeBlock(codelet, depIndex) ||
+         shouldDemoteFullTimestepUniformDepToComputeBlock(codelet, depIndex);
+}
+
 static bool isCompatibleBlockStorageParticipant(codir::CodeletOp seed,
                                                 unsigned seedDepIndex,
                                                 codir::CodeletOp candidate,
@@ -444,10 +508,13 @@ static bool isCompatibleBlockStorageParticipant(codir::CodeletOp seed,
     return false;
   std::optional<codir::CodirStorageViewKind> view =
       getDepStorageViewKind(candidate, candidateDepIndex);
-  if (view && !storageViewUsesComputeBlock(*view))
+  bool semanticComputeBlock =
+      depSemanticallyRequiresComputeBlock(candidate, candidateDepIndex);
+  if (view && !storageViewUsesComputeBlock(*view) && !semanticComputeBlock)
     return false;
   if (!hasTileOwnerSlicePlan(candidate) ||
-      !depAccessesStayWithinSingleOwnerSlice(candidate, candidateDepIndex))
+      (!depAccessesStayWithinSingleOwnerSlice(candidate, candidateDepIndex) &&
+       !stencilDepRequiresComputeBlock(candidate, candidateDepIndex)))
     return false;
   return true;
 }
@@ -704,6 +771,12 @@ static bool shouldDemoteStencilHaloReadToComputeBlock(codir::CodeletOp codelet,
   return stencilWriteFitsInTile(codelet);
 }
 
+static bool stencilDepRequiresComputeBlock(codir::CodeletOp codelet,
+                                           unsigned depIndex) {
+  return shouldDemoteStencilWriteToComputeBlock(codelet, depIndex) ||
+         shouldDemoteStencilHaloReadToComputeBlock(codelet, depIndex);
+}
+
 static bool shouldUseReplicatedReadDep(codir::CodeletOp codelet,
                                        unsigned depIndex) {
   if (!isMatmulCodelet(codelet) && !isStencilCodelet(codelet))
@@ -768,15 +841,20 @@ static codir::CodirStorageViewKind
 chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
                   codir::CodirStorageViewKind requested) {
   // Reduced inputs of a cross-owner transpose-reduce stay block-distributed on
-  // their native axis regardless of the materializer's initial view (whole-token
-  // reads default to host_whole): the per-node reduce_scatter combine consumes
-  // each node's own block, so they must never collapse to a coarse host_whole
-  // gather. Mirrors the stencil halo native-read demotion, for the reduction.
+  // their native axis regardless of the materializer's initial view
+  // (whole-token reads default to host_whole): the per-node reduce_scatter
+  // combine consumes each node's own block, so they must never collapse to a
+  // coarse host_whole gather. Mirrors the stencil halo native-read demotion,
+  // for the reduction.
   if (isCrossOwnerReduceReducedReadInput(codelet, depIndex))
     return codir::CodirStorageViewKind::compute_block;
   bool stencilRequiresComputeBlock =
       shouldDemoteStencilWriteToComputeBlock(codelet, depIndex) ||
       shouldDemoteStencilHaloReadToComputeBlock(codelet, depIndex);
+  bool uniformRequiresComputeBlock =
+      shouldDemoteFullTimestepUniformDepToComputeBlock(codelet, depIndex);
+  bool semanticComputeBlock =
+      stencilRequiresComputeBlock || uniformRequiresComputeBlock;
   /// Replicated-read eligibility is a semantic property of the dep (matmul
   /// inner operand, or stencil read with halo crossing). The initial view the
   /// SDE→CODIR materializer stamps (host_whole for whole-storage tokens,
@@ -786,6 +864,9 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
        requested == codir::CodirStorageViewKind::compute_block) &&
       shouldUseReplicatedReadDep(codelet, depIndex))
     return codir::CodirStorageViewKind::replicated_read;
+  if (requested == codir::CodirStorageViewKind::host_whole &&
+      uniformRequiresComputeBlock)
+    requested = codir::CodirStorageViewKind::compute_block;
   if (requested == codir::CodirStorageViewKind::host_whole &&
       stencilRequiresComputeBlock)
     requested = codir::CodirStorageViewKind::compute_block;
@@ -802,7 +883,7 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
     // Stencil halo accesses cross the owner slice by construction; keep
     // compute_block when the stencil demote predicates authorize block-owned
     // storage with halo-fetched neighbors.
-    if (stencilRequiresComputeBlock)
+    if (semanticComputeBlock)
       return codir::CodirStorageViewKind::compute_block;
     return codir::CodirStorageViewKind::host_whole;
   }
@@ -813,7 +894,8 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
 
   bool needsHostBridge = isa_and_nonnull<BlockArgument>(root) ||
                          hasHostMemrefAccessOutsideCodelet(root);
-  if (needsHostBridge && shouldUseHostWholeReadOnlyDep(codelet, depIndex, dep))
+  if (needsHostBridge && !uniformRequiresComputeBlock &&
+      shouldUseHostWholeReadOnlyDep(codelet, depIndex, dep))
     return codir::CodirStorageViewKind::host_whole;
 
   if (needsSharedRootRedistribution(codelet, depIndex, dep)) {
