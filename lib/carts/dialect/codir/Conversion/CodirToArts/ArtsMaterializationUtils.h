@@ -1445,6 +1445,55 @@ static inline bool codirDepUsesHaloStencilStorage(codir::CodeletOp codelet,
 }
 
 static inline bool
+codirDepHasNoStencilReachAlongOwnerDims(codir::CodeletOp codelet,
+                                        unsigned depIndex) {
+  if (!codelet || depIndex >= codelet.getDeps().size())
+    return false;
+  auto memrefType = dyn_cast<MemRefType>(codelet.getDeps()[depIndex].getType());
+  if (!memrefType || memrefType.getRank() == 0)
+    return false;
+  if (!codelet.getAccessMinOffsetsAttr() || !codelet.getAccessMaxOffsetsAttr())
+    return false;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->empty())
+    return false;
+
+  unsigned memrefRank = static_cast<unsigned>(memrefType.getRank());
+  for (unsigned ownerDim : *ownerDims) {
+    std::optional<unsigned> ownerSlot = getCodirOwnerDimSlot(codelet, ownerDim);
+    std::optional<int64_t> minOffset = getCodirOwnerDimValue(
+        codelet.getAccessMinOffsetsAttr(), ownerDim, ownerSlot, memrefRank);
+    std::optional<int64_t> maxOffset = getCodirOwnerDimValue(
+        codelet.getAccessMaxOffsetsAttr(), ownerDim, ownerSlot, memrefRank);
+    if (!minOffset || !maxOffset)
+      return false;
+    if (*minOffset != 0 || *maxOffset != 0)
+      return false;
+  }
+  return true;
+}
+
+static inline bool
+codirDepUsesOwnerLocalStencilStorage(codir::CodeletOp codelet,
+                                     unsigned depIndex) {
+  if (!codelet || depIndex >= codelet.getDeps().size())
+    return false;
+  if (!codirDepRequiresComputeBlockStorage(codelet, depIndex) ||
+      !isCodirStencilPattern(codelet))
+    return false;
+  std::optional<codir::CodirAccessMode> mode =
+      getCodirDepAccessMode(codelet, depIndex);
+  if (!mode || !codirAccessMayRead(*mode) || codirAccessMayWrite(*mode))
+    return false;
+  if (getFinalizedCodirDepCollectiveKind(codelet, depIndex) !=
+      codir::CodirCollectiveKind::none)
+    return false;
+  return codirDepHasNoStencilReachAlongOwnerDims(codelet, depIndex);
+}
+
+static inline bool
 codirRootHasHaloStencilStorageParticipant(codir::CodeletOp codelet,
                                           unsigned depIndex) {
   if (!codelet || depIndex >= codelet.getDeps().size())
@@ -3097,6 +3146,40 @@ static inline bool bridgePlanHasHaloStencilStorage(const BridgePlan &plan) {
 }
 
 static inline bool
+bridgePlanHasOwnerLocalReadOnlyStencilStorage(const BridgePlan &plan) {
+  bool foundOwnerLocalStencilRead = false;
+  for (const HostBridgeParticipant &participant : plan.participants) {
+    codir::CodeletOp participantCodelet = participant.codelet;
+    if (!participantCodelet ||
+        participant.depIndex >= participantCodelet.getDeps().size())
+      return false;
+
+    if (!codirAccessMayRead(participant.mode)) {
+      if (codirAccessMayWrite(participant.mode))
+        return false;
+      continue;
+    }
+    if (codirAccessMayWrite(participant.mode))
+      return false;
+
+    if (!codirDepRequiresComputeBlockStorage(participantCodelet,
+                                             participant.depIndex) ||
+        !isCodirStencilPattern(participantCodelet))
+      continue;
+
+    if (codirDepUsesHaloStencilStorage(participantCodelet,
+                                       participant.depIndex))
+      return false;
+
+    if (!codirDepUsesOwnerLocalStencilStorage(participantCodelet,
+                                              participant.depIndex))
+      return false;
+    foundOwnerLocalStencilRead = true;
+  }
+  return foundOwnerLocalStencilRead;
+}
+
+static inline bool
 bridgePlanHasUnsupportedCollective(const BridgePlan &plan,
                                    codir::CodirCollectiveKind &collectiveKind) {
   for (const HostBridgeParticipant &participant : plan.participants) {
@@ -4245,6 +4328,18 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
   // nearest-neighbor RO reads.
   bool perBlockStencilHalo =
       bridgePlan.needsCopyOut && bridgePlanHasHaloStencilStorage(bridgePlan);
+
+  // Read-only stencil bridges with zero reach along the committed owner
+  // dimensions are block-local after the host-whole -> compute-block copy-in.
+  // Commit the existing per-block single-writer stencil fact here so ARTS
+  // realizes distributed ownership from CODIR's storage transition instead of
+  // re-deriving a benchmark-specific exception.
+  bool ownerLocalReadOnlyStencilBridge =
+      bridgePlanHasOwnerLocalReadOnlyStencilStorage(bridgePlan);
+  if (ownerLocalReadOnlyStencilBridge) {
+    if (failed(preparePerBlockSingleWriterStencilDb(blockAlloc)))
+      return failure();
+  }
 
   if (needsCopyIn) {
     if (failed(materializeHostBlockCopyLoop(
