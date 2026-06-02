@@ -99,26 +99,12 @@ void EpochLoweringPass::runOnOperation() {
       continue;
     }
 
-    /// Check if this epoch is marked for persistent structured region lowering.
-    /// When set, worker EDTs within this epoch are expected to maintain stable
-    /// owner-local slices across multiple logical timesteps.
-    bool isPersistent = epochOp.getPersistentRegion().value_or(false);
-    if (isPersistent) {
-      ARTS_INFO("  Persistent structured region: epoch will use stable "
-                "owner-strip execution");
-    }
-
     /// Create the CreateEpochOp.
     AC->setInsertionPoint(epochOp);
     auto createEpochOp = AC->create<CreateEpochOp>(
         epochOp.getLoc(), IntegerType::get(AC->getContext(), 64),
-        /*finishEdtGuid=*/Value(), /*finishSlot=*/Value(),
-        /*persistent_region=*/UnitAttr());
+        /*finishEdtGuid=*/Value(), /*finishSlot=*/Value());
     auto currentEpoch = createEpochOp.getEpochGuid();
-
-    /// Propagate persistent region flag to the lowered CreateEpochOp.
-    if (isPersistent)
-      createEpochOp.setPersistentRegion(true);
 
     /// Collect EdtCreateOps that need the epoch GUID.
     SmallVector<EdtCreateOp, 8> edtCreatesToUpdate;

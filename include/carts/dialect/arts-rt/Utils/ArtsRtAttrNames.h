@@ -24,15 +24,6 @@ inline constexpr llvm::StringLiteral NoStartEpoch = "arts.no_start_epoch";
 
 } // namespace Operation
 
-/// Split launch state schema markers stamped on the host launch helper to
-/// pin the state/dep payload layouts decided during ARTS lowering.
-namespace LaunchState {
-
-inline constexpr llvm::StringLiteral StateSchema = "arts.launch.state_schema";
-inline constexpr llvm::StringLiteral DepSchema = "arts.launch.dep_schema";
-
-} // namespace LaunchState
-
 /// RT-facing loop execution hints copied onto outlined EDT functions. These
 /// live on func/LLVM function ops, so they cannot be ODS accessors on
 /// arts_rt ops; in-dialect producers use generated accessors and copy the

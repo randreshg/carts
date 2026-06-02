@@ -22,7 +22,7 @@ module {
     %c4 = arith.constant 4 : index
     %c-1_i32 = arith.constant -1 : i32
     %zero = arith.constant 0.000000e+00 : f64
-    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%c-1_i32 : i32) sizes[%c4] elementType(f64) elementSizes[%c64] : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>] route(%c-1_i32 : i32) sizes[%c4] elementType(f64) elementSizes[%c64] : (memref<?xi64>, memref<?xmemref<?xf64>>)
     %base = arith.muli %block, %c64 : index
     %neg_base = arith.subi %c0, %base : index
     %below_zero = arith.cmpi slt, %neg_base, %c0 : index

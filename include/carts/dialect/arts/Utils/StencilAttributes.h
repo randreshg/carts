@@ -25,7 +25,6 @@ enum class StencilAttrKind {
   MaxOffsets,
   SpatialDims,
   OwnerDims,
-  BlockShape,
   WriteFootprint,
   SupportedBlockHalo,
 };
@@ -43,8 +42,6 @@ inline StringAttr getGeneratedStencilAttrName(OpT op, StencilAttrKind kind) {
     return op.getStencilSpatialDimsAttrName();
   case StencilAttrKind::OwnerDims:
     return op.getStencilOwnerDimsAttrName();
-  case StencilAttrKind::BlockShape:
-    return op.getStencilBlockShapeAttrName();
   case StencilAttrKind::WriteFootprint:
     return op.getStencilWriteFootprintAttrName();
   case StencilAttrKind::SupportedBlockHalo:
@@ -120,13 +117,6 @@ getStencilOwnerDims(Operation *op) {
 }
 
 inline std::optional<SmallVector<int64_t, 4>>
-getStencilBlockShape(Operation *op) {
-  StringAttr name =
-      detail::getStencilAttrName(op, detail::StencilAttrKind::BlockShape);
-  return name ? readI64ArrayAttr(op, name) : std::nullopt;
-}
-
-inline std::optional<SmallVector<int64_t, 4>>
 getStencilWriteFootprint(Operation *op) {
   StringAttr name =
       detail::getStencilAttrName(op, detail::StencilAttrKind::WriteFootprint);
@@ -149,7 +139,6 @@ inline void copyStencilContractAttrs(Operation *source, Operation *dest) {
            detail::StencilAttrKind::MaxOffsets,
            detail::StencilAttrKind::SpatialDims,
            detail::StencilAttrKind::OwnerDims,
-           detail::StencilAttrKind::BlockShape,
            detail::StencilAttrKind::WriteFootprint,
            detail::StencilAttrKind::SupportedBlockHalo,
        }) {

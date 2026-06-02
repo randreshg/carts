@@ -216,16 +216,6 @@ def PartitionMode
 /// Enum attribute for DB partition modes
 def PartitionModeAttr : Arts_I32EnumAttr<"partition_mode", PartitionMode>;
 
-/// DB access pattern classification used by DB layout and acquire rewriting.
-def DbAccessPattern
-    : Arts_I32Enum<"DbAccessPattern", "DB access pattern classification", [
-      I32EnumAttrCase<"unknown", 0, "unknown">,
-      I32EnumAttrCase<"uniform", 1, "uniform">,
-      I32EnumAttrCase<"stencil", 2, "stencil">,
-      I32EnumAttrCase<"indexed", 3, "indexed">
-    ]>;
-def DbAccessPatternAttr : Arts_I32EnumAttr<"access_pattern", DbAccessPattern>;
-
 /// Distribution strategy carried by SDE/CODIR-authored ARTS materialization plans.
 def EdtDistributionKind
     : Arts_I32Enum<"EdtDistributionKind", "EDT distribution strategy kind", [

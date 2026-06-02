@@ -395,9 +395,6 @@ mlir::carts::arts::getSemanticContract(Operation *op) {
   info.pattern.revision = getPatternRevision(op);
   if (auto ownerDims = getStencilOwnerDims(op))
     info.spatial.ownerDims.assign(ownerDims->begin(), ownerDims->end());
-  if (auto blockShape = getStencilBlockShape(op))
-    info.spatial.staticBlockShape.assign(blockShape->begin(),
-                                         blockShape->end());
   if (auto minOffsets = getStencilMinOffsets(op))
     info.spatial.staticMinOffsets.assign(minOffsets->begin(),
                                          minOffsets->end());
@@ -433,8 +430,6 @@ mlir::carts::arts::getLoweringContract(Operation *op, OpBuilder &builder,
 
   LoweringContractInfo info =
       getSemanticContract(op).value_or(LoweringContractInfo{});
-  if (auto blockShape = getStencilBlockShape(op))
-    info.spatial.blockShape = materializeIndexValues(builder, loc, *blockShape);
   if (auto minOffsets = getStencilMinOffsets(op))
     info.spatial.minOffsets = materializeIndexValues(builder, loc, *minOffsets);
   if (auto maxOffsets = getStencilMaxOffsets(op))

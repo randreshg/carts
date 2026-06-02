@@ -70,10 +70,6 @@ using namespace llvm;
 // RelaunchStateSoundness) live in
 // carts/dialect/arts/Utils/ArtsAttrNames.h.
 
-// `persistent_region` is an ODS-declared UnitAttr on arts.epoch and
-// arts_rt.create_epoch; consumers must use the generated
-// op.getPersistentRegion() / op.setPersistentRegion(...) accessors.
-
 } // namespace Operation
 
 } // namespace AttrNames

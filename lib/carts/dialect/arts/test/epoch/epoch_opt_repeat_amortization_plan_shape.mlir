@@ -7,7 +7,7 @@ module {
     %c4 = arith.constant 4 : index
     %route = arith.constant 0 : i32
 
-    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {planOwnerDims = [0], planPhysicalBlockShape = [1], planLogicalWorkerSlice = [1], planIterationTopology = #arts.plan_iteration_topology<owner_tile>, planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {planOwnerDims = [0], planPhysicalBlockShape = [1], planLogicalWorkerSlice = [1], planIterationTopology = #arts.plan_iteration_topology<owner_tile>, planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
     scf.for %i = %c0 to %c4 step %c1 {
       arts.epoch attributes {depPattern = #arts.dep_pattern<uniform>, planIterationTopology = #arts.plan_iteration_topology<owner_tile>, planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>} {
         %acq_guid, %acq_ptr = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] {depPattern = #arts.dep_pattern<uniform>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
@@ -30,7 +30,7 @@ module {
     %c4 = arith.constant 4 : index
     %route = arith.constant 0 : i32
 
-    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {planOwnerDims = [0], planPhysicalBlockShape = [1], planLogicalWorkerSlice = [1], planHaloShape = [1], planIterationTopology = #arts.plan_iteration_topology<owner_tile>, planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {planOwnerDims = [0], planPhysicalBlockShape = [1], planLogicalWorkerSlice = [1], planHaloShape = [1], planIterationTopology = #arts.plan_iteration_topology<owner_tile>, planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>} : (memref<?xi64>, memref<?xmemref<?xf64>>)
     scf.for %i = %c0 to %c4 step %c1 {
       arts.epoch attributes {depPattern = #arts.dep_pattern<uniform>, planHaloShape = [1], planIterationTopology = #arts.plan_iteration_topology<owner_tile>, planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>} {
         %acq_guid, %acq_ptr = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] {depPattern = #arts.dep_pattern<uniform>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)

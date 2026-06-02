@@ -23,7 +23,6 @@ struct DbOwnerMapPlan {
   DbOwnerMapKind kind = DbOwnerMapKind::linear_mod_nodes;
   SmallVector<int64_t, 4> dims;
   SmallVector<int64_t, 4> blockShape;
-  SmallVector<int64_t, 4> nodeShape;
 };
 
 enum class DbOwnerMapContractFailure {
@@ -71,8 +70,6 @@ inline std::optional<DbOwnerMapPlan> getDbOwnerMapPlan(DbAllocOp alloc) {
   plan.kind = kindAttr.getValue();
   plan.dims.assign(dims->begin(), dims->end());
   plan.blockShape.assign(blockShape->begin(), blockShape->end());
-  if (auto nodeShape = readI64ArrayAttr(alloc.getOwnerNodeShapeAttr()))
-    plan.nodeShape.assign(nodeShape->begin(), nodeShape->end());
   return plan;
 }
 
@@ -480,8 +477,6 @@ inline void copyDbOwnerMapAttrs(DbAllocOp source, DbAllocOp dest) {
     dest.setOwnerMapDimsAttr(attr);
   if (auto attr = source.getOwnerBlockShapeAttr())
     dest.setOwnerBlockShapeAttr(attr);
-  if (auto attr = source.getOwnerNodeShapeAttr())
-    dest.setOwnerNodeShapeAttr(attr);
 }
 
 } // namespace mlir::carts::arts

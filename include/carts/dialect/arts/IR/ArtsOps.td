@@ -111,7 +111,6 @@ def DbAllocOp : Arts_Op<"db_alloc",
     Variadic<Index>:$elementSizes,
     OptionalAttr<UnitAttr>:$distributed,
     OptionalAttr<PartitionModeAttr>:$partition_mode,
-    OptionalAttr<DbAccessPatternAttr>:$access_pattern,
     OptionalAttr<ArtsDepPatternAttr>:$depPattern,
     OptionalAttr<EdtDistributionKindAttr>:$distribution_kind,
     OptionalAttr<EdtDistributionPatternAttr>:$distribution_pattern,
@@ -121,7 +120,6 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<ArrayAttr>:$stencil_max_offsets,
     OptionalAttr<ArrayAttr>:$stencil_spatial_dims,
     OptionalAttr<ArrayAttr>:$stencil_owner_dims,
-    OptionalAttr<ArrayAttr>:$stencil_block_shape,
     OptionalAttr<ArrayAttr>:$stencil_write_footprint,
     OptionalAttr<UnitAttr>:$stencil_supported_block_halo,
     OptionalAttr<ArrayAttr>:$planOwnerDims,
@@ -136,7 +134,6 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<I32Attr>:$owner_map_version,
     OptionalAttr<ArrayAttr>:$owner_map_dims,
     OptionalAttr<ArrayAttr>:$owner_block_shape,
-    OptionalAttr<ArrayAttr>:$owner_node_shape,
     OptionalAttr<UnitAttr>:$local_only,
     OptionalAttr<UnitAttr>:$read_only_after_init,
     // Per-block all-gather replica: every block stays local on every node.
@@ -147,7 +144,7 @@ def DbAllocOp : Arts_Op<"db_alloc",
   );
   let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
   let assemblyFormat = [{
-    `[` $mode `,` $allocType `,` $dbMode (`,` $partition_mode^)? (`,` $access_pattern^)? `]`
+    `[` $mode `,` $allocType `,` $dbMode (`,` $partition_mode^)? `]`
     `route` `(` $route `:` type($route) `)`
     ( `(` $address^ `:` type($address) `)` )?
     `sizes` `[` $sizes `]`
@@ -279,7 +276,6 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     OptionalAttr<ArrayAttr>:$stencil_max_offsets,
     OptionalAttr<ArrayAttr>:$stencil_spatial_dims,
     OptionalAttr<ArrayAttr>:$stencil_owner_dims,
-    OptionalAttr<ArrayAttr>:$stencil_block_shape,
     OptionalAttr<ArrayAttr>:$stencil_write_footprint,
     OptionalAttr<UnitAttr>:$stencil_supported_block_halo,
     /// Segment attributes for multiple partition entries
@@ -696,7 +692,6 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<ArrayAttr>:$stencil_max_offsets,
     OptionalAttr<ArrayAttr>:$stencil_spatial_dims,
     OptionalAttr<ArrayAttr>:$stencil_owner_dims,
-    OptionalAttr<ArrayAttr>:$stencil_block_shape,
     OptionalAttr<ArrayAttr>:$stencil_write_footprint,
     OptionalAttr<UnitAttr>:$stencil_supported_block_halo,
     OptionalAttr<ArrayAttr>:$planOwnerDims,
@@ -788,7 +783,6 @@ def EpochOp
     OptionalAttr<ArrayAttr>:$stencil_max_offsets,
     OptionalAttr<ArrayAttr>:$stencil_spatial_dims,
     OptionalAttr<ArrayAttr>:$stencil_owner_dims,
-    OptionalAttr<ArrayAttr>:$stencil_block_shape,
     OptionalAttr<ArrayAttr>:$stencil_write_footprint,
     OptionalAttr<UnitAttr>:$stencil_supported_block_halo,
     OptionalAttr<ArrayAttr>:$planOwnerDims,
@@ -797,8 +791,7 @@ def EpochOp
     OptionalAttr<ArrayAttr>:$planHaloShape,
     OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
     OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure,
-    OptionalAttr<ArtsPlanAsyncStrategyAttr>:$planAsyncStrategy,
-    OptionalAttr<UnitAttr>:$persistent_region
+    OptionalAttr<ArtsPlanAsyncStrategyAttr>:$planAsyncStrategy
   );
   let regions = (region SizedRegion<1> : $body);
   let results = (outs I64 : $epochGuid);

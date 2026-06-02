@@ -14,7 +14,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
     %c8 = arith.constant 8 : index
     %c512 = arith.constant 512 : index
     %c784 = arith.constant 784 : index
-    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%route : i32) sizes[%c64] elementType(f32) elementSizes[%c8, %c512, %c784] {depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, planIterationTopology = #arts.plan_iteration_topology<owner_strip>, planLogicalWorkerSlice = [8, 512, 784], planOwnerDims = [0], planPhysicalBlockShape = [8, 512, 784]} : (memref<?xi64>, memref<?xmemref<?x?x?xf32>>)
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>] route(%route : i32) sizes[%c64] elementType(f32) elementSizes[%c8, %c512, %c784] {depPattern = #arts.dep_pattern<uniform>, distribution_kind = #arts.distribution_kind<block>, distribution_pattern = #arts.distribution_pattern<uniform>, distribution_version = 1 : i32, planIterationTopology = #arts.plan_iteration_topology<owner_strip>, planLogicalWorkerSlice = [8, 512, 784], planOwnerDims = [0], planPhysicalBlockShape = [8, 512, 784]} : (memref<?xi64>, memref<?xmemref<?x?x?xf32>>)
     return
   }
 }

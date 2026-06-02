@@ -13,7 +13,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
     %c1 = arith.constant 1 : index
     %cst = arith.constant 1.000000e+00 : f64
 
-    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <coarse>, <uniform>] route(%c-1_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c1] : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%c-1_i32 : i32) sizes[%c1] elementType(f64) elementSizes[%c1] : (memref<?xi64>, memref<?xmemref<?xf64>>)
     %view = arts.db_ref %ptr[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
 
     %epoch = arts.epoch {

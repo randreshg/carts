@@ -466,17 +466,6 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
         ::mlir::carts::arts_rt::AttrNames::Operation::ReadyLocalLaunch,
         AC->getBuilder().getUnitAttr());
 
-  /// Preserve structured launch schemas on the lowered create op for consumers
-  /// that need the explicit state/dependency ABI.
-  if (auto stateSchema = edtOp->getAttrOfType<DenseI64ArrayAttr>(
-          ::mlir::carts::arts_rt::AttrNames::LaunchState::StateSchema))
-    outlineOp->setAttr(
-        ::mlir::carts::arts_rt::AttrNames::LaunchState::StateSchema,
-        stateSchema);
-  if (auto depSchema = edtOp->getAttrOfType<DenseI64ArrayAttr>(
-          ::mlir::carts::arts_rt::AttrNames::LaunchState::DepSchema))
-    outlineOp->setAttr(
-        ::mlir::carts::arts_rt::AttrNames::LaunchState::DepSchema, depSchema);
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)
     baseId = idRegistry.getOrCreate(edtOp.getOperation());
