@@ -164,54 +164,6 @@ inline ArtsPlanAsyncStrategyAttr getPlanAsyncStrategyAttr(Operation *op) {
   return nullptr;
 }
 
-inline IntegerAttr getPlanCostSchedulerOverheadAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanCostSchedulerOverheadAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanCostSchedulerOverheadAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanCostSchedulerOverheadAttr();
-  return nullptr;
-}
-
-inline IntegerAttr getPlanCostSliceWideningPressureAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanCostSliceWideningPressureAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanCostSliceWideningPressureAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanCostSliceWideningPressureAttr();
-  return nullptr;
-}
-
-inline IntegerAttr getPlanCostExpectedLocalWorkAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanCostExpectedLocalWorkAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanCostExpectedLocalWorkAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanCostExpectedLocalWorkAttr();
-  return nullptr;
-}
-
-inline IntegerAttr getPlanCostRelaunchAmortizationAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanCostRelaunchAmortizationAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanCostRelaunchAmortizationAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanCostRelaunchAmortizationAttr();
-  return nullptr;
-}
-
 inline void setPlanOwnerDimsAttr(Operation *op, ArrayAttr attr) {
   if (!op || !attr)
     return;
@@ -293,52 +245,6 @@ inline void setPlanAsyncStrategyAttr(Operation *op,
     dbAllocOp.setPlanAsyncStrategyAttr(attr);
 }
 
-inline void setPlanCostSchedulerOverheadAttr(Operation *op, IntegerAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanCostSchedulerOverheadAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanCostSchedulerOverheadAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanCostSchedulerOverheadAttr(attr);
-}
-
-inline void setPlanCostSliceWideningPressureAttr(Operation *op,
-                                                 IntegerAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanCostSliceWideningPressureAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanCostSliceWideningPressureAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanCostSliceWideningPressureAttr(attr);
-}
-
-inline void setPlanCostExpectedLocalWorkAttr(Operation *op, IntegerAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanCostExpectedLocalWorkAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanCostExpectedLocalWorkAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanCostExpectedLocalWorkAttr(attr);
-}
-
-inline void setPlanCostRelaunchAmortizationAttr(Operation *op,
-                                                IntegerAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanCostRelaunchAmortizationAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanCostRelaunchAmortizationAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanCostRelaunchAmortizationAttr(attr);
-}
-
 /// Check whether a CARTS operation carries any structured plan attr. This is a
 /// generic contract-presence test; callers that need semantic families should
 /// consume explicit dep/distribution contract attrs instead.
@@ -346,11 +252,7 @@ inline bool hasStructuredPlanAttrs(Operation *op) {
   return getPlanOwnerDimsAttr(op) || getPlanPhysicalBlockShapeAttr(op) ||
          getPlanLogicalWorkerSliceAttr(op) || getPlanHaloShapeAttr(op) ||
          getPlanIterationTopologyAttr(op) ||
-         getPlanRepetitionStructureAttr(op) || getPlanAsyncStrategyAttr(op) ||
-         getPlanCostSchedulerOverheadAttr(op) ||
-         getPlanCostSliceWideningPressureAttr(op) ||
-         getPlanCostExpectedLocalWorkAttr(op) ||
-         getPlanCostRelaunchAmortizationAttr(op);
+         getPlanRepetitionStructureAttr(op) || getPlanAsyncStrategyAttr(op);
 }
 
 inline std::optional<StringRef> getRuntimeConfigPath(ModuleOp module) {

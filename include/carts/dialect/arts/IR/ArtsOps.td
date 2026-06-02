@@ -131,10 +131,6 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
     OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure,
     OptionalAttr<ArtsPlanAsyncStrategyAttr>:$planAsyncStrategy,
-    OptionalAttr<I64Attr>:$planCostSchedulerOverhead,
-    OptionalAttr<I64Attr>:$planCostSliceWideningPressure,
-    OptionalAttr<I64Attr>:$planCostExpectedLocalWork,
-    OptionalAttr<I64Attr>:$planCostRelaunchAmortization,
     OptionalAttr<StorageBridgeAttr>:$storage_bridge,
     OptionalAttr<DbOwnerMapKindAttr>:$owner_map_kind,
     OptionalAttr<I32Attr>:$owner_map_version,
@@ -720,10 +716,6 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<I64Attr>:$partialReductionSplitFactor,
     OptionalAttr<I64Attr>:$partialReductionSplitOwnerTaskCount,
     OptionalAttr<I64Attr>:$partialReductionSplitTargetWorkerCount,
-    OptionalAttr<I64Attr>:$planCostSchedulerOverhead,
-    OptionalAttr<I64Attr>:$planCostSliceWideningPressure,
-    OptionalAttr<I64Attr>:$planCostExpectedLocalWork,
-    OptionalAttr<I64Attr>:$planCostRelaunchAmortization,
     OptionalAttr<I64Attr>:$critical_path_distance,
     Variadic<AnyMemRef>:$dependencies,
     Variadic<AnyType>:$params
@@ -806,10 +798,6 @@ def EpochOp
     OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
     OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure,
     OptionalAttr<ArtsPlanAsyncStrategyAttr>:$planAsyncStrategy,
-    OptionalAttr<I64Attr>:$planCostSchedulerOverhead,
-    OptionalAttr<I64Attr>:$planCostSliceWideningPressure,
-    OptionalAttr<I64Attr>:$planCostExpectedLocalWork,
-    OptionalAttr<I64Attr>:$planCostRelaunchAmortization,
     OptionalAttr<UnitAttr>:$persistent_region
   );
   let regions = (region SizedRegion<1> : $body);

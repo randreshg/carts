@@ -6,6 +6,7 @@
 
 #include "EpochOptInternal.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Debug.h"
 
 ARTS_DEBUG_SETUP(epoch_opt);
@@ -185,9 +186,16 @@ static bool isStableRepeatTopology(Operation *op) {
           topology.getValue() == ArtsPlanIterationTopology::owner_tile);
 }
 
-static bool hasZeroSliceWideningPressure(Operation *op) {
-  auto attr = getPlanCostSliceWideningPressureAttr(op);
-  return attr && attr.getInt() == 0;
+static bool hasNoPlannedHaloWidening(Operation *op) {
+  ArrayAttr haloShape = getPlanHaloShapeAttr(op);
+  if (!haloShape)
+    return true;
+
+  std::optional<SmallVector<int64_t, 4>> haloExtents =
+      readI64ArrayAttr(haloShape);
+  if (!haloExtents)
+    return false;
+  return llvm::all_of(*haloExtents, [](int64_t extent) { return extent == 0; });
 }
 
 static bool epochHasRepeatStableUniformPlan(EpochOp epochOp) {
@@ -196,7 +204,7 @@ static bool epochHasRepeatStableUniformPlan(EpochOp epochOp) {
   auto repetition = getPlanRepetitionStructureAttr(op);
   return depPattern && isUniformFamilyDepPattern(*depPattern) && repetition &&
          repetition.getValue() == ArtsPlanRepetitionStructure::full_timestep &&
-         isStableRepeatTopology(op) && hasZeroSliceWideningPressure(op);
+         isStableRepeatTopology(op) && hasNoPlannedHaloWidening(op);
 }
 
 static bool acquireHasRepeatStableUniformSlice(DbAcquireOp acquire) {
