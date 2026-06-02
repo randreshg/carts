@@ -26,6 +26,14 @@ SmallVector<int64_t, 4>
 factorStencilWorkersAcrossDims(int64_t workers, ArrayRef<int64_t> extents,
                                ArrayRef<int64_t> haloRadii);
 
+/// Refine an existing physical block shape so owner dimensions expose at least
+/// the target source-level concurrency implied by `targetComputeUnits` when
+/// the owner extents permit it. This only caps owner-dim block extents; it
+/// never coarsens existing DB/MU grain and never touches non-owner dimensions.
+bool enforceOwnerBlockConcurrencyFloor(
+    ArrayRef<int64_t> shape, ArrayRef<int64_t> ownerPhysicalDims,
+    int64_t targetComputeUnits, SmallVectorImpl<int64_t> &physicalBlockShape);
+
 /// Ratio of halo-expanded tile volume to owned tile volume for a stencil
 /// distribution. Captures the per-tile network footprint inflation caused by
 /// perimeter halo reads. Returns +infinity if any owned dimension collapses

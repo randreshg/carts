@@ -1079,7 +1079,6 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
 // authority and the iteration-space decomposition re-tiles to the block.
 static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
                                       sde::SDECostModel &costModel) {
-  (void)costModel;
   if (!op || hasPhysicalLayoutPlan(op) ||
       sde::hasCommittedCuMuPartitionEvidence(op.getOperation()))
     return false;
@@ -1126,6 +1125,10 @@ static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
     return false;
   SmallVector<int64_t, 4> blockShape(writeLayout->budgetBlockShape.begin(),
                                      writeLayout->budgetBlockShape.end());
+  if (!sde::enforceOwnerBlockConcurrencyFloor(
+          outputPlan->shape, ownerDims,
+          getInterLocalityTargetWorkers(costModel), blockShape))
+    return false;
   // Per-owner-dim halo from the op's stencil access offsets (0 for
   // non-stencils). Not compared by hasSameHostBridgePlan, but needed for
   // correct halo exchange.

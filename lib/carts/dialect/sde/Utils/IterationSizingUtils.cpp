@@ -133,6 +133,37 @@ factorStencilWorkersAcrossDims(int64_t workers, ArrayRef<int64_t> extents,
   return grid;
 }
 
+bool enforceOwnerBlockConcurrencyFloor(
+    ArrayRef<int64_t> shape, ArrayRef<int64_t> ownerPhysicalDims,
+    int64_t targetComputeUnits, SmallVectorImpl<int64_t> &physicalBlockShape) {
+  if (shape.empty() || ownerPhysicalDims.empty() ||
+      shape.size() != physicalBlockShape.size())
+    return false;
+
+  SmallVector<int64_t, 4> ownerExtents;
+  ownerExtents.reserve(ownerPhysicalDims.size());
+  for (int64_t physicalDim : ownerPhysicalDims) {
+    if (physicalDim < 0 || static_cast<size_t>(physicalDim) >= shape.size())
+      return false;
+    if (shape[physicalDim] <= 0 || physicalBlockShape[physicalDim] <= 0)
+      return false;
+    ownerExtents.push_back(shape[physicalDim]);
+  }
+
+  SmallVector<int64_t, 4> workerGrid = factorWorkersAcrossDims(
+      std::max<int64_t>(1, targetComputeUnits), ownerExtents);
+  if (workerGrid.size() != ownerPhysicalDims.size())
+    return false;
+
+  for (auto [idx, physicalDim] : llvm::enumerate(ownerPhysicalDims)) {
+    int64_t balancedBlock =
+        ceilDivPositive(shape[physicalDim], workerGrid[idx]);
+    physicalBlockShape[physicalDim] =
+        std::min<int64_t>(physicalBlockShape[physicalDim], balancedBlock);
+  }
+  return true;
+}
+
 int64_t haloExpandedTileBytes(ArrayRef<int64_t> extents,
                               ArrayRef<int64_t> haloRadii,
                               ArrayRef<int64_t> physicalBlockShape,

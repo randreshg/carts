@@ -6,7 +6,7 @@
 // facts and emits one flat launch ordinal over the full owner-tile space.
 
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
-// CHECK: func.func @elementwise_inplace_3d_owner_tile
+// CHECK-LABEL: func.func @elementwise_inplace_3d_owner_tile
 // CHECK: sde.su_distribute <blocked>
 // CHECK: sde.su_iterate
 // CHECK-SAME: classification(<elementwise>)
@@ -21,7 +21,33 @@
 // CHECK-SAME: exposedCuCount = 64 : i64
 // CHECK-SAME: physicalBlockShape = [32, 32, 32]
 // CHECK-SAME: physicalOwnerDims = [0, 1, 2]
-// CHECK: func.func @elementwise_inplace_3d_transposed_owner_tile
+// CHECK-LABEL: func.func @elementwise_inplace_3d_transposed_owner_tile
+// CHECK: sde.su_distribute <blocked>
+// CHECK: sde.su_iterate
+// CHECK-SAME: classification(<elementwise>)
+// CHECK: partitionGraph = [{blockShape = [32, 32, 32]
+// CHECK-SAME: muBlockCount = 64 : i64
+// CHECK-SAME: ownerDims = [2, 1, 0]
+// CHECK: partitionScore = {blockShape = [32, 32, 32]
+// CHECK-SAME: exposedCuCount = 64 : i64
+// CHECK-SAME: muBlockCount = 64 : i64
+// CHECK-SAME: ownerDims = [2, 1, 0]
+// CHECK: physicalBlockShape = [32, 32, 32]
+// CHECK-SAME: physicalOwnerDims = [2, 1, 0]
+// CHECK-LABEL: func.func @elementwise_outofplace_3d_owner_tile
+// CHECK: sde.su_distribute <blocked>
+// CHECK: sde.su_iterate
+// CHECK-SAME: classification(<elementwise>)
+// CHECK: partitionGraph = [{blockShape = [32, 32, 32]
+// CHECK-SAME: muBlockCount = 64 : i64
+// CHECK-SAME: ownerDims = [0, 1, 2]
+// CHECK: partitionScore = {blockShape = [32, 32, 32]
+// CHECK-SAME: exposedCuCount = 64 : i64
+// CHECK-SAME: muBlockCount = 64 : i64
+// CHECK-SAME: ownerDims = [0, 1, 2]
+// CHECK: physicalBlockShape = [32, 32, 32]
+// CHECK-SAME: physicalOwnerDims = [0, 1, 2]
+// CHECK-LABEL: func.func @elementwise_outofplace_3d_transposed_owner_tile
 // CHECK: sde.su_distribute <blocked>
 // CHECK: sde.su_iterate
 // CHECK-SAME: classification(<elementwise>)
@@ -35,7 +61,7 @@
 // CHECK: physicalBlockShape = [32, 32, 32]
 // CHECK-SAME: physicalOwnerDims = [2, 1, 0]
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir
-// CHECK: func.func @elementwise_inplace_3d_owner_tile
+// CHECK-LABEL: func.func @elementwise_inplace_3d_owner_tile
 // CHECK: scf.for %[[ORD0:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
 // CHECK: arith.remui %[[ORD0]]
 // CHECK: arith.divui %[[ORD0]]
@@ -53,7 +79,7 @@
 // CHECK-SAME: ownerDims = [0, 1, 2]
 // CHECK-SAME: tile_owner_dims = [0, 1, 2]
 // CHECK-SAME: tile_shape = [32, 32, 32]
-// CHECK: func.func @elementwise_inplace_3d_transposed_owner_tile
+// CHECK-LABEL: func.func @elementwise_inplace_3d_transposed_owner_tile
 // CHECK: scf.for %[[ORD1:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
 // CHECK: arith.remui %[[ORD1]]
 // CHECK: arith.divui %[[ORD1]]
@@ -61,6 +87,22 @@
 // CHECK: arith.divui
 // CHECK: arith.remui
 // CHECK: codir.codelet {{.*}}params(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} : index, index, index, index, index, index)
+// CHECK-SAME: partition_score = {blockShape = [32, 32, 32]
+// CHECK-SAME: exposedCuCount = 64 : i64
+// CHECK-SAME: muBlockCount = 64 : i64
+// CHECK-SAME: ownerDims = [2, 1, 0]
+// CHECK-SAME: tile_owner_dims = [2, 1, 0]
+// CHECK-SAME: tile_shape = [32, 32, 32]
+// CHECK-LABEL: func.func @elementwise_outofplace_3d_owner_tile
+// CHECK: codir.codelet
+// CHECK-SAME: partition_score = {blockShape = [32, 32, 32]
+// CHECK-SAME: exposedCuCount = 64 : i64
+// CHECK-SAME: muBlockCount = 64 : i64
+// CHECK-SAME: ownerDims = [0, 1, 2]
+// CHECK-SAME: tile_owner_dims = [0, 1, 2]
+// CHECK-SAME: tile_shape = [32, 32, 32]
+// CHECK-LABEL: func.func @elementwise_outofplace_3d_transposed_owner_tile
+// CHECK: codir.codelet
 // CHECK-SAME: partition_score = {blockShape = [32, 32, 32]
 // CHECK-SAME: exposedCuCount = 64 : i64
 // CHECK-SAME: muBlockCount = 64 : i64
@@ -98,6 +140,36 @@
 // NODE4-SAME: targetLogicalWorkers = 256 : i64
 // NODE4-SAME: tile_owner_dims = [2, 1, 0]
 // NODE4-SAME: tile_shape = [13, 13, 13]
+// NODE4-LABEL: func.func @elementwise_outofplace_3d_owner_tile
+// NODE4: codir.codelet
+// NODE4-SAME: logical_worker_slice = [11, 16, 16]
+// NODE4-SAME: partition_graph = [{blockShape = [11, 16, 16]
+// NODE4-SAME: muBlockCount = 768 : i64
+// NODE4-SAME: ownerDims = [0, 1, 2]
+// NODE4-SAME: partition_score = {blockShape = [11, 16, 16]
+// NODE4-SAME: chosenCuCount = 768 : i64
+// NODE4-SAME: exposedCuCount = 256 : i64
+// NODE4-SAME: muBlockCount = 768 : i64
+// NODE4-SAME: ownerDims = [0, 1, 2]
+// NODE4-SAME: requestedCuCount = 768 : i64
+// NODE4-SAME: targetLogicalWorkers = 256 : i64
+// NODE4-SAME: tile_owner_dims = [0, 1, 2]
+// NODE4-SAME: tile_shape = [11, 16, 16]
+// NODE4-LABEL: func.func @elementwise_outofplace_3d_transposed_owner_tile
+// NODE4: codir.codelet
+// NODE4-SAME: logical_worker_slice = [16, 16, 11]
+// NODE4-SAME: partition_graph = [{blockShape = [16, 16, 11]
+// NODE4-SAME: muBlockCount = 768 : i64
+// NODE4-SAME: ownerDims = [2, 1, 0]
+// NODE4-SAME: partition_score = {blockShape = [16, 16, 11]
+// NODE4-SAME: chosenCuCount = 768 : i64
+// NODE4-SAME: exposedCuCount = 256 : i64
+// NODE4-SAME: muBlockCount = 768 : i64
+// NODE4-SAME: ownerDims = [2, 1, 0]
+// NODE4-SAME: requestedCuCount = 768 : i64
+// NODE4-SAME: targetLogicalWorkers = 256 : i64
+// NODE4-SAME: tile_owner_dims = [2, 1, 0]
+// NODE4-SAME: tile_shape = [16, 16, 11]
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,
@@ -133,6 +205,42 @@ module attributes {
         %bias = memref.load %B[%k, %j, %i] : memref<128x128x128xf32>
         %next = arith.addf %old, %bias : f32
         memref.store %next, %A[%k, %j, %i] : memref<128x128x128xf32>
+        sde.yield
+      }
+      sde.yield
+    }
+    return
+  }
+
+  func.func @elementwise_outofplace_3d_owner_tile(%A: memref<128x128x128xf32>, %B: memref<128x128x128xf32>, %C: memref<128x128x128xf32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128 : index
+    sde.cu_region <parallel> {
+      sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
+      ^bb0(%i: index, %j: index, %k: index):
+        %lhs = memref.load %A[%i, %j, %k] : memref<128x128x128xf32>
+        %rhs = memref.load %B[%i, %j, %k] : memref<128x128x128xf32>
+        %next = arith.addf %lhs, %rhs : f32
+        memref.store %next, %C[%i, %j, %k] : memref<128x128x128xf32>
+        sde.yield
+      }
+      sde.yield
+    }
+    return
+  }
+
+  func.func @elementwise_outofplace_3d_transposed_owner_tile(%A: memref<128x128x128xf32>, %B: memref<128x128x128xf32>, %C: memref<128x128x128xf32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128 : index
+    sde.cu_region <parallel> {
+      sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
+      ^bb0(%i: index, %j: index, %k: index):
+        %lhs = memref.load %A[%k, %j, %i] : memref<128x128x128xf32>
+        %rhs = memref.load %B[%k, %j, %i] : memref<128x128x128xf32>
+        %next = arith.addf %lhs, %rhs : f32
+        memref.store %next, %C[%k, %j, %i] : memref<128x128x128xf32>
         sde.yield
       }
       sde.yield

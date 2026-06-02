@@ -848,7 +848,8 @@ static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
 }
 
 static std::optional<PhysicalTilePlan>
-buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op) {
+buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
+                                         sde::SDECostModel &costModel) {
   if (!isBudgetReconciledTileCandidate(op))
     return std::nullopt;
 
@@ -898,6 +899,10 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op) {
                                 orderedOwnerPhysicalDims.end());
   plan.blockShape.assign(writeLayout->budgetBlockShape.begin(),
                          writeLayout->budgetBlockShape.end());
+  if (!sde::enforceOwnerBlockConcurrencyFloor(
+          outputPlan->shape, plan.ownerPhysicalDims,
+          getTargetTileTasks(op, costModel), plan.blockShape))
+    return std::nullopt;
   plan.tileIterations.assign(numDims, 1);
 
   for (unsigned loopDim = 0; loopDim < numDims; ++loopDim) {
@@ -1144,7 +1149,8 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
 
       std::optional<PhysicalTilePlan> physicalTilePlan;
       if (!directMatmul)
-        physicalTilePlan = buildBudgetReconciledElementwiseTilePlan(op);
+        physicalTilePlan =
+            buildBudgetReconciledElementwiseTilePlan(op, *costModel);
 
       // Compute per-dim tile iterations.
       SmallVector<Value> perDimTileIter;
