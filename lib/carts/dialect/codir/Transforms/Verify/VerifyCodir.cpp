@@ -224,6 +224,20 @@ struct VerifyCodirPass : public codir::impl::VerifyCodirBase<VerifyCodirPass> {
                                 << " must be a dictionary attribute";
           failed = true;
         } else {
+          auto isConsumedScoreField = [](StringRef key) {
+            return key == codir::AttrNames::PartitionScoreKeys::
+                              TargetLogicalWorkers ||
+                   key == codir::AttrNames::PartitionScoreKeys::ExposedCuCount;
+          };
+          for (NamedAttribute entry : score) {
+            StringRef key = entry.getName().getValue();
+            if (isConsumedScoreField(key))
+              continue;
+            codelet.emitOpError()
+                << codir::AttrNames::PartitionScore << "." << key
+                << " is not consumed by the CODIR-to-ARTS boundary";
+            failed = true;
+          }
           auto verifyPositiveScoreField = [&](StringRef key) -> bool {
             Attribute value = score.get(key);
             if (!value)
@@ -242,10 +256,6 @@ struct VerifyCodirPass : public codir::impl::VerifyCodirBase<VerifyCodirPass> {
               codir::AttrNames::PartitionScoreKeys::TargetLogicalWorkers);
           hasConcurrencyField |= verifyPositiveScoreField(
               codir::AttrNames::PartitionScoreKeys::ExposedCuCount);
-          verifyPositiveScoreField(
-              codir::AttrNames::PartitionScoreKeys::ChosenCuCount);
-          verifyPositiveScoreField(
-              codir::AttrNames::PartitionScoreKeys::MuBlockCount);
           if (!hasConcurrencyField) {
             codelet.emitOpError()
                 << codir::AttrNames::PartitionScore << " must contain "

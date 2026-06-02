@@ -14,10 +14,13 @@
 #define CARTS_DIALECT_CODIR_UTILS_SDETOCODIRMETADATAUTILS_H
 
 #include "carts/dialect/codir/IR/CodirDialect.h"
+#include "carts/dialect/codir/Utils/CodirAttrNames.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 
 namespace mlir::carts::codir::sde_to_codir {
 
@@ -62,6 +65,24 @@ struct CodirCodeletMetadata {
   Attribute partitionGraph;
   Attribute partitionScore;
 };
+
+inline Attribute translatePartitionScoreToCodirContract(Attribute attr) {
+  auto score = dyn_cast_or_null<DictionaryAttr>(attr);
+  if (!score)
+    return attr;
+
+  SmallVector<NamedAttribute, 2> fields;
+  auto copyField = [&](StringRef sdeKey, StringRef codirKey) {
+    if (Attribute value = score.get(sdeKey))
+      fields.push_back(
+          NamedAttribute(StringAttr::get(attr.getContext(), codirKey), value));
+  };
+  copyField(sde::AttrNames::PartitionScoreKeys::TargetLogicalWorkers,
+            codir::AttrNames::PartitionScoreKeys::TargetLogicalWorkers);
+  copyField(sde::AttrNames::PartitionScoreKeys::ExposedCuCount,
+            codir::AttrNames::PartitionScoreKeys::ExposedCuCount);
+  return DictionaryAttr::get(attr.getContext(), fields);
+}
 
 inline CodirCodeletMetadata getCodirMetadataFromTask(sde::SdeCuTaskOp task) {
   CodirCodeletMetadata metadata;
@@ -123,7 +144,8 @@ getCodirMetadataFromSchedulingUnit(sde::SdeSuIterateOp source) {
   metadata.arrayLayout = source.getArrayLayoutAttr();
   metadata.layoutsDisagree = source.getLayoutsDisagreeAttr();
   metadata.partitionGraph = source->getAttr(sde::AttrNames::PartitionGraph);
-  metadata.partitionScore = source->getAttr(sde::AttrNames::PartitionScore);
+  metadata.partitionScore = translatePartitionScoreToCodirContract(
+      source->getAttr(sde::AttrNames::PartitionScore));
   return metadata;
 }
 

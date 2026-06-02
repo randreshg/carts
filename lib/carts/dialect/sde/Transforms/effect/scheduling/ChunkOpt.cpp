@@ -136,7 +136,6 @@ struct ChunkOptPass : public sde::impl::ChunkOptBase<ChunkOptPass> {
           rewrite.op.getSpatialDimsAttr(), rewrite.op.getWriteFootprintAttr(),
           rewrite.op.getPhysicalOwnerDimsAttr(),
           rewrite.op.getPhysicalBlockShapeAttr(),
-          rewrite.op.getContractionTileShapeAttr(),
           rewrite.op.getLogicalWorkerSliceAttr(),
           rewrite.op.getPhysicalHaloShapeAttr(),
           rewrite.op.getIterationTopologyAttr(),

@@ -73,10 +73,8 @@
 // CHECK-SAME: kind = "block_parallel"
 // CHECK-SAME: ownerDims = [0, 1, 2]
 // CHECK-SAME: distribution_kind = #codir.distribution_kind<blocked>
-// CHECK-SAME: partition_score = {blockShape = [32, 32, 32]
+// CHECK-SAME: partition_score = {
 // CHECK-SAME: exposedCuCount = 64 : i64
-// CHECK-SAME: muBlockCount = 64 : i64
-// CHECK-SAME: ownerDims = [0, 1, 2]
 // CHECK-SAME: tile_owner_dims = [0, 1, 2]
 // CHECK-SAME: tile_shape = [32, 32, 32]
 // CHECK-LABEL: func.func @elementwise_inplace_3d_transposed_owner_tile
@@ -87,26 +85,20 @@
 // CHECK: arith.divui
 // CHECK: arith.remui
 // CHECK: codir.codelet {{.*}}params(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} : index, index, index, index, index, index)
-// CHECK-SAME: partition_score = {blockShape = [32, 32, 32]
+// CHECK-SAME: partition_score = {
 // CHECK-SAME: exposedCuCount = 64 : i64
-// CHECK-SAME: muBlockCount = 64 : i64
-// CHECK-SAME: ownerDims = [2, 1, 0]
 // CHECK-SAME: tile_owner_dims = [2, 1, 0]
 // CHECK-SAME: tile_shape = [32, 32, 32]
 // CHECK-LABEL: func.func @elementwise_outofplace_3d_owner_tile
 // CHECK: codir.codelet
-// CHECK-SAME: partition_score = {blockShape = [32, 32, 32]
+// CHECK-SAME: partition_score = {
 // CHECK-SAME: exposedCuCount = 64 : i64
-// CHECK-SAME: muBlockCount = 64 : i64
-// CHECK-SAME: ownerDims = [0, 1, 2]
 // CHECK-SAME: tile_owner_dims = [0, 1, 2]
 // CHECK-SAME: tile_shape = [32, 32, 32]
 // CHECK-LABEL: func.func @elementwise_outofplace_3d_transposed_owner_tile
 // CHECK: codir.codelet
-// CHECK-SAME: partition_score = {blockShape = [32, 32, 32]
+// CHECK-SAME: partition_score = {
 // CHECK-SAME: exposedCuCount = 64 : i64
-// CHECK-SAME: muBlockCount = 64 : i64
-// CHECK-SAME: ownerDims = [2, 1, 0]
 // CHECK-SAME: tile_owner_dims = [2, 1, 0]
 // CHECK-SAME: tile_shape = [32, 32, 32]
 
@@ -117,11 +109,8 @@
 // NODE4-SAME: partition_graph = [{blockShape = [13, 13, 13]
 // NODE4-SAME: muBlockCount = 1000 : i64
 // NODE4-SAME: ownerDims = [0, 1, 2]
-// NODE4-SAME: partition_score = {blockShape = [13, 13, 13]
-// NODE4-SAME: chosenCuCount = 1000 : i64
+// NODE4-SAME: partition_score = {
 // NODE4-SAME: exposedCuCount = 256 : i64
-// NODE4-SAME: muBlockCount = 1000 : i64
-// NODE4-SAME: requestedCuCount = 768 : i64
 // NODE4-SAME: targetLogicalWorkers = 256 : i64
 // NODE4-SAME: tile_owner_dims = [0, 1, 2]
 // NODE4-SAME: tile_shape = [13, 13, 13]
@@ -131,12 +120,8 @@
 // NODE4-SAME: partition_graph = [{blockShape = [13, 13, 13]
 // NODE4-SAME: muBlockCount = 1000 : i64
 // NODE4-SAME: ownerDims = [2, 1, 0]
-// NODE4-SAME: partition_score = {blockShape = [13, 13, 13]
-// NODE4-SAME: chosenCuCount = 1000 : i64
+// NODE4-SAME: partition_score = {
 // NODE4-SAME: exposedCuCount = 256 : i64
-// NODE4-SAME: muBlockCount = 1000 : i64
-// NODE4-SAME: ownerDims = [2, 1, 0]
-// NODE4-SAME: requestedCuCount = 768 : i64
 // NODE4-SAME: targetLogicalWorkers = 256 : i64
 // NODE4-SAME: tile_owner_dims = [2, 1, 0]
 // NODE4-SAME: tile_shape = [13, 13, 13]
@@ -146,12 +131,8 @@
 // NODE4-SAME: partition_graph = [{blockShape = [11, 16, 16]
 // NODE4-SAME: muBlockCount = 768 : i64
 // NODE4-SAME: ownerDims = [0, 1, 2]
-// NODE4-SAME: partition_score = {blockShape = [11, 16, 16]
-// NODE4-SAME: chosenCuCount = 768 : i64
+// NODE4-SAME: partition_score = {
 // NODE4-SAME: exposedCuCount = 256 : i64
-// NODE4-SAME: muBlockCount = 768 : i64
-// NODE4-SAME: ownerDims = [0, 1, 2]
-// NODE4-SAME: requestedCuCount = 768 : i64
 // NODE4-SAME: targetLogicalWorkers = 256 : i64
 // NODE4-SAME: tile_owner_dims = [0, 1, 2]
 // NODE4-SAME: tile_shape = [11, 16, 16]
@@ -161,12 +142,8 @@
 // NODE4-SAME: partition_graph = [{blockShape = [16, 16, 11]
 // NODE4-SAME: muBlockCount = 768 : i64
 // NODE4-SAME: ownerDims = [2, 1, 0]
-// NODE4-SAME: partition_score = {blockShape = [16, 16, 11]
-// NODE4-SAME: chosenCuCount = 768 : i64
+// NODE4-SAME: partition_score = {
 // NODE4-SAME: exposedCuCount = 256 : i64
-// NODE4-SAME: muBlockCount = 768 : i64
-// NODE4-SAME: ownerDims = [2, 1, 0]
-// NODE4-SAME: requestedCuCount = 768 : i64
 // NODE4-SAME: targetLogicalWorkers = 256 : i64
 // NODE4-SAME: tile_owner_dims = [2, 1, 0]
 // NODE4-SAME: tile_shape = [16, 16, 11]

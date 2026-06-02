@@ -1291,16 +1291,15 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           op.getAccessMinOffsetsAttr(), op.getAccessMaxOffsetsAttr(),
           op.getOwnerDimsAttr(), op.getSpatialDimsAttr(),
           op.getWriteFootprintAttr(), op.getPhysicalOwnerDimsAttr(),
-          op.getPhysicalBlockShapeAttr(), op.getContractionTileShapeAttr(),
-          op.getLogicalWorkerSliceAttr(), op.getPhysicalHaloShapeAttr(),
-          op.getIterationTopologyAttr(), op.getRepetitionStructureAttr(),
-          op.getAsyncStrategyAttr(), op.getCpsGroupIdAttr(),
-          op.getCpsStageIndexAttr(), op.getCpsStageCountAttr(),
-          op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
-          op.getInPlaceSharedStateAttr(), op.getVectorizeWidthAttr(),
-          op.getUnrollFactorAttr(), op.getInterleaveCountAttr(),
-          op.getArrayLayoutAttr(), op.getLayoutsDisagreeAttr(),
-          op.getCommVolumeBytesAttr());
+          op.getPhysicalBlockShapeAttr(), op.getLogicalWorkerSliceAttr(),
+          op.getPhysicalHaloShapeAttr(), op.getIterationTopologyAttr(),
+          op.getRepetitionStructureAttr(), op.getAsyncStrategyAttr(),
+          op.getCpsGroupIdAttr(), op.getCpsStageIndexAttr(),
+          op.getCpsStageCountAttr(), op.getDistributionKindAttr(),
+          op.getInPlaceSafeAttr(), op.getInPlaceSharedStateAttr(),
+          op.getVectorizeWidthAttr(), op.getUnrollFactorAttr(),
+          op.getInterleaveCountAttr(), op.getArrayLayoutAttr(),
+          op.getLayoutsDisagreeAttr(), op.getCommVolumeBytesAttr());
       newOp->setAttrs(sde::getRewrittenAttrs(op));
       if (!physicalTilePlan && !directMatmul)
         alignExistingStaticPhysicalPlanToSteps(newOp, tiledSteps, parallelMask);

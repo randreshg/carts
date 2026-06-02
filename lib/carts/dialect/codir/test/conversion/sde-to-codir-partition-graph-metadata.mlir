@@ -20,12 +20,7 @@
 // CHECK-SAME: muBlockCount = 2 : i64
 // CHECK-SAME: role = "read"
 // CHECK-SAME: partition_score = {
-// CHECK-SAME: chosenCuCount = 32 : i64
-// CHECK-SAME: chosenTileBytes = 262144 : i64
-// CHECK-SAME: cuGroupCount = 16 : i64
-// CHECK-SAME: cuGroupSize = 2 : i64
-// CHECK-SAME: muBlockCount = 32 : i64
-// CHECK-SAME: objective = "max_concurrency_comm_aware"
+// CHECK-SAME: exposedCuCount = 16 : i64
 // CHECK-SAME: targetLogicalWorkers = 16 : i64
 // CHECK-SAME: tile_owner_dims = [0]
 // CHECK-SAME: tile_shape = [32, 1024]

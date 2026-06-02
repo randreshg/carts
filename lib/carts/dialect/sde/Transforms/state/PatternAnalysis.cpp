@@ -683,16 +683,15 @@ promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor,
       op.getAccessMinOffsetsAttr(), op.getAccessMaxOffsetsAttr(),
       op.getOwnerDimsAttr(), op.getSpatialDimsAttr(),
       op.getWriteFootprintAttr(), op.getPhysicalOwnerDimsAttr(),
-      op.getPhysicalBlockShapeAttr(), op.getContractionTileShapeAttr(),
-      op.getLogicalWorkerSliceAttr(), op.getPhysicalHaloShapeAttr(),
-      op.getIterationTopologyAttr(), op.getRepetitionStructureAttr(),
-      op.getAsyncStrategyAttr(), op.getCpsGroupIdAttr(),
-      op.getCpsStageIndexAttr(), op.getCpsStageCountAttr(),
-      op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
-      op.getInPlaceSharedStateAttr(), op.getVectorizeWidthAttr(),
-      op.getUnrollFactorAttr(), op.getInterleaveCountAttr(),
-      op.getArrayLayoutAttr(), op.getLayoutsDisagreeAttr(),
-      op.getCommVolumeBytesAttr());
+      op.getPhysicalBlockShapeAttr(), op.getLogicalWorkerSliceAttr(),
+      op.getPhysicalHaloShapeAttr(), op.getIterationTopologyAttr(),
+      op.getRepetitionStructureAttr(), op.getAsyncStrategyAttr(),
+      op.getCpsGroupIdAttr(), op.getCpsStageIndexAttr(),
+      op.getCpsStageCountAttr(), op.getDistributionKindAttr(),
+      op.getInPlaceSafeAttr(), op.getInPlaceSharedStateAttr(),
+      op.getVectorizeWidthAttr(), op.getUnrollFactorAttr(),
+      op.getInterleaveCountAttr(), op.getArrayLayoutAttr(),
+      op.getLayoutsDisagreeAttr(), op.getCommVolumeBytesAttr());
   newOp->setAttrs(sde::getRewrittenAttrs(op));
   removeStaleShapePlanAttrs(newOp);
 
@@ -906,16 +905,15 @@ promoteOutOfPlaceStencilOwnerLoop(sde::SdeSuIterateOp op,
       op.getAccessMinOffsetsAttr(), op.getAccessMaxOffsetsAttr(),
       op.getOwnerDimsAttr(), op.getSpatialDimsAttr(),
       op.getWriteFootprintAttr(), op.getPhysicalOwnerDimsAttr(),
-      op.getPhysicalBlockShapeAttr(), op.getContractionTileShapeAttr(),
-      op.getLogicalWorkerSliceAttr(), op.getPhysicalHaloShapeAttr(),
-      op.getIterationTopologyAttr(), op.getRepetitionStructureAttr(),
-      op.getAsyncStrategyAttr(), op.getCpsGroupIdAttr(),
-      op.getCpsStageIndexAttr(), op.getCpsStageCountAttr(),
-      op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
-      op.getInPlaceSharedStateAttr(), op.getVectorizeWidthAttr(),
-      op.getUnrollFactorAttr(), op.getInterleaveCountAttr(),
-      op.getArrayLayoutAttr(), op.getLayoutsDisagreeAttr(),
-      op.getCommVolumeBytesAttr());
+      op.getPhysicalBlockShapeAttr(), op.getLogicalWorkerSliceAttr(),
+      op.getPhysicalHaloShapeAttr(), op.getIterationTopologyAttr(),
+      op.getRepetitionStructureAttr(), op.getAsyncStrategyAttr(),
+      op.getCpsGroupIdAttr(), op.getCpsStageIndexAttr(),
+      op.getCpsStageCountAttr(), op.getDistributionKindAttr(),
+      op.getInPlaceSafeAttr(), op.getInPlaceSharedStateAttr(),
+      op.getVectorizeWidthAttr(), op.getUnrollFactorAttr(),
+      op.getInterleaveCountAttr(), op.getArrayLayoutAttr(),
+      op.getLayoutsDisagreeAttr(), op.getCommVolumeBytesAttr());
   newOp->setAttrs(sde::getRewrittenAttrs(op));
   removeStaleShapePlanAttrs(newOp);
 
@@ -1051,10 +1049,6 @@ stampPartialReductionIntent(sde::SdeSuIterateOp op,
       buildI64ArrayAttr(op.getContext(), ownerDims));
 }
 
-static void clearContractionTilingIntent(sde::SdeSuIterateOp op) {
-  op->removeAttr(op.getContractionTileShapeAttrName());
-}
-
 /// True when `root` is the output of a SIBLING `sde.su_iterate` (a distributed
 /// scheduling unit) — a computed distributed intermediate rather than a
 /// host-initialized array. The tight gate distinguishes a sibling-written
@@ -1162,16 +1156,13 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
 /// Detection runs in PatternAnalysis, while the loop nest is still the
 /// canonical (2-parallel, 1-reduction, 3-dim) matmul (later loop
 /// tiling/interchange splits the parallel axes and breaks canonical recovery).
-/// It stamps the inert
-/// declarative facts `partialReductionDims` / `partialReductionOwnerDims` (the
-/// reduction axis and the parallel owner axes), plus a PROVISIONAL
-/// element-space `contractionTileShape = [contractionExtent]`.
-/// DistributionPlanning later refines that tile size to the producer's owner
-/// block once `physicalBlockShape` is known. The combine kind is sum, left
-/// implicit: it is unambiguous from the matmul pattern + the named reduction
-/// axis, and the su_iterate `reductionKinds` carrier is tied to
-/// `reductionAccumulators` (wrong vehicle for a matmul contraction without an
-/// accumulator carrier).
+/// It stamps the inert declarative facts `partialReductionDims` /
+/// `partialReductionOwnerDims`: the reduction axis and the parallel owner
+/// axes. DistributionPlanning later keeps or drops those facts once a physical
+/// owner-block plan exists. The combine kind is sum, left implicit: it is
+/// unambiguous from the matmul pattern + the named reduction axis, and the
+/// su_iterate `reductionKinds` carrier is tied to `reductionAccumulators`
+/// (wrong vehicle for a matmul contraction without an accumulator carrier).
 ///
 /// SDE never names the communication operation, never emits the combine, and
 /// never encodes nodes/routes/the concrete split factor T. The concrete
@@ -1185,7 +1176,6 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
 static void
 stampContractionTilingIntent(sde::SdeSuIterateOp op,
                              sde::SdeStructuredClassification classification) {
-  clearContractionTilingIntent(op);
   if (classification != sde::SdeStructuredClassification::matmul)
     return;
 
@@ -1198,10 +1188,6 @@ stampContractionTilingIntent(sde::SdeSuIterateOp op,
   if (!isSiblingDistributedIntermediate(op, candidate->contractionInputRoot))
     return;
 
-  // Provisional element-space tile = full contraction extent; refined to the
-  // producer owner-block size in DistributionPlanning.
-  op.setContractionTileShapeAttr(
-      buildI64ArrayAttr(op.getContext(), {*candidate->contractionExtent}));
   // The reduction axis (partialReductionDims) and the matmul pattern already
   // make the combine kind unambiguous (sum). The `reductionKinds` carrier is
   // tied to `reductionAccumulators` in the su_iterate assembly format and is
@@ -1241,7 +1227,6 @@ struct PatternAnalysisPass
       op->removeAttr(op.getInPlaceSafeAttrName());
       op->removeAttr(op.getInPlaceSharedStateAttrName());
       clearPartialReductionIntent(op);
-      clearContractionTilingIntent(op);
 
       sde::SdeStructuredClassification classification = summary->classification;
       bool hasExplicitStencilContract = false;

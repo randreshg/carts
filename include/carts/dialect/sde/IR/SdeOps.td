@@ -396,11 +396,6 @@ def SdeSuIterateOp
     // target nodes, routes, or concrete worker placement.
     OptionalAttr<ArrayAttr>:$physicalOwnerDims,
     OptionalAttr<ArrayAttr>:$physicalBlockShape,
-    // Element-space contraction-tile shape authored by SDE when a matmul-class
-    // scheduling unit contracts a sibling-computed distributed intermediate on
-    // its reduction axis. Later planning derives the split factor and
-    // materializes the concrete partial products and cross-tile reduce.
-    OptionalAttr<ArrayAttr>:$contractionTileShape,
     OptionalAttr<ArrayAttr>:$logicalWorkerSlice,
     OptionalAttr<ArrayAttr>:$physicalHaloShape,
     OptionalAttr<SdeIterationTopologyAttr>:$iterationTopology,

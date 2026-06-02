@@ -955,6 +955,10 @@ struct PlannedBlockLocalAccessRewrite {
   unsigned ownerDim = 0;
   Value ownerBase;
   int64_t lowerHalo = 0;
+  Value groupedSourcePtr;
+  unsigned ownerSlot = 0;
+  int64_t blockSize = 1;
+  bool grouped = false;
 };
 
 static inline FailureOr<Value>
@@ -982,17 +986,100 @@ materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
   return arith::SubIOp::create(builder, loc, index, localOrigin).getResult();
 }
 
+static inline FailureOr<Value>
+materializeGroupedBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
+                                  Value ownerBase, int64_t blockSize,
+                                  Value &relativeBlock) {
+  if (!index || !ownerBase || blockSize <= 0)
+    return failure();
+  Value blockSizeValue = createConstantIndex(builder, loc, blockSize);
+  Value relativeIndex =
+      ::mlir::carts::ValueAnalysis::sameValue(index, ownerBase)
+          ? createZeroIndex(builder, loc)
+          : arith::SubIOp::create(builder, loc, index, ownerBase).getResult();
+  relativeBlock =
+      arith::DivUIOp::create(builder, loc, relativeIndex, blockSizeValue);
+  Value blockOffset =
+      arith::MulIOp::create(builder, loc, relativeBlock, blockSizeValue);
+  Value blockBase = arith::AddIOp::create(builder, loc, ownerBase, blockOffset);
+  if (::mlir::carts::ValueAnalysis::sameValue(index, blockBase))
+    return createZeroIndex(builder, loc);
+  return arith::SubIOp::create(builder, loc, index, blockBase).getResult();
+}
+
 static inline LogicalResult rewritePlannedBlockLocalAccesses(
     arts::EdtOp task, ArrayRef<PlannedBlockLocalAccessRewrite> rewrites) {
   if (rewrites.empty())
     return success();
 
-  auto rewriteIndices = [&](Operation *op, Value memref,
+  auto rewriteIndices = [&](Operation *op, MutableOperandRange memrefOperand,
                             MutableOperandRange indices) -> WalkResult {
-    for (const PlannedBlockLocalAccessRewrite &rewrite : rewrites) {
-      if (memref != rewrite.localMemref)
-        continue;
-      if (indices.size() <= rewrite.ownerDim) {
+    Value memref = memrefOperand[0].get();
+    SmallVector<const PlannedBlockLocalAccessRewrite *, 4> matching;
+    for (const PlannedBlockLocalAccessRewrite &rewrite : rewrites)
+      if (memref == rewrite.localMemref)
+        matching.push_back(&rewrite);
+    if (matching.empty())
+      return WalkResult::advance();
+
+    bool hasGrouped = llvm::any_of(
+        matching, [](const PlannedBlockLocalAccessRewrite *rewrite) {
+          return rewrite->grouped;
+        });
+    if (hasGrouped) {
+      Value sourcePtr;
+      unsigned sourceRank = 0;
+      for (const PlannedBlockLocalAccessRewrite *rewrite : matching) {
+        if (!rewrite->grouped || rewrite->lowerHalo != 0 ||
+            !rewrite->groupedSourcePtr || rewrite->blockSize <= 0) {
+          op->emitError("grouped planned block-local access requires "
+                        "block-window facts for every owner dimension");
+          return WalkResult::interrupt();
+        }
+        if (!sourcePtr)
+          sourcePtr = rewrite->groupedSourcePtr;
+        if (sourcePtr != rewrite->groupedSourcePtr) {
+          op->emitError("grouped planned block-local access mixes dependency "
+                        "sources");
+          return WalkResult::interrupt();
+        }
+        sourceRank = std::max<unsigned>(sourceRank, rewrite->ownerSlot + 1);
+      }
+      if (auto sourceType = dyn_cast<MemRefType>(sourcePtr.getType()))
+        sourceRank = std::max<unsigned>(sourceRank, sourceType.getRank());
+      if (sourceRank == 0)
+        sourceRank = 1;
+
+      OpBuilder builder(op);
+      SmallVector<Value, 4> dbRefIndices(
+          sourceRank, createZeroIndex(builder, op->getLoc()));
+      for (const PlannedBlockLocalAccessRewrite *rewrite : matching) {
+        if (indices.size() <= rewrite->ownerDim ||
+            rewrite->ownerSlot >= dbRefIndices.size()) {
+          op->emitError("grouped planned block-local access has malformed "
+                        "owner-dimension facts");
+          return WalkResult::interrupt();
+        }
+        Value relativeBlock;
+        FailureOr<Value> localIndex = materializeGroupedBlockLocalIndex(
+            builder, op->getLoc(), indices[rewrite->ownerDim].get(),
+            rewrite->ownerBase, rewrite->blockSize, relativeBlock);
+        if (failed(localIndex)) {
+          op->emitError("grouped planned block-local access does not stay "
+                        "within the block window");
+          return WalkResult::interrupt();
+        }
+        dbRefIndices[rewrite->ownerSlot] = relativeBlock;
+        indices[rewrite->ownerDim].set(*localIndex);
+      }
+      Value selectedPayload =
+          arts::DbRefOp::create(builder, op->getLoc(), sourcePtr, dbRefIndices);
+      memrefOperand.assign(ValueRange{selectedPayload});
+      return WalkResult::advance();
+    }
+
+    for (const PlannedBlockLocalAccessRewrite *rewrite : matching) {
+      if (indices.size() <= rewrite->ownerDim) {
         op->emitError("planned block-local access is missing the owner "
                       "dimension index");
         return WalkResult::interrupt();
@@ -1000,14 +1087,14 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
 
       OpBuilder builder(op);
       FailureOr<Value> localIndex = materializeBlockLocalIndex(
-          builder, op->getLoc(), indices[rewrite.ownerDim].get(),
-          rewrite.ownerBase, rewrite.lowerHalo);
+          builder, op->getLoc(), indices[rewrite->ownerDim].get(),
+          rewrite->ownerBase, rewrite->lowerHalo);
       if (failed(localIndex)) {
         op->emitError("planned block-local access does not stay within the "
                       "owner slice");
         return WalkResult::interrupt();
       }
-      indices[rewrite.ownerDim].set(*localIndex);
+      indices[rewrite->ownerDim].set(*localIndex);
     }
     return WalkResult::advance();
   };
@@ -1015,9 +1102,11 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
   Block &body = task.getBody().front();
   WalkResult result = body.walk([&](Operation *op) {
     if (auto load = dyn_cast<memref::LoadOp>(op))
-      return rewriteIndices(op, load.getMemref(), load.getIndicesMutable());
+      return rewriteIndices(op, load.getMemrefMutable(),
+                            load.getIndicesMutable());
     if (auto store = dyn_cast<memref::StoreOp>(op))
-      return rewriteIndices(op, store.getMemref(), store.getIndicesMutable());
+      return rewriteIndices(op, store.getMemrefMutable(),
+                            store.getIndicesMutable());
     return WalkResult::advance();
   });
 
@@ -3032,97 +3121,78 @@ readPartitionScoreConcurrencyFloor(codir::CodeletOp codelet) {
   return 0;
 }
 
-static inline int64_t readPartitionScoreMuBlockCount(codir::CodeletOp codelet) {
-  if (!codelet)
-    return 0;
-  auto score = dyn_cast_or_null<DictionaryAttr>(
-      codelet->getAttr(codir::AttrNames::PartitionScore));
-  if (!score)
-    return 0;
+struct BridgePartitionGraphEvidence {
+  int64_t muBlockCount = 0;
+  int64_t cuGroupSize = 0;
+};
 
-  if (std::optional<int64_t> muBlocks = readPositiveI64(
-          score, codir::AttrNames::PartitionScoreKeys::MuBlockCount))
-    return *muBlocks;
-  if (std::optional<int64_t> chosenCu = readPositiveI64(
-          score, codir::AttrNames::PartitionScoreKeys::ChosenCuCount))
-    return *chosenCu;
-  return 0;
+static inline bool
+bridgePartitionGraphRoleMatches(DictionaryAttr entry,
+                                codir::CodirAccessMode mode) {
+  auto role = dyn_cast_or_null<StringAttr>(
+      entry ? entry.get(codir::AttrNames::PartitionGraphKeys::Role)
+            : Attribute{});
+  if (!role)
+    return true;
+  if (codirAccessMayWrite(mode) &&
+      role.getValue() == codir::AttrNames::LayoutGraphValues::RoleWrite)
+    return true;
+  if (codirAccessMayRead(mode) &&
+      role.getValue() == codir::AttrNames::LayoutGraphValues::RoleRead)
+    return true;
+  return false;
 }
 
-static inline int64_t readPartitionScoreCuGroupSize(codir::CodeletOp codelet) {
+static inline BridgePartitionGraphEvidence
+readBridgePartitionGraphEvidence(const BridgePlan &plan) {
+  BridgePartitionGraphEvidence evidence;
+  codir::CodeletOp codelet = plan.seedCodelet;
   if (!codelet)
-    return 0;
-  auto score = dyn_cast_or_null<DictionaryAttr>(
-      codelet->getAttr(codir::AttrNames::PartitionScore));
-  if (!score)
-    return 0;
+    return evidence;
 
-  if (std::optional<int64_t> groupSize = readPositiveI64(
-          score, codir::AttrNames::PartitionScoreKeys::CuGroupSize))
-    return *groupSize;
-  return 0;
-}
+  std::optional<int64_t> depArrayId =
+      codir::getDepArrayId(codelet, plan.seedDepIndex);
+  if (!depArrayId)
+    return evidence;
 
-static inline int64_t readPartitionGraphCuGroupSize(codir::CodeletOp codelet) {
-  if (!codelet)
-    return 0;
   auto graph = dyn_cast_or_null<ArrayAttr>(
       codelet->getAttr(codir::AttrNames::PartitionGraph));
   if (!graph)
-    return 0;
+    return evidence;
 
-  int64_t bestAny = 0;
-  int64_t bestMismatch = 0;
+  codir::CodirAccessMode mode =
+      codir::getDepAccessMode(codelet, plan.seedDepIndex)
+          .value_or(codir::CodirAccessMode::readwrite);
   for (Attribute attr : graph) {
     auto entry = dyn_cast<DictionaryAttr>(attr);
     if (!entry)
       continue;
-    auto group = dyn_cast_or_null<IntegerAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::CuGroupSize));
-    if (!group || group.getInt() <= 0)
-      continue;
-
-    int64_t size = group.getInt();
-    bestAny = std::max(bestAny, size);
     auto edgeClass = dyn_cast_or_null<StringAttr>(
         entry.get(codir::AttrNames::PartitionGraphKeys::EdgeClass));
-    if (edgeClass &&
-        edgeClass.getValue() ==
+    if (!edgeClass ||
+        edgeClass.getValue() !=
             codir::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
-      bestMismatch = std::max(bestMismatch, size);
-  }
-  return bestMismatch > 0 ? bestMismatch : bestAny;
-}
-
-static inline int64_t readPartitionGraphMuBlockCount(codir::CodeletOp codelet) {
-  if (!codelet)
-    return 0;
-  auto graph = dyn_cast_or_null<ArrayAttr>(
-      codelet->getAttr(codir::AttrNames::PartitionGraph));
-  if (!graph)
-    return 0;
-
-  int64_t bestAny = 0;
-  int64_t bestMismatch = 0;
-  for (Attribute attr : graph) {
-    auto entry = dyn_cast<DictionaryAttr>(attr);
-    if (!entry)
       continue;
-    auto blocks = dyn_cast_or_null<IntegerAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::MuBlockCount));
-    if (!blocks || blocks.getInt() <= 0)
+    if (auto layoutKind = dyn_cast_or_null<StringAttr>(
+            entry.get(codir::AttrNames::PartitionGraphKeys::LayoutKind)))
+      if (layoutKind.getValue() ==
+          codir::AttrNames::PartitionGraphValues::OwnerBlock)
+        continue;
+    if (!bridgePartitionGraphRoleMatches(entry, mode))
+      continue;
+    auto muId = dyn_cast_or_null<IntegerAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::MuId));
+    if (!muId || muId.getInt() != *depArrayId)
       continue;
 
-    int64_t count = blocks.getInt();
-    bestAny = std::max(bestAny, count);
-    auto edgeClass = dyn_cast_or_null<StringAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::EdgeClass));
-    if (edgeClass &&
-        edgeClass.getValue() ==
-            codir::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
-      bestMismatch = std::max(bestMismatch, count);
+    if (std::optional<int64_t> blocks = readPositiveI64(
+            entry, codir::AttrNames::PartitionGraphKeys::MuBlockCount))
+      evidence.muBlockCount = std::max(evidence.muBlockCount, *blocks);
+    if (std::optional<int64_t> group = readPositiveI64(
+            entry, codir::AttrNames::PartitionGraphKeys::CuGroupSize))
+      evidence.cuGroupSize = std::max(evidence.cuGroupSize, *group);
   }
-  return bestMismatch > 0 ? bestMismatch : bestAny;
+  return evidence;
 }
 
 static inline int64_t getStaticFlatBlockCount(arts::DbAllocOp blockAlloc) {
@@ -3550,8 +3620,9 @@ chooseBridgeGroupSize(const BridgePlan &plan,
   desired = std::min<int64_t>(desired, *blockCount);
 
   codir::CodeletOp codelet = plan.seedCodelet;
-  int64_t muBlocks = std::max(readPartitionScoreMuBlockCount(codelet),
-                              readPartitionGraphMuBlockCount(codelet));
+  BridgePartitionGraphEvidence graphEvidence =
+      readBridgePartitionGraphEvidence(plan);
+  int64_t muBlocks = graphEvidence.muBlockCount;
   if (muBlocks > 0)
     muBlocks = std::min<int64_t>(*blockCount, muBlocks);
 
@@ -3568,8 +3639,7 @@ chooseBridgeGroupSize(const BridgePlan &plan,
     desired = std::min(desired, std::max<int64_t>(1, maxGroupForConcurrency));
   }
 
-  int64_t authoredGroupSize = std::max(readPartitionScoreCuGroupSize(codelet),
-                                       readPartitionGraphCuGroupSize(codelet));
+  int64_t authoredGroupSize = graphEvidence.cuGroupSize;
   if (authoredGroupSize > 0)
     desired = std::min<int64_t>(desired, authoredGroupSize);
 

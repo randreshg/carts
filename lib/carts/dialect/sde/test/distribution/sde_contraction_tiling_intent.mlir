@@ -2,13 +2,12 @@
 // RUN:   --start-from sde-planning --pipeline sde-planning \
 // RUN:   --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Contraction tiling as SDE intent.
+// Chained matmul partial-reduction intent.
 //
 // This mirrors a chained matmul G = E * F, where F = C * D is a sibling-
 // computed distributed intermediate that G reads on its CONTRACTION axis (the
 // reduction loop dim k). SDE decides — pattern-free, from the canonical matmul
-// access shapes — to tile k: it stamps the element-space `contractionTileShape`
-// (aligned to the producer owner block) plus the inert declarative facts
+// access shapes — to mark the reduction axis and parallel owner axes with
 // `partialReductionDims` / `partialReductionOwnerDims`. It must NOT set the
 // `partialReduction` UNIT attr (the CODIR ReductionPlanning trigger) — there is
 // no materializer for the cross-owner matmul k-tile case yet, so the intent
@@ -70,21 +69,15 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : 
 }
 
 // After DistributionPlanning, exactly one matmul scheduling unit carries the
-// contraction-tiling intent: the second one (Out = E * F), whose contraction
-// input F is the sibling-computed intermediate. The tile shape is element-space
-// and aligned to the producer owner block; under the realized finer-grain
-// planning the refinement leaves the full contraction extent (k-tile = 256, a
-// single inert tile), so the intent stays maximally inert; the
-// partial-reduction dims name the reduction axis and the parallel owner axes.
-// The first matmul (F = C * D, host inputs only) carries no such intent.
+// partial-reduction dims: the second one (Out = E * F), whose contraction input
+// F is the sibling-computed intermediate. The first matmul (F = C * D, host
+// inputs only) carries no such intent.
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning
 // The matmul attr-dict (printed on the scheduling unit's closing brace line)
-// carries the contraction-tiling intent, the block-aligned element-space tile,
-// and the inert partial-reduction dims.
+// carries the inert partial-reduction dims and the SDE-owned physical plan.
 // CHECK: classification(<matmul>)
 // CHECK: classification(<matmul>)
-// CHECK: contractionTileShape = [256]
-// CHECK-SAME: partialReductionDims = [2]
+// CHECK: partialReductionDims = [2]
 // CHECK-SAME: partialReductionOwnerDims = [0, 1]
 // CHECK-SAME: physicalBlockShape = [8, 256]
 

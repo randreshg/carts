@@ -55,10 +55,6 @@ namespace PartitionScoreKeys {
 inline constexpr llvm::StringLiteral TargetLogicalWorkers =
     "targetLogicalWorkers";
 inline constexpr llvm::StringLiteral ExposedCuCount = "exposedCuCount";
-inline constexpr llvm::StringLiteral ChosenCuCount = "chosenCuCount";
-inline constexpr llvm::StringLiteral MuBlockCount = "muBlockCount";
-inline constexpr llvm::StringLiteral CuGroupSize = "cuGroupSize";
-inline constexpr llvm::StringLiteral CuGroupCount = "cuGroupCount";
 } // namespace PartitionScoreKeys
 
 } // namespace mlir::carts::codir::AttrNames

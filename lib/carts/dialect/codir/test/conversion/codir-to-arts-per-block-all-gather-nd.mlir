@@ -22,7 +22,7 @@ module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_worker
                         distribution_kind = #codir.distribution_kind<blocked>,
                         iteration_topology = #codir.iteration_topology<owner_tile>,
                         logical_worker_slice = [4, 4, 4],
-                        partition_score = {chosenCuCount = 256 : i64, concurrencyFloor = 256 : i64, cuGroupSize = 1 : i64, exposedCuCount = 256 : i64, muBlockCount = 512 : i64, targetLogicalWorkers = 256 : i64, tileBytes = 256 : i64},
+                        partition_score = {exposedCuCount = 256 : i64, targetLogicalWorkers = 256 : i64},
                         pattern = #codir.pattern<uniform>,
                         tile_owner_dims = [0, 1, 2],
                         tile_shape = [4, 4, 4]} {
@@ -68,7 +68,7 @@ module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_worker
                           distribution_kind = #codir.distribution_kind<blocked>,
                           iteration_topology = #codir.iteration_topology<owner_tile>,
                           logical_worker_slice = [8, 16, 32],
-                          partition_score = {chosenCuCount = 256 : i64, concurrencyFloor = 256 : i64, cuGroupSize = 1 : i64, exposedCuCount = 256 : i64, muBlockCount = 256 : i64, targetLogicalWorkers = 256 : i64, tileBytes = 16384 : i64},
+                          partition_score = {exposedCuCount = 256 : i64, targetLogicalWorkers = 256 : i64},
                           pattern = #codir.pattern<stencil_tiling_nd>,
                           plan_owner_dims = [0, 1, 2],
                           tile_owner_dims = [2, 1, 0],

@@ -228,8 +228,8 @@ module {
 
   // Generic layout-mismatch redistribution: no matmul benchmark shape and no
   // consumer-name heuristic. CODIR derives the all_gather family from neutral
-  // layout evidence on the dependency while preserving the upstream layout and
-  // grouping facts verbatim.
+  // layout evidence on the dependency while preserving the upstream layout
+  // graph facts verbatim.
   func.func @generic_layout_mismatch_all_gather(%tmp: memref<128xf32>) {
     codir.codelet deps(%tmp : memref<128xf32>)
         attributes {array_layout = [{arrayId = 7 : i64,
@@ -251,11 +251,7 @@ module {
                                         muId = 7 : i64,
                                         muBlockCount = 8 : i64,
                                         role = "write"}],
-                    partition_score = {chosenCuCount = 8 : i64,
-                                       cuGroupCount = 2 : i64,
-                                       cuGroupSize = 4 : i64,
-                                       exposedCuCount = 8 : i64,
-                                       muBlockCount = 8 : i64,
+                    partition_score = {exposedCuCount = 8 : i64,
                                        targetLogicalWorkers = 8 : i64},
                     pattern = #codir.pattern<elementwise_pipeline>} {
     ^bb0(%arg0: memref<128xf32>):
@@ -289,11 +285,7 @@ module {
                                         muId = 11 : i64,
                                         muBlockCount = 8 : i64,
                                         role = "write"}],
-                    partition_score = {chosenCuCount = 8 : i64,
-                                       cuGroupCount = 2 : i64,
-                                       cuGroupSize = 4 : i64,
-                                       exposedCuCount = 8 : i64,
-                                       muBlockCount = 8 : i64,
+                    partition_score = {exposedCuCount = 8 : i64,
                                        targetLogicalWorkers = 8 : i64},
                     pattern = #codir.pattern<reduction>} {
     ^bb0(%arg0: memref<128xf32>):
@@ -344,7 +336,7 @@ module {
 
 // Generic layout mismatch selects all_gather without relying on a matmul
 // consumer predicate, and StoragePlanning does not rewrite the forwarded SDE
-// layout/grouping facts.
+// layout graph facts.
 // CHECK-LABEL: func.func @generic_layout_mismatch_all_gather
 // CHECK: codir.codelet
 // CHECK-SAME: array_layout = [{arrayId = 7 : i64
@@ -356,8 +348,8 @@ module {
 // CHECK-SAME: cuGroupSize = 4 : i64
 // CHECK-SAME: edgeClass = "layout_mismatch"
 // CHECK-SAME: edgeCommBytes = 4096 : i64
-// CHECK-SAME: partition_score = {chosenCuCount = 8 : i64
-// CHECK-SAME: cuGroupSize = 4 : i64
+// CHECK-SAME: partition_score = {exposedCuCount = 8 : i64
+// CHECK-SAME: targetLogicalWorkers = 8 : i64
 
 // Reduction-like layout mismatch selects reduce_scatter using the same
 // code-agnostic evidence path.

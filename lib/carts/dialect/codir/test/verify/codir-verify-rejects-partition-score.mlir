@@ -24,17 +24,39 @@ module {
   func.func @codir_bad_partition_score_missing_concurrency(%dep: memref<4xf32>) {
     codir.codelet deps(%dep : memref<4xf32>)
       attributes {dep_modes = [#codir.access_mode<read>],
-                  partition_score = {chosenCuCount = 4 : i64}} {
+                  partition_score = {}} {
     ^bb0(%dep_arg: memref<4xf32>):
       codir.yield
     }
     return
   }
 
-  func.func @codir_bad_partition_score_mu_blocks(%dep: memref<4xf32>) {
+  func.func @codir_bad_partition_score_mu_blocks_unconsumed(%dep: memref<4xf32>) {
     codir.codelet deps(%dep : memref<4xf32>)
       attributes {dep_modes = [#codir.access_mode<read>],
                   partition_score = {muBlockCount = 0 : i64,
+                                     targetLogicalWorkers = 1 : i64}} {
+    ^bb0(%dep_arg: memref<4xf32>):
+      codir.yield
+    }
+    return
+  }
+
+  func.func @codir_bad_partition_score_unconsumed_key(%dep: memref<4xf32>) {
+    codir.codelet deps(%dep : memref<4xf32>)
+      attributes {dep_modes = [#codir.access_mode<read>],
+                  partition_score = {objective = "max_concurrency_comm_aware",
+                                     targetLogicalWorkers = 1 : i64}} {
+    ^bb0(%dep_arg: memref<4xf32>):
+      codir.yield
+    }
+    return
+  }
+
+  func.func @codir_bad_partition_score_cu_group_size_unconsumed(%dep: memref<4xf32>) {
+    codir.codelet deps(%dep : memref<4xf32>)
+      attributes {dep_modes = [#codir.access_mode<read>],
+                  partition_score = {cuGroupSize = 0 : i64,
                                      targetLogicalWorkers = 1 : i64}} {
     ^bb0(%dep_arg: memref<4xf32>):
       codir.yield
@@ -46,4 +68,6 @@ module {
 // CHECK: partition_score must be a dictionary attribute
 // CHECK: partition_score.targetLogicalWorkers must be a positive integer attribute
 // CHECK: partition_score must contain targetLogicalWorkers or exposedCuCount
-// CHECK: partition_score.muBlockCount must be a positive integer attribute
+// CHECK: partition_score.muBlockCount is not consumed by the CODIR-to-ARTS boundary
+// CHECK: partition_score.objective is not consumed by the CODIR-to-ARTS boundary
+// CHECK: partition_score.cuGroupSize is not consumed by the CODIR-to-ARTS boundary
