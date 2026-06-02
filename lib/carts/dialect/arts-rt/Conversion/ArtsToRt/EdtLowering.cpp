@@ -460,12 +460,6 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
 
   setOutlinedFunc(outlineOp, outlinedFunc.getName());
 
-  if (edtOp->hasAttr(
-          ::mlir::carts::arts_rt::AttrNames::Operation::ReadyLocalLaunch))
-    outlineOp->setAttr(
-        ::mlir::carts::arts_rt::AttrNames::Operation::ReadyLocalLaunch,
-        AC->getBuilder().getUnitAttr());
-
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)
     baseId = idRegistry.getOrCreate(edtOp.getOperation());

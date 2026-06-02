@@ -10,7 +10,6 @@
 
 #include "CodegenInternal.h"
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
-#include "carts/dialect/arts-rt/Utils/ArtsRtAttrNames.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
@@ -78,12 +77,7 @@ struct CreateEpochPattern : public ArtsRtToLLVMPattern<CreateEpochOp> {
       edtSlot = AC->createIntConstant(DEFAULT_EDT_SLOT, AC->Int32, loc);
     }
 
-    /// Create epoch guid
-    Value epochGuid;
-    if (op->hasAttr(::mlir::carts::arts_rt::AttrNames::Operation::NoStartEpoch))
-      epochGuid = AC->createEpochNoStart(guid, edtSlot, loc);
-    else
-      epochGuid = AC->createEpoch(guid, edtSlot, loc);
+    Value epochGuid = AC->createEpoch(guid, edtSlot, loc);
     rewriter.replaceOp(op, epochGuid);
     ++numEpochOpsConverted;
     return success();
@@ -126,11 +120,8 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering RecordInDep Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto edtGuid = op.getEdtGuid();
     auto loc = op.getLoc();
-    auto readyLocalSite = resolveReadyLocalLaunchSite(edtGuid);
-    const bool useReadyLocalLaunch =
-        readyLocalSite && canUseReadyLocalLaunchSite(*readyLocalSite);
+    auto edtGuid = op.getEdtGuid();
 
     /// Get access mode from attribute
     auto accessMode = op.getAccessMode();
@@ -153,14 +144,6 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
     Value sharedSlotAlloc = AC->create<memref::AllocaOp>(loc, slotTy);
     Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
     AC->create<memref::StoreOp>(loc, zeroI32, sharedSlotAlloc);
-    Value readyLocalDepBuffer;
-    if (useReadyLocalLaunch) {
-      Value depCount = readyLocalSite->representativeCreate().getDepCount();
-      if (depCount.getType() != AC->Int32)
-        depCount = AC->castToInt(AC->Int32, depCount, loc);
-      readyLocalDepBuffer = allocateReadyLocalDepBuffer(depCount, loc);
-    }
-
     /// Add dependencies for each datablock using shared slot counter
     unsigned dbIdx = 0;
     for (Value dbGuid : op.getDatablocks()) {
@@ -178,30 +161,8 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
           (dbIdx < byteOffsets.size()) ? byteOffsets[dbIdx] : Value();
       Value byteSize = (dbIdx < byteSizes.size()) ? byteSizes[dbIdx] : Value();
       recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, accessMode, acquireMode,
-                      depFlags, boundsValid, byteOffset, byteSize,
-                      readyLocalDepBuffer, loc);
+                      depFlags, boundsValid, byteOffset, byteSize, loc);
       ++dbIdx;
-    }
-
-    if (useReadyLocalLaunch) {
-      if (readyLocalSite->isMergedIfResult()) {
-        Value launchGuid = emitMergedIfReadyLocalLaunch(
-            *readyLocalSite, readyLocalDepBuffer, loc);
-        readyLocalSite->ifOp.getResult(readyLocalSite->ifResultIndex)
-            .replaceAllUsesWith(launchGuid);
-        if (readyLocalSite->ifOp->use_empty())
-          rewriter.eraseOp(readyLocalSite->ifOp);
-      } else {
-        auto readyLocalCreate = readyLocalSite->representativeCreate();
-        func::CallOp launchCall =
-            emitReadyLocalLaunch(readyLocalCreate, readyLocalDepBuffer, loc);
-        readyLocalCreate.replaceAllUsesWith(launchCall.getResult(0));
-        if (readyLocalCreate->use_empty())
-          rewriter.eraseOp(readyLocalCreate);
-      }
-      rewriter.eraseOp(op);
-      ++numDepOpsConverted;
-      return success();
     }
 
     rewriter.eraseOp(op);
@@ -210,222 +171,6 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
   }
 
 private:
-  struct ReadyLocalLaunchSite {
-    SmallVector<EdtCreateOp, 2> creates;
-    scf::IfOp ifOp;
-    unsigned ifResultIndex = 0;
-
-    bool isValid() const { return !creates.empty(); }
-    bool isMergedIfResult() const { return static_cast<bool>(ifOp); }
-    EdtCreateOp representativeCreate() const { return creates.front(); }
-  };
-
-  std::optional<ReadyLocalLaunchSite>
-  resolveReadyLocalLaunchSite(Value edtGuid) const {
-    if (auto create = edtGuid.getDefiningOp<EdtCreateOp>()) {
-      ReadyLocalLaunchSite site;
-      site.creates.push_back(create);
-      return site;
-    }
-
-    auto ifOp = edtGuid.getDefiningOp<scf::IfOp>();
-    if (!ifOp)
-      return std::nullopt;
-
-    auto result = dyn_cast<OpResult>(edtGuid);
-    if (!result)
-      return std::nullopt;
-
-    unsigned resultNumber = result.getResultNumber();
-    auto thenYield = dyn_cast<scf::YieldOp>(ifOp.thenBlock()->getTerminator());
-    auto elseYield = dyn_cast<scf::YieldOp>(ifOp.elseBlock()->getTerminator());
-    if (!thenYield || !elseYield)
-      return std::nullopt;
-    if (resultNumber >= thenYield.getNumOperands() ||
-        resultNumber >= elseYield.getNumOperands())
-      return std::nullopt;
-
-    auto thenCreate =
-        thenYield.getOperand(resultNumber).getDefiningOp<EdtCreateOp>();
-    auto elseCreate =
-        elseYield.getOperand(resultNumber).getDefiningOp<EdtCreateOp>();
-    if (!thenCreate || !elseCreate)
-      return std::nullopt;
-
-    ReadyLocalLaunchSite site;
-    site.creates.push_back(thenCreate);
-    site.creates.push_back(elseCreate);
-    site.ifOp = ifOp;
-    site.ifResultIndex = resultNumber;
-    return site;
-  }
-
-  bool canUseReadyLocalLaunchSite(ReadyLocalLaunchSite &site) const {
-    if (!site.isValid())
-      return false;
-    if (site.isMergedIfResult() && site.ifOp->getNumResults() != 1)
-      return false;
-
-    auto reference = site.representativeCreate();
-    if (!reference->hasAttr(
-            ::mlir::carts::arts_rt::AttrNames::Operation::ReadyLocalLaunch) ||
-        !reference.getEpochGuid())
-      return false;
-
-    for (EdtCreateOp create : site.creates) {
-      if (!create->hasAttr(
-              ::mlir::carts::arts_rt::AttrNames::Operation::ReadyLocalLaunch) ||
-          !create.getEpochGuid())
-        return false;
-      if (create.getParamMemref() != reference.getParamMemref() ||
-          create.getDepCount() != reference.getDepCount() ||
-          create.getEpochGuid() != reference.getEpochGuid() ||
-          create.getRoute() != reference.getRoute())
-        return false;
-    }
-    return true;
-  }
-
-  Value emitMergedIfReadyLocalLaunch(ReadyLocalLaunchSite &site,
-                                     Value depBuffer, Location loc) const {
-    auto launchIf = AC->create<scf::IfOp>(loc, site.ifOp.getResultTypes(),
-                                          site.ifOp.getCondition(),
-                                          /*withElseRegion=*/true);
-
-    AC->setInsertionPointToStart(&launchIf.getThenRegion().front());
-    func::CallOp thenLaunch = emitReadyLocalLaunch(
-        site.creates.front(), depBuffer, site.creates.front().getLoc());
-    AC->create<scf::YieldOp>(site.creates.front().getLoc(),
-                             thenLaunch.getResult(0));
-
-    AC->setInsertionPointToStart(&launchIf.getElseRegion().front());
-    func::CallOp elseLaunch = emitReadyLocalLaunch(
-        site.creates.back(), depBuffer, site.creates.back().getLoc());
-    AC->create<scf::YieldOp>(site.creates.back().getLoc(),
-                             elseLaunch.getResult(0));
-
-    AC->setInsertionPointAfter(launchIf);
-    return launchIf.getResult(0);
-  }
-
-  func::CallOp emitReadyLocalLaunch(EdtCreateOp op, Value depBuffer,
-                                    Location loc) const {
-    auto funcNameAttr = op->getAttrOfType<StringAttr>(
-        ::mlir::carts::arts::AttrNames::Operation::OutlinedFunc);
-    if (!funcNameAttr)
-      op.emitError(
-          "Missing arts.outlined_func attribute for ready-local launch");
-
-    auto outlined =
-        AC->getModule().lookupSymbol<func::FuncOp>(funcNameAttr.getValue());
-    if (!outlined)
-      op.emitError("ready-local outlined function not found");
-
-    Value funcPtr = AC->createFnPtr(outlined, loc);
-    Value paramv = op.getParamMemref();
-    Value depc = op.getDepCount();
-    if (depc.getType() != AC->Int32)
-      depc = AC->castToInt(AC->Int32, depc, loc);
-
-    if (auto memrefType = dyn_cast<MemRefType>(paramv.getType())) {
-      auto runtimeParamType =
-          MemRefType::get({ShapedType::kDynamic}, AC->Int64);
-      if (memrefType != runtimeParamType)
-        paramv = AC->create<memref::CastOp>(loc, runtimeParamType, paramv)
-                     .getResult();
-    }
-
-    Value paramc;
-    if (auto memrefType = dyn_cast<MemRefType>(paramv.getType())) {
-      if (memrefType.hasStaticShape() && memrefType.getNumElements() == 0) {
-        paramc = AC->createIntConstant(0, AC->Int32, loc);
-      } else {
-        auto zeroIndex = AC->createIndexConstant(0, loc);
-        auto memrefSize = AC->create<memref::DimOp>(loc, paramv, zeroIndex);
-        paramc = AC->create<arith::IndexCastOp>(loc, AC->Int32, memrefSize);
-      }
-    } else {
-      paramc = AC->createIntConstant(0, AC->Int32, loc);
-    }
-
-    Value route = op.getRoute();
-    if (!route)
-      route = createCurrentNodeRoute(AC->getBuilder(), loc);
-
-    auto createIdAttr = op->getAttrOfType<IntegerAttr>(
-        ::mlir::carts::arts::AttrNames::Operation::ArtsCreateId);
-    Value artsIdVal;
-    if (createIdAttr)
-      artsIdVal = AC->create<arith::ConstantOp>(loc, AC->Int64, createIdAttr);
-    else
-      artsIdVal = AC->createIntConstant(0, AC->Int64, loc);
-    Value hintMemref = buildArtsHintMemref(AC, route, artsIdVal, loc);
-
-    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-    func::CallOp launch =
-        RCB.callOp(types::ARTSRTL_arts_edt_create_ready_local_with_epoch,
-                   {funcPtr, paramc, paramv, depc, depBuffer, op.getEpochGuid(),
-                    hintMemref});
-    freeReadyLocalDepBuffer(depBuffer, loc);
-    return launch;
-  }
-
-  Value allocateReadyLocalDepBuffer(Value depCount, Location loc) const {
-    Value depCountSize = AC->castToInt(AC->PtrSize, depCount, loc);
-    Value depElementSize = AC->create<polygeist::TypeSizeOp>(
-        loc, IndexType::get(AC->getContext()), AC->ArtsEdtDep);
-    depElementSize = AC->castToInt(AC->PtrSize, depElementSize, loc);
-    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-    return RCB.call(types::ARTSRTL_arts_calloc, {depCountSize, depElementSize});
-  }
-
-  void freeReadyLocalDepBuffer(Value depBuffer, Location loc) const {
-    ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-    RCB.callVoid(types::ARTSRTL_arts_free, {depBuffer});
-  }
-
-  void storeReadyLocalDepEntry(Value depBuffer, Value slotValue,
-                               Value guidValue, Value modeValue,
-                               std::optional<int32_t> depFlags,
-                               Value byteOffsetI64, Value byteSizeI64,
-                               Location loc) const {
-    Value slotI64 = AC->ensureI64(slotValue, loc);
-    Value depEntryPtr = AC->create<LLVM::GEPOp>(
-        loc, AC->llvmPtr, AC->ArtsEdtDep, depBuffer, ValueRange{slotI64});
-    Value c0 = AC->createIntConstant(0, AC->Int64, loc);
-    Value c1 = AC->createIntConstant(1, AC->Int64, loc);
-    Value c2 = AC->createIntConstant(2, AC->Int64, loc);
-    Value c3 = AC->createIntConstant(3, AC->Int64, loc);
-    Value c4 = AC->createIntConstant(4, AC->Int64, loc);
-    Value c5 = AC->createIntConstant(5, AC->Int64, loc);
-    Value flagsValue =
-        AC->createIntConstant(depFlags.value_or(0), AC->Int32, loc);
-    Value nullPtr = AC->create<LLVM::ZeroOp>(loc, AC->llvmPtr);
-    if (!byteOffsetI64)
-      byteOffsetI64 = AC->createIntConstant(0, AC->Int64, loc);
-    if (!byteSizeI64)
-      byteSizeI64 = AC->createIntConstant(0, AC->Int64, loc);
-
-    Value guidPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
-                                            depEntryPtr, ValueRange{c0, c0});
-    Value ptrPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
-                                           depEntryPtr, ValueRange{c0, c1});
-    Value modePtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
-                                            depEntryPtr, ValueRange{c0, c2});
-    Value flagsPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
-                                             depEntryPtr, ValueRange{c0, c3});
-    Value offsetPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
-                                              depEntryPtr, ValueRange{c0, c4});
-    Value sizePtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
-                                            depEntryPtr, ValueRange{c0, c5});
-    AC->create<LLVM::StoreOp>(loc, AC->ensureI64(guidValue, loc), guidPtr);
-    AC->create<LLVM::StoreOp>(loc, nullPtr, ptrPtr);
-    AC->create<LLVM::StoreOp>(loc, modeValue, modePtr);
-    AC->create<LLVM::StoreOp>(loc, flagsValue, flagsPtr);
-    AC->create<LLVM::StoreOp>(loc, byteOffsetI64, offsetPtr);
-    AC->create<LLVM::StoreOp>(loc, byteSizeI64, sizePtr);
-  }
-
   SmallVector<Value, 4>
   inferStencilCenterCoordsFromContract(DbAcquireOp dbAcquireOp,
                                        const DbLoweringInfo &dbInfo,
@@ -1034,7 +779,7 @@ private:
                           std::optional<int32_t> depFlags, Value boundsValid,
                           Value byteOffset, Value byteSize,
                           const DepDbInfo &depInfo, const DepBoundsInfo &bounds,
-                          Value readyLocalDepBuffer, Location loc) const {
+                          Location loc) const {
     auto guidStorageType = dyn_cast<MemRefType>(
         (depInfo.guidStorage ? depInfo.guidStorage : dbGuid).getType());
     bool useDirectCoords = !bounds.useDepv && guidStorageType &&
@@ -1060,13 +805,13 @@ private:
                                   : AC->computeLinearIndex(bounds.allocSizes,
                                                            globalCoords, loc);
 
-          recordSingleDb(
-              dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
-              linearIndex, ArrayRef<Value>(globalCoords), bounds.allocSizes,
-              accessMode, acquireMode, depFlags, boundsValid, depInfo.depStruct,
-              depInfo.baseOffset, bounds.totalDBs, byteOffset, byteSize,
-              depInfo.stencilCenterLinear, depInfo.stencilCenterCoords,
-              &depInfo, readyLocalDepBuffer, loc);
+          recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
+                         linearIndex, ArrayRef<Value>(globalCoords),
+                         bounds.allocSizes, accessMode, acquireMode, depFlags,
+                         boundsValid, depInfo.depStruct, depInfo.baseOffset,
+                         bounds.totalDBs, byteOffset, byteSize,
+                         depInfo.stencilCenterLinear,
+                         depInfo.stencilCenterCoords, &depInfo, loc);
           return;
         }
 
@@ -1089,12 +834,12 @@ private:
     if (!bounds.useDepv && depInfo.dbInfo.isSingleElement &&
         !depInfo.dbInfo.indices.empty()) {
       Value zero = AC->createIndexConstant(0, loc);
-      recordSingleDb(
-          dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc, zero,
-          depInfo.dbInfo.indices, bounds.allocSizes, accessMode, acquireMode,
-          depFlags, boundsValid, depInfo.depStruct, depInfo.baseOffset,
-          bounds.totalDBs, byteOffset, byteSize, depInfo.stencilCenterLinear,
-          depInfo.stencilCenterCoords, &depInfo, readyLocalDepBuffer, loc);
+      recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
+                     zero, depInfo.dbInfo.indices, bounds.allocSizes,
+                     accessMode, acquireMode, depFlags, boundsValid,
+                     depInfo.depStruct, depInfo.baseOffset, bounds.totalDBs,
+                     byteOffset, byteSize, depInfo.stencilCenterLinear,
+                     depInfo.stencilCenterCoords, &depInfo, loc);
       return;
     }
 
@@ -1107,8 +852,7 @@ private:
                          accessMode, acquireMode, depFlags, boundsValid,
                          depInfo.depStruct, depInfo.baseOffset, bounds.totalDBs,
                          byteOffset, byteSize, depInfo.stencilCenterLinear,
-                         depInfo.stencilCenterCoords, &depInfo,
-                         readyLocalDepBuffer, loc);
+                         depInfo.stencilCenterCoords, &depInfo, loc);
         },
         bounds.allocSizes);
   }
@@ -1118,14 +862,13 @@ private:
                        DepAccessMode accessMode,
                        std::optional<int32_t> acquireMode,
                        std::optional<int32_t> depFlags, Value boundsValid,
-                       Value byteOffset, Value byteSize,
-                       Value readyLocalDepBuffer, Location loc) const {
+                       Value byteOffset, Value byteSize, Location loc) const {
     DepDbInfo depInfo = extractDbInfoForDeps(dbGuid, acquireMode, loc);
     DepBoundsInfo bounds =
         computeDepBounds(dbGuid, depInfo, accessMode, boundsValid);
     emitRecordDepCalls(dbGuid, edtGuid, sharedSlotAlloc, accessMode,
                        acquireMode, depFlags, boundsValid, byteOffset, byteSize,
-                       depInfo, bounds, readyLocalDepBuffer, loc);
+                       depInfo, bounds, loc);
   }
 
   /// Emit the appropriate runtime call for recording a dependency.
@@ -1212,7 +955,7 @@ private:
       Value boundsValid, Value depStruct, Value baseOffset, Value totalDBs,
       Value byteOffset, Value byteSize, Value stencilCenterLinear,
       ArrayRef<Value> stencilCenterCoords, const DepDbInfo *depInfo,
-      Value readyLocalDepBuffer, Location loc) const {
+      Location loc) const {
     const bool useDepv =
         depStruct && baseOffset &&
         (accessMode == DepAccessMode::from_depv ||
@@ -1350,27 +1093,14 @@ private:
       Value dbGuidValue = loadDbGuidValue(dbGuid, guidStorage, linearIndex,
                                           directIndices, directLayoutSizes,
                                           useDepv, depStruct, baseOffset, loc);
-      if (readyLocalDepBuffer) {
-        storeReadyLocalDepEntry(readyLocalDepBuffer, currentSlotI32,
-                                dbGuidValue, modeValue, effectiveDepFlags,
-                                byteOffsetI64, byteSizeI64, loc);
-      } else {
-        emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                          byteOffsetI64, byteSizeI64, effectiveDepFlags, loc);
-      }
+      emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
+                        byteOffsetI64, byteSizeI64, effectiveDepFlags, loc);
 
       /// Else: invalid index - signal null dependency
       AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
-      if (readyLocalDepBuffer) {
-        Value nullGuid = AC->createIntConstant(0, AC->Int64, loc);
-        Value nullMode = AC->createIntConstant(DB_MODE_NULL, AC->Int32, loc);
-        storeReadyLocalDepEntry(readyLocalDepBuffer, currentSlotI32, nullGuid,
-                                nullMode, std::nullopt, Value(), Value(), loc);
-      } else {
-        ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-        RCB.callVoid(types::ARTSRTL_arts_signal_edt_null,
-                     {edtGuidValue, currentSlotI32});
-      }
+      ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
+      RCB.callVoid(types::ARTSRTL_arts_signal_edt_null,
+                   {edtGuidValue, currentSlotI32});
 
       AC->setInsertionPointAfter(ifOp);
     } else {
@@ -1378,14 +1108,8 @@ private:
       Value dbGuidValue = loadDbGuidValue(dbGuid, guidStorage, linearIndex,
                                           directIndices, directLayoutSizes,
                                           useDepv, depStruct, baseOffset, loc);
-      if (readyLocalDepBuffer) {
-        storeReadyLocalDepEntry(readyLocalDepBuffer, currentSlotI32,
-                                dbGuidValue, modeValue, effectiveDepFlags,
-                                byteOffsetI64, byteSizeI64, loc);
-      } else {
-        emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                          byteOffsetI64, byteSizeI64, effectiveDepFlags, loc);
-      }
+      emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
+                        byteOffsetI64, byteSizeI64, effectiveDepFlags, loc);
     }
 
     /// Increment slot counter
@@ -1675,14 +1399,6 @@ struct EdtCreatePattern : public ArtsRtToLLVMPattern<EdtCreateOp> {
 
   LogicalResult matchAndRewrite(EdtCreateOp op,
                                 PatternRewriter &rewriter) const override {
-    if (op->hasAttr(
-            ::mlir::carts::arts_rt::AttrNames::Operation::ReadyLocalLaunch) &&
-        op.getEpochGuid()) {
-      for (Operation *user : op.getGuid().getUsers())
-        if (isa<RecordDepOp>(user))
-          return failure();
-    }
-
     ARTS_INFO("Lowering EdtCreate Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     /// Get outlined function name

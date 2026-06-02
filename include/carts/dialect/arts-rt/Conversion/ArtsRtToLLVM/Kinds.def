@@ -285,17 +285,6 @@ __ARTS_RTL_ATTRS(arts_edt_create_with_epoch, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, ZExt, ReadOnlyPtrAttrs, ZExt,
                             EmptyAttrs, ReadOnlyPtrAttrs))
 
-/// arts_guid_t arts_edt_create_ready_local_with_epoch(
-///     arts_edt_t func_ptr, uint32_t paramc, const uint64_t *paramv,
-///     uint32_t depc, const arts_edt_dep_t *depv, arts_guid_t epoch_guid,
-///     const arts_hint_t *hint);
-__ARTS_RTL(arts_edt_create_ready_local_with_epoch, ArtsGuid, EdtFnPtr, Int32,
-           Int64Ptr, Int32, RawPtr, ArtsGuid, ArtsHintTypePtr)
-__ARTS_RTL_ATTRS(arts_edt_create_ready_local_with_epoch, ControlAttrs,
-                 EmptyAttrs,
-                 ParamAttrs(ReadOnlyPtrAttrs, ZExt, ReadOnlyPtrAttrs, ZExt,
-                            ReadOnlyPtrAttrs, EmptyAttrs, ReadOnlyPtrAttrs))
-
 /// void arts_signal_edt_null(arts_guid_t edt_guid, uint32_t slot);
 __ARTS_RTL(arts_signal_edt_null, Void, ArtsGuid, Int32)
 __ARTS_RTL_ATTRS(arts_signal_edt_null, ControlAttrs, EmptyAttrs,

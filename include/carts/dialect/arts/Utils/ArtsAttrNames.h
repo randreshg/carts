@@ -81,10 +81,6 @@ namespace Contract {
 /// Marker stamped on dependency sources that the contract layer can narrow.
 inline constexpr llvm::StringLiteral NarrowableDep = "narrowable_dep";
 
-/// Discriminator carried by typed LoweringContractAttr payloads, copied
-/// through cross-dialect attribute propagation.
-inline constexpr llvm::StringLiteral ContractKindKey = "contract_kind";
-
 } // namespace Contract
 
 } // namespace mlir::carts::arts::AttrNames

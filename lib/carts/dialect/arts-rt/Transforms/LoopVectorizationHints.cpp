@@ -443,11 +443,9 @@ struct LoopVectorizationHintsPass
           (funcOp.getNumArguments() >= 4) ? funcOp.getArgument(3) : Value{};
       SmallVector<LLVM::AccessGroupAttr> parallelAccessGroups;
 
-      // RT reads only RT-facing hints translated from Core EDT attrs. The
-      // SDE-stamped `arts.rt.vectorize_width` is currently target-blind (it
-      // derives from `ARTSCostModel::getVectorWidth()`, a generic SSE2 floor)
-      // so RT resolves the per-loop lane count from the host target features
-      // instead; only the interleave hint is consumed from SDE.
+      // RT reads only consumed RT-facing hints translated from Core EDT attrs.
+      // Lane count is resolved from host target features; only interleave is
+      // carried through the function-level hint surface.
       unsigned rtInterleaveCount = 0;
       if (auto attr = funcOp->getAttrOfType<IntegerAttr>(
               ::mlir::carts::arts_rt::AttrNames::Rt::InterleaveCount))

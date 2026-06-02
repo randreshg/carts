@@ -413,9 +413,6 @@ mlir::carts::arts::getSemanticContract(Operation *op) {
       isStencilFamilyDepPattern(*info.pattern.depPattern);
   info.analysis.narrowableDep =
       op->hasAttr(::mlir::carts::arts::AttrNames::Contract::NarrowableDep);
-  if (auto contractKind = op->getAttrOfType<IntegerAttr>(
-          ::mlir::carts::arts::AttrNames::Contract::ContractKindKey))
-    info.pattern.kind = static_cast<ContractKind>(contractKind.getInt());
   mergePlanSpatialAttrs(op, info);
   if (info.empty())
     return std::nullopt;

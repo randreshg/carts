@@ -109,11 +109,6 @@ public:
   /// Epoch management
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
 
-  /// Create an epoch without counting the caller as active.
-  /// Used for continuation-path epochs where the caller doesn't wait.
-  Value createEpochNoStart(Value finishEdtGuid, Value finishEdtSlot,
-                           Location loc);
-
   /// Utility functions
   Value getCurrentEpochGuid(Location loc);
   Value getEdtEpochGuid(Location loc);

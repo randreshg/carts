@@ -60,9 +60,9 @@ using namespace llvm;
 // dropped. `critical_path_distance` is an ODS-declared OptionalAttr<I64Attr>
 // on arts.edt (set by EdtTransformsPass ET-6 and read through the
 // LoweringContractOp::getCriticalPathDistance() helper which still consults
-// the encapsulated ContractAttr). `narrowable_dep` and `contract_kind` are
-// cross-dialect discardable keys (propagated via copySemanticContractAttrs
-// onto non-ARTS source ops like memref.alloc); they live in
+// the encapsulated ContractAttr). `narrowable_dep` is a cross-dialect
+// discardable key (propagated via copySemanticContractAttrs onto non-ARTS
+// source ops like memref.alloc); it lives in
 // carts/dialect/arts/Utils/ArtsAttrNames.h under the Contract namespace.
 
 // Proof-driven ownership attributes (Proof::OwnerDimReachability,
@@ -738,11 +738,6 @@ inline void copySemanticContractAttrs(Operation *source, Operation *dest) {
     return;
   copyPatternAttrs(source, dest);
   copyStencilContractAttrs(source, dest);
-  if (auto contractKind = source->getAttrOfType<IntegerAttr>(
-          AttrNames::Contract::ContractKindKey))
-    dest->setAttr(AttrNames::Contract::ContractKindKey, contractKind);
-  else
-    dest->removeAttr(AttrNames::Contract::ContractKindKey);
   if (source->hasAttr(AttrNames::Contract::NarrowableDep))
     dest->setAttr(AttrNames::Contract::NarrowableDep,
                   UnitAttr::get(dest->getContext()));

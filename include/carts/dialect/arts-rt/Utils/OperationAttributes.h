@@ -12,10 +12,6 @@ inline void copyCoreExecutionHintAttrsToRtFunction(arts::EdtOp source,
                                                    Operation *dest) {
   if (!source || !dest)
     return;
-  if (auto attr = source.getVectorizeWidthAttr())
-    dest->setAttr(AttrNames::Rt::VectorizeWidth, attr);
-  if (auto attr = source.getUnrollFactorAttr())
-    dest->setAttr(AttrNames::Rt::UnrollFactor, attr);
   if (auto attr = source.getInterleaveCountAttr())
     dest->setAttr(AttrNames::Rt::InterleaveCount, attr);
 }
