@@ -62,7 +62,6 @@ struct CodirCodeletMetadata {
   // SDE module-scoped layout-assignment carriers, threaded verbatim.
   ArrayAttr arrayLayout;
   ArrayAttr layoutsDisagree;
-  IntegerAttr commVolumeBytes;
   Attribute partitionGraph;
   Attribute partitionScore;
 };
@@ -129,7 +128,6 @@ getCodirMetadataFromSchedulingUnit(sde::SdeSuIterateOp source) {
   // is needed beyond copying the attribute handle.
   metadata.arrayLayout = source.getArrayLayoutAttr();
   metadata.layoutsDisagree = source.getLayoutsDisagreeAttr();
-  metadata.commVolumeBytes = source.getCommVolumeBytesAttr();
   metadata.partitionGraph = source->getAttr(sde::AttrNames::PartitionGraph);
   metadata.partitionScore = source->getAttr(sde::AttrNames::PartitionScore);
   return metadata;

@@ -70,7 +70,6 @@ def CartsCodir_CodeletOp
     // batch bridge EDTs without collapsing SDE-exposed concurrency.
     OptionalAttr<ArrayAttr>:$array_layout,
     OptionalAttr<ArrayAttr>:$layouts_disagree,
-    OptionalAttr<I64Attr>:$comm_volume_bytes,
     Variadic<AnyType>:$deps,
     Variadic<AnyType>:$params
   );

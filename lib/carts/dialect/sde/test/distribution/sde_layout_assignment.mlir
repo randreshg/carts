@@ -36,10 +36,10 @@
 
 // Boundary proof: CODIR receives the same neutral layout graph facts under CODIR
 // attr names. The per-array layout graph (block kinds, owner dims, per-edge
-// commVolumeBytes) crosses the boundary verbatim as `array_layout`, the
-// aggregate edge pressure as `comm_volume_bytes`, the dependency-to-array join
-// as `dep_array_ids`, and the disagreeing edge as `layouts_disagree`. Concrete
-// collective selection remains a CODIR storage-planning decision.
+// commVolumeBytes) crosses the boundary verbatim as `array_layout`; CODIR does
+// not carry a duplicate aggregate comm-volume attr. The dependency-to-array join
+// crosses as `dep_array_ids`, and the disagreeing edge as `layouts_disagree`.
+// Concrete collective selection remains a CODIR storage-planning decision.
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir
 // CHECK: func.func @three_mm
 // CHECK: codir.codelet
@@ -47,7 +47,7 @@
 // CHECK: codir.codelet
 // CHECK: codir.codelet
 // CHECK-SAME: array_layout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}]
-// CHECK-SAME: comm_volume_bytes = 2097152 : i64
+// CHECK-NOT: comm_volume_bytes
 // CHECK-SAME: dep_array_ids = [0, 3, 6]
 // CHECK-SAME: layouts_disagree = [3]
 

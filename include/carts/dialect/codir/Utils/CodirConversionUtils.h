@@ -96,7 +96,7 @@ createCodirCodelet(OpBuilder &builder, Location loc, ArrayAttr depModes,
       metadata.accessMinOffsets, metadata.accessMaxOffsets,
       metadata.spatialDims, metadata.writeFootprint, metadata.inPlaceSafe,
       metadata.inPlaceSharedState, metadata.arrayLayout,
-      metadata.layoutsDisagree, metadata.commVolumeBytes, deps, params);
+      metadata.layoutsDisagree, deps, params);
   if (metadata.partitionGraph)
     codelet->setAttr(codir::AttrNames::PartitionGraph, metadata.partitionGraph);
   if (metadata.partitionScore)
