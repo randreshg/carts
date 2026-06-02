@@ -69,6 +69,55 @@ struct VerifyCodirPass : public codir::impl::VerifyCodirBase<VerifyCodirPass> {
         }
       }
 
+      auto arrayLayoutContainsId = [&](int64_t expected) {
+        ArrayAttr layout = codelet.getArrayLayoutAttr();
+        if (!layout)
+          return false;
+        for (Attribute attr : layout) {
+          auto entry = dyn_cast<DictionaryAttr>(attr);
+          if (!entry)
+            continue;
+          auto arrayId = dyn_cast_or_null<IntegerAttr>(
+              entry.get(codir::AttrNames::LayoutGraphKeys::ArrayId));
+          if (arrayId && arrayId.getInt() == expected)
+            return true;
+        }
+        return false;
+      };
+
+      ArrayAttr depArrayIds = codelet.getDepArrayIdsAttr();
+      if (depArrayIds) {
+        if (depArrayIds.size() != codelet.getDeps().size()) {
+          codelet.emitOpError()
+              << "expects dep_array_ids entry count (" << depArrayIds.size()
+              << ") to match dependency operand count ("
+              << codelet.getDeps().size() << ")";
+          failed = true;
+        }
+        for (auto [index, attr] : llvm::enumerate(depArrayIds)) {
+          auto id = dyn_cast<IntegerAttr>(attr);
+          if (!id) {
+            codelet.emitOpError()
+                << "dep_array_ids entry #" << index
+                << " must be an integer attribute, got " << attr;
+            failed = true;
+            continue;
+          }
+          if (id.getInt() < -1) {
+            codelet.emitOpError() << "dep_array_ids entry #" << index
+                                  << " must be -1 or a non-negative array id";
+            failed = true;
+            continue;
+          }
+          if (id.getInt() >= 0 && !arrayLayoutContainsId(id.getInt())) {
+            codelet.emitOpError()
+                << "dep_array_ids entry #" << index << " references arrayId "
+                << id.getInt() << " not present in array_layout";
+            failed = true;
+          }
+        }
+      }
+
       ArrayAttr depCollectives = codelet.getDepCollectivesAttr();
       if (depCollectives) {
         if (depCollectives.size() != codelet.getDeps().size()) {

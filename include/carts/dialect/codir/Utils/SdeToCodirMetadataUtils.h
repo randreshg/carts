@@ -47,6 +47,7 @@ struct CodirCodeletMetadata {
   CodirIterationTopologyAttr iterationTopology;
   CodirRepetitionStructureAttr repetitionStructure;
   CodirAsyncStrategyAttr asyncStrategy;
+  ArrayAttr depArrayIds;
   ArrayAttr planOwnerDims;
   ArrayAttr tileOwnerDims;
   ArrayAttr tileShape;

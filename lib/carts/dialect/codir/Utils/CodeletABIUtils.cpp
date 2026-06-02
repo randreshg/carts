@@ -90,15 +90,16 @@ static bool arrayLayoutEntryHasMismatch(CodeletOp codelet,
 
 static bool depArrayLayoutHasMismatch(CodeletOp codelet, unsigned depIndex,
                                       CodirAccessMode mode) {
-  ArrayAttr layout = codelet ? codelet.getArrayLayoutAttr() : ArrayAttr{};
-  if (!layout || depIndex >= layout.size())
-    return false;
-  auto entry = dyn_cast<DictionaryAttr>(layout[depIndex]);
+  DictionaryAttr entry = getArrayLayoutEntryForDep(codelet, depIndex);
   return entry && isRoleCompatible(entry, mode) &&
          arrayLayoutEntryHasMismatch(codelet, entry);
 }
 
-static bool partitionGraphHasMismatch(CodeletOp codelet, CodirAccessMode mode) {
+static bool partitionGraphHasMismatch(CodeletOp codelet, unsigned depIndex,
+                                      CodirAccessMode mode) {
+  std::optional<int64_t> depArrayId = getDepArrayId(codelet, depIndex);
+  if (!depArrayId)
+    return false;
   ArrayAttr graph = codelet ? dyn_cast_or_null<ArrayAttr>(
                                   codelet->getAttr(AttrNames::PartitionGraph))
                             : ArrayAttr{};
@@ -112,6 +113,10 @@ static bool partitionGraphHasMismatch(CodeletOp codelet, CodirAccessMode mode) {
                         AttrNames::PartitionGraphValues::EdgeLayoutMismatch))
       continue;
     if (!isRoleCompatible(entry, mode))
+      continue;
+    auto muId = dyn_cast_or_null<IntegerAttr>(
+        entry.get(AttrNames::PartitionGraphKeys::MuId));
+    if (!muId || muId.getInt() != *depArrayId)
       continue;
     // Owner-block entries describe the compute DB home shape. They may carry
     // aggregate communication pressure for the codelet, but they are not by
@@ -127,7 +132,7 @@ static bool partitionGraphHasMismatch(CodeletOp codelet, CodirAccessMode mode) {
 static bool depHasLayoutMismatchEvidence(CodeletOp codelet, unsigned depIndex,
                                          CodirAccessMode mode) {
   return depArrayLayoutHasMismatch(codelet, depIndex, mode) ||
-         partitionGraphHasMismatch(codelet, mode);
+         partitionGraphHasMismatch(codelet, depIndex, mode);
 }
 
 static bool isReductionLike(CodeletOp codelet) {
@@ -349,6 +354,35 @@ bool isMemrefForwardingOp(Operation *op) {
   return llvm::any_of(op->getResults(), [](Value result) {
     return isa<MemRefType>(result.getType());
   });
+}
+
+std::optional<int64_t> getDepArrayId(CodeletOp codelet, unsigned depIndex) {
+  ArrayAttr depArrayIds = codelet ? codelet.getDepArrayIdsAttr() : ArrayAttr{};
+  if (!depArrayIds || depIndex >= depArrayIds.size())
+    return std::nullopt;
+  auto intAttr = dyn_cast<IntegerAttr>(depArrayIds[depIndex]);
+  if (!intAttr || intAttr.getInt() < 0)
+    return std::nullopt;
+  return intAttr.getInt();
+}
+
+DictionaryAttr getArrayLayoutEntryForDep(CodeletOp codelet, unsigned depIndex) {
+  std::optional<int64_t> depArrayId = getDepArrayId(codelet, depIndex);
+  if (!depArrayId)
+    return {};
+  ArrayAttr layout = codelet ? codelet.getArrayLayoutAttr() : ArrayAttr{};
+  if (!layout)
+    return {};
+  for (Attribute attr : layout) {
+    auto entry = dyn_cast<DictionaryAttr>(attr);
+    if (!entry)
+      continue;
+    auto arrayId = dyn_cast_or_null<IntegerAttr>(
+        entry.get(AttrNames::LayoutGraphKeys::ArrayId));
+    if (arrayId && arrayId.getInt() == *depArrayId)
+      return entry;
+  }
+  return {};
 }
 
 std::optional<CodirAccessMode> getDepAccessMode(CodeletOp codelet,

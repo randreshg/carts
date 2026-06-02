@@ -13,6 +13,7 @@
 #include "carts/dialect/codir/Utils/SdeToCodirMetadataUtils.h"
 #include "carts/dialect/codir/Utils/TaskDepSliceUtils.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
+#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -82,11 +83,11 @@ createCodirCodelet(OpBuilder &builder, Location loc, ArrayAttr depModes,
                    UnitAttr taskDepend = {}, UnitAttr orderedTaskDepend = {},
                    UnitAttr completionBarrier = {}) {
   codir::CodeletOp codelet = codir::CodeletOp::create(
-      builder, loc, depModes, depStorageViews, /*dep_collectives=*/ArrayAttr{},
-      /*dep_owner_dims=*/ArrayAttr{}, taskDepend, orderedTaskDepend,
-      completionBarrier, metadata.pattern, metadata.reductionStrategy,
-      metadata.partialReduction, metadata.partialReductionDims,
-      metadata.partialReductionOwnerDims,
+      builder, loc, depModes, depStorageViews, metadata.depArrayIds,
+      /*dep_collectives=*/ArrayAttr{}, /*dep_owner_dims=*/ArrayAttr{},
+      taskDepend, orderedTaskDepend, completionBarrier, metadata.pattern,
+      metadata.reductionStrategy, metadata.partialReduction,
+      metadata.partialReductionDims, metadata.partialReductionOwnerDims,
       metadata.partialReductionDepResultDimMaps, UnitAttr{}, ArrayAttr{},
       IntegerAttr{}, IntegerAttr{}, IntegerAttr{}, metadata.distributionKind,
       metadata.iterationTopology, metadata.repetitionStructure,
@@ -1766,6 +1767,154 @@ struct SuCodeletPlan {
   DenseMap<Value, unsigned> paramIndex;
 };
 
+struct SuDepArrayIdPlan {
+  DenseMap<Operation *, DenseMap<Value, int64_t>> arrayIdByRootBySu;
+
+  std::optional<int64_t> lookup(sde::SdeSuIterateOp source, Value dep) const {
+    if (!source || !dep)
+      return std::nullopt;
+    auto opIt = arrayIdByRootBySu.find(source.getOperation());
+    if (opIt == arrayIdByRootBySu.end())
+      return std::nullopt;
+    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep);
+    if (!root)
+      return std::nullopt;
+    auto idIt = opIt->second.find(root);
+    if (idIt == opIt->second.end())
+      return std::nullopt;
+    return idIt->second;
+  }
+};
+
+static inline bool
+profileAccessesSchedulingUnit(const sde::ArrayAccessProfile &profile,
+                              unsigned suId) {
+  for (ArrayRef<sde::ArrayPositionUse> positionUses : profile.positionUses)
+    for (const sde::ArrayPositionUse &use : positionUses)
+      if (use.suId == suId)
+        return true;
+  return false;
+}
+
+static inline std::optional<int64_t> readLayoutEntryArrayId(Attribute attr) {
+  auto entry = dyn_cast<DictionaryAttr>(attr);
+  if (!entry)
+    return std::nullopt;
+  auto arrayId = dyn_cast_or_null<IntegerAttr>(
+      entry.get(codir::AttrNames::LayoutGraphKeys::ArrayId));
+  if (!arrayId || arrayId.getInt() < 0)
+    return std::nullopt;
+  return arrayId.getInt();
+}
+
+static inline void
+collectAccessRootsByCommittedLayoutOrder(sde::SdeSuIterateOp source,
+                                         SmallVectorImpl<Value> &roots) {
+  llvm::SetVector<Value> writeRoots;
+  llvm::SetVector<Value> readRoots;
+
+  auto collectRoot = [&](Value memref, bool isWrite) {
+    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(memref);
+    if (!root || sde::isDefinedInside(source.getOperation(), root))
+      return;
+    auto type = dyn_cast<MemRefType>(root.getType());
+    if (!type || type.getRank() == 0)
+      return;
+    (isWrite ? writeRoots : readRoots).insert(root);
+  };
+
+  source.getBody().walk([&](Operation *nested) {
+    if (auto store = dyn_cast<memref::StoreOp>(nested)) {
+      if (!isa<MemRefType>(store.getValueToStore().getType()))
+        collectRoot(store.getMemref(), /*isWrite=*/true);
+      return;
+    }
+    if (auto load = dyn_cast<memref::LoadOp>(nested)) {
+      if (!isa<MemRefType>(load.getResult().getType()))
+        collectRoot(load.getMemref(), /*isWrite=*/false);
+    }
+  });
+
+  llvm::SetVector<Value> ordered;
+  for (Value root : writeRoots)
+    ordered.insert(root);
+  for (Value root : readRoots)
+    ordered.insert(root);
+  roots.append(ordered.begin(), ordered.end());
+}
+
+static inline LogicalResult buildSuDepArrayIdPlan(Operation *moduleOp,
+                                                  SuDepArrayIdPlan &plan) {
+  sde::ModuleAccessRelations relations =
+      sde::buildModuleAccessRelations(moduleOp);
+
+  for (auto [suId, source] : llvm::enumerate(relations.schedulingUnits)) {
+    ArrayAttr layout = source.getArrayLayoutAttr();
+    if (!layout)
+      continue;
+
+    DenseMap<Value, int64_t> arrayIdByRoot;
+    unsigned layoutIndex = 0;
+    for (auto &kv : relations.profiles) {
+      const sde::ArrayAccessProfile &profile = kv.second;
+      if (!profileAccessesSchedulingUnit(profile, static_cast<unsigned>(suId)))
+        continue;
+      if (layoutIndex >= layout.size())
+        return source.emitOpError()
+               << "arrayLayout has fewer entries than analyzed "
+                  "scheduling-unit roots";
+      std::optional<int64_t> arrayId =
+          readLayoutEntryArrayId(layout[layoutIndex]);
+      if (!arrayId)
+        return source.emitOpError() << "arrayLayout entry #" << layoutIndex
+                                    << " must carry a non-negative arrayId";
+      arrayIdByRoot.try_emplace(profile.root, *arrayId);
+      ++layoutIndex;
+    }
+    if (layoutIndex != layout.size()) {
+      SmallVector<Value, 4> accessRoots;
+      collectAccessRootsByCommittedLayoutOrder(source, accessRoots);
+      if (accessRoots.size() != layout.size())
+        return source.emitOpError()
+               << "arrayLayout entry count (" << layout.size()
+               << ") does not match analyzed scheduling-unit root count ("
+               << layoutIndex << ") or direct access-root count ("
+               << accessRoots.size() << ")";
+
+      arrayIdByRoot.clear();
+      for (auto [index, root] : llvm::enumerate(accessRoots)) {
+        std::optional<int64_t> arrayId = readLayoutEntryArrayId(layout[index]);
+        if (!arrayId)
+          return source.emitOpError() << "arrayLayout entry #" << index
+                                      << " must carry a non-negative arrayId";
+        arrayIdByRoot.try_emplace(root, *arrayId);
+      }
+    }
+    if (!arrayIdByRoot.empty())
+      plan.arrayIdByRootBySu.try_emplace(source.getOperation(),
+                                         std::move(arrayIdByRoot));
+  }
+
+  return success();
+}
+
+static inline ArrayAttr
+buildSuDepArrayIdsAttr(sde::SdeSuIterateOp source, ArrayRef<Value> deps,
+                       const SuDepArrayIdPlan *depArrayIdPlan) {
+  if (!depArrayIdPlan || deps.empty())
+    return {};
+  Builder builder(source.getContext());
+  SmallVector<Attribute> attrs;
+  attrs.reserve(deps.size());
+  bool sawArrayId = false;
+  for (Value dep : deps) {
+    std::optional<int64_t> arrayId = depArrayIdPlan->lookup(source, dep);
+    sawArrayId |= arrayId.has_value();
+    attrs.push_back(builder.getI64IntegerAttr(arrayId.value_or(-1)));
+  }
+  return sawArrayId ? builder.getArrayAttr(attrs) : ArrayAttr{};
+}
+
 struct SuBarrierTokenDepPlan {
   DenseMap<Operation *, SmallVector<Value, 2>> tokenLocalRootsBySu;
   DenseSet<Operation *> suppressCompletionBarrierForSu;
@@ -2499,7 +2648,8 @@ static inline bool requiresSuCompletionBarrier(
 
 static inline LogicalResult convertSuOwnerTileNdToCodir(
     sde::SdeSuIterateOp source,
-    const SuBarrierTokenDepPlan *barrierTokenDepPlan = nullptr) {
+    const SuBarrierTokenDepPlan *barrierTokenDepPlan = nullptr,
+    const SuDepArrayIdPlan *depArrayIdPlan = nullptr) {
   OpBuilder builder(source);
   std::optional<SmallVector<unsigned, 4>> ownerDims =
       getSuOwnerTileDispatchPhysicalDims(source);
@@ -2581,10 +2731,13 @@ static inline LogicalResult convertSuOwnerTileNdToCodir(
   SmallVector<Attribute> depStorageViewAttrs =
       buildCodirStorageViewAttrs(source.getContext(), plan.depStorageViews);
 
-  auto codelet = createCodirCodelet(
-      builder, loc, builder.getArrayAttr(depModeAttrs),
-      builder.getArrayAttr(depStorageViewAttrs), plan.deps, plan.params,
-      getCodirMetadataFromSchedulingUnit(source));
+  CodirCodeletMetadata metadata = getCodirMetadataFromSchedulingUnit(source);
+  metadata.depArrayIds =
+      buildSuDepArrayIdsAttr(source, plan.deps, depArrayIdPlan);
+  auto codelet =
+      createCodirCodelet(builder, loc, builder.getArrayAttr(depModeAttrs),
+                         builder.getArrayAttr(depStorageViewAttrs), plan.deps,
+                         plan.params, metadata);
   if (requiresSuCompletionBarrier(source, barrierTokenDepPlan))
     codelet.setCompletionBarrierAttr(builder.getUnitAttr());
 
@@ -2644,9 +2797,11 @@ static inline LogicalResult convertSuOwnerTileNdToCodir(
 
 static inline LogicalResult convertSuIterateToCodir(
     sde::SdeSuIterateOp source,
-    const SuBarrierTokenDepPlan *barrierTokenDepPlan = nullptr) {
+    const SuBarrierTokenDepPlan *barrierTokenDepPlan = nullptr,
+    const SuDepArrayIdPlan *depArrayIdPlan = nullptr) {
   if (getSuOwnerTileDispatchPhysicalDims(source))
-    return convertSuOwnerTileNdToCodir(source, barrierTokenDepPlan);
+    return convertSuOwnerTileNdToCodir(source, barrierTokenDepPlan,
+                                       depArrayIdPlan);
 
   OpBuilder builder(source);
   Value dispatchStep = buildSuDispatchStep(source, builder);
@@ -2674,10 +2829,13 @@ static inline LogicalResult convertSuIterateToCodir(
   SmallVector<Attribute> depStorageViewAttrs =
       buildCodirStorageViewAttrs(source.getContext(), plan.depStorageViews);
 
-  auto codelet = createCodirCodelet(
-      builder, loc, builder.getArrayAttr(depModeAttrs),
-      builder.getArrayAttr(depStorageViewAttrs), plan.deps, plan.params,
-      getCodirMetadataFromSchedulingUnit(source));
+  CodirCodeletMetadata metadata = getCodirMetadataFromSchedulingUnit(source);
+  metadata.depArrayIds =
+      buildSuDepArrayIdsAttr(source, plan.deps, depArrayIdPlan);
+  auto codelet =
+      createCodirCodelet(builder, loc, builder.getArrayAttr(depModeAttrs),
+                         builder.getArrayAttr(depStorageViewAttrs), plan.deps,
+                         plan.params, metadata);
   if (requiresSuCompletionBarrier(source, barrierTokenDepPlan))
     codelet.setCompletionBarrierAttr(builder.getUnitAttr());
 

@@ -221,14 +221,12 @@ static bool isCrossOwnerReduceReducedReadInput(codir::CodeletOp codelet,
   return false;
 }
 
-/// The committed, dep-indexed `array_layout` owner dims for `depIndex` (the SDE
-/// global distribution truth for the array), or nullopt when unavailable.
+/// The committed `array_layout` owner dims joined through `dep_array_ids` for
+/// `depIndex` (the SDE global distribution truth for the array), or nullopt
+/// when unavailable.
 static std::optional<SmallVector<unsigned, 4>>
 getCommittedLayoutOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
-  ArrayAttr layout = codelet ? codelet.getArrayLayoutAttr() : ArrayAttr{};
-  if (!layout || depIndex >= layout.size())
-    return std::nullopt;
-  auto entry = dyn_cast<DictionaryAttr>(layout[depIndex]);
+  DictionaryAttr entry = codir::getArrayLayoutEntryForDep(codelet, depIndex);
   if (!entry)
     return std::nullopt;
   auto ownerDims = dyn_cast_or_null<ArrayAttr>(

@@ -27,6 +27,16 @@ std::optional<CodirAccessMode> getDepAccessMode(CodeletOp codelet,
 std::optional<CodirStorageViewKind> getDepStorageViewKind(CodeletOp codelet,
                                                           unsigned depIndex);
 
+/// Return the SDE arrayId joined to the given dependency, or nullopt when the
+/// dependency has no committed SDE layout fact. `dep_array_ids = -1` is the
+/// explicit no-layout sentinel.
+std::optional<int64_t> getDepArrayId(CodeletOp codelet, unsigned depIndex);
+
+/// Return the `array_layout` dictionary joined to the given dependency by
+/// `dep_array_ids`, or null when the join is absent or malformed. CODIR must
+/// use this helper instead of indexing per-array layout facts by dep slot.
+DictionaryAttr getArrayLayoutEntryForDep(CodeletOp codelet, unsigned depIndex);
+
 /// True when a stencil codelet's per-iteration write footprint fits inside its
 /// owner-dim tile slice. Storage planning and collective selection share this
 /// gate so `halo` cannot be named for a dep whose block storage was rejected.

@@ -28,6 +28,10 @@ def CartsCodir_CodeletOp
   let arguments = (ins
     OptionalAttr<ArrayAttr>:$dep_modes,
     OptionalAttr<ArrayAttr>:$dep_storage_views,
+    // One SDE arrayId per dependency. Non-negative entries join a dependency
+    // to `array_layout` / `partition_graph`; -1 means no SDE layout fact was
+    // available for that dependency.
+    OptionalAttr<ArrayAttr>:$dep_array_ids,
     // One CODIR collective family per dependency, parallel to
     // `dep_storage_views`.
     OptionalAttr<ArrayAttr>:$dep_collectives,

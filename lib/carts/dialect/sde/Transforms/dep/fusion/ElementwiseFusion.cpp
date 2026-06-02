@@ -11,7 +11,9 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
 
+#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
+#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -21,6 +23,7 @@ namespace mlir::carts::sde {
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 
 using namespace mlir;
@@ -40,8 +43,135 @@ struct ElementwiseStage {
   SmallVector<MemrefAccess, 4> writes;
 };
 
+struct MergedLayoutEntry {
+  DictionaryAttr entry;
+  bool sawWrite = false;
+  int64_t commVolumeBytes = 0;
+};
+
 static bool isSkippableInterStageOp(Operation *op) {
   return op && op->getNumRegions() == 0 && isMemoryEffectFree(op);
+}
+
+static DictionaryAttr
+rebuildMergedLayoutEntry(MLIRContext *ctx, const MergedLayoutEntry &merged) {
+  if (!merged.entry)
+    return {};
+  Builder builder(ctx);
+  SmallVector<NamedAttribute, 10> attrs;
+  bool sawRole = false;
+  bool sawComm = false;
+  attrs.reserve(merged.entry.size());
+  for (NamedAttribute attr : merged.entry) {
+    if (attr.getName() == sde::AttrNames::LayoutGraph::Role) {
+      sawRole = true;
+      attrs.push_back(builder.getNamedAttr(
+          sde::AttrNames::LayoutGraph::Role,
+          builder.getStringAttr(
+              merged.sawWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
+                              : sde::AttrNames::LayoutGraphValues::RoleRead)));
+      continue;
+    }
+    if (attr.getName() == sde::AttrNames::LayoutGraph::CommVolumeBytes) {
+      sawComm = true;
+      attrs.push_back(builder.getNamedAttr(
+          sde::AttrNames::LayoutGraph::CommVolumeBytes,
+          builder.getI64IntegerAttr(merged.commVolumeBytes)));
+      continue;
+    }
+    attrs.push_back(attr);
+  }
+  if (!sawRole)
+    attrs.push_back(builder.getNamedAttr(
+        sde::AttrNames::LayoutGraph::Role,
+        builder.getStringAttr(
+            merged.sawWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
+                            : sde::AttrNames::LayoutGraphValues::RoleRead)));
+  if (!sawComm)
+    attrs.push_back(builder.getNamedAttr(
+        sde::AttrNames::LayoutGraph::CommVolumeBytes,
+        builder.getI64IntegerAttr(merged.commVolumeBytes)));
+  return builder.getDictionaryAttr(attrs);
+}
+
+static void applyMergedLayoutAttrs(sde::SdeSuIterateOp fused,
+                                   MutableArrayRef<ElementwiseStage> stages) {
+  MLIRContext *ctx = fused.getContext();
+  Builder builder(ctx);
+  SmallVector<int64_t, 4> order;
+  llvm::DenseMap<int64_t, unsigned> indexByArrayId;
+  SmallVector<MergedLayoutEntry, 4> entries;
+  llvm::SmallDenseSet<int64_t, 4> disagreeIds;
+
+  for (ElementwiseStage &stage : stages) {
+    if (auto disagree = stage.op.getLayoutsDisagreeAttr()) {
+      for (Attribute attr : disagree)
+        if (auto id = dyn_cast<IntegerAttr>(attr); id && id.getInt() >= 0)
+          disagreeIds.insert(id.getInt());
+    }
+
+    ArrayAttr layout = stage.op.getArrayLayoutAttr();
+    if (!layout)
+      continue;
+    for (Attribute attr : layout) {
+      auto dict = dyn_cast<DictionaryAttr>(attr);
+      std::optional<sde::LayoutGraphFact> fact =
+          sde::parseArrayLayoutFact(dict);
+      if (!dict || !fact || fact->id < 0)
+        continue;
+      int64_t arrayId = fact->id;
+      auto [it, inserted] = indexByArrayId.try_emplace(arrayId, entries.size());
+      if (inserted) {
+        order.push_back(arrayId);
+        entries.push_back(
+            MergedLayoutEntry{dict, fact->role == sde::LayoutGraphRole::write,
+                              std::max<int64_t>(0, fact->commVolumeBytes)});
+        continue;
+      }
+
+      MergedLayoutEntry &merged = entries[it->second];
+      bool candidateWrites = fact->role == sde::LayoutGraphRole::write;
+      int64_t candidateComm = std::max<int64_t>(0, fact->commVolumeBytes);
+      merged.commVolumeBytes += candidateComm;
+      if (candidateComm > 0)
+        disagreeIds.insert(arrayId);
+      if (candidateWrites && !merged.sawWrite) {
+        merged.entry = dict;
+        merged.sawWrite = true;
+      } else if (!merged.sawWrite && candidateComm > 0 &&
+                 sde::parseArrayLayoutFact(merged.entry)->commVolumeBytes ==
+                     0) {
+        merged.entry = dict;
+      }
+    }
+  }
+
+  if (entries.empty()) {
+    fused->removeAttr(fused.getArrayLayoutAttrName());
+    fused->removeAttr(fused.getLayoutsDisagreeAttrName());
+    fused->removeAttr(fused.getCommVolumeBytesAttrName());
+    return;
+  }
+
+  SmallVector<Attribute, 4> layoutAttrs;
+  layoutAttrs.reserve(order.size());
+  int64_t totalCommBytes = 0;
+  for (int64_t arrayId : order) {
+    MergedLayoutEntry &merged = entries[indexByArrayId.lookup(arrayId)];
+    totalCommBytes += merged.commVolumeBytes;
+    layoutAttrs.push_back(rebuildMergedLayoutEntry(ctx, merged));
+  }
+  fused.setArrayLayoutAttr(builder.getArrayAttr(layoutAttrs));
+  fused.setCommVolumeBytesAttr(builder.getI64IntegerAttr(totalCommBytes));
+
+  SmallVector<Attribute, 4> disagreeAttrs;
+  for (int64_t arrayId : order)
+    if (disagreeIds.contains(arrayId))
+      disagreeAttrs.push_back(builder.getI64IntegerAttr(arrayId));
+  if (disagreeAttrs.empty())
+    fused->removeAttr(fused.getLayoutsDisagreeAttrName());
+  else
+    fused.setLayoutsDisagreeAttr(builder.getArrayAttr(disagreeAttrs));
 }
 
 static sde::SdeSuIterateOp getStageSuIterate(Operation *op) {
@@ -387,6 +517,7 @@ static sde::SdeSuIterateOp fuseStages(MutableArrayRef<ElementwiseStage> stages,
           sde::SdeStructuredClassification::elementwise_pipeline));
   fused.setPatternAttr(sde::SdePatternAttr::get(
       first.getContext(), sde::SdePattern::elementwise_pipeline));
+  applyMergedLayoutAttrs(fused, stages);
 
   Block &dst = sde::ensureBlock(fused.getBody());
   if (dst.getNumArguments() == 0) {

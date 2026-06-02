@@ -91,10 +91,12 @@
 // CHECK-SAME: array_layout = [{arrayId = [[H]] : i64
 // CHECK-SAME: ownerDims = [0, 1]
 // CHECK-SAME: role = "write"
+// CHECK-SAME: dep_array_ids = {{\[}}[[H]]]
 // CHECK: codir.codelet
 // CHECK-SAME: array_layout = [{arrayId = [[H]] : i64
 // CHECK-SAME: ownerDims = [0, 1]
 // CHECK-SAME: role = "read"
+// CHECK-SAME: dep_array_ids = {{\[[0-9]+, }}[[H]]]
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>,

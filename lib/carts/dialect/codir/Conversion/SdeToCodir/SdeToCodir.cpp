@@ -61,11 +61,18 @@ struct ConvertSdeToCodirPass
     SuBarrierTokenDepPlan barrierTokenDepPlan;
     collectSuBarrierTokenDepPlans(getOperation(), barrierTokenDepPlan);
 
+    SuDepArrayIdPlan depArrayIdPlan;
+    if (failed(buildSuDepArrayIdPlan(getOperation(), depArrayIdPlan))) {
+      signalPassFailure();
+      return;
+    }
+
     SmallVector<sde::SdeSuIterateOp> iterates;
     getOperation().walk(
         [&](sde::SdeSuIterateOp iterate) { iterates.push_back(iterate); });
     for (sde::SdeSuIterateOp iterate : iterates) {
-      if (failed(convertSuIterateToCodir(iterate, &barrierTokenDepPlan))) {
+      if (failed(convertSuIterateToCodir(iterate, &barrierTokenDepPlan,
+                                         &depArrayIdPlan))) {
         signalPassFailure();
         return;
       }
