@@ -17,10 +17,15 @@ Run in order. Stop at the first failure and investigate.
 5. **Sample suite snapshot.** `dekk carts test --suite e2e --json .carts/outputs/regression/carts-e2e.json`. Compare PASS count to the latest baseline in `.results/`. Do not advance if PASS count decreased. New PASS count should match or exceed prior snapshot.
 
 6. **Pipeline-stage IR sanity.** If the fix touches stage N, dump full pipeline: `dekk carts compile samples/<fixed-sample> --all-pipelines -o .carts/outputs/regression/pipelines/`. Run `grep -c "arts\." .carts/outputs/regression/pipelines/*/*.mlir` to spot op-count anomalies. No silent op drops.
+   Also confirm the vision boundary for the touched path: SDE facts are real
+   transformations, CODIR materializes collectives/bridges, ARTS realizes
+   DB/EDT owner maps and grouped CUs, and ARTS-RT only lowers mechanically.
 
 7. **Verify-barrier check.** Confirm the verification barrier above the fix still holds. `dekk carts lit lib/carts/dialect/*/test/ -filter=Verify<StageName>`.
 
 8. **Multinode spot-check** (if the fix touches SDE distribution planning, DB refinement, ownership, EDT materialization, EpochLowering, or CPS logic). `dekk carts compile samples/<fixed-sample> --distributed-db -O3 -o .carts/outputs/regression/mn && ARTS_CONFIG=samples/arts_multinode.cfg .carts/outputs/regression/mn`. No regression vs prior multinode baseline.
+   Check DB/MU grain separately from CU/bridge grain and verify no benchmark
+   special-case or hypergraph-as-owner-dims shortcut was introduced.
 
 9. **Stderr scan.** Capture stderr: `dekk carts compile … 2>&1 | grep -i "warn\|error"`. New warnings? Investigate before considering the fix done.
 

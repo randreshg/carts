@@ -14,6 +14,10 @@ parameters:
 
 Goal: determine whether the bug is caused by stale cached analysis, incorrect dependency declarations, or an invalid phase-ordering assumption.
 
+Analyses cache and expose committed facts; they must not let downstream passes
+recompute upstream semantic decisions. Use [[carts-vision]] when stale facts
+cross SDE/CODIR/ARTS/ARTS-RT boundaries.
+
 Use bundled helpers when they fit:
 - `scripts/find-analysis-usage.sh` — grep AnalysisManager queries for a pass or token
 - `scripts/find-invalidation-sites.sh` — grep invalidation APIs and direct invalidate calls
@@ -61,6 +65,9 @@ Read these before editing invalidation behavior:
 - Never bypass analysis APIs to “fix” a stale-analysis symptom
 - Do not widen invalidation without checking downstream compile-time cost
 - If a pass mutates DB/EDT structure, assume cached facts may be stale until proven otherwise
+- Invalidation fixes must preserve committed-fact flow: SDE layout facts,
+  CODIR collective/bridge facts, ARTS owner maps/DB/EDT facts, and ARTS-RT
+  mechanical lowering facts stay in their owning layers.
 
 ## Hand-off
 

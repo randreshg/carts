@@ -108,12 +108,10 @@ void mlir::carts::arts::stampOwnershipProof(LoweringContractOp contractOp,
   contractOp->setAttr(
       ::mlir::carts::arts::AttrNames::Proof::PartitionAccessMapping,
       BoolAttr::get(ctx, proof.partitionAccessMapping));
-  contractOp->setAttr(
-      ::mlir::carts::arts::AttrNames::Proof::HaloLegality,
-      BoolAttr::get(ctx, proof.haloLegality));
-  contractOp->setAttr(
-      ::mlir::carts::arts::AttrNames::Proof::DepSliceSoundness,
-      BoolAttr::get(ctx, proof.depSliceSoundness));
+  contractOp->setAttr(::mlir::carts::arts::AttrNames::Proof::HaloLegality,
+                      BoolAttr::get(ctx, proof.haloLegality));
+  contractOp->setAttr(::mlir::carts::arts::AttrNames::Proof::DepSliceSoundness,
+                      BoolAttr::get(ctx, proof.depSliceSoundness));
   contractOp->setAttr(
       ::mlir::carts::arts::AttrNames::Proof::RelaunchStateSoundness,
       BoolAttr::get(ctx, proof.relaunchStateSoundness));

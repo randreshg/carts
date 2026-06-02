@@ -48,9 +48,7 @@ public:
   /// Optional output-tile byte floor for distributed plans (0 = disabled).
   /// Compiler tools may inject this from a CLI flag before passes run; the
   /// arts.cfg parser also accepts `min_distributed_tile_bytes = N`.
-  int64_t getMinDistributedTileBytes() const {
-    return minDistributedTileBytes;
-  }
+  int64_t getMinDistributedTileBytes() const { return minDistributedTileBytes; }
   void setMinDistributedTileBytes(int64_t bytes) {
     minDistributedTileBytes = bytes;
   }

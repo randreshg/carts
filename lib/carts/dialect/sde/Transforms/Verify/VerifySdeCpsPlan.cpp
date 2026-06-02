@@ -92,8 +92,8 @@ static void verifyPartitionEvidenceIsRuntimeNeutral(sde::SdeSuIterateOp op,
 
   if (auto arrayAttr = dyn_cast<ArrayAttr>(attr)) {
     for (Attribute element : arrayAttr)
-      verifyPartitionEvidenceIsRuntimeNeutral(op, element, attrName,
-                                              attrKey, hasFailure);
+      verifyPartitionEvidenceIsRuntimeNeutral(op, element, attrName, attrKey,
+                                              hasFailure);
     return;
   }
 

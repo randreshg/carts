@@ -21,7 +21,11 @@ Inspect these stage boundaries in order:
 
 Look for:
 
+- SDE array-layout facts backed by real loop/layout/source transformation
+  (`physicalOwnerDims`, `physicalBlockShape`, loop tiling, access-window shape)
 - `distribution_kind`, `distribution_pattern`, `distribution_version`
+- CODIR collective/bridge choices derived from compute pattern plus SDE layout
+  mismatch (`dep_collectives`, `dep_storage_views`, `dep_owner_dims`)
 - writable task acquires that should preserve owner hints
 - `DbAllocOp` instances marked `distributed`
 - cases where SDE distribution planning should have produced distributed ARTS
@@ -35,6 +39,12 @@ Look for:
 - Are handle users restricted to allowed DB dependency flow?
 - Is there at least one internode writer?
 - Is the case rejected because it is read-only stencil-style internode use?
+- Are DB/MU blocks fine enough for single-writer concurrency without making
+  every tiny DB its own CU/bridge task?
+- Are compute/bridge/communication CUs grouped over block ranges for read-only
+  or copy-like edges?
+- Is any layer recomputing owner dims, block shape, collective family, owner
+  maps, or runtime mode instead of consuming committed upstream facts?
 
 ## 4. Runtime Checks
 
@@ -50,6 +60,7 @@ Suspect lowering first if:
 - routed work is absent in pre-lowering IR
 - `distributed` markers are missing
 - owner hints and partitioning disagree
+- ARTS-RT introduces scheduling, ownership, partition, or collective decisions
 
 Suspect runtime/config first if:
 

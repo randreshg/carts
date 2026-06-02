@@ -86,10 +86,11 @@ public:
                                                   (getDataAccessCost() + 1.0)));
   }
 
-  // Owner-local pipeline compute units execute multiple local stages before exposing
-  // completion. Keep their owner slices large enough to amortize task lifecycle
-  // and synchronization, while scaling the floor sublinearly with logical
-  // capacity so large runs do not create one tiny pipeline task per worker.
+  // Owner-local pipeline compute units execute multiple local stages before
+  // exposing completion. Keep their owner slices large enough to amortize task
+  // lifecycle and synchronization, while scaling the floor sublinearly with
+  // logical capacity so large runs do not create one tiny pipeline task per
+  // worker.
   virtual int64_t getMinPipelineOwnerIterationsPerTask() const {
     int64_t lifecycleIterations =
         std::max<int64_t>(1, static_cast<int64_t>(std::ceil(

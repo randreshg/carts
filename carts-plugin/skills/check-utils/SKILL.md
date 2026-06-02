@@ -45,12 +45,17 @@ a helper and choosing its canonical home.
 | Loop shape, IVs, trip counts, nearest loops, loop depth | `include/carts/utils/LoopUtils.h` |
 | Deferred op removal | `include/carts/utils/RemovalUtils.h` |
 | Shared ODS attribute enum across dialects | `include/carts/IR/CommonAttrs.td` |
-| SDE source semantics, access maps, PatternAnalysis, MU/CU/SU planning | `include/carts/dialect/sde/Analysis` or `Utils` |
-| CODIR codelet isolation, dep/param ABI, token-local views | `include/carts/dialect/codir/Utils` |
-| ARTS DB/EDT/epoch objects, dependency slots, placement, ownership | `include/carts/dialect/arts/Utils` or `Analysis` |
+| SDE source semantics, HPF-style layout/alignment, affine access maps, PatternAnalysis, MU/CU/SU planning, real loop/layout facts | `include/carts/dialect/sde/Analysis` or `Utils` |
+| CODIR codelet isolation, dep/param ABI, token-local views, collective/contraction/bridge/halo materialization | `include/carts/dialect/codir/Utils` |
+| ARTS DB/EDT/epoch objects, dependency slots, placement, ownership, owner maps, per-block DB realization, grouped CU/bridge execution | `include/carts/dialect/arts/Utils` or `Analysis` |
 | ARTS loop invariance, hoist legality, dominance | `include/carts/dialect/arts/Utils/LoopInvarianceUtils.h` |
-| ARTS-RT runtime ABI packing, depv layout, runtime calls, pointer lowering | `include/carts/dialect/arts-rt/Utils` |
+| ARTS-RT runtime ABI packing, depv layout, runtime calls, pointer lowering only | `include/carts/dialect/arts-rt/Utils` |
 | Compiler instrumentation or driver-only helpers | existing compile-driver owner |
+
+Do not place helpers where they enable downstream recomputation of committed
+facts. Owner dims belong to SDE layout analysis; collective families belong to
+CODIR materialization; owner maps and grouped DB/EDT realization belong to
+ARTS; ABI call mechanics belong to ARTS-RT.
 
 ## Attribute Strings
 

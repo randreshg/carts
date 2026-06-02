@@ -45,6 +45,7 @@
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/dialect/arts/Analysis/AnalysisManager.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/codir/Conversion/PassRegistration.h"
 #include "carts/dialect/codir/IR/CodirDialect.h"
 #include "carts/dialect/codir/Transforms/PassRegistration.h"
@@ -52,7 +53,6 @@
 #include "carts/passes/Passes.h"
 #include "carts/utils/Debug.h"
 #include "carts/utils/ExecutionResourceAttrs.h"
-#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/PassInstrumentation.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -271,11 +271,16 @@ static cl::opt<std::string> CustomPassPipeline(
     cl::value_desc("pipeline"), cl::init(""));
 
 static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
-    {"PromoteTargetAttrs",     "LowerAffine(func)",
-     "CSE",                    "SdeInputInliner",
-     "PolygeistCanonicalize",  "ScalarForwarding",
-     "PolygeistCanonicalize",  "SdeMemrefNormalization",
-     "SdeHandleDeps",          "SdeDeadStateCleanup",
+    {"PromoteTargetAttrs",
+     "LowerAffine(func)",
+     "CSE",
+     "SdeInputInliner",
+     "PolygeistCanonicalize",
+     "ScalarForwarding",
+     "PolygeistCanonicalize",
+     "SdeMemrefNormalization",
+     "SdeHandleDeps",
+     "SdeDeadStateCleanup",
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
@@ -296,11 +301,8 @@ static const std::array<llvm::StringLiteral, 15> kSdePlanningPasses = {
     "VerifySdeCpsPlan",
     "MemoryUnitMaterialization"};
 static const std::array<llvm::StringLiteral, 5> kSdeToCodirPasses = {
-    "ConvertSdeToCodir",
-    "CodirCodeletOpt",
-    "ReductionPlanning",
-    "StoragePlanning",
-    "VerifyCodir"};
+    "ConvertSdeToCodir", "CodirCodeletOpt", "ReductionPlanning",
+    "StoragePlanning", "VerifyCodir"};
 static const std::array<llvm::StringLiteral, 7> kCodirToArtsPasses = {
     "MaterializeSdeBoundaryToArts",
     "ConvertCodirToArts",
@@ -416,17 +418,14 @@ static constexpr llvm::StringLiteral kCodirToArtsLayers[] = {"codir", "arts"};
 
 static constexpr llvm::StringLiteral kFrontendStages[] = {
     "sde-input-normalization", "initial-cleanup"};
-static constexpr llvm::StringLiteral kSdePlanningStages[] = {
-    "sde-planning"};
-static constexpr llvm::StringLiteral kSdeToCodirStages[] = {
-    "sde-to-codir"};
-static constexpr llvm::StringLiteral kCodirToArtsStages[] = {
-    "codir-to-arts"};
+static constexpr llvm::StringLiteral kSdePlanningStages[] = {"sde-planning"};
+static constexpr llvm::StringLiteral kSdeToCodirStages[] = {"sde-to-codir"};
+static constexpr llvm::StringLiteral kCodirToArtsStages[] = {"codir-to-arts"};
 static constexpr llvm::StringLiteral kArtsStages[] = {
     "edt-transforms",           "create-dbs", "db-opt", "post-db-refinement",
     "late-concurrency-cleanup", "epochs"};
-static constexpr llvm::StringLiteral kArtsRtStages[] = {
-    "pre-lowering", "arts-rt-to-llvm"};
+static constexpr llvm::StringLiteral kArtsRtStages[] = {"pre-lowering",
+                                                        "arts-rt-to-llvm"};
 static constexpr llvm::StringLiteral kCodirStages[] = {
     "verify-codir", "codelet-opt", "storage-planning"};
 

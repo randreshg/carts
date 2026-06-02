@@ -41,14 +41,20 @@ runtime.
 
 CARTS is migrating toward four project dialect layers:
 
-- SDE (`sde`) - source semantics, PatternAnalysis, MU/CU/SU planning, memref
-  tiling/access windows, reductions, and target-neutral scheduling intent.
+- SDE (`sde`) - HPF-style `DISTRIBUTE`/`ALIGN`: source semantics, per-array
+  block layouts from affine access relations, abstract communication-volume
+  cost, PatternAnalysis, and real source/SU/CU/MU loop/layout transformations.
+  It names no collectives, DBs, EDTs, routes, GUIDs, or runtime policy.
 - CODIR (`codir`) - isolated codelets, explicit deps/params, token-local
-  memref views, and codelet-local verification.
-- ARTS (`arts`) - abstract DB, EDT, epoch, dependency-slot, placement, and
-  distributed ownership objects.
+  memref views, first-class MPI distribution patterns, collective/bridge
+  selection from SDE layout mismatch plus compute pattern, and materialized
+  contraction/redistribution/halo structure.
+- ARTS (`arts`) - abstract DB, EDT, epoch, dependency-slot, placement,
+  distributed ownership, per-block single-writer DB realization, owner maps,
+  and grouped compute/bridge/communication CUs.
 - ARTS-RT (`arts_rt`) - runtime ABI, packing, pointer lowering, and
-  LLVM-facing cleanup.
+  LLVM-facing cleanup. It mechanically lowers ARTS facts and does not infer
+  scheduling, ownership, partition, or collective policy.
 
 The canonical pipeline is defined in `tools/compile/Compile.cpp`. When docs or
 skills disagree with the compiler, the live compiler manifest wins.
@@ -58,11 +64,21 @@ skills disagree with the compiler, the live compiler manifest wins.
 - Prefer production fixes over band-aids. Understand the root cause, the
   owning dialect, and the runtime/compiler contract before patching symptoms.
 - Before changing compiler IR, state the function and limits of the affected
-  dialect layer. SDE owns OpenMP semantics and scheduling intent; CODIR owns
-  codelet isolation; ARTS owns abstract orchestration and analyses; ARTS-RT
-  owns lowering-ready runtime shape.
-- Do not hide correctness behind later cleanup passes, incidental pass order,
-  fixture churn, or duplicated local helpers.
+  dialect layer. SDE owns data layout and the real loop/source transformations
+  that make it true; CODIR owns collective/bridge materialization; ARTS owns
+  DB/EDT/owner-map realization and grouped execution; ARTS-RT owns
+  lowering-ready runtime shape.
+- Do not hide correctness behind later cleanup passes, metadata-only promises,
+  incidental pass order, fixture churn, or duplicated local helpers. If the
+  owning layer cannot safely transform, fail closed with evidence.
+- Preserve committed upstream plans. Later layers may verify, consume, realize,
+  or reject them; they must not recompute block shape, owner dims, collective
+  family, owner maps, DB grain, or runtime mode.
+- Keep DB grain separate from CU/bridge grain. Production distributed shape is a
+  two-level graph: MU/DB blocks fine enough for single-writer concurrency, plus
+  grouped compute/bridge/communication CUs for read-only or copy-like edges.
+- Use hypergraph partitioning as CU grouping/partition evidence over committed
+  MU facts, not as benchmark-specific owner-dim or storage-grain repair.
 - Passes, operations, attributes, and dialect-owned IR metadata must be
   declared through the owning TableGen/ODS files first. C++ code should consume
   generated declarations/accessors instead of adding manual pass/attribute
@@ -165,6 +181,7 @@ Match verification to the change:
 
 | Skill | Description | Path |
 | --- | --- | --- |
+| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, state/dependency/effect value optimization, hypergraph planning, DB/CU grain, distributed DBs, RDMA scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
 | `carts-worktrees` | Use when working on multiple CARTS/ARTS changes in parallel, isolating a risky compiler/runtime change, or running concurrent builds/benchmarks without clobbering the main checkout. Covers the carts-wt tool and the shared-LLVM/Polygeist worktree model. | `carts-plugin/skills/carts-worktrees/SKILL.md` |
 
 <!-- END SKILLS INVENTORY -->

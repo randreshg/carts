@@ -161,8 +161,17 @@ struct ArrayPositionUse {
   ArrayDimKind kind = ArrayDimKind::broadcast;
   /// The loop dim doing the indexing (when kind selects a single dim).
   std::optional<unsigned> loopDim;
+  /// True when the loop dim is a realized `sde.su_iterate` owner dimension,
+  /// not merely an unpromoted nested loop IV.
+  bool isSchedulingLoopDim = false;
   /// True when this use is a write (the producing/owner access).
   bool isWrite = false;
+  /// Number of non-degenerate physical dimensions covered by this write's
+  /// zero-offset parallel indexing map. Zero for reads.
+  unsigned writeCoverageRank = 0;
+  /// True when this write covers every non-degenerate physical dimension of
+  /// the root with unique zero-offset parallel loop IVs.
+  bool fullRankWrite = false;
 };
 
 /// Accumulated module-wide access facts for one array root. The root is the
@@ -173,11 +182,18 @@ struct ArrayAccessProfile {
   SmallVector<int64_t, 4> staticShape;
   /// Per physical position, every recorded use across the module.
   SmallVector<SmallVector<ArrayPositionUse, 2>, 4> positionUses;
+  /// Number of static shape dimensions with extent greater than one.
+  unsigned nonDegenerateRank = 0;
   /// True when at least one scheduling unit writes this root.
   bool hasWriter = false;
   /// True when at least one scheduling unit reads this root.
   bool hasReader = false;
-  /// The suId of the (single) writer scheduling unit, if exactly one.
+  /// Best write coverage rank seen across all writers.
+  unsigned maxWriteCoverageRank = 0;
+  /// True when some writer covers every non-degenerate physical dimension.
+  bool hasFullRankWriter = false;
+  /// The suId of the best writer. When hasFullRankWriter is true, this is the
+  /// canonical full-root writer.
   std::optional<unsigned> writerSuId;
 };
 

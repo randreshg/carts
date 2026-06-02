@@ -152,8 +152,7 @@ public:
     DbAcquireOp acquire;
   };
 
-  using AcquireAccessOperationMap =
-      DenseMap<DbRefOp, SetVector<Operation *>>;
+  using AcquireAccessOperationMap = DenseMap<DbRefOp, SetVector<Operation *>>;
 
   DbAnalysis(AnalysisManager &AM);
 

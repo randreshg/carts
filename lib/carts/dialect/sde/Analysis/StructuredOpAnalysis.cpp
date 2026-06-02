@@ -819,6 +819,55 @@ buildLoopPhysicalDimMaps(AffineMap map, unsigned numLoops, unsigned rank) {
   return std::make_pair(std::move(loopToPhysical), std::move(physicalToLoop));
 }
 
+static unsigned countNonDegenerateDims(ArrayRef<int64_t> shape) {
+  unsigned count = 0;
+  for (int64_t extent : shape)
+    if (extent > 1)
+      ++count;
+  return count;
+}
+
+struct WriteSupport {
+  unsigned coverageRank = 0;
+  bool fullRank = false;
+};
+
+static WriteSupport
+computeFullRootWriteSupport(AffineMap map,
+                            ArrayRef<utils::IteratorType> iterTypes,
+                            ArrayRef<int64_t> staticShape) {
+  if (map.getNumResults() != staticShape.size())
+    return {};
+
+  unsigned nonDegenerateRank = countNonDegenerateDims(staticShape);
+  llvm::SmallBitVector coveredPhysical(staticShape.size(), false);
+  llvm::SmallBitVector usedLoopDims(iterTypes.size(), false);
+
+  for (unsigned physicalDim = 0; physicalDim < staticShape.size();
+       ++physicalDim) {
+    if (staticShape[physicalDim] <= 1)
+      continue;
+
+    std::optional<AffineDimOffset> dimOffset =
+        extractDimOffset(map.getResult(physicalDim));
+    if (!dimOffset || !dimOffset->dim || dimOffset->offset != 0)
+      continue;
+
+    unsigned loopDim = *dimOffset->dim;
+    if (loopDim >= iterTypes.size() ||
+        iterTypes[loopDim] != utils::IteratorType::parallel)
+      continue;
+
+    if (usedLoopDims.test(loopDim))
+      return {static_cast<unsigned>(coveredPhysical.count()), false};
+    usedLoopDims.set(loopDim);
+    coveredPhysical.set(physicalDim);
+  }
+
+  unsigned coverageRank = coveredPhysical.count();
+  return {coverageRank, coverageRank == nonDegenerateRank};
+}
+
 } // namespace
 
 bool isOwnerLocalPipelineReduction(SdeSuIterateOp iterOp) {
@@ -842,7 +891,8 @@ bool isOwnerLocalPipelineReduction(SdeSuIterateOp iterOp) {
   // dependency views. Every external read therefore has to be provably inside
   // the same owner slice, not merely dependent on the owner IV. Triangular
   // self-Gram style kernels read both data[i, *] and data[j, *] for j > i;
-  // slicing those reads to the i owner block is out of bounds on multinode runs.
+  // slicing those reads to the i owner block is out of bounds on multinode
+  // runs.
   for (Value read : effects.reads) {
     if (isDefinedInside(iterOp.getOperation(), read))
       continue;
@@ -1165,6 +1215,11 @@ findCompatibleOutputLayoutPlan(const StructuredLoopSummary &summary) {
     if (!shape || shape->empty())
       return std::nullopt;
 
+    WriteSupport support = computeFullRootWriteSupport(
+        write.indexingMap, summary.iterTypes, *shape);
+    if (!support.fullRank)
+      return std::nullopt;
+
     auto maps = buildLoopPhysicalDimMaps(
         write.indexingMap, summary.nest.ivs.size(), shape->size());
     if (!maps)
@@ -1263,19 +1318,29 @@ static void recordAccessEntry(ModuleAccessRelations &relations,
     profile.root = root;
     profile.rank = rank;
     profile.staticShape = *shape;
+    profile.nonDegenerateRank = countNonDegenerateDims(*shape);
     profile.positionUses.assign(rank, {});
   }
   if (profile.rank != rank || profile.staticShape != *shape)
     return;
 
+  WriteSupport writeSupport;
+  if (isWrite)
+    writeSupport =
+        computeFullRootWriteSupport(entry.indexingMap, iterTypes, *shape);
+
   if (isWrite) {
     profile.hasWriter = true;
-    if (!profile.writerSuId)
+    bool hadFullRankWriter = profile.hasFullRankWriter;
+    bool betterWriter =
+        !profile.writerSuId ||
+        writeSupport.coverageRank > profile.maxWriteCoverageRank ||
+        (writeSupport.fullRank && !hadFullRankWriter);
+    if (betterWriter)
       profile.writerSuId = suId;
-    else if (*profile.writerSuId != suId)
-      // More than one writer scheduling unit: leave writerSuId as the
-      // first; assignment seeds from it but readers still align to it.
-      ;
+    profile.maxWriteCoverageRank =
+        std::max(profile.maxWriteCoverageRank, writeSupport.coverageRank);
+    profile.hasFullRankWriter |= writeSupport.fullRank;
   } else {
     profile.hasReader = true;
   }
@@ -1283,6 +1348,13 @@ static void recordAccessEntry(ModuleAccessRelations &relations,
   for (unsigned pos = 0; pos < rank; ++pos) {
     ArrayPositionUse use = classifyPositionUse(entry.indexingMap.getResult(pos),
                                                iterTypes, suId, isWrite);
+    if (use.loopDim &&
+        *use.loopDim < relations.schedulingUnits[suId].getLowerBounds().size())
+      use.isSchedulingLoopDim = true;
+    if (isWrite) {
+      use.writeCoverageRank = writeSupport.coverageRank;
+      use.fullRankWrite = writeSupport.fullRank;
+    }
     profile.positionUses[pos].push_back(use);
   }
 }
@@ -1296,9 +1368,8 @@ ModuleAccessRelations buildModuleAccessRelations(Operation *moduleOp) {
 
   // Assign stable scheduling-unit ids in walk order so writer/reader joins are
   // deterministic across runs.
-  moduleOp->walk([&](SdeSuIterateOp op) {
-    relations.schedulingUnits.push_back(op);
-  });
+  moduleOp->walk(
+      [&](SdeSuIterateOp op) { relations.schedulingUnits.push_back(op); });
 
   for (auto [suId, op] : llvm::enumerate(relations.schedulingUnits)) {
     std::optional<StructuredLoopSummary> summary = analyzeStructuredLoop(op);

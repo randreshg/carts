@@ -8,6 +8,8 @@ description: Use when inspecting CARTS pipeline stages, pass order, stage tokens
 Read `references/pipeline-stages.md` before relying on stage names or pass
 order. The compiler source and live manifest beat docs.
 
+For layer ownership or value-optimization questions, read [[carts-vision]].
+
 ## Workflow
 
 1. Query the live pipeline, including pass labels and dependency edges.
@@ -27,3 +29,19 @@ order. The compiler source and live manifest beat docs.
 - Runtime crash or hang: `carts-runtime-triage`.
 - Operation lifecycle: `carts-dialect-map`.
 - New or moved pass: `carts-pass-dev`.
+
+## Expected Fact Boundaries
+
+- `sde-planning`: SDE has committed real source/layout/alignment/tiling facts.
+  These facts must be backed by actual loop/layout transformations, not
+  metadata promises.
+- `sde-to-codir`: CODIR has isolated codelets with explicit deps/params and
+  committed collective/bridge/contraction/halo intent derived from SDE facts.
+- `codir-to-arts` through `post-db-refinement`: ARTS realizes DBs, EDTs, owner
+  maps, storage modes, and grouped compute/bridge/communication CUs.
+- `pre-lowering` and `arts-rt-to-llvm`: ARTS-RT mechanically lowers chosen ARTS
+  facts to runtime/LLVM shape.
+
+Later stages validate, consume, realize, or reject earlier facts. They do not
+rediscover source semantics, redo SDE layout, pick new collective families, or
+invent runtime ownership policy.

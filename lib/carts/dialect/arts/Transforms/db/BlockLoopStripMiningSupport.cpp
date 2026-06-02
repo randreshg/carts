@@ -6,8 +6,8 @@
 
 #include "BlockLoopStripMiningInternal.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
-#include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 
 ARTS_DEBUG_SETUP(block_loop_strip_mining);
 

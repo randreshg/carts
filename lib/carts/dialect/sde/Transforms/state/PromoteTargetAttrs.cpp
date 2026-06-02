@@ -34,11 +34,10 @@ struct PromoteTargetAttrsPass
     ModuleOp module = getOperation();
 
     if (!target::getTargetCpu(module)) {
-      if (auto attr =
-              module->getAttrOfType<StringAttr>(kPolygeistTargetCpu)) {
+      if (auto attr = module->getAttrOfType<StringAttr>(kPolygeistTargetCpu)) {
         target::setTargetCpu(module, attr.getValue());
-        ARTS_DEBUG("Promoted polygeist.target-cpu='" << attr.getValue()
-                                                     << "' to carts.target-cpu");
+        ARTS_DEBUG("Promoted polygeist.target-cpu='"
+                   << attr.getValue() << "' to carts.target-cpu");
       }
     }
 
@@ -46,8 +45,9 @@ struct PromoteTargetAttrsPass
       if (auto attr =
               module->getAttrOfType<StringAttr>(kPolygeistTargetFeatures)) {
         target::setTargetFeatures(module, attr.getValue());
-        ARTS_DEBUG("Promoted polygeist.target-features to carts.target-features ("
-                   << attr.getValue().size() << " bytes)");
+        ARTS_DEBUG(
+            "Promoted polygeist.target-features to carts.target-features ("
+            << attr.getValue().size() << " bytes)");
       }
     }
   }

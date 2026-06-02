@@ -10,11 +10,26 @@ analysis, or test belongs.
 
 ## Hard Rule
 
-- SDE owns OpenMP semantics and runtime-agnostic scheduling/state.
-- CODIR owns isolated codelets with explicit deps/params and local verification.
-- ARTS owns DB/EDT/epoch orchestration, analyses, placement, and ownership.
-- ARTS-RT owns lowering-ready runtime ABI shape before LLVM.
-- Do not patch downstream symptoms when the semantic owner is upstream.
+- SDE owns OpenMP semantics, HPF-style `DISTRIBUTE`/`ALIGN`, per-array layouts,
+  abstract communication-volume cost, and the real source/SU/CU/MU loop/layout
+  transformations needed to make those facts true. It names no collective,
+  DB, EDT, route, GUID, or runtime policy.
+- CODIR owns isolated codelets with explicit deps/params and first-class
+  distribution patterns. It consumes committed SDE layout facts, chooses
+  collectives/bridges from compute pattern plus layout mismatch, and
+  materializes contraction, redistribution, and halo structure.
+- ARTS owns DB/EDT/epoch orchestration, analyses, placement, distributed
+  ownership, owner maps, per-block single-writer DB realization, and grouped
+  compute/bridge/communication CUs.
+- ARTS-RT owns lowering-ready runtime ABI shape before LLVM. It mechanically
+  lowers ARTS facts and does not infer scheduling, ownership, partition, or
+  collective policy.
+- Do not patch downstream symptoms when the semantic owner is upstream. Later
+  layers consume, verify, realize, or reject committed upstream facts; they do
+  not silently recompute them.
+- Keep DB grain separate from CU/bridge grain, and treat hypergraph decisions as
+  CU grouping evidence over committed MU facts rather than benchmark-specific
+  owner-dim repair.
 
 ## Procedure
 

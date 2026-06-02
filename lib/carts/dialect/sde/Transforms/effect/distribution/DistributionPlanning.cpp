@@ -56,9 +56,10 @@ static bool applyPhysicalPlanIfRealized(sde::SdeSuIterateOp op,
                                         ArrayRef<int64_t> ownerDims,
                                         ArrayRef<int64_t> physicalBlockShape,
                                         ArrayRef<int64_t> haloShape = {});
-static bool physicalPlanMatchesRealizedLoopSteps(
-    sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
-    ArrayRef<int64_t> physicalBlockShape);
+static bool
+physicalPlanMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
+                                     ArrayRef<int64_t> ownerDims,
+                                     ArrayRef<int64_t> physicalBlockShape);
 
 static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
   return saturatingMultiplyPositive(costModel.getLogicalWorkerCapacity(),
@@ -123,8 +124,8 @@ chooseMappedSdeOwnerLoopDims(sde::SdeSuIterateOp op,
   SmallVector<unsigned, 4> mappedLoopDims;
   mappedLoopDims.reserve(plan.loopDimToPhysicalDim.size());
   unsigned loopRank = op.getLowerBounds().size();
-  for (unsigned loopDim = 0, e = plan.loopDimToPhysicalDim.size();
-       loopDim < e; ++loopDim) {
+  for (unsigned loopDim = 0, e = plan.loopDimToPhysicalDim.size(); loopDim < e;
+       ++loopDim) {
     if (loopDim >= loopRank || loopDim >= plan.loopDimToPhysicalDim.size())
       break;
     int64_t physicalDim = plan.loopDimToPhysicalDim[loopDim];
@@ -848,6 +849,56 @@ selectSingleWriteLayoutFact(sde::SdeSuIterateOp op) {
   return selected;
 }
 
+static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
+                                            ArrayRef<int64_t> ownerDims) {
+  if (!op || ownerDims.empty() || op.getBody().empty())
+    return true;
+
+  auto loopIvs = op.getLoopInductionVars();
+  if (!loopIvs || loopIvs->empty())
+    return false;
+
+  bool sawExternalStore = false;
+  bool rejected = false;
+  op.getBody().walk([&](memref::StoreOp storeOp) {
+    if (rejected)
+      return;
+    Value root =
+        ::mlir::carts::ValueAnalysis::stripMemrefViewOps(storeOp.getMemref());
+    if (!root || sde::isDefinedInside(op.getOperation(), root))
+      return;
+    auto memrefType = dyn_cast<MemRefType>(root.getType());
+    if (!memrefType || memrefType.getRank() == 0) {
+      rejected = true;
+      return;
+    }
+
+    sawExternalStore = true;
+    OperandRange indices = storeOp.getIndices();
+    for (int64_t ownerDim : ownerDims) {
+      if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= indices.size()) {
+        rejected = true;
+        return;
+      }
+      if (!sde::isExactOwnerIndex(indices[ownerDim], *loopIvs)) {
+        rejected = true;
+        return;
+      }
+    }
+  });
+
+  return sawExternalStore && !rejected;
+}
+
+static bool assignedWriteLayoutMatchesOwnerDims(sde::SdeSuIterateOp op,
+                                                ArrayRef<int64_t> ownerDims) {
+  std::optional<sde::LayoutGraphFact> writeLayout =
+      selectSingleWriteLayoutFact(op);
+  if (!writeLayout)
+    return true;
+  return llvm::equal(writeLayout->ownerDims, ownerDims);
+}
+
 static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
                                                 sde::SDECostModel &costModel) {
   if (!op || hasPhysicalLayoutPlan(op) ||
@@ -874,6 +925,8 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
   sde::LoopIndexedOutputPlan plan = *outputPlan;
   plan.ownerPhysicalDims.assign(writeLayout->ownerDims.begin(),
                                 writeLayout->ownerDims.end());
+  if (!allExternalStoresCoverOwnerDims(op, plan.ownerPhysicalDims))
+    return false;
 
   int64_t workers =
       std::max<int64_t>(1, getInterLocalityTargetWorkers(costModel));
@@ -889,16 +942,16 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
   return applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape);
 }
 
-// Consume the one committed node-agnostic budget layout for every SU that writes
-// a multi-owner-distributed data-parallel array, stamping identical
+// Consume the one committed node-agnostic budget layout for every SU that
+// writes a multi-owner-distributed data-parallel array, stamping identical
 // physicalOwnerDims + physicalBlockShape (+ logicalWorkerSlice) across all
 // writers of that array. That equality is what hasSameHostBridgePlan
 // (ArtsMaterializationUtils.h) requires, so the per-timestep host bridge hoists
 // and the iterative double-buffer stencils stop materializing a coarse
 // per-timestep copy. Runs first in the stamper dispatch and is the default for
-// the multi-owner data-parallel family (matmul/contraction excluded). Realization
-// is not gated on the loop step: the committed layout is the authority and the
-// iteration-space decomposition re-tiles to the block.
+// the multi-owner data-parallel family (matmul/contraction excluded).
+// Realization is not gated on the loop step: the committed layout is the
+// authority and the iteration-space decomposition re-tiles to the block.
 static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
                                       sde::SDECostModel &costModel) {
   (void)costModel;
@@ -906,8 +959,8 @@ static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
       sde::hasCommittedCuMuPartitionEvidence(op.getOperation()))
     return false;
   // Matmul/contraction keeps its dedicated contraction-tiling plan: its CU-task
-  // grain is the reduction-aware worker grain, not the data-parallel block grain
-  // reconciled here. This is the one genuinely layout-irreducible family.
+  // grain is the reduction-aware worker grain, not the data-parallel block
+  // grain reconciled here. This is the one genuinely layout-irreducible family.
   if (auto cls = op.getStructuredClassification();
       cls && *cls == sde::SdeStructuredClassification::matmul)
     return false;
@@ -926,21 +979,24 @@ static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
     return false;
   SmallVector<int64_t, 4> ownerDims(writeLayout->ownerDims.begin(),
                                     writeLayout->ownerDims.end());
+  if (!allExternalStoresCoverOwnerDims(op, ownerDims))
+    return false;
   SmallVector<int64_t, 4> blockShape(writeLayout->budgetBlockShape.begin(),
                                      writeLayout->budgetBlockShape.end());
-  // Per-owner-dim halo from the op's stencil access offsets (0 for non-stencils).
-  // Not compared by hasSameHostBridgePlan, but needed for correct halo exchange.
+  // Per-owner-dim halo from the op's stencil access offsets (0 for
+  // non-stencils). Not compared by hasSameHostBridgePlan, but needed for
+  // correct halo exchange.
   SmallVector<int64_t, 4> haloShape;
   bool anyHalo = false;
   for (int64_t od : ownerDims) {
-    int64_t h = od >= 0
-                    ? readStencilHaloForOwnerDim(op, static_cast<unsigned>(od))
-                    : 0;
+    int64_t h =
+        od >= 0 ? readStencilHaloForOwnerDim(op, static_cast<unsigned>(od)) : 0;
     haloShape.push_back(std::max<int64_t>(0, h));
     anyHalo |= h > 0;
   }
   applyPhysicalPlan(op, ownerDims, blockShape,
-                    anyHalo ? ArrayRef<int64_t>(haloShape) : ArrayRef<int64_t>{});
+                    anyHalo ? ArrayRef<int64_t>(haloShape)
+                            : ArrayRef<int64_t>{});
   return true;
 }
 
@@ -995,9 +1051,10 @@ alignLateOwnerPlanToExistingStep(sde::SdeSuIterateOp op,
   physicalBlockShape[ownerPhysicalDim] = *ownerStep;
 }
 
-static bool physicalPlanMatchesRealizedLoopSteps(
-    sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
-    ArrayRef<int64_t> physicalBlockShape) {
+static bool
+physicalPlanMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
+                                     ArrayRef<int64_t> ownerDims,
+                                     ArrayRef<int64_t> physicalBlockShape) {
   if (!op || ownerDims.empty() || physicalBlockShape.empty() ||
       op.getSteps().empty())
     return false;
@@ -1131,7 +1188,7 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
         }
       }
 
-      if (isInPlaceSelfReadStencil(op)) {
+      if (isInPlaceSelfReadStencil(op) && !op.getInPlaceSafeAttr()) {
         auto effects = sde::collectStructuredMemoryEffects(op.getBody());
         if (effects.hasUnknownEffects || effects.writes.empty())
           return;
@@ -1286,6 +1343,11 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
       }
     }
   }
+
+  if (!assignedWriteLayoutMatchesOwnerDims(op, outputPlan->ownerPhysicalDims))
+    return;
+  if (!allExternalStoresCoverOwnerDims(op, outputPlan->ownerPhysicalDims))
+    return;
 
   int64_t ownerPhysicalDim = outputPlan->ownerPhysicalDims.front();
   if (ownerPhysicalDim < 0 ||
@@ -1682,7 +1744,7 @@ chooseDistributionKind(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
   case sde::SdeStructuredClassification::stencil:
     if (sde::hasNestedStencilOwnerContract(op))
       return std::nullopt;
-    if (isInPlaceSelfReadStencil(op))
+    if (isInPlaceSelfReadStencil(op) && !op.getInPlaceSafeAttr())
       return std::nullopt;
     if (hasEnoughWorkForDistribution(op, costModel))
       return sde::SdeDistributionKind::owner_compute;

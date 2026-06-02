@@ -342,8 +342,7 @@ unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
                              << "] critical_path_distance=" << dist);
   };
 
-  EdtCriticalPathResult criticalPath =
-      edtGraph.computeCriticalPathDistances();
+  EdtCriticalPathResult criticalPath = edtGraph.computeCriticalPathDistances();
 
   if (criticalPath.empty())
     return 0;
@@ -369,10 +368,9 @@ unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
   }
 
   if (annotated > 0) {
-    ARTS_INFO("ET-6: function "
-              << func.getName() << ": " << annotated
-              << " EDTs annotated, max critical path depth="
-              << criticalPath.maxDistance);
+    ARTS_INFO("ET-6: function " << func.getName() << ": " << annotated
+                                << " EDTs annotated, max critical path depth="
+                                << criticalPath.maxDistance);
   }
 
   return annotated;
@@ -389,9 +387,8 @@ static void markDepNarrowable(DbAcquireOp acquire, Value ptr,
                               std::optional<ArtsDepPattern> edtDepPattern,
                               ArrayRef<int64_t> haloFootprint = {}) {
   if (contractOp) {
-    contractOp->setAttr(
-        ::mlir::carts::arts::AttrNames::Contract::NarrowableDep,
-        UnitAttr::get(contractOp.getContext()));
+    contractOp->setAttr(::mlir::carts::arts::AttrNames::Contract::NarrowableDep,
+                        UnitAttr::get(contractOp.getContext()));
   } else {
     /// No existing contract -- create one with the marker.
     LoweringContractInfo newInfo;

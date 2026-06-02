@@ -17,9 +17,9 @@
 #include "carts/dialect/arts/Analysis/db/DbDistributedEligibility.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
-#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 

@@ -23,5 +23,11 @@ Read `conventions.md` for CARTS-specific rules.
 8. Was `carts-simplify` run before review/commit, including patch size,
    duplicated helpers, utility placement, stale debug output, existing API
    reuse, and `.carts/` artifact discipline?
+9. Does the patch preserve the `carts-vision` spine: SDE real layout/tiling,
+   CODIR collectives/bridges, ARTS DB/EDT owner-map realization plus grouped
+   execution, and ARTS-RT mechanical lowering?
+10. Are optimizer triggers structural and benchmark-agnostic, with DB/MU grain
+    kept separate from CU/bridge grain and hypergraph evidence used only for
+    grouping/partition quality?
 
 When no issues are found, say so and state any remaining test gaps.

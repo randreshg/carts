@@ -12,6 +12,8 @@ This meta-skill routes the first edit through the load-bearing project skills.
 - Before compiler source edits, read the matching skill docs first.
 - Helper work starts with [[carts-find-utils]] or [[carts-check-utils]].
 - Dialect boundary work starts with [[carts-dialect-map]].
+- Layer-placement, value-optimization, hypergraph, DB/CU grain, or distributed
+  shape work starts with [[carts-vision]].
 - Attribute work starts with [[carts-attr-consolidation]].
 - Before commit, run [[carts-simplify]] then [[carts-review]].
 
@@ -21,6 +23,7 @@ This meta-skill routes the first edit through the load-bearing project skills.
 2. Classify touched surface: helper, dialect boundary, attribute, include tier,
    pass development, debugging, tests, runtime, benchmark, or skill maintenance.
 3. Read the matching skills:
+   - vision/layer/value optimization: [[carts-vision]]
    - helpers: [[carts-find-utils]], [[carts-check-utils]]
    - dialect boundaries: [[carts-dialect-map]], [[carts-pipeline-map]]
    - attributes: [[carts-attr-consolidation]]

@@ -37,15 +37,20 @@ dekk carts skills generate
 
 The project is organized around four dialect layers:
 
-- `sde`: source semantics, OpenMP/source planning, PatternAnalysis, MU/CU/SU
-  planning, memref tiling/access windows, reductions, and target-neutral
-  scheduling intent.
+- `sde`: HPF-style `DISTRIBUTE`/`ALIGN`, source semantics, per-array block
+  layouts from affine access relations, abstract communication-volume cost,
+  PatternAnalysis, and real source/SU/CU/MU loop/layout transformations. It
+  names no collectives, DBs, EDTs, routes, GUIDs, or runtime policy.
 - `codir`: isolated codelets, explicit deps/params, token-local memref views,
-  and codelet-local verification.
-- `arts`: abstract DB, EDT, epoch, dependency-slot, placement, and distributed
-  ownership objects.
+  first-class MPI distribution patterns, collective/bridge selection from SDE
+  layout mismatch plus compute pattern, and materialized
+  contraction/redistribution/halo structure.
+- `arts`: abstract DB, EDT, epoch, dependency-slot, placement, distributed
+  ownership, per-block single-writer DB realization, owner maps, and grouped
+  compute/bridge/communication CUs.
 - `arts_rt`: runtime ABI, packing, pointer lowering, runtime calls, and
-  LLVM-facing cleanup.
+  LLVM-facing cleanup. It mechanically lowers ARTS facts and does not infer
+  scheduling, ownership, partition, or collective policy.
 
 Physical layout:
 
@@ -62,8 +67,14 @@ tools/compile/Compile.cpp
   declared in TableGen. C++ implements behavior behind generated surfaces.
 - Do not hardcode project attribute names. Use generated ODS accessors such as
   `op.getStencilMinOffsetsAttrName()` or the owning dialect utility API.
-- SDE and CODIR must stay runtime-neutral. ARTS owns abstract orchestration and
-  multinode placement. ARTS-RT owns runtime ABI and LLVM-facing lowering.
+- Do real transformations in the owning layer. SDE commits layout/source facts,
+  CODIR commits collective/bridge facts, ARTS realizes DB/EDT owner maps and
+  grouped execution, and ARTS-RT lowers mechanically. Downstream consumes,
+  verifies, realizes, or rejects committed facts; it does not silently
+  recompute them.
+- Keep DB/MU grain separate from CU/bridge grain. Use the hypergraph only as
+  grouping and partition-quality evidence over committed MU facts, not as an
+  owner-dim shortcut.
 - Use `carts-check-utils` before adding helper code. Shared helpers belong in
   the narrowest owning dialect `Utils/` area or in a real shared utility.
 - Generated diagnostics, dumps, benchmark outputs, and scratch state belong
@@ -148,6 +159,7 @@ Before editing CARTS sources, scan the Skills inventory below and read the SKILL
 
 | Skill | Description | Path |
 | --- | --- | --- |
+| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, state/dependency/effect value optimization, hypergraph planning, DB/CU grain, distributed DBs, RDMA scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
 | `carts-worktrees` | Use when working on multiple CARTS/ARTS changes in parallel, isolating a risky compiler/runtime change, or running concurrent builds/benchmarks without clobbering the main checkout. Covers the carts-wt tool and the shared-LLVM/Polygeist worktree model. | `carts-plugin/skills/carts-worktrees/SKILL.md` |
 
 <!-- END SKILLS INVENTORY -->

@@ -69,8 +69,8 @@ SmallVector<int64_t, 4> factorWorkersAcrossDims(int64_t workers,
 }
 
 long double estimateStencilExpandedTileRatio(ArrayRef<int64_t> extents,
-                                              ArrayRef<int64_t> haloRadii,
-                                              ArrayRef<int64_t> grid) {
+                                             ArrayRef<int64_t> haloRadii,
+                                             ArrayRef<int64_t> grid) {
   long double ownedVolume = 1.0L;
   long double expandedVolume = 1.0L;
   for (auto [idx, extent] : llvm::enumerate(extents)) {
@@ -133,7 +133,6 @@ factorStencilWorkersAcrossDims(int64_t workers, ArrayRef<int64_t> extents,
   return grid;
 }
 
-
 int64_t haloExpandedTileBytes(ArrayRef<int64_t> extents,
                               ArrayRef<int64_t> haloRadii,
                               ArrayRef<int64_t> physicalBlockShape,
@@ -149,7 +148,8 @@ int64_t haloExpandedTileBytes(ArrayRef<int64_t> extents,
       return 0;
     grid.push_back(ceilDivPositive(extent, physicalBlockShape[idx]));
   }
-  long double ratio = estimateStencilExpandedTileRatio(extents, haloRadii, grid);
+  long double ratio =
+      estimateStencilExpandedTileRatio(extents, haloRadii, grid);
   if (!std::isfinite(static_cast<double>(ratio)) || ratio <= 0.0L)
     return ownedBytes;
   long double expanded = static_cast<long double>(ownedBytes) * ratio;

@@ -10,6 +10,14 @@ argument-hint: [<input-file | benchmark-path>]
 
 Goal: determine whether a multi-node failure comes from ownership marking, lowering, runtime routing, or benchmark/runtime configuration.
 
+Layer rule: diagnose the first layer where the committed fact is wrong, then fix
+that layer with a real transformation. SDE owns layout and source/SU/CU/MU
+rewrites; CODIR owns collective/bridge/contraction materialization; ARTS owns
+per-block single-writer DB/EDT/owner-map realization and grouped
+compute/bridge/communication CUs; ARTS-RT lowers mechanically. Do not repair a
+bad SDE layout in CODIR/ARTS, and do not repair missing CODIR collective intent
+in ARTS-RT.
+
 Use bundled helpers when they fit:
 - `scripts/run-multinode-benchmark.sh` — rerun a benchmark with logs retained
 - `scripts/inspect-distributed-ir.sh` — capture the key distributed pipeline stages
@@ -37,8 +45,15 @@ Read these before patching anything:
    - `post-db-refinement`
    - `pre-lowering`
 6. Check ownership constraints:
+   - SDE layout facts are backed by an actual loop/layout transformation, not
+     metadata that downstream must reinterpret
+   - CODIR selected explicit collectives/bridges from SDE layout mismatch and
+     compute pattern when a distributed edge requires communication
    - `distributed` marker present on eligible `DbAllocOp`
    - SDE planning contracts plus CODIR/ARTS materialization contracts are present when required
+   - DB/MU block grain and grouped CU/bridge grain are both sane; tiny DBs with
+     one EDT each and coarse DBs that serialize independent writers are both
+     failures to investigate
    - routed work and owner hints agree
 7. Inspect runtime artifacts:
    - `arts.log`, `omp.log`

@@ -9,6 +9,7 @@
 //   - the cross-owner transpose-reduce step (atax/bicg A^T) selects
 //     `reduce_scatter`;
 //   - an iterative full-timestep stencil write selects `halo`;
+//   - an in-place safe readwrite halo stencil selects `halo` and block storage;
 //   - owner-aligned deps select `none`.
 
 module {
@@ -116,6 +117,68 @@ module {
     return
   }
 
+  // A readwrite in-place stencil is both the writer and the halo reader of the
+  // same state. CODIR must keep it block-native and name the halo collective so
+  // ARTS can realize a per-block single-writer DB instead of a coarse host DB.
+  func.func @inplace_safe_readwrite_halo_storage(%A: memref<1024x1024xf64>,
+                                                 %base_i: index,
+                                                 %base_j: index) {
+    codir.codelet deps(%A : memref<1024x1024xf64>)
+        params(%base_i, %base_j : index, index)
+        attributes {access_max_offsets = [1, 1],
+                    access_min_offsets = [0, 0],
+                    dep_modes = [#codir.access_mode<readwrite>],
+                    dep_storage_views = [#codir.storage_view<host_whole>],
+                    in_place_safe,
+                    iteration_topology = #codir.iteration_topology<owner_tile>,
+                    pattern = #codir.pattern<stencil_tiling_nd>,
+                    tile_owner_dims = [0, 1],
+                    tile_shape = [16, 32],
+                    write_footprint = [1, 1]} {
+    ^bb0(%arg0: memref<1024x1024xf64>, %i: index, %j: index):
+      %inner_c1 = arith.constant 1 : index
+      %ip1 = arith.addi %i, %inner_c1 : index
+      %jp1 = arith.addi %j, %inner_c1 : index
+      %center = memref.load %arg0[%i, %j] : memref<1024x1024xf64>
+      %edge = memref.load %arg0[%ip1, %jp1] : memref<1024x1024xf64>
+      %sum = arith.addf %center, %edge : f64
+      memref.store %sum, %arg0[%i, %j] : memref<1024x1024xf64>
+      codir.yield
+    }
+    return
+  }
+
+  // The in-place-safe shortcut cannot name a halo collective unless the same
+  // write-footprint/tile-shape legality used by storage planning accepts block
+  // storage. This catches metadata-only collective promises over host_whole.
+  func.func @inplace_safe_halo_rejects_oversized_write(%A: memref<1024x1024xf64>,
+                                                       %base_i: index,
+                                                       %base_j: index) {
+    codir.codelet deps(%A : memref<1024x1024xf64>)
+        params(%base_i, %base_j : index, index)
+        attributes {access_max_offsets = [1, 1],
+                    access_min_offsets = [0, 0],
+                    dep_modes = [#codir.access_mode<readwrite>],
+                    dep_storage_views = [#codir.storage_view<host_whole>],
+                    in_place_safe,
+                    iteration_topology = #codir.iteration_topology<owner_tile>,
+                    pattern = #codir.pattern<stencil_tiling_nd>,
+                    tile_owner_dims = [0, 1],
+                    tile_shape = [16, 32],
+                    write_footprint = [17, 1]} {
+    ^bb0(%arg0: memref<1024x1024xf64>, %i: index, %j: index):
+      %inner_c1 = arith.constant 1 : index
+      %ip1 = arith.addi %i, %inner_c1 : index
+      %jp1 = arith.addi %j, %inner_c1 : index
+      %center = memref.load %arg0[%i, %j] : memref<1024x1024xf64>
+      %edge = memref.load %arg0[%ip1, %jp1] : memref<1024x1024xf64>
+      %sum = arith.addf %center, %edge : f64
+      memref.store %sum, %arg0[%i, %j] : memref<1024x1024xf64>
+      codir.yield
+    }
+    return
+  }
+
   // Generic layout-mismatch redistribution: no matmul benchmark shape and no
   // consumer-name heuristic. CODIR derives the all_gather family from neutral
   // layout evidence on the dependency while preserving the upstream layout and
@@ -205,6 +268,22 @@ module {
 // CHECK-LABEL: func.func @halo_collective
 // CHECK: codir.codelet
 // CHECK-SAME: dep_collectives = [#codir.collective<halo>]
+
+// The in-place safe halo stencil is planned as block storage and selects halo;
+// readwrite must not fall through to host_whole/all_gather.
+// CHECK-LABEL: func.func @inplace_safe_readwrite_halo_storage
+// CHECK: codir.codelet
+// CHECK-SAME: dep_collectives = [#codir.collective<halo>]
+// CHECK-SAME: dep_owner_dims = [{{\[}}0, 1]]
+// CHECK-SAME: dep_storage_views = [#codir.storage_view<compute_block>]
+
+// An oversized in-place-safe write footprint keeps host_whole and cannot select
+// halo just because access offsets are nonzero.
+// CHECK-LABEL: func.func @inplace_safe_halo_rejects_oversized_write
+// CHECK: codir.codelet
+// CHECK-SAME: dep_collectives = [#codir.collective<none>]
+// CHECK-SAME: dep_owner_dims = [{{\[}}0, 1]]
+// CHECK-SAME: dep_storage_views = [#codir.storage_view<host_whole>]
 
 // Generic layout mismatch selects all_gather without relying on a matmul
 // consumer predicate, and StoragePlanning does not rewrite the forwarded SDE

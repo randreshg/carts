@@ -12,6 +12,11 @@ Apply this rubric whenever a sample or benchmark fails. The principle: **errors 
 6. Apply the fix in the originating layer, NOT the surface layer.
 7. Cross-check against **anti-patterns** to confirm you are not repeating a documented mistake.
 
+Use the `carts-vision` spine to classify the originating layer: SDE fixes real
+source/layout/tiling facts; CODIR fixes collective/bridge/contraction/halo
+materialization; ARTS fixes DB/EDT owner-map realization and grouped execution;
+ARTS-RT fixes only mechanical lowering.
+
 ## Triage decision tree
 
 When an error surfaces at stage N, check the listed prior stages first.
@@ -28,7 +33,7 @@ When an error surfaces at stage N, check the listed prior stages first.
 | `pre-lowering` | `arts.db_acquire` references GUID that does not exist | DB refinement (GUID lost), CODIR-to-ARTS materialization for codelet deps, EpochLowering (CPS carry corruption) | Trace the GUID source. Did an intermediate pass erase it? |
 | `pre-lowering` | CPS chain: wrong iteration counter or outer epoch GUID | `EpochOpt` CPS-8 carry re-analysis, `EpochLowering` propagation | Check `CPSParamPerm` and `CPSIterCounterParamIdx` post-EpochOpt. |
 | `pre-lowering` | `CPS advance: rebuilt continuation pack with N schema holes` | `EpochOpt` carry analysis, intermediate EDT fusion, `EdtLowering` pack ordering | Carry arity changed between EpochOpt and EpochLowering. Zero-filled slots carry garbage. |
-| `post-db-refinement` (distributed) | Stencil halo not applied, internode acquire uses full range | SDE window contract mismatch, ARTS distributed ownership attr missing | Is `distributed` attr on the DB? Did ARTS select distributed ownership after consuming the SDE/CODIR window contract? |
+| `post-db-refinement` (distributed) | Stencil halo not applied, internode acquire uses full range | SDE window/layout contract mismatch, CODIR bridge/halo materialization missing, ARTS distributed ownership attr missing | Did SDE commit a real layout/window, did CODIR materialize halo/bridge intent, and did ARTS realize distributed owner maps after consuming those facts? |
 | `post-db-refinement` (distributed) | Task hangs on remote data acquire | Dependency-window narrowing, DB refinement scope-aware bounds | A dep window may have narrowed to local-only; distributed task cannot reach halo. |
 | `pre-lowering` | `arts_rt.edt_create` argument count mismatch | `EdtLowering` pack construction, prior DB/EDT rewrites invalidating pack operand | `EdtParamPackOp` was rewritten; `EdtCreateOp` references old pack. |
 | Post-LLVM | Wrong value in loop or task parameter (silent miscompute) | `EpochLowering` CPS carry slot corruption, `EdtLowering` pack slot reordering | Run `dekk carts compile --all-pipelines` and inspect `pipelines/4_rt/` for the pack structure. |

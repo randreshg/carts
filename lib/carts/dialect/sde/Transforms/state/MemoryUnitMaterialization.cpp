@@ -131,7 +131,8 @@ static bool canMaterializePlannedOwnerSlices(sde::SdeSuIterateOp op) {
   return false;
 }
 
-static LogicalResult demoteUnsupportedPhysicalStoragePlan(sde::SdeSuIterateOp op) {
+static LogicalResult
+demoteUnsupportedPhysicalStoragePlan(sde::SdeSuIterateOp op) {
   if (!op || !hasPhysicalOwnerSlicePlan(op) ||
       canMaterializePlannedOwnerSlices(op))
     return success();

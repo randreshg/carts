@@ -101,7 +101,6 @@ struct AttachFastMathOnEdtPass
 
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::carts::arts_rt::createAttachFastMathOnEdtPass() {
+std::unique_ptr<Pass> mlir::carts::arts_rt::createAttachFastMathOnEdtPass() {
   return std::make_unique<AttachFastMathOnEdtPass>();
 }

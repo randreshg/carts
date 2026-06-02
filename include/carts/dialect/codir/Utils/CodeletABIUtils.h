@@ -27,6 +27,11 @@ std::optional<CodirAccessMode> getDepAccessMode(CodeletOp codelet,
 std::optional<CodirStorageViewKind> getDepStorageViewKind(CodeletOp codelet,
                                                           unsigned depIndex);
 
+/// True when a stencil codelet's per-iteration write footprint fits inside its
+/// owner-dim tile slice. Storage planning and collective selection share this
+/// gate so `halo` cannot be named for a dep whose block storage was rejected.
+bool stencilWriteFitsInTile(CodeletOp codelet);
+
 /// --- First-class CODIR collective selection -------------------------------
 /// These predicates are the EXACT gate bodies that ConvertCodirToArts has
 /// historically used to decide the all-gather and cross-owner reduce

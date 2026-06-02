@@ -729,7 +729,7 @@ static std::optional<unsigned> mapLoopDimToPhysicalDim(sde::SdeSuIterateOp op,
   return loopDim;
 }
 
-static bool isBudgetReconciledElementwiseCandidate(sde::SdeSuIterateOp op) {
+static bool isBudgetReconciledTileCandidate(sde::SdeSuIterateOp op) {
   if (!op || op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr() ||
       op.getInPlaceSharedStateAttr() ||
       op.getReductionAccumulators().size() != 0)
@@ -739,20 +739,25 @@ static bool isBudgetReconciledElementwiseCandidate(sde::SdeSuIterateOp op) {
   if (!classification)
     return false;
 
-  return *classification == sde::SdeStructuredClassification::elementwise ||
-         *classification ==
-             sde::SdeStructuredClassification::elementwise_pipeline;
+  if (*classification == sde::SdeStructuredClassification::elementwise ||
+      *classification == sde::SdeStructuredClassification::elementwise_pipeline)
+    return true;
+
+  return *classification == sde::SdeStructuredClassification::stencil &&
+         op.getInPlaceSafeAttr();
 }
 
 static std::optional<sde::LayoutGraphFact>
-selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op) {
+selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
+                                  bool allowSingleOwnerDim) {
   ArrayAttr layout = op.getArrayLayoutAttr();
   if (!layout)
     return std::nullopt;
 
   std::optional<sde::LayoutGraphFact> selected;
   for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
-    if (fact.role != sde::LayoutGraphRole::write || fact.ownerDims.size() < 2 ||
+    if (fact.role != sde::LayoutGraphRole::write ||
+        fact.ownerDims.size() < (allowSingleOwnerDim ? 1u : 2u) ||
         fact.budgetBlockShape.empty())
       continue;
     if (selected)
@@ -762,14 +767,62 @@ selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op) {
   return selected;
 }
 
+static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
+                                            ArrayRef<int64_t> ownerDims) {
+  if (!op || ownerDims.empty() || op.getBody().empty())
+    return true;
+
+  auto loopIvs = op.getLoopInductionVars();
+  if (!loopIvs || loopIvs->empty())
+    return false;
+
+  bool sawExternalStore = false;
+  bool rejected = false;
+  op.getBody().walk([&](memref::StoreOp storeOp) {
+    if (rejected)
+      return;
+    Value root =
+        ::mlir::carts::ValueAnalysis::stripMemrefViewOps(storeOp.getMemref());
+    if (!root || sde::isDefinedInside(op.getOperation(), root))
+      return;
+    auto memrefType = dyn_cast<MemRefType>(root.getType());
+    if (!memrefType || memrefType.getRank() == 0) {
+      rejected = true;
+      return;
+    }
+
+    sawExternalStore = true;
+    OperandRange indices = storeOp.getIndices();
+    for (int64_t ownerDim : ownerDims) {
+      if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= indices.size()) {
+        rejected = true;
+        return;
+      }
+      if (!sde::isExactOwnerIndex(indices[ownerDim], *loopIvs)) {
+        rejected = true;
+        return;
+      }
+    }
+  });
+
+  return sawExternalStore && !rejected;
+}
+
 static std::optional<PhysicalTilePlan>
 buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op) {
-  if (!isBudgetReconciledElementwiseCandidate(op))
+  if (!isBudgetReconciledTileCandidate(op))
     return std::nullopt;
 
+  auto classification = op.getStructuredClassification();
+  bool allowSingleOwnerDim =
+      classification &&
+      *classification == sde::SdeStructuredClassification::stencil &&
+      op.getInPlaceSafeAttr();
   std::optional<sde::LayoutGraphFact> writeLayout =
-      selectSingleBudgetWriteLayoutFact(op);
+      selectSingleBudgetWriteLayoutFact(op, allowSingleOwnerDim);
   if (!writeLayout)
+    return std::nullopt;
+  if (!allExternalStoresCoverOwnerDims(op, writeLayout->ownerDims))
     return std::nullopt;
 
   unsigned numDims = op.getLowerBounds().size();

@@ -171,9 +171,8 @@ struct VerifyCodirPass : public codir::impl::VerifyCodirBase<VerifyCodirPass> {
               codelet->getAttr(codir::AttrNames::PartitionScore)) {
         auto score = dyn_cast<DictionaryAttr>(scoreAttr);
         if (!score) {
-          codelet.emitOpError()
-              << codir::AttrNames::PartitionScore
-              << " must be a dictionary attribute";
+          codelet.emitOpError() << codir::AttrNames::PartitionScore
+                                << " must be a dictionary attribute";
           failed = true;
         } else {
           auto verifyPositiveScoreField = [&](StringRef key) -> bool {

@@ -27,11 +27,12 @@ static bool isInsideHostOpenMPIsland(Operation *op) {
   return false;
 }
 
-// The "no internode task depends on a coarse aggregate DB" invariant is verified
-// in VerifyDistributedDbPlacement: it must run AFTER DbDistributedOwnership marks
-// local_only and DistributedLaunchConsistency localizes host-bridge EDTs to
-// intranode, which only happen in post-db-refinement. Checking it here (end of
-// codir-to-arts) would reject bridges that are legitimately localized downstream.
+// The "no internode task depends on a coarse aggregate DB" invariant is
+// verified in VerifyDistributedDbPlacement: it must run AFTER
+// DbDistributedOwnership marks local_only and DistributedLaunchConsistency
+// localizes host-bridge EDTs to intranode, which only happen in
+// post-db-refinement. Checking it here (end of codir-to-arts) would reject
+// bridges that are legitimately localized downstream.
 
 static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
   auto *sdeDialect =

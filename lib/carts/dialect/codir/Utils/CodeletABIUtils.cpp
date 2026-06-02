@@ -1,11 +1,32 @@
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
 
 #include "carts/dialect/codir/Utils/CodirAttrNames.h"
+#include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 
 namespace mlir::carts::codir {
+
+bool stencilWriteFitsInTile(CodeletOp codelet) {
+  if (!codelet || !codelet.getTileOwnerDimsAttr() ||
+      !codelet.getTileShapeAttr())
+    return false;
+  std::optional<SmallVector<int64_t, 4>> writeFootprint =
+      readI64ArrayAttr(codelet.getWriteFootprintAttr());
+  std::optional<SmallVector<int64_t, 4>> tileShape =
+      readI64ArrayAttr(codelet.getTileShapeAttr());
+  if (!writeFootprint || !tileShape ||
+      writeFootprint->size() != tileShape->size())
+    return false;
+  for (size_t dim = 0, e = writeFootprint->size(); dim < e; ++dim) {
+    int64_t footprint = (*writeFootprint)[dim];
+    int64_t tile = (*tileShape)[dim];
+    if (footprint < 0 || tile <= 0 || footprint > tile)
+      return false;
+  }
+  return true;
+}
 
 namespace {
 inline bool codirAccessMayRead(CodirAccessMode mode) {
@@ -118,6 +139,23 @@ static bool isReductionLike(CodeletOp codelet) {
   return pattern && pattern.getValue() == CodirPattern::reduction;
 }
 
+static bool storageViewUsesComputeBlock(CodirStorageViewKind view) {
+  return view == CodirStorageViewKind::compute_block ||
+         view == CodirStorageViewKind::phase_redistributed;
+}
+
+static bool depHasBlockStoragePlan(CodeletOp codelet, unsigned depIndex) {
+  std::optional<CodirStorageViewKind> view =
+      getDepStorageViewKind(codelet, depIndex);
+  if (!view || !storageViewUsesComputeBlock(*view))
+    return false;
+  ArrayAttr ownerDims = codelet ? codelet.getDepOwnerDimsAttr() : ArrayAttr{};
+  if (!ownerDims || depIndex >= ownerDims.size())
+    return false;
+  auto dims = dyn_cast<ArrayAttr>(ownerDims[depIndex]);
+  return dims && !dims.empty();
+}
+
 static bool isStencilCollectiveLike(CodeletOp codelet) {
   if (!codelet)
     return false;
@@ -135,6 +173,21 @@ static bool isStencilCollectiveLike(CodeletOp codelet) {
     return false;
   }
   if (codelet.getEmitBlockNativeStencilAttr())
+    return true;
+  auto hasHaloWindow = [](ArrayAttr offsets) {
+    if (!offsets)
+      return false;
+    for (Attribute offset : offsets) {
+      auto value = dyn_cast<IntegerAttr>(offset);
+      if (value && value.getInt() != 0)
+        return true;
+    }
+    return false;
+  };
+  if (codelet.getInPlaceSafeAttr() && codelet.getTileOwnerDimsAttr() &&
+      codelet.getTileShapeAttr() && stencilWriteFitsInTile(codelet) &&
+      (hasHaloWindow(codelet.getAccessMinOffsetsAttr()) ||
+       hasHaloWindow(codelet.getAccessMaxOffsetsAttr())))
     return true;
   auto repetition = codelet.getRepetitionStructureAttr();
   return repetition &&
@@ -286,8 +339,11 @@ CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex) {
   if (!mode || !codirAccessMayWrite(*mode))
     return CodirCollectiveKind::none;
   if (depHasLayoutMismatchEvidence(codelet, depIndex, *mode)) {
-    if (isStencilCollectiveLike(codelet))
-      return CodirCollectiveKind::halo;
+    if (isStencilCollectiveLike(codelet)) {
+      if (depHasBlockStoragePlan(codelet, depIndex))
+        return CodirCollectiveKind::halo;
+      return CodirCollectiveKind::none;
+    }
     if (isReductionLike(codelet))
       return CodirCollectiveKind::reduce_scatter;
     // An all-gather presupposes the dep is block-distributed (owner-tiled) so
@@ -308,13 +364,15 @@ CodirCollectiveKind chooseCollective(CodeletOp codelet, unsigned depIndex) {
       coarseBridgeTargetHasCrossOwnerReduceConsumer(codelet, depIndex))
     return CodirCollectiveKind::reduce_scatter;
   // Iterative stencil writes select nearest-neighbor halo exchange even without
-  // a layout mismatch, so the buffer stays a per-block single-writer distributed
-  // DB across timesteps. This covers BOTH in-place (stencil_tiling_nd) and
-  // double-buffered (alternating_buffer_stencil) iterative stencils -- the same
-  // set isStencilCollectiveLike already recognizes in the layout-mismatch branch
-  // above. Without this, a same-layout double-buffer jacobi stencil falls to
-  // `none` and is realized via a per-timestep host_whole<->block bridge copy.
-  if (isStencilCollectiveLike(codelet))
+  // a layout mismatch, so the buffer stays a per-block single-writer
+  // distributed DB across timesteps. This covers BOTH in-place
+  // (stencil_tiling_nd) and double-buffered (alternating_buffer_stencil)
+  // iterative stencils -- the same set isStencilCollectiveLike already
+  // recognizes in the layout-mismatch branch above. Without this, a same-layout
+  // double-buffer jacobi stencil falls to `none` and is realized via a
+  // per-timestep host_whole<->block bridge copy.
+  if (isStencilCollectiveLike(codelet) &&
+      depHasBlockStoragePlan(codelet, depIndex))
     return CodirCollectiveKind::halo;
   return CodirCollectiveKind::none;
 }

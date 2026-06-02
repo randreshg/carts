@@ -414,8 +414,8 @@ mlir::carts::arts::getSemanticContract(Operation *op) {
   info.spatial.supportedBlockHalo =
       hasSupportedBlockHalo(op) && info.pattern.depPattern &&
       isStencilFamilyDepPattern(*info.pattern.depPattern);
-  info.analysis.narrowableDep = op->hasAttr(
-      ::mlir::carts::arts::AttrNames::Contract::NarrowableDep);
+  info.analysis.narrowableDep =
+      op->hasAttr(::mlir::carts::arts::AttrNames::Contract::NarrowableDep);
   if (auto contractKind = op->getAttrOfType<IntegerAttr>(
           ::mlir::carts::arts::AttrNames::Contract::ContractKindKey))
     info.pattern.kind = static_cast<ContractKind>(contractKind.getInt());

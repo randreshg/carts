@@ -32,8 +32,8 @@
 #include "mlir/Transforms/DialectConversion.h"
 /// Arts
 #include "carts/dialect/arts/IR/ArtsDialect.h"
-#include "carts/dialect/arts/Utils/RuntimeConfig.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/RuntimeConfig.h"
 #include "carts/utils/Utils.h"
 /// Debug
 

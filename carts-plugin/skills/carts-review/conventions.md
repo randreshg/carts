@@ -46,17 +46,42 @@ rg -n '^static .*\\(' lib/carts include/carts --glob '*.cpp' --glob '*.h'
 
 ## File Placement
 
-- SDE semantics: `lib/carts/dialect/sde`.
-- CODIR codelet isolation: `lib/carts/dialect/codir`.
-- ARTS DB/EDT/epoch/analysis: `lib/carts/dialect/arts`.
-- ARTS-RT runtime-shaped lowering: `lib/carts/dialect/arts-rt`.
+- SDE semantics, HPF-style data layout, affine access relations, abstract
+  communication-volume cost, and real source/SU/CU/MU loop/layout transforms:
+  `lib/carts/dialect/sde`.
+- CODIR codelet isolation, first-class collectives/bridges, and
+  contraction/redistribution/halo materialization:
+  `lib/carts/dialect/codir`.
+- ARTS DB/EDT/epoch/analysis, per-block single-writer DB realization, owner
+  maps, distributed ownership, and grouped compute/bridge/communication CUs:
+  `lib/carts/dialect/arts`.
+- ARTS-RT runtime-shaped mechanical lowering:
+  `lib/carts/dialect/arts-rt`.
 - Shared utilities: `include/carts/utils`, `lib/carts/utils`, or dialect-specific
   support utilities when the helper is not globally meaningful.
+
+## Layer Contract
+
+- A layer that has enough information to transform must transform, or fail
+  closed with evidence. Metadata-only contracts that rely on a later layer to
+  repair semantics are review findings.
+- Downstream passes consume committed facts. Recomputing owner dims, block
+  shape, collective family, owner maps, DB grain, or runtime mode in a later
+  layer is a review finding unless the pass explicitly verifies and rejects an
+  invalid upstream plan.
+- DB/MU grain and CU/bridge grain are separate. Review distributed changes for
+  a two-level graph: fine enough MU/DB blocks for single-writer concurrency and
+  grouped compute/bridge/communication CUs over block ranges.
+- Hypergraph logic is allowed as CU grouping and partition evidence over
+  committed MU facts. Benchmark-name owner-dim or storage-grain shortcuts are
+  review findings.
 
 ## Review Traps
 
 - Stale docs naming non-live stages or passes.
 - Fixture refresh hiding a real verifier failure.
+- CODIR or ARTS compensating for a bad SDE layout instead of rejecting it.
+- ARTS-RT inferring scheduling, ownership, partition, or collective policy.
 - New static helpers duplicating existing utilities.
 - Runtime debug build left as final verification.
 - Examples runner mutating sample artifacts during a supposedly read-only task.

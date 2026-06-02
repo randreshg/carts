@@ -12,9 +12,9 @@
 #include "carts/dialect/arts/Analysis/loop/LoopAnalysis.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
-#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
@@ -866,8 +866,8 @@ DbAcquireNode *DbAnalysis::getDbAcquireNode(DbAcquireOp acquire) {
   return getOrCreateGraph(func).getDbAcquireNode(acquire);
 }
 
-void DbAnalysis::forEachDbAlloc(
-    func::FuncOp func, const std::function<void(DbAllocOp)> &fn) {
+void DbAnalysis::forEachDbAlloc(func::FuncOp func,
+                                const std::function<void(DbAllocOp)> &fn) {
   if (!func || !fn)
     return;
 
@@ -881,8 +881,8 @@ void DbAnalysis::forEachDbAlloc(
   });
 }
 
-void DbAnalysis::forEachDbAcquire(
-    func::FuncOp func, const std::function<void(DbAcquireOp)> &fn) {
+void DbAnalysis::forEachDbAcquire(func::FuncOp func,
+                                  const std::function<void(DbAcquireOp)> &fn) {
   if (!func || !fn)
     return;
 
@@ -990,8 +990,7 @@ DbAnalysis::getOrderedAcquiresForAlloc(DbAllocOp alloc) {
     DbAcquireOp acquire = acqNode->getDbAcquireOp();
     if (!acquire)
       continue;
-    ordered.push_back(
-        {graph.getOpOrder(acquire.getOperation()), acquire});
+    ordered.push_back({graph.getOpOrder(acquire.getOperation()), acquire});
   }
 
   llvm::sort(ordered, [](const OrderedAcquireSummary &lhs,

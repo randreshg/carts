@@ -35,8 +35,8 @@ namespace mlir::carts::arts_rt {
 #include "carts/dialect/arts-rt/Transforms/Passes.h.inc"
 } // namespace mlir::carts::arts_rt
 
-#include "carts/utils/Debug.h"
 #include "carts/dialect/arts-rt/Utils/ArtsRtAttrNames.h"
+#include "carts/utils/Debug.h"
 #include "carts/utils/TargetAttributes.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -208,8 +208,9 @@ static unsigned getTargetMaxVectorWidth(ModuleOp module,
 /// narrow (AVX2/AVX-512 host) and when it is too wide (SSE2-only host). With
 /// no target features visible (legacy fixture, hand-crafted lit input) the
 /// cap falls back to 128 bits.
-static unsigned resolveVectorWidthForTarget(ModuleOp module,
-                                            const TypeAnalysisResult &typeInfo) {
+static unsigned
+resolveVectorWidthForTarget(ModuleOp module,
+                            const TypeAnalysisResult &typeInfo) {
   return getTargetMaxVectorWidth(module, typeInfo);
 }
 
@@ -482,8 +483,9 @@ struct LoopVectorizationHintsPass
         // `vectorWidth` override still wins for lit fixtures that force a
         // specific width.
         auto typeInfo = analyzeLoadTypes(loopBlocks);
-        unsigned width = vectorWidth ? vectorWidth
-                                     : resolveVectorWidthForTarget(module, typeInfo);
+        unsigned width = vectorWidth
+                             ? vectorWidth
+                             : resolveVectorWidthForTarget(module, typeInfo);
         unsigned interleave =
             rtInterleaveCount ? rtInterleaveCount : interleaveCount;
 

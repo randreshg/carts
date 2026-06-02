@@ -9,11 +9,11 @@
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
 #include "carts/utils/ArrayAttrUtils.h"
-#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -757,7 +757,8 @@ static LogicalResult createFinalCombineEdt(OpBuilder &builder, Location loc,
   // The final combine RO-acquires the per-tile partials and writes the result
   // block once, so downstream lowering can treat it as a block-native settle
   // rather than a shared-frontier <inout> accumulate.
-  combineEdt.setPerBlockSummingSettleAttr(UnitAttr::get(combineEdt.getContext()));
+  combineEdt.setPerBlockSummingSettleAttr(
+      UnitAttr::get(combineEdt.getContext()));
   return createFinalCombineBody(combineEdt, scalarType, elementCount,
                                 inputCount == 2);
 }

@@ -19,11 +19,16 @@ This file is a fast-lookup distillation. If it disagrees with the docs above, th
 
 ## The four charters
 
-### SDE (`sde`) — Semantic planning
+### SDE (`sde`) — Semantic planning and real layout transforms
 
-**Owns:** semantic decisions about what to do, irrespective of how the runtime realizes them.
+**Owns:** semantic decisions and real source/layout transformations about what
+to do, irrespective of how the runtime realizes them.
 
 - Loop classification: elementwise / stencil / matmul / reduction / wavefront / Jacobi / mixed
+- HPF-style `DISTRIBUTE`/`ALIGN`
+- Per-array block layouts from affine access relations
+- Abstract communication-volume cost
+- Source/SU/CU/MU loop, tiling, access-window, and layout rewrites
 - Reduction strategy: atomic / tree / local_accumulate
 - Schedule: static / dynamic / guided
 - Chunk size for dynamic/guided
@@ -36,14 +41,20 @@ This file is a fast-lookup distillation. If it disagrees with the docs above, th
 - Touching any `arts.*` op
 - Including any header from retired ARTS-era path aliases
 - Baking ARTS-specific runtime semantics into decisions (decisions should be expressible as portable contracts)
+- Naming collectives, DBs, EDTs, routes, GUIDs, or runtime policy
 
-### CODIR (`codir.*`) — Codelet isolation
+### CODIR (`codir.*`) — Codelet isolation and distribution patterns
 
-**Owns:** isolated codelet ABI between SDE planning and ARTS object creation.
+**Owns:** isolated codelet ABI and first-class distribution-pattern
+materialization between SDE planning and ARTS object creation.
 
 - Codelet boundaries with explicit deps and scalar params
 - Token-local memref views
 - Codelet-local verification and body isolation
+- MPI distribution patterns: `all_gather`, `all_to_all`, `reduce_scatter`,
+  `allreduce`, `broadcast`, and `halo`
+- Collective/bridge selection from compute pattern plus SDE layout mismatch
+- Contraction, redistribution, reduction, and halo materialization
 - Mechanical handoff to ARTS `db_acquire` and `edt`
 
 **IR level:** isolated codelet regions. No implicit captures from above.
@@ -52,24 +63,31 @@ This file is a fast-lookup distillation. If it disagrees with the docs above, th
 - Choosing source-level tiling or scheduling policy
 - Choosing ARTS runtime topology or depv layout
 - Recovering deps/params by scanning outer SSA uses
+- Redoing SDE data-layout analysis
 
 ### ARTS (`arts.*`) — Abstract runtime object realization
 
 **Owns:** structural realization of SDE/CODIR contracts as abstract ARTS
 objects.
 
-- DBs: alloc, partition, distributed-ownership marking, mode tightening, scratch elimination
+- DBs: per-block single-writer allocation, partition, owner maps,
+  distributed-ownership marking, mode tightening, scratch elimination
 - EDTs: structural opt, ICM, distribution contract realization, orchestration
+- Two-level graph realization: fine MU/DB blocks plus grouped
+  compute/bridge/communication CUs
 - Scope: local vs distributed, using abstract-machine analysis
 - Implementation loops: local `scf.for` control flow inside concrete ARTS objects
 - Epochs: creation, CPS scheduling, optimization
-- Contract attributes: encode SDE decisions for downstream consumption
+- Contract attributes: consume SDE/CODIR decisions for ARTS realization and
+  ARTS-RT lowering
 
 **IR level:** ARTS structural: regions, DBs, partitions, contracts. No
 tensor/linalg carriers survive the SDE-to-CODIR / CODIR-to-ARTS boundary.
 
 **Forbidden:**
 - Re-deriving classifications SDE already stamped (Invariant 5)
+- Recomputing owner dims, block shapes, collective families, or storage grain
+  that SDE/CODIR already committed
 - Emitting `arts_rt.*` ops before `pre-lowering`
 - Performing semantic analysis from scratch (consume SDE contracts instead)
 
@@ -86,12 +104,17 @@ tensor/linalg carriers survive the SDE-to-CODIR / CODIR-to-ARTS boundary.
 **Forbidden:**
 - Any analysis or contract reading
 - Optimization passes that need to understand DB/EDT semantics (those belong in ARTS)
+- Scheduling, ownership, partition, storage-grain, or collective decisions
 
 ## Five hard invariants
 
 These are placement rules. If you are tempted to break one, update the charter first.
 
-1. **If a pass *decides*, it lives in SDE — or consumes an SDE contract from ARTS.** No ARTS pass should make a fresh classification decision.
+1. **If a pass decides source layout or computation shape, it lives in SDE; if
+   it decides collective/bridge materialization, it lives in CODIR; if it
+   realizes DB/EDT ownership, it lives in ARTS; if it lowers runtime calls, it
+   lives in ARTS-RT.** Later layers consume committed facts and do not
+   rediscover them.
 
 2. **Cross-dialect op creation only at stage boundaries.** SDE planning feeds CODIR at `sde-to-codir`; CODIR creates ARTS objects at `codir-to-arts`; any SDE op left after CODIR conversion fails verification. ARTS lowers to ARTS-RT in pre-lowering (`EdtLowering` / `EpochLowering`). No pass creates ops outside its dialect, except those boundary conversion passes.
 
@@ -99,7 +122,15 @@ These are placement rules. If you are tempted to break one, update the charter f
 
 4. **SDE does not include any header from retired ARTS-era path aliases.** Mechanical check; grep for old path aliases.
 
-5. **Cost-model-driven decisions belong in the *decision-owner*, not the *realizer*.** SDE stamps a contract (e.g., tile geometry); ARTS consumes it. If both compute the same thing, one is wrong.
+5. **Cost-model-driven decisions belong in the *decision-owner*, not the
+   realizer.** SDE stamps layout and tile geometry; CODIR stamps collective
+   family and bridges; ARTS realizes DB/EDT owner maps and grouped CUs. If two
+   layers compute the same owner dims, block shape, collective family, or
+   storage grain, one is wrong.
+
+6. **DB/MU grain and CU/bridge grain are separate.** Hypergraph analysis may
+   guide CU grouping over committed MU facts, but it must not hardcode owner
+   dims, block shape, or benchmark-specific storage grain.
 
 ## Currently-known violations (2026-04-11 audit)
 
@@ -135,7 +166,7 @@ session note under `.carts/sessions/<topic>/charter-decisions.md`.
 | A reduction strategy choice (atomic / tree / accumulate) | SDE (`ReductionStrategy`) |
 | A scope choice (local vs distributed) | ARTS, using abstract-machine analysis |
 | A schedule choice (static / dynamic / guided) | SDE (`ScheduleRefinement`) |
-| Tile / chunk / halo geometry **as a contract** | SDE (decision); ARTS (realization) |
+| Tile / chunk / halo geometry **as a contract** | SDE (layout decision); CODIR (bridge/halo materialization); ARTS (DB/EDT realization) |
 | DB allocation / acquire / release / partitioning | ARTS |
 | EDT structural rewrite, fusion, distribution | ARTS |
 | Epoch creation | ARTS |

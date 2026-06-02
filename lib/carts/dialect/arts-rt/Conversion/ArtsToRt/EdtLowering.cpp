@@ -38,10 +38,10 @@ namespace mlir::carts::arts_rt {
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/passes/Passes.h"
-#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -476,8 +476,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   if (auto depSchema = edtOp->getAttrOfType<DenseI64ArrayAttr>(
           ::mlir::carts::arts_rt::AttrNames::LaunchState::DepSchema))
     outlineOp->setAttr(
-        ::mlir::carts::arts_rt::AttrNames::LaunchState::DepSchema,
-        depSchema);
+        ::mlir::carts::arts_rt::AttrNames::LaunchState::DepSchema, depSchema);
   int64_t baseId = getArtsId(edtOp);
   if (!baseId)
     baseId = idRegistry.getOrCreate(edtOp.getOperation());
@@ -1146,8 +1145,9 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
                                 ValueAnalysis::stripNumericCasts(byteSize));
     if (depDbAcquireOp && hasExplicitSlice) {
       /// Depv-carried slices are still unstable for continuation-style
-      /// generated EDTs. Fall back to whole-block dependencies for depv acquires
-      /// instead of preserving a compact slice through the runtime transport.
+      /// generated EDTs. Fall back to whole-block dependencies for depv
+      /// acquires instead of preserving a compact slice through the runtime
+      /// transport.
       Value zeroIdx = AC->createIndexConstant(0, loc);
       byteOffset = zeroIdx;
       byteSize = zeroIdx;

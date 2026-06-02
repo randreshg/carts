@@ -12,6 +12,10 @@ Goal: never guess what the compiler should generate. Instead, understand the
 runtime contract, write the correct code by hand, prove it works, then teach the
 compiler to emit that exact pattern.
 
+Runtime contracts inform ARTS realization and ARTS-RT lowering. They do not move
+source layout/distribution policy out of SDE or collective/bridge
+materialization out of CODIR. Use [[carts-vision]] when deciding the fix layer.
+
 ## Methodology
 
 ### Phase 1 — Understand the Runtime
@@ -76,7 +80,9 @@ compiler to emit that exact pattern.
 
 1. The fix should make the compiler generate code that matches the hand-written
    pattern — not "something that works differently."
-2. Modify the relevant lowering pass(es) to emit the correct runtime calls.
+2. Modify the owning layer: ARTS for DB/EDT/owner-map realization, ARTS-RT for
+   mechanical runtime calls, CODIR for collective/bridge structure, or SDE for
+   source/layout facts.
 3. Re-compile the benchmark and verify the output matches the hand-written code
    at the LLVM IR level.
 4. Run the full test suite: `dekk carts test`

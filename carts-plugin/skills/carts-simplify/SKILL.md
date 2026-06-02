@@ -20,7 +20,8 @@ before commit, PR review, or final task completion.
    - root cause is understood;
    - the changed dialect is the semantic owner;
    - the solution respects that dialect's function and limits;
-   - no correctness depends on a downstream band-aid.
+   - no correctness depends on a downstream band-aid;
+   - committed upstream facts are consumed or rejected, not recomputed.
 4. Remove accidental complexity:
    - dead code, unused helpers, stale comments, debug prints, and speculative
      abstractions;
@@ -49,7 +50,15 @@ before commit, PR review, or final task completion.
      creates ops from another dialect;
    - lit/e2e coverage lands at the earliest stable owning stage;
    - canonicalization, folding, and cleanup passes are not required for
-     correctness.
+     correctness;
+   - SDE does not name collectives or runtime policy;
+   - CODIR does not redo SDE data-layout analysis;
+   - ARTS does not rediscover source semantics;
+   - ARTS-RT does not infer scheduling, ownership, partition, or collective
+     policy;
+   - DB/MU grain remains separate from CU/bridge grain;
+   - hypergraph logic is grouping evidence, not an owner-dim shortcut;
+   - no benchmark-name special cases are introduced.
 8. Run the smallest meaningful verification for the touched surface, then
    broaden only when blast radius requires it.
 

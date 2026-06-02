@@ -34,7 +34,6 @@ namespace mlir::carts::arts_rt {
 #define GEN_PASS_DEF_DATAPTRHOISTING
 #include "carts/dialect/arts-rt/Transforms/Passes.h.inc"
 } // namespace mlir::carts::arts_rt
-#include "carts/utils/LoopUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/utils/LoopUtils.h"
 

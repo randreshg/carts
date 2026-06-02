@@ -14,9 +14,9 @@
 /// 5. Creates memref dependency views with proper indices and sizes
 ///===----------------------------------------------------------------------===///
 
-#include "carts/dialect/sde/Utils/PolygeistToSdeUtils.h"
 #include "carts/dialect/sde/Analysis/AffineAccessUtils.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Utils/PolygeistToSdeUtils.h"
 #include "carts/utils/Debug.h"
 #include "carts/utils/RemovalUtils.h"
 #include "carts/utils/Utils.h"

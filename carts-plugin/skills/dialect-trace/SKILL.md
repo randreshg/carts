@@ -18,24 +18,28 @@ Trace an operation's lifecycle across the pipeline stages and dialect layers
 (SDE, CODIR, ARTS, ARTS-RT). Understand where ops are created, transformed,
 and destroyed.
 
+Use [[carts-vision]] when the trace affects layer placement, real
+transformations, distributed shape, or DB/CU grain.
+
 ## Dialects
 
 | Dialect | Namespace | Stages | Purpose |
 |---------|-----------|--------|---------|
-| SDE | `sde::` | 3 (`sde-planning`) | Semantic contracts, pattern classification, MU/CU/SU planning |
-| CODIR | `codir::` | 4-5 | Codelet isolation, explicit deps/params, token-local views |
-| ARTS | `arts::` | 5-12 | DB/EDT/epoch orchestration and analysis |
-| ARTS-RT | `arts_rt::` | 12-13 | Runtime ABI and LLVM-facing call mapping |
+| SDE | `sde::` | 3 (`sde-planning`) | Real source/layout/tiling transforms, HPF-style `DISTRIBUTE`/`ALIGN`, MU/CU/SU facts |
+| CODIR | `codir::` | 4-5 | Codelet isolation plus first-class collective/bridge/contraction/halo materialization |
+| ARTS | `arts::` | 5-12 | Per-block DB/EDT/owner-map realization and grouped compute/bridge/communication CUs |
+| ARTS-RT | `arts_rt::` | 12-13 | Mechanical runtime ABI and LLVM-facing call mapping |
 
 ## Dialect Boundaries
 
 ```
 C/OMP source
   → [sde-planning]    OMP → SDE (ConvertOpenMPToSde) →
-                 SDE transforms and MU/CU/SU planning
+                 SDE commits real layout/tiling/source facts
   → [sde-to-codir]    SDE codelets → isolated CODIR codelets
+                 CODIR commits collectives/bridges from SDE facts
   → [codir-to-arts]   CODIR deps/codelets → ARTS DB/acquire/EDT
-  → [ARTS stages]     ARTS transforms (arts.edt, arts.db_*, arts.epoch, scf.for)
+  → [ARTS stages]     ARTS realizes owner maps, DB/EDT graphs, grouped CUs
   → [pre-lowering]    ARTS → ARTS-RT lowering
                  (EdtLowering.cpp, EpochLowering.cpp, DbLowering.cpp)
   → [arts-rt-to-llvm] ARTS-RT → LLVM lowering
@@ -135,3 +139,5 @@ When asked to trace an op:
 5. Map findings to pipeline stages using the pass-placement reference
 6. Report the complete lifecycle: created at stage X, transformed by Y, lowered at Z
 7. Flag any unexpected cross-dialect references (ops used outside their expected stage range)
+8. Flag downstream recomputation of committed facts: owner dims, block shape,
+   collective family, owner maps, DB grain, or runtime policy.

@@ -32,6 +32,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include <limits>
 
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_LAYOUTASSIGNMENT
@@ -96,7 +97,8 @@ static bool
 isWriterParallelOwnerPosition(const sde::ArrayAccessProfile &profile,
                               unsigned pos) {
   for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
-    if (use.isWrite && use.kind == sde::ArrayDimKind::parallelIndexed)
+    if (use.isWrite && use.fullRankWrite && use.isSchedulingLoopDim &&
+        use.kind == sde::ArrayDimKind::parallelIndexed)
       return true;
   }
   return false;
@@ -115,7 +117,8 @@ static bool isParallelOwnerPosition(const sde::ArrayAccessProfile &profile,
   if (profile.hasWriter)
     return false;
   for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
-    if (!use.isWrite && use.kind == sde::ArrayDimKind::parallelIndexed)
+    if (!use.isWrite && use.isSchedulingLoopDim &&
+        use.kind == sde::ArrayDimKind::parallelIndexed)
       return true;
   }
   return false;
@@ -153,14 +156,16 @@ blockShapeFromBudget(ArrayRef<int64_t> staticShape, int64_t elemBytes,
       ownerExtents.push_back(staticShape[pos]);
   if (ownerExtents.empty())
     return blockShape;
-  // Reuse the tested owner-dim factoring: spread desiredBlocks across owner dims.
+  // Reuse the tested owner-dim factoring: spread desiredBlocks across owner
+  // dims.
   SmallVector<int64_t, 4> grid =
       sde::factorWorkersAcrossDims(desiredBlocks, ownerExtents);
   for (auto [idx, pos] : llvm::enumerate(ownerPositions)) {
     if (pos < 0 || static_cast<size_t>(pos) >= blockShape.size())
       continue;
     int64_t g = (idx < grid.size()) ? std::max<int64_t>(1, grid[idx]) : 1;
-    blockShape[pos] = std::max<int64_t>(1, llvm::divideCeil(staticShape[pos], g));
+    blockShape[pos] =
+        std::max<int64_t>(1, llvm::divideCeil(staticShape[pos], g));
   }
   return blockShape;
 }
@@ -203,7 +208,8 @@ makeReplicatedCandidate(const sde::ArrayAccessProfile &profile) {
 // parallel.
 static SmallVector<sde::ArrayLayoutCandidate, 4>
 enumerateCandidates(const sde::ArrayAccessProfile &profile,
-                    std::optional<unsigned> contractionPosition) {
+                    std::optional<unsigned> contractionPosition,
+                    bool preserveFullWriterOwnerTile) {
   SmallVector<sde::ArrayLayoutCandidate, 4> candidates;
 
   // BlockParallel: owner = parallel-indexed positions (writer's owner-computes
@@ -223,7 +229,7 @@ enumerateCandidates(const sde::ArrayAccessProfile &profile,
     // block layout that aligns the dominant consumer and leaves only one
     // redistribution edge. The candidate is only meaningful when more than one
     // parallel position exists.
-    if (parallelOwner.size() > 1) {
+    if (parallelOwner.size() > 1 && !preserveFullWriterOwnerTile) {
       for (int64_t pos : parallelOwner)
         candidates.push_back(makeBlockCandidate(
             profile, {pos}, sde::ArrayLayoutKind::blockParallel));
@@ -306,11 +312,9 @@ static int64_t estimateCommVolume(
     for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
       if (use.isWrite)
         continue;
-      bool &aligned =
-          readerAligned.try_emplace(use.suId, true).first->second;
+      bool &aligned = readerAligned.try_emplace(use.suId, true).first->second;
       bool &crossReduce =
-          readerCrossOwnerReduction.try_emplace(use.suId, false)
-              .first->second;
+          readerCrossOwnerReduction.try_emplace(use.suId, false).first->second;
       if (!ownerPos)
         continue;
       // This reader touches an owner position: alignment depends on how.
@@ -377,10 +381,13 @@ struct ChosenLayout {
 // to redistribute. Otherwise ties prefer block over replicated, and parallel
 // over contraction (the simpler edge).
 static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
-                                 std::optional<unsigned> contractionPosition) {
-  SmallVector<sde::ArrayLayoutCandidate, 4> candidates =
-      enumerateCandidates(profile, contractionPosition);
+                                 std::optional<unsigned> contractionPosition,
+                                 bool preserveFullWriterOwnerTile) {
+  SmallVector<sde::ArrayLayoutCandidate, 4> candidates = enumerateCandidates(
+      profile, contractionPosition, preserveFullWriterOwnerTile);
   bool preferContraction = contractionPosition.has_value();
+  bool preferFullWriterBlock =
+      preserveFullWriterOwnerTile && profile.hasFullRankWriter;
 
   ChosenLayout best;
   bool haveBest = false;
@@ -401,6 +408,12 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
     if (preferContraction &&
         candidate.kind == sde::ArrayLayoutKind::blockContraction)
       selectionCost = 0;
+    // A full-rank writer feeding stencil readers is owned distributed state.
+    // Replication would erase the SDE layout fact and force CODIR/ARTS to
+    // repair state placement instead of materializing the communication edge.
+    if (preferFullWriterBlock &&
+        candidate.kind == sde::ArrayLayoutKind::replicated)
+      selectionCost = std::numeric_limits<int64_t>::max() / 4;
 
     bool better = !haveBest || selectionCost < bestSelectionCost;
     if (!better && selectionCost == bestSelectionCost) {
@@ -480,14 +493,14 @@ static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
                                       layout.blockShape.end());
   if (layout.kind == sde::ArrayLayoutKind::blockParallel &&
       !layout.ownerPositions.empty())
-    budgetShape = blockShapeFromBudget(staticShape, elemBytes,
-                                       layout.ownerPositions, kTargetBlockBytes);
+    budgetShape = blockShapeFromBudget(
+        staticShape, elemBytes, layout.ownerPositions, kTargetBlockBytes);
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::BudgetBlockShape,
                                   buildI64ArrayAttr(ctx, budgetShape)));
-  fields.push_back(b.getNamedAttr(
-      sde::AttrNames::LayoutGraph::BudgetMuBlockCount,
-      b.getI64IntegerAttr(
-          computeMuBlockCount(staticShape, layout.ownerPositions, budgetShape))));
+  fields.push_back(
+      b.getNamedAttr(sde::AttrNames::LayoutGraph::BudgetMuBlockCount,
+                     b.getI64IntegerAttr(computeMuBlockCount(
+                         staticShape, layout.ownerPositions, budgetShape))));
   return b.getDictionaryAttr(fields);
 }
 
@@ -497,6 +510,22 @@ static bool schedulingUnitWritesRoot(const sde::ArrayAccessProfile &profile,
     for (const sde::ArrayPositionUse &use : posUses)
       if (use.suId == suId && use.isWrite)
         return true;
+  return false;
+}
+
+static bool hasStencilReader(const sde::ArrayAccessProfile &profile,
+                             ArrayRef<sde::SdeSuIterateOp> schedulingUnits) {
+  for (const auto &posUses : profile.positionUses) {
+    for (const sde::ArrayPositionUse &use : posUses) {
+      if (use.isWrite || use.suId >= schedulingUnits.size())
+        continue;
+      sde::SdeSuIterateOp reader = schedulingUnits[use.suId];
+      auto classification = reader.getStructuredClassification();
+      if (classification &&
+          *classification == sde::SdeStructuredClassification::stencil)
+        return true;
+    }
+  }
   return false;
 }
 
@@ -541,8 +570,8 @@ struct LayoutAssignmentPass
       const sde::ArrayAccessProfile &inputProfile = it->second;
       // Sibling-distributed intermediate: produced by some OTHER scheduling
       // unit.
-      if (!inputProfile.hasWriter || !inputProfile.writerSuId ||
-          *inputProfile.writerSuId == consumerId)
+      if (!inputProfile.hasWriter || !inputProfile.hasFullRankWriter ||
+          !inputProfile.writerSuId || *inputProfile.writerSuId == consumerId)
         continue;
       if (!cand->contractionInputPhysicalDim)
         continue;
@@ -580,7 +609,11 @@ struct LayoutAssignmentPass
       if (auto it = contractionPositionByRoot.find(profile.root);
           it != contractionPositionByRoot.end())
         contractionPosition = it->second;
-      ChosenLayout chosen = assignLayout(profile, contractionPosition);
+      bool preserveFullWriterOwnerTile =
+          profile.hasFullRankWriter &&
+          hasStencilReader(profile, relations.schedulingUnits);
+      ChosenLayout chosen = assignLayout(profile, contractionPosition,
+                                         preserveFullWriterOwnerTile);
 
       // PhaseD — stamp on EVERY scheduling unit that accesses this root (writer
       // AND readers — the input generalization), keyed by arrayId so the future
@@ -634,14 +667,13 @@ struct LayoutAssignmentPass
           sde::buildCuMuHypergraphStorage(layoutGraph);
       sde::CuMuTypedHypergraph view = storage.view();
       if (!view.vertices.empty() && !view.nets.empty()) {
-        unsigned partCount = std::min<unsigned>(
-            static_cast<unsigned>(view.vertices.size()), 2u);
+        unsigned partCount =
+            std::min<unsigned>(static_cast<unsigned>(view.vertices.size()), 2u);
         SmallVector<unsigned, 8> assignment =
             sde::buildContiguousCuPartAssignment(
                 static_cast<unsigned>(view.vertices.size()),
                 std::max<unsigned>(1u, partCount));
-        int64_t cutBytes =
-            sde::computeCuMuHypergraphCutBytes(view, assignment);
+        int64_t cutBytes = sde::computeCuMuHypergraphCutBytes(view, assignment);
         llvm::errs() << "[HYPERGRAPH-SHADOW] vertices=" << view.vertices.size()
                      << " nets=" << view.nets.size()
                      << " parts=" << std::max<unsigned>(1u, partCount)

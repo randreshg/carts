@@ -421,6 +421,11 @@ static bool storageViewUsesComputeBlock(codir::CodirStorageViewKind view) {
          view == codir::CodirStorageViewKind::phase_redistributed;
 }
 
+static bool accessModeMayWrite(codir::CodirAccessMode mode) {
+  return mode == codir::CodirAccessMode::write ||
+         mode == codir::CodirAccessMode::readwrite;
+}
+
 static bool stencilDepRequiresComputeBlock(codir::CodeletOp codelet,
                                            unsigned depIndex);
 
@@ -622,29 +627,6 @@ static bool stencilCrossesTileBoundary(codir::CodeletOp codelet) {
          anyNonzero(codelet.getAccessMaxOffsetsAttr());
 }
 
-/// True when the stencil's per-iteration write footprint fits inside the
-/// codelet's owner-dim tile slice. Conv-3d-style centrally-written stencils
-/// have `write_footprint = [1, ...]` against tiles of [32, 64, 64]; such
-/// writes are safe to lower as block-owned.
-static bool stencilWriteFitsInTile(codir::CodeletOp codelet) {
-  if (!codelet || !hasTileOwnerSlicePlan(codelet))
-    return false;
-  std::optional<SmallVector<int64_t, 4>> writeFootprint =
-      readI64ArrayAttr(codelet.getWriteFootprintAttr());
-  std::optional<SmallVector<int64_t, 4>> tileShape =
-      readI64ArrayAttr(codelet.getTileShapeAttr());
-  if (!writeFootprint || !tileShape ||
-      writeFootprint->size() != tileShape->size())
-    return false;
-  for (size_t dim = 0, e = writeFootprint->size(); dim < e; ++dim) {
-    int64_t footprint = (*writeFootprint)[dim];
-    int64_t tile = (*tileShape)[dim];
-    if (footprint < 0 || tile <= 0 || footprint > tile)
-      return false;
-  }
-  return true;
-}
-
 /// True iff `root` (the allocation underlying a codelet dep) is written by
 /// some other CodeletOp in the same function. Walks `root`'s users
 /// transitively through memref-forwarding ops so alternating-buffer swap loops,
@@ -745,9 +727,9 @@ static bool shouldDemoteStencilWriteToComputeBlock(codir::CodeletOp codelet,
     return false;
   std::optional<codir::CodirAccessMode> mode =
       getDepAccessMode(codelet, depIndex);
-  if (!mode || *mode != codir::CodirAccessMode::write)
+  if (!mode || !accessModeMayWrite(*mode))
     return false;
-  return stencilWriteFitsInTile(codelet);
+  return codir::stencilWriteFitsInTile(codelet);
 }
 
 /// Stencil reads on patterns that have writers in the same time loop
@@ -768,7 +750,7 @@ static bool shouldDemoteStencilHaloReadToComputeBlock(codir::CodeletOp codelet,
     return false;
   if (!stencilCrossesTileBoundary(codelet))
     return false;
-  return stencilWriteFitsInTile(codelet);
+  return codir::stencilWriteFitsInTile(codelet);
 }
 
 static bool stencilDepRequiresComputeBlock(codir::CodeletOp codelet,

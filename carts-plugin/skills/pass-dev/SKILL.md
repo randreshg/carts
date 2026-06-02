@@ -20,6 +20,22 @@ parameters:
 
 ## Architecture Conventions (MANDATORY)
 
+**Layer-owned transformation** — do the real transformation in the owning
+dialect. Do not add metadata-only promises for another pass to repair later.
+If the layer cannot safely transform, fail closed with a verifier or explicit
+reject reason. SDE commits real layout/loop/source facts; CODIR commits
+collective/bridge/contraction structure; ARTS realizes DB/EDT/owner-map and
+grouped CU/bridge execution; ARTS-RT lowers mechanically.
+
+**Committed facts** — downstream passes may verify, consume, realize, or reject
+upstream facts. They must not silently recompute owner dims, block shapes,
+collective families, DB grain, or runtime modes.
+
+**Distributed grain** — keep DB/MU grain separate from CU/bridge grain. The
+target shape is fine enough per-block single-writer DBs plus grouped
+compute/bridge/communication CUs. Hypergraph decisions are grouping evidence
+over committed MU facts, not benchmark-name shortcuts.
+
 **Analysis interface** — always use analysis classes, NEVER access graphs directly:
 ```cpp
 AM->getDbAnalysis().getOrCreateGraph(func)     // DB analysis

@@ -34,8 +34,7 @@ inline bool hasCommittedCuMuPartitionPlan(Operation *op) {
   return op->hasAttr("physicalOwnerDims") ||
          op->hasAttr("physicalBlockShape") ||
          op->hasAttr("logicalWorkerSlice") ||
-         op->hasAttr("physicalHaloShape") ||
-         op->hasAttr("iterationTopology") ||
+         op->hasAttr("physicalHaloShape") || op->hasAttr("iterationTopology") ||
          op->hasAttr("distributionKind");
 }
 

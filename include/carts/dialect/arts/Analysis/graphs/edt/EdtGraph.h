@@ -37,9 +37,7 @@ struct EdtCriticalPathResult {
   SmallVector<EdtNode *, 8> cyclicNodes;
   int64_t maxDistance = 0;
 
-  bool empty() const {
-    return orderedDistances.empty() && cyclicNodes.empty();
-  }
+  bool empty() const { return orderedDistances.empty() && cyclicNodes.empty(); }
   bool hasCycle() const { return !cyclicNodes.empty(); }
 };
 

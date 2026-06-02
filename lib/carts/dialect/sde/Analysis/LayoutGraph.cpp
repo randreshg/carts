@@ -148,7 +148,8 @@ static LayoutGraphFact parseLayoutCommon(DictionaryAttr dict,
     if (std::optional<StringRef> kind =
             getString(dict, AttrNames::PartitionGraphKeys::LayoutKind))
       fact.layoutKind = parseLayoutKind(*kind);
-    fact.ownerDims = getI64Array(dict, AttrNames::PartitionGraphKeys::OwnerDims);
+    fact.ownerDims =
+        getI64Array(dict, AttrNames::PartitionGraphKeys::OwnerDims);
     fact.blockShape =
         getI64Array(dict, AttrNames::PartitionGraphKeys::BlockShape);
     if (std::optional<int64_t> value =
@@ -342,8 +343,8 @@ SmallVector<LayoutGraphFact, 4> parsePartitionGraphFacts(ArrayAttr attr) {
   return facts;
 }
 
-std::optional<LayoutGraphScoreFact> parsePartitionScoreFact(
-    DictionaryAttr dict) {
+std::optional<LayoutGraphScoreFact>
+parsePartitionScoreFact(DictionaryAttr dict) {
   if (!dict)
     return std::nullopt;
 
@@ -391,8 +392,8 @@ SmallVector<CuMuHyperedgePressure, 4>
 collectCuMuHyperedgePressures(ArrayRef<LayoutGraphFact> facts) {
   SmallVector<CuMuHyperedgePressure, 4> pressures;
   for (const LayoutGraphFact &fact : facts) {
-    int64_t trafficBytes = fact.edgeCommBytes > 0 ? fact.edgeCommBytes
-                                                  : fact.commVolumeBytes;
+    int64_t trafficBytes =
+        fact.edgeCommBytes > 0 ? fact.edgeCommBytes : fact.commVolumeBytes;
     if (trafficBytes <= 0)
       continue;
     int64_t remoteFanout = std::max<int64_t>(0, fact.muBlockCount - 1);
@@ -423,13 +424,12 @@ collectCuMuHyperedgePressures(const LayoutGraph &graph) {
   return pressures;
 }
 
-LayoutGraphBalanceSummary summarizeLayoutGraphBalance(
-    const LayoutGraph &graph, LayoutGraphBalanceOptions options) {
+LayoutGraphBalanceSummary
+summarizeLayoutGraphBalance(const LayoutGraph &graph,
+                            LayoutGraphBalanceOptions options) {
   return summarizeLayoutGraphBalance(
       graph,
-      [](const CuVertex &cu) {
-        return std::max<int64_t>(1, cu.workWeight);
-      },
+      [](const CuVertex &cu) { return std::max<int64_t>(1, cu.workWeight); },
       [](const MuNet &net) { return defaultMuTrafficBytes(net); }, options);
 }
 
@@ -451,9 +451,8 @@ LayoutGraphBalanceSummary summarizeLayoutGraphBalance(
   int64_t targetPartitions = options.targetCuPartitions > 0
                                  ? options.targetCuPartitions
                                  : summary.cuCount;
-  targetPartitions =
-      std::clamp<int64_t>(targetPartitions, int64_t{1},
-                          std::max<int64_t>(1, summary.cuCount));
+  targetPartitions = std::clamp<int64_t>(targetPartitions, int64_t{1},
+                                         std::max<int64_t>(1, summary.cuCount));
   if (summary.totalCuWorkWeight > 0 && targetPartitions > 0) {
     double ideal = static_cast<double>(summary.totalCuWorkWeight) /
                    static_cast<double>(targetPartitions);
@@ -506,12 +505,12 @@ CuVertex makeCuVertex(unsigned cuId, SdeSuIterateOp op,
   vertex.op = op;
 
   for (const MemrefAccessEntry &entry : summary.reads) {
-    vertex.accesses.push_back(makeAccessRelation(
-        entry.memref, entry, LayoutGraphAccessKind::read));
+    vertex.accesses.push_back(
+        makeAccessRelation(entry.memref, entry, LayoutGraphAccessKind::read));
   }
   for (const MemrefAccessEntry &entry : summary.writes) {
-    vertex.accesses.push_back(makeAccessRelation(
-        entry.memref, entry, LayoutGraphAccessKind::write));
+    vertex.accesses.push_back(
+        makeAccessRelation(entry.memref, entry, LayoutGraphAccessKind::write));
   }
   return vertex;
 }

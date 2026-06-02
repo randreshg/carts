@@ -39,8 +39,7 @@ inline constexpr llvm::StringLiteral DepSchema = "arts.launch.dep_schema";
 /// final values onto the outlined func through this shared name set.
 namespace Rt {
 
-inline constexpr llvm::StringLiteral VectorizeWidth =
-    "arts.rt.vectorize_width";
+inline constexpr llvm::StringLiteral VectorizeWidth = "arts.rt.vectorize_width";
 inline constexpr llvm::StringLiteral UnrollFactor = "arts.rt.unroll_factor";
 inline constexpr llvm::StringLiteral InterleaveCount =
     "arts.rt.interleave_count";

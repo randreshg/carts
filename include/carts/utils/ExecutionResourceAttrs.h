@@ -54,9 +54,9 @@ inline std::optional<int64_t> getLogicalTotalLocalities(ModuleOp module) {
 inline void setLogicalTotalLocalities(ModuleOp module, int64_t localities) {
   if (!module || localities <= 0)
     return;
-  module->setAttr(AttrNames::Execution::LogicalTotalLocalities,
-                  IntegerAttr::get(IntegerType::get(module.getContext(), 64),
-                                   localities));
+  module->setAttr(
+      AttrNames::Execution::LogicalTotalLocalities,
+      IntegerAttr::get(IntegerType::get(module.getContext(), 64), localities));
 }
 
 } // namespace mlir::carts

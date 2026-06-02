@@ -664,9 +664,9 @@ static bool isTimestepInterstitialOp(Operation *op) {
 }
 
 static void stampAlternatingBufferTimestepPlan(sde::SdeSuIterateOp predecessor,
-                                    sde::SdeSuIterateOp successor,
-                                    bool predecessorIsStencil,
-                                    bool successorIsStencil) {
+                                               sde::SdeSuIterateOp successor,
+                                               bool predecessorIsStencil,
+                                               bool successorIsStencil) {
   stampRepeatedTimestepPlan(predecessor);
   stampRepeatedTimestepPlan(successor);
   if (predecessorIsStencil)
@@ -719,7 +719,8 @@ static bool stampTimestepPlanIfRecognized(
   if (((predStencil && succUniform) || (predUniform && succStencil)) &&
       (compatibleIterationPlan ||
        haveSameStaticWrittenShape(predEffects, succEffects))) {
-    stampAlternatingBufferTimestepPlan(predecessor, successor, predStencil, succStencil);
+    stampAlternatingBufferTimestepPlan(predecessor, successor, predStencil,
+                                       succStencil);
     coarsenRepeatedStencilSlice(predecessor);
     coarsenRepeatedStencilSlice(successor);
     return true;

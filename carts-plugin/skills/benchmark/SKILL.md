@@ -10,6 +10,10 @@ argument-hint: [list | run <name> | build | clean]
 
 Run and manage CARTS benchmarks. NEVER use `./carts-benchmarks` or benchmark scripts directly.
 
+Benchmarks validate behavior; they do not define compiler policy. Suspicious
+results should be routed to `carts-benchmark-triage` and explained with
+structural evidence from `carts-vision`, not benchmark-name special cases.
+
 ## Usage
 
 Run `dekk carts benchmarks --help` for the latest options. Common:

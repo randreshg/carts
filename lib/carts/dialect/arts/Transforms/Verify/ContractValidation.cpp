@@ -20,10 +20,10 @@
 #define GEN_PASS_DEF_CONTRACTVALIDATION
 #include "carts/dialect/arts/Analysis/db/OwnershipProof.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
-#include "carts/passes/Passes.h"
-#include "carts/passes/Passes.h.inc"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/StencilAttributes.h"
+#include "carts/passes/Passes.h"
+#include "carts/passes/Passes.h.inc"
 #include "mlir/Pass/Pass.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"

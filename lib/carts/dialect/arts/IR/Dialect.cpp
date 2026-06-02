@@ -18,8 +18,8 @@
 
 #include "carts/dialect/arts/Analysis/db/DbAnalysis.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
-#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/utils/Utils.h"
@@ -599,8 +599,7 @@ LogicalResult DbAllocOp::verify() {
     return emitOpError() << "has unsupported owner_map_version";
 
   if (getLocalOnly().value_or(false))
-    return emitOpError()
-           << "cannot be both distributed and local_only";
+    return emitOpError() << "cannot be both distributed and local_only";
   if (getDistributedRejectReasonAttr())
     return emitOpError()
            << "cannot be both distributed and rejected for distributed "

@@ -381,9 +381,8 @@ struct ReductionPlanningPass
         signalPassFailure();
         return;
       }
-      if (failed(
-              stampPartialReductionSplitPlan(codelet, depMaps,
-                                             targetWorkerCount))) {
+      if (failed(stampPartialReductionSplitPlan(codelet, depMaps,
+                                                targetWorkerCount))) {
         signalPassFailure();
         return;
       }

@@ -15,6 +15,10 @@ parameters:
 
 # CARTS Benchmark Triage
 
+Benchmarks are evidence and reproducers, not compiler policy. Use
+[[carts-vision]] before turning a performance symptom into a compiler/runtime
+change.
+
 Use bundled helpers when they fit:
 - `scripts/rerun-benchmark.sh` — rerun `dekk carts triage-benchmark` with explicit size/threads/stages
 - `scripts/locate-run-artifacts.sh` — locate logs, flags, and configs under a benchmark results tree
@@ -49,6 +53,14 @@ Only use stage names from `dekk carts pipeline --json`.
    - Benchmark-side UB or invalid verification
    - Runtime/distributed lowering issue
 5. Read stage dumps in order: `sde-planning` -> `sde-to-codir` -> `codir-to-arts` -> `edt-transforms` -> `create-dbs` -> `db-opt` -> `post-db-refinement` -> `late-concurrency-cleanup` -> `epochs` -> `pre-lowering` -> `arts-rt-to-llvm`
+6. Check structural evidence before proposing a fix:
+   - SDE committed real layout/tiling facts;
+   - CODIR committed collectives/bridges from layout mismatch and compute
+     pattern;
+   - ARTS realized owner maps, DB/EDT graphs, and grouped CUs;
+   - DB/MU grain is distinct from CU/bridge grain;
+   - hypergraph evidence supports grouping decisions;
+   - no benchmark-name branch is needed.
 
 If the regression is multi-node specific or depends on `--distributed-db`, switch to `carts-distributed-triage`.
 

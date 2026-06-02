@@ -17,6 +17,10 @@ parameters:
 
 Goal: keep the failure, remove everything else.
 
+Reduced cases preserve structural facts, not benchmark identity. Use
+[[carts-vision]] to decide which SDE, CODIR, ARTS, or ARTS-RT fact must survive
+the reduction.
+
 Use bundled helpers when they fit:
 - `scripts/snapshot-stage.sh` — capture a specific stage dump to a file
 - `scripts/find-related-tests.sh` — search existing regressions before inventing a new one
@@ -48,10 +52,14 @@ Read these while shrinking a case:
    - independent tasks / acquires
    - helper functions that do not affect the failure
 4. Preserve semantic markers.
+   - SDE layout/alignment/tiling facts and in-place safety facts
+   - CODIR storage views, owner dims, collectives, bridges, and codelet deps
+   - ARTS owner maps, DB/EDT graph facts, DB modes, and grouped CUs
    - dep patterns
    - `distribution_*`
    - partition modes / full-range behavior
    - metadata and contract attributes
+   - separate DB/MU grain from CU/bridge grouping
 5. End in a checked-in regression test whenever possible.
 
 ## Lit Test Pattern

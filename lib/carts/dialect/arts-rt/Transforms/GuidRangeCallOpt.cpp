@@ -33,9 +33,9 @@
 #include "carts/dialect/arts-rt/Transforms/Passes.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts-rt/Utils/RuntimeCallUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 #include "carts/utils/LoopUtils.h"
-#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/ValueAnalysis.h"
 namespace mlir::carts::arts_rt {
 #define GEN_PASS_DEF_GUIDRANGECALLOPT
@@ -96,7 +96,8 @@ struct GuidRangeCallOptPass
     int rewrittenStatic = 0;
     int rewrittenGuarded = 0;
     for (scf::ForOp loop : loops) {
-      auto lowerBound = ::mlir::carts::arts::tryFoldConstantIndex(loop.getLowerBound());
+      auto lowerBound =
+          ::mlir::carts::arts::tryFoldConstantIndex(loop.getLowerBound());
       auto step = ::mlir::carts::arts::tryFoldConstantIndex(loop.getStep());
       if (!lowerBound || !step || *lowerBound != 0 || *step != 1)
         continue;
@@ -112,8 +113,8 @@ struct GuidRangeCallOptPass
         continue;
 
       for (func::CallOp reserveCall : reserveCalls) {
-        auto routeConst =
-            ::mlir::carts::arts::tryFoldConstantIndex(reserveCall.getOperand(1));
+        auto routeConst = ::mlir::carts::arts::tryFoldConstantIndex(
+            reserveCall.getOperand(1));
         if (!routeConst || !canReserveGuidRangeForRoute(module, *routeConst))
           continue;
 

@@ -33,14 +33,14 @@
 #include "carts/dialect/arts/Utils/BlockedAccessUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 #include "carts/utils/Debug.h"
-#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 
 using namespace mlir;
 using namespace mlir::func;
@@ -308,12 +308,12 @@ static bool hasTrustedPartitionedWriteContract(DbAcquireOp acquire) {
     return false;
 
   Operation *contract = contractOp.getOperation();
-  return getBoolAttr(contract,
-                     ::mlir::carts::arts::AttrNames::Proof::
-                         OwnerDimReachability) &&
-         getBoolAttr(contract,
-                     ::mlir::carts::arts::AttrNames::Proof::
-                         PartitionAccessMapping) &&
+  return getBoolAttr(
+             contract,
+             ::mlir::carts::arts::AttrNames::Proof::OwnerDimReachability) &&
+         getBoolAttr(
+             contract,
+             ::mlir::carts::arts::AttrNames::Proof::PartitionAccessMapping) &&
          getBoolAttr(contract,
                      ::mlir::carts::arts::AttrNames::Proof::HaloLegality);
 }
@@ -334,8 +334,7 @@ static bool canUseUnorderedLocalWrite(DbAcquireOp acquire, EdtOp edtOp,
 }
 
 static bool canUsePlannedCoarseUnorderedOutWrite(DbAcquireOp acquire,
-                                                 EdtOp edtOp,
-                                                 ModuleOp module,
+                                                 EdtOp edtOp, ModuleOp module,
                                                  bool payloadMayRead) {
   if (!acquire || !edtOp)
     return false;
@@ -395,8 +394,7 @@ static std::optional<unsigned> getDependencyIndex(EdtOp edtOp,
 }
 
 static bool canUseInPlaceSafeCoarseUnorderedWrite(DbAcquireOp acquire,
-                                                  EdtOp edtOp,
-                                                  ModuleOp module,
+                                                  EdtOp edtOp, ModuleOp module,
                                                   unsigned depIndex) {
   if (!acquire || !edtOp)
     return false;
@@ -444,9 +442,8 @@ static RuntimeDbMode selectRuntimeDbModeVerdict(DbAnalysis &dbAnalysis,
   if (canUseUnorderedLocalWrite(acquire, edtOp, module) ||
       canUsePlannedCoarseUnorderedOutWrite(acquire, edtOp, module,
                                            payloadMayRead) ||
-      (depIndex &&
-       canUseInPlaceSafeCoarseUnorderedWrite(acquire, edtOp, module,
-                                             *depIndex)))
+      (depIndex && canUseInPlaceSafeCoarseUnorderedWrite(acquire, edtOp, module,
+                                                         *depIndex)))
     return RuntimeDbMode::rw;
 
   return orderedMode;
@@ -755,8 +752,7 @@ bool DbModeTighteningPass::adjustDbModes() {
       if (currentDbMode != *maxMode) {
         ARTS_DEBUG("AllocOp: " << allocOp << " from " << currentDbMode << " to "
                                << *maxMode);
-        allocOp.setModeAttr(
-            ArtsModeAttr::get(allocOp.getContext(), *maxMode));
+        allocOp.setModeAttr(ArtsModeAttr::get(allocOp.getContext(), *maxMode));
         ++numAllocModesAdjusted;
         changed = true;
       }
@@ -891,8 +887,7 @@ bool DbModeTighteningPass::stampRuntimeDbModeVerdicts() {
 
       RuntimeDbMode verdict =
           selectRuntimeDbModeVerdict(dbAnalysis, acqOp, module);
-      if (acqOp.getRuntimeDbMode() &&
-          *acqOp.getRuntimeDbMode() == verdict)
+      if (acqOp.getRuntimeDbMode() && *acqOp.getRuntimeDbMode() == verdict)
         return;
 
       acqOp.setRuntimeDbModeAttr(

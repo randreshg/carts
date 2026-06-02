@@ -20,6 +20,9 @@ parameters:
 Compare IR between pipeline stages to understand transformations, find the
 first stage where semantics diverge, or bisect a miscompilation.
 
+Use [[carts-vision]] to interpret the boundary: the stage where a symptom first
+appears may be downstream of the stage that owns the missing transformation.
+
 ## Quick Commands
 
 ### Dump all stages
@@ -67,6 +70,16 @@ conditionally when requested.
 | 11 | epochs | Are epochs created correctly? |
 | 12 | pre-lowering | Are EDTs/DBs/epochs lowered to RT calls? |
 | 13 | arts-rt-to-llvm | Is final LLVM IR correct? |
+
+Expected fact evolution:
+
+- `sde-planning`: real SDE source/layout/alignment/tiling facts appear.
+- `sde-to-codir` / `codir-to-arts`: CODIR materializes explicit deps,
+  storage views, collectives, bridges, contractions, reductions, and halos.
+- `edt-transforms` through `post-db-refinement`: ARTS realizes DB/EDT owner
+  graphs, owner maps, DB modes, and grouped compute/bridge/communication CUs.
+- `pre-lowering` / `arts-rt-to-llvm`: ARTS-RT mechanically lowers the chosen
+  ARTS facts.
 
 ## Bisection Strategy by Symptom
 

@@ -23,6 +23,10 @@ partitioning-heuristic pass; `DbHeuristics` records decisions while
 `DbAnalysis`, `DbLayoutPlanUtils`, and the DB refinement passes own the
 evidence and rewrites.
 
+Use [[carts-vision]] for placement questions. Heuristics explain structural
+evidence; they must not become benchmark-name policy or downstream
+recomputation of SDE/CODIR facts.
+
 ## Quick Diagnostic Commands
 
 ```bash
@@ -71,6 +75,18 @@ Use these labels as diagnostic categories, not as source-file entry points:
 | Any + internode | numNodes > 1 | TwoLevel |
 | Triangular | any | BlockCyclic |
 | Stencil/Uniform/Unknown | any | Block |
+
+## Vision Guardrails
+
+- Heuristic triggers must be code-agnostic: affine structure, typed attrs,
+  graph facts, contracts, layout mismatch, and runtime topology.
+- SDE owns owner dims and block layout facts; CODIR owns collective/bridge
+  family selection from SDE facts; ARTS consumes those facts to realize DBs,
+  EDTs, owner maps, and grouped execution.
+- DB/MU partition grain is not the same decision as CU/bridge grouping.
+- Hypergraph evidence guides CU grouping, bridge coalescing, and partition
+  quality over committed MU facts. It must not hardcode owner dims, block
+  shapes, or benchmark-specific storage grain.
 
 ## Key Source Files
 

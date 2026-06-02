@@ -15,6 +15,16 @@
 // SDE-SAME: pattern = #sde.pattern<stencil_tiling_nd>
 // SDE-SAME: spatialDims = [0, 1]
 // SDE-SAME: writeFootprint = [1, 1]
+// SDE: func.func @in_place_point_self_read_stencil
+// SDE: sde.su_iterate (%c1) to (%c63) step (%c1) classification(<stencil>) {
+// SDE: } {
+// SDE-SAME: accessMaxOffsets = [0, 0]
+// SDE-SAME: accessMinOffsets = [-1, 0]
+// SDE-SAME: inPlaceSafe
+// SDE-SAME: ownerDims = [0, 1]
+// SDE-SAME: pattern = #sde.pattern<stencil_tiling_nd>
+// SDE-SAME: spatialDims = [0, 1]
+// SDE-SAME: writeFootprint = [1, 1]
 // SDE: func.func @in_place_neighbor_stencil
 // SDE: sde.su_iterate (%c1) to (%c63) step (%c1) classification(<stencil>) {
 // SDE: } {
@@ -29,6 +39,8 @@
 // ARTS-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
 // ARTS: func.func @main
 // ARTS: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>{{.*}}planIterationTopology = #arts.plan_iteration_topology<owner_tile>{{.*}}planLogicalWorkerSlice = [16, 32]{{.*}}stencil_max_offsets = [1, 1]{{.*}}stencil_min_offsets = [-1, -1]{{.*}}stencil_owner_dims = [0, 1]{{.*}}stencil_spatial_dims = [0, 1]{{.*}}stencil_supported_block_halo{{.*}}stencil_write_footprint = [1, 1]
+// ARTS: func.func @in_place_point_self_read_stencil
+// ARTS: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>{{.*}}inPlaceSafe{{.*}}stencil_max_offsets = [0, 0]{{.*}}stencil_min_offsets = [-1, 0]{{.*}}stencil_owner_dims = [0, 1]{{.*}}stencil_spatial_dims = [0, 1]{{.*}}stencil_supported_block_halo{{.*}}stencil_write_footprint = [1, 1]
 // ARTS: func.func @in_place_neighbor_stencil
 // ARTS: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>{{.*}}stencil_max_offsets = [1, 1]{{.*}}stencil_min_offsets = [-1, -1]{{.*}}stencil_owner_dims = [0, 1]{{.*}}stencil_spatial_dims = [0, 1]{{.*}}stencil_supported_block_halo{{.*}}stencil_write_footprint = [1, 1]
 // ARTS: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>{{.*}}distribution_pattern = #arts.distribution_pattern<stencil>{{.*}}inPlaceSharedState{{.*}}stencil_max_offsets = [1, 1]{{.*}}stencil_min_offsets = [-1, -1]{{.*}}stencil_owner_dims = [0, 1]{{.*}}stencil_spatial_dims = [0, 1]{{.*}}stencil_supported_block_halo{{.*}}stencil_write_footprint = [1, 1]
@@ -56,6 +68,29 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
             %s2 = arith.addf %s0, %s1 : f64
             %sum = arith.addf %s2, %c : f64
             memref.store %sum, %B[%i, %j] : memref<64x64xf64>
+          }
+          omp.yield
+        }
+      }
+      omp.terminator
+    }
+    return
+  }
+
+  func.func @in_place_point_self_read_stencil(%A: memref<64x64xf64>, %B: memref<64x64xf64>) {
+    %c1 = arith.constant 1 : index
+    %c63 = arith.constant 63 : index
+    omp.parallel {
+      omp.wsloop {
+        omp.loop_nest (%i) : index = (%c1) to (%c63) step (%c1) {
+          scf.for %j = %c1 to %c63 step %c1 {
+            %im1 = arith.subi %i, %c1 : index
+            %self = memref.load %A[%i, %j] : memref<64x64xf64>
+            %n = memref.load %B[%im1, %j] : memref<64x64xf64>
+            %c = memref.load %B[%i, %j] : memref<64x64xf64>
+            %s0 = arith.addf %self, %n : f64
+            %sum = arith.addf %s0, %c : f64
+            memref.store %sum, %A[%i, %j] : memref<64x64xf64>
           }
           omp.yield
         }

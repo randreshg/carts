@@ -17,6 +17,12 @@ Phases are ordered to minimize attribution noise:
 
 **Do not reorder.** If you feel tempted, the rationale is wrong (update this doc) or the phase definition is wrong (update the task).
 
+Every phase uses the `carts-vision` spine: SDE commits real
+source/layout/alignment/tiling facts, CODIR commits collective/bridge
+materialization, ARTS realizes DB/EDT ownership and grouped execution, and
+ARTS-RT lowers mechanically. Do not advance with downstream recomputation,
+benchmark-name fixes, hypergraph-as-owner-dims, or merged DB/CU grain.
+
 ## Phase 0 — Resolve charter open questions (task #1)
 
 **Type:** decision
@@ -97,7 +103,12 @@ captured under `.carts/sessions/...`.
 
 **Stop condition:** `DbDistributedOwnership` marks DBs with the `distributed` UnitAttr for elementwise, matmul, and reduction classifications when `--distributed-db` is set. The 9 originally-passing samples (now extended to all 26 if phase 4 is green) compile under `-O3 --distributed-db`.
 
-**Action:** keep SDE distribution planning target-neutral and add the distributed eligibility gate in ARTS ownership/refinement. ARTS should consume SDE/CODIR classification, window, and physical layout contracts, then use abstract-machine analysis to decide whether the realized DB/EDT shape is local or distributed.
+**Action:** keep SDE layout/distribution facts target-neutral and real, ensure
+CODIR has materialized any required collective/bridge intent, then add or
+adjust ARTS ownership/refinement gates so ARTS consumes SDE/CODIR contracts and
+abstract-machine topology to realize local or distributed DB/EDT shape. ARTS
+must not redetect source patterns or invent owner dims; ARTS-RT must only lower
+the chosen realization.
 
 **Effort:** ~2h.
 
@@ -157,7 +168,9 @@ captured under `.carts/sessions/...`.
 3. **4h** — Keep active SDE passes wired in `Compile.cpp`; obsolete
    state/codelet and tensor raising/lowering sources have been removed.
 
-4. **6h** — Add SDE-contract early-exit guards to ARTS refinement passes so they defer when SDE has stamped a contract.
+4. **6h** — Add SDE-contract verification/consumption guards to ARTS
+   refinement passes so they consume or reject committed facts instead of
+   recomputing owner dims, block shapes, or collective families.
 
 5. **12h** — Decouple semantic detection from structural rewriting in ARTS DB/EDT refinement. Move wavefront / Jacobi family detection into SDE (extend `PatternAnalysis` or add a later SDE wavefront-planning pass). Make ARTS passes consumers, not detectors. Enforces Invariant 5.
 

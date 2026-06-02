@@ -5,8 +5,8 @@
 ///==========================================================================///
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 
-#include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"

@@ -366,12 +366,11 @@ tryFoldConstantIndexWithImpl(Value v, unsigned depth,
 
   // Fold scf.if with a compile-time-constant condition to the live branch's
   // yielded value. Dataset-selection macros (e.g. polybench's SMALL_DATASET)
-  // wrap the size constant in `scf.if %true { yield N }`, which otherwise blocks
-  // constant recovery of array extents before canonicalization runs.
+  // wrap the size constant in `scf.if %true { yield N }`, which otherwise
+  // blocks constant recovery of array extents before canonicalization runs.
   if (auto result = dyn_cast<OpResult>(v))
     if (auto ifOp = dyn_cast<scf::IfOp>(result.getOwner()))
-      if (auto cst =
-              ifOp.getCondition().getDefiningOp<arith::ConstantOp>())
+      if (auto cst = ifOp.getCondition().getDefiningOp<arith::ConstantOp>())
         if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
           Region &live = intAttr.getValue().isZero() ? ifOp.getElseRegion()
                                                      : ifOp.getThenRegion();
@@ -456,9 +455,11 @@ tryFoldConstantIndexWithImpl(Value v, unsigned depth,
     Value den = ValueAnalysis::stripNumericCasts(div.getRhs());
     if (auto mul = num.getDefiningOp<arith::MulIOp>()) {
       if (ValueAnalysis::stripNumericCasts(mul.getRhs()) == den)
-        return tryFoldConstantIndexWithImpl(mul.getLhs(), depth + 1, extraFolder);
+        return tryFoldConstantIndexWithImpl(mul.getLhs(), depth + 1,
+                                            extraFolder);
       if (ValueAnalysis::stripNumericCasts(mul.getLhs()) == den)
-        return tryFoldConstantIndexWithImpl(mul.getRhs(), depth + 1, extraFolder);
+        return tryFoldConstantIndexWithImpl(mul.getRhs(), depth + 1,
+                                            extraFolder);
     }
     return std::nullopt;
   }
@@ -1027,8 +1028,8 @@ bool ValueAnalysis::sameMemrefRoot(Value lhs, Value rhs) {
 }
 
 std::optional<unsigned> ValueAnalysis::getMemrefRank(Value value) {
-  auto type = value ? dyn_cast_if_present<MemRefType>(value.getType())
-                    : MemRefType();
+  auto type =
+      value ? dyn_cast_if_present<MemRefType>(value.getType()) : MemRefType();
   if (!type || type.getRank() < 0)
     return std::nullopt;
   return static_cast<unsigned>(type.getRank());

@@ -22,10 +22,10 @@ using namespace mlir::carts::arts;
 
 namespace {
 
-/// No internode ARTS task may depend on a coarse single-block aggregate user DB:
-/// distributed execution requires block DB storage (or a per-node-localized host
-/// bridge / small replicated read). This runs after DbDistributedOwnership and
-/// DistributedLaunchConsistency, so coarse host sources are already marked
+/// No internode ARTS task may depend on a coarse single-block aggregate user
+/// DB: distributed execution requires block DB storage (or a per-node-localized
+/// host bridge / small replicated read). This runs after DbDistributedOwnership
+/// and DistributedLaunchConsistency, so coarse host sources are already marked
 /// local_only and their bridges localized to intranode; a coarse internode dep
 /// surviving to this point is a genuine un-materialized distribution.
 static void verifyDistributedDbDeps(EdtOp edt, bool &found) {
@@ -80,8 +80,7 @@ static LogicalResult verifyDistributedDbAlloc(DbAllocOp alloc) {
               "shape";
 
   if (alloc.getLocalOnly().value_or(false))
-    return alloc.emitOpError()
-           << "is both distributed and local_only";
+    return alloc.emitOpError() << "is both distributed and local_only";
   if (alloc.getDistributedRejectReasonAttr())
     return alloc.emitOpError()
            << "is both distributed and rejected for distributed ownership";
@@ -98,8 +97,7 @@ static LogicalResult verifyDistributedDbAlloc(DbAllocOp alloc) {
   case DbOwnerMapKind::linear_mod_nodes:
   case DbOwnerMapKind::owner_dim_contiguous:
     if (!ownerDimsAddressDbRank(plan->dims, alloc.getSizes().size()))
-      return alloc.emitOpError()
-             << "has owner_map_dims outside the DB rank";
+      return alloc.emitOpError() << "has owner_map_dims outside the DB rank";
     break;
   case DbOwnerMapKind::owner_dim_grid:
   case DbOwnerMapKind::explicit_rank_table:
@@ -119,7 +117,8 @@ struct VerifyDistributedDbPlacementPass
       if (mlir::failed(verifyDistributedDbAlloc(alloc)))
         failed = true;
     });
-    getOperation().walk([&](EdtOp edt) { verifyDistributedDbDeps(edt, failed); });
+    getOperation().walk(
+        [&](EdtOp edt) { verifyDistributedDbDeps(edt, failed); });
     if (failed)
       signalPassFailure();
   }

@@ -145,8 +145,7 @@ static bool acquireCarriesPlannedSubpartitionEvidence(DbAcquireOp acquire) {
       acquire.getStencilMinOffsetsAttr() ||
       acquire.getStencilMaxOffsetsAttr() ||
       acquire.getStencilSpatialDimsAttr() ||
-      acquire.getStencilOwnerDimsAttr() ||
-      acquire.getStencilBlockShapeAttr() ||
+      acquire.getStencilOwnerDimsAttr() || acquire.getStencilBlockShapeAttr() ||
       acquire.getStencilWriteFootprintAttr() ||
       acquire.getStencilSupportedBlockHaloAttr())
     return true;
@@ -166,8 +165,7 @@ static bool acquireCarriesPlannedSubpartitionEvidence(DbAcquireOp acquire) {
           alloc.getPlanAsyncStrategyAttr() ||
           alloc->hasAttr("perBlockReplicated") ||
           alloc->hasAttr("perBlockSingleWriterStencil") ||
-          alloc.getStencilOwnerDimsAttr() ||
-          alloc.getStencilBlockShapeAttr() ||
+          alloc.getStencilOwnerDimsAttr() || alloc.getStencilBlockShapeAttr() ||
           alloc.getStencilSupportedBlockHaloAttr());
 }
 

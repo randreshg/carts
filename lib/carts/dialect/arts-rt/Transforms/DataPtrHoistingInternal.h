@@ -13,7 +13,6 @@
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/BlockedAccessUtils.h"
 #include "carts/utils/LoopUtils.h"
-#include "carts/utils/LoopUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"

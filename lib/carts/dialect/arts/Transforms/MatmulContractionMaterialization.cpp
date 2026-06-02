@@ -2,21 +2,22 @@
 /// File: MatmulContractionMaterialization.cpp
 ///
 /// Materializes a planned block-matmul contraction reduction into
-/// per-(owner-block, k-tile) partial-product producer EDTs plus a per-block summing
-/// settle, so the cross-node contraction over F avoids a single coarse
+/// per-(owner-block, k-tile) partial-product producer EDTs plus a per-block
+/// summing settle, so the cross-node contraction over F avoids a single coarse
 /// <inout> replica.
 ///
 /// Why a dedicated ARTS pass (not the CodirToArts bridge, not the existing
 /// PartialReductionSplitMaterialization):
 ///   - codir.codelet is IsolatedFromAbove, so a k-loop body transform that must
 ///     reference the cross-node all-gather replica (the `perBlockReplicated` DB
-///     emitted by emitPerBlockAllGatherWriteBack) can only run AFTER lowerCodelet
-///     when G is an arts.edt. This pass runs at post-db-refinement, after the
-///     replica exists.
-///   - PartialReductionSplitMaterialization splits scalar rank-1 add reductions.
+///     emitted by emitPerBlockAllGatherWriteBack) can only run AFTER
+///     lowerCodelet when G is an arts.edt. This pass runs at
+///     post-db-refinement, after the replica exists.
+///   - PartialReductionSplitMaterialization splits scalar rank-1 add
+///   reductions.
 ///     This pass handles rank-2 block matmul contractions whose result is an
-///     owner block rather than a scalar element, using the same per-tile EDT and
-///     outside-the-EDT block-arg acquire discipline.
+///     owner block rather than a scalar element, using the same per-tile EDT
+///     and outside-the-EDT block-arg acquire discipline.
 ///
 /// ABI legality: every DB an EDT touches must arrive as a block-arg dep backed
 /// by a db_acquire emitted outside the EDT.
@@ -26,10 +27,10 @@
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
-#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -56,7 +57,8 @@ namespace {
 ///   coarseFDep   : index of G's <in> coarse-F dependency (`replicatedRead`).
 ///   replicaAlloc : the matching `perBlockReplicated` all-gather replica of F.
 ///   blockRows    : replica owner-block extent along the contraction dim.
-///   numTiles     : number of replica blocks (= contraction length / blockRows).
+///   numTiles     : number of replica blocks (= contraction length /
+///   blockRows).
 struct MatmulContractionTarget {
   EdtOp gEdt;
   scf::ForOp ownerLoop;
@@ -94,9 +96,10 @@ static std::optional<int64_t> foldConst(Value v) {
 /// Block-mode <in>/<out> acquire of `alloc` at outer index `offset` (size 1),
 /// emitted OUTSIDE any EDT so the resulting ptr can be a block-arg dep. ARTS-RT
 /// ABI requires every DB an EDT touches to arrive this way.
-static DbAcquireOp materializeBridgeAcquireBlock(OpBuilder &builder, Location loc,
-                                                 DbAllocOp alloc, ArtsMode mode,
-                                                 Value offset, Value size) {
+static DbAcquireOp materializeBridgeAcquireBlock(OpBuilder &builder,
+                                                 Location loc, DbAllocOp alloc,
+                                                 ArtsMode mode, Value offset,
+                                                 Value size) {
   return DbAcquireOp::create(builder, loc, mode, alloc.getGuid(),
                              alloc.getPtr(), PartitionMode::block,
                              /*indices=*/SmallVector<Value>{},
@@ -110,7 +113,8 @@ static DbAcquireOp materializeBridgeAcquireBlock(OpBuilder &builder, Location lo
                              /*elementSizes=*/SmallVector<Value>{});
 }
 
-/// The db_ref payload (rank-N memref view) of an EDT body's `depIndex` block arg.
+/// The db_ref payload (rank-N memref view) of an EDT body's `depIndex` block
+/// arg.
 static Value getDepPayload(Block &edtBody, unsigned depIndex) {
   if (depIndex >= edtBody.getNumArguments())
     return {};
@@ -124,8 +128,8 @@ static Value getDepPayload(Block &edtBody, unsigned depIndex) {
 /// Per-element summing nest: reduce the P partial payloads with arith.addf and
 /// store once into the destination payload (the addf dual of a copy nest).
 static void materializeSumNest(OpBuilder &builder, Location loc,
-                               ArrayRef<Value> partialPayloads, Value dstPayload,
-                               ArrayRef<Value> copySizes) {
+                               ArrayRef<Value> partialPayloads,
+                               Value dstPayload, ArrayRef<Value> copySizes) {
   std::function<void(SmallVectorImpl<Value> &)> emit =
       [&](SmallVectorImpl<Value> &indices) {
         unsigned dim = indices.size();
@@ -153,8 +157,9 @@ static void materializeSumNest(OpBuilder &builder, Location loc,
   emit(indices);
 }
 
-/// Find the unique `perBlockReplicated` replica whose flattened element footprint
-/// equals the coarse-F whole-array footprint (numTiles * per-block footprint).
+/// Find the unique `perBlockReplicated` replica whose flattened element
+/// footprint equals the coarse-F whole-array footprint (numTiles * per-block
+/// footprint).
 static DbAllocOp findMatchingReplica(ModuleOp module, DbAllocOp coarseFAlloc) {
   if (!coarseFAlloc)
     return {};
@@ -195,8 +200,8 @@ static DbAllocOp findMatchingReplica(ModuleOp module, DbAllocOp coarseFAlloc) {
   return matches == 1 ? match : DbAllocOp{};
 }
 
-/// Inside G's EDT body, find the contraction k-loop (the scf.for whose IV is the
-/// row index of a load from the coarse-F payload) and the paired E/F loads.
+/// Inside G's EDT body, find the contraction k-loop (the scf.for whose IV is
+/// the row index of a load from the coarse-F payload) and the paired E/F loads.
 static LogicalResult findContractionLoads(EdtOp gEdt, unsigned coarseFDep,
                                           unsigned eDep,
                                           MatmulContractionTarget &t) {
@@ -330,7 +335,8 @@ static std::optional<MatmulContractionTarget> matchTarget(EdtOp edt) {
   if (!resultDep || !eDep)
     return std::nullopt;
 
-  // Replica geometry: owner-block extent along the contraction dim + block count.
+  // Replica geometry: owner-block extent along the contraction dim + block
+  // count.
   int64_t blockRows = 0;
   if (auto ownerDims = getPlanOwnerDimsAttr(replicaAlloc.getOperation()))
     if (ownerDims.size() == 1)
@@ -381,14 +387,14 @@ static DbAllocOp createPartialsDb(OpBuilder &builder, Location loc,
   Value tileCount = createConstantIndex(builder, loc, numTiles);
   SmallVector<Value> innerSizes(resultAlloc.getElementSizes().begin(),
                                 resultAlloc.getElementSizes().end());
-  auto db = DbAllocOp::create(builder, loc, ArtsMode::inout, route,
-                              DbAllocType::heap, DbMode::write,
-                              resultAlloc.getElementType(),
-                              SmallVector<Value>{tileCount},
-                              std::move(innerSizes), PartitionMode::block);
+  auto db = DbAllocOp::create(
+      builder, loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
+      resultAlloc.getElementType(), SmallVector<Value>{tileCount},
+      std::move(innerSizes), PartitionMode::block);
   if (auto ownerDims = getPlanOwnerDimsAttr(resultAlloc.getOperation()))
     setPlanOwnerDimsAttr(db.getOperation(), ownerDims);
-  if (auto blockShape = getPlanPhysicalBlockShapeAttr(resultAlloc.getOperation()))
+  if (auto blockShape =
+          getPlanPhysicalBlockShapeAttr(resultAlloc.getOperation()))
     setPlanPhysicalBlockShapeAttr(db.getOperation(), blockShape);
   // Replicated-local: every node holds all per-tile partials for its owned
   // block, exactly like the all-gather replica it consumes.
@@ -402,36 +408,39 @@ static DbAllocOp createPartialsDb(OpBuilder &builder, Location loc,
 /// the partial tile `tileIdx` (<out>). Its body recomputes the matmul over the
 /// k' rows of the tile, accumulating into the partial.
 static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
-                                      MatmulContractionTarget &t, int64_t tileIdx,
-                                      DbAllocOp partialsDb, Value ownerOrdinal) {
+                                      MatmulContractionTarget &t,
+                                      int64_t tileIdx, DbAllocOp partialsDb,
+                                      Value ownerOrdinal) {
   ModuleOp module = t.gEdt->getParentOfType<ModuleOp>();
   Value one = createOneIndex(builder, loc);
   Value tileVal = createConstantIndex(builder, loc, tileIdx);
 
   // OUTSIDE-the-EDT acquires (block-arg deps).
   DbAcquireOp eAcq = getDepAcquire(t.gEdt, t.eDep);
-  DbAcquireOp fStrip = materializeBridgeAcquireBlock(builder, loc, t.replicaAlloc,
-                                                     ArtsMode::in, tileVal, one);
+  DbAcquireOp fStrip = materializeBridgeAcquireBlock(
+      builder, loc, t.replicaAlloc, ArtsMode::in, tileVal, one);
   DbAllocOp eAlloc = getDepAlloc(t.gEdt, t.eDep);
   if (!eAlloc)
     return failure();
-  // Reuse G's own E block offset (it is the same owner block) by re-acquiring the
-  // E block at G's result-block offset.
+  // Reuse G's own E block offset (it is the same owner block) by re-acquiring
+  // the E block at G's result-block offset.
   DbAcquireOp gResultAcq = getDepAcquire(t.gEdt, t.resultDep);
   if (!eAcq || !gResultAcq)
     return failure();
-  Value eOffset = eAcq.getOffsets().empty() ? Value() : eAcq.getOffsets().front();
+  Value eOffset =
+      eAcq.getOffsets().empty() ? Value() : eAcq.getOffsets().front();
   Value eSize = eAcq.getSizes().empty() ? one : eAcq.getSizes().front();
   if (!eOffset)
     return failure();
-  DbAcquireOp eBlock = materializeBridgeAcquireBlock(builder, loc, eAlloc,
-                                                     ArtsMode::in, eOffset, eSize);
+  DbAcquireOp eBlock = materializeBridgeAcquireBlock(
+      builder, loc, eAlloc, ArtsMode::in, eOffset, eSize);
   DbAcquireOp partialAcq = materializeBridgeAcquireBlock(
       builder, loc, partialsDb, ArtsMode::out, tileVal, one);
 
-  SmallVector<Value> deps{partialAcq.getPtr(), eBlock.getPtr(), fStrip.getPtr()};
-  // Carry G's worker-shape params (block rows + owner offset) so the cloned body
-  // keeps the same output-block iteration bounds.
+  SmallVector<Value> deps{partialAcq.getPtr(), eBlock.getPtr(),
+                          fStrip.getPtr()};
+  // Carry G's worker-shape params (block rows + owner offset) so the cloned
+  // body keeps the same output-block iteration bounds.
   SmallVector<Value> params(t.gEdt.getParams().begin(),
                             t.gEdt.getParams().end());
 
@@ -456,16 +465,17 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
   for (Value param : params)
     body.addArgument(param.getType(), loc);
 
-  // Clone G's matmul body into the producer, mapping G's dep/param block args to
-  // the producer's (result->partial, E->E, F->replicaStrip, params->params), so
-  // every cloned db_ref/load is self-contained. The producer body args are
+  // Clone G's matmul body into the producer, mapping G's dep/param block args
+  // to the producer's (result->partial, E->E, F->replicaStrip, params->params),
+  // so every cloned db_ref/load is self-contained. The producer body args are
   // [partial, E, replicaStrip, params...]; G's are [..deps.., params..].
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(&body);
   // Tile bounds are created FIRST so they dominate the cloned k-loop they bound
   // and the reindexed F loads beneath it.
   Value tileBase = createConstantIndex(builder, loc, tileIdx * t.blockRows);
-  Value tileEnd = createConstantIndex(builder, loc, (tileIdx + 1) * t.blockRows);
+  Value tileEnd =
+      createConstantIndex(builder, loc, (tileIdx + 1) * t.blockRows);
 
   Block &gBody = t.gEdt.getBody().front();
   IRMapping mapper;
@@ -503,16 +513,18 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
   for (memref::LoadOp ld : fLoads) {
     OpBuilder::InsertionGuard lg(builder);
     builder.setInsertionPoint(ld);
-    Value kp = arith::SubIOp::create(builder, loc, ld.getIndices()[0], tileBase);
-    auto fixed = memref::LoadOp::create(
-        builder, loc, clonedFPayload,
-        SmallVector<Value>{kp, ld.getIndices()[1]});
+    Value kp =
+        arith::SubIOp::create(builder, loc, ld.getIndices()[0], tileBase);
+    auto fixed =
+        memref::LoadOp::create(builder, loc, clonedFPayload,
+                               SmallVector<Value>{kp, ld.getIndices()[1]});
     ld.replaceAllUsesWith(fixed.getResult());
     ld.erase();
   }
 
-  // Each tile writes its OWN partial DB and zero-inits it (the cloned G zero-init
-  // nest), so the per-tile contribution is exact; the settle sums the P partials.
+  // Each tile writes its OWN partial DB and zero-inits it (the cloned G
+  // zero-init nest), so the per-tile contribution is exact; the settle sums the
+  // P partials.
   YieldOp::create(builder, loc);
   return success();
 }
@@ -520,8 +532,8 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
 /// Emit the per-block summing settle: sum the P partial tiles into G's settled
 /// block (the original result DB), written <out> once.
 static LogicalResult emitSettle(OpBuilder &builder, Location loc,
-                                MatmulContractionTarget &t, DbAllocOp partialsDb,
-                                Value ownerOrdinal) {
+                                MatmulContractionTarget &t,
+                                DbAllocOp partialsDb, Value ownerOrdinal) {
   ModuleOp module = t.gEdt->getParentOfType<ModuleOp>();
   DbAllocOp resultAlloc = getDepAlloc(t.gEdt, t.resultDep);
   DbAcquireOp resultAcq = getDepAcquire(t.gEdt, t.resultDep);
@@ -569,10 +581,10 @@ static LogicalResult emitSettle(OpBuilder &builder, Location loc,
     Value bodyZero = createZeroIndex(builder, loc);
     SmallVector<Value> partialPayloads;
     for (int64_t tile = 0; tile < t.numTiles; ++tile)
-      partialPayloads.push_back(
-          DbRefOp::create(builder, loc, body.getArgument(tile),
-                          SmallVector<Value>{bodyZero})
-              .getResult());
+      partialPayloads.push_back(DbRefOp::create(builder, loc,
+                                                body.getArgument(tile),
+                                                SmallVector<Value>{bodyZero})
+                                    .getResult());
     Value dstPayload =
         DbRefOp::create(builder, loc, body.getArgument(t.numTiles),
                         SmallVector<Value>{bodyZero})
@@ -580,7 +592,8 @@ static LogicalResult emitSettle(OpBuilder &builder, Location loc,
     SmallVector<Value> bodyCopySizes;
     for (size_t i = 0; i < blockElementSizes.size(); ++i)
       bodyCopySizes.push_back(body.getArgument(t.numTiles + 1 + i));
-    materializeSumNest(builder, loc, partialPayloads, dstPayload, bodyCopySizes);
+    materializeSumNest(builder, loc, partialPayloads, dstPayload,
+                       bodyCopySizes);
     YieldOp::create(builder, loc);
   }
   return success();
@@ -597,21 +610,22 @@ static LogicalResult materializeTarget(MatmulContractionTarget &t) {
   // before G, so each owner-block iteration reserves its own per-tile partial
   // GUIDs (no cross-block aliasing of the partial buffers).
   OpBuilder builder(gEdt);
-  DbAllocOp partialsDb = createPartialsDb(builder, loc, resultAlloc, t.numTiles);
+  DbAllocOp partialsDb =
+      createPartialsDb(builder, loc, resultAlloc, t.numTiles);
 
   // Owner ordinal for routing = the owner index used by G's result acquire
   // offset (the relative dispatch position).
   builder.setInsertionPoint(gEdt);
   DbAcquireOp resultAcq = getDepAcquire(gEdt, t.resultDep);
-  Value ownerOrdinal =
-      resultAcq && !resultAcq.getOffsets().empty()
-          ? resultAcq.getOffsets().front()
-          : createZeroIndex(builder, loc);
+  Value ownerOrdinal = resultAcq && !resultAcq.getOffsets().empty()
+                           ? resultAcq.getOffsets().front()
+                           : createZeroIndex(builder, loc);
 
   // Per-tile producers.
   for (int64_t tile = 0; tile < t.numTiles; ++tile) {
     builder.setInsertionPoint(gEdt);
-    if (failed(emitTileProducer(builder, loc, t, tile, partialsDb, ownerOrdinal)))
+    if (failed(
+            emitTileProducer(builder, loc, t, tile, partialsDb, ownerOrdinal)))
       return failure();
   }
 
