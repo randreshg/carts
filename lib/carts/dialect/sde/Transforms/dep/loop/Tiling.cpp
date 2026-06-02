@@ -274,6 +274,32 @@ static bool isExecutableInnermostBody(Block &body) {
   return true;
 }
 
+static bool isStencilTileBody(Block &body);
+
+static bool isStencilTileBodyOp(Operation &op) {
+  if (isScalarExecutableOp(op))
+    return true;
+
+  if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+    for (Region &region : ifOp->getRegions()) {
+      if (!llvm::all_of(region,
+                        [](Block &block) { return isStencilTileBody(block); }))
+        return false;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+static bool isStencilTileBody(Block &body) {
+  for (Operation &op : body.without_terminator()) {
+    if (!isStencilTileBodyOp(op))
+      return false;
+  }
+  return true;
+}
+
 static bool hasPerfectNestedScalarLoopNest(Block &body, unsigned numLoops) {
   if (numLoops == 0)
     return false;
@@ -381,7 +407,7 @@ static bool isStencilCandidate(sde::SdeSuIterateOp op, Block &body) {
         if (nestedLoop)
           return false; // imperfect nest
         nestedLoop = forOp;
-      } else if (!isScalarExecutableOp(nested)) {
+      } else if (!isStencilTileBodyOp(nested)) {
         return false;
       }
     }
@@ -390,7 +416,7 @@ static bool isStencilCandidate(sde::SdeSuIterateOp op, Block &body) {
     ++innerLoops;
     current = nestedLoop.getBody();
   }
-  return isExecutableInnermostBody(*current) && (numSuDims + innerLoops) >= 1;
+  return isStencilTileBody(*current) && (numSuDims + innerLoops) >= 1;
 }
 
 static SmallVector<int64_t> getStencilHaloWidths(sde::SdeSuIterateOp op) {
@@ -740,11 +766,19 @@ static bool isBudgetReconciledTileCandidate(sde::SdeSuIterateOp op) {
     return false;
 
   if (*classification == sde::SdeStructuredClassification::elementwise ||
-      *classification == sde::SdeStructuredClassification::elementwise_pipeline)
-    return true;
+      *classification ==
+          sde::SdeStructuredClassification::elementwise_pipeline) {
+    // Budget reconciliation is needed for out-of-place copy-like stages that
+    // must share a block layout with a paired distributed consumer/producer.
+    // In-place elementwise owner tiles already expose single-writer block
+    // concurrency; using the byte-budget block shape here collapses DB/MU grain
+    // instead of creating a separate CU grouping decision.
+    return !op.getInPlaceSafeAttr();
+  }
 
-  return *classification == sde::SdeStructuredClassification::stencil &&
-         op.getInPlaceSafeAttr();
+  // Stencils use the stencil owner-block planner below. The byte-budget layout
+  // is CU grouping evidence, not a reason to inflate DB/MU block grain.
+  return false;
 }
 
 static std::optional<sde::LayoutGraphFact>
@@ -877,6 +911,10 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op) {
   plan.topology = plan.ownerPhysicalDims.size() > 1
                       ? sde::SdeIterationTopology::owner_tile
                       : sde::SdeIterationTopology::owner_strip;
+  if (classification &&
+      *classification == sde::SdeStructuredClassification::stencil)
+    plan.haloShape =
+        getStencilHaloRadiiForOwnerDims(op, plan.ownerPhysicalDims.size());
   return plan;
 }
 
@@ -1154,8 +1192,8 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       }
 
       // For stencils, enforce halo-aware minimum tile size per dimension.
-      if (op.getStructuredClassification() ==
-          sde::SdeStructuredClassification::stencil) {
+      if (!physicalTilePlan && op.getStructuredClassification() ==
+                                   sde::SdeStructuredClassification::stencil) {
         SmallVector<int64_t> halos = getStencilHaloWidths(op);
         for (unsigned d = 0; d < numDims && d < halos.size(); ++d) {
           Value haloVal = createConstantIndex(rewriter, loc, halos[d]);
@@ -1198,8 +1236,11 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           break;
         }
         if (parallelMask[d]) {
-          tiledSteps.push_back(arith::MulIOp::create(
-              rewriter, loc, originalStep, perDimTileIter[d]));
+          if (constantStep == 1)
+            tiledSteps.push_back(perDimTileIter[d]);
+          else
+            tiledSteps.push_back(arith::MulIOp::create(
+                rewriter, loc, originalStep, perDimTileIter[d]));
           anyTiled = true;
         } else {
           tiledSteps.push_back(originalStep);

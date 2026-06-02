@@ -180,12 +180,22 @@ struct ConvertCodirToArtsPass
   }
 
   scf::ForOp findGenericWorkerDispatchLoop(codir::CodeletOp codelet) const {
+    scf::ForOp nearestLoop;
     for (Operation *parent = codelet ? codelet->getParentOp() : nullptr; parent;
          parent = parent->getParentOp()) {
       auto loop = dyn_cast<scf::ForOp>(parent);
-      if (loop && containsValue(codelet.getParams(), loop.getInductionVar()))
+      if (!loop)
+        continue;
+      if (!nearestLoop)
+        nearestLoop = loop;
+      if (containsValue(codelet.getParams(), loop.getInductionVar()))
         return loop;
     }
+    // Flattened owner-tile dispatch rematerializes owner bases from a block
+    // ordinal, so the dispatch IV is not a codelet parameter. It is still the
+    // ARTS launch ordinal for the committed tile-owner plan.
+    if (hasCodirTileOwnerSlicePlan(codelet))
+      return nearestLoop;
     return {};
   }
 

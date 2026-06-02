@@ -25,6 +25,16 @@ Value createOneIndex(OpBuilder &builder, Location loc) {
   return createConstantIndex(builder, loc, 1);
 }
 
+Value materializeNonNegativeCeilDiv(OpBuilder &builder, Location loc,
+                                    Value numerator, Value denominator) {
+  Value zero = createZeroIndex(builder, loc);
+  Value negative = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::slt, numerator, zero);
+  Value clamped =
+      arith::SelectOp::create(builder, loc, negative, zero, numerator);
+  return arith::CeilDivUIOp::create(builder, loc, clamped, denominator);
+}
+
 bool isSideEffectFreeArithmeticLikeOp(Operation *op) {
   if (!op || op->hasTrait<OpTrait::IsTerminator>())
     return true;

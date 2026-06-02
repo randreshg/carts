@@ -6,8 +6,7 @@
 
 // MN8-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // MN8: func.func @transpose_gemv_owner_pipeline
-// MN8: %[[STEP:.*]] = arith.muli %c1, %c16{{(_[0-9]+)?}} : index
-// MN8: sde.su_iterate (%c0) to (%c8192) step (%[[STEP]]) classification(<elementwise_pipeline>)
+// MN8: sde.su_iterate (%c0) to (%c8192) step (%c16{{(_[0-9]+)?}}) classification(<elementwise_pipeline>)
 // MN8: physicalBlockShape = [16]
 // MN8-LABEL: // -----// IR Dump After ConvertSdeToCodir (convert-sde-to-codir) //----- //
 // MN8: func.func @transpose_gemv_owner_pipeline

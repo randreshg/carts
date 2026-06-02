@@ -19,6 +19,8 @@ namespace carts {
 Value createConstantIndex(OpBuilder &builder, Location loc, int64_t val);
 Value createZeroIndex(OpBuilder &builder, Location loc);
 Value createOneIndex(OpBuilder &builder, Location loc);
+Value materializeNonNegativeCeilDiv(OpBuilder &builder, Location loc,
+                                    Value numerator, Value denominator);
 
 /// Return true for regionless arithmetic-like operations that are safe to
 /// duplicate when restructuring control flow around epochs/EDTs.

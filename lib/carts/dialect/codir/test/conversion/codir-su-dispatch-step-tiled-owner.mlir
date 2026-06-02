@@ -3,7 +3,10 @@
 
 // SDE tiling may already rewrite the scheduling-unit step to the physical
 // owner block. CODIR must not multiply that step by the block shape again, or
-// the launch loop collapses row-strip EDTs into one oversized codelet.
+// the launch loop collapses row-strip EDTs into one oversized codelet. For
+// owner tiles, CODIR also collapses the dispatch loops into a single row-major
+// block-ordinal launch loop so ARTS sees one launch ordinal over the full ND
+// tile space without changing per-block DB/MU grain.
 
 module {
   func.func @su_dispatch_step_keeps_sde_tiled_owner_step(%A: memref<4800x4800xf32>) {
@@ -54,6 +57,24 @@ module {
         sde.yield
       } {iterationTopology = #sde.iteration_topology<owner_tile>,
          logicalWorkerSlice = [2400, 2400], physicalOwnerDims = [0, 1],
+         pattern = #sde.pattern<stencil_tiling_nd>}
+      sde.yield
+    }
+    return
+  }
+
+  func.func @su_owner_tile_flattens_3d_logical_slice(%A: memref<64x64x64xf32>, %B: memref<64x64x64xf32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c63 = arith.constant 63 : index
+    sde.cu_region <parallel> {
+      sde.su_iterate (%c1, %c1, %c1) to (%c63, %c63, %c63) step (%c1, %c1, %c1) classification(<stencil>) {
+      ^bb0(%i: index, %j: index, %k: index):
+        %v = memref.load %B[%i, %j, %k] : memref<64x64x64xf32>
+        memref.store %v, %A[%i, %j, %k] : memref<64x64x64xf32>
+        sde.yield
+      } {iterationTopology = #sde.iteration_topology<owner_tile>,
+         logicalWorkerSlice = [4, 4, 8], physicalOwnerDims = [0, 1, 2],
          pattern = #sde.pattern<stencil_tiling_nd>}
       sde.yield
     }
@@ -137,13 +158,37 @@ module {
 // CHECK-LABEL: func.func @su_owner_tile_uses_multidim_logical_slice
 // CHECK-DAG: %[[C2400_0:.*]] = arith.constant 2400 : index
 // CHECK-DAG: %[[C2400_1:.*]] = arith.constant 2400 : index
-// CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %[[C2400_0]]
-// CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %[[C2400_1]]
+// CHECK: arith.ceildivui %{{.*}}, %[[C2400_0]]
+// CHECK: arith.ceildivui %{{.*}}, %[[C2400_1]]
+// CHECK: %[[TOTAL_0:.*]] = arith.muli
+// CHECK: %[[TOTAL:.*]] = arith.muli %[[TOTAL_0]]
+// CHECK: scf.for %[[ORD:.*]] = %{{.*}} to %[[TOTAL]] step %{{.*}} {
+// CHECK: arith.remui %[[ORD]]
+// CHECK: arith.divui %[[ORD]]
 // CHECK: codir.codelet
 // CHECK: arith.minui
 // CHECK: scf.for
 // CHECK: arith.minui
 // CHECK: scf.for
+
+// CHECK-LABEL: func.func @su_owner_tile_flattens_3d_logical_slice
+// CHECK-DAG: %[[C4_0:.*]] = arith.constant 4 : index
+// CHECK-DAG: %[[C4_1:.*]] = arith.constant 4 : index
+// CHECK-DAG: %[[C8:.*]] = arith.constant 8 : index
+// CHECK: arith.ceildivui %{{.*}}, %[[C4_0]]
+// CHECK: arith.ceildivui %{{.*}}, %[[C4_1]]
+// CHECK: arith.ceildivui %{{.*}}, %[[C8]]
+// CHECK: %[[TOTAL_0:.*]] = arith.muli
+// CHECK: %[[TOTAL_1:.*]] = arith.muli %[[TOTAL_0]]
+// CHECK: %[[TOTAL_2:.*]] = arith.muli %[[TOTAL_1]]
+// CHECK: scf.for %[[ORD:.*]] = %{{.*}} to %[[TOTAL_2]] step %{{.*}} {
+// CHECK: arith.remui %[[ORD]]
+// CHECK: arith.divui %[[ORD]]
+// CHECK: arith.remui
+// CHECK: arith.divui
+// CHECK: arith.remui
+// CHECK: codir.codelet {{.*}}params(%{{.*}}, %{{.*}}, %{{.*}} : index, index, index)
+// CHECK-SAME: tile_owner_dims = [0, 1, 2]
 
 // CHECK-LABEL: func.func @su_dispatch_step_uses_owner_strip_multidim_logical_slice
 // CHECK-DAG: %[[C36000:.*]] = arith.constant 36000 : index

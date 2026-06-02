@@ -146,9 +146,12 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 }
 
 // CHECK-LABEL: func.func @partition_score_keeps_bridge_blocks_concurrent
+// CHECK: perBlockReplicated
 // CHECK: arts.runtime_query <total_nodes>
+// CHECK: arith.ceildivui
 // CHECK: scf.for {{.*}} step %c1
-// CHECK: scf.for {{.*}} step %c1
+// CHECK: arith.divui
+// CHECK: arith.remui
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>)
 // CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>)
 // CHECK: arts.edt <task>
@@ -156,16 +159,23 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 
 // CHECK-LABEL: func.func @partition_score_rounding_keeps_non_divisible_floor
 // CHECK-NOT: arith.constant 2 : index
+// CHECK: perBlockReplicated
 // CHECK: arts.runtime_query <total_nodes>
+// CHECK: arith.ceildivui
 // CHECK: scf.for {{.*}} step %c1
-// CHECK: scf.for {{.*}} step %c1
+// CHECK: arith.divui
+// CHECK: arith.remui
 // CHECK: arts.edt <task>
 // CHECK-SAME: perBlockAllGather
 
 // CHECK-LABEL: func.func @partition_score_groups_copy_like_bridge_without_collapsing_mus
+// CHECK: perBlockReplicated
 // CHECK: arts.runtime_query <total_nodes>
+// CHECK: arith.constant 4 : index
+// CHECK: arith.ceildivui
 // CHECK: scf.for {{.*}} step %c1
-// CHECK: scf.for {{.*}} step %c4
+// CHECK: arith.divui
+// CHECK: arith.remui
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>)
 // CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>)
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>)

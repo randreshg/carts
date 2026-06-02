@@ -87,6 +87,40 @@ Useful diagnostic hook:
 CARTS_DIAG_HYPERGRAPH=1 dekk carts compile <input> -O3 --pipeline=sde-planning
 ```
 
+## CGO'15 Stencil Mapping
+
+For locality-aware concurrent-start stencils, keep the mapping strict:
+
+- SDE proves Jacobi-style legality, performs the real skew/diamond or
+  time-band loop transform, widens halo by `radius * bandDepth`, and commits
+  layout/time-band facts.
+- CODIR consumes those facts and names the once-per-band `halo` or other
+  collective/bridge intent.
+- ARTS realizes the same fine per-block DB/MU grain with grouped
+  compute/bridge/communication CUs over block ranges.
+- ARTS-RT lowers mechanically; it must not infer time bands, stencil legality,
+  owner maps, collectives, or DB grain from runtime shape.
+
+Thread grouping maps to CU/bridge grouping evidence over committed MUs, not to
+coarse DBs or metadata-only promises.
+
+## Timestep/Epoch Rule
+
+Barrier and epoch optimization must be a real graph transformation:
+
+- SDE removes or amortizes timestep barriers only by rewriting loop/dataflow
+  shape, such as time-band/skew/diamond tiling with widened halo or explicit
+  per-block/range tokens.
+- CODIR consumes those facts and names the resulting halo/bridge/storage
+  transitions.
+- ARTS groups compute/bridge/communication CUs over committed block ranges while
+  each lane keeps its own per-block DB acquire.
+- ARTS-RT/runtime lowers and tunes the emitted epoch/frontier/route calls; it
+  must not infer missing dataflow or suppress waits.
+
+Never coarsen `logicalWorkerSlice`, `physicalBlockShape`, or DB/MU grain from a
+barrier/epoch optimization.
+
 ## Layer Placement Checklist
 
 1. What is the first wrong committed fact?

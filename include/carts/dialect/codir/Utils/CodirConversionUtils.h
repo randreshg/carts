@@ -1733,16 +1733,27 @@ static inline Value buildSuDispatchStep(sde::SdeSuIterateOp source,
 }
 
 static inline FailureOr<Value>
-buildSuOwnerTileDispatchStep(sde::SdeSuIterateOp source, unsigned dim,
-                             OpBuilder &builder) {
-  if (dim >= source.getSteps().size())
+buildSuOwnerTileDispatchStep(sde::SdeSuIterateOp source, unsigned loopDim,
+                             unsigned physicalDim, OpBuilder &builder) {
+  if (loopDim >= source.getSteps().size())
     return failure();
   std::optional<int64_t> slice =
-      getPositiveI64(source.getLogicalWorkerSliceAttr(), dim);
+      getPositiveI64(source.getLogicalWorkerSliceAttr(), physicalDim);
   if (!slice)
     return failure();
-  return buildSuDispatchStepFromExtent(source, source.getSteps()[dim], *slice,
-                                       builder);
+  return buildSuDispatchStepFromExtent(source, source.getSteps()[loopDim],
+                                       *slice, builder);
+}
+
+static inline Value materializeSuOwnerTileTripCount(sde::SdeSuIterateOp source,
+                                                    unsigned loopDim,
+                                                    Value dispatchStep,
+                                                    OpBuilder &builder) {
+  Location loc = source.getLoc();
+  Value span =
+      arith::SubIOp::create(builder, loc, source.getUpperBounds()[loopDim],
+                            source.getLowerBounds()[loopDim]);
+  return materializeNonNegativeCeilDiv(builder, loc, span, dispatchStep);
 }
 
 struct SuCodeletPlan {
@@ -1886,17 +1897,15 @@ static inline std::optional<Value> getSingleWriteReadIntermediate(
   return intermediate;
 }
 
-static inline bool
-hasMatchingOneDimensionalIterationSpace(sde::SdeSuIterateOp predecessor,
-                                        sde::SdeSuIterateOp successor) {
+static inline bool hasMatchingIterationSpace(sde::SdeSuIterateOp predecessor,
+                                             sde::SdeSuIterateOp successor) {
   if (!predecessor || !successor)
     return false;
-  if (predecessor.getLowerBounds().size() != 1 ||
-      predecessor.getUpperBounds().size() != 1 ||
-      predecessor.getSteps().size() != 1 ||
-      successor.getLowerBounds().size() != 1 ||
-      successor.getUpperBounds().size() != 1 ||
-      successor.getSteps().size() != 1)
+  if (predecessor.getLowerBounds().size() !=
+          successor.getLowerBounds().size() ||
+      predecessor.getUpperBounds().size() !=
+          successor.getUpperBounds().size() ||
+      predecessor.getSteps().size() != successor.getSteps().size())
     return false;
 
   return ::mlir::carts::ValueAnalysis::areValueRangesEquivalent(
@@ -1907,10 +1916,92 @@ hasMatchingOneDimensionalIterationSpace(sde::SdeSuIterateOp predecessor,
              predecessor.getSteps(), successor.getSteps());
 }
 
-static inline bool hasSingleLeadingPhysicalOwnerDim(sde::SdeSuIterateOp op) {
-  std::optional<SmallVector<int64_t, 4>> ownerDims =
+static inline std::optional<SmallVector<unsigned, 4>>
+getNonNegativePhysicalOwnerDims(sde::SdeSuIterateOp op) {
+  std::optional<SmallVector<int64_t, 4>> parsed =
       ::mlir::carts::readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
-  return ownerDims && ownerDims->size() == 1 && (*ownerDims)[0] == 0;
+  if (!parsed || parsed->empty())
+    return std::nullopt;
+  SmallVector<unsigned, 4> ownerDims;
+  ownerDims.reserve(parsed->size());
+  for (int64_t dim : *parsed) {
+    if (dim < 0)
+      return std::nullopt;
+    ownerDims.push_back(static_cast<unsigned>(dim));
+  }
+  return ownerDims;
+}
+
+static inline bool isTokenLocalBoundaryClassification(sde::SdeSuIterateOp op) {
+  if (!op || !op.getReductionAccumulators().empty())
+    return false;
+  auto classification = op.getStructuredClassification();
+  if (!classification)
+    return false;
+  switch (*classification) {
+  case sde::SdeStructuredClassification::elementwise:
+  case sde::SdeStructuredClassification::elementwise_pipeline:
+  case sde::SdeStructuredClassification::matmul:
+    return true;
+  case sde::SdeStructuredClassification::stencil:
+  case sde::SdeStructuredClassification::reduction:
+    return false;
+  }
+  return false;
+}
+
+static inline bool isTokenLocalBoundaryTopology(sde::SdeSuIterateOp op) {
+  auto topology = op.getIterationTopology();
+  return topology && (*topology == sde::SdeIterationTopology::owner_strip ||
+                      *topology == sde::SdeIterationTopology::owner_tile ||
+                      *topology == sde::SdeIterationTopology::owner_tile_2d);
+}
+
+static inline bool
+allRootAccessesUseOwnerDims(sde::SdeSuIterateOp source, Value root,
+                            ArrayRef<unsigned> physicalOwnerDims) {
+  if (!source || !root || physicalOwnerDims.empty() || source.getBody().empty())
+    return false;
+
+  Block &body = source.getBody().front();
+  if (body.getNumArguments() < physicalOwnerDims.size())
+    return false;
+
+  bool sawRootAccess = false;
+  bool rejected = false;
+  auto checkAccess = [&](Value memref, OperandRange indices) {
+    if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(memref) != root)
+      return;
+    sawRootAccess = true;
+    for (auto [ownerSlot, physicalDim] : llvm::enumerate(physicalOwnerDims)) {
+      if (physicalDim >= indices.size() ||
+          !indexSelectsOwnerSlice(indices[physicalDim],
+                                  body.getArgument(ownerSlot))) {
+        rejected = true;
+        return;
+      }
+    }
+  };
+
+  source.getBody().walk([&](Operation *op) {
+    if (rejected)
+      return WalkResult::interrupt();
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (isa<MemRefType>(load.getResult().getType()))
+        return WalkResult::advance();
+      checkAccess(load.getMemref(), load.getIndices());
+      return rejected ? WalkResult::interrupt() : WalkResult::advance();
+    }
+    if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (isa<MemRefType>(store.getValueToStore().getType()))
+        return WalkResult::advance();
+      checkAccess(store.getMemref(), store.getIndices());
+      return rejected ? WalkResult::interrupt() : WalkResult::advance();
+    }
+    return WalkResult::advance();
+  });
+
+  return sawRootAccess && !rejected;
 }
 
 static inline bool
@@ -1919,22 +2010,30 @@ hasAlignedBarrierTokenAccessWindow(sde::SdeSuIterateOp predecessor,
                                    Value intermediateRoot) {
   if (!intermediateRoot)
     return false;
-  if (!hasMatchingOneDimensionalIterationSpace(predecessor, successor))
+  if (!hasMatchingIterationSpace(predecessor, successor))
     return false;
   if (!hasSdePhysicalOwnerSlicePlan(predecessor) ||
       !hasSdePhysicalOwnerSlicePlan(successor))
     return false;
-  if (!hasSingleLeadingPhysicalOwnerDim(predecessor) ||
-      !hasSingleLeadingPhysicalOwnerDim(successor))
+  if (!isTokenLocalBoundaryClassification(predecessor) ||
+      !isTokenLocalBoundaryClassification(successor))
     return false;
-  if (!canUseOwnerSliceBoundaryPlan(predecessor) ||
-      !canUseOwnerSliceBoundaryPlan(successor))
+  if (!isTokenLocalBoundaryTopology(predecessor) ||
+      !isTokenLocalBoundaryTopology(successor))
+    return false;
+  std::optional<SmallVector<unsigned, 4>> predOwnerDims =
+      getNonNegativePhysicalOwnerDims(predecessor);
+  std::optional<SmallVector<unsigned, 4>> succOwnerDims =
+      getNonNegativePhysicalOwnerDims(successor);
+  if (!predOwnerDims || !succOwnerDims || *predOwnerDims != *succOwnerDims)
     return false;
   if (!hasSamePhysicalLayoutPlan(predecessor, successor))
     return false;
 
-  return canAccessRootWithPlan(predecessor, intermediateRoot, predecessor) &&
-         canAccessRootWithPlan(successor, intermediateRoot, predecessor);
+  return allRootAccessesUseOwnerDims(predecessor, intermediateRoot,
+                                     *predOwnerDims) &&
+         allRootAccessesUseOwnerDims(successor, intermediateRoot,
+                                     *succOwnerDims);
 }
 
 static inline void collectSuBarrierTokenDepPlans(ModuleOp module,
@@ -2244,6 +2343,54 @@ static inline void appendSuOwnerSliceLocalRewrites(
   }
 }
 
+static inline void appendSuOwnerTileLocalRewrites(
+    sde::SdeSuIterateOp source, ArrayRef<Value> dispatchBases,
+    OpBuilder &builder, SuCodeletPlan &plan,
+    const SuBarrierTokenDepPlan *barrierTokenDepPlan = nullptr) {
+  if (!hasSdePhysicalOwnerSlicePlan(source) || !barrierTokenDepPlan)
+    return;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getNonNegativePhysicalOwnerDims(source);
+  if (!ownerDims || ownerDims->empty() ||
+      ownerDims->size() > dispatchBases.size())
+    return;
+
+  for (auto [depIndex, dep] : llvm::enumerate(plan.deps)) {
+    auto depType = dyn_cast<MemRefType>(dep.getType());
+    if (!depType || depType.getRank() == 0)
+      continue;
+
+    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep);
+    if (!barrierTokenDepPlan->hasTokenLocalRoot(source, root))
+      continue;
+    if (!allRootAccessesUseOwnerDims(source, root, *ownerDims))
+      continue;
+
+    SmallVector<Value> offsets;
+    offsets.reserve(depType.getRank());
+    for (int64_t dim = 0, rank = depType.getRank(); dim < rank; ++dim)
+      offsets.push_back(createZeroIndex(builder, source.getLoc()));
+
+    bool valid = true;
+    for (auto [ownerSlot, physicalDim] : llvm::enumerate(*ownerDims)) {
+      if (physicalDim >= offsets.size()) {
+        valid = false;
+        break;
+      }
+      offsets[physicalDim] = dispatchBases[ownerSlot];
+    }
+    if (!valid)
+      continue;
+
+    plan.localIndexRewrites.push_back(
+        {static_cast<unsigned>(depIndex), std::move(offsets), {}});
+    if (depIndex < plan.depStorageViews.size())
+      plan.depStorageViews[depIndex] =
+          codir::CodirStorageViewKind::compute_block;
+  }
+}
+
 static inline Value lookupMappedParam(Value value, IRMapping &mapper) {
   if (Value mapped = mapper.lookupOrNull(value))
     return mapped;
@@ -2323,11 +2470,25 @@ static inline LogicalResult cloneSuBodyFromDim(sde::SdeSuIterateOp source,
   return cloneSuBodyFromDim(source, dim + 1, mapper, builder, computeBlock);
 }
 
-static inline bool hasSuOwnerTile2dDispatchPlan(sde::SdeSuIterateOp source) {
-  return hasOwnerTileTopology(source) && source.getLowerBounds().size() >= 2 &&
-         source.getUpperBounds().size() >= 2 && source.getSteps().size() >= 2 &&
-         getPositiveI64(source.getLogicalWorkerSliceAttr(), 0).has_value() &&
-         getPositiveI64(source.getLogicalWorkerSliceAttr(), 1).has_value();
+static inline std::optional<SmallVector<unsigned, 4>>
+getSuOwnerTileDispatchPhysicalDims(sde::SdeSuIterateOp source) {
+  if (!hasOwnerTileTopology(source) || source.getBody().empty())
+    return std::nullopt;
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getNonNegativePhysicalOwnerDims(source);
+  if (!ownerDims || ownerDims->size() < 2)
+    return std::nullopt;
+  if (source.getLowerBounds().size() < ownerDims->size() ||
+      source.getUpperBounds().size() < ownerDims->size() ||
+      source.getSteps().size() < ownerDims->size() ||
+      source.getBody().front().getNumArguments() < ownerDims->size())
+    return std::nullopt;
+  for (auto [loopDim, physicalDim] : llvm::enumerate(*ownerDims)) {
+    if (!getPositiveI64(source.getLogicalWorkerSliceAttr(), physicalDim))
+      return std::nullopt;
+    (void)loopDim;
+  }
+  return ownerDims;
 }
 
 static inline bool requiresSuCompletionBarrier(
@@ -2338,40 +2499,84 @@ static inline bool requiresSuCompletionBarrier(
            barrierTokenDepPlan->suppressCompletionBarrier(source));
 }
 
-static inline LogicalResult convertSuOwnerTile2dToCodir(
+static inline LogicalResult convertSuOwnerTileNdToCodir(
     sde::SdeSuIterateOp source,
     const SuBarrierTokenDepPlan *barrierTokenDepPlan = nullptr) {
   OpBuilder builder(source);
-  FailureOr<Value> dispatchStep0 =
-      buildSuOwnerTileDispatchStep(source, 0, builder);
-  FailureOr<Value> dispatchStep1 =
-      buildSuOwnerTileDispatchStep(source, 1, builder);
-  if (failed(dispatchStep0) || failed(dispatchStep1))
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getSuOwnerTileDispatchPhysicalDims(source);
+  if (!ownerDims)
     return source.emitOpError()
-           << "owner-tile scheduling-unit conversion requires two positive "
-              "logical worker slice dimensions";
+           << "owner-tile scheduling-unit conversion requires at least two "
+              "realized physical owner dimensions";
+
+  SmallVector<Value, 4> dispatchSteps;
+  dispatchSteps.reserve(ownerDims->size());
+  for (auto [loopDim, physicalDim] : llvm::enumerate(*ownerDims)) {
+    FailureOr<Value> dispatchStep =
+        buildSuOwnerTileDispatchStep(source, loopDim, physicalDim, builder);
+    if (failed(dispatchStep))
+      return source.emitOpError()
+             << "owner-tile scheduling-unit conversion requires a positive "
+                "logical worker slice for every physical owner dimension";
+    dispatchSteps.push_back(*dispatchStep);
+  }
 
   SuCodeletPlan plan;
-  if (failed(buildSuCodeletPlan(source, *dispatchStep0, plan)) ||
-      failed(addSuParam(*dispatchStep1, plan, source)))
+  if (failed(buildSuCodeletPlan(source, dispatchSteps.front(), plan)))
     return failure();
+  for (Value dispatchStep : llvm::drop_begin(dispatchSteps))
+    if (failed(addSuParam(dispatchStep, plan, source)))
+      return failure();
 
   Location loc = source.getLoc();
-  auto dispatchLoop0 =
-      scf::ForOp::create(builder, loc, source.getLowerBounds()[0],
-                         source.getUpperBounds()[0], *dispatchStep0);
+  SmallVector<Value, 4> tileCounts;
+  tileCounts.reserve(ownerDims->size());
+  for (auto [loopDim, dispatchStep] : llvm::enumerate(dispatchSteps))
+    tileCounts.push_back(materializeSuOwnerTileTripCount(
+        source, loopDim, dispatchStep, builder));
 
-  OpBuilder::InsertionGuard outerGuard(builder);
-  builder.setInsertionPointToStart(dispatchLoop0.getBody());
-  auto dispatchLoop1 =
-      scf::ForOp::create(builder, loc, source.getLowerBounds()[1],
-                         source.getUpperBounds()[1], *dispatchStep1);
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  Value totalTileCount = one;
+  for (Value tileCount : tileCounts)
+    totalTileCount =
+        arith::MulIOp::create(builder, loc, totalTileCount, tileCount);
+  auto dispatchLoop =
+      scf::ForOp::create(builder, loc, zero, totalTileCount, one);
 
-  builder.setInsertionPointToStart(dispatchLoop1.getBody());
-  if (failed(addSuParam(dispatchLoop0.getInductionVar(), plan)) ||
-      failed(addSuParam(dispatchLoop1.getInductionVar(), plan)))
-    return source.emitOpError()
-           << "failed to materialize owner-tile scheduling-unit base params";
+  OpBuilder::InsertionGuard dispatchGuard(builder);
+  builder.setInsertionPointToStart(dispatchLoop.getBody());
+  Value ordinal = dispatchLoop.getInductionVar();
+  SmallVector<Value, 4> coords(tileCounts.size(), Value{});
+  Value remaining = ordinal;
+  for (int64_t dim = static_cast<int64_t>(tileCounts.size()) - 1; dim >= 0;
+       --dim) {
+    Value emptyDim = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::eq, tileCounts[dim], zero);
+    Value safeTileCount =
+        arith::SelectOp::create(builder, loc, emptyDim, one, tileCounts[dim]);
+    coords[dim] =
+        arith::RemUIOp::create(builder, loc, remaining, safeTileCount);
+    remaining = arith::DivUIOp::create(builder, loc, remaining, safeTileCount);
+  }
+
+  SmallVector<Value, 4> dispatchBases;
+  dispatchBases.reserve(ownerDims->size());
+  for (auto [loopDim, coord] : llvm::enumerate(coords)) {
+    Value offset =
+        arith::MulIOp::create(builder, loc, coord, dispatchSteps[loopDim]);
+    dispatchBases.push_back(arith::AddIOp::create(
+        builder, loc, source.getLowerBounds()[loopDim], offset));
+  }
+
+  for (Value base : dispatchBases) {
+    if (failed(addSuParam(base, plan, source)))
+      return source.emitOpError()
+             << "failed to materialize owner-tile scheduling-unit base params";
+  }
+  appendSuOwnerTileLocalRewrites(source, dispatchBases, builder, plan,
+                                 barrierTokenDepPlan);
 
   SmallVector<Attribute> depModeAttrs =
       buildCodirAccessModeAttrs(source.getContext(), plan.depModes);
@@ -2408,38 +2613,25 @@ static inline LogicalResult convertSuOwnerTile2dToCodir(
            << "failed to localize scheduling-unit alloca capture";
   mapSuEquivalentConstantIndexParams(source, plan, mapper);
 
-  Value base0 = mapper.lookup(dispatchLoop0.getInductionVar());
-  Value upper0 = mapper.lookup(source.getUpperBounds()[0]);
-  Value step0 = mapper.lookup(source.getSteps()[0]);
-  Value span0 = mapper.lookup(*dispatchStep0);
-  Value rawEnd0 = arith::AddIOp::create(builder, loc, base0, span0);
-  Value localEnd0 = arith::MinUIOp::create(builder, loc, rawEnd0, upper0);
-  auto localLoop0 = scf::ForOp::create(builder, loc, base0, localEnd0, step0);
-  if (source.getBody().front().getNumArguments() > 0)
-    mapper.map(source.getBody().front().getArgument(0),
-               localLoop0.getInductionVar());
+  for (auto [loopDim, dispatchBase] : llvm::enumerate(dispatchBases)) {
+    Value base = mapper.lookup(dispatchBase);
+    Value upper = mapper.lookup(source.getUpperBounds()[loopDim]);
+    Value step = mapper.lookup(source.getSteps()[loopDim]);
+    Value span = mapper.lookup(dispatchSteps[loopDim]);
+    Value rawEnd = arith::AddIOp::create(builder, loc, base, span);
+    Value localEnd = arith::MinUIOp::create(builder, loc, rawEnd, upper);
+    auto localLoop = scf::ForOp::create(builder, loc, base, localEnd, step);
+    mapper.map(source.getBody().front().getArgument(loopDim),
+               localLoop.getInductionVar());
+    builder.setInsertionPointToStart(localLoop.getBody());
+  }
 
-  OpBuilder::InsertionGuard localGuard0(builder);
-  builder.setInsertionPointToStart(localLoop0.getBody());
-  Value base1 = mapper.lookup(dispatchLoop1.getInductionVar());
-  Value upper1 = mapper.lookup(source.getUpperBounds()[1]);
-  Value step1 = mapper.lookup(source.getSteps()[1]);
-  Value span1 = mapper.lookup(*dispatchStep1);
-  Value rawEnd1 = arith::AddIOp::create(builder, loc, base1, span1);
-  Value localEnd1 = arith::MinUIOp::create(builder, loc, rawEnd1, upper1);
-  auto localLoop1 = scf::ForOp::create(builder, loc, base1, localEnd1, step1);
-  if (source.getBody().front().getNumArguments() > 1)
-    mapper.map(source.getBody().front().getArgument(1),
-               localLoop1.getInductionVar());
-
-  OpBuilder::InsertionGuard localGuard1(builder);
-  builder.setInsertionPointToStart(localLoop1.getBody());
   Block *computeBlock = sde::getSuIterateComputeBlock(source);
   if (!computeBlock)
     return source.emitOpError()
            << "expects a computable body before CODIR conversion";
-  if (failed(
-          cloneSuBodyFromDim(source, /*dim=*/2, mapper, builder, computeBlock)))
+  if (failed(cloneSuBodyFromDim(source, ownerDims->size(), mapper, builder,
+                                computeBlock)))
     return failure();
 
   builder.setInsertionPointToEnd(body);
@@ -2455,8 +2647,8 @@ static inline LogicalResult convertSuOwnerTile2dToCodir(
 static inline LogicalResult convertSuIterateToCodir(
     sde::SdeSuIterateOp source,
     const SuBarrierTokenDepPlan *barrierTokenDepPlan = nullptr) {
-  if (hasSuOwnerTile2dDispatchPlan(source))
-    return convertSuOwnerTile2dToCodir(source, barrierTokenDepPlan);
+  if (getSuOwnerTileDispatchPhysicalDims(source))
+    return convertSuOwnerTileNdToCodir(source, barrierTokenDepPlan);
 
   OpBuilder builder(source);
   Value dispatchStep = buildSuDispatchStep(source, builder);

@@ -3,19 +3,20 @@
 
 // Imperfect local stencil/update loops carry owner-slice scheduling intent when
 // the local owner IV drives the trailing physical output dimension and all
-// output self-reads stay within that owner slice. DistributionPlanning names a
-// per-array block layout (block_parallel writes/reads with finite block shapes)
-// spanning the spatial owner dims. The standalone CreateDbs pipeline keeps the
-// host-visible source allocations coarse and carries the owner-dim plan forward
-// on the task EDT; the physical block storage is materialized later in the
-// SDE/CODIR/ARTS MU-token path, not in create-dbs.
+// output self-reads stay within that owner slice. DistributionPlanning must not
+// stamp a multi-owner physical plan for dimensions that SDE has not realized as
+// owner loops; it keeps the write block-parallel on the trailing owner dim and
+// the read replicated. The standalone CreateDbs pipeline keeps host-visible
+// source allocations coarse and carries the owner-dim plan forward on the task
+// EDT; physical block storage is materialized later in the SDE/CODIR/ARTS
+// MU-token path, not in create-dbs.
 
 // SDE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // SDE: func.func @main
 // SDE: sde.su_iterate (%c2) to (%c62) step (%c1) schedule(<static>) classification(<stencil>) {
 // SDE: } {
-// SDE-SAME: arrayLayout = [{arrayId = 0 : i64, blockShape = [8, 8, 32], budgetBlockShape = [16, 16, 64], budgetMuBlockCount = 1 : i64, commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0, 1, 2], role = "write"}, {arrayId = 1 : i64, blockShape = [8, 8, 64], budgetBlockShape = [16, 16, 64], budgetMuBlockCount = 1 : i64, commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"}]
-// SDE-SAME: inPlaceSharedState
+// SDE-SAME: arrayLayout = [{arrayId = 0 : i64, blockShape = [16, 16, 32], budgetBlockShape = [16, 16, 64], budgetMuBlockCount = 1 : i64, commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [2], role = "write"}, {arrayId = 1 : i64, blockShape = [16, 16, 64], budgetBlockShape = [16, 16, 64], budgetMuBlockCount = 1 : i64, commVolumeBytes = 0 : i64, kind = "replicated", muBlockCount = 1 : i64, ownerDims = [], role = "read"}]
+// SDE-SAME: inPlaceSafe
 // SDE-SAME: ownerDims = [0, 1, 2]
 // SDE-SAME: pattern = #sde.pattern<stencil_tiling_nd>
 // SDE-SAME: spatialDims = [0, 1, 2]
@@ -28,7 +29,7 @@
 // DB: arts.db_alloc
 // DB-SAME: <coarse>
 // DB: arts.edt <task>
-// DB-SAME: inPlaceSharedState
+// DB-SAME: inPlaceSafe
 // DB-SAME: planOwnerDims = [0, 1, 2]
 // DB-SAME: stencil_owner_dims = [0, 1, 2]
 

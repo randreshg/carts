@@ -225,42 +225,6 @@ static void stampRepeatedTimestepPlan(sde::SdeSuIterateOp op) {
         op.getContext(), sde::SdeAsyncStrategy::advance_stage));
 }
 
-static void coarsenRepeatedStencilSlice(sde::SdeSuIterateOp op) {
-  if (!op)
-    return;
-  if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
-    return;
-  auto topology = op.getIterationTopology();
-  if (!topology || *topology != sde::SdeIterationTopology::owner_tile)
-    return;
-  ArrayAttr slice = op.getLogicalWorkerSliceAttr();
-  if (!slice || slice.size() != 2)
-    return;
-
-  SmallVector<Attribute, 2> coarsenedValues(slice.begin(), slice.end());
-  auto firstDim = dyn_cast<IntegerAttr>(coarsenedValues.front());
-  if (!firstDim || firstDim.getInt() <= 0)
-    return;
-  coarsenedValues.front() =
-      IntegerAttr::get(firstDim.getType(), firstDim.getInt() * 2);
-  ArrayAttr coarsened = ArrayAttr::get(op.getContext(), coarsenedValues);
-  if (coarsened == slice)
-    return;
-  op.setLogicalWorkerSliceAttr(coarsened);
-  if (ArrayAttr physical = op.getPhysicalBlockShapeAttr()) {
-    SmallVector<Attribute, 2> physicalValues(physical.begin(), physical.end());
-    if (physicalValues.size() != 2)
-      return;
-    auto physicalFirstDim = dyn_cast<IntegerAttr>(physicalValues.front());
-    if (!physicalFirstDim || physicalFirstDim.getInt() <= 0)
-      return;
-    physicalValues.front() = IntegerAttr::get(physicalFirstDim.getType(),
-                                              physicalFirstDim.getInt() * 2);
-    op.setPhysicalBlockShapeAttr(
-        ArrayAttr::get(op.getContext(), physicalValues));
-  }
-}
-
 static Operation *findPreviousSuContainer(Operation *anchor) {
   Block *block = anchor ? anchor->getBlock() : nullptr;
   if (!block)
@@ -475,13 +439,28 @@ static bool isPipelineableStructuredClassification(sde::SdeSuIterateOp op) {
   return false;
 }
 
-static std::optional<unsigned>
-getSinglePhysicalOwnerDim(sde::SdeSuIterateOp op) {
+static std::optional<SmallVector<unsigned, 4>>
+getPhysicalOwnerDims(sde::SdeSuIterateOp op) {
   auto ownerDims =
       ::mlir::carts::readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
-  if (!ownerDims || ownerDims->size() != 1 || (*ownerDims)[0] < 0)
+  if (!ownerDims || ownerDims->empty())
     return std::nullopt;
-  return static_cast<unsigned>((*ownerDims)[0]);
+
+  SmallVector<unsigned, 4> result;
+  result.reserve(ownerDims->size());
+  for (int64_t dim : *ownerDims) {
+    if (dim < 0)
+      return std::nullopt;
+    result.push_back(static_cast<unsigned>(dim));
+  }
+  return result;
+}
+
+static bool isTokenLocalPipelineTopology(sde::SdeSuIterateOp op) {
+  auto topology = op.getIterationTopology();
+  return topology && (*topology == sde::SdeIterationTopology::owner_strip ||
+                      *topology == sde::SdeIterationTopology::owner_tile ||
+                      *topology == sde::SdeIterationTopology::owner_tile_2d);
 }
 
 static bool loopIvSelectsOwnerSlice(Value iv, Value ownerIv,
@@ -523,9 +502,12 @@ static bool accessMapUsesOwnerSliceAtPhysicalDim(AffineMap map,
 }
 
 static bool
-accessEntriesUseOwnerDimForRoot(ArrayRef<sde::MemrefAccessEntry> accesses,
-                                ArrayRef<Value> ivs, Value root,
-                                unsigned physicalDim, unsigned ownerLoopDim) {
+accessEntriesUseOwnerDimsForRoot(ArrayRef<sde::MemrefAccessEntry> accesses,
+                                 ArrayRef<Value> ivs, Value root,
+                                 ArrayRef<unsigned> physicalOwnerDims) {
+  if (physicalOwnerDims.empty() || physicalOwnerDims.size() > ivs.size())
+    return false;
+
   bool sawRoot = false;
   for (const sde::MemrefAccessEntry &access : accesses) {
     Value accessRoot =
@@ -533,9 +515,14 @@ accessEntriesUseOwnerDimForRoot(ArrayRef<sde::MemrefAccessEntry> accesses,
     if (accessRoot != root)
       continue;
     sawRoot = true;
-    if (!accessMapUsesOwnerSliceAtPhysicalDim(access.indexingMap, physicalDim,
-                                              ivs, ownerLoopDim))
-      return false;
+
+    for (auto [ownerLoopDim, physicalDim] :
+         llvm::enumerate(physicalOwnerDims)) {
+      if (!accessMapUsesOwnerSliceAtPhysicalDim(
+              access.indexingMap, physicalDim, ivs,
+              static_cast<unsigned>(ownerLoopDim)))
+        return false;
+    }
   }
   return sawRoot;
 }
@@ -578,14 +565,15 @@ static bool canPipelineThroughTokenLocalMemoryDeps(
   if (!haveSdeApprovedTiledTimestepPlan(predecessor, successor))
     return false;
 
-  auto topology = predecessor.getIterationTopology();
-  if (!topology || *topology != sde::SdeIterationTopology::owner_strip ||
+  if (!isTokenLocalPipelineTopology(predecessor) ||
       !sameSdeIterationTopology(predecessor, successor))
     return false;
 
-  std::optional<unsigned> predOwnerDim = getSinglePhysicalOwnerDim(predecessor);
-  std::optional<unsigned> succOwnerDim = getSinglePhysicalOwnerDim(successor);
-  if (!predOwnerDim || !succOwnerDim || *predOwnerDim != *succOwnerDim)
+  std::optional<SmallVector<unsigned, 4>> predOwnerDims =
+      getPhysicalOwnerDims(predecessor);
+  std::optional<SmallVector<unsigned, 4>> succOwnerDims =
+      getPhysicalOwnerDims(successor);
+  if (!predOwnerDims || !succOwnerDims || *predOwnerDims != *succOwnerDims)
     return false;
 
   Value intermediate;
@@ -599,13 +587,12 @@ static bool canPipelineThroughTokenLocalMemoryDeps(
   if (predSummary->nest.ivs.empty() || succSummary->nest.ivs.empty())
     return false;
 
-  constexpr unsigned ownerLoopDim = 0;
-  return accessEntriesUseOwnerDimForRoot(predSummary->writes,
-                                         predSummary->nest.ivs, intermediate,
-                                         *predOwnerDim, ownerLoopDim) &&
-         accessEntriesUseOwnerDimForRoot(succSummary->reads,
-                                         succSummary->nest.ivs, intermediate,
-                                         *succOwnerDim, ownerLoopDim);
+  return accessEntriesUseOwnerDimsForRoot(predSummary->writes,
+                                          predSummary->nest.ivs, intermediate,
+                                          *predOwnerDims) &&
+         accessEntriesUseOwnerDimsForRoot(succSummary->reads,
+                                          succSummary->nest.ivs, intermediate,
+                                          *succOwnerDims);
 }
 
 static bool haveCompatibleTimestepIterationPlan(sde::SdeSuIterateOp lhs,
@@ -711,8 +698,6 @@ static bool stampTimestepPlanIfRecognized(
       allowStencilStencilPlan) {
     stampRepeatedTimestepPlan(predecessor);
     stampRepeatedTimestepPlan(successor);
-    coarsenRepeatedStencilSlice(predecessor);
-    coarsenRepeatedStencilSlice(successor);
     return true;
   }
 
@@ -721,8 +706,6 @@ static bool stampTimestepPlanIfRecognized(
        haveSameStaticWrittenShape(predEffects, succEffects))) {
     stampAlternatingBufferTimestepPlan(predecessor, successor, predStencil,
                                        succStencil);
-    coarsenRepeatedStencilSlice(predecessor);
-    coarsenRepeatedStencilSlice(successor);
     return true;
   }
 

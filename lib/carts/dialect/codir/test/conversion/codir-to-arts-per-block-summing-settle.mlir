@@ -1,39 +1,30 @@
-// RUN: %carts-compile %s --arts-config %inputs_dir/arts_multinode.cfg \
-// RUN:   --pass-pipeline='builtin.module(reduction-planning,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
 // RUN:   | %FileCheck %s
 
-// Per-block single-writer summing settle, the
-// arith.addf dual of the per-block all-gather. This reuses the cross-owner
-// transpose-matvec reduce shape (atax y = A^T(Ax) / bicg s = A^T r): a producer
-// writes the intermediate `tmp` block-distributed by row; a transpose-reduce
-// codelet owns its output by column and contracts over the matrix ROW dim
-// (reduce_scatter). The producer here OPTS IN to the block-native realization
-// via `emit_block_native_settle` (+ a `partial_reduction_split_factor` naming
-// the per-tile partial count). The compiler must then emit, on top of the
-// legacy coarse gather, a per-block summing settle: an outer per-node loop
-// driving one block loop, where each settled block is its OWN <block> DB written
-// output-only (<out>) ONCE, accumulating the P per-tile partial blocks
-// (RO-acquired <in>) with `+=`. Distinct DB per settled block => single
-// uncontended writer => no shared exclusive-write frontier => race-free AND
-// concurrent (the coarse-replica serialization removed at the root, in the
-// reduction direction).
-//
-// Without `emit_block_native_settle`, this stays on the legacy coarse gather.
+// Per-block single-writer summing settle, the arith.addf dual of the per-block
+// all-gather. CODIR has already committed reduce_scatter on the producer
+// storage bridge, so CODIR-to-ARTS must realize a block-native settle: one
+// replicated per-block result DB, RO partial-block deps, and one output-only
+// settled block dep per lane. This test stays at the CODIR-to-ARTS boundary; an
+// unsplit transpose-reduce consumer that reads tmp across the reduction IV is
+// not block-local and must be transformed before it can use compute_block
+// storage.
 
 module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_workers = 16 : i64} {
-  func.func @per_block_summing_settle(%A: memref<128x128xf64>, %x: memref<128xf64>, %tmp: memref<128xf64>, %y: memref<128xf64>, %base: index) {
+  func.func @per_block_summing_settle() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c16 = arith.constant 16 : index
     %c128 = arith.constant 128 : index
+    %tmp = memref.alloc() : memref<128xf64>
 
-    // Producer: tmp = A*x, owner dim 0 (row), tmp written block-distributed.
-    // Opts into the block-native summing settle with 2 per-tile partials.
-    scf.for %i = %base to %c128 step %c16 {
-      codir.codelet deps(%tmp, %A, %x : memref<128xf64>, memref<128x128xf64>, memref<128xf64>)
+    scf.for %i = %c0 to %c128 step %c16 {
+      codir.codelet deps(%tmp : memref<128xf64>)
           params(%i : index)
-          attributes {dep_modes = [#codir.access_mode<write>, #codir.access_mode<read>, #codir.access_mode<read>],
-                      dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<replicated_read>, #codir.storage_view<replicated_read>],
+          attributes {dep_collectives = [#codir.collective<reduce_scatter>],
+                      dep_modes = [#codir.access_mode<write>],
+                      dep_owner_dims = [[0]],
+                      dep_storage_views = [#codir.storage_view<phase_redistributed>],
                       distribution_kind = #codir.distribution_kind<blocked>,
                       emit_block_native_settle,
                       iteration_topology = #codir.iteration_topology<owner_strip>,
@@ -42,58 +33,25 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
                       pattern = #codir.pattern<elementwise_pipeline>,
                       tile_owner_dims = [0],
                       tile_shape = [16]} {
-      ^bb0(%argT: memref<128xf64>, %argA: memref<128x128xf64>, %argX: memref<128xf64>, %owner: index):
-        %ic0 = arith.constant 0 : index
+      ^bb0(%argT: memref<128xf64>, %owner: index):
         %ic1 = arith.constant 1 : index
-        %ic128 = arith.constant 128 : index
+        %ic16 = arith.constant 16 : index
         %czero = arith.constant 0.000000e+00 : f64
-        memref.store %czero, %argT[%owner] : memref<128xf64>
-        scf.for %j = %ic0 to %ic128 step %ic1 {
-          %t = memref.load %argT[%owner] : memref<128xf64>
-          %a = memref.load %argA[%owner, %j] : memref<128x128xf64>
-          %xv = memref.load %argX[%j] : memref<128xf64>
-          %m = arith.mulf %a, %xv : f64
-          %s = arith.addf %t, %m : f64
-          memref.store %s, %argT[%owner] : memref<128xf64>
+        %end = arith.addi %owner, %ic16 : index
+        scf.for %j = %owner to %end step %ic1 {
+          memref.store %czero, %argT[%j] : memref<128xf64>
         }
         codir.yield
       }
     }
 
-    // Transpose reduce: y = A^T*tmp. The matrix read A[reductionIV, owner]
-    // reduces over A's leading (row) dim -> the cross-owner reduce_scatter
-    // signature that gates the settle on the producer above.
-    scf.for %jb = %base to %c128 step %c16 {
-      codir.codelet deps(%y, %A, %tmp : memref<128xf64>, memref<128x128xf64>, memref<128xf64>)
-          params(%jb : index)
-          attributes {dep_modes = [#codir.access_mode<readwrite>, #codir.access_mode<read>, #codir.access_mode<read>],
-                      dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<replicated_read>, #codir.storage_view<host_whole>],
-                      distribution_kind = #codir.distribution_kind<blocked>,
-                      iteration_topology = #codir.iteration_topology<owner_strip>,
-                      logical_worker_slice = [16],
-                      partial_reduction,
-                      partial_reduction_dims = [0],
-                      partial_reduction_owner_dims = [0],
-                      pattern = #codir.pattern<elementwise_pipeline>,
-                      tile_owner_dims = [0],
-                      tile_shape = [16]} {
-      ^bb0(%argY: memref<128xf64>, %argA: memref<128x128xf64>, %argT: memref<128xf64>, %owner: index):
-        %ic0 = arith.constant 0 : index
-        %ic1 = arith.constant 1 : index
-        %ic128 = arith.constant 128 : index
-        %old = memref.load %argY[%owner] : memref<128xf64>
-        scf.for %i = %ic0 to %ic128 step %ic1 {
-          %a = memref.load %argA[%i, %owner] : memref<128x128xf64>
-          %tv = memref.load %argT[%i] : memref<128xf64>
-          %m = arith.mulf %a, %tv : f64
-          %next = arith.addf %old, %m : f64
-          memref.store %next, %argY[%owner] : memref<128xf64>
-        }
-        codir.yield
-      }
-    }
+    %result = memref.load %tmp[%c0] : memref<128xf64>
+    func.call @use(%result) : (f64) -> ()
+    memref.dealloc %tmp : memref<128xf64>
     return
   }
+
+  func.func private @use(f64)
 }
 
 // CHECK-LABEL: func.func @per_block_summing_settle
@@ -105,10 +63,14 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
 // degenerates to one uncontended writer per block.
 // CHECK: %[[SGUID:.*]], %[[SPTR:.*]] = arts.db_alloc[<inout>, <heap>, <write>, <block>] {{.*}}{local_only, perBlockReplicated
 
-// Outer per-node loop then per-block loop: every node settles all blocks.
+// One flat launch loop covers every (node, block-group) pair. The derived
+// node ordinal routes the task, while the derived block ordinal selects each
+// settled block. DB grain stays per block.
 // CHECK: arts.runtime_query <total_nodes>
+// CHECK: arith.ceildivui
 // CHECK: scf.for {{.*}} step %c1
-// CHECK: scf.for {{.*}} step %c4
+// CHECK: arith.divui
+// CHECK: arith.remui
 // The P per-tile partials are RO-acquired (<in>) on distinct block GUIDs; the
 // settled block is acquired output-only on its OWN distinct block DB by exactly
 // one EDT (single writer, no shared exclusive-write frontier).

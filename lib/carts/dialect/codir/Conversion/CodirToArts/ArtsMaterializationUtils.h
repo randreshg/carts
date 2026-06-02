@@ -622,12 +622,17 @@ getSingleCodirTileOwnerBlockSize(codir::CodeletOp codelet, unsigned depIndex,
 }
 
 static inline scf::ForOp findCodirOwnerDispatchLoop(codir::CodeletOp codelet) {
+  scf::ForOp nearestLoop;
   for (Operation *parent = codelet ? codelet->getParentOp() : nullptr; parent;
        parent = parent->getParentOp()) {
     auto loop = dyn_cast<scf::ForOp>(parent);
+    if (loop && !nearestLoop)
+      nearestLoop = loop;
     if (loop && containsValue(codelet.getParams(), loop.getInductionVar()))
       return loop;
   }
+  if (hasCodirTileOwnerSlicePlan(codelet))
+    return nearestLoop;
   return {};
 }
 
@@ -648,10 +653,43 @@ static inline Value getCodirOwnerDomainLower(codir::CodeletOp codelet) {
   return {};
 }
 
+static inline bool dependsOnAncestorLoop(Value value,
+                                         codir::CodeletOp codelet) {
+  if (!value || !codelet)
+    return false;
+  for (Operation *parent = codelet->getParentOp(); parent;
+       parent = parent->getParentOp()) {
+    auto loop = dyn_cast<scf::ForOp>(parent);
+    if (loop &&
+        ::mlir::carts::ValueAnalysis::dependsOn(value, loop.getInductionVar()))
+      return true;
+  }
+  return false;
+}
+
+static inline Value
+deriveCodirOwnerDomainLowerFromParam(codir::CodeletOp codelet,
+                                     Value ownerParam) {
+  Value stripped = ::mlir::carts::ValueAnalysis::stripNumericCasts(ownerParam);
+  auto add = stripped ? stripped.getDefiningOp<arith::AddIOp>() : nullptr;
+  if (!add)
+    return {};
+
+  Value lhs = add.getLhs();
+  Value rhs = add.getRhs();
+  bool lhsDependsOnDispatch = dependsOnAncestorLoop(lhs, codelet);
+  bool rhsDependsOnDispatch = dependsOnAncestorLoop(rhs, codelet);
+  if (lhsDependsOnDispatch == rhsDependsOnDispatch)
+    return {};
+  return lhsDependsOnDispatch ? rhs : lhs;
+}
+
 static inline Value getCodirOwnerDomainLower(codir::CodeletOp codelet,
                                              Value ownerParam) {
   if (auto loop = findCodirOwnerDispatchLoop(codelet, ownerParam))
     return loop.getLowerBound();
+  if (Value lower = deriveCodirOwnerDomainLowerFromParam(codelet, ownerParam))
+    return lower;
   return getCodirOwnerDomainLower(codelet);
 }
 
@@ -1548,12 +1586,18 @@ static inline bool codirAccessMayRead(codir::CodirAccessMode mode) {
 static inline Operation *
 findCodirDispatchBridgeAnchor(codir::CodeletOp codelet) {
   Operation *anchor = codelet ? codelet.getOperation() : nullptr;
+  Operation *nearestLoop = nullptr;
   for (Operation *parent = codelet ? codelet->getParentOp() : nullptr; parent;
        parent = parent->getParentOp()) {
     auto loop = dyn_cast<scf::ForOp>(parent);
+    if (loop && !nearestLoop)
+      nearestLoop = parent;
     if (loop && containsValue(codelet.getParams(), loop.getInductionVar()))
       anchor = parent;
   }
+  if (codelet && anchor == codelet.getOperation() &&
+      hasCodirTileOwnerSlicePlan(codelet) && nearestLoop)
+    return nearestLoop;
   return anchor;
 }
 
@@ -2487,6 +2531,44 @@ materializeRowMajorCoordinates(OpBuilder &builder, Location loc, Value ordinal,
   return coords;
 }
 
+struct FlatNodeBlockGroupLoop {
+  scf::ForOp loop;
+  Value nodeOrdinal;
+  Value blockBase;
+};
+
+static inline FlatNodeBlockGroupLoop
+materializeFlatNodeBlockGroupLoop(OpBuilder &builder, Location loc,
+                                  Value totalNodes, Value blockCount,
+                                  int64_t blockGroupSize) {
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  Value blockStep =
+      createConstantIndex(builder, loc, std::max<int64_t>(1, blockGroupSize));
+  Value blockGroupCount =
+      materializeNonNegativeCeilDiv(builder, loc, blockCount, blockStep);
+  Value workItemCount =
+      arith::MulIOp::create(builder, loc, totalNodes, blockGroupCount);
+
+  auto flatLoop = scf::ForOp::create(builder, loc, zero, workItemCount, one);
+  builder.setInsertionPointToStart(flatLoop.getBody());
+  Value launchOrdinal = flatLoop.getInductionVar();
+
+  // The loop body is unreachable when blockGroupCount is zero, but keep the
+  // divisor nonzero so zero-sized dynamic inputs still have well-formed IR.
+  Value emptyBlocks = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::eq, blockGroupCount, zero);
+  Value safeBlockGroupCount =
+      arith::SelectOp::create(builder, loc, emptyBlocks, one, blockGroupCount);
+  Value nodeOrdinal =
+      arith::DivUIOp::create(builder, loc, launchOrdinal, safeBlockGroupCount);
+  Value blockGroupOrdinal =
+      arith::RemUIOp::create(builder, loc, launchOrdinal, safeBlockGroupCount);
+  Value blockBase =
+      arith::MulIOp::create(builder, loc, blockGroupOrdinal, blockStep);
+  return {flatLoop, nodeOrdinal, blockBase};
+}
+
 static inline LogicalResult
 materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
                              arts::DbAllocOp blockAlloc,
@@ -2543,20 +2625,23 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
 
   OpBuilder::InsertionGuard guard(builder);
   Value gatherNodeOrdinal;
-  scf::ForOp nodeLoop;
+  scf::ForOp loop;
+  Value blockBase;
   if (gatherAcrossNodes) {
     auto totalNodesI32 = arts::RuntimeQueryOp::create(
         builder, loc, arts::RuntimeQueryKind::totalNodes);
     Value totalNodes = arith::IndexCastOp::create(
         builder, loc, builder.getIndexType(), totalNodesI32.getResult());
-    nodeLoop = scf::ForOp::create(builder, loc, zero, totalNodes, one);
-    builder.setInsertionPointToStart(nodeLoop.getBody());
-    gatherNodeOrdinal = nodeLoop.getInductionVar();
+    FlatNodeBlockGroupLoop flatLoop = materializeFlatNodeBlockGroupLoop(
+        builder, loc, totalNodes, blockCount, blockGroupSize);
+    loop = flatLoop.loop;
+    gatherNodeOrdinal = flatLoop.nodeOrdinal;
+    blockBase = flatLoop.blockBase;
+  } else {
+    loop = scf::ForOp::create(builder, loc, zero, blockCount, blockStep);
+    builder.setInsertionPointToStart(loop.getBody());
+    blockBase = loop.getInductionVar();
   }
-
-  auto loop = scf::ForOp::create(builder, loc, zero, blockCount, blockStep);
-  builder.setInsertionPointToStart(loop.getBody());
-  Value blockBase = loop.getInductionVar();
 
   struct CopyLane {
     SmallVector<Value> blockCoords;
@@ -2701,8 +2786,7 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
   }
 
   if (!copyIntoBlock) {
-    builder.setInsertionPointAfter(gatherAcrossNodes ? nodeLoop.getOperation()
-                                                     : loop.getOperation());
+    builder.setInsertionPointAfter(loop.getOperation());
     auto reason = arts::ArtsBarrierReasonAttr::get(
         builder.getContext(), arts::ArtsBarrierReason::required_memory);
     arts::BarrierOp::create(builder, loc, reason);
@@ -3568,7 +3652,6 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
   replicaAlloc.setPerBlockReplicatedAttr(
       UnitAttr::get(replicaAlloc.getContext()));
 
-  Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
   Value blockCount =
       materializeProduct(builder, loc, producerBlockAlloc.getSizes());
@@ -3581,24 +3664,19 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
       planBridgeWorkGroups(plan, BridgeWorkloadKind::all_gather);
   plan.groupSize = groupPlan.groupSize;
   int64_t blockGroupSize = plan.groupSize;
-  Value blockStep = createConstantIndex(builder, loc, blockGroupSize);
 
-  // Outer per-node loop: every node assembles its OWN full set of gathered
-  // blocks. Routing each block copy to the node ordinal keeps the gathered
-  // write owner-local on each node's replica while the RO producer-block
-  // acquire pulls remote blocks through the existing cross-node acquire.
+  // One flattened launch loop covers every (node, block-group) pair. Routing
+  // each block copy to the derived node ordinal keeps the gathered write
+  // owner-local on each node's replica while every lane still acquires a
+  // distinct per-block source/destination DB.
   auto totalNodesI32 = arts::RuntimeQueryOp::create(
       builder, loc, arts::RuntimeQueryKind::totalNodes);
   Value totalNodes = arith::IndexCastOp::create(
       builder, loc, builder.getIndexType(), totalNodesI32.getResult());
-  auto nodeLoop = scf::ForOp::create(builder, loc, zero, totalNodes, one);
-  builder.setInsertionPointToStart(nodeLoop.getBody());
-  Value nodeOrdinal = nodeLoop.getInductionVar();
-
-  auto blockLoop =
-      scf::ForOp::create(builder, loc, zero, blockCount, blockStep);
-  builder.setInsertionPointToStart(blockLoop.getBody());
-  Value blockBase = blockLoop.getInductionVar();
+  FlatNodeBlockGroupLoop flatLoop = materializeFlatNodeBlockGroupLoop(
+      builder, loc, totalNodes, blockCount, blockGroupSize);
+  Value nodeOrdinal = flatLoop.nodeOrdinal;
+  Value blockBase = flatLoop.blockBase;
 
   SmallVector<Value> deps;
   deps.reserve(static_cast<size_t>(blockGroupSize) * 2);
@@ -3662,7 +3740,7 @@ emitPerBlockAllGatherWriteBack(OpBuilder &builder, Location loc, Value hostView,
     arts::YieldOp::create(builder, loc);
   }
 
-  builder.setInsertionPointAfter(nodeLoop);
+  builder.setInsertionPointAfter(flatLoop.loop.getOperation());
   auto reason = arts::ArtsBarrierReasonAttr::get(
       builder.getContext(), arts::ArtsBarrierReason::required_memory);
   arts::BarrierOp::create(builder, loc, reason);
@@ -3695,7 +3773,6 @@ emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
   // the single-writer property is per settled block.
   OpBuilder::InsertionGuard topGuard(builder);
   Value route = arts::createCurrentNodeRoute(builder, loc);
-  Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
   Value tileCountVal = createConstantIndex(builder, loc, tileCount);
 
@@ -3734,28 +3811,22 @@ emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
   settleAlloc.setPerBlockReplicatedAttr(
       UnitAttr::get(settleAlloc.getContext()));
 
-  // Outer per-node loop: every node settles its OWN full set of blocks (an
-  // allreduce leaves the reduced result on every rank). Routing each settle to
-  // the node ordinal keeps the settled write owner-local on each node's replica
-  // while the RO partial acquires pull remote partials through the existing
-  // cross-node acquire.
+  // One flattened launch loop covers every (node, block-group) pair. Routing
+  // each settle to the derived node ordinal keeps the settled write owner-local
+  // on each node's replica while every lane still has its own per-block partial
+  // deps and one distinct output block dep.
   auto totalNodesI32 = arts::RuntimeQueryOp::create(
       builder, loc, arts::RuntimeQueryKind::totalNodes);
   Value totalNodes = arith::IndexCastOp::create(
       builder, loc, builder.getIndexType(), totalNodesI32.getResult());
-  auto nodeLoop = scf::ForOp::create(builder, loc, zero, totalNodes, one);
-  builder.setInsertionPointToStart(nodeLoop.getBody());
-  Value nodeOrdinal = nodeLoop.getInductionVar();
 
   BridgeWorkGroupPlan groupPlan =
       planBridgeWorkGroups(bridgePlan, BridgeWorkloadKind::summing_settle);
   int64_t blockGroupSize = groupPlan.groupSize;
-  Value blockStep = createConstantIndex(builder, loc, blockGroupSize);
-
-  auto blockLoop =
-      scf::ForOp::create(builder, loc, zero, blockCount, blockStep);
-  builder.setInsertionPointToStart(blockLoop.getBody());
-  Value blockBase = blockLoop.getInductionVar();
+  FlatNodeBlockGroupLoop flatLoop = materializeFlatNodeBlockGroupLoop(
+      builder, loc, totalNodes, blockCount, blockGroupSize);
+  Value nodeOrdinal = flatLoop.nodeOrdinal;
+  Value blockBase = flatLoop.blockBase;
 
   // Acquire the P per-(block,tile) partials read-only OUTSIDE the EDT (the
   // EdtLowering ABI forbids GEPing an outer DB alloc from the EDT body). Each
@@ -3830,7 +3901,7 @@ emitPerBlockSummingSettle(OpBuilder &builder, Location loc,
     arts::YieldOp::create(builder, loc);
   }
 
-  builder.setInsertionPointAfter(nodeLoop);
+  builder.setInsertionPointAfter(flatLoop.loop.getOperation());
   auto reason = arts::ArtsBarrierReasonAttr::get(
       builder.getContext(), arts::ArtsBarrierReason::required_memory);
   arts::BarrierOp::create(builder, loc, reason);

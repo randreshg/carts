@@ -10,8 +10,7 @@
 // CHECK: %[[C8:.*]] = arith.constant 8 : index
 // CHECK: %[[HALO:.*]] = arith.maxui %[[C8]], {{.*}} : index
 // CHECK: %[[BOUNDED:.*]] = arith.minui %[[HALO]], {{.*}} : index
-// CHECK: %[[STEP:.*]] = arith.muli %c1, %[[BOUNDED]] : index
-// CHECK: sde.su_iterate (%c1) to (%c65) step (%[[STEP]]) classification(<stencil>) {
+// CHECK: sde.su_iterate (%c1) to (%c65) step (%[[BOUNDED]]) classification(<stencil>) {
 // CHECK: scf.for {{.*}} = %arg{{[0-9]+}} to {{.*}} step %c1 {
 // CHECK: } {
 // CHECK-SAME: inPlaceSharedState

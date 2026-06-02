@@ -12,8 +12,7 @@
 // CHECK: sde.su_iterate (%c0) to (%c1023) step (%c1) classification(<reduction>) {
 // CHECK-LABEL: // -----// IR Dump After Tiling (tiling) //----- //
 // CHECK: func.func @row_local_pipeline
-// CHECK: %[[STEP:.*]] = arith.muli %c1, %c128{{(_[0-9]+)?}} : index
-// CHECK: sde.su_iterate (%c0) to (%c1024) step (%[[STEP]]) classification(<elementwise_pipeline>) {
+// CHECK: sde.su_iterate (%c0) to (%c1024) step (%c128{{(_[0-9]+)?}}) classification(<elementwise_pipeline>) {
 // CHECK: func.func @shifted_self_read_not_owner_local
 // CHECK: sde.su_iterate (%c0) to (%c1023) step (%c1) classification(<reduction>) {
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir (convert-sde-to-codir) //----- //

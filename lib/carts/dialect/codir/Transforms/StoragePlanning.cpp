@@ -857,8 +857,11 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
     return codir::CodirStorageViewKind::host_whole;
 
   Value dep = codelet.getDeps()[depIndex];
-  if (isStorageView(dep))
+  if (isStorageView(dep)) {
+    if (!hasTileOwnerSlicePlan(codelet) && !semanticComputeBlock)
+      return codir::CodirStorageViewKind::host_whole;
     return codir::CodirStorageViewKind::compute_block;
+  }
   if (!hasTileOwnerSlicePlan(codelet) ||
       !depAccessesStayWithinSingleOwnerSlice(codelet, depIndex)) {
     // Stencil halo accesses cross the owner slice by construction; keep
