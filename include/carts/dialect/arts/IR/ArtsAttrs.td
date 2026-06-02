@@ -145,15 +145,6 @@ def ArtsPlanRepetitionStructureAttr
     : Arts_I32EnumAttr<"plan_repetition_structure",
                        ArtsPlanRepetitionStructure>;
 
-def ArtsPlanAsyncStrategy
-    : Arts_I32Enum<"ArtsPlanAsyncStrategy",
-                   "ARTS async-loop strategy", [
-      I32EnumAttrCase<"blocking", 0, "blocking">,
-      I32EnumAttrCase<"advance_edt", 1, "advance_edt">
-    ]>;
-def ArtsPlanAsyncStrategyAttr
-    : Arts_I32EnumAttr<"plan_async_strategy", ArtsPlanAsyncStrategy>;
-
 def ArtsReductionStrategy
     : Arts_I32Enum<"ArtsReductionStrategy",
                    "ARTS reduction execution strategy", [
@@ -307,8 +298,7 @@ def PatternAttr : Arts_Attr<"Pattern", "pattern"> {
     OptionalParameter<"::mlir::carts::arts::ArtsDepPatternAttr">:$depPattern,
     OptionalParameter<"::mlir::carts::arts::EdtDistributionKindAttr">:$distributionKind,
     OptionalParameter<"::mlir::carts::arts::EdtDistributionPatternAttr">:$distributionPattern,
-    OptionalParameter<"::mlir::IntegerAttr">:$distributionVersion,
-    OptionalParameter<"::mlir::IntegerAttr">:$revision
+    OptionalParameter<"::mlir::IntegerAttr">:$distributionVersion
   );
   let assemblyFormat = "`<` struct(params) `>`";
 }
@@ -330,7 +320,6 @@ def ContractAttr : Arts_Attr<"Contract", "contract"> {
     OptionalParameter<"::mlir::BoolAttr">:$supportedBlockHalo,
     OptionalParameter<"::mlir::BoolAttr">:$narrowableDep,
     OptionalParameter<"::mlir::BoolAttr">:$postDbRefined,
-    OptionalParameter<"::mlir::IntegerAttr">:$criticalPathDistance,
     OptionalParameter<"::mlir::IntegerAttr">:$contractKind
   );
   let assemblyFormat = "`<` struct(params) `>`";

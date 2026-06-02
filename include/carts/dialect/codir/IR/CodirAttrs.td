@@ -117,14 +117,4 @@ def RepetitionStructureAttr
     : CartsCodir_I32EnumAttr<"repetition_structure",
                              CodirRepetitionStructure>;
 
-def CodirAsyncStrategy
-    : CartsCodir_I32Enum<"CodirAsyncStrategy",
-                         "CODIR async task-shape strategy", [
-      I32EnumAttrCase<"blocking", 0, "blocking">,
-      I32EnumAttrCase<"advance_stage", 1, "advance_stage">,
-      I32EnumAttrCase<"cps_chain", 2, "cps_chain">
-    ]>;
-def AsyncStrategyAttr
-    : CartsCodir_I32EnumAttr<"async_strategy", CodirAsyncStrategy>;
-
 #endif // CARTS_CODIR_ATTRS

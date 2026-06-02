@@ -128,7 +128,6 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<ArrayAttr>:$planHaloShape,
     OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
     OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure,
-    OptionalAttr<ArtsPlanAsyncStrategyAttr>:$planAsyncStrategy,
     OptionalAttr<StorageBridgeAttr>:$storage_bridge,
     OptionalAttr<DbOwnerMapKindAttr>:$owner_map_kind,
     OptionalAttr<I32Attr>:$owner_map_version,
@@ -488,7 +487,6 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
     std::optional<EdtDistributionKind> getDistributionKind();
     std::optional<EdtDistributionPattern> getDistributionPattern();
     std::optional<int64_t> getDistributionVersion();
-    std::optional<int64_t> getPatternRevision();
     std::optional<SmallVector<int64_t, 4>> getOwnerDims();
     std::optional<int64_t> getCenterOffset();
     std::optional<SmallVector<int64_t, 4>> getSpatialDims();
@@ -496,7 +494,6 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
     std::optional<bool> getSupportedBlockHalo();
     std::optional<bool> getNarrowableDep();
     std::optional<bool> getPostDbRefined();
-    std::optional<int64_t> getCriticalPathDistance();
     std::optional<int64_t> getContractKind();
   }];
   let builders = [
@@ -505,7 +502,6 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
                    CArg<"std::optional<EdtDistributionKind>", "std::nullopt">:$distributionKind,
                    CArg<"std::optional<EdtDistributionPattern>", "std::nullopt">:$distributionPattern,
                    CArg<"std::optional<int64_t>", "std::nullopt">:$distributionVersion,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$revision,
                    CArg<"SmallVector<int64_t>", "{}">:$ownerDims,
                    CArg<"SmallVector<Value>", "{}">:$blockShape,
                    CArg<"SmallVector<Value>", "{}">:$minOffsets,
@@ -517,7 +513,6 @@ def LoweringContractOp : Arts_Op<"lowering_contract",
                    CArg<"SmallVector<int64_t>", "{}">:$stencilIndependentDims,
                    CArg<"bool", "false">:$narrowableDep,
                    CArg<"bool", "false">:$postDbRefined,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$criticalPathDistance,
                    CArg<"std::optional<int64_t>", "std::nullopt">:$contractKind)>
   ];
 }
@@ -663,14 +658,11 @@ def EdtOp : Arts_Op<"edt", [
       - `task`: general task.
     - `concurrency`: execution scope (`intranode` or `internode`).
     - `route`: routing value (I32) for task placement.
-    - `nowait` (optional): indicates the EDT does not require an epoch
-      wrapper (typically used when the EDT is already inside an epoch).
   }];
   let arguments = (ins
     EdtTypeAttr:$type,
     EdtConcurrencyAttr:$concurrency,
     I32:$route,
-    OptionalAttr<UnitAttr>:$nowait,
     OptionalAttr<UnitAttr>:$storageBridgeCopy,
     // Per-block all-gather copy EDT.
     OptionalAttr<UnitAttr>:$perBlockAllGather,
@@ -700,7 +692,6 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<ArrayAttr>:$planHaloShape,
     OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
     OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure,
-    OptionalAttr<ArtsPlanAsyncStrategyAttr>:$planAsyncStrategy,
     OptionalAttr<ArtsReductionStrategyAttr>:$reductionStrategy,
     UnitAttr:$partialReduction,
     OptionalAttr<ArrayAttr>:$partialReductionDims,
@@ -711,7 +702,6 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<I64Attr>:$partialReductionSplitFactor,
     OptionalAttr<I64Attr>:$partialReductionSplitOwnerTaskCount,
     OptionalAttr<I64Attr>:$partialReductionSplitTargetWorkerCount,
-    OptionalAttr<I64Attr>:$critical_path_distance,
     Variadic<AnyMemRef>:$dependencies,
     Variadic<AnyType>:$params
   );
@@ -790,8 +780,7 @@ def EpochOp
     OptionalAttr<ArrayAttr>:$planLogicalWorkerSlice,
     OptionalAttr<ArrayAttr>:$planHaloShape,
     OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
-    OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure,
-    OptionalAttr<ArtsPlanAsyncStrategyAttr>:$planAsyncStrategy
+    OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure
   );
   let regions = (region SizedRegion<1> : $body);
   let results = (outs I64 : $epochGuid);

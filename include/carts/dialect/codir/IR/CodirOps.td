@@ -53,7 +53,6 @@ def CartsCodir_CodeletOp
     OptionalAttr<DistributionKindAttr>:$distribution_kind,
     OptionalAttr<IterationTopologyAttr>:$iteration_topology,
     OptionalAttr<RepetitionStructureAttr>:$repetition_structure,
-    OptionalAttr<AsyncStrategyAttr>:$async_strategy,
     OptionalAttr<ArrayAttr>:$plan_owner_dims,
     OptionalAttr<ArrayAttr>:$tile_owner_dims,
     OptionalAttr<ArrayAttr>:$tile_shape,

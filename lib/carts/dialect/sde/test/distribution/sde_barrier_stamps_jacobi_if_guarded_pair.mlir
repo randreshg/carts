@@ -36,12 +36,10 @@
 // CHECK-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
 // CHECK: func.func @jacobi_if_guarded_pair
 // CHECK: depPattern = #arts.dep_pattern<stencil_tiling_nd>
-// CHECK-SAME: planAsyncStrategy = #arts.plan_async_strategy<advance_edt>
 // CHECK-SAME: planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>
 // CHECK: arts.barrier {barrierReason = #arts.barrier_reason<timestep_stage_boundary>}
 // CHECK: scf.if
 // CHECK: depPattern = #arts.dep_pattern<stencil_tiling_nd>
-// CHECK-SAME: planAsyncStrategy = #arts.plan_async_strategy<advance_edt>
 // CHECK-SAME: planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>
 // CHECK-NOT: sde.
 

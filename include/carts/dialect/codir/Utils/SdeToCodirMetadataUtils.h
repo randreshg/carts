@@ -6,8 +6,8 @@
 /// ARTS runtime/orchestration objects.
 ///
 /// The SDE and CODIR enum classes for AccessMode, Pattern, DistributionKind,
-/// IterationTopology, RepetitionStructure, AsyncStrategy, and
-/// ReductionStrategy have identical case sets and integer codes
+/// IterationTopology, RepetitionStructure, and ReductionStrategy have
+/// identical case sets and integer codes
 /// (audit-verified). Translation across the boundary is a static_cast.
 ///==========================================================================///
 #ifndef CARTS_DIALECT_CODIR_UTILS_SDETOCODIRMETADATAUTILS_H
@@ -31,8 +31,6 @@ static_assert(static_cast<int>(sde::SdeIterationTopology::owner_tile_2d) ==
               static_cast<int>(CodirIterationTopology::owner_tile_2d));
 static_assert(static_cast<int>(sde::SdeRepetitionStructure::full_timestep) ==
               static_cast<int>(CodirRepetitionStructure::full_timestep));
-static_assert(static_cast<int>(sde::SdeAsyncStrategy::cps_chain) ==
-              static_cast<int>(CodirAsyncStrategy::cps_chain));
 static_assert(static_cast<int>(sde::SdeReductionStrategy::local_accumulate) ==
               static_cast<int>(CodirReductionStrategy::local_accumulate));
 
@@ -46,7 +44,6 @@ struct CodirCodeletMetadata {
   CodirDistributionKindAttr distributionKind;
   CodirIterationTopologyAttr iterationTopology;
   CodirRepetitionStructureAttr repetitionStructure;
-  CodirAsyncStrategyAttr asyncStrategy;
   ArrayAttr depArrayIds;
   ArrayAttr planOwnerDims;
   ArrayAttr tileOwnerDims;
@@ -99,9 +96,6 @@ getCodirMetadataFromSchedulingUnit(sde::SdeSuIterateOp source) {
   if (auto repetition = source.getRepetitionStructureAttr())
     metadata.repetitionStructure = CodirRepetitionStructureAttr::get(
         ctx, static_cast<CodirRepetitionStructure>(repetition.getValue()));
-  if (auto async = source.getAsyncStrategyAttr())
-    metadata.asyncStrategy = CodirAsyncStrategyAttr::get(
-        ctx, static_cast<CodirAsyncStrategy>(async.getValue()));
   if (auto strategy = source.getReductionStrategyAttr())
     metadata.reductionStrategy = CodirReductionStrategyAttr::get(
         ctx, static_cast<CodirReductionStrategy>(strategy.getValue()));

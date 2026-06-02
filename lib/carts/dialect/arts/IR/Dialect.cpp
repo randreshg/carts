@@ -439,7 +439,7 @@ void EpochOp::build(OpBuilder &builder, OperationState &state, Type epochGuid) {
         IntegerAttr{}, ArrayAttr{}, ArrayAttr{}, ArrayAttr{}, ArrayAttr{},
         ArrayAttr{}, UnitAttr{}, ArrayAttr{}, ArrayAttr{}, ArrayAttr{},
         ArrayAttr{}, ArtsPlanIterationTopologyAttr{},
-        ArtsPlanRepetitionStructureAttr{}, ArtsPlanAsyncStrategyAttr{});
+        ArtsPlanRepetitionStructureAttr{});
 }
 
 /// Helper to compute GUID type from sizes
@@ -962,7 +962,7 @@ void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
     contractKind = static_cast<int64_t>(info.pattern.kind);
   build(builder, state, target, info.pattern.depPattern,
         info.pattern.distributionKind, info.pattern.distributionPattern,
-        info.pattern.distributionVersion, info.pattern.revision,
+        info.pattern.distributionVersion,
         SmallVector<int64_t>(info.spatial.ownerDims.begin(),
                              info.spatial.ownerDims.end()),
         SmallVector<Value>(info.spatial.blockShape.begin(),
@@ -978,8 +978,7 @@ void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
                              info.spatial.spatialDims.end()),
         SmallVector<int64_t>(info.spatial.stencilIndependentDims.begin(),
                              info.spatial.stencilIndependentDims.end()),
-        info.analysis.narrowableDep, info.analysis.postDbRefined,
-        info.analysis.criticalPathDistance, contractKind);
+        info.analysis.narrowableDep, info.analysis.postDbRefined, contractKind);
 }
 
 LoweringContractOp
@@ -997,8 +996,7 @@ static PatternAttr
 buildPatternAttr(OpBuilder &builder, std::optional<ArtsDepPattern> depPattern,
                  std::optional<EdtDistributionKind> distributionKind,
                  std::optional<EdtDistributionPattern> distributionPattern,
-                 std::optional<int64_t> distributionVersion,
-                 std::optional<int64_t> revision) {
+                 std::optional<int64_t> distributionVersion) {
   auto *ctx = builder.getContext();
   auto i64Type = IntegerType::get(ctx, 64);
   ArtsDepPatternAttr depAttr = depPattern
@@ -1014,22 +1012,20 @@ buildPatternAttr(OpBuilder &builder, std::optional<ArtsDepPattern> depPattern,
   IntegerAttr versionAttr =
       distributionVersion ? IntegerAttr::get(i64Type, *distributionVersion)
                           : IntegerAttr();
-  IntegerAttr revisionAttr =
-      revision ? IntegerAttr::get(i64Type, *revision) : IntegerAttr();
 
-  if (!depAttr && !kindAttr && !patternAttr && !versionAttr && !revisionAttr)
+  if (!depAttr && !kindAttr && !patternAttr && !versionAttr)
     return PatternAttr();
-  return PatternAttr::get(ctx, depAttr, kindAttr, patternAttr, versionAttr,
-                          revisionAttr);
+  return PatternAttr::get(ctx, depAttr, kindAttr, patternAttr, versionAttr);
 }
 
-static ContractAttr buildContractAttr(
-    OpBuilder &builder, ArrayRef<int64_t> ownerDims,
-    std::optional<int64_t> centerOffset, ArrayRef<int64_t> spatialDims,
-    ArrayRef<int64_t> stencilIndependentDims, bool supportedBlockHalo,
-    bool narrowableDep, bool postDbRefined,
-    std::optional<int64_t> criticalPathDistance,
-    std::optional<int64_t> contractKind) {
+static ContractAttr buildContractAttr(OpBuilder &builder,
+                                      ArrayRef<int64_t> ownerDims,
+                                      std::optional<int64_t> centerOffset,
+                                      ArrayRef<int64_t> spatialDims,
+                                      ArrayRef<int64_t> stencilIndependentDims,
+                                      bool supportedBlockHalo,
+                                      bool narrowableDep, bool postDbRefined,
+                                      std::optional<int64_t> contractKind) {
   auto *ctx = builder.getContext();
   auto i64Type = IntegerType::get(ctx, 64);
 
@@ -1051,23 +1047,19 @@ static ContractAttr buildContractAttr(
       narrowableDep ? builder.getBoolAttr(true) : BoolAttr();
   BoolAttr postDbRefinedAttr =
       postDbRefined ? builder.getBoolAttr(true) : BoolAttr();
-  IntegerAttr criticalPathDistanceAttr =
-      criticalPathDistance ? IntegerAttr::get(i64Type, *criticalPathDistance)
-                           : IntegerAttr();
   IntegerAttr contractKindAttr =
       contractKind ? IntegerAttr::get(i64Type, *contractKind) : IntegerAttr();
 
   if (!ownerDimsAttr && !centerOffsetAttr && !spatialDimsAttr &&
       !stencilIndependentDimsAttr && !supportedBlockHaloAttr &&
-      !narrowableDepAttr && !postDbRefinedAttr && !criticalPathDistanceAttr &&
-      !contractKindAttr) {
+      !narrowableDepAttr && !postDbRefinedAttr && !contractKindAttr) {
     return ContractAttr();
   }
 
-  return ContractAttr::get(
-      ctx, ownerDimsAttr, centerOffsetAttr, spatialDimsAttr,
-      stencilIndependentDimsAttr, supportedBlockHaloAttr, narrowableDepAttr,
-      postDbRefinedAttr, criticalPathDistanceAttr, contractKindAttr);
+  return ContractAttr::get(ctx, ownerDimsAttr, centerOffsetAttr,
+                           spatialDimsAttr, stencilIndependentDimsAttr,
+                           supportedBlockHaloAttr, narrowableDepAttr,
+                           postDbRefinedAttr, contractKindAttr);
 }
 
 static std::optional<int64_t> getOptionalI64(IntegerAttr attr) {
@@ -1082,14 +1074,13 @@ void LoweringContractOp::build(
     std::optional<ArtsDepPattern> depPattern,
     std::optional<EdtDistributionKind> distributionKind,
     std::optional<EdtDistributionPattern> distributionPattern,
-    std::optional<int64_t> distributionVersion, std::optional<int64_t> revision,
-    SmallVector<int64_t> ownerDims, SmallVector<Value> blockShape,
-    SmallVector<Value> minOffsets, SmallVector<Value> maxOffsets,
-    SmallVector<Value> writeFootprint, std::optional<int64_t> centerOffset,
-    bool supportedBlockHalo, SmallVector<int64_t> spatialDims,
+    std::optional<int64_t> distributionVersion, SmallVector<int64_t> ownerDims,
+    SmallVector<Value> blockShape, SmallVector<Value> minOffsets,
+    SmallVector<Value> maxOffsets, SmallVector<Value> writeFootprint,
+    std::optional<int64_t> centerOffset, bool supportedBlockHalo,
+    SmallVector<int64_t> spatialDims,
     SmallVector<int64_t> stencilIndependentDims, bool narrowableDep,
-    bool postDbRefined, std::optional<int64_t> criticalPathDistance,
-    std::optional<int64_t> contractKind) {
+    bool postDbRefined, std::optional<int64_t> contractKind) {
   state.addOperands(target);
   state.addOperands(blockShape);
   state.addOperands(minOffsets);
@@ -1103,16 +1094,15 @@ void LoweringContractOp::build(
            static_cast<int32_t>(maxOffsets.size()),
            static_cast<int32_t>(writeFootprint.size())}));
 
-  if (PatternAttr patternAttr = buildPatternAttr(
-          builder, depPattern, distributionKind, distributionPattern,
-          distributionVersion, revision)) {
+  if (PatternAttr patternAttr =
+          buildPatternAttr(builder, depPattern, distributionKind,
+                           distributionPattern, distributionVersion)) {
     state.addAttribute(LoweringContractOp::getPatternAttrName(state.name),
                        patternAttr);
   }
   if (ContractAttr contractAttr = buildContractAttr(
           builder, ownerDims, centerOffset, spatialDims, stencilIndependentDims,
-          supportedBlockHalo, narrowableDep, postDbRefined,
-          criticalPathDistance, contractKind)) {
+          supportedBlockHalo, narrowableDep, postDbRefined, contractKind)) {
     state.addAttribute(LoweringContractOp::getContractAttrName(state.name),
                        contractAttr);
   }
@@ -1145,12 +1135,6 @@ LoweringContractOp::getDistributionPattern() {
 std::optional<int64_t> LoweringContractOp::getDistributionVersion() {
   if (auto pattern = getPattern())
     return getOptionalI64(pattern->getDistributionVersion());
-  return std::nullopt;
-}
-
-std::optional<int64_t> LoweringContractOp::getPatternRevision() {
-  if (auto pattern = getPattern())
-    return getOptionalI64(pattern->getRevision());
   return std::nullopt;
 }
 
@@ -1200,12 +1184,6 @@ std::optional<bool> LoweringContractOp::getPostDbRefined() {
   if (auto contract = getContract())
     if (BoolAttr postDbRefined = contract->getPostDbRefined())
       return postDbRefined.getValue();
-  return std::nullopt;
-}
-
-std::optional<int64_t> LoweringContractOp::getCriticalPathDistance() {
-  if (auto contract = getContract())
-    return getOptionalI64(contract->getCriticalPathDistance());
   return std::nullopt;
 }
 

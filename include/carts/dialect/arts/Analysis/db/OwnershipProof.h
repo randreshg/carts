@@ -3,15 +3,14 @@
 ///
 /// Proof-driven ownership analysis for lowering contracts.
 ///
-/// Computes a 5-dimension proof vector that certifies various aspects of
+/// Computes a 4-dimension proof vector that certifies various aspects of
 /// ownership soundness for a distributed kernel:
 ///   - ownerDimReachability: owner dims are statically reachable
 ///   - partitionAccessMapping: partition-to-access mapping is sound
 ///   - haloLegality: halo widening is legal
 ///   - depSliceSoundness: dependency narrowing is sound
-///   - relaunchStateSoundness: relaunch state is stable
 ///
-/// When all 5 dimensions are proven, downstream passes can trust the
+/// When all dimensions are proven, downstream passes can trust the
 /// contract's spatial layout without re-deriving evidence from the graph.
 ///==========================================================================///
 
@@ -31,19 +30,17 @@ struct OwnershipProof {
   bool partitionAccessMapping = false;
   bool haloLegality = false;
   bool depSliceSoundness = false;
-  bool relaunchStateSoundness = false;
 
   bool isFullyProven() const {
     return ownerDimReachability && partitionAccessMapping && haloLegality &&
-           depSliceSoundness && relaunchStateSoundness;
+           depSliceSoundness;
   }
 
   unsigned provenCount() const {
     return static_cast<unsigned>(ownerDimReachability) +
            static_cast<unsigned>(partitionAccessMapping) +
            static_cast<unsigned>(haloLegality) +
-           static_cast<unsigned>(depSliceSoundness) +
-           static_cast<unsigned>(relaunchStateSoundness);
+           static_cast<unsigned>(depSliceSoundness);
   }
 };
 

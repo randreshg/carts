@@ -17,9 +17,6 @@
 ///              actual data footprint is smaller than the full DB, enabling
 ///              downstream lowering to use arts_add_dependence_at (ESD).
 ///
-///   ET-6:      Critical path analysis -- compute longest dependency chain
-///              via topological sort and annotate critical_path_distance.
-///
 ///   EXT-EDT-2: Dead dependency elimination -- remove unused dependency
 ///              slots whose block arguments have zero uses or are only
 ///              consumed by cleanup or true-only compiler control-token stores.
@@ -72,9 +69,6 @@ static llvm::Statistic numGranularityAnnotations{
 static llvm::Statistic numNarrowedDeps{
     "edt_transforms", "NumNarrowedDeps",
     "Number of ET-3 narrowed dependency chains"};
-static llvm::Statistic numCriticalPathAnnotations{
-    "edt_transforms", "NumCriticalPathAnnotations",
-    "Number of ET-6 critical path annotations"};
 static llvm::Statistic numDeadDepsRemoved{
     "edt_transforms", "NumDeadDepsRemoved",
     "Number of EXT-EDT-2 dead deps removed"};
@@ -106,10 +100,6 @@ private:
   /// Returns the number of annotated EDTs.
   unsigned estimateTaskGranularity();
 
-  /// ET-6: Compute critical path distances for all EDTs in a function.
-  /// Returns the number of annotated EDTs.
-  unsigned analyzeCriticalPath(func::FuncOp func, EdtGraph &edtGraph);
-
   /// ET-3: Narrow dependency chains for stencil/wavefront patterns.
   /// For neighbor halo reads, mark the dependency as narrowable when the
   /// actual data footprint is smaller than the full DB.
@@ -133,38 +123,6 @@ private:
   void logModuleEdtSummary(const ModuleEdtMetrics &metrics) const;
 };
 } // namespace
-
-/// Iterates EDT dependencies, finds the DbAcquireOp and associated
-/// LoweringContractOp for each, and applies the given mutation to the
-/// contract info before upserting it back.
-static void
-annotateEdtDepContracts(EdtOp edt,
-                        function_ref<void(DbAcquireOp acquire, Value ptr,
-                                          LoweringContractInfo &info)>
-                            mutate) {
-  for (Value dep : edt.getDependencies()) {
-    auto acquire = dep.getDefiningOp<DbAcquireOp>();
-    if (!acquire)
-      continue;
-    Value ptr = acquire.getPtr();
-    auto contractOp = getLoweringContractOp(ptr);
-    LoweringContractInfo info =
-        contractOp ? getLoweringContract(ptr).value_or(LoweringContractInfo{})
-                   : LoweringContractInfo{};
-    mutate(acquire, ptr, info);
-    if (!info.empty()) {
-      if (contractOp) {
-        OpBuilder builder(contractOp.getContext());
-        builder.setInsertionPointAfter(contractOp.getOperation());
-        upsertLoweringContract(builder, contractOp.getLoc(), ptr, info);
-      } else {
-        OpBuilder builder(acquire.getContext());
-        builder.setInsertionPointAfter(acquire.getOperation());
-        upsertLoweringContract(builder, acquire.getLoc(), ptr, info);
-      }
-    }
-  }
-}
 
 void EdtTransformsPass::runOnOperation() {
   ARTS_INFO_HEADER(EdtTransformsPass);
@@ -231,8 +189,7 @@ EdtTransformsPass::ModuleEdtMetrics EdtTransformsPass::gatherModuleEdtFacts() {
   ModuleOp module = getOperation();
   ModuleEdtMetrics metrics;
 
-  /// Walk all functions, gather EDT metrics, and run ET-6 critical path
-  /// analysis while the graph is already hot.
+  /// Walk all functions and gather EDT metrics while the graph is already hot.
   module.walk([&](func::FuncOp func) {
     auto &edtGraph = AM->getEdtAnalysis().getOrCreateEdtGraph(func);
     if (edtGraph.size() == 0)
@@ -249,11 +206,6 @@ EdtTransformsPass::ModuleEdtMetrics EdtTransformsPass::gatherModuleEdtFacts() {
 
       ARTS_DEBUG("  EDT [" << node->getHierId() << "]");
     });
-
-    unsigned et6Count = analyzeCriticalPath(func, edtGraph);
-    numCriticalPathAnnotations += et6Count;
-    ARTS_DEBUG("ET-6: Annotated " << et6Count
-                                  << " EDTs with critical path distance");
   });
 
   return metrics;
@@ -317,63 +269,6 @@ unsigned EdtTransformsPass::estimateTaskGranularity() {
   });
 
   return count;
-}
-
-///===----------------------------------------------------------------------===///
-/// ET-6: Critical path analysis
-///===----------------------------------------------------------------------===///
-unsigned EdtTransformsPass::analyzeCriticalPath(func::FuncOp func,
-                                                EdtGraph &edtGraph) {
-  auto annotateNode = [&](EdtNode *node, int64_t dist, unsigned &annotated) {
-    EdtOp edt = node->getEdtOp();
-
-    /// Set critical_path_distance directly on the EdtOp.
-    edt.setCriticalPathDistance(dist);
-
-    /// Also update LoweringContractOps on the EDT's dependency acquires.
-    annotateEdtDepContracts(edt, [&](DbAcquireOp /*acquire*/, Value /*ptr*/,
-                                     LoweringContractInfo &info) {
-      info.analysis.criticalPathDistance = dist;
-    });
-
-    ++annotated;
-
-    ARTS_DEBUG("ET-6: EDT [" << node->getHierId()
-                             << "] critical_path_distance=" << dist);
-  };
-
-  EdtCriticalPathResult criticalPath = edtGraph.computeCriticalPathDistances();
-
-  if (criticalPath.empty())
-    return 0;
-
-  /// If topological sort did not cover all nodes, there is a cycle.
-  /// Assign distance 0 to any remaining nodes (defensive).
-  if (criticalPath.hasCycle()) {
-    ARTS_WARN("ET-6: EDT dependency graph has a cycle in function "
-              << func.getName() << "; assigning distance 0 to "
-              << criticalPath.cyclicNodes.size() << " unreachable EDTs");
-  }
-
-  /// Annotate each EDT with the critical_path_distance attribute and
-  /// update any LoweringContractOps on its dependencies.
-  unsigned annotated = 0;
-  for (const EdtCriticalPathEntry &entry : criticalPath.orderedDistances) {
-    annotateNode(entry.node, entry.distance, annotated);
-  }
-
-  if (criticalPath.hasCycle()) {
-    for (auto *node : criticalPath.cyclicNodes)
-      annotateNode(node, /*dist=*/0, annotated);
-  }
-
-  if (annotated > 0) {
-    ARTS_INFO("ET-6: function " << func.getName() << ": " << annotated
-                                << " EDTs annotated, max critical path depth="
-                                << criticalPath.maxDistance);
-  }
-
-  return annotated;
 }
 
 ///===----------------------------------------------------------------------===///

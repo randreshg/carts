@@ -333,8 +333,6 @@ mlir::carts::arts::getLoweringContract(Value target) {
     info.pattern.distributionPattern = *distributionPattern;
   if (auto version = contract.getDistributionVersion())
     info.pattern.distributionVersion = static_cast<int64_t>(*version);
-  if (auto revision = contract.getPatternRevision())
-    info.pattern.revision = static_cast<int64_t>(*revision);
   info.analysis.narrowableDep = contract.getNarrowableDep().value_or(false);
   if (auto ownerDims = contract.getOwnerDims())
     info.spatial.ownerDims = SmallVector<int64_t, 4>(*ownerDims);
@@ -356,9 +354,6 @@ mlir::carts::arts::getLoweringContract(Value target) {
     info.spatial.stencilIndependentDims =
         SmallVector<int64_t, 4>(*stencilIndependentDims);
   info.analysis.postDbRefined = contract.getPostDbRefined().value_or(false);
-  if (auto criticalPathDistance = contract.getCriticalPathDistance())
-    info.analysis.criticalPathDistance =
-        static_cast<int64_t>(*criticalPathDistance);
   if (auto contractKind = contract.getContractKind())
     info.pattern.kind = static_cast<ContractKind>(*contractKind);
 
@@ -392,7 +387,6 @@ mlir::carts::arts::getSemanticContract(Operation *op) {
   info.pattern.distributionPattern = getEdtDistributionPattern(op);
   if (auto version = getDistributionVersionAttr(op))
     info.pattern.distributionVersion = version.getInt();
-  info.pattern.revision = getPatternRevision(op);
   if (auto ownerDims = getStencilOwnerDims(op))
     info.spatial.ownerDims.assign(ownerDims->begin(), ownerDims->end());
   if (auto minOffsets = getStencilMinOffsets(op))
@@ -464,10 +458,6 @@ mlir::carts::arts::mergeLoweringContractInfo(LoweringContractInfo &dest,
   }
   if (!dest.pattern.distributionVersion && src.pattern.distributionVersion) {
     dest.pattern.distributionVersion = src.pattern.distributionVersion;
-    changed = true;
-  }
-  if (!dest.pattern.revision && src.pattern.revision) {
-    dest.pattern.revision = src.pattern.revision;
     changed = true;
   }
   if (!dest.analysis.narrowableDep && src.analysis.narrowableDep) {
@@ -564,12 +554,6 @@ mlir::carts::arts::mergeLoweringContractInfo(LoweringContractInfo &dest,
     dest.analysis.postDbRefined = true;
     changed = true;
   }
-  if (!dest.analysis.criticalPathDistance &&
-      src.analysis.criticalPathDistance) {
-    dest.analysis.criticalPathDistance = src.analysis.criticalPathDistance;
-    changed = true;
-  }
-
   normalizeLoweringContractInfo(dest);
   return changed ? ContractChange::Changed : ContractChange::Unchanged;
 }

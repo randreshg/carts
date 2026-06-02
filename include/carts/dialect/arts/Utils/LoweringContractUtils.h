@@ -31,11 +31,10 @@ struct SemanticPattern {
   std::optional<EdtDistributionKind> distributionKind;
   std::optional<EdtDistributionPattern> distributionPattern;
   std::optional<int64_t> distributionVersion;
-  std::optional<int64_t> revision;
 
   bool hasDistributionContract() const {
     return kind != ContractKind::Unknown || depPattern || distributionKind ||
-           distributionPattern || distributionVersion || revision;
+           distributionPattern || distributionVersion;
   }
 };
 
@@ -66,9 +65,8 @@ struct SpatialLayout {
 struct AnalysisRefinement {
   bool narrowableDep = false;
   bool postDbRefined = false;
-  std::optional<int64_t> criticalPathDistance;
 
-  bool empty() const { return !postDbRefined && !criticalPathDistance; }
+  bool empty() const { return !postDbRefined; }
 };
 
 struct LoweringContractInfo {

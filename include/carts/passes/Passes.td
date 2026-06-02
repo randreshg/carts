@@ -178,13 +178,12 @@ def EdtAllocaSinking : Pass<"edt-alloca-sinking", "mlir::ModuleOp"> {
 }
 
 def EdtTransforms : Pass<"edt-transforms", "mlir::ModuleOp"> {
-  let summary = "Post-DB EDT transforms (granularity, affinity, critical path)";
+  let summary = "Post-DB EDT transforms (granularity, affinity, dependency cleanup)";
   let description = [{
     Hosts EDT-level transformations that run after DB partitioning and
     mode decisions are known. Current placeholder slots:
     - ET-1: Task granularity control
     - ET-2: Data affinity placement
-    - ET-6: Critical path analysis
     - EXT-EDT-2: Dead dependency elimination
   }];
   let dependentDialects =

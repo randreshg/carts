@@ -22,10 +22,10 @@
 // CHECK-SAME: repetitionStructure = #sde.repetition_structure<full_timestep>
 // CHECK-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
 // CHECK: func.func @alternating_buffer_pair
-// CHECK: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<uniform>{{.*}}planAsyncStrategy = #arts.plan_async_strategy<advance_edt>{{.*}}planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>
+// CHECK: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<uniform>{{.*}}planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>
 // CHECK: arts.barrier {{.*}}barrierReason = #arts.barrier_reason<required_memory>
 // CHECK: arts.barrier {{.*}}barrierReason = #arts.barrier_reason<timestep_stage_boundary>
-// CHECK: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<alternating_buffer_stencil>{{.*}}planAsyncStrategy = #arts.plan_async_strategy<advance_edt>{{.*}}planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>
+// CHECK: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<alternating_buffer_stencil>{{.*}}planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>
 // CHECK-NOT: sde.
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {

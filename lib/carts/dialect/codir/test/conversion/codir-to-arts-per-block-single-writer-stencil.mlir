@@ -226,7 +226,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-DAG: %[[C16_G:.*]] = arith.constant 16 : index
 // CHECK: owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>
 // CHECK: scf.for %{{.*}} = %[[C0_G]] to %[[C16_G]] step %[[C2_G]]
-// CHECK: attributes {critical_path_distance = 0 : i64, storageBridgeCopy}
+// CHECK: attributes {storageBridgeCopy}
 // CHECK: scf.for %[[BLOCK_BASE:.*]] = %[[C0_G]] to %[[C16_G]] step %[[C2_G]]
 // CHECK: arts.db_acquire[<out>]
 // CHECK-SAME: partitioning(<block>)

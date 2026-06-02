@@ -21,7 +21,6 @@
 // CHECK-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
 // CHECK: func.func @mismatched_uniform_adjacent
 // CHECK: depPattern = #arts.dep_pattern<uniform>
-// CHECK-NOT: planAsyncStrategy
 // CHECK-NOT: planRepetitionStructure
 // CHECK: depPattern = #arts.dep_pattern<uniform>
 // CHECK-NOT: sde.

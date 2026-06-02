@@ -27,20 +27,6 @@ namespace carts::arts {
 class EdtDepEdge;
 class EdtAnalysis;
 
-struct EdtCriticalPathEntry {
-  EdtNode *node = nullptr;
-  int64_t distance = 0;
-};
-
-struct EdtCriticalPathResult {
-  SmallVector<EdtCriticalPathEntry, 16> orderedDistances;
-  SmallVector<EdtNode *, 8> cyclicNodes;
-  int64_t maxDistance = 0;
-
-  bool empty() const { return orderedDistances.empty() && cyclicNodes.empty(); }
-  bool hasCycle() const { return !cyclicNodes.empty(); }
-};
-
 /// Represents task dependencies with edges labeled by data blocks.
 class EdtGraph {
 public:
@@ -54,7 +40,6 @@ public:
 
   /// Edt-specific methods
   bool isEdtReachable(EdtOp from, EdtOp to);
-  EdtCriticalPathResult computeCriticalPathDistances() const;
   size_t size() const { return nodes.size(); }
 
   /// Check if two EDTs are independent under the current memory-root model.
@@ -76,9 +61,6 @@ private:
   NodeBase *getOrCreateNode(Operation *op);
   NodeBase *getNode(Operation *op) const;
   bool addEdge(NodeBase *from, NodeBase *to, EdgeBase *edge);
-  void getDeterministicTopologicalOrder(
-      SmallVectorImpl<EdtNode *> &topoOrder,
-      SmallVectorImpl<EdtNode *> &leftoverNodes) const;
   void collectNodes();
   void linkEdtsToLoops();
   void buildDependencies();

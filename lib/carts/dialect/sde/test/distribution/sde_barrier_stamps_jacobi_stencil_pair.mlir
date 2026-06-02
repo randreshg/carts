@@ -24,7 +24,6 @@
 // CHECK-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
 // CHECK: func.func @jacobi_stencil_pair
 // CHECK: depPattern = #arts.dep_pattern<stencil_tiling_nd>
-// CHECK-SAME: planAsyncStrategy = #arts.plan_async_strategy<advance_edt>
 // CHECK-SAME: planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>
 // CHECK: arts.barrier
 // CHECK-SAME: barrierReason = #arts.barrier_reason<required_memory>
@@ -32,7 +31,6 @@
 // between the compute EDT and the timestep boundary; allow it to appear.
 // CHECK: barrierReason = #arts.barrier_reason<timestep_stage_boundary>
 // CHECK: depPattern = #arts.dep_pattern<stencil_tiling_nd>
-// CHECK-SAME: planAsyncStrategy = #arts.plan_async_strategy<advance_edt>
 // CHECK-SAME: planRepetitionStructure = #arts.plan_repetition_structure<full_timestep>
 // CHECK-NOT: sde.
 

@@ -161,7 +161,6 @@ static bool acquireCarriesPlannedSubpartitionEvidence(DbAcquireOp acquire) {
           alloc.getPlanHaloShapeAttr() ||
           alloc.getPlanIterationTopologyAttr() ||
           alloc.getPlanRepetitionStructureAttr() ||
-          alloc.getPlanAsyncStrategyAttr() ||
           alloc->hasAttr("perBlockReplicated") ||
           alloc->hasAttr("perBlockSingleWriterStencil") ||
           alloc.getStencilOwnerDimsAttr() ||

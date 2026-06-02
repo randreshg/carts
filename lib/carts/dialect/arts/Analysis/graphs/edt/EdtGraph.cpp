@@ -29,14 +29,6 @@ using namespace mlir::carts::arts;
 #include "carts/utils/Debug.h"
 ARTS_DEBUG_SETUP(edt_graph);
 
-namespace {
-void sortEdtNodesByHierId(SmallVectorImpl<EdtNode *> &nodes) {
-  llvm::sort(nodes, [](EdtNode *lhs, EdtNode *rhs) {
-    return lhs->getHierId() < rhs->getHierId();
-  });
-}
-} // namespace
-
 EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph, EdtAnalysis *EA)
     : func(func), dbGraph(dbGraph), edtAnalysis(EA) {
   ARTS_INFO("Creating EDT graph for function: " << func.getName().str());
@@ -135,103 +127,6 @@ bool EdtGraph::isEdtReachable(EdtOp fromOp, EdtOp toOp) {
     }
   }
   return false;
-}
-
-void EdtGraph::getDeterministicTopologicalOrder(
-    SmallVectorImpl<EdtNode *> &topoOrder,
-    SmallVectorImpl<EdtNode *> &leftoverNodes) const {
-  topoOrder.clear();
-  leftoverNodes.clear();
-
-  SmallVector<EdtNode *, 16> allNodes;
-  forEachNode([&](NodeBase *base) {
-    if (auto *edtNode = dyn_cast<EdtNode>(base))
-      allNodes.push_back(edtNode);
-  });
-
-  if (allNodes.empty())
-    return;
-
-  DenseMap<EdtNode *, unsigned> inDegree;
-  for (auto *node : allNodes)
-    inDegree[node] = 0;
-
-  for (auto *node : allNodes) {
-    for (auto *edge : node->getInEdges()) {
-      auto *fromNode = dyn_cast<EdtNode>(edge->getFrom());
-      if (fromNode && inDegree.count(fromNode))
-        ++inDegree[node];
-    }
-  }
-
-  SmallVector<EdtNode *, 16> worklist;
-  for (auto *node : allNodes) {
-    if (inDegree[node] == 0)
-      worklist.push_back(node);
-  }
-  sortEdtNodesByHierId(worklist);
-
-  topoOrder.reserve(allNodes.size());
-  while (!worklist.empty()) {
-    EdtNode *current = worklist.pop_back_val();
-    topoOrder.push_back(current);
-
-    SmallVector<EdtNode *, 8> successors;
-    for (auto *edge : current->getOutEdges()) {
-      auto *toNode = dyn_cast<EdtNode>(edge->getTo());
-      if (toNode && inDegree.count(toNode)) {
-        --inDegree[toNode];
-        if (inDegree[toNode] == 0)
-          successors.push_back(toNode);
-      }
-    }
-
-    sortEdtNodesByHierId(successors);
-    worklist.append(successors.begin(), successors.end());
-  }
-
-  if (topoOrder.size() == allNodes.size())
-    return;
-
-  DenseSet<EdtNode *> visitedNodes(topoOrder.begin(), topoOrder.end());
-  leftoverNodes.reserve(allNodes.size() - topoOrder.size());
-  for (auto *node : allNodes) {
-    if (!visitedNodes.contains(node))
-      leftoverNodes.push_back(node);
-  }
-  sortEdtNodesByHierId(leftoverNodes);
-}
-
-EdtCriticalPathResult EdtGraph::computeCriticalPathDistances() const {
-  EdtCriticalPathResult result;
-  DenseMap<EdtNode *, int64_t> distance;
-  SmallVector<EdtNode *, 16> topoOrder;
-
-  distance.clear();
-  getDeterministicTopologicalOrder(topoOrder, result.cyclicNodes);
-
-  result.orderedDistances.reserve(topoOrder.size());
-  for (auto *node : topoOrder) {
-    int64_t dist = 0;
-    for (auto *edge : node->getInEdges()) {
-      auto *predNode = dyn_cast<EdtNode>(edge->getFrom());
-      if (!predNode)
-        continue;
-      auto it = distance.find(predNode);
-      if (it != distance.end()) {
-        int64_t edgeWeight = 1;
-        auto *depEdge = static_cast<EdtDepEdge *>(edge);
-        edgeWeight = std::max<int64_t>(1, depEdge->getWeight());
-        dist = std::max(dist, it->second + edgeWeight);
-      }
-    }
-    distance[node] = dist;
-    result.orderedDistances.push_back({node, dist});
-    if (dist > result.maxDistance)
-      result.maxDistance = dist;
-  }
-
-  return result;
 }
 
 bool EdtGraph::areEdtsIndependent(EdtOp a, EdtOp b) {

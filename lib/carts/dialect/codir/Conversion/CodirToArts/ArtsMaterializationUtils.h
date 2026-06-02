@@ -181,18 +181,6 @@ convertRepetitionStructure(codir::CodirRepetitionStructure structure) {
   return arts::ArtsPlanRepetitionStructure::none;
 }
 
-static inline arts::ArtsPlanAsyncStrategy
-convertAsyncStrategy(codir::CodirAsyncStrategy strategy) {
-  switch (strategy) {
-  case codir::CodirAsyncStrategy::blocking:
-    return arts::ArtsPlanAsyncStrategy::blocking;
-  case codir::CodirAsyncStrategy::advance_stage:
-  case codir::CodirAsyncStrategy::cps_chain:
-    return arts::ArtsPlanAsyncStrategy::advance_edt;
-  }
-  return arts::ArtsPlanAsyncStrategy::blocking;
-}
-
 static inline arts::EdtDistributionPattern
 getDistributionPattern(codir::CodirPattern pattern) {
   switch (pattern) {
@@ -250,7 +238,6 @@ static inline void propagateCodirPlanToArts(codir::CodeletOp codelet,
       arts::setEdtDistributionPattern(
           taskOp, getDistributionPattern(pattern.getValue()));
       arts::setDistributionVersion(taskOp, 1);
-      arts::setPatternRevision(taskOp, 1);
     }
   }
   if (auto kind = codelet.getDistributionKindAttr()) {
@@ -267,11 +254,6 @@ static inline void propagateCodirPlanToArts(codir::CodeletOp codelet,
     arts::setPlanRepetitionStructureAttr(
         taskOp, arts::ArtsPlanRepetitionStructureAttr::get(
                     ctx, convertRepetitionStructure(repetition.getValue())));
-  }
-  if (auto async = codelet.getAsyncStrategyAttr()) {
-    arts::setPlanAsyncStrategyAttr(
-        taskOp, arts::ArtsPlanAsyncStrategyAttr::get(
-                    ctx, convertAsyncStrategy(async.getValue())));
   }
   if (auto strategy = codelet.getReductionStrategyAttr())
     task.setReductionStrategyAttr(arts::ArtsReductionStrategyAttr::get(

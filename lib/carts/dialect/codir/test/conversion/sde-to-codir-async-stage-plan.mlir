@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir)' \
-// RUN:   | %FileCheck %s --implicit-check-not="advance_edt"
+// RUN:   | %FileCheck %s --implicit-check-not="async_strategy"
 
 module {
   func.func @async_stage_plan(%A: memref<8xi32>) {
@@ -22,4 +22,4 @@ module {
 
 // CHECK-LABEL: func.func @async_stage_plan
 // CHECK: codir.codelet
-// CHECK-SAME: async_strategy = #codir.async_strategy<advance_stage>
+// CHECK-SAME: repetition_structure = #codir.repetition_structure<full_timestep>

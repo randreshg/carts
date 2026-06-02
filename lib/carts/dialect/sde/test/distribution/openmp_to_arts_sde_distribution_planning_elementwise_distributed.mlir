@@ -14,7 +14,6 @@
 // ARTS-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
 // ARTS: func.func @main
 // ARTS: arts.edt <task> <internode>
-// ARTS-SAME: arts.pattern_revision = 1 : i64
 // ARTS-SAME: depPattern = #arts.dep_pattern<uniform>
 // ARTS-SAME: distribution_pattern = #arts.distribution_pattern<uniform>
 

@@ -41,10 +41,6 @@ inline constexpr llvm::StringLiteral ArtsCreateId = "arts.create_id";
 /// Symbol of the outlined EDT body function carried on the launch op.
 inline constexpr llvm::StringLiteral OutlinedFunc = "arts.outlined_func";
 
-/// PatternAnalysis revision counter used to invalidate downstream caches
-/// when the semantic pattern family on a producer op changes.
-inline constexpr llvm::StringLiteral PatternRevision = "arts.pattern_revision";
-
 /// Marker stamped on loops produced by ARTS block-loop strip-mining so the
 /// support pass can recognize and clear its own outputs.
 inline constexpr llvm::StringLiteral StripMiningGenerated =
@@ -66,8 +62,6 @@ inline constexpr llvm::StringLiteral PartitionAccessMapping =
 inline constexpr llvm::StringLiteral HaloLegality = "arts.proof.halo_legality";
 inline constexpr llvm::StringLiteral DepSliceSoundness =
     "arts.proof.dep_slice_soundness";
-inline constexpr llvm::StringLiteral RelaunchStateSoundness =
-    "arts.proof.relaunch_state_soundness";
 
 } // namespace Proof
 

@@ -92,8 +92,6 @@ mlir::carts::arts::computeOwnershipProof(LoweringContractOp contractOp) {
     }
   }
 
-  proof.relaunchStateSoundness = true;
-
   return proof;
 }
 
@@ -112,9 +110,6 @@ void mlir::carts::arts::stampOwnershipProof(LoweringContractOp contractOp,
                       BoolAttr::get(ctx, proof.haloLegality));
   contractOp->setAttr(::mlir::carts::arts::AttrNames::Proof::DepSliceSoundness,
                       BoolAttr::get(ctx, proof.depSliceSoundness));
-  contractOp->setAttr(
-      ::mlir::carts::arts::AttrNames::Proof::RelaunchStateSoundness,
-      BoolAttr::get(ctx, proof.relaunchStateSoundness));
 }
 
 OwnershipProof mlir::carts::arts::readOwnershipProof(Operation *op) {
@@ -133,8 +128,5 @@ OwnershipProof mlir::carts::arts::readOwnershipProof(Operation *op) {
   if (auto attr = op->getAttrOfType<BoolAttr>(
           ::mlir::carts::arts::AttrNames::Proof::DepSliceSoundness))
     proof.depSliceSoundness = attr.getValue();
-  if (auto attr = op->getAttrOfType<BoolAttr>(
-          ::mlir::carts::arts::AttrNames::Proof::RelaunchStateSoundness))
-    proof.relaunchStateSoundness = attr.getValue();
   return proof;
 }

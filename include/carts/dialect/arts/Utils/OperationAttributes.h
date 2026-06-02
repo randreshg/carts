@@ -27,14 +27,13 @@ namespace AttrNames {
 namespace Operation {
 using namespace llvm;
 
-// ArtsId, ArtsCreateId, OutlinedFunc, PatternRevision, and
-// StripMiningGenerated live in carts/dialect/arts/Utils/ArtsAttrNames.h.
+// ArtsId, ArtsCreateId, OutlinedFunc, and StripMiningGenerated live in
+// carts/dialect/arts/Utils/ArtsAttrNames.h.
 
 // `nowait`, `preserve_access_mode`, and `preserve_dep_edge` are ODS-declared
-// attributes on their owning ops (arts.edt, sde.* loop/region ops, and
-// arts.db_acquire respectively); consumers must use the generated
-// `op.get<Name>AttrName()` / `op.get<Name>()` / `op.remove<Name>Attr()`
-// accessors rather than raw strings.
+// attributes on their owning ops (sde.* loop/region ops and arts.db_acquire);
+// consumers must use the generated `op.get<Name>AttrName()` / `op.get<Name>()`
+// / `op.remove<Name>Attr()` accessors rather than raw strings.
 
 /// Partition-related attributes (TableGen-generated names).
 /// `partition_mode` is owned by ArtsPartitionedOpInterface, `distributed`
@@ -57,17 +56,13 @@ using namespace llvm;
 //
 // `owner_dims`, `supported_block_halo`, `stencil_independent_dims`,
 // `post_db_refined`, and `spatial_dims` had zero in-tree consumers and were
-// dropped. `critical_path_distance` is an ODS-declared OptionalAttr<I64Attr>
-// on arts.edt (set by EdtTransformsPass ET-6 and read through the
-// LoweringContractOp::getCriticalPathDistance() helper which still consults
-// the encapsulated ContractAttr). `narrowable_dep` is a cross-dialect
+// dropped. `narrowable_dep` is a cross-dialect
 // discardable key (propagated via copySemanticContractAttrs onto non-ARTS
 // source ops like memref.alloc); it lives in
 // carts/dialect/arts/Utils/ArtsAttrNames.h under the Contract namespace.
 
 // Proof-driven ownership attributes (Proof::OwnerDimReachability,
-// PartitionAccessMapping, HaloLegality, DepSliceSoundness,
-// RelaunchStateSoundness) live in
+// PartitionAccessMapping, HaloLegality, DepSliceSoundness) live in
 // carts/dialect/arts/Utils/ArtsAttrNames.h.
 
 } // namespace Operation
@@ -148,18 +143,6 @@ getPlanRepetitionStructureAttr(Operation *op) {
   return nullptr;
 }
 
-inline ArtsPlanAsyncStrategyAttr getPlanAsyncStrategyAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanAsyncStrategyAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanAsyncStrategyAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanAsyncStrategyAttr();
-  return nullptr;
-}
-
 inline void setPlanOwnerDimsAttr(Operation *op, ArrayAttr attr) {
   if (!op || !attr)
     return;
@@ -229,26 +212,13 @@ setPlanRepetitionStructureAttr(Operation *op,
     dbAllocOp.setPlanRepetitionStructureAttr(attr);
 }
 
-inline void setPlanAsyncStrategyAttr(Operation *op,
-                                     ArtsPlanAsyncStrategyAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanAsyncStrategyAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanAsyncStrategyAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanAsyncStrategyAttr(attr);
-}
-
 /// Check whether a CARTS operation carries any structured plan attr. This is a
 /// generic contract-presence test; callers that need semantic families should
 /// consume explicit dep/distribution contract attrs instead.
 inline bool hasStructuredPlanAttrs(Operation *op) {
   return getPlanOwnerDimsAttr(op) || getPlanPhysicalBlockShapeAttr(op) ||
          getPlanLogicalWorkerSliceAttr(op) || getPlanHaloShapeAttr(op) ||
-         getPlanIterationTopologyAttr(op) ||
-         getPlanRepetitionStructureAttr(op) || getPlanAsyncStrategyAttr(op);
+         getPlanIterationTopologyAttr(op) || getPlanRepetitionStructureAttr(op);
 }
 
 inline std::optional<StringRef> getRuntimeConfigPath(ModuleOp module) {
@@ -602,27 +572,6 @@ inline std::optional<ArtsDepPattern> getEffectiveDepPattern(Operation *op) {
   return std::nullopt;
 }
 
-inline std::optional<int64_t> getPatternRevision(Operation *op) {
-  if (!op)
-    return std::nullopt;
-  if (auto attr =
-          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::PatternRevision))
-    return attr.getInt();
-  return std::nullopt;
-}
-
-inline void setPatternRevision(Operation *op, int64_t revision) {
-  if (!op)
-    return;
-  if (revision <= 0) {
-    op->removeAttr(AttrNames::Operation::PatternRevision);
-    return;
-  }
-  op->setAttr(
-      AttrNames::Operation::PatternRevision,
-      IntegerAttr::get(IntegerType::get(op->getContext(), 64), revision));
-}
-
 inline void copyDepPatternAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;
@@ -695,10 +644,6 @@ inline void copyPatternAttrs(Operation *source, Operation *dest) {
     return;
   copyDistributionAttrs(source, dest);
   copyDepPatternAttrs(source, dest);
-  if (auto revision = getPatternRevision(source))
-    setPatternRevision(dest, *revision);
-  else
-    dest->removeAttr(AttrNames::Operation::PatternRevision);
 }
 
 inline void inheritPatternAttrs(Operation *source, Operation *dest) {
@@ -706,9 +651,6 @@ inline void inheritPatternAttrs(Operation *source, Operation *dest) {
     return;
   inheritDistributionAttrs(source, dest);
   inheritDepPatternAttrs(source, dest);
-  if (!getPatternRevision(dest))
-    if (auto revision = getPatternRevision(source))
-      setPatternRevision(dest, *revision);
 }
 
 /// Use only when the destination preserves the same loop semantics/identity as
