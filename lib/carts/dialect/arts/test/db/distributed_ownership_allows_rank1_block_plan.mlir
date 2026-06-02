@@ -41,6 +41,18 @@
 // CHECK-SAME: planOwnerDims = [1]
 // CHECK-SAME: planPhysicalBlockShape = [8, 16]
 // CHECK: arts.edt <task> <internode>
+// CHECK-LABEL: func.func @rank3_transposed_owner_dims_project_full_physical_block_shape
+// CHECK: arts.db_alloc
+// CHECK-SAME: <block>
+// CHECK-SAME: distributed
+// CHECK-SAME: owner_block_shape = [32, 16, 8]
+// CHECK-SAME: owner_map_dims = [0, 1, 2]
+// CHECK-SAME: owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>
+// CHECK-SAME: owner_map_version = 1 : i32
+// CHECK-SAME: planLogicalWorkerSlice = [8, 16, 32]
+// CHECK-SAME: planOwnerDims = [2, 1, 0]
+// CHECK-SAME: planPhysicalBlockShape = [8, 16, 32]
+// CHECK: arts.edt <task> <internode>
 
 module {
   func.func @rank1_block_alloc_can_be_distributed() {
@@ -112,6 +124,32 @@ module {
     }
 
     arts.db_release(%acq_ptr) : memref<?xmemref<?x?xf64>>
+    return
+  }
+
+  func.func @rank3_transposed_owner_dims_project_full_physical_block_shape() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c4 = arith.constant 4 : index
+    %c8 = arith.constant 8 : index
+    %c16 = arith.constant 16 : index
+    %c32 = arith.constant 32 : index
+    %route = arith.constant 0 : i32
+    %value = arith.constant 1.0 : f64
+
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>, <uniform>] route(%route : i32) sizes[%c4, %c2, %c1] elementType(f64) elementSizes[%c8, %c16, %c32] {distribution_kind = #arts.distribution_kind<block>, planLogicalWorkerSlice = [8, 16, 32], planOwnerDims = [2, 1, 0], planPhysicalBlockShape = [8, 16, 32]} : (memref<?x?x?xi64>, memref<?x?x?xmemref<?x?x?xf64>>)
+    %acq_guid, %acq_ptr = arts.db_acquire[<inout>] (%guid : memref<?x?x?xi64>, %ptr : memref<?x?x?xmemref<?x?x?xf64>>) partitioning(<block>), indices[], offsets[%c0, %c0, %c0], sizes[%c1, %c1, %c1] -> (memref<?x?x?xi64>, memref<?x?x?xmemref<?x?x?xf64>>)
+
+    arts.edt <task> <internode> route(%route) (%acq_ptr) : memref<?x?x?xmemref<?x?x?xf64>> attributes {distribution_kind = #arts.distribution_kind<block>, planLogicalWorkerSlice = [8, 16, 32], planOwnerDims = [2, 1, 0], planPhysicalBlockShape = [8, 16, 32]} {
+    ^bb0(%dep: memref<?x?x?xmemref<?x?x?xf64>>):
+      %payload = arts.db_ref %dep[%c0, %c0, %c0] : memref<?x?x?xmemref<?x?x?xf64>> -> memref<?x?x?xf64>
+      memref.store %value, %payload[%c0, %c0, %c0] : memref<?x?x?xf64>
+      arts.db_release(%dep) : memref<?x?x?xmemref<?x?x?xf64>>
+      arts.yield
+    }
+
+    arts.db_release(%acq_ptr) : memref<?x?x?xmemref<?x?x?xf64>>
     return
   }
 }

@@ -827,12 +827,17 @@ static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
 
     sawExternalStore = true;
     OperandRange indices = storeOp.getIndices();
-    for (int64_t ownerDim : ownerDims) {
+    if (ownerDims.size() > loopIvs->size()) {
+      rejected = true;
+      return;
+    }
+    for (auto [ownerSlot, ownerDim] : llvm::enumerate(ownerDims)) {
       if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= indices.size()) {
         rejected = true;
         return;
       }
-      if (!sde::isExactOwnerIndex(indices[ownerDim], *loopIvs)) {
+      if (!sde::isOwnerDependentIndex(indices[ownerDim],
+                                      (*loopIvs)[ownerSlot])) {
         rejected = true;
         return;
       }
@@ -856,8 +861,6 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op) {
       selectSingleBudgetWriteLayoutFact(op, allowSingleOwnerDim);
   if (!writeLayout)
     return std::nullopt;
-  if (!allExternalStoresCoverOwnerDims(op, writeLayout->ownerDims))
-    return std::nullopt;
 
   unsigned numDims = op.getLowerBounds().size();
   if (numDims < writeLayout->ownerDims.size() ||
@@ -871,18 +874,28 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op) {
       outputPlan->physicalDimToLoopDim.size() != outputPlan->shape.size())
     return std::nullopt;
 
-  for (int64_t rawOwnerDim : writeLayout->ownerDims) {
-    if (rawOwnerDim < 0 || static_cast<size_t>(rawOwnerDim) >=
-                               outputPlan->physicalDimToLoopDim.size())
+  SmallVector<int64_t, 4> orderedOwnerPhysicalDims;
+  orderedOwnerPhysicalDims.reserve(writeLayout->ownerDims.size());
+  for (unsigned loopDim = 0; loopDim < numDims; ++loopDim) {
+    if (loopDim >= outputPlan->loopDimToPhysicalDim.size())
       return std::nullopt;
-    int64_t loopDim = outputPlan->physicalDimToLoopDim[rawOwnerDim];
-    if (loopDim < 0 || static_cast<unsigned>(loopDim) >= numDims)
+    int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
+    if (physicalDim < 0)
+      continue;
+    if (static_cast<size_t>(physicalDim) >=
+        outputPlan->physicalDimToLoopDim.size())
       return std::nullopt;
+    if (llvm::is_contained(writeLayout->ownerDims, physicalDim))
+      orderedOwnerPhysicalDims.push_back(physicalDim);
   }
+  if (orderedOwnerPhysicalDims.size() != writeLayout->ownerDims.size())
+    return std::nullopt;
+  if (!allExternalStoresCoverOwnerDims(op, orderedOwnerPhysicalDims))
+    return std::nullopt;
 
   PhysicalTilePlan plan;
-  plan.ownerPhysicalDims.assign(writeLayout->ownerDims.begin(),
-                                writeLayout->ownerDims.end());
+  plan.ownerPhysicalDims.assign(orderedOwnerPhysicalDims.begin(),
+                                orderedOwnerPhysicalDims.end());
   plan.blockShape.assign(writeLayout->budgetBlockShape.begin(),
                          writeLayout->budgetBlockShape.end());
   plan.tileIterations.assign(numDims, 1);

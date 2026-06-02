@@ -72,6 +72,9 @@ struct StructuredMemoryEffectSummary {
 struct LoopIndexedOutputPlan {
   Value root;
   SmallVector<int64_t, 4> shape;
+  /// Ordered map from owner loop slot to physical memref dimension.
+  /// For a transposed write `A[k, j, i]` in loop order `(i, j, k)`, this is
+  /// `[2, 1, 0]`, not the unordered set `{0, 1, 2}`.
   SmallVector<int64_t, 4> ownerPhysicalDims;
 };
 
@@ -264,6 +267,11 @@ inline bool isOwnerDependentIndex(Value index,
   return false;
 }
 
+inline bool isOwnerDependentIndex(Value index, Value ownerIndex) {
+  SmallVector<Value, 1> ownerIndexValues{ownerIndex};
+  return isOwnerDependentIndex(index, ownerIndexValues);
+}
+
 inline SmallVector<int64_t, 4>
 collectExactOwnerIndexedPhysicalDims(OperandRange indices,
                                      ArrayRef<Value> ownerIndexValues) {
@@ -271,6 +279,32 @@ collectExactOwnerIndexedPhysicalDims(OperandRange indices,
   for (auto [idx, index] : llvm::enumerate(indices))
     if (isOwnerDependentIndex(index, ownerIndexValues))
       ownerPhysicalDims.push_back(static_cast<int64_t>(idx));
+  return ownerPhysicalDims;
+}
+
+inline std::optional<SmallVector<int64_t, 4>>
+collectOwnerIndexedPhysicalDimsByOwnerOrder(OperandRange indices,
+                                            ArrayRef<Value> ownerIndexValues) {
+  if (indices.empty() || ownerIndexValues.empty())
+    return std::nullopt;
+
+  llvm::SmallBitVector usedPhysicalDims(indices.size(), false);
+  SmallVector<int64_t, 4> ownerPhysicalDims;
+  ownerPhysicalDims.reserve(ownerIndexValues.size());
+  for (Value ownerIndex : ownerIndexValues) {
+    std::optional<unsigned> selectedPhysicalDim;
+    for (auto [physicalDim, index] : llvm::enumerate(indices)) {
+      if (!isOwnerDependentIndex(index, ownerIndex))
+        continue;
+      if (selectedPhysicalDim)
+        return std::nullopt;
+      selectedPhysicalDim = static_cast<unsigned>(physicalDim);
+    }
+    if (!selectedPhysicalDim || usedPhysicalDims.test(*selectedPhysicalDim))
+      return std::nullopt;
+    usedPhysicalDims.set(*selectedPhysicalDim);
+    ownerPhysicalDims.push_back(static_cast<int64_t>(*selectedPhysicalDim));
+  }
   return ownerPhysicalDims;
 }
 

@@ -213,6 +213,30 @@ getDistributionPattern(codir::CodirPattern pattern) {
   return arts::EdtDistributionPattern::unknown;
 }
 
+static inline bool sameSortedI64Set(ArrayAttr lhs, ArrayAttr rhs) {
+  std::optional<SmallVector<int64_t, 4>> lhsValues = readI64ArrayAttr(lhs);
+  std::optional<SmallVector<int64_t, 4>> rhsValues = readI64ArrayAttr(rhs);
+  if (!lhsValues || !rhsValues || lhsValues->size() != rhsValues->size())
+    return false;
+  llvm::sort(*lhsValues);
+  llvm::sort(*rhsValues);
+  return llvm::equal(*lhsValues, *rhsValues);
+}
+
+static inline ArrayAttr getCodirStencilOwnerDimsAttr(codir::CodeletOp codelet) {
+  if (!codelet)
+    return ArrayAttr{};
+  ArrayAttr planOwnerDims = codelet.getPlanOwnerDimsAttr();
+  ArrayAttr tileOwnerDims = codelet.getTileOwnerDimsAttr();
+  if (!tileOwnerDims)
+    return planOwnerDims;
+  if (!planOwnerDims)
+    return tileOwnerDims;
+  if (sameSortedI64Set(planOwnerDims, tileOwnerDims))
+    return tileOwnerDims;
+  return planOwnerDims;
+}
+
 static inline void propagateCodirPlanToArts(codir::CodeletOp codelet,
                                             arts::EdtOp task) {
   if (!codelet || !task)
@@ -288,7 +312,7 @@ static inline void propagateCodirPlanToArts(codir::CodeletOp codelet,
     task->setAttr(task.getStencilMinOffsetsAttrName(), minOffsets);
   if (auto maxOffsets = codelet.getAccessMaxOffsetsAttr())
     task->setAttr(task.getStencilMaxOffsetsAttrName(), maxOffsets);
-  if (auto ownerDims = codelet.getPlanOwnerDimsAttr())
+  if (auto ownerDims = getCodirStencilOwnerDimsAttr(codelet))
     task->setAttr(task.getStencilOwnerDimsAttrName(), ownerDims);
   if (auto spatialDims = codelet.getSpatialDimsAttr())
     task->setAttr(task.getStencilSpatialDimsAttrName(), spatialDims);

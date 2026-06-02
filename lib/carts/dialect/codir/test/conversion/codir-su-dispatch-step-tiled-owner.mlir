@@ -81,6 +81,26 @@ module {
     return
   }
 
+  func.func @su_owner_tile_flattens_nonleading_physical_dims(%A: memref<2x64x64xf32>, %B: memref<2x64x64xf32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c63 = arith.constant 63 : index
+    sde.cu_region <parallel> {
+      sde.su_iterate (%c1, %c1) to (%c63, %c63) step (%c1, %c1) classification(<stencil>) {
+      ^bb0(%i: index, %j: index):
+        %v = memref.load %A[%c0, %i, %j] : memref<2x64x64xf32>
+        memref.store %v, %B[%c0, %i, %j] : memref<2x64x64xf32>
+        sde.yield
+      } {iterationTopology = #sde.iteration_topology<owner_tile>,
+         logicalWorkerSlice = [1, 4, 8],
+         physicalBlockShape = [1, 4, 8],
+         physicalOwnerDims = [1, 2],
+         pattern = #sde.pattern<stencil_tiling_nd>}
+      sde.yield
+    }
+    return
+  }
+
   func.func @su_dispatch_step_uses_owner_strip_multidim_logical_slice(%A: memref<2304000xf32>, %B: memref<2304000x30xf32>) {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
@@ -189,6 +209,18 @@ module {
 // CHECK: arith.remui
 // CHECK: codir.codelet {{.*}}params(%{{.*}}, %{{.*}}, %{{.*}} : index, index, index)
 // CHECK-SAME: tile_owner_dims = [0, 1, 2]
+
+// CHECK-LABEL: func.func @su_owner_tile_flattens_nonleading_physical_dims
+// CHECK-DAG: %[[C4_NL:.*]] = arith.constant 4 : index
+// CHECK-DAG: %[[C8_NL:.*]] = arith.constant 8 : index
+// CHECK: arith.ceildivui %{{.*}}, %[[C4_NL]]
+// CHECK: arith.ceildivui %{{.*}}, %[[C8_NL]]
+// CHECK: scf.for %[[ORD_NL:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
+// CHECK: arith.remui %[[ORD_NL]]
+// CHECK: arith.divui %[[ORD_NL]]
+// CHECK: codir.codelet {{.*}}params(%{{.*}}, %{{.*}} : index, index)
+// CHECK-SAME: tile_owner_dims = [1, 2]
+// CHECK-SAME: tile_shape = [1, 4, 8]
 
 // CHECK-LABEL: func.func @su_dispatch_step_uses_owner_strip_multidim_logical_slice
 // CHECK-DAG: %[[C36000:.*]] = arith.constant 36000 : index

@@ -138,17 +138,19 @@ getDbOwnerBlockShapeFromPlan(DbAllocOp alloc) {
       planBlockShape->empty() || !dbOwnerDims || dbOwnerDims->empty())
     return std::nullopt;
 
-  /// Already compacted to one block size per owner-map dimension.
-  if (planBlockShape->size() == dbOwnerDims->size()) {
-    SmallVector<int64_t, 4> blockShape;
-    blockShape.assign(planBlockShape->begin(), planBlockShape->end());
-    return blockShape;
-  }
-
   /// Full physical block shape: project by the physical owner dims and retain
   /// owner-slot order. For planOwnerDims [1] and planPhysicalBlockShape [8,
   /// 16], the rank-1 DB owner block shape is [16].
   if (planBlockShape->size() == alloc.getElementSizes().size()) {
+    SmallVector<int64_t, 4> identityOwnerDims =
+        makeAllDbOwnerDims(dbOwnerDims->size());
+    if (planBlockShape->size() == dbOwnerDims->size() &&
+        sameI64Values(*planOwnerDims, identityOwnerDims)) {
+      SmallVector<int64_t, 4> blockShape;
+      blockShape.assign(planBlockShape->begin(), planBlockShape->end());
+      return blockShape;
+    }
+
     SmallVector<int64_t, 4> blockShape;
     blockShape.reserve(planOwnerDims->size());
     for (int64_t physicalDim : *planOwnerDims) {
@@ -157,6 +159,13 @@ getDbOwnerBlockShapeFromPlan(DbAllocOp alloc) {
         return std::nullopt;
       blockShape.push_back((*planBlockShape)[physicalDim]);
     }
+    return blockShape;
+  }
+
+  /// Already compacted to one block size per owner-map dimension.
+  if (planBlockShape->size() == dbOwnerDims->size()) {
+    SmallVector<int64_t, 4> blockShape;
+    blockShape.assign(planBlockShape->begin(), planBlockShape->end());
     return blockShape;
   }
 

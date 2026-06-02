@@ -783,10 +783,13 @@ static bool allRootAccessesStayWithinOwnerTile(sde::SdeSuIterateOp op,
     auto memRefType = dyn_cast<MemRefType>(base.getType());
     if (!memRefType || memRefType.getRank() == 0 || indices.empty())
       return WalkResult::interrupt();
-    for (int64_t rawDim : ownerDims) {
+    if (ownerDims.size() > ownerIndexValues.size())
+      return WalkResult::interrupt();
+    for (auto [ownerSlot, rawDim] : llvm::enumerate(ownerDims)) {
       if (rawDim < 0 || static_cast<size_t>(rawDim) >= indices.size())
         return WalkResult::interrupt();
-      if (!sde::isOwnerDependentIndex(indices[rawDim], ownerIndexValues))
+      if (!sde::isOwnerDependentIndex(indices[rawDim],
+                                      ownerIndexValues[ownerSlot]))
         return WalkResult::interrupt();
     }
     return WalkResult::advance();
@@ -837,10 +840,10 @@ findConsistentMultiOwnerOutputPlan(sde::SdeSuIterateOp op) {
       return WalkResult::interrupt();
     }
 
-    SmallVector<int64_t, 4> ownerPhysicalDims =
-        sde::collectExactOwnerIndexedPhysicalDims(storeOp.getIndices(),
-                                                  ownerIndexValues);
-    if (ownerPhysicalDims.size() < 2) {
+    std::optional<SmallVector<int64_t, 4>> ownerPhysicalDims =
+        sde::collectOwnerIndexedPhysicalDimsByOwnerOrder(storeOp.getIndices(),
+                                                         ownerIndexValues);
+    if (!ownerPhysicalDims || ownerPhysicalDims->size() < 2) {
       rejected = true;
       return WalkResult::interrupt();
     }
@@ -856,7 +859,7 @@ findConsistentMultiOwnerOutputPlan(sde::SdeSuIterateOp op) {
     }
 
     sde::LoopIndexedOutputPlan candidate{base, std::move(shape),
-                                         std::move(ownerPhysicalDims)};
+                                         std::move(*ownerPhysicalDims)};
     if (!selectedPlan) {
       selectedPlan = std::move(candidate);
       return WalkResult::advance();
@@ -949,12 +952,17 @@ static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
 
     sawExternalStore = true;
     OperandRange indices = storeOp.getIndices();
-    for (int64_t ownerDim : ownerDims) {
+    if (ownerDims.size() > loopIvs->size()) {
+      rejected = true;
+      return;
+    }
+    for (auto [ownerSlot, ownerDim] : llvm::enumerate(ownerDims)) {
       if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= indices.size()) {
         rejected = true;
         return;
       }
-      if (!sde::isExactOwnerIndex(indices[ownerDim], *loopIvs)) {
+      if (!sde::isOwnerDependentIndex(indices[ownerDim],
+                                      (*loopIvs)[ownerSlot])) {
         rejected = true;
         return;
       }
@@ -970,7 +978,39 @@ static bool assignedWriteLayoutMatchesOwnerDims(sde::SdeSuIterateOp op,
       selectSingleWriteLayoutFact(op);
   if (!writeLayout)
     return true;
-  return llvm::equal(writeLayout->ownerDims, ownerDims);
+  if (writeLayout->ownerDims.size() != ownerDims.size())
+    return false;
+  SmallVector<int64_t, 4> layoutDims(writeLayout->ownerDims.begin(),
+                                     writeLayout->ownerDims.end());
+  SmallVector<int64_t, 4> plannedDims(ownerDims.begin(), ownerDims.end());
+  llvm::sort(layoutDims);
+  llvm::sort(plannedDims);
+  return llvm::equal(layoutDims, plannedDims);
+}
+
+static std::optional<SmallVector<int64_t, 4>>
+orderPhysicalOwnerDimsByLoop(const sde::StructuredOutputLayoutPlan &outputPlan,
+                             ArrayRef<int64_t> layoutOwnerDims,
+                             unsigned loopRank) {
+  if (layoutOwnerDims.empty() || outputPlan.loopDimToPhysicalDim.empty())
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> orderedOwnerDims;
+  orderedOwnerDims.reserve(layoutOwnerDims.size());
+  for (unsigned loopDim = 0; loopDim < loopRank; ++loopDim) {
+    if (loopDim >= outputPlan.loopDimToPhysicalDim.size())
+      return std::nullopt;
+    int64_t physicalDim = outputPlan.loopDimToPhysicalDim[loopDim];
+    if (physicalDim < 0)
+      continue;
+    if (static_cast<size_t>(physicalDim) >= outputPlan.shape.size())
+      return std::nullopt;
+    if (llvm::is_contained(layoutOwnerDims, physicalDim))
+      orderedOwnerDims.push_back(physicalDim);
+  }
+  if (orderedOwnerDims.size() != layoutOwnerDims.size())
+    return std::nullopt;
+  return orderedOwnerDims;
 }
 
 static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
@@ -997,8 +1037,19 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
     return false;
 
   sde::LoopIndexedOutputPlan plan = *outputPlan;
-  plan.ownerPhysicalDims.assign(writeLayout->ownerDims.begin(),
-                                writeLayout->ownerDims.end());
+  if (std::optional<sde::StructuredOutputLayoutPlan> structuredPlan =
+          sde::findCompatibleOutputLayoutPlan(op)) {
+    std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
+        orderPhysicalOwnerDimsByLoop(*structuredPlan, writeLayout->ownerDims,
+                                     op.getLowerBounds().size());
+    if (!orderedOwnerDims)
+      return false;
+    plan.ownerPhysicalDims.assign(orderedOwnerDims->begin(),
+                                  orderedOwnerDims->end());
+  } else {
+    plan.ownerPhysicalDims.assign(writeLayout->ownerDims.begin(),
+                                  writeLayout->ownerDims.end());
+  }
   if (!allExternalStoresCoverOwnerDims(op, plan.ownerPhysicalDims))
     return false;
 
@@ -1060,8 +1111,17 @@ static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
   // rather than stamping an unverifiable owner_tile plan.
   if (op.getLowerBounds().size() < writeLayout->ownerDims.size())
     return false;
-  SmallVector<int64_t, 4> ownerDims(writeLayout->ownerDims.begin(),
-                                    writeLayout->ownerDims.end());
+  std::optional<sde::StructuredOutputLayoutPlan> outputPlan =
+      sde::findCompatibleOutputLayoutPlan(op);
+  if (!outputPlan)
+    return false;
+  std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
+      orderPhysicalOwnerDimsByLoop(*outputPlan, writeLayout->ownerDims,
+                                   op.getLowerBounds().size());
+  if (!orderedOwnerDims)
+    return false;
+  SmallVector<int64_t, 4> ownerDims(orderedOwnerDims->begin(),
+                                    orderedOwnerDims->end());
   if (!allExternalStoresCoverOwnerDims(op, ownerDims))
     return false;
   SmallVector<int64_t, 4> blockShape(writeLayout->budgetBlockShape.begin(),
@@ -1115,23 +1175,27 @@ static void
 alignLateOwnerPlanToExistingStep(sde::SdeSuIterateOp op,
                                  ArrayRef<int64_t> ownerDims,
                                  MutableArrayRef<int64_t> physicalBlockShape) {
-  if (ownerDims.size() != 1 || op.getSteps().empty())
-    return;
-
-  int64_t ownerPhysicalDim = ownerDims.front();
-  if (ownerPhysicalDim < 0 ||
-      static_cast<size_t>(ownerPhysicalDim) >= physicalBlockShape.size())
-    return;
-
-  std::optional<int64_t> ownerStep = getPositiveConstantIndex(op.getSteps()[0]);
-  if (!ownerStep || *ownerStep <= physicalBlockShape[ownerPhysicalDim])
+  if (ownerDims.empty() || op.getSteps().empty() ||
+      ownerDims.size() > op.getSteps().size())
     return;
 
   // DistributionPlanning runs after SDE loop tiling. When it authors a physical
-  // owner plan late, the element-space block for the owner dimension must cover
-  // the already-existing owner-loop step; otherwise one planned task slice can
-  // index outside the dependency window described by the SDE owner plan.
-  physicalBlockShape[ownerPhysicalDim] = *ownerStep;
+  // owner plan late, the element-space block for each owner dimension must
+  // match the already-realized owner-loop step. A coarser block would serialize
+  // independent tiled loops behind one DB/MU; a finer block would describe
+  // slices the loop no longer materializes.
+  for (auto [ownerSlot, ownerPhysicalDim] : llvm::enumerate(ownerDims)) {
+    if (ownerPhysicalDim < 0 ||
+        static_cast<size_t>(ownerPhysicalDim) >= physicalBlockShape.size())
+      return;
+
+    std::optional<int64_t> ownerStep =
+        getPositiveConstantIndex(op.getSteps()[ownerSlot]);
+    if (!ownerStep || *ownerStep <= 1)
+      continue;
+
+    physicalBlockShape[ownerPhysicalDim] = *ownerStep;
+  }
 }
 
 static bool
@@ -1449,6 +1513,7 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
                 *multiOwnerPlan, costModel, workers,
                 readAbstractCommVolumeBytes(op),
                 collectAbstractMuHyperedges(op), ownerDims, physicalBlockShape);
+            alignLateOwnerPlanToExistingStep(op, ownerDims, physicalBlockShape);
             if (applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape))
               return;
           }

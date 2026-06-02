@@ -15,6 +15,23 @@
 // BASE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // BASE: func.func @elementwise_inplace_2d_owner_tile
 // BASE: iterationTopology = #sde.iteration_topology<owner_tile>
+// BASE-SAME: logicalWorkerSlice = [86, 86, 16]
+// BASE-SAME: partitionGraph = [
+// BASE-SAME: blockShape = [86, 86, 16]
+// BASE-SAME: muBlockCount = 36 : i64
+// BASE-SAME: partitionScore = {
+// BASE-SAME: blockShape = [86, 86, 16]
+// BASE-SAME: exposedCuCount = 16 : i64
+// BASE-SAME: muBlockCount = 36 : i64
+// BASE-SAME: physicalBlockShape = [86, 86, 16]
+// BASE-SAME: physicalOwnerDims = [0, 1]
+// BASE: func.func @precommitted_owner_tile
+// BASE: iterationTopology = #sde.iteration_topology<owner_tile>
+// BASE-SAME: logicalWorkerSlice = [64, 128, 16]
+// BASE-SAME: physicalBlockShape = [64, 128, 16]
+// BASE-SAME: physicalOwnerDims = [0, 1]
+// BASE: func.func @physical_only_owner_tile
+// BASE: iterationTopology = #sde.iteration_topology<owner_tile>
 // BASE-SAME: logicalWorkerSlice = [64, 128, 16]
 // BASE-SAME: physicalBlockShape = [64, 128, 16]
 // BASE-SAME: physicalOwnerDims = [0, 1]
@@ -22,8 +39,15 @@
 // COARSE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // COARSE: func.func @elementwise_inplace_2d_owner_tile
 // COARSE: iterationTopology = #sde.iteration_topology<owner_tile>
-// COARSE-SAME: logicalWorkerSlice = [64, 128, 16]
-// COARSE-SAME: physicalBlockShape = [64, 128, 16]
+// COARSE-SAME: logicalWorkerSlice = [86, 86, 16]
+// COARSE-SAME: partitionGraph = [{blockShape = [86, 86, 16]
+// COARSE-SAME: muBlockCount = 36 : i64
+// COARSE-SAME: partitionScore = {blockShape = [86, 86, 16]
+// COARSE-SAME: cuGroupCount = 18 : i64
+// COARSE-SAME: cuGroupSize = 2 : i64
+// COARSE-SAME: minTileBytes = 1048576 : i64
+// COARSE-SAME: muBlockCount = 36 : i64
+// COARSE-SAME: physicalBlockShape = [86, 86, 16]
 // COARSE-SAME: physicalOwnerDims = [0, 1]
 // COARSE: func.func @precommitted_owner_tile
 // COARSE: iterationTopology = #sde.iteration_topology<owner_tile>
