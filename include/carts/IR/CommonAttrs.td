@@ -30,4 +30,13 @@ defvar CartsReductionStrategyCases = [
     I32EnumAttrCase<"local_accumulate", 2, "local_accumulate">
 ];
 
+// BarrierReason is defined with identical cases in the SDE and ARTS dialects.
+defvar CartsBarrierReasonCases = [
+    I32EnumAttrCase<"redundant", 0, "redundant">,
+    I32EnumAttrCase<"required_memory", 1, "required_memory">,
+    I32EnumAttrCase<"timestep_stage_boundary", 2, "timestep_stage_boundary">,
+    I32EnumAttrCase<"wavefront_frontier", 3, "wavefront_frontier">,
+    I32EnumAttrCase<"unknown_required", 4, "unknown_required">
+];
+
 #endif // CARTS_COMMON_ATTRS

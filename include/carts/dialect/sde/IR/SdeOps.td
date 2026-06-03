@@ -163,14 +163,8 @@ def SdeAsyncStrategyAttr
 
 def SdeBarrierReason
     : CartsSde_I32Enum<"SdeBarrierReason",
-                      "SDE barrier preservation or elimination reason", [
-      I32EnumAttrCase<"redundant", 0, "redundant">,
-      I32EnumAttrCase<"required_memory", 1, "required_memory">,
-      I32EnumAttrCase<"timestep_stage_boundary", 2,
-                      "timestep_stage_boundary">,
-      I32EnumAttrCase<"wavefront_frontier", 3, "wavefront_frontier">,
-      I32EnumAttrCase<"unknown_required", 4, "unknown_required">
-    ]>;
+                      "SDE barrier preservation or elimination reason",
+                      CartsBarrierReasonCases>;
 def SdeBarrierReasonAttr
     : CartsSde_I32EnumAttr<"barrier_reason", SdeBarrierReason>;
 
