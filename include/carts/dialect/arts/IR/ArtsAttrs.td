@@ -8,6 +8,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
+include "carts/IR/CommonAttrs.td"
 include "mlir/IR/BuiltinAttributeInterfaces.td"
 include "mlir/IR/BuiltinAttributes.td"
 include "ArtsDialect.td"
@@ -124,11 +125,8 @@ def DbOwnerMapKindAttr
 
 def ArtsPlanIterationTopology
     : Arts_I32Enum<"ArtsPlanIterationTopology",
-                   "ARTS physical iteration topology", [
-      I32EnumAttrCase<"owner_strip", 0, "owner_strip">,
-      I32EnumAttrCase<"owner_tile", 1, "owner_tile">,
-      I32EnumAttrCase<"owner_tile_2d", 2, "owner_tile_2d">
-    ]>;
+                   "ARTS physical iteration topology",
+                   CartsIterationTopologyCases>;
 def ArtsPlanIterationTopologyAttr
     : Arts_I32EnumAttr<"plan_iteration_topology",
                        ArtsPlanIterationTopology>;

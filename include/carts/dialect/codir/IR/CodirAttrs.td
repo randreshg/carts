@@ -7,6 +7,7 @@
 #define CARTS_CODIR_ATTRS
 
 include "carts/dialect/codir/IR/CodirDialect.td"
+include "carts/IR/CommonAttrs.td"
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
 
@@ -97,11 +98,8 @@ def DistributionKindAttr
 
 def CodirIterationTopology
     : CartsCodir_I32Enum<"CodirIterationTopology",
-                         "CODIR logical iteration topology", [
-      I32EnumAttrCase<"owner_strip", 0, "owner_strip">,
-      I32EnumAttrCase<"owner_tile", 1, "owner_tile">,
-      I32EnumAttrCase<"owner_tile_2d", 2, "owner_tile_2d">
-    ]>;
+                         "CODIR logical iteration topology",
+                         CartsIterationTopologyCases>;
 def IterationTopologyAttr
     : CartsCodir_I32EnumAttr<"iteration_topology", CodirIterationTopology>;
 

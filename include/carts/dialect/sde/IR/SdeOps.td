@@ -8,6 +8,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
+include "carts/IR/CommonAttrs.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/LoopLikeInterface.td"
@@ -136,11 +137,8 @@ def SdeDistributionKindAttr
 
 def SdeIterationTopology
     : CartsSde_I32Enum<"SdeIterationTopology",
-                      "SDE element-space iteration topology", [
-      I32EnumAttrCase<"owner_strip", 0, "owner_strip">,
-      I32EnumAttrCase<"owner_tile", 1, "owner_tile">,
-      I32EnumAttrCase<"owner_tile_2d", 2, "owner_tile_2d">
-    ]>;
+                      "SDE element-space iteration topology",
+                      CartsIterationTopologyCases>;
 def SdeIterationTopologyAttr
     : CartsSde_I32EnumAttr<"iteration_topology", SdeIterationTopology>;
 
