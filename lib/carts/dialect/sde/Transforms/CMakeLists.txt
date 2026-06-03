@@ -6,6 +6,7 @@ set(CARTS_SDE_TRANSFORMS_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/state/PromoteTargetAttrs.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/ScalarForwarding.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/DeadStateCleanup.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/Parallelize.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/LayoutAssignment.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/IterationSpaceDecomposition.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/Vectorization.cpp"

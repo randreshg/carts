@@ -46,6 +46,25 @@ def Tiling : Pass<"tiling", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createTilingPass()";
 }
 
+def Parallelize : Pass<"sde-parallelize", "mlir::ModuleOp"> {
+  let summary = "Parallelize + raise embarrassingly-parallel sequential loop nests to SDE scheduling units";
+  let description = [{
+    Detects perfectly-nested rectangular `scf.for` nests that are provably
+    dependence-free (single store at indices == the loop IVs, no read of the
+    written array, pure body) and whose written array is also written by a
+    sibling `sde.su_iterate` (so it is block-distributable). Collapses the nest
+    to one flat iteration dim (delinearizing the IVs) and raises it to
+    `sde.cu_region` + `sde.su_iterate`, so LayoutAssignment sees a block writer
+    and the array stays block-native instead of being coarsed into a host_whole
+    DB with a bridge. Fail-closed: unprovable nests are left untouched.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor = "mlir::carts::sde::createParallelizePass()";
+}
+
 def PatternAnalysis
     : Pass<"sde-pattern-analysis", "mlir::ModuleOp"> {
   let summary = "Analyze and stamp approved SDE structured patterns";

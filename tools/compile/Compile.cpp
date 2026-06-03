@@ -273,8 +273,9 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 15> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 16> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
+    "Parallelize",
     "PatternAnalysis",
     "LayoutAssignment",
     "LoopInterchange",
@@ -1115,6 +1116,11 @@ void buildSdePlanningPipeline(PassManager &pm,
                               arts::AnalysisManager *AM = nullptr) {
   sde::SDECostModel *costModel = AM ? &AM->getCostModel() : nullptr;
   pm.addPass(sde::createConvertOpenMPToSdePass());
+  // Parallelize+raise embarrassingly-parallel sequential loop nests (e.g. host
+  // array inits) into SDE scheduling units BEFORE LayoutAssignment, so their
+  // arrays are seen as block writers and stay block-native instead of being
+  // coarsed into a host_whole DB + bridge. Fail-closed on anything unprovable.
+  pm.addPass(sde::createParallelizePass());
   // SDE pattern analysis first stamps approved memref/ND access facts. Dep
   // transforms then consume those SDE facts before effect passes make
   // scheduling decisions.

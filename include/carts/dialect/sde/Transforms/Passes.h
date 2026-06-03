@@ -63,6 +63,7 @@ std::unique_ptr<Pass> createScalarForwardingPass();
 std::unique_ptr<Pass> createMemoryUnitMaterializationPass();
 
 // --- Dep passes (structural transforms) ---
+std::unique_ptr<Pass> createParallelizePass();
 std::unique_ptr<Pass> createPatternAnalysisPass();
 std::unique_ptr<Pass>
 createLayoutAssignmentPass(SDECostModel *costModel = nullptr);
