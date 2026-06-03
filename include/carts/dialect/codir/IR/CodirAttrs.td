@@ -61,11 +61,8 @@ def CollectiveKindAttr
 
 def CodirReductionStrategy
     : CartsCodir_I32Enum<"CodirReductionStrategy",
-                         "CODIR reduction execution strategy", [
-      I32EnumAttrCase<"atomic", 0, "atomic">,
-      I32EnumAttrCase<"tree", 1, "tree">,
-      I32EnumAttrCase<"local_accumulate", 2, "local_accumulate">
-    ]>;
+                         "CODIR reduction execution strategy",
+                         CartsReductionStrategyCases>;
 def ReductionStrategyAttr
     : CartsCodir_I32EnumAttr<"reduction_strategy",
                              CodirReductionStrategy>;

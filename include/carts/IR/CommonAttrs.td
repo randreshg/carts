@@ -22,4 +22,12 @@ defvar CartsIterationTopologyCases = [
     I32EnumAttrCase<"owner_tile_2d", 2, "owner_tile_2d">
 ];
 
+// ReductionStrategy is defined with identical cases (atomic / tree /
+// local_accumulate) in the SDE, CODIR, and ARTS dialects.
+defvar CartsReductionStrategyCases = [
+    I32EnumAttrCase<"atomic", 0, "atomic">,
+    I32EnumAttrCase<"tree", 1, "tree">,
+    I32EnumAttrCase<"local_accumulate", 2, "local_accumulate">
+];
+
 #endif // CARTS_COMMON_ATTRS

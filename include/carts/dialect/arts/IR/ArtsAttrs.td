@@ -145,11 +145,8 @@ def ArtsPlanRepetitionStructureAttr
 
 def ArtsReductionStrategy
     : Arts_I32Enum<"ArtsReductionStrategy",
-                   "ARTS reduction execution strategy", [
-      I32EnumAttrCase<"atomic", 0, "atomic">,
-      I32EnumAttrCase<"tree", 1, "tree">,
-      I32EnumAttrCase<"local_accumulate", 2, "local_accumulate">
-    ]>;
+                   "ARTS reduction execution strategy",
+                   CartsReductionStrategyCases>;
 def ArtsReductionStrategyAttr
     : Arts_I32EnumAttr<"reduction_strategy", ArtsReductionStrategy>;
 

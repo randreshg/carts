@@ -78,11 +78,8 @@ def SdeReductionKindAttr : CartsSde_I32EnumAttr<"reduction_kind", SdeReductionKi
 
 def SdeReductionStrategy
     : CartsSde_I32Enum<"SdeReductionStrategy",
-                      "Reduction execution strategy", [
-      I32EnumAttrCase<"atomic", 0, "atomic">,
-      I32EnumAttrCase<"tree", 1, "tree">,
-      I32EnumAttrCase<"local_accumulate", 2, "local_accumulate">
-    ]>;
+                      "Reduction execution strategy",
+                      CartsReductionStrategyCases>;
 def SdeReductionStrategyAttr
     : CartsSde_I32EnumAttr<"reduction_strategy", SdeReductionStrategy>;
 
