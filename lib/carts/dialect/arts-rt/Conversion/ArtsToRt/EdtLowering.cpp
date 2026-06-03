@@ -1050,7 +1050,7 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
     /// even if the underlying allocation is WRITE-only. The allocation mode is
     /// only used to narrow (not widen) the access when the arts mode is not
     /// already read.
-    DbMode dbMode = RtDbUtils::convertArtsModeToDbMode(artsMode);
+    DbMode dbMode = DbUtils::convertArtsModeToDbMode(artsMode);
     int32_t runtimeDbMode = static_cast<int32_t>(dbMode);
     if (dbAcquireOp && dbAcquireOp.getRuntimeDbMode()) {
       RuntimeDbMode verdict = *dbAcquireOp.getRuntimeDbMode();

@@ -13,8 +13,9 @@
 //     any N at runtime via the owner map. For a 4096x4096 f64 array (128 MiB) at
 //     a ~2 MiB budget this is 64 blocks of [512, 512] -- 16x the abstract 4.
 //
-// The budget grain is emitted but not yet consumed; this test pins it so a
-// regression back to a node-count-tied grain is caught. See
+// This test pins the emitted budget grain so a regression back to a
+// node-count-tied grain is caught. budgetBlockShape is now consumed by SDE loop
+// tiling and distribution planning; budgetMuBlockCount is still emit-only. See
 // distribution-architecture-n-node-general-2026-06-01.md.
 
 // CHECK: // -----// IR Dump After LayoutAssignment (sde-layout-assignment) //----- //

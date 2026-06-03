@@ -286,10 +286,6 @@ SmallVector<Value> RtDbUtils::getDepOffsetsFromDb(Value dbPtr) {
   return getDepOffsetsFromDb(getUnderlyingDb(dbPtr));
 }
 
-DbMode RtDbUtils::convertArtsModeToDbMode(ArtsMode mode) {
-  return DbUtils::convertArtsModeToDbMode(mode);
-}
-
 void RtDbUtils::convertElementSliceToBlockSlice(
     OpBuilder &builder, Location loc, ValueRange elementOffsets,
     ValueRange elementSizes, ValueRange blockSpans, ValueRange totalBlockCounts,

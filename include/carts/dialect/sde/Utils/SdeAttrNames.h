@@ -40,7 +40,9 @@ inline constexpr llvm::StringLiteral CommVolumeBytes = "commVolumeBytes";
 // Node-agnostic, budget-sized DB/MU block grain: a function of problem size and
 // a target block-byte budget, NOT of node/worker count. Emitted alongside the
 // abstract BlockShape/MuBlockCount during the N-node-general distribution
-// migration (Step 0); not yet consumed. See
+// migration. BudgetBlockShape is consumed by SDE loop tiling and distribution
+// planning (it seeds the physical tile block shape); BudgetMuBlockCount is
+// still emitted but not yet read downstream. See
 // distribution-architecture-n-node-general-2026-06-01.md.
 inline constexpr llvm::StringLiteral BudgetBlockShape = "budgetBlockShape";
 inline constexpr llvm::StringLiteral BudgetMuBlockCount = "budgetMuBlockCount";

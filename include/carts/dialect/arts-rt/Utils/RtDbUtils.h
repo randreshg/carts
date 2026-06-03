@@ -54,9 +54,6 @@ public:
   static SmallVector<Value> getDepOffsetsFromDb(Operation *dbOp);
   static SmallVector<Value> getDepOffsetsFromDb(Value dbPtr);
 
-  static carts::arts::DbMode
-  convertArtsModeToDbMode(carts::arts::ArtsMode mode);
-
   static void convertElementSliceToBlockSlice(
       OpBuilder &builder, Location loc, ValueRange elementOffsets,
       ValueRange elementSizes, ValueRange blockSpans,

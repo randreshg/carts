@@ -485,10 +485,12 @@ static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
           staticShape, layout.ownerPositions, layout.blockShape))));
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::CommVolumeBytes,
                                   b.getI64IntegerAttr(edgeCommBytes)));
-  // Node-agnostic budget grain, emitted alongside the abstract grain (Step 0 of
-  // the N-node-general migration). Not yet consumed; downstream still reads
-  // BlockShape/MuBlockCount. For block layouts only — replicated/contraction
-  // keep the abstract grain mirrored so the field is always present.
+  // Node-agnostic budget grain, emitted alongside the abstract grain as part of
+  // the N-node-general migration. BudgetBlockShape is consumed downstream by SDE
+  // loop tiling and distribution planning to seed the physical tile block shape;
+  // BudgetMuBlockCount is emitted for completeness but not yet read. For block
+  // layouts only — replicated/contraction keep the abstract grain mirrored so
+  // the field is always present.
   SmallVector<int64_t, 4> budgetShape(layout.blockShape.begin(),
                                       layout.blockShape.end());
   if (layout.kind == sde::ArrayLayoutKind::blockParallel &&
