@@ -64,15 +64,18 @@ namespace mlir::carts::sde {
 } // namespace mlir::carts::sde
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
+#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Debug.h"
+#include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
 
 #include <numeric>
@@ -136,6 +139,38 @@ singleWriteFact(sde::SdeSuIterateOp op) {
   return selected;
 }
 
+// An su_iterate already carries a committed physical plan.
+static bool hasPhysicalPlan(sde::SdeSuIterateOp op) {
+  std::optional<SmallVector<int64_t, 4>> ownerDims =
+      readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      readI64ArrayAttr(op.getPhysicalBlockShapeAttr());
+  return ownerDims && !ownerDims->empty() && blockShape && !blockShape->empty();
+}
+
+static bool isDataParallel(sde::SdeSuIterateOp op) {
+  auto cls = op.getStructuredClassification();
+  return cls && (*cls == sde::SdeStructuredClassification::elementwise ||
+                 *cls == sde::SdeStructuredClassification::elementwise_pipeline);
+}
+
+// Author a 1-D storage plan (DB grain) on a data-parallel su_iterate that
+// DistributionPlanning left unplanned. The block is the committed node-agnostic
+// budgetBlockShape, clamped so it does not exceed the realized owner-loop step
+// (physicalPlanMatchesOwnerStepOrder requires block <= step). No partition
+// evidence is stamped (none exists; the verifier only checks evidence when it is
+// present), and logicalWorkerSlice mirrors the block — downstream CODIR/ARTS
+// distribute the DB from physicalOwnerDims + physicalBlockShape.
+static void authorOneDimPlan(sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
+                             ArrayRef<int64_t> block, MLIRContext *ctx) {
+  op.setPhysicalOwnerDimsAttr(buildI64ArrayAttr(ctx, ownerDims));
+  op.setPhysicalBlockShapeAttr(buildI64ArrayAttr(ctx, block));
+  op.setLogicalWorkerSliceAttr(buildI64ArrayAttr(ctx, block));
+  op.setIterationTopologyAttr(sde::SdeIterationTopologyAttr::get(
+      ctx, ownerDims.size() > 1 ? sde::SdeIterationTopology::owner_tile
+                                : sde::SdeIterationTopology::owner_strip));
+}
+
 // Per-writer integer scale factor from its committed block to the reconciled
 // block B over the owner dims: product of oldBlock[d] / B[d]. B is the per-dim
 // GCD of all writer blocks, so B[d] divides oldBlock[d] and each ratio is an
@@ -182,7 +217,67 @@ struct StorageGrainReconciliationPass
           StorageGrainReconciliationPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    MLIRContext *ctx = module.getContext();
 
+    // ---- Phase A: author 1-D storage plans for unplanned data-parallel SUs ----
+    // DistributionPlanning's stampBudgetReconciledPlan rejects single-owner-dim
+    // arrays (the `ownerDims.size() < 2` guard), so a 1-D `omp parallel for`
+    // data-parallel array (e.g. stream's vectors) gets NO physical plan and
+    // coarsens to a host_whole DB. Author the plan here, post-DistributionPlanning,
+    // from the committed budget grain.
+    //
+    // Protect storage that a stencil/matmul writer owns: collect the array ids
+    // written by any hard-excluded SU first, and never author a 1-D plan for
+    // them. This is what keeps a stencil double-buffer (e.g. jacobi-for's `u`,
+    // also written by an elementwise copy SU) from being block-distributed by
+    // the copy SU and desynced from the stencil's owner-tile grain.
+    llvm::DenseSet<int64_t> protectedArrayIds;
+    module.walk([&](sde::SdeSuIterateOp op) {
+      if (!isHardExcludedFamily(op))
+        return;
+      ArrayAttr layout = op.getArrayLayoutAttr();
+      if (!layout)
+        return;
+      for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout))
+        if (fact.role == sde::LayoutGraphRole::write && fact.id >= 0)
+          protectedArrayIds.insert(fact.id);
+    });
+
+    module.walk([&](sde::SdeSuIterateOp op) {
+      if (hasPhysicalPlan(op) || isHardExcludedFamily(op) || !isDataParallel(op))
+        return;
+      if (op.getInPlaceSafeAttr())
+        return; // in-place reuse keeps its single-DB grain
+      std::optional<sde::LayoutGraphFact> wf = singleWriteFact(op);
+      if (!wf || wf->id < 0 || protectedArrayIds.count(wf->id))
+        return;
+      if (wf->layoutKind != sde::ArrayLayoutKind::blockParallel)
+        return; // only block-distributable arrays
+      if (wf->ownerDims.size() != 1 || wf->budgetBlockShape.empty())
+        return; // 1-D owner only (the <2-guard gap); N-D is future work
+      int64_t ownerDim = wf->ownerDims[0];
+      if (ownerDim < 0 ||
+          static_cast<size_t>(ownerDim) >= op.getSteps().size() ||
+          static_cast<size_t>(ownerDim) >= wf->budgetBlockShape.size())
+        return;
+      int64_t step = 0;
+      if (!::mlir::carts::ValueAnalysis::getConstantIndex(
+              op.getSteps()[ownerDim], step) ||
+          step <= 0)
+        return; // need a realized constant owner step to bound the block
+      SmallVector<int64_t, 4> block(wf->budgetBlockShape.begin(),
+                                    wf->budgetBlockShape.end());
+      if (block[ownerDim] > step)
+        block[ownerDim] = step; // keep block <= step (step-order invariant)
+      if (block[ownerDim] <= 0)
+        return;
+      ARTS_DEBUG("Authoring 1-D storage plan for array id " << wf->id);
+      SmallVector<int64_t, 4> ownerDims(wf->ownerDims.begin(),
+                                        wf->ownerDims.end());
+      authorOneDimPlan(op, ownerDims, block, ctx);
+    });
+
+    // ---- Phase B: reconcile divergent multi-writer grains ----
     // Bucket every committed-plan su_iterate writer by its array join id.
     llvm::MapVector<int64_t, SmallVector<Writer, 4>> byArray;
     module.walk([&](sde::SdeSuIterateOp op) {
@@ -241,7 +336,6 @@ struct StorageGrainReconciliationPass
 
       ARTS_DEBUG("Reconciling DB grain for array id "
                  << entry.first << " across " << writers.size() << " writers");
-      MLIRContext *ctx = module.getContext();
       ArrayAttr blockAttr = buildI64ArrayAttr(ctx, block);
       for (Writer &w : writers) {
         // The DB/MU grain is physicalBlockShape (reconciled). The CU/worker
