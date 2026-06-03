@@ -439,11 +439,12 @@ Operation *CreateDbsPass::findPhysicalLayoutPlanSource(Operation *alloc) {
   };
 
   auto equivalentPlan = [](Operation *lhs, Operation *rhs) {
+    // DB physical layout identity is storage grain: owner dims, block shape,
+    // halo, and topology. Logical worker slice is CU grouping evidence and may
+    // differ across codelets that share the same block DBs.
     return getPlanOwnerDimsAttr(lhs) == getPlanOwnerDimsAttr(rhs) &&
            getPlanPhysicalBlockShapeAttr(lhs) ==
                getPlanPhysicalBlockShapeAttr(rhs) &&
-           getPlanLogicalWorkerSliceAttr(lhs) ==
-               getPlanLogicalWorkerSliceAttr(rhs) &&
            getPlanHaloShapeAttr(lhs) == getPlanHaloShapeAttr(rhs) &&
            getPlanIterationTopologyAttr(lhs) ==
                getPlanIterationTopologyAttr(rhs);

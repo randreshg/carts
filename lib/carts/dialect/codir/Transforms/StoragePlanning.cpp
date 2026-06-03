@@ -445,9 +445,11 @@ static bool hasSameBlockStoragePlan(codir::CodeletOp lhs, unsigned lhsDepIndex,
       getDepOwnerDims(lhs, lhsDepIndex);
   std::optional<SmallVector<unsigned, 4>> rhsOwnerDims =
       getDepOwnerDims(rhs, rhsDepIndex);
+  // Storage compatibility is a DB/MU-grain question. `logical_worker_slice`
+  // describes CU grouping and may legitimately differ between a full-timestep
+  // uniform copy and the stencil that consumes the same physical blocks.
   return lhsOwnerDims && rhsOwnerDims && *lhsOwnerDims == *rhsOwnerDims &&
-         lhs.getTileShapeAttr() == rhs.getTileShapeAttr() &&
-         lhs.getLogicalWorkerSliceAttr() == rhs.getLogicalWorkerSliceAttr();
+         lhs.getTileShapeAttr() == rhs.getTileShapeAttr();
 }
 
 static bool rootHasCompatibleStencilBlockParticipant(codir::CodeletOp seed,

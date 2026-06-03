@@ -421,7 +421,11 @@ struct ConvertCodirToArtsPass
           }
           bool grouped = llvm::any_of(*groupBlockCounts,
                                       [](int64_t count) { return count > 1; });
-          if (grouped && hasHaloWindow)
+          // Grouped halo-backed deps are only allowed when the body remains
+          // owner-slice rooted. Concrete index bounds are still proven by the
+          // block-local rewrite before any db_ref is materialized.
+          if (grouped && hasHaloWindow &&
+              !codirDepAccessesStayWithinSingleOwnerSlice(codelet, depIdx))
             return codelet.emitOpError()
                    << "grouped compute over halo block dependency #" << depIdx
                    << " requires lane-specific halo acquire materialization";

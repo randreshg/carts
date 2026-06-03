@@ -75,7 +75,7 @@ module {
     return
   }
 
-  func.func @full_timestep_uniform_copy_shared_with_stencil_gets_bridge_plan() {
+  func.func @full_timestep_uniform_copy_shared_with_stencil_keeps_block_storage_with_different_cu_group() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c8 = arith.constant 8 : index
@@ -94,7 +94,7 @@ module {
                         dep_storage_views = [#codir.storage_view<host_whole>, #codir.storage_view<host_whole>],
                         distribution_kind = #codir.distribution_kind<blocked>,
                         iteration_topology = #codir.iteration_topology<owner_tile>,
-                        logical_worker_slice = [8, 8],
+                        logical_worker_slice = [16, 8],
                         pattern = #codir.pattern<uniform>,
                         repetition_structure = #codir.repetition_structure<full_timestep>,
                         tile_owner_dims = [0, 1],
@@ -141,9 +141,10 @@ module {
 // CHECK-SAME: dep_owner_dims = [{{\[}}0, 1], [0, 1], [0, 1]]
 // CHECK-SAME: dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>, #codir.storage_view<compute_block>]
 
-// CHECK-LABEL: func.func @full_timestep_uniform_copy_shared_with_stencil_gets_bridge_plan
+// CHECK-LABEL: func.func @full_timestep_uniform_copy_shared_with_stencil_keeps_block_storage_with_different_cu_group
 // CHECK: codir.codelet
 // CHECK-SAME: dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<phase_redistributed>]
+// CHECK-SAME: logical_worker_slice = [16, 8]
 // CHECK-SAME: pattern = #codir.pattern<uniform>
 // CHECK: codir.codelet
 // CHECK-SAME: dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>, #codir.storage_view<compute_block>]

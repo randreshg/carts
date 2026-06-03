@@ -157,7 +157,6 @@ static bool acquireCarriesPlannedSubpartitionEvidence(DbAcquireOp acquire) {
           alloc.getOwnerMapVersionAttr() || alloc.getOwnerMapDimsAttr() ||
           alloc.getOwnerBlockShapeAttr() || alloc.getPlanOwnerDimsAttr() ||
           alloc.getPlanPhysicalBlockShapeAttr() ||
-          alloc.getPlanLogicalWorkerSliceAttr() ||
           alloc.getPlanHaloShapeAttr() ||
           alloc.getPlanIterationTopologyAttr() ||
           alloc.getPlanRepetitionStructureAttr() ||

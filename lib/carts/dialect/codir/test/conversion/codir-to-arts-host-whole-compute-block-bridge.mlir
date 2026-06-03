@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts)' \
-// RUN:   --arts-config %inputs_dir/arts_multinode_8x64.cfg | %FileCheck %s --check-prefixes=CHECK,WRITE,WRITEFIRST,HOIST,SHARED,READONLY,PERSIST,CARRIED,INCOMPAT
+// RUN:   --arts-config %inputs_dir/arts_multinode_8x64.cfg | %FileCheck %s --check-prefixes=CHECK,WRITE,WRITEFIRST,HOIST,SHARED,GROUPED,READONLY,PERSIST,CARRIED,INCOMPAT
 
 // Storage planning turns an owner-local compute_block request into an explicit
 // phase_redistributed contract when host code still needs the original whole
@@ -226,6 +226,67 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
     }
     %result = memref.load %A[%c0, %c0] : memref<18x4xf32>
     func.call @use(%result) : (f32) -> ()
+    memref.dealloc %A : memref<18x4xf32>
+    return
+  }
+
+  func.func @host_bridge_reuses_block_storage_with_different_cu_group() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c4 = arith.constant 4 : index
+    %c8 = arith.constant 8 : index
+    %c16 = arith.constant 16 : index
+    %c18 = arith.constant 18 : index
+    %A = memref.alloc() : memref<18x4xf32>
+    %B = memref.alloc() : memref<18x4xf32>
+    scf.for %rep = %c0 to %c2 step %c1 {
+      scf.for %i = %c0 to %c18 step %c16 {
+        codir.codelet deps(%A : memref<18x4xf32>) params(%i : index)
+            attributes {dep_modes = [#codir.access_mode<read>],
+                        dep_storage_views = [#codir.storage_view<phase_redistributed>],
+                        distribution_kind = #codir.distribution_kind<blocked>,
+                        iteration_topology = #codir.iteration_topology<owner_strip>,
+                        logical_worker_slice = [16, 4],
+                        pattern = #codir.pattern<uniform>,
+                        tile_owner_dims = [0],
+                        tile_shape = [8, 4]} {
+        ^bb0(%arg0: memref<18x4xf32>, %base: index):
+          %inner_c0 = arith.constant 0 : index
+          %value = memref.load %arg0[%base, %inner_c0] : memref<18x4xf32>
+          func.call @use(%value) : (f32) -> ()
+          codir.yield
+        }
+      }
+      scf.for %j = %c0 to %c18 step %c8 {
+        codir.codelet deps(%B, %A : memref<18x4xf32>, memref<18x4xf32>) params(%j : index)
+            attributes {access_max_offsets = [1, 0],
+                        access_min_offsets = [-1, 0],
+                        dep_modes = [#codir.access_mode<read>, #codir.access_mode<write>],
+                        dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>],
+                        distribution_kind = #codir.distribution_kind<blocked>,
+                        halo_shape = [1],
+                        iteration_topology = #codir.iteration_topology<owner_strip>,
+                        logical_worker_slice = [8, 4],
+                        pattern = #codir.pattern<alternating_buffer_stencil>,
+                        plan_owner_dims = [0, 1],
+                        spatial_dims = [0, 1],
+                        tile_owner_dims = [0],
+                        tile_shape = [8, 4],
+                        write_footprint = [1, 1]} {
+        ^bb0(%arg0: memref<18x4xf32>, %arg1: memref<18x4xf32>, %base: index):
+          %inner_c0 = arith.constant 0 : index
+          %inner_cst = arith.constant 1.000000e+00 : f32
+          %value = memref.load %arg0[%base, %inner_c0] : memref<18x4xf32>
+          %next = arith.addf %value, %inner_cst : f32
+          memref.store %next, %arg1[%base, %inner_c0] : memref<18x4xf32>
+          codir.yield
+        }
+      }
+    }
+    %result = memref.load %A[%c0, %c0] : memref<18x4xf32>
+    func.call @use(%result) : (f32) -> ()
+    memref.dealloc %B : memref<18x4xf32>
     memref.dealloc %A : memref<18x4xf32>
     return
   }
@@ -557,6 +618,18 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // SHARED-SAME: storageBridgeCopy
 // SHARED: arts.barrier
 // SHARED: memref.load %[[HOST]]
+
+// GROUPED-LABEL: func.func @host_bridge_reuses_block_storage_with_different_cu_group
+// GROUPED: %[[HOST:.*]] = arts.db_ref
+// GROUPED: arts.db_alloc{{.*}}storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
+// GROUPED: arts.edt <task> <internode>
+// GROUPED-SAME: storageBridgeCopy
+// GROUPED: scf.for %{{.*}} = %c0 to %c2
+// GROUPED-NOT: arts.db_alloc{{.*}}storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
+// GROUPED: arts.edt <task>
+// GROUPED: arts.edt <task>
+// GROUPED-NOT: arts.db_alloc{{.*}}storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
+// GROUPED: memref.load %[[HOST]]
 
 // READONLY-LABEL: func.func @read_only_bridge_hoists_past_host_read
 // READONLY: arts.db_alloc

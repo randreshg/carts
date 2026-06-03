@@ -987,9 +987,11 @@ materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
   return arith::SubIOp::create(builder, loc, index, localOrigin).getResult();
 }
 
-static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
-    OpBuilder &builder, Location loc, Value index, Value ownerBase,
-    int64_t blockSize, int64_t groupBlockCount, Value &relativeBlock) {
+static inline FailureOr<Value>
+materializeGroupedBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
+                                  Value ownerBase, int64_t lowerHalo,
+                                  int64_t blockSize, int64_t groupBlockCount,
+                                  Value &relativeBlock) {
   if (!index || !ownerBase || blockSize <= 0 || groupBlockCount <= 0)
     return failure();
   if (groupBlockCount > std::numeric_limits<int64_t>::max() / blockSize)
@@ -998,34 +1000,106 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
     return failure();
 
   int64_t windowExtent = blockSize * groupBlockCount;
-  auto getOwnerRelativeConstant =
-      [&](Value candidate) -> std::optional<int64_t> {
-    int64_t offset = 0;
-    Value base =
-        ::mlir::carts::ValueAnalysis::stripConstantOffset(candidate, &offset);
-    if (::mlir::carts::ValueAnalysis::sameValue(base, ownerBase))
-      return offset;
-    return std::nullopt;
+  struct WindowProof {
+    Value ownerBase;
+    int64_t windowExtent = 0;
+
+    std::optional<int64_t> getOwnerRelativeConstant(Value candidate) const {
+      int64_t offset = 0;
+      Value base =
+          ::mlir::carts::ValueAnalysis::stripConstantOffset(candidate, &offset);
+      if (::mlir::carts::ValueAnalysis::sameValue(base, ownerBase))
+        return offset;
+      return std::nullopt;
+    }
+
+    std::optional<std::pair<Value, int64_t>>
+    splitAddConstant(Value candidate) const {
+      candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+      if (auto add = candidate.getDefiningOp<arith::AddIOp>()) {
+        if (std::optional<int64_t> rhs =
+                ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
+                    add.getRhs()))
+          return std::make_pair(add.getLhs(), *rhs);
+        if (std::optional<int64_t> lhs =
+                ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
+                    add.getLhs()))
+          return std::make_pair(add.getRhs(), *lhs);
+      }
+      return std::nullopt;
+    }
+
+    bool pointStaysInWindow(Value candidate, unsigned depth = 0) const {
+      if (!candidate || depth > 8)
+        return false;
+      std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
+      if (offset)
+        return *offset >= 0 && *offset < windowExtent;
+
+      candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+      if (auto blockArg = dyn_cast<BlockArgument>(candidate)) {
+        auto loop =
+            dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+        if (!loop || loop.getInductionVar() != candidate)
+          return false;
+        if (!::mlir::carts::ValueAnalysis::isConstantAtLeastOne(loop.getStep()))
+          return false;
+        return pointStaysInWindow(loop.getLowerBound(), depth + 1) &&
+               upperStaysInWindow(loop.getUpperBound(), depth + 1);
+      }
+      return false;
+    }
+
+    bool upperOffsetStaysInWindow(Value candidate) const {
+      std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
+      return offset && *offset >= 0 && *offset <= windowExtent;
+    }
+
+    bool pointPlusOffsetStaysInWindow(Value base, int64_t offset,
+                                      unsigned depth) const {
+      if (!base || offset < 0 || depth > 8)
+        return false;
+      if (std::optional<int64_t> baseOffset = getOwnerRelativeConstant(base))
+        return *baseOffset >= 0 && *baseOffset + offset <= windowExtent;
+
+      base = ::mlir::carts::ValueAnalysis::stripNumericCasts(base);
+      auto blockArg = dyn_cast<BlockArgument>(base);
+      if (!blockArg)
+        return false;
+      auto loop =
+          dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+      if (!loop || loop.getInductionVar() != base)
+        return false;
+      std::optional<int64_t> step =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+      return step && *step > 0 && offset <= *step &&
+             upperStaysInWindow(loop.getUpperBound(), depth + 1);
+    }
+
+    bool upperStaysInWindow(Value candidate, unsigned depth = 0) const {
+      if (!candidate || depth > 8)
+        return false;
+      if (upperOffsetStaysInWindow(candidate))
+        return true;
+      if (auto add = splitAddConstant(candidate))
+        if (pointPlusOffsetStaysInWindow(add->first, add->second, depth + 1))
+          return true;
+      candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+      if (auto min = candidate.getDefiningOp<arith::MinUIOp>())
+        return upperStaysInWindow(min.getLhs(), depth + 1) ||
+               upperStaysInWindow(min.getRhs(), depth + 1);
+      if (auto min = candidate.getDefiningOp<arith::MinSIOp>())
+        return upperStaysInWindow(min.getLhs(), depth + 1) ||
+               upperStaysInWindow(min.getRhs(), depth + 1);
+      return false;
+    }
   };
+  WindowProof proof{ownerBase, windowExtent};
   auto pointStaysInWindow = [&](Value candidate) {
-    std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
-    return offset && *offset >= 0 && *offset < windowExtent;
-  };
-  auto upperOffsetStaysInWindow = [&](Value candidate) {
-    std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
-    return offset && *offset >= 0 && *offset <= windowExtent;
+    return proof.pointStaysInWindow(candidate);
   };
   auto upperStaysInWindow = [&](Value candidate) {
-    if (upperOffsetStaysInWindow(candidate))
-      return true;
-    candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
-    if (auto min = candidate.getDefiningOp<arith::MinUIOp>())
-      return upperOffsetStaysInWindow(min.getLhs()) ||
-             upperOffsetStaysInWindow(min.getRhs());
-    if (auto min = candidate.getDefiningOp<arith::MinSIOp>())
-      return upperOffsetStaysInWindow(min.getLhs()) ||
-             upperOffsetStaysInWindow(min.getRhs());
-    return false;
+    return proof.upperStaysInWindow(candidate);
   };
 
   bool provenInWindow = pointStaysInWindow(index);
@@ -1035,9 +1109,7 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
           dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
       if (loop && loop.getInductionVar() == index &&
           ::mlir::carts::ValueAnalysis::isConstantAtLeastOne(loop.getStep())) {
-        std::optional<int64_t> lower =
-            getOwnerRelativeConstant(loop.getLowerBound());
-        provenInWindow = lower && *lower >= 0 && *lower < windowExtent &&
+        provenInWindow = pointStaysInWindow(loop.getLowerBound()) &&
                          upperStaysInWindow(loop.getUpperBound());
       }
     }
@@ -1055,9 +1127,15 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
   Value blockOffset =
       arith::MulIOp::create(builder, loc, relativeBlock, blockSizeValue);
   Value blockBase = arith::AddIOp::create(builder, loc, ownerBase, blockOffset);
-  if (::mlir::carts::ValueAnalysis::sameValue(index, blockBase))
+
+  Value blockPayloadBase = blockBase;
+  if (lowerHalo > 0)
+    blockPayloadBase = subtractClampZero(builder, loc, blockBase, lowerHalo);
+
+  if (::mlir::carts::ValueAnalysis::sameValue(index, blockPayloadBase))
     return createZeroIndex(builder, loc);
-  return arith::SubIOp::create(builder, loc, index, blockBase).getResult();
+  return arith::SubIOp::create(builder, loc, index, blockPayloadBase)
+      .getResult();
 }
 
 static inline LogicalResult rewritePlannedBlockLocalAccesses(
@@ -1083,9 +1161,8 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
       Value sourcePtr;
       unsigned sourceRank = 0;
       for (const PlannedBlockLocalAccessRewrite *rewrite : matching) {
-        if (!rewrite->grouped || rewrite->lowerHalo != 0 ||
-            !rewrite->groupedSourcePtr || rewrite->blockSize <= 0 ||
-            rewrite->groupBlockCount <= 0) {
+        if (!rewrite->grouped || !rewrite->groupedSourcePtr ||
+            rewrite->blockSize <= 0 || rewrite->groupBlockCount <= 0) {
           op->emitError("grouped planned block-local access requires "
                         "block-window facts for every owner dimension");
           return WalkResult::interrupt();
@@ -1117,8 +1194,8 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
         Value relativeBlock;
         FailureOr<Value> localIndex = materializeGroupedBlockLocalIndex(
             builder, op->getLoc(), indices[rewrite->ownerDim].get(),
-            rewrite->ownerBase, rewrite->blockSize, rewrite->groupBlockCount,
-            relativeBlock);
+            rewrite->ownerBase, rewrite->lowerHalo, rewrite->blockSize,
+            rewrite->groupBlockCount, relativeBlock);
         if (failed(localIndex)) {
           op->emitError("grouped planned block-local access does not stay "
                         "within the block window");
@@ -1206,8 +1283,6 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
       arts::setPlanOwnerDimsAttr(dbAlloc.getOperation(), ownerDims);
     if (auto blockShape = planSource.getPhysicalBlockShapeAttr())
       arts::setPlanPhysicalBlockShapeAttr(dbAlloc.getOperation(), blockShape);
-    if (auto workerSlice = planSource.getLogicalWorkerSliceAttr())
-      arts::setPlanLogicalWorkerSliceAttr(dbAlloc.getOperation(), workerSlice);
     if (auto haloShape = planSource.getPhysicalHaloShapeAttr())
       arts::setPlanHaloShapeAttr(dbAlloc.getOperation(), haloShape);
   } else {
@@ -1281,8 +1356,6 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
   arts::setPlanOwnerDimsAttr(dbAlloc.getOperation(), ownerDims);
   if (auto blockShape = planSource.getTileShapeAttr())
     arts::setPlanPhysicalBlockShapeAttr(dbAlloc.getOperation(), blockShape);
-  if (auto workerSlice = planSource.getLogicalWorkerSliceAttr())
-    arts::setPlanLogicalWorkerSliceAttr(dbAlloc.getOperation(), workerSlice);
   if (auto haloShape = planSource.getHaloShapeAttr())
     arts::setPlanHaloShapeAttr(dbAlloc.getOperation(), haloShape);
   if (llvm::any_of(ownerHalos, [](const CodirOwnerHaloWindow &halo) {
@@ -2103,10 +2176,12 @@ static inline bool hasSameHostBridgePlan(codir::CodeletOp lhs,
                                          unsigned rhsDepIndex) {
   if (!lhs || !rhs)
     return false;
+  // Host bridge compatibility is about the DB/MU storage grain. The logical
+  // worker slice is CU grouping evidence and may differ between a grouped copy
+  // CU and a stencil/compute CU that share the same physical block DBs.
   return getCodirDepOwnerDimsAttr(lhs, lhsDepIndex) ==
              getCodirDepOwnerDimsAttr(rhs, rhsDepIndex) &&
-         lhs.getTileShapeAttr() == rhs.getTileShapeAttr() &&
-         lhs.getLogicalWorkerSliceAttr() == rhs.getLogicalWorkerSliceAttr();
+         lhs.getTileShapeAttr() == rhs.getTileShapeAttr();
 }
 
 static inline std::optional<unsigned>

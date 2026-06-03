@@ -289,9 +289,11 @@ static inline bool hasSamePhysicalLayoutPlan(sde::SdeSuIterateOp lhs,
                                              sde::SdeSuIterateOp rhs) {
   if (!lhs || !rhs)
     return false;
+  // Physical DB/MU layout identity is storage grain. The logical worker slice
+  // is CU grouping evidence and may differ across users of the same physical
+  // block plan.
   return lhs.getPhysicalOwnerDimsAttr() == rhs.getPhysicalOwnerDimsAttr() &&
          lhs.getPhysicalBlockShapeAttr() == rhs.getPhysicalBlockShapeAttr() &&
-         lhs.getLogicalWorkerSliceAttr() == rhs.getLogicalWorkerSliceAttr() &&
          lhs.getPhysicalHaloShapeAttr() == rhs.getPhysicalHaloShapeAttr() &&
          lhs.getIterationTopologyAttr() == rhs.getIterationTopologyAttr();
 }
