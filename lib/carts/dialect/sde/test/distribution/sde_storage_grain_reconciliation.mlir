@@ -39,6 +39,20 @@
 // CHECK: } {
 // CHECK-SAME: physicalBlockShape = [8, 64]
 
+// An unplanned data-parallel writer gets a plan authored from the budget grain,
+// clamped to the loop step (budget [8], step 8 -> [8]).
+// CHECK-LABEL: func.func @authors_unplanned_dataparallel
+// CHECK: sde.su_iterate
+// CHECK: } {
+// CHECK-SAME: physicalBlockShape = [8]
+
+// An array a stencil SU touches (here reads) is protected: the sibling
+// elementwise writer is NOT authored, so no physical plan appears before the
+// stencil SU.
+// CHECK-LABEL: func.func @skips_stencil_touched_array
+// CHECK-NOT: physicalBlockShape
+// CHECK: classification(<stencil>)
+
 module {
   func.func @reconciles_divergent_writers(%A: memref<64x64xf32>) {
     %c0 = arith.constant 0 : index
@@ -121,6 +135,46 @@ module {
          logicalWorkerSlice = [8, 64],
          physicalBlockShape = [8, 64],
          physicalOwnerDims = [0]}
+      sde.yield
+    }
+    return
+  }
+
+  func.func @authors_unplanned_dataparallel(%A: memref<64xf32>) {
+    %c0 = arith.constant 0 : index
+    %c8 = arith.constant 8 : index
+    %c64 = arith.constant 64 : index
+    %zero = arith.constant 0.000000e+00 : f32
+    sde.cu_region <parallel> {
+      sde.su_iterate (%c0) to (%c64) step (%c8) classification(<elementwise>) {
+      ^bb0(%i: index):
+        memref.store %zero, %A[%i] : memref<64xf32>
+        sde.yield
+      } {arrayLayout = [{arrayId = 3 : i64, blockShape = [64], budgetBlockShape = [8], budgetMuBlockCount = 8 : i64, commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}]}
+      sde.yield
+    }
+    return
+  }
+
+  func.func @skips_stencil_touched_array(%A: memref<64xf32>, %B: memref<64xf32>) {
+    %c0 = arith.constant 0 : index
+    %c8 = arith.constant 8 : index
+    %c64 = arith.constant 64 : index
+    %zero = arith.constant 0.000000e+00 : f32
+    sde.cu_region <parallel> {
+      // elementwise writer of array id 5 — would be authored, but id 5 is read
+      // by the stencil below, so it is protected.
+      sde.su_iterate (%c0) to (%c64) step (%c8) classification(<elementwise>) {
+      ^bb0(%i: index):
+        memref.store %zero, %A[%i] : memref<64xf32>
+        sde.yield
+      } {arrayLayout = [{arrayId = 5 : i64, blockShape = [64], budgetBlockShape = [8], budgetMuBlockCount = 8 : i64, commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}]}
+      sde.su_iterate (%c0) to (%c64) step (%c8) classification(<stencil>) {
+      ^bb0(%i: index):
+        %v = memref.load %A[%i] : memref<64xf32>
+        memref.store %v, %B[%i] : memref<64xf32>
+        sde.yield
+      } {arrayLayout = [{arrayId = 5 : i64, blockShape = [64], budgetBlockShape = [8], budgetMuBlockCount = 8 : i64, commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 6 : i64, blockShape = [64], budgetBlockShape = [8], budgetMuBlockCount = 8 : i64, commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}]}
       sde.yield
     }
     return
