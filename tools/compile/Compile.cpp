@@ -273,7 +273,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 16> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 17> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "Parallelize",
     "PatternAnalysis",
@@ -286,6 +286,7 @@ static const std::array<llvm::StringLiteral, 16> kSdePlanningPasses = {
     "ChunkOpt",
     "ReductionStrategy",
     "DistributionPlanning",
+    "StorageGrainReconciliation",
     "IterationSpaceDecomposition",
     "BarrierElimination",
     "VerifySdeCpsPlan",
@@ -1136,6 +1137,7 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createChunkOptPass(costModel));
   pm.addPass(sde::createReductionStrategyPass(costModel));
   pm.addPass(sde::createDistributionPlanningPass(costModel));
+  pm.addPass(sde::createStorageGrainReconciliationPass());
   pm.addPass(sde::createIterationSpaceDecompositionPass());
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createVerifySdeCpsPlanPass());

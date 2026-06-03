@@ -82,6 +82,7 @@ std::unique_ptr<Pass>
 createReductionStrategyPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createDistributionPlanningPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass> createStorageGrainReconciliationPass();
 std::unique_ptr<Pass>
 createBarrierEliminationPass(SDECostModel *costModel = nullptr);
 
