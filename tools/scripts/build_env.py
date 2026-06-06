@@ -56,6 +56,8 @@ def configured_make_vars(config: Any) -> list[str]:
         )
     if cmake_path := shutil.which("cmake"):
         make_vars.append(f"{MAKE_VAR_CMAKE}={cmake_path}")
+    if getattr(getattr(config, "info", None), "is_macos", False):
+        make_vars.append("ARTS_USE_RDMA=OFF")
     return make_vars
 
 

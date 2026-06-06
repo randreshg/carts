@@ -78,9 +78,9 @@ def build(
     profile: Optional[Path] = Option(
         None, "--profile",
         help="Custom counter profile file path (overrides --counters)"),
-    rdma: bool = Option(
-        True, "--rdma/--no-rdma",
-        help="Build ARTS with RDMA transport by default; use --no-rdma for TCP fallback (--arts only)"),
+    rdma: Optional[bool] = Option(
+        None, "--rdma/--no-rdma",
+        help="Build ARTS with RDMA transport (Linux default ON; macOS default OFF) (--arts only)"),
     cc: Optional[str] = Option(
         None, "--cc",
         help="C compiler for LLVM bootstrap (default: clang; use gcc on systems without clang)"),
@@ -121,8 +121,14 @@ def build(
     make_vars = configured_make_vars(config)
 
     if arts:
-        if rdma:
+        use_rdma = rdma if rdma is not None else not config.info.is_macos
+        if use_rdma:
             _check_rdma_provider_deps()
+        elif config.info.is_macos and rdma is None:
+            console.print(
+                "Network: "
+                f"[{Colors.INFO}]TCP (macOS default; pass --rdma to force RDMA)[/{Colors.INFO}]"
+            )
         # Expose the raw v2 ARTS runtime levels directly:
         #   0 -> ERROR only
         #   1 -> WARN
@@ -133,7 +139,7 @@ def build(
             make_vars.extend([
                 "ARTS_BUILD_TYPE=Debug",
             ])
-        make_vars.append(f"ARTS_USE_RDMA={'ON' if rdma else 'OFF'}")
+        make_vars.append(f"ARTS_USE_RDMA={'ON' if use_rdma else 'OFF'}")
 
     # Counter levels: 0=off, 1=artsid, 2=deep
     # Levels 1+ require USE_COUNTERS and USE_METRICS

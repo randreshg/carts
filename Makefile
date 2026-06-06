@@ -188,9 +188,9 @@ COUNTER_CONFIG_ABSPATH := $(abspath $(COUNTER_CONFIG_PATH))
 # jemalloc allocator (opt-in). OFF because ARTS's jemalloc uses an empty
 # symbol prefix, which crashes libarts on macOS via cross-allocator free.
 ARTS_USE_JEMALLOC ?= OFF
-# RDMA transport is the default multinode build; TCP is available with
-# ARTS_USE_RDMA=OFF for non-RDMA developer systems or fallback experiments.
-ARTS_USE_RDMA ?= ON
+# RDMA transport is the default multinode build on Linux. macOS developer
+# builds default to TCP (OFF). Override with ARTS_USE_RDMA=ON|OFF as needed.
+ARTS_USE_RDMA ?= $(if $(filter Darwin,$(shell uname)),OFF,ON)
 
 # Configuration hash file for ARTS build caching
 ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config

@@ -11,8 +11,7 @@ dependencies:
   - clang>=18
   - clangxx>=18
   - git
-  - ucx
-  - libfabric
+  # Linux RDMA provider headers come from ensure-rdma-deps.sh / system packages.
   - openpyxl>=3.1.5
   - pytest
   - pytest-asyncio
