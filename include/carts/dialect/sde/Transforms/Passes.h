@@ -88,6 +88,7 @@ createDistributionPlanningPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createStorageGrainReconciliationPass();
 std::unique_ptr<Pass>
 createBarrierEliminationPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass> createMuAccessWindowSyncOptPass();
 
 // --- Conversion passes ---
 std::unique_ptr<Pass> createConvertOpenMPToSdePass();

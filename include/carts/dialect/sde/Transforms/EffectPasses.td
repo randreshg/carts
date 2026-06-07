@@ -108,4 +108,34 @@ def BarrierElimination
   let constructor = "mlir::carts::sde::createBarrierEliminationPass()";
 }
 
+def MuAccessWindowSyncOpt
+    : Pass<"sde-mu-access-window-sync-opt", "mlir::ModuleOp"> {
+  let summary = "Remove SU barriers proven redundant by MU access windows";
+  let description = [{
+    The transform counterpart of `verify-sde-mu-access-window-sync`. After
+    `raise-to-mu-access-window` has stamped per-CU `sde.mu_access_window` facts,
+    each surviving `sde.su_barrier` separates a before phase and an after phase
+    whose block-grid windows (`[blockLo, blockHi)` per owner dim) reveal whether
+    the barrier orders a real dependency. Reading the shared `classifyBarrierSync`
+    analysis, this pass erases every barrier proven REDUNDANT — the ordered CUs
+    touch disjoint blocks or only read shared blocks, and both phases are fully
+    described by windows, so removing the global ordering point makes the
+    independent CUs available for parallel scheduling (and later CODIR dataflow).
+
+    It is conservative and fails closed by construction: it removes a barrier
+    only on a REDUNDANT verdict. JUSTIFIED barriers (a real aligned RAW/WAW/WAR
+    ordering) are preserved as the irreducible global ordering CODIR refines into
+    explicit dependency edges from the same windows; MISALIGNED barriers (a
+    consumer reaching blocks the producer never wrote) are preserved for the
+    later SDE redistribution transform that owns the movement; and out-of-scope,
+    malformed, rank-mismatched, or otherwise unprovable barriers are left
+    untouched for `verify-sde-mu-access-window-sync` to gate. The pass introduces
+    no token, slice, dependency-graph, distribution, or stage-boundary metadata —
+    it only deletes a proven-unnecessary ordering point.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor = "mlir::carts::sde::createMuAccessWindowSyncOptPass()";
+}
+
 #endif // ARTS_DIALECT_SDE_TRANSFORMS_EFFECT_PASSES
