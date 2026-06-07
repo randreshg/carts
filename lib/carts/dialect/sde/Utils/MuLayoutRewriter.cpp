@@ -36,8 +36,7 @@ makeMuAccessIndexer(SdeStructuredClassification cls,
   }
 }
 
-bool isSingleOwnerBlockGridRealizable(SdeSuIterateOp si,
-                                      MemRefType logicalType,
+bool isSingleOwnerBlockGridRealizable(SdeSuIterateOp si, MemRefType logicalType,
                                       MuPhysicalLayout &out) {
   if (!si)
     return false;
@@ -54,8 +53,9 @@ bool isSingleOwnerBlockGridRealizable(SdeSuIterateOp si,
     return false; // matmul / reduction -> conservative, no attr promise
   }
 
-  std::optional<MuPhysicalLayout> plan = resolveMuPhysicalLayout(
-      logicalType, si.getPhysicalOwnerDimsAttr(), si.getPhysicalBlockShapeAttr());
+  std::optional<MuPhysicalLayout> plan =
+      resolveMuPhysicalLayout(logicalType, si.getPhysicalOwnerDimsAttr(),
+                              si.getPhysicalBlockShapeAttr());
   if (!plan || !plan->isSingleContiguousOwner())
     return false;
   out = *plan;
@@ -144,8 +144,8 @@ recognizeExpandedBlockGridMu(SdeSuIterateOp si, MemRefType muType) {
   if (!ownerVals || !blockVals || ownerVals->size() != 1)
     return std::nullopt;
 
-  // Single-owner expanded form: muRank == originalRank + 1, with the rank-length
-  // block-shape carrying the original rank.
+  // Single-owner expanded form: muRank == originalRank + 1, with the
+  // rank-length block-shape carrying the original rank.
   const unsigned muRank = muType.getRank();
   if (blockVals->size() + 1 != muRank)
     return std::nullopt; // flat / owner-length / multi-owner -> out of scope

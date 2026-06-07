@@ -770,7 +770,8 @@ private:
               ptrBuffer, guidBuffer, callbackRoute, callbackTotalDbSize,
               callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
               /*distributedOwnership=*/true,
-              /*createDb=*/true, DbInterleavePlacement::Default, callbackDbSizes,
+              /*createDb=*/true, DbInterleavePlacement::Default,
+              callbackDbSizes,
               /*indices=*/{}, std::nullopt, &*ownerMap, callbackNodeId);
         } else {
           createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
@@ -790,7 +791,8 @@ private:
               ptrBuffer, guidBuffer, callbackRoute, callbackTotalDbSize,
               callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
               /*distributedOwnership=*/true,
-              /*createDb=*/false, DbInterleavePlacement::Default, callbackDbSizes,
+              /*createDb=*/false, DbInterleavePlacement::Default,
+              callbackDbSizes,
               /*indices=*/{}, std::nullopt, &*ownerMap);
         } else {
           createMultiDbs(
@@ -1008,7 +1010,8 @@ private:
 
   void createDbFromGuidAtIndex(Value dbMemref, Value guid, Value linearIndex,
                                Value elementSize, std::optional<int64_t> nextId,
-                               Location loc, DbInterleavePlacement memoryPlacement,
+                               Location loc,
+                               DbInterleavePlacement memoryPlacement,
                                Value hintRoute = {},
                                bool requireLocalOwner = false) const {
     Value elemSize64 = AC->ensureI64(elementSize, loc);
@@ -1045,16 +1048,15 @@ private:
                                 ValueRange{linearIndex});
   }
 
-  void
-  createSingleDb(Value dbMemref, Value guidMemref, Value route,
-                 Value elementSize, std::optional<int64_t> *nextId,
-                 Location loc, bool distributedOwnership = false,
-                 bool createDb = true,
-                 DbInterleavePlacement memoryPlacement = DbInterleavePlacement::Default,
-                 ArrayRef<Value> sizes = {}, ArrayRef<Value> indices = {},
-                 std::optional<Value> linearIndexOverride = std::nullopt,
-                 const DbOwnerMapPlan *ownerMap = nullptr,
-                 Value localNodeForCreate = {}) const {
+  void createSingleDb(
+      Value dbMemref, Value guidMemref, Value route, Value elementSize,
+      std::optional<int64_t> *nextId, Location loc,
+      bool distributedOwnership = false, bool createDb = true,
+      DbInterleavePlacement memoryPlacement = DbInterleavePlacement::Default,
+      ArrayRef<Value> sizes = {}, ArrayRef<Value> indices = {},
+      std::optional<Value> linearIndexOverride = std::nullopt,
+      const DbOwnerMapPlan *ownerMap = nullptr,
+      Value localNodeForCreate = {}) const {
     Value linearIndex;
     if (linearIndexOverride.has_value()) {
       linearIndex = *linearIndexOverride;
@@ -1114,14 +1116,13 @@ private:
     }
   }
 
-  void
-  createMultiDbs(Value dbMemref, Value guidMemref, ArrayRef<Value> sizes,
-                 Value route, Value elementSize, std::optional<int64_t> *nextId,
-                 Location loc, bool distributedOwnership = false,
-                 bool createDb = true,
-                 DbInterleavePlacement memoryPlacement = DbInterleavePlacement::Default,
-                 const DbOwnerMapPlan *ownerMap = nullptr,
-                 Value localNodeForCreate = {}) const {
+  void createMultiDbs(
+      Value dbMemref, Value guidMemref, ArrayRef<Value> sizes, Value route,
+      Value elementSize, std::optional<int64_t> *nextId, Location loc,
+      bool distributedOwnership = false, bool createDb = true,
+      DbInterleavePlacement memoryPlacement = DbInterleavePlacement::Default,
+      const DbOwnerMapPlan *ownerMap = nullptr,
+      Value localNodeForCreate = {}) const {
     Value totalElems = AC->computeTotalElements(sizes, loc);
     /// Keep DB creation always linearized here. The dedicated GuidRangeCallOpt
     /// pass handles reserve->reserve_range promotion centrally after
@@ -1140,9 +1141,10 @@ private:
     AC->setInsertionPointAfter(linearLoop);
   }
 
-  DbInterleavePlacement getDbInterleavePlacement(DbAllocOp op, ArrayRef<Value> dbSizes,
-                                         bool isSingleElement,
-                                         bool distributedOwnership) const {
+  DbInterleavePlacement
+  getDbInterleavePlacement(DbAllocOp op, ArrayRef<Value> dbSizes,
+                           bool isSingleElement,
+                           bool distributedOwnership) const {
     if (distributedOwnership || isSingleElement)
       return DbInterleavePlacement::Default;
 

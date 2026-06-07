@@ -159,7 +159,8 @@ def SdeRaiseToMuAccessWindow
     accesses spanning multiple CUs, and unsupported (non-load/store) uses. The
     pass never mutates existing ops; it only inserts window facts.
 
-    Not part of the default `-O3` pipeline (see `verify-sde-mu-access-window`).
+    Production SDE planning runs this after MU layout has been materialized and
+    rank-expanded, then verifies the raised windows before crossing into CODIR.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];
@@ -191,7 +192,9 @@ def SdeCoarseAvoidance
     concept. Its only mutation is the block-grid rewrite (in-place load/store
     rewrites that move no op across a CU/SU boundary), so CU legality is preserved.
 
-    Not part of the default `-O3` pipeline (see `verify-sde-coarse-avoidance`).
+    Production SDE planning runs this after access-window and redistribution
+    structure is available, then verifies that avoidable coarse MU shape did not
+    survive before crossing into CODIR.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect",
@@ -224,7 +227,8 @@ def SdeRedistribute
     home. It introduces no `sde.mu_token`, slice, `sde.mu_dep`, owner map, DB,
     route, collective, or CODIR isolation concept.
 
-    Not part of the default `-O3` pipeline (see `verify-sde-redistribute`).
+    Production SDE planning runs this before CODIR conversion so movement edges
+    are committed as SDE structure before a downstream layer consumes them.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];

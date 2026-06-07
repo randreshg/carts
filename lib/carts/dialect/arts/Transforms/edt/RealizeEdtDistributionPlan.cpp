@@ -2,11 +2,11 @@
 /// File: RealizeEdtDistributionPlan.cpp
 ///
 /// Authors the ARTS EDT distribution plan from committed facts. The CODIR
-/// boundary restates the committed dep pattern and access-window facts onto each
-/// arts.edt; this pass derives the distribution realization plan from them: the
-/// distribution family, the distribution version, and the block-halo capability
-/// marker. It consumes already-committed structure and never classifies movement
-/// or selects a distribution family from source patterns.
+/// boundary restates the committed dep pattern and access-window facts onto
+/// each arts.edt; this pass derives the distribution realization plan from
+/// them: the distribution family, the distribution version, and the block-halo
+/// capability marker. It consumes already-committed structure and never
+/// classifies movement or selects a distribution family from source patterns.
 ///==========================================================================///
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
@@ -39,8 +39,8 @@ struct RealizeEdtDistributionPlanPass
         arts::setDistributionVersion(op, 1);
       }
 
-      // A stencil-family dep with a committed access window reads neighbor tiles
-      // out of a per-block DB, so it advertises block-halo capability.
+      // A stencil-family dep with a committed access window reads neighbor
+      // tiles out of a per-block DB, so it advertises block-halo capability.
       if (arts::isStencilFamilyDepPattern(*pattern) &&
           edt->hasAttr(edt.getStencilMinOffsetsAttrName()) &&
           edt->hasAttr(edt.getStencilMaxOffsetsAttrName()))

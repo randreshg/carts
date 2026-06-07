@@ -1313,9 +1313,8 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           op.getPhysicalBlockShapeAttr(), op.getLogicalWorkerSliceAttr(),
           op.getPhysicalHaloShapeAttr(), op.getIterationTopologyAttr(),
           op.getRepetitionStructureAttr(), op.getAsyncStrategyAttr(),
-          op.getDistributionKindAttr(),
-          op.getInPlaceSafeAttr(), op.getInPlaceSharedStateAttr(),
-          op.getArrayLayoutAttr(),
+          op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
+          op.getInPlaceSharedStateAttr(), op.getArrayLayoutAttr(),
           op.getLayoutsDisagreeAttr(), op.getCommVolumeBytesAttr());
       newOp->setAttrs(sde::getRewrittenAttrs(op));
       if (!physicalTilePlan && !directMatmul)

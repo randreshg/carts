@@ -193,7 +193,8 @@ SmallVector<LayoutGraphFact, 4> parsePartitionGraphFacts(ArrayAttr attr);
 /// `relations.profiles` gets an incrementing id in MapVector insertion order,
 /// skipping rank-0 / empty-shape profiles. Any consumer that joins an
 /// `arrayLayout` `arrayId` back to its array root (e.g. redistribution
-/// realization) MUST use this one numbering so producer and consumer never drift.
+/// realization) MUST use this one numbering so producer and consumer never
+/// drift.
 llvm::MapVector<Value, int64_t>
 assignStableArrayIds(const ModuleAccessRelations &relations);
 std::optional<LayoutGraphScoreFact>

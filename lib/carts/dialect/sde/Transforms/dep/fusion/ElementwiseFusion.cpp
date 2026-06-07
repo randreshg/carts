@@ -503,9 +503,8 @@ static sde::SdeSuIterateOp fuseStages(MutableArrayRef<ElementwiseStage> stages,
       first.getPhysicalBlockShapeAttr(), first.getLogicalWorkerSliceAttr(),
       first.getPhysicalHaloShapeAttr(), first.getIterationTopologyAttr(),
       first.getRepetitionStructureAttr(), first.getAsyncStrategyAttr(),
-      first.getDistributionKindAttr(),
-      first.getInPlaceSafeAttr(), first.getInPlaceSharedStateAttr(),
-      first.getArrayLayoutAttr(),
+      first.getDistributionKindAttr(), first.getInPlaceSafeAttr(),
+      first.getInPlaceSharedStateAttr(), first.getArrayLayoutAttr(),
       first.getLayoutsDisagreeAttr(), first.getCommVolumeBytesAttr());
   fused->setAttrs(sde::getRewrittenAttrs(first));
   fused.setStructuredClassificationAttr(

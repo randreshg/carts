@@ -105,6 +105,16 @@ static cl::opt<std::string> OutputFilename("o", cl::desc("Output filename"),
                                            cl::value_desc("filename"),
                                            cl::init("-"));
 
+static cl::opt<bool> Opt0("O0",
+                          cl::desc("Do not run staged CARTS optimizations"),
+                          cl::init(false));
+
+static cl::opt<bool> Opt1("O1", cl::desc("Run staged CARTS optimizations"),
+                          cl::init(false));
+
+static cl::opt<bool> Opt2("O2", cl::desc("Run staged CARTS optimizations"),
+                          cl::init(false));
+
 static cl::opt<bool> Opt("O3", cl::desc("Apply Optimizations"),
                          cl::init(false));
 
@@ -278,7 +288,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 16> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "Parallelize",
     "PatternAnalysis",
@@ -294,7 +304,19 @@ static const std::array<llvm::StringLiteral, 16> kSdePlanningPasses = {
     "IterationSpaceDecomposition",
     "BarrierElimination",
     "VerifySdePartitionPlan",
-    "MemoryUnitMaterialization"};
+    "MemoryUnitMaterialization",
+    "SdeCuNormalization",
+    "SdeRankExpandMu",
+    "VerifySdeMuLayout",
+    "RaiseToMuAccessWindow",
+    "VerifySdeMuAccessWindow",
+    "MuAccessWindowSyncOpt",
+    "VerifySdeMuAccessWindowSync",
+    "SdeRedistribute",
+    "VerifySdeRedistribute",
+    "SdeCoarseAvoidance",
+    "VerifySdeCoarseAvoidance",
+    "VerifySde"};
 static const std::array<llvm::StringLiteral, 5> kSdeToCodirPasses = {
     "ConvertSdeToCodir", "CodirCodeletOpt", "ReductionPlanning",
     "StoragePlanning", "VerifyCodir"};
@@ -337,12 +359,9 @@ static const std::array<llvm::StringLiteral, 7> kLateConcurrencyCleanupPasses =
      "ArtsDeadCodeElimination",
      "Mem2Reg"};
 static const std::array<llvm::StringLiteral, 7> kEpochsPasses = {
-    "PolygeistCanonicalize",
-    "CreateEpochs",
-    "VerifyEpochCreated",
-    "EpochOpt[amortization]",
-    "PolygeistCanonicalize",
-    "DbCommitDistributedDeps (conditional)",
+    "PolygeistCanonicalize",       "CreateEpochs",
+    "VerifyEpochCreated",          "EpochOpt[amortization]",
+    "PolygeistCanonicalize",       "DbCommitDistributedDeps (conditional)",
     "VerifyArtsCdag (conditional)"};
 static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
     "EdtAllocaSinking",
@@ -532,6 +551,20 @@ static void printStringArray(llvm::raw_ostream &os,
   os << "]";
 }
 
+static void printCorePipelineSequence(llvm::raw_ostream &os) {
+  os << "[";
+  bool first = true;
+  for (const auto &stage : getStageRegistry()) {
+    if (stage.kind != StageKind::Core)
+      continue;
+    if (!first)
+      os << ", ";
+    first = false;
+    os << "\"" << stage.token << "\"";
+  }
+  os << "]";
+}
+
 static void
 printDialectGroupArray(llvm::raw_ostream &os,
                        llvm::ArrayRef<DialectGroupDescriptor> groups) {
@@ -599,7 +632,20 @@ static void printPipelineManifestAsJSON(llvm::raw_ostream &os) {
   os << "  \"dialect_groups\": {\n";
   os << "    \"canonical\": ";
   printDialectGroupArray(os, kDialectGroups);
-  os << "\n  }\n";
+  os << "\n  },\n";
+  os << "  \"optimization_levels\": {\n";
+  os << "    \"O0\": {\"pipeline_sequence\": [], "
+        "\"epilogue_sequence\": []},\n";
+  os << "    \"O1\": {\"pipeline_sequence\": ";
+  printCorePipelineSequence(os);
+  os << ", \"epilogue_sequence\": []},\n";
+  os << "    \"O2\": {\"pipeline_sequence\": ";
+  printCorePipelineSequence(os);
+  os << ", \"epilogue_sequence\": []},\n";
+  os << "    \"O3\": {\"pipeline_sequence\": ";
+  printCorePipelineSequence(os);
+  os << ", \"epilogue_sequence\": [\"" << kPostO3OptToken << "\"]}\n";
+  os << "  }\n";
   os << "}\n";
 }
 
@@ -1154,6 +1200,18 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createVerifySdePartitionPlanPass());
   pm.addPass(sde::createMemoryUnitMaterializationPass());
+  pm.addPass(sde::createSdeCuNormalizationPass());
+  pm.addPass(sde::createSdeRankExpandMuPass());
+  pm.addPass(sde::createVerifySdeMuLayoutPass());
+  pm.addPass(sde::createRaiseToMuAccessWindowPass());
+  pm.addPass(sde::createVerifySdeMuAccessWindowPass());
+  pm.addPass(sde::createMuAccessWindowSyncOptPass());
+  pm.addPass(sde::createVerifySdeMuAccessWindowSyncPass());
+  pm.addPass(sde::createSdeRedistributePass());
+  pm.addPass(sde::createVerifySdeRedistributePass());
+  pm.addPass(sde::createSdeCoarseAvoidancePass());
+  pm.addPass(sde::createVerifySdeCoarseAvoidancePass());
+  pm.addPass(sde::createVerifySdePass());
 }
 
 /// SDE-to-CODIR materialization. This is the production codelet conversion:
@@ -1644,10 +1702,9 @@ buildPassManager(ModuleOp module, MLIRContext &context,
                  << stage.token);
       return failure();
     }
-    StageExecutionContext stageContext{module,         context,
-                                       AM.get(),       &machine,
-                                       stopAfterStage, Opt,
-                                       EmitLLVM,       enableDistributedDb};
+    StageExecutionContext stageContext{
+        module,         context, AM.get(), &machine,
+        stopAfterStage, Opt,     EmitLLVM, enableDistributedDb};
     stage.build(pm, stageContext);
     auto result = pm.run(module);
 
@@ -1691,9 +1748,9 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   for (const auto &stage : getStageRegistry()) {
     if (stage.kind != StageKind::Epilogue)
       continue;
-    StageExecutionContext stageContext{module,   context, AM.get(),
-                                       &machine,  false,   Opt,
-                                       EmitLLVM,  enableDistributedDb};
+    StageExecutionContext stageContext{
+        module, context, AM.get(), &machine,
+        false,  Opt,     EmitLLVM, enableDistributedDb};
     if (!stage.enabled(stageContext))
       continue;
     if (failed(runStage(stage, /*stopAfterStage=*/false)))
@@ -1728,6 +1785,12 @@ int main(int argc, char **argv) {
   registerPassManagerCLOptions();
   registerDefaultTimingManagerCLOptions();
   cl::ParseCommandLineOptions(argc, argv, "MLIR Optimization Driver\n");
+  unsigned selectedOptLevels =
+      (Opt0 ? 1 : 0) + (Opt1 ? 1 : 0) + (Opt2 ? 1 : 0) + (Opt ? 1 : 0);
+  if (selectedOptLevels > 1) {
+    ARTS_ERROR("Select only one optimization level: -O0, -O1, -O2, or -O3");
+    return 1;
+  }
   std::string effectiveArtsDebug = ArtsDebug;
   if (Diagnose) {
     if (!effectiveArtsDebug.empty())
@@ -1739,6 +1802,11 @@ int main(int argc, char **argv) {
   if (PrintPipelineManifestJSON) {
     printPipelineManifestAsJSON(llvm::outs());
     return 0;
+  }
+
+  if (Opt0 && CustomPassPipeline.empty()) {
+    ARTS_ERROR("-O0 does not run the staged CARTS optimization pipeline");
+    return 1;
   }
 
   FailureOr<StageId> resolvedStartFrom =

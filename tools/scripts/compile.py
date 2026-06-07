@@ -52,6 +52,7 @@ class PipelineManifest:
     steps: List[PipelineManifestStep]
     epilogue_steps: List[PipelineManifestStep]
     dialect_groups: Dict[str, object]
+    optimization_levels: Dict[str, object]
 
 
 def _parse_manifest_steps_field(
@@ -157,12 +158,18 @@ def _parse_pipeline_manifest_payload(payload: str) -> PipelineManifest:
     dialect_groups_raw = data.get("dialect_groups", {})
     if not isinstance(dialect_groups_raw, dict):
         raise ValueError("field 'dialect_groups' must be an object when present")
+    optimization_levels_raw = data.get("optimization_levels", {})
+    if not isinstance(optimization_levels_raw, dict):
+        raise ValueError(
+            "field 'optimization_levels' must be an object when present"
+        )
 
     return PipelineManifest(
         tokens=tokens,
         steps=steps,
         epilogue_steps=epilogue_steps,
         dialect_groups=dialect_groups_raw,
+        optimization_levels=optimization_levels_raw,
     )
 
 
@@ -211,6 +218,8 @@ def _pipeline_manifest_to_dict(manifest: PipelineManifest) -> Dict[str, object]:
     }
     if manifest.dialect_groups:
         payload["dialect_groups"] = manifest.dialect_groups
+    if manifest.optimization_levels:
+        payload["optimization_levels"] = manifest.optimization_levels
     return payload
 
 

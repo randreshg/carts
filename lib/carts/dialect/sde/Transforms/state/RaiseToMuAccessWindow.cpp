@@ -11,12 +11,13 @@
 /// carrier type already encodes.
 ///
 /// It is a pure ADDITIVE raiser: it reads the committed plan + expanded type
-/// VERBATIM (via the shared `planAccessWindow` query — it never recomputes owner
-/// dims or block shape), proves the structure against the writer su_iterate
-/// iteration domain, and inserts explicit window structure. Out-of-scope MUs
-/// (dynamic, matmul/reduction, multi-owner, in-place, multi-CU, unsupported use)
-/// are skipped conservatively — no window, no error, no existing op mutated. It
-/// introduces no `sde.mu_token`, slice, `sde.mu_dep`, or CODIR concept.
+/// VERBATIM (via the shared `planAccessWindow` query — it never recomputes
+/// owner dims or block shape), proves the structure against the writer
+/// su_iterate iteration domain, and inserts explicit window structure.
+/// Out-of-scope MUs (dynamic, matmul/reduction, multi-owner, in-place,
+/// multi-CU, unsupported use) are skipped conservatively — no window, no error,
+/// no existing op mutated. It introduces no `sde.mu_token`, slice,
+/// `sde.mu_dep`, or CODIR concept.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -54,8 +55,9 @@ struct RaiseToMuAccessWindowPass
       if (!plan)
         continue; // out of scope -> conservative, no window
 
-      // Find the insertion point (first non-window op in the CU body) and detect
-      // an already-raised window for this (MU, mode) so the pass is idempotent.
+      // Find the insertion point (first non-window op in the CU body) and
+      // detect an already-raised window for this (MU, mode) so the pass is
+      // idempotent.
       Block &body = plan->cu.getBody().front();
       bool exists = false;
       Operation *insertBefore = nullptr;

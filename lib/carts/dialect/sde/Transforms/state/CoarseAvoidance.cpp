@@ -12,7 +12,8 @@
 ///     elementwise/stencil BLOCK plan that proves a real grid, realize that
 ///     finest grain as structure (the same gate + rewriter rank expansion uses,
 ///     consuming the committed plan verbatim);
-///   * else leave it flat. Whether a flat MU is an avoidable bug or a legitimate
+///   * else leave it flat. Whether a flat MU is an avoidable bug or a
+///   legitimate
 ///     last resort (dynamic / in-place / reduction / matmul / multi-owner /
 ///     aliasing) is diagnosed by `verify-sde-coarse-avoidance`, which fails
 ///     closed with a reason rather than letting coarse pass silently.
@@ -21,8 +22,8 @@
 /// end to end: rather than leave a partial owner-dim promise, the pass fails
 /// closed with evidence.
 ///
-/// It changes only MU storage shape. The load/store rewrites move no op across a
-/// CU/SU boundary, so CU legality established by
+/// It changes only MU storage shape. The load/store rewrites move no op across
+/// a CU/SU boundary, so CU legality established by
 /// `sde-cu-normalization`/`verify-sde` is preserved by construction.
 ///==========================================================================///
 
@@ -69,8 +70,9 @@ struct SdeCoarseAvoidancePass
       if (si && carts::sde::recognizeExpandedBlockGridMu(si, logicalType))
         continue;
 
-      // Best effort: realize the committed finest grain as structure. Out-of-scope
-      // (coarse) MUs are left flat for verify-sde-coarse-avoidance to diagnose.
+      // Best effort: realize the committed finest grain as structure.
+      // Out-of-scope (coarse) MUs are left flat for verify-sde-coarse-avoidance
+      // to diagnose.
       carts::sde::MuPhysicalLayout plan;
       if (!carts::sde::isSingleOwnerBlockGridRealizable(si, logicalType, plan))
         continue;

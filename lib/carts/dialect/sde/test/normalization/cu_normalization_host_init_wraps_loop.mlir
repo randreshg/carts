@@ -7,8 +7,8 @@
 // A non-OpenMP host init loop at function scope, in an SDE-bearing function (it
 // also holds an sde.mu_alloc), is source executable work outside any CU.
 // verify-sde REJECTS it before normalization; sde-cu-normalization wraps the
-// constant + loop in a conservative cu_region<single> and verify-sde ACCEPTS the
-// result. Index plumbing and the sde.mu_alloc stay at function scope.
+// loop in a conservative cu_region<single> and verify-sde ACCEPTS the result.
+// Index plumbing, constants, and the sde.mu_alloc stay at function scope.
 
 module {
   func.func @host_init(%A: memref<8xf32>) {
@@ -26,13 +26,14 @@ module {
 
 // REJECT: source executable work outside any CU
 
-// The index plumbing and sde.mu_alloc stay at function scope (before the CU),
-// and exactly one conservative single-CU is introduced (no over-wrapping).
+// The index plumbing, constants, and sde.mu_alloc stay at function scope (before
+// the CU), and exactly one conservative single-CU is introduced (no
+// over-wrapping).
 // NORM-LABEL: func @host_init
 // NORM:         arith.constant 8 : index
 // NORM:         sde.mu_alloc
+// NORM:         arith.constant 0.0
 // NORM:         sde.cu_region <single> {
-// NORM:           arith.constant 0.0
 // NORM:           scf.for
 // NORM:             memref.store
 // NORM-NOT:      sde.cu_region <single>

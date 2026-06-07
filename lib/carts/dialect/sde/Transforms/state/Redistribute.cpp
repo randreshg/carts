@@ -13,12 +13,12 @@
 ///
 /// The committed edge analysis (source, family, target, and the fail-closed
 /// reasons) lives in `collectRedistributionEdges`, shared with
-/// `verify-sde-redistribute` so the producer and the gate never drift. This pass
-/// emits one `sde.redist` per representable edge and fails closed (diagnostic +
-/// signalPassFailure), inventing nothing, on each unrepresentable edge. It owns
-/// the geometric movement family only; CODIR maps it to a transport mechanically.
-/// It introduces no `sde.mu_token`, slice, `sde.mu_dep`, owner map, DB, route,
-/// collective, or CODIR isolation concept.
+/// `verify-sde-redistribute` so the producer and the gate never drift. This
+/// pass emits one `sde.redist` per representable edge and fails closed
+/// (diagnostic + signalPassFailure), inventing nothing, on each unrepresentable
+/// edge. It owns the geometric movement family only; CODIR maps it to a
+/// transport mechanically. It introduces no `sde.mu_token`, slice,
+/// `sde.mu_dep`, owner map, DB, route, collective, or CODIR isolation concept.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/RedistributionEdges.h"

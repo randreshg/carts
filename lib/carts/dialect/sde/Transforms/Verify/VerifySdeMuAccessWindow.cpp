@@ -8,8 +8,8 @@
 ///        MU read or written by exactly one elementwise/stencil CU, not in
 ///        place — exactly the `planAccessWindow` predicate the raiser uses) has
 ///        EXACTLY ONE `sde.mu_access_window` in its enclosing `sde.cu_region`.
-///        Zero => the raiser did not run; more than one => the idempotency guard
-///        is broken.
+///        Zero => the raiser did not run; more than one => the idempotency
+///        guard is broken.
 ///
 ///   R2 — grain consistency: every `sde.mu_access_window`'s `blockHi` is the
 ///        `ceilDiv` of a REAL iteration extent on the writer `su_iterate` (an
@@ -41,7 +41,8 @@ using namespace mlir::carts;
 namespace {
 
 struct VerifySdeMuAccessWindowPass
-    : public sde::impl::VerifySdeMuAccessWindowBase<VerifySdeMuAccessWindowPass> {
+    : public sde::impl::VerifySdeMuAccessWindowBase<
+          VerifySdeMuAccessWindowPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     bool failed = false;
@@ -73,10 +74,10 @@ struct VerifySdeMuAccessWindowPass
       } else if (countModeMatch == 0) {
         // Exactly one window, but its mode disagrees with how the CU actually
         // accesses the MU (a window must faithfully describe the access).
-        mu.emitOpError()
-            << "sde.mu_access_window has the wrong access mode; the CU accesses "
-               "this MU as "
-            << sde::stringifySdeAccessMode(plan->mode);
+        mu.emitOpError() << "sde.mu_access_window has the wrong access mode; "
+                            "the CU accesses "
+                            "this MU as "
+                         << sde::stringifySdeAccessMode(plan->mode);
         failed = true;
       }
     });
@@ -100,8 +101,7 @@ struct VerifySdeMuAccessWindowPass
           blockHi->size() != 1)
         return;
       int64_t ownerDim = (*ownerVals)[0];
-      if (ownerDim < 0 ||
-          static_cast<size_t>(ownerDim) >= blockVals->size())
+      if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= blockVals->size())
         return;
       int64_t blockExtent = (*blockVals)[ownerDim];
       if (!sde::findOwnerIterationExtent(si, blockExtent, (*blockHi)[0])) {

@@ -199,7 +199,8 @@ static LogicalResult rewriteCoarseRawAccess(Operation *op, Value expectedRoot,
   if (expectedRoot && access->memref != expectedRoot) {
     return op->emitError(
         "raw memref view/alias access reached ARTS DB materialization; "
-        "SDE/CODIR must rewrite accesses to codelet-local memref views before ARTS "
+        "SDE/CODIR must rewrite accesses to codelet-local memref views before "
+        "ARTS "
         "conversion");
   }
 

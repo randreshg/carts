@@ -994,7 +994,8 @@ struct StoragePlanningPass
       // authoritative: CODIR preserves it instead of reclassifying. Absent or
       // `none` entries are planned normally, so -O3 (no committed collectives)
       // is unaffected. Finalized codelets keep the recompute-vs-existing
-      // integrity check below, so this deference applies to first-time planning.
+      // integrity check below, so this deference applies to first-time
+      // planning.
       ArrayAttr committedCollectives =
           finalized ? ArrayAttr{} : codelet.getDepCollectivesAttr();
       SmallVector<Attribute> collectives;
@@ -1006,7 +1007,8 @@ struct StoragePlanningPass
                       committedCollectives[index])
                 : nullptr;
         codir::CodirCollectiveKind kind =
-            committed && committed.getValue() != codir::CodirCollectiveKind::none
+            committed &&
+                    committed.getValue() != codir::CodirCollectiveKind::none
                 ? committed.getValue()
                 : codir::chooseCollective(codelet, index);
         collectives.push_back(

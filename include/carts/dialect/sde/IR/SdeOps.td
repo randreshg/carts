@@ -656,7 +656,8 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
     not recomputed here. Stencil halo growth is NOT encoded (deferred to a later
     halo-redistribution transform); `validExtents` is the in-tile extent.
 
-    This op is NOT part of the default `-O3` pipeline.
+    Production SDE planning emits this carrier for in-scope block-grid MUs
+    before SDE-to-CODIR conversion consumes it.
   }];
 
   let arguments = (ins
@@ -715,7 +716,8 @@ def SdeRedistOp : CartsSde_Op<"redist", [
     block-argument memref); `sde.cu_region`/`su_iterate` are not
     `IsolatedFromAbove`, so it is visible at the redistribution site.
 
-    This op is NOT part of the default `-O3` pipeline.
+    Production SDE planning emits this carrier for representable movement edges
+    before SDE-to-CODIR conversion consumes it.
   }];
 
   let arguments = (ins

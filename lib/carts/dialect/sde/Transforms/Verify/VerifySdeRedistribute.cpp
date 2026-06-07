@@ -48,8 +48,8 @@ struct VerifySdeRedistributePass
       sde::SdeSuIterateOp consumer = f.consumer;
       consumer.emitOpError()
           << "verify-sde-redistribute: redistribution edge for array "
-          << f.arrayId << " is not representable and was left coarse: "
-          << f.reason;
+          << f.arrayId
+          << " is not representable and was left coarse: " << f.reason;
       failed = true;
     }
     for (const sde::RedistributionEdge &edge : committed.edges) {
@@ -71,15 +71,16 @@ struct VerifySdeRedistributePass
     }
 
     // Grounding: every sde.redist must match a committed edge.
-    module.walk([&](sde::SdeRedistOp redist) {
-      for (const sde::RedistributionEdge &edge : committed.edges)
-        if (sde::redistMatchesEdge(redist, edge))
-          return;
-      redist.emitOpError()
-          << "verify-sde-redistribute: sde.redist is not grounded in a "
-             "committed layout-disagreement edge";
-      failed = true;
-    });
+    module.walk(
+        [&](sde::SdeRedistOp redist) {
+          for (const sde::RedistributionEdge &edge : committed.edges)
+            if (sde::redistMatchesEdge(redist, edge))
+              return;
+          redist.emitOpError()
+              << "verify-sde-redistribute: sde.redist is not grounded in a "
+                 "committed layout-disagreement edge";
+          failed = true;
+        });
 
     if (failed)
       signalPassFailure();

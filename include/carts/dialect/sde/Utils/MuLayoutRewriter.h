@@ -86,10 +86,10 @@ makeMuAccessIndexer(SdeStructuredClassification cls,
 /// coarse-avoidance verification: true iff `si` is a committed,
 /// single-contiguous-owner, fully-static elementwise/stencil BLOCK plan whose
 /// committed `physicalOwnerDims`/`physicalBlockShape` resolve to a real grid
-/// (block count > 1). It reads the committed plan VERBATIM — it never recomputes
-/// owner dims or block shape — and fills `out` on success. Matmul, reduction,
-/// multi-owner, dynamic, and no-committed-plan MUs are out of scope (returns
-/// false; the caller leaves them conservative or diagnoses them).
+/// (block count > 1). It reads the committed plan VERBATIM — it never
+/// recomputes owner dims or block shape — and fills `out` on success. Matmul,
+/// reduction, multi-owner, dynamic, and no-committed-plan MUs are out of scope
+/// (returns false; the caller leaves them conservative or diagnoses them).
 bool isSingleOwnerBlockGridRealizable(SdeSuIterateOp si,
                                       mlir::MemRefType logicalType,
                                       MuPhysicalLayout &out);
@@ -101,10 +101,11 @@ bool isSingleOwnerBlockGridRealizable(SdeSuIterateOp si,
 /// owner-dims/block-shape (a layout conflict the caller leaves conservative).
 SdeSuIterateOp findCommittedBlockPlanWriter(SdeMuAllocOp muAlloc);
 
-/// True if `root` has a use a block-grid layout cannot localize — any user other
-/// than a direct `memref.load`/`store`/`dealloc`, an `sde.mu_access_window`
-/// fact, or an `sde.redist` fact. The single allow-list shared by the
-/// coarse-avoidance gate and redistribution realization so they never drift.
+/// True if `root` has a use a block-grid layout cannot localize — any user
+/// other than a direct `memref.load`/`store`/`dealloc`, an
+/// `sde.mu_access_window` fact, or an `sde.redist` fact. The single allow-list
+/// shared by the coarse-avoidance gate and redistribution realization so they
+/// never drift.
 bool muRootHasUnsupportedUse(mlir::Value root);
 
 /// A rank-expanded single-contiguous-owner block-grid MU candidate, recognized
@@ -113,10 +114,10 @@ bool muRootHasUnsupportedUse(mlir::Value root);
 /// does NOT prove tile/grain consistency — callers decide whether a mismatch is
 /// a skip (a raiser) or an error (a verifier).
 struct ExpandedBlockGridMu {
-  unsigned ownerDim = 0;     ///< committed logical owner dim
-  unsigned logicalRank = 0;  ///< original (logical) rank == expandedRank - 1
-  int64_t blockExtent = 0;   ///< committed owner block extent (from the attr)
-  int64_t gridCount = 0;     ///< leading grid dim of the expanded type
+  unsigned ownerDim = 0;    ///< committed logical owner dim
+  unsigned logicalRank = 0; ///< original (logical) rank == expandedRank - 1
+  int64_t blockExtent = 0;  ///< committed owner block extent (from the attr)
+  int64_t gridCount = 0;    ///< leading grid dim of the expanded type
 };
 
 /// Recognize the single-owner expanded form: `physicalOwnerDims` has one entry,
@@ -128,9 +129,9 @@ recognizeExpandedBlockGridMu(SdeSuIterateOp si, mlir::MemRefType muType);
 
 /// The grid count of a rank-expanded MU must be `ceilDiv(extent, block)` for an
 /// ACTUAL committed iteration extent on the writer `su_iterate`, read from the
-/// iteration domain (independent of the expanded type) so a recover proof is not
-/// tautological. Returns the matching original owner-dim extent, or nullopt when
-/// no committed iteration extent yields this grid count.
+/// iteration domain (independent of the expanded type) so a recover proof is
+/// not tautological. Returns the matching original owner-dim extent, or nullopt
+/// when no committed iteration extent yields this grid count.
 std::optional<int64_t> findOwnerIterationExtent(SdeSuIterateOp si,
                                                 int64_t blockExtent,
                                                 int64_t gridExtent);

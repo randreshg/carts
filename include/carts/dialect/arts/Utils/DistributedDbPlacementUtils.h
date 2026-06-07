@@ -57,8 +57,8 @@ inline bool ownerDimsAddressDbRank(ArrayRef<int64_t> dims, unsigned rank) {
 }
 
 /// Physical DB layout seed plan committed by SDE/CODIR onto an op (db_alloc,
-/// edt, or epoch): the owner dims plus the per-block physical shape. This is the
-/// single reader for the seed-plan attrs; callers that previously re-read
+/// edt, or epoch): the owner dims plus the per-block physical shape. This is
+/// the single reader for the seed-plan attrs; callers that previously re-read
 /// planOwnerDims / planPhysicalBlockShape inline route through here.
 struct ArtsDbPhysicalLayout {
   SmallVector<int64_t, 4> ownerDims;
@@ -484,9 +484,9 @@ inline DbOwnerMapKind chooseDbOwnerMapKind(DbAllocOp alloc) {
 }
 
 /// Realize the ARTS owner-map and scattered home of a distributed DB from the
-/// committed SDE/CODIR seed plan. This is mechanical: owner dims and block shape
-/// are projected from the plan, never recomputed. Returns false (caller fails
-/// closed) when the plan cannot be projected into a usable owner map.
+/// committed SDE/CODIR seed plan. This is mechanical: owner dims and block
+/// shape are projected from the plan, never recomputed. Returns false (caller
+/// fails closed) when the plan cannot be projected into a usable owner map.
 inline bool realizeDbOwnerMapFromPlan(DbAllocOp alloc) {
   if (!alloc)
     return false;

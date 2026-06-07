@@ -134,8 +134,7 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
             for (const ArrayPositionUse &use : posUses)
               if (use.suId == suIdIt->second && !use.isWrite &&
                   use.kind == ArrayDimKind::reductionIndexed &&
-                  llvm::is_contained(home.ownerDims,
-                                     static_cast<int64_t>(pos)))
+                  llvm::is_contained(home.ownerDims, static_cast<int64_t>(pos)))
                 hasOwnerReduction = true;
       }
       if (!hasOwnerReduction) {

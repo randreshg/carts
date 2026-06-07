@@ -46,11 +46,13 @@ inline bool isSuOp(Operation *op) {
 }
 
 /// Schedule/index/window plumbing: a pure, region-free op whose results are all
-/// `index` (constants, loop-bound arithmetic, affine.apply, memref.dim, ...).
-/// These are the SU-local / function-scope values the charter permits outside a
-/// CU; everything else that computes a program value or has an effect is source
-/// compute.
+/// `index` (constants, loop-bound arithmetic, affine.apply, memref.dim, ...),
+/// plus constant-like values of any type. These are the SU-local /
+/// function-scope values the charter permits outside a CU; everything else that
+/// computes a program value or has an effect is source compute.
 inline bool isSchedulePlumbing(Operation *op) {
+  if (op->hasTrait<OpTrait::ConstantLike>())
+    return true;
   return isMemoryEffectFree(op) && op->getNumRegions() == 0 &&
          llvm::all_of(op->getResultTypes(),
                       [](Type t) { return isa<IndexType>(t); });

@@ -127,10 +127,10 @@ static inline void recordWindowComputeBlock(codir::CodeletOp codelet,
   MLIRContext *ctx = codelet.getContext();
   unsigned count = codelet.getDeps().size();
 
-  SmallVector<Attribute> views = completeDepAttrs(
-      codelet.getDepStorageViewsAttr(), count,
-      codir::CodirStorageViewKindAttr::get(
-          ctx, codir::CodirStorageViewKind::host_whole));
+  SmallVector<Attribute> views =
+      completeDepAttrs(codelet.getDepStorageViewsAttr(), count,
+                       codir::CodirStorageViewKindAttr::get(
+                           ctx, codir::CodirStorageViewKind::host_whole));
   views[depIndex] = codir::CodirStorageViewKindAttr::get(
       ctx, codir::CodirStorageViewKind::compute_block);
   codelet.setDepStorageViewsAttr(ArrayAttr::get(ctx, views));
@@ -150,12 +150,11 @@ static inline void recordMovement(codir::CodeletOp codelet, unsigned depIndex,
                                   codir::CodirCollectiveKind movement) {
   MLIRContext *ctx = codelet.getContext();
   unsigned count = codelet.getDeps().size();
-  SmallVector<Attribute> collectives = completeDepAttrs(
-      codelet.getDepCollectivesAttr(), count,
-      codir::CodirCollectiveKindAttr::get(ctx,
-                                          codir::CodirCollectiveKind::none));
-  collectives[depIndex] =
-      codir::CodirCollectiveKindAttr::get(ctx, movement);
+  SmallVector<Attribute> collectives =
+      completeDepAttrs(codelet.getDepCollectivesAttr(), count,
+                       codir::CodirCollectiveKindAttr::get(
+                           ctx, codir::CodirCollectiveKind::none));
+  collectives[depIndex] = codir::CodirCollectiveKindAttr::get(ctx, movement);
   codelet.setDepCollectivesAttr(ArrayAttr::get(ctx, collectives));
 }
 
@@ -182,8 +181,7 @@ rejectUncommittedMovement(codir::CodeletOp codelet,
       if (!depId || depId.getInt() != disId.getInt())
         continue;
       sawDep = true;
-      Value depRoot =
-          ValueAnalysis::stripMemrefViewOps(codelet.getDeps()[i]);
+      Value depRoot = ValueAnalysis::stripMemrefViewOps(codelet.getDeps()[i]);
       for (sde::SdeRedistOp redist : redists)
         if (ValueAnalysis::stripMemrefViewOps(redist.getMu()) == depRoot) {
           covered = true;
@@ -249,7 +247,8 @@ static inline LogicalResult consumeCommittedSdeStructure(Operation *root) {
           sdeMovementFamilyToCollective(redist.getFamily());
       if (!movement)
         return consumer.emitOpError()
-               << "consumes a committed sde.redist whose movement family has no "
+               << "consumes a committed sde.redist whose movement family has "
+                  "no "
                   "CODIR collective representation; CODIR will not drop or "
                   "invent the movement";
       recordMovement(consumer, edge.consumer.depIndex, *movement);

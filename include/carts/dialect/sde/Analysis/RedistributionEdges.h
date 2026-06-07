@@ -12,8 +12,8 @@
 /// relative to the home — or, when no legal family applies, a fail-closed
 /// failure with evidence. It is the single source of truth shared by
 /// `sde-redistribute` (which emits `sde.redist`) and `verify-sde-redistribute`
-/// (which checks the edges are faithfully represented). It reads committed facts
-/// verbatim and never recomputes owner dims, block shape, or family.
+/// (which checks the edges are faithfully represented). It reads committed
+/// facts verbatim and never recomputes owner dims, block shape, or family.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_SDE_ANALYSIS_REDISTRIBUTIONEDGES_H
@@ -36,15 +36,15 @@ namespace mlir::carts::sde {
 
 /// One committed, legally representable redistribution edge.
 struct RedistributionEdge {
-  Value root;                    ///< the array root being redistributed
-  int64_t arrayId = -1;          ///< its module-stable arrayId
-  SdeSuIterateOp consumer;       ///< the disagreeing reader (diagnostic site)
+  Value root;              ///< the array root being redistributed
+  int64_t arrayId = -1;    ///< its module-stable arrayId
+  SdeSuIterateOp consumer; ///< the disagreeing reader (diagnostic site)
   SdeMovementFamily family = SdeMovementFamily::phase_redist;
   SmallVector<int64_t, 4> sourceOwnerDims; ///< committed home owner dims
   SmallVector<int64_t, 4> sourceBlockShape;
   SmallVector<int64_t, 4> targetOwnerDims; ///< target determined by the family
   SmallVector<int64_t, 4> targetBlockShape;
-  int64_t commVolumeBytes = 0;   ///< advisory committed edge cost (0 = none)
+  int64_t commVolumeBytes = 0; ///< advisory committed edge cost (0 = none)
 };
 
 /// A committed disagreement edge that cannot be represented as legal
@@ -66,7 +66,8 @@ struct RedistributionEdges {
 /// edges and fail-closed failures.
 RedistributionEdges collectRedistributionEdges(Operation *moduleOp);
 
-/// True iff `redist` faithfully represents `edge` (same root, family, and source
+/// True iff `redist` faithfully represents `edge` (same root, family, and
+/// source
 /// + target geometry). Shared idempotence/grounding predicate.
 bool redistMatchesEdge(SdeRedistOp redist, const RedistributionEdge &edge);
 

@@ -15,8 +15,8 @@
 ///     silently.
 ///
 /// An MU with no committed plan and no coarse-relevant structure (e.g. private
-/// scratch) is legitimately non-distributed and accepted. The verifier reads the
-/// committed plan verbatim and shares the realize gate
+/// scratch) is legitimately non-distributed and accepted. The verifier reads
+/// the committed plan verbatim and shares the realize gate
 /// (`isSingleOwnerBlockGridRealizable`) with rank expansion and the pass; it
 /// never recomputes owner dims or block shape.
 ///==========================================================================///
@@ -40,8 +40,8 @@ using namespace mlir::carts;
 
 namespace {
 
-/// Why a flat MU cannot be block-partitioned. Each non-None reason is a diagnosed
-/// last resort the current IR cannot avoid.
+/// Why a flat MU cannot be block-partitioned. Each non-None reason is a
+/// diagnosed last resort the current IR cannot avoid.
 enum class CoarseReason {
   None,       ///< no committed plan and no coarse-relevant structure -> accept
   Dynamic,    ///< dynamic shape: no static block grid
@@ -130,39 +130,41 @@ struct VerifySdeCoarseAvoidancePass
     ModuleOp module = getOperation();
     bool failed = false;
 
-    module.walk([&](sde::SdeMuAllocOp mu) {
-      auto muType = dyn_cast<MemRefType>(mu.getMemref().getType());
-      if (!muType)
-        return;
-      // Redistribution explicitly represented: sde-redistribute owns this MU's
-      // movement, so it is not a coarse last resort. verify-sde-redistribute
-      // gates the redistribution structure itself.
-      if (muHasRedist(mu))
-        return;
-      sde::SdeSuIterateOp si = sde::findCommittedBlockPlanWriter(mu);
+    module.walk(
+        [&](sde::SdeMuAllocOp mu) {
+          auto muType = dyn_cast<MemRefType>(mu.getMemref().getType());
+          if (!muType)
+            return;
+          // Redistribution explicitly represented: sde-redistribute owns this
+          // MU's movement, so it is not a coarse last resort.
+          // verify-sde-redistribute gates the redistribution structure itself.
+          if (muHasRedist(mu))
+            return;
+          sde::SdeSuIterateOp si = sde::findCommittedBlockPlanWriter(mu);
 
-      // Block-partitioned: the grid is in the type. OK.
-      if (si && sde::recognizeExpandedBlockGridMu(si, muType))
-        return;
+          // Block-partitioned: the grid is in the type. OK.
+          if (si && sde::recognizeExpandedBlockGridMu(si, muType))
+            return;
 
-      // Avoidable coarse: in the realize scope but left flat.
-      sde::MuPhysicalLayout plan;
-      if (sde::isSingleOwnerBlockGridRealizable(si, muType, plan)) {
-        mu.emitOpError()
-            << "MU is in the block-grid realize scope but left coarse; "
-               "sde-coarse-avoidance must rank-expand the committed finest grain";
-        failed = true;
-        return;
-      }
+          // Avoidable coarse: in the realize scope but left flat.
+          sde::MuPhysicalLayout plan;
+          if (sde::isSingleOwnerBlockGridRealizable(si, muType, plan)) {
+            mu.emitOpError()
+                << "MU is in the block-grid realize scope but left coarse; "
+                   "sde-coarse-avoidance must rank-expand the committed finest "
+                   "grain";
+            failed = true;
+            return;
+          }
 
-      // Unsupported coarse: diagnose the last-resort reason, never silent.
-      CoarseReason reason = classifyCoarseReason(mu, muType);
-      if (reason != CoarseReason::None) {
-        mu.emitOpError() << coarseReasonText(reason);
-        failed = true;
-      }
-      // None -> legitimately non-distributed -> accept.
-    });
+          // Unsupported coarse: diagnose the last-resort reason, never silent.
+          CoarseReason reason = classifyCoarseReason(mu, muType);
+          if (reason != CoarseReason::None) {
+            mu.emitOpError() << coarseReasonText(reason);
+            failed = true;
+          }
+          // None -> legitimately non-distributed -> accept.
+        });
 
     if (failed)
       signalPassFailure();

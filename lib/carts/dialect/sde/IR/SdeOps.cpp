@@ -584,8 +584,8 @@ void SdeMuAccessWindowOp::print(OpAsmPrinter &p) {
   p << " owner_dims(" << getOwnerDimCount() << ")";
   auto printArr = [&](StringRef kw, ArrayAttr arr) {
     p << " " << kw << " [";
-    llvm::interleaveComma(arr, p,
-                          [&](Attribute a) { p << cast<IntegerAttr>(a).getInt(); });
+    llvm::interleaveComma(
+        arr, p, [&](Attribute a) { p << cast<IntegerAttr>(a).getInt(); });
     p << "]";
   };
   printArr("block_lo", getBlockLo());
@@ -668,8 +668,10 @@ LogicalResult SdeMuAccessWindowOp::verify() {
   if (ownerDimCount >= muType.getRank())
     return emitOpError("sde.mu_access_window: ownerDimCount must be < MU rank");
 
-  std::optional<SmallVector<int64_t, 4>> blockLo = readI64ArrayAttr(getBlockLo());
-  std::optional<SmallVector<int64_t, 4>> blockHi = readI64ArrayAttr(getBlockHi());
+  std::optional<SmallVector<int64_t, 4>> blockLo =
+      readI64ArrayAttr(getBlockLo());
+  std::optional<SmallVector<int64_t, 4>> blockHi =
+      readI64ArrayAttr(getBlockHi());
   std::optional<SmallVector<int64_t, 4>> valid =
       readI64ArrayAttr(getValidExtents());
   if (!blockLo || !blockHi || !valid)
@@ -678,8 +680,8 @@ LogicalResult SdeMuAccessWindowOp::verify() {
 
   if (static_cast<int64_t>(blockLo->size()) != ownerDimCount ||
       static_cast<int64_t>(blockHi->size()) != ownerDimCount)
-    return emitOpError(
-        "sde.mu_access_window: blockLo/blockHi length must equal ownerDimCount");
+    return emitOpError("sde.mu_access_window: blockLo/blockHi length must "
+                       "equal ownerDimCount");
 
   int64_t logicalRank = muType.getRank() - ownerDimCount;
   if (static_cast<int64_t>(valid->size()) != logicalRank)
@@ -694,16 +696,16 @@ LogicalResult SdeMuAccessWindowOp::verify() {
                 "dim "
              << k;
     if ((*blockHi)[k] > eshape[k])
-      return emitOpError()
-             << "sde.mu_access_window: blockHi[" << k << "]=" << (*blockHi)[k]
-             << " exceeds MU grid dim " << eshape[k];
+      return emitOpError() << "sde.mu_access_window: blockHi[" << k
+                           << "]=" << (*blockHi)[k] << " exceeds MU grid dim "
+                           << eshape[k];
   }
   for (int64_t d = 0; d < logicalRank; ++d) {
     int64_t tileDim = eshape[ownerDimCount + d];
     if ((*valid)[d] < 1 || (*valid)[d] > tileDim)
-      return emitOpError()
-             << "sde.mu_access_window: validExtents[" << d << "]=" << (*valid)[d]
-             << " out of range [1, " << tileDim << "]";
+      return emitOpError() << "sde.mu_access_window: validExtents[" << d
+                           << "]=" << (*valid)[d] << " out of range [1, "
+                           << tileDim << "]";
   }
 
   // The window describes one CU: it must sit directly in a sde.cu_region body.
@@ -724,12 +726,12 @@ LogicalResult SdeMuAccessWindowOp::verify() {
 void SdeRedistOp::print(OpAsmPrinter &p) {
   auto printArr = [&](StringRef kw, ArrayAttr arr) {
     p << " " << kw << " [";
-    llvm::interleaveComma(arr, p,
-                          [&](Attribute a) { p << cast<IntegerAttr>(a).getInt(); });
+    llvm::interleaveComma(
+        arr, p, [&](Attribute a) { p << cast<IntegerAttr>(a).getInt(); });
     p << "]";
   };
-  p << " <" << stringifySdeMovementFamily(getFamily()) << "> " << getMu() << " : "
-    << getMu().getType();
+  p << " <" << stringifySdeMovementFamily(getFamily()) << "> " << getMu()
+    << " : " << getMu().getType();
   p << " from";
   printArr("owner", getSourceOwnerDims());
   printArr("block", getSourceBlockShape());
@@ -740,10 +742,10 @@ void SdeRedistOp::print(OpAsmPrinter &p) {
     printArr("halo", halo);
   if (IntegerAttr cost = getCommVolumeBytesAttr())
     p << " cost " << cost.getInt();
-  p.printOptionalAttrDict(
-      (*this)->getAttrs(),
-      {"family", "sourceOwnerDims", "sourceBlockShape", "targetOwnerDims",
-       "targetBlockShape", "haloShape", "commVolumeBytes"});
+  p.printOptionalAttrDict((*this)->getAttrs(),
+                          {"family", "sourceOwnerDims", "sourceBlockShape",
+                           "targetOwnerDims", "targetBlockShape", "haloShape",
+                           "commVolumeBytes"});
 }
 
 ParseResult SdeRedistOp::parse(OpAsmParser &parser, OperationState &result) {
@@ -751,7 +753,8 @@ ParseResult SdeRedistOp::parse(OpAsmParser &parser, OperationState &result) {
   IntegerType i64 = IntegerType::get(ctx, 64);
 
   StringRef famKw;
-  if (parser.parseLess() || parser.parseKeyword(&famKw) || parser.parseGreater())
+  if (parser.parseLess() || parser.parseKeyword(&famKw) ||
+      parser.parseGreater())
     return failure();
   std::optional<SdeMovementFamily> fam = symbolizeSdeMovementFamily(famKw);
   if (!fam)
@@ -836,8 +839,8 @@ LogicalResult SdeRedistOp::verify() {
     SmallVector<bool, 4> isOwner(rank, false);
     for (int64_t d : *owner) {
       if (d < 0 || d >= rank)
-        return emitOpError()
-               << "sde.redist: " << side << " owner dim " << d << " out of range";
+        return emitOpError() << "sde.redist: " << side << " owner dim " << d
+                             << " out of range";
       if (isOwner[d])
         return emitOpError()
                << "sde.redist: " << side << " owner dim " << d << " duplicated";
@@ -853,8 +856,8 @@ LogicalResult SdeRedistOp::verify() {
       for (int64_t d = 0; d < rank; ++d) {
         int64_t b = (*block)[d];
         if (b <= 0 || b > shape[d])
-          return emitOpError() << "sde.redist: " << side << " block extent " << b
-                               << " out of range on dim " << d;
+          return emitOpError() << "sde.redist: " << side << " block extent "
+                               << b << " out of range on dim " << d;
         if (!isOwner[d] && b != shape[d])
           return emitOpError() << "sde.redist: " << side
                                << " non-owner block extent must equal full "
@@ -865,16 +868,16 @@ LogicalResult SdeRedistOp::verify() {
       for (auto [i, d] : llvm::enumerate(*owner)) {
         int64_t b = (*block)[i];
         if (b <= 0 || b > shape[d])
-          return emitOpError() << "sde.redist: " << side << " block extent " << b
-                               << " out of range on owner dim " << d;
+          return emitOpError() << "sde.redist: " << side << " block extent "
+                               << b << " out of range on owner dim " << d;
       }
     }
     return success();
   };
   if (failed(checkEndpoint("source", getSourceOwnerDims(),
                            getSourceBlockShape())) ||
-      failed(checkEndpoint("target", getTargetOwnerDims(),
-                           getTargetBlockShape())))
+      failed(
+          checkEndpoint("target", getTargetOwnerDims(), getTargetBlockShape())))
     return failure();
 
   bool sourceReplicated = getSourceOwnerDims().empty();
@@ -891,7 +894,8 @@ LogicalResult SdeRedistOp::verify() {
       return emitOpError("sde.redist: haloShape length must equal MU rank");
     for (int64_t v : *h)
       if (v < 0)
-        return emitOpError("sde.redist: haloShape entries must be non-negative");
+        return emitOpError(
+            "sde.redist: haloShape entries must be non-negative");
   } else if (fam == SdeMovementFamily::halo_like) {
     return emitOpError("sde.redist: halo_like family requires a haloShape");
   }
