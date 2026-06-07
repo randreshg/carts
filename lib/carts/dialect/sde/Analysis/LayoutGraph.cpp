@@ -638,39 +638,4 @@ LayoutGraph buildLayoutGraph(
   return graph;
 }
 
-CuMuHypergraphStorage buildCuMuHypergraphStorage(const LayoutGraph &graph) {
-  CuMuHypergraphStorage storage;
-
-  storage.vertices.reserve(graph.cuVertices.size());
-  for (const CuVertex &vertex : graph.cuVertices) {
-    CuMuGraphVertex typed;
-    typed.id = vertex.id;
-    typed.workWeight = std::max<int64_t>(1, vertex.workWeight);
-    storage.vertices.push_back(typed);
-  }
-
-  storage.nets.reserve(graph.muNets.size());
-  storage.netPins.reserve(graph.muNets.size());
-  for (const MuNet &net : graph.muNets) {
-    SmallVector<unsigned, 4> pins;
-    for (unsigned pinId : net.pinIds) {
-      if (pinId >= graph.muPins.size())
-        continue;
-      unsigned cuId = graph.muPins[pinId].cuId;
-      if (cuId < graph.cuVertices.size() &&
-          llvm::find(pins, cuId) == pins.end())
-        pins.push_back(cuId);
-    }
-
-    storage.netPins.push_back(std::move(pins));
-    CuMuGraphNet typed;
-    typed.id = net.id;
-    typed.weightBytes = std::max<int64_t>(1, net.commVolumeBytes);
-    typed.pinCuIds = storage.netPins.back();
-    storage.nets.push_back(typed);
-  }
-
-  return storage;
-}
-
 } // namespace mlir::carts::sde

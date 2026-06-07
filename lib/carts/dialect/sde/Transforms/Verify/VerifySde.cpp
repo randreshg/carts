@@ -20,8 +20,7 @@
 ///
 /// Deliberately NOT checked: CU `IsolatedFromAbove` (a CODIR concern), the
 /// presence of an `sde.mu_token` / slice op / any specific access-window
-/// carrier (windows are raised later by RaiseToMuAccessWindow). The pass is
-/// standalone and is intended for explicit verification pipelines.
+/// carrier (windows are raised later by RaiseToMuAccessWindow).
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"

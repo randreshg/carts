@@ -637,13 +637,6 @@ inline void copyPatternAttrs(Operation *source, Operation *dest) {
   copyDepPatternAttrs(source, dest);
 }
 
-inline void inheritPatternAttrs(Operation *source, Operation *dest) {
-  if (!source || !dest)
-    return;
-  inheritDistributionAttrs(source, dest);
-  inheritDepPatternAttrs(source, dest);
-}
-
 /// Use only when the destination preserves the same loop semantics/identity as
 /// the source. Structural rewrites that create a new iteration space should
 /// restamp the specific attrs they still mean instead of cloning all metadata.

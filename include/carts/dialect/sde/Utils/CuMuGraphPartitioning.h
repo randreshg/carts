@@ -48,15 +48,6 @@ struct CuMuTypedHypergraph {
   ArrayRef<CuMuGraphNet> nets;
 };
 
-/// Owning storage for `CuMuTypedHypergraph` views.
-struct CuMuHypergraphStorage {
-  SmallVector<CuMuGraphVertex, 8> vertices;
-  SmallVector<CuMuGraphNet, 8> nets;
-  SmallVector<SmallVector<unsigned, 4>, 8> netPins;
-
-  CuMuTypedHypergraph view() const;
-};
-
 /// SDE-level memory-unit vertex. It describes element-space layout only:
 /// no target storage objects, routes, ranks, or communication-operation names.
 struct CuMuMemoryUnit {

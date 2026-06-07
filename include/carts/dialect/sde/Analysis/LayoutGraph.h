@@ -230,10 +230,6 @@ LayoutGraph buildLayoutGraph(const ModuleAccessRelations &relations,
                              const llvm::MapVector<Value, AssignedArrayLayout>
                                  *assignedLayouts = nullptr);
 
-/// Lower the neutral layout graph into the typed CU/MU hypergraph view used by
-/// the SDE partition objective. The returned storage owns net pin arrays.
-CuMuHypergraphStorage buildCuMuHypergraphStorage(const LayoutGraph &graph);
-
 } // namespace mlir::carts::sde
 
 #endif // CARTS_DIALECT_SDE_ANALYSIS_LAYOUTGRAPH_H

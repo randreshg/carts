@@ -2,12 +2,11 @@
 
 // Cross-cutting round-trip for every `#arts.distribution_kind` enum case
 // carried as the `distribution_kind` discardable attribute on `arts.edt`.
-// Pins all five cases (block, two_level, block_cyclic, tiling_2d, replicated)
+// Pins all four cases (block, block_cyclic, tiling_2d, replicated)
 // so adding a strategy forces an explicit fixture update.
 
 // CHECK-LABEL: func.func @distribution_kind_all_cases_roundtrip
 // CHECK: distribution_kind = #arts.distribution_kind<block>
-// CHECK: distribution_kind = #arts.distribution_kind<two_level>
 // CHECK: distribution_kind = #arts.distribution_kind<block_cyclic>
 // CHECK: distribution_kind = #arts.distribution_kind<tiling_2d>
 // CHECK: distribution_kind = #arts.distribution_kind<replicated>
@@ -25,11 +24,6 @@ module {
         -> (memref<?xi64>, memref<?xmemref<?xi32>>)
     arts.edt <task> <intranode> route(%route) (%ap) : memref<?xmemref<?xi32>>
         attributes {distribution_kind = #arts.distribution_kind<block>} {
-    ^bb0(%a: memref<?xmemref<?xi32>>):
-      arts.yield
-    }
-    arts.edt <task> <intranode> route(%route) (%ap) : memref<?xmemref<?xi32>>
-        attributes {distribution_kind = #arts.distribution_kind<two_level>} {
     ^bb0(%a: memref<?xmemref<?xi32>>):
       arts.yield
     }

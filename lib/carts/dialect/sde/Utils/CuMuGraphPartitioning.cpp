@@ -20,10 +20,6 @@ namespace mlir::carts::sde {
 static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs);
 static int64_t saturatingAddPositive(int64_t lhs, int64_t rhs);
 
-CuMuTypedHypergraph CuMuHypergraphStorage::view() const {
-  return CuMuTypedHypergraph{vertices, nets};
-}
-
 SmallVector<unsigned, 8> buildContiguousCuPartAssignment(unsigned vertexCount,
                                                          unsigned partCount) {
   SmallVector<unsigned, 8> assignment;

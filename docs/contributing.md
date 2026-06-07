@@ -24,7 +24,7 @@ dekk carts install                      # Install prerequisites and build the to
 dekk carts install --wrap              # Also generate the optional project-local wrapper
 dekk carts build                       # Build CARTS
 dekk carts build --clean               # Clean build
-dekk carts build --arts                # ARTS release, RDMA/RoCE rsocket support
+dekk carts build --arts                # ARTS release, GASNet-EX (v4 production default)
 dekk carts build --arts --no-rdma      # ARTS release, TCP fallback
 dekk carts build --arts --debug 0      # ARTS errors only
 dekk carts build --arts --debug 1      # ARTS warnings
@@ -134,11 +134,12 @@ Follow LLVM conventions:
 - Docker scripts mount shared workspace volume for clean builds
 - Environment configuration lives in `.dekk.toml` at the repo root
 - Run `dekk carts doctor` to diagnose environment issues
-- ARTS builds default to the RDMA/RoCE rsocket compatibility transport for
-  multinode runs and require `librdmacm`, UCX, and libfabric development files.
-  Keep the supported profile bounded unless you are explicitly triaging a
-  provider issue: `port_count=1`, `sender_threads=1`, `receiver_threads=1`,
-  accept-thread on, serialized active connects, and close-after-send. Use
+- ARTS builds default to GASNet-EX for multinode runs (auto-bootstrapped, the
+  Linux default). `--legacy-rsocket` selects the RDMA/RoCE rsocket fallback,
+  which requires `librdmacm`, UCX, and libfabric development files; keep its
+  profile bounded unless you are explicitly triaging a provider issue:
+  `port_count=1`, `sender_threads=1`, `receiver_threads=1`, accept-thread on,
+  serialized active connects, and close-after-send. Use
   `dekk carts build --arts --no-rdma` for non-RDMA systems or TCP fallback
   experiments. Benchmark single-node configs still use TCP and do not request
   distributed DB ownership.

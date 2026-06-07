@@ -218,7 +218,6 @@ def PartitionModeAttr : Arts_I32EnumAttr<"partition_mode", PartitionMode>;
 def EdtDistributionKind
     : Arts_I32Enum<"EdtDistributionKind", "EDT distribution strategy kind", [
       I32EnumAttrCase<"block", 0, "block">,
-      I32EnumAttrCase<"two_level", 1, "two_level">,
       I32EnumAttrCase<"block_cyclic", 2, "block_cyclic">,
       I32EnumAttrCase<"tiling_2d", 3, "tiling_2d">,
       I32EnumAttrCase<"replicated", 4, "replicated">
