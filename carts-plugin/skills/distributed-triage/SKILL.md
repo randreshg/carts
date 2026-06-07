@@ -79,7 +79,7 @@ dekk carts benchmarks run polybench/2mm \
 ## Key Files
 
 - `docs/heuristics/distribution.md`
-- `lib/carts/dialect/arts/Transforms/db/DbDistributedOwnership.cpp`
+- `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp`
 - `lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp`
 - `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
 - `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/ConvertArtsRtToLLVM.cpp`

@@ -81,10 +81,10 @@ committed layout facts:
   collective families come from CODIR layout mismatch plus compute pattern, and
   owner maps belong to ARTS realization.
 
-Useful diagnostic hook:
+Inspect the SDE planning shape directly:
 
 ```bash
-CARTS_DIAG_HYPERGRAPH=1 dekk carts compile <input> -O3 --pipeline=sde-planning
+dekk carts compile <input> -O3 --pipeline=sde-planning
 ```
 
 ## CGO'15 Stencil Mapping

@@ -66,7 +66,7 @@ Use to locate where to grep when triaging.
 - SDE distribution/reduction planning: `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/sde/Transforms/effect/scheduling/ReductionStrategy.cpp`
 - ARTS-RT ABI conversion: `pre-lowering` implementation in `lib/carts/dialect/arts-rt/Conversion/ArtsToRt/` and LLVM lowering in `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/`
 - ARTS-RT LLVM cleanup: `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/ArtsRtOpToLLVMPatterns.cpp`
-- Multinode-conditional passes: `DbDistributedOwnership`, `DbDistributedEligibility`, SDE distribution planning, ARTS DB refinement
+- Multinode-conditional passes: `DbOwnerMapRealization`, `DbDistributedEligibility`, SDE distribution planning, ARTS DB refinement
 
 ## Anti-patterns from prior fixes
 

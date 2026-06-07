@@ -172,8 +172,7 @@ session note under `.carts/sessions/<topic>/charter-decisions.md`.
 | DB allocation / acquire / release / partitioning | ARTS |
 | EDT structural rewrite, fusion, distribution | ARTS |
 | Epoch creation | ARTS |
-| CPS legality, candidate grouping, and dataflow/token planning | SDE |
-| CPS continuation materialization | ARTS/ARTS-RT, consuming SDE plans |
+| CPS continuation materialization | ARTS / ARTS-RT |
 | `arts_rt.edt_create` argument lowering | ARTS-RT |
 | LLVM-near final cleanup (DataPtrHoisting, GuidRangeCallOpt) | ARTS-RT |
 | Polygeist→MLIR frontend bridge | frontend conversion, before SDE planning |

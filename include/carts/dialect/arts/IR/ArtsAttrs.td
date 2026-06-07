@@ -346,31 +346,4 @@ def HaloSliceAttr : Arts_Attr<"HaloSlice", "halo_slice"> {
   let assemblyFormat = "`<` struct(params) `>`";
 }
 
-///===----------------------------------------------------------------------===///
-// ARTS Metadata Attributes
-///===----------------------------------------------------------------------===///
-
-/// Attribute to store dimensional analysis results for flattened memrefs
-def MemrefDimInfoAttr : Arts_Attr<"MemrefDimInfo", "memref_dim_info"> {
-  let summary = "Recovered dimensional information for flattened memrefs";
-  let description = [{
-    Stores inferred multi-dimensional shape and affine access patterns
-    for array allocations that were originally flattened (e.g., array[N*M]).
-    This enables canonicalization of memref<N*M> to memref<NxM> with proper
-    multi-dimensional indexing.
-
-    The attribute captures:
-    - inferredDims: The recovered dimensions (e.g., [128, 128] for N=128)
-    - strideExprs: Stride multipliers for each dimension (e.g., [128, 1])
-    - accessPattern: Affine map showing linearization pattern
-  }];
-  let parameters = (ins "::mlir::ArrayAttr"
-                    : $inferredDims, "::mlir::ArrayAttr"
-                    : $strideExprs, "::mlir::AffineMapAttr"
-                    : $accessPattern);
-  let mnemonic = "memref_dim_info";
-  let assemblyFormat =
-      "`<` $inferredDims `,` $strideExprs `,` $accessPattern `>`";
-}
-
 #endif // ARTS_ATTRS

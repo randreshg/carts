@@ -48,7 +48,7 @@ data placement decisions.
 automatically:
 
 1. **Distributes memory like MPI** — each node allocates only its portion of
-   data (via `DbDistributedOwnershipPass` and round-robin route selection in
+   data (via `DbOwnerMapRealizationPass` and round-robin route selection in
    `ConvertArtsRtToLLVM`). Memory capacity scales with node count.
 2. **Distributes computation like AMT** — tasks are routed to nodes based on
    data ownership, with work-stealing for dynamic load balancing. No manual
@@ -210,8 +210,8 @@ Goal:
 
 Current implementation:
 - `DbAllocOp` supports a `distributed` marker attribute.
-- Pass: `DbDistributedOwnershipPass`
-  (`lib/carts/dialect/arts/Transforms/db/DbDistributedOwnership.cpp`).
+- Pass: `DbOwnerMapRealizationPass`
+  (`lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp`).
 - Pipeline placement: ARTS DB refinement after SDE distribution planning
   (default-on for multinode in `carts-compile`; `--no-distributed-db` forces the
   origin-node baseline).

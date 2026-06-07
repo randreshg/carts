@@ -161,7 +161,7 @@ Mem2Reg
 
 ```text
 DbModeTightening
-DbDistributedOwnership (conditional)
+DbOwnerMapRealization (conditional)
 EdtTransforms
 DbTransforms
 ContractValidation

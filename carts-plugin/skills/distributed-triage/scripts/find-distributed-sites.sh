@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 git grep -n \
-  -e 'DbDistributedOwnership' \
+  -e 'DbOwnerMapRealization' \
   -e 'DbDistributedEligibility' \
   -e 'DistributionPlanning' \
   -e 'ConvertSdeToCodir' \

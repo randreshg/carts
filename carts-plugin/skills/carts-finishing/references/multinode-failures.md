@@ -20,11 +20,11 @@ If the rubric here does not match, escalate to `carts-distributed-triage` with t
 
 **Symptom:** `(null reference)` at runtime. Worker hangs on `arts_db_acquire`. Or segfault.
 
-**Root cause:** `DbDistributedOwnership` in ARTS DB refinement did not mark the DB, or the eligibility check is too conservative.
+**Root cause:** `DbOwnerMapRealization` in ARTS DB refinement did not mark the DB, or the eligibility check is too conservative.
 
 **Fix usually belongs in:**
-- `lib/carts/dialect/arts/Transforms/db/DbDistributedEligibility.cpp` (eligibility rules — too restrictive)
-- `lib/carts/dialect/arts/Transforms/db/DbDistributedOwnership.cpp` (attribute stamping — never reached)
+- `lib/carts/dialect/arts/Analysis/db/DbDistributedEligibility.cpp` (eligibility rules — too restrictive)
+- `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp` (owner-map realization — never reached)
 
 ### 2. Distributed window mismatch
 
@@ -49,7 +49,7 @@ halo/window contract is wrong; otherwise ARTS DB refinement should validate the
 
 **Root cause:** ARTS DB refinement computed a halo for local-only operation and did not widen for distributed neighbors.
 
-**Fix usually belongs in:** `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` or the DB refinement helper that stamps the window. When marking a DB distributed, validate that halo bounds cover all transitive neighbors and cross-check `DbDistributedOwnership.cpp`, `DbDistributedEligibility.cpp`, and `DbAnalysis.cpp`.
+**Fix usually belongs in:** `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` or the DB refinement helper that stamps the window. When marking a DB distributed, validate that halo bounds cover all transitive neighbors and cross-check `DbOwnerMapRealization.cpp`, `DbDistributedEligibility.cpp`, and `DbAnalysis.cpp`.
 
 ### 4. GUID coherence (same data, different handles on nodes)
 
@@ -119,7 +119,7 @@ If a sample passes single-node but fails multinode:
 
 - `docs/compiler/dialects/arts-rt/README.md` — ARTS-RT lowering contract
 - `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` — DB/window refinement
-- `lib/carts/dialect/arts/Transforms/db/DbDistributedOwnership.cpp` and `lib/carts/dialect/arts/Analysis/db/DbDistributedEligibility.cpp` — distributed ownership gates
+- `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp` and `lib/carts/dialect/arts/Analysis/db/DbDistributedEligibility.cpp` — distributed ownership gates
 - `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp` — DB/acquire facts
 - `tools/compile/Compile.cpp` — canonical pipeline tokens and stage ordering
 - `carts-plugin/skills/distributed-triage/SKILL.md` — sister triage skill

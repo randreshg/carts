@@ -101,7 +101,7 @@ captured under `.carts/sessions/...`.
 
 **Type:** targeted-fix
 
-**Stop condition:** `DbDistributedOwnership` marks DBs with the `distributed` UnitAttr for elementwise, matmul, and reduction classifications in multinode builds (distribution is default-on). The 9 originally-passing samples (now extended to all 26 if phase 4 is green) compile under `-O3` on a multinode config.
+**Stop condition:** `DbOwnerMapRealization` realizes the ARTS owner map and `distributed` marker over committed SDE/CODIR distribution structure in multinode builds (distribution is default-on); it does not make independent eligibility or distribution-family decisions. The 9 originally-passing samples (now extended to all 26 if phase 4 is green) compile under `-O3` on a multinode config.
 
 **Action:** keep SDE layout/distribution facts target-neutral and real, ensure
 CODIR has materialized any required collective/bridge intent, then add or
