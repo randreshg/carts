@@ -39,8 +39,10 @@ Read these before changing code:
 1. Confirm the environment and rebuild the relevant bits.
    - `dekk carts doctor`
    - `dekk carts build`
-   - `dekk carts build --arts` if the runtime may be stale; this defaults to RDMA/RoCE
+   - `dekk carts build --arts` if the runtime may be stale; the production
+     multinode transport is GASNet-EX (set `ARTS_GASNET_PREFIX`/`ARTS_GASNET_CONDUIT`/`ARTS_GASNET_THREADMODE`; it fails closed if unset)
    - `dekk carts build --arts --no-rdma` only when reproducing a TCP fallback run
+   - `dekk carts build --arts --legacy-rsocket` only to reproduce the legacy rsocket path
 2. Classify the symptom.
    - crash / assertion / sanitizer
    - hang / deadlock / no progress

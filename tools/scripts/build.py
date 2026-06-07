@@ -1,5 +1,6 @@
 """Build command for CARTS CLI."""
 
+import os
 from pathlib import Path
 import subprocess
 from typing import Optional
@@ -64,6 +65,93 @@ def _check_rdma_provider_deps() -> None:
         raise Exit(1)
 
 
+# ARTS multinode transport kinds. GASNet-EX is the v4 production default on
+# Linux; rsocket is an explicit legacy fallback only; TCP is the debug escape.
+ARTS_TRANSPORT_GASNET = "gasnet"
+ARTS_TRANSPORT_RSOCKET = "rsocket"
+ARTS_TRANSPORT_TCP = "tcp"
+
+
+def _select_arts_transport(config, rdma: Optional[bool], legacy_rsocket: bool) -> str:
+    """Resolve the ARTS data-plane transport for an --arts build.
+
+    Decision order (matches AGENTS.md / runtime.md): --no-rdma is the explicit
+    TCP/debug escape and wins; --legacy-rsocket selects the legacy rsocket data
+    plane; otherwise the production accelerated transport is GASNet-EX, which is
+    the Linux default and is also selected by an explicit --rdma. macOS developer
+    builds fall back to TCP unless an accelerated transport is requested.
+    """
+    if rdma is False:
+        if legacy_rsocket:
+            print_error("--no-rdma and --legacy-rsocket are mutually exclusive.")
+            raise Exit(1)
+        return ARTS_TRANSPORT_TCP
+    if legacy_rsocket:
+        return ARTS_TRANSPORT_RSOCKET
+    if rdma is True:
+        return ARTS_TRANSPORT_GASNET
+    return ARTS_TRANSPORT_TCP if config.info.is_macos else ARTS_TRANSPORT_GASNET
+
+
+def _apply_arts_transport_make_vars(transport: str, make_vars: list) -> None:
+    """Append the make variables that realize the chosen ARTS transport.
+
+    GASNet selection requires explicit prefix/conduit/threadmode configuration
+    from the environment and fails closed with a clear diagnostic when any is
+    missing, rather than silently downgrading to TCP or rsocket.
+    """
+    if transport == ARTS_TRANSPORT_GASNET:
+        prefix = os.environ.get("ARTS_GASNET_PREFIX", "").strip()
+        conduit = os.environ.get("ARTS_GASNET_CONDUIT", "").strip()
+        threadmode = os.environ.get("ARTS_GASNET_THREADMODE", "").strip()
+        missing = [
+            name
+            for name, value in (
+                ("ARTS_GASNET_PREFIX", prefix),
+                ("ARTS_GASNET_CONDUIT", conduit),
+                ("ARTS_GASNET_THREADMODE", threadmode),
+            )
+            if not value
+        ]
+        if missing:
+            print_error(
+                "GASNet-EX is the default production multinode transport, but it "
+                "is not configured. Set " + ", ".join(missing) + " in the "
+                "environment, e.g.:\n"
+                "    ARTS_GASNET_PREFIX=<gasnet-install> "
+                "ARTS_GASNET_CONDUIT=ucx ARTS_GASNET_THREADMODE=par \\\n"
+                "        dekk carts build --arts\n"
+                "Or build the TCP/debug runtime with `--no-rdma`, or the legacy "
+                "rsocket runtime with `--legacy-rsocket`."
+            )
+            raise Exit(1)
+        console.print(
+            f"Network: [{Colors.INFO}]GASNet-EX "
+            f"(conduit={conduit}, threadmode={threadmode}, prefix={prefix})"
+            f"[/{Colors.INFO}]"
+        )
+        make_vars.extend(
+            [
+                "ARTS_USE_GASNET=ON",
+                "ARTS_USE_RDMA=OFF",
+                f"ARTS_GASNET_PREFIX={prefix}",
+                f"ARTS_GASNET_CONDUIT={conduit}",
+                f"ARTS_GASNET_THREADMODE={threadmode}",
+            ]
+        )
+    elif transport == ARTS_TRANSPORT_RSOCKET:
+        console.print(
+            f"Network: [{Colors.INFO}]rsocket RDMA (legacy fallback)[/{Colors.INFO}]"
+        )
+        _check_rdma_provider_deps()
+        make_vars.extend(["ARTS_USE_GASNET=OFF", "ARTS_USE_RDMA=ON"])
+    else:  # ARTS_TRANSPORT_TCP
+        console.print(
+            f"Network: [{Colors.INFO}]TCP (debug/escape transport)[/{Colors.INFO}]"
+        )
+        make_vars.extend(["ARTS_USE_GASNET=OFF", "ARTS_USE_RDMA=OFF"])
+
+
 def build(
     clean: bool = Option(False, "--clean", "-c", help="Run make clean before building"),
     arts: bool = Option(False, "--arts", "-a", help="Build only ARTS (mutually exclusive target flag)"),
@@ -81,7 +169,13 @@ def build(
         help="Custom counter profile file path (overrides --counters)"),
     rdma: Optional[bool] = Option(
         None, "--rdma/--no-rdma",
-        help="Build ARTS with RDMA transport (Linux default ON; macOS default OFF) (--arts only)"),
+        help="Production accelerated transport: --rdma selects GASNet-EX "
+             "(Linux default ON; macOS default OFF); --no-rdma is the TCP/debug "
+             "escape (--arts only)"),
+    legacy_rsocket: bool = Option(
+        False, "--legacy-rsocket",
+        help="Use the legacy rsocket RDMA data plane instead of the default "
+             "GASNet-EX production transport (--arts only)"),
     cc: Optional[str] = Option(
         None, "--cc",
         help="C compiler for LLVM bootstrap (default: clang; use gcc on systems without clang)"),
@@ -122,14 +216,8 @@ def build(
     make_vars = configured_make_vars(config)
 
     if arts:
-        use_rdma = rdma if rdma is not None else not config.info.is_macos
-        if use_rdma:
-            _check_rdma_provider_deps()
-        elif config.info.is_macos and rdma is None:
-            console.print(
-                "Network: "
-                f"[{Colors.INFO}]TCP (macOS default; pass --rdma to force RDMA)[/{Colors.INFO}]"
-            )
+        transport = _select_arts_transport(config, rdma, legacy_rsocket)
+        _apply_arts_transport_make_vars(transport, make_vars)
         # Expose the raw v2 ARTS runtime levels directly:
         #   0 -> ERROR only
         #   1 -> WARN
@@ -140,7 +228,6 @@ def build(
             make_vars.extend([
                 "ARTS_BUILD_TYPE=Debug",
             ])
-        make_vars.append(f"ARTS_USE_RDMA={'ON' if use_rdma else 'OFF'}")
 
     # Counter levels: 0=off, 1=artsid, 2=deep
     # Levels 1+ require USE_COUNTERS and USE_METRICS
