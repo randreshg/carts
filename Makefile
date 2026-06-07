@@ -199,14 +199,17 @@ ARTS_USE_RDMA ?= $(if $(filter Darwin,$(shell uname)),OFF,ON)
 
 # GASNet-EX transport. When ON it overrides ARTS_USE_RDMA in the ARTS CMake and
 # selects the GASNet data plane. `dekk carts build --arts` (tools/scripts/build.py)
-# is the policy layer: it makes GASNet the Linux production default and fails
-# closed without explicit prefix/conduit/threadmode. A bare `make arts` keeps the
-# legacy rsocket/TCP default (GASNet OFF). The prefix/conduit/threadmode are
-# passed through to the ARTS CMake only when set.
+# is the policy layer: it makes GASNet the Linux production default. When no
+# ARTS_GASNET_PREFIX is given and ARTS_GASNET_BOOTSTRAP=ON (default), the ARTS
+# build downloads + builds GASNet from its release tarball and auto-detects the
+# conduit. A bare `make arts` keeps the legacy rsocket/TCP default (GASNet OFF).
+# prefix/conduit/version are passed to the ARTS CMake only when set.
 ARTS_USE_GASNET ?= OFF
+ARTS_GASNET_BOOTSTRAP ?= ON
 ARTS_GASNET_PREFIX ?=
 ARTS_GASNET_CONDUIT ?=
 ARTS_GASNET_THREADMODE ?= par
+ARTS_GASNET_VERSION ?=
 
 # Configuration hash file for ARTS build caching
 ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
@@ -215,7 +218,7 @@ ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
 COUNTER_CONFIG_HASH := $(shell md5sum "$(COUNTER_CONFIG_ABSPATH)" 2>/dev/null | cut -d' ' -f1 || echo "no-config")
 
 # Compute current configuration as a string for hashing
-ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_LOG_LEVEL)|$(COUNTER_CONFIG_ABSPATH)|$(COUNTER_CONFIG_HASH)|$(CARTS_LINKER_PATH)|$(ARTS_USE_JEMALLOC)|$(ARTS_USE_RDMA)|$(ARTS_USE_GASNET)|$(ARTS_GASNET_PREFIX)|$(ARTS_GASNET_CONDUIT)|$(ARTS_GASNET_THREADMODE)|production-rdma-deps-required|build-with-install-rpath
+ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_LOG_LEVEL)|$(COUNTER_CONFIG_ABSPATH)|$(COUNTER_CONFIG_HASH)|$(CARTS_LINKER_PATH)|$(ARTS_USE_JEMALLOC)|$(ARTS_USE_RDMA)|$(ARTS_USE_GASNET)|$(ARTS_GASNET_BOOTSTRAP)|$(ARTS_GASNET_PREFIX)|$(ARTS_GASNET_CONDUIT)|$(ARTS_GASNET_THREADMODE)|$(ARTS_GASNET_VERSION)|production-rdma-deps-required|build-with-install-rpath
 
 arts-download:
 	@if [ ! -d "$(ARTS_DIR)/.git" ]; then \
@@ -254,9 +257,11 @@ arts:
 			-DARTS_USE_JEMALLOC=$(ARTS_USE_JEMALLOC) \
 			-DARTS_USE_RDMA=$(ARTS_USE_RDMA) \
 			-DARTS_USE_GASNET=$(ARTS_USE_GASNET) \
+			-DARTS_GASNET_BOOTSTRAP=$(ARTS_GASNET_BOOTSTRAP) \
 			$(if $(ARTS_GASNET_PREFIX),-DARTS_GASNET_PREFIX=$(ARTS_GASNET_PREFIX),) \
 			$(if $(ARTS_GASNET_CONDUIT),-DARTS_GASNET_CONDUIT=$(ARTS_GASNET_CONDUIT),) \
 			$(if $(ARTS_GASNET_THREADMODE),-DARTS_GASNET_THREADMODE=$(ARTS_GASNET_THREADMODE),) \
+			$(if $(ARTS_GASNET_VERSION),-DARTS_GASNET_VERSION=$(ARTS_GASNET_VERSION),) \
 			-DARTS_BUILD_BENCHMARKS=OFF \
 			-DARTS_BUILD_TESTS=OFF \
 			-DARTS_BUILD_EXAMPLES=OFF \

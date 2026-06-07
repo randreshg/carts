@@ -93,52 +93,53 @@ def _select_arts_transport(config, rdma: Optional[bool], legacy_rsocket: bool) -
     return ARTS_TRANSPORT_TCP if config.info.is_macos else ARTS_TRANSPORT_GASNET
 
 
-def _apply_arts_transport_make_vars(transport: str, make_vars: list) -> None:
+def _apply_arts_transport_make_vars(
+    transport: str, make_vars: list, no_bootstrap: bool = False
+) -> None:
     """Append the make variables that realize the chosen ARTS transport.
 
-    GASNet selection requires explicit prefix/conduit/threadmode configuration
-    from the environment and fails closed with a clear diagnostic when any is
-    missing, rather than silently downgrading to TCP or rsocket.
+    GASNet needs no external configuration by default: when no ARTS_GASNET_PREFIX
+    is given, the ARTS build downloads its release tarball, auto-detects the
+    conduit, installs its dependencies, and builds it into the build tree. An
+    external prefix overrides the bootstrap; --gasnet-no-bootstrap disables it and
+    then requires a prefix (fail-closed).
     """
     if transport == ARTS_TRANSPORT_GASNET:
         prefix = os.environ.get("ARTS_GASNET_PREFIX", "").strip()
         conduit = os.environ.get("ARTS_GASNET_CONDUIT", "").strip()
         threadmode = os.environ.get("ARTS_GASNET_THREADMODE", "").strip()
-        missing = [
-            name
-            for name, value in (
-                ("ARTS_GASNET_PREFIX", prefix),
-                ("ARTS_GASNET_CONDUIT", conduit),
-                ("ARTS_GASNET_THREADMODE", threadmode),
-            )
-            if not value
-        ]
-        if missing:
+        version = os.environ.get("ARTS_GASNET_VERSION", "").strip()
+
+        if no_bootstrap and not prefix:
             print_error(
-                "GASNet-EX is the default production multinode transport, but it "
-                "is not configured. Set " + ", ".join(missing) + " in the "
-                "environment, e.g.:\n"
-                "    ARTS_GASNET_PREFIX=<gasnet-install> "
-                "ARTS_GASNET_CONDUIT=ucx ARTS_GASNET_THREADMODE=par \\\n"
-                "        dekk carts build --arts\n"
-                "Or build the TCP/debug runtime with `--no-rdma`, or the legacy "
-                "rsocket runtime with `--legacy-rsocket`."
+                "--gasnet-no-bootstrap requires a prebuilt GASNet: set "
+                "ARTS_GASNET_PREFIX=<gasnet-install> (and optionally "
+                "ARTS_GASNET_CONDUIT). Drop --gasnet-no-bootstrap to download and "
+                "build GASNet automatically, or use --no-rdma for the TCP runtime."
             )
             raise Exit(1)
+
+        if prefix:
+            source = f"external prefix={prefix}"
+        else:
+            source = f"bootstrap (download {version or 'default release'})"
         console.print(
             f"Network: [{Colors.INFO}]GASNet-EX "
-            f"(conduit={conduit}, threadmode={threadmode}, prefix={prefix})"
-            f"[/{Colors.INFO}]"
+            f"(conduit={conduit or 'auto'}, {source})[/{Colors.INFO}]"
         )
-        make_vars.extend(
-            [
-                "ARTS_USE_GASNET=ON",
-                "ARTS_USE_RDMA=OFF",
-                f"ARTS_GASNET_PREFIX={prefix}",
-                f"ARTS_GASNET_CONDUIT={conduit}",
-                f"ARTS_GASNET_THREADMODE={threadmode}",
-            ]
-        )
+
+        make_vars.extend(["ARTS_USE_GASNET=ON", "ARTS_USE_RDMA=OFF"])
+        make_vars.append(f"ARTS_GASNET_BOOTSTRAP={'OFF' if no_bootstrap else 'ON'}")
+        # Pass through only what the user set; the ARTS build supplies the rest
+        # (auto-detected conduit, pinned version, par threadmode).
+        if prefix:
+            make_vars.append(f"ARTS_GASNET_PREFIX={prefix}")
+        if conduit:
+            make_vars.append(f"ARTS_GASNET_CONDUIT={conduit}")
+        if threadmode:
+            make_vars.append(f"ARTS_GASNET_THREADMODE={threadmode}")
+        if version:
+            make_vars.append(f"ARTS_GASNET_VERSION={version}")
     elif transport == ARTS_TRANSPORT_RSOCKET:
         console.print(
             f"Network: [{Colors.INFO}]rsocket RDMA (legacy fallback)[/{Colors.INFO}]"
@@ -176,6 +177,10 @@ def build(
         False, "--legacy-rsocket",
         help="Use the legacy rsocket RDMA data plane instead of the default "
              "GASNet-EX production transport (--arts only)"),
+    gasnet_no_bootstrap: bool = Option(
+        False, "--gasnet-no-bootstrap",
+        help="Do not download/build GASNet; require a prebuilt ARTS_GASNET_PREFIX "
+             "(--arts only)"),
     cc: Optional[str] = Option(
         None, "--cc",
         help="C compiler for LLVM bootstrap (default: clang; use gcc on systems without clang)"),
@@ -217,7 +222,7 @@ def build(
 
     if arts:
         transport = _select_arts_transport(config, rdma, legacy_rsocket)
-        _apply_arts_transport_make_vars(transport, make_vars)
+        _apply_arts_transport_make_vars(transport, make_vars, gasnet_no_bootstrap)
         # Expose the raw v2 ARTS runtime levels directly:
         #   0 -> ERROR only
         #   1 -> WARN

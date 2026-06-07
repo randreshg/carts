@@ -40,7 +40,8 @@ Read these before changing code:
    - `dekk carts doctor`
    - `dekk carts build`
    - `dekk carts build --arts` if the runtime may be stale; the production
-     multinode transport is GASNet-EX (set `ARTS_GASNET_PREFIX`/`ARTS_GASNET_CONDUIT`/`ARTS_GASNET_THREADMODE`; it fails closed if unset)
+     multinode transport is GASNet-EX, auto-downloaded+built (override with
+     `ARTS_GASNET_CONDUIT`/`ARTS_GASNET_VERSION`, or `ARTS_GASNET_PREFIX` for a prebuilt GASNet)
    - `dekk carts build --arts --no-rdma` only when reproducing a TCP fallback run
    - `dekk carts build --arts --legacy-rsocket` only to reproduce the legacy rsocket path
 2. Classify the symptom.

@@ -18,8 +18,12 @@ Common workflows:
 - `dekk carts build` — rebuild CARTS compiler only (fastest, incremental)
 - `dekk carts build --clean` — full clean rebuild
 - `dekk carts build --arts` — rebuild ARTS runtime; the production multinode
-  transport is GASNet-EX, configured by `ARTS_GASNET_PREFIX` / `ARTS_GASNET_CONDUIT`
-  / `ARTS_GASNET_THREADMODE` (fails closed if unset)
+  transport is GASNet-EX. With no `ARTS_GASNET_PREFIX`, the build downloads the
+  GASNet release, auto-detects the conduit, installs its deps, and builds it
+  (override with `ARTS_GASNET_CONDUIT` / `ARTS_GASNET_VERSION`; point
+  `ARTS_GASNET_PREFIX` at a prebuilt GASNet to skip the download)
+- `dekk carts build --arts --gasnet-no-bootstrap` — require a prebuilt
+  `ARTS_GASNET_PREFIX` instead of downloading GASNet
 - `dekk carts build --arts --no-rdma` — rebuild ARTS runtime for TCP fallback (debug)
 - `dekk carts build --arts --legacy-rsocket` — rebuild ARTS on the legacy rsocket
   RDMA data plane (not the v4 default)
@@ -40,7 +44,7 @@ with `dekk carts build --llvm`.
 | Flag | What it builds | When to use |
 |------|---------------|-------------|
 | (none) | CARTS compiler only | After changing `lib/carts/` or `include/carts/` |
-| `--arts` | ARTS runtime | After changing `external/arts/`; defaults to GASNet-EX (set `ARTS_GASNET_*`; `--no-rdma` for TCP, `--legacy-rsocket` for rsocket) |
+| `--arts` | ARTS runtime | After changing `external/arts/`; defaults to GASNet-EX (auto-downloaded+built; `--no-rdma` for TCP, `--legacy-rsocket` for rsocket, `--gasnet-no-bootstrap` to require a prebuilt prefix) |
 | `--polygeist` | Polygeist frontend | After changing `external/Polygeist/` |
 | `--llvm` | LLVM/MLIR | After changing `external/Polygeist/llvm-project/` |
 | `--clean` | Full clean rebuild | When incremental build fails or after branch switch |
