@@ -443,6 +443,10 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   // Preserve the committed RO/EW/RW verdict across acquire rebuilds.
   if (auto attr = acquireOp.getRuntimeDbModeAttr())
     newAcquireOp.setRuntimeDbModeAttr(attr);
+  // Preserve the committed per-slot halo window so ArtsRtToLLVM consumes the
+  // committed fact instead of reconstructing the face slice from raw offsets.
+  if (auto attr = acquireOp.getHaloSliceAttr())
+    newAcquireOp.setHaloSliceAttr(attr);
   /// Rebuilt acquires must preserve the semantic stencil/distribution contract
   /// in addition to generic `arts.*` bookkeeping. Downstream passes such as
   /// dep lowering rely on these attrs (or the mirrored value contract) to

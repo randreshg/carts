@@ -61,14 +61,10 @@ void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
       !acquire.getOffsets().empty() && !acquire.getSizes().empty())
     return;
 
-  bool applyStencilHalo = shouldApplyStencilHalo(contract, acquire);
-  auto haloMinOffsets = contract.getStaticMinOffsets();
-  auto haloMaxOffsets = contract.getStaticMaxOffsets();
-  bool hasContractHalo = applyStencilHalo || haloMinOffsets || haloMaxOffsets;
-  bool needsStructuralNormalization = rank > 1 || usesBlockLayout(*mode);
-  if (!hasContractHalo && !needsStructuralNormalization)
-    return;
-
+  /// This converts the committed partition_* element window into the DB-space
+  /// block window mechanically. It does not reconstruct the stencil halo from
+  /// the contract: block-layout acquires past the guard above always need this
+  /// structural element-to-block normalization.
   auto alloc = dyn_cast_or_null<DbAllocOp>(
       RtDbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
   if (!alloc)

@@ -340,6 +340,9 @@ private:
   /// Holds extracted dependency info for a single datablock source.
   struct DepDbInfo {
     DbLoweringInfo dbInfo;
+    /// The originating distributed acquire, used to read its committed
+    /// halo_slice window. Null for dep-struct or fallback sources.
+    DbAcquireOp dbAcquireOp = nullptr;
     SmallVector<Value, 4> allocSizes;
     Value guidStorage = nullptr;
     Value depStruct = nullptr;
@@ -380,18 +383,24 @@ private:
     return {byteOffset, byteSize};
   }
 
-  std::pair<Value, Value>
-  inferStencilFaceSliceForSlot(const DepDbInfo &depInfo, Value linearIndex,
-                               ArrayRef<Value> directIndices,
-                               Location loc) const {
-    if (!depInfo.stencilContract ||
-        !depInfo.stencilContract->isStencilFamily() ||
-        !depInfo.stencilContract->supportsBlockHalo() || !depInfo.scalarSize)
+  /// Build the per-slot read-only halo face byte slice from the committed
+  /// halo_slice window. ARTS-RT consumes the committed element extents (lower /
+  /// upper) and performs only the element-to-byte arithmetic; it does not
+  /// reconstruct the window from the stencil contract.
+  std::pair<Value, Value> buildCommittedHaloFaceSliceForSlot(
+      const DepDbInfo &depInfo, Value linearIndex,
+      ArrayRef<Value> directIndices, Location loc) const {
+    if (!depInfo.dbAcquireOp || !depInfo.scalarSize ||
+        depInfo.blockElementSizes.empty())
       return {Value(), Value()};
 
-    auto staticMin = depInfo.stencilContract->getStaticMinOffsets();
-    auto staticMax = depInfo.stencilContract->getStaticMaxOffsets();
-    if (!staticMin || !staticMax || depInfo.blockElementSizes.empty())
+    DbAcquireOp acquire = depInfo.dbAcquireOp;
+    auto haloSlice = acquire.getHaloSliceAttr();
+    if (!haloSlice)
+      return {Value(), Value()};
+    ArrayRef<int64_t> lower = haloSlice.getLower().asArrayRef();
+    ArrayRef<int64_t> upper = haloSlice.getUpper().asArrayRef();
+    if (lower.empty() || upper.empty() || lower.size() != upper.size())
       return {Value(), Value()};
 
     Value zero = AC->createIndexConstant(0, loc);
@@ -416,7 +425,7 @@ private:
                   depInfo.blockOwnerDims.empty()
                       ? depInfo.blockElementSizes.size()
                       : depInfo.blockOwnerDims.size(),
-                  std::min<unsigned>(staticMin->size(), staticMax->size()))));
+                  std::min<unsigned>(lower.size(), upper.size()))));
       for (unsigned dim = 0; dim < ownerRank; ++dim) {
         unsigned physicalDim =
             depInfo.blockOwnerDims.empty() ? dim : depInfo.blockOwnerDims[dim];
@@ -445,8 +454,8 @@ private:
               AC->create<arith::AndIOp>(loc, sameOtherDims, equalCoord);
         }
 
-        int64_t haloBefore = std::max<int64_t>(0, -(*staticMin)[dim]);
-        int64_t haloAfter = std::max<int64_t>(0, (*staticMax)[dim]);
+        int64_t haloBefore = std::max<int64_t>(0, -lower[dim]);
+        int64_t haloAfter = std::max<int64_t>(0, upper[dim]);
         if (haloBefore > 0) {
           Value isLowerNeighbor = AC->create<arith::CmpIOp>(
               loc, arith::CmpIPredicate::ult, directIndices[dim],
@@ -476,7 +485,7 @@ private:
     if (depInfo.stencilCenterLinear && !depInfo.blockElementSizes.empty()) {
       unsigned ownerRank =
           depInfo.blockOwnerDims.empty()
-              ? static_cast<unsigned>(staticMin->size())
+              ? static_cast<unsigned>(lower.size())
               : static_cast<unsigned>(depInfo.blockOwnerDims.size());
       if (ownerRank != 1)
         return {Value(), Value()};
@@ -491,8 +500,8 @@ private:
                 depInfo.blockElementSizes[lead])))
           return {Value(), Value()};
 
-      int64_t haloBefore = std::max<int64_t>(0, -(*staticMin)[0]);
-      int64_t haloAfter = std::max<int64_t>(0, (*staticMax)[0]);
+      int64_t haloBefore = std::max<int64_t>(0, -lower[0]);
+      int64_t haloAfter = std::max<int64_t>(0, upper[0]);
       if (haloBefore > 0) {
         Value isLowerNeighbor = AC->create<arith::CmpIOp>(
             loc, arith::CmpIPredicate::ult, AC->castToIndex(linearIndex, loc),
@@ -678,6 +687,7 @@ private:
 
     if (dbAcquireOp) {
       result.dbInfo = RtDbUtils::extractDbLoweringInfo(dbAcquireOp);
+      result.dbAcquireOp = dbAcquireOp;
       result.guidStorage =
           dbAcquireOp.getSourceGuid() ? dbAcquireOp.getSourceGuid() : dbGuid;
       result.allocSizes = resolveOuterSizesForGuid(dbGuid);
@@ -1007,36 +1017,36 @@ private:
                                               readValue);
     }
 
-    // When an acquire expands into multiple DB slots, derive read-only face
-    // slices from the stencil contract per emitted slot instead of widening
-    // every neighbor block back to a whole-DB dependence.
+    // When an acquire expands into multiple DB slots, copy the committed
+    // halo_slice window per emitted slot instead of widening every neighbor
+    // block back to a whole-DB dependence.
     Value effectiveByteOffset = byteOffset;
     Value effectiveByteSize = byteSize;
     std::optional<int32_t> effectiveDepFlags = depFlags;
     bool preserveShape =
         depFlags && ((*depFlags & kArtsDepFlagPreserveShape) != 0);
-    bool inferredPreserveShape = false;
+    bool committedFaceSlice = false;
     bool hasExplicitSlice = byteOffset && byteSize &&
                             !ValueAnalysis::isZeroConstant(
                                 ValueAnalysis::stripNumericCasts(byteSize));
     if (!preserveShape && !hasExplicitSlice && depInfo) {
-      auto inferredSlice = inferStencilFaceSliceForSlot(*depInfo, linearIndex,
-                                                        directIndices, loc);
-      if (inferredSlice.first && inferredSlice.second) {
-        effectiveByteOffset = inferredSlice.first;
-        effectiveByteSize = inferredSlice.second;
-        /// Late stencil-face inference keeps the consumer IR on the original
+      auto faceSlice = buildCommittedHaloFaceSliceForSlot(*depInfo, linearIndex,
+                                                          directIndices, loc);
+      if (faceSlice.first && faceSlice.second) {
+        effectiveByteOffset = faceSlice.first;
+        effectiveByteSize = faceSlice.second;
+        /// The committed halo face slice keeps the consumer IR on the original
         /// block coordinate system (for example, Seidel's left halo still
         /// indexes row 252 of the predecessor block). Compact slice payloads
-        /// would break that contract, so inferred face slices must request the
+        /// would break that contract, so committed face slices must request the
         /// shape-preserving runtime path.
-        inferredPreserveShape = true;
+        committedFaceSlice = true;
         int32_t depFlagBits = effectiveDepFlags.value_or(0);
         depFlagBits |= kArtsDepFlagPreserveShape;
         effectiveDepFlags = depFlagBits;
       }
     }
-    if (preserveShape && !inferredPreserveShape) {
+    if (preserveShape && !committedFaceSlice) {
       /// Explicit preserve-shape markings currently act as an analysis-time
       /// "do not compact this acquire" contract. Keep those on the whole-DB
       /// path until the upstream acquire rewrite carries a compact index space.

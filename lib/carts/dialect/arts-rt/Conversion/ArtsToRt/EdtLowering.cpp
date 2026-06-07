@@ -108,83 +108,6 @@ static bool hasSingleDbSlot(Operation *dbOp) {
       sizes, [](Value size) { return ValueAnalysis::isOneLikeValue(size); });
 }
 
-static std::optional<std::pair<SmallVector<Value, 4>, SmallVector<Value, 4>>>
-trySynthesizeElementSlice(ArtsCodegen *AC, DbAcquireOp acquire, Location loc) {
-  if (!AC || !acquire)
-    return std::nullopt;
-  if (!acquire.getElementOffsets().empty() ||
-      !acquire.getElementSizes().empty())
-    return std::nullopt;
-
-  PartitionMode mode =
-      acquire.getPartitionMode().value_or(PartitionMode::coarse);
-  if (!usesBlockLayout(mode))
-    return std::nullopt;
-
-  auto contract = resolveAcquireContract(acquire);
-  if (!contract)
-    return std::nullopt;
-
-  const bool allowReadSlice =
-      acquire.getMode() != ArtsMode::in || contract->analysis.narrowableDep ||
-      shouldApplyStencilHalo(*contract, acquire) ||
-      shouldUsePartitionSliceAsDepWindow(*contract, acquire);
-  if (!allowReadSlice)
-    return std::nullopt;
-
-  auto partitionOffsets = acquire.getPartitionOffsets();
-  auto partitionSizes = acquire.getPartitionSizes();
-  unsigned explicitRank =
-      std::min<unsigned>(partitionOffsets.size(), partitionSizes.size());
-  if (explicitRank == 0)
-    return std::nullopt;
-  if (contract->spatial.ownerDims.empty())
-    return std::nullopt;
-
-  SmallVector<Value, 4> blockExtents;
-  if (auto staticShape = contract->getStaticBlockShape()) {
-    for (int64_t dim : *staticShape)
-      blockExtents.push_back(AC->createIndexConstant(dim, loc));
-  } else if (!contract->spatial.blockShape.empty()) {
-    blockExtents.assign(contract->spatial.blockShape.begin(),
-                        contract->spatial.blockShape.end());
-  } else if (auto alloc = dyn_cast_or_null<DbAllocOp>(
-                 RtDbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()))) {
-    blockExtents.assign(alloc.getElementSizes().begin(),
-                        alloc.getElementSizes().end());
-  }
-  if (blockExtents.empty())
-    return std::nullopt;
-
-  SmallVector<unsigned, 4> explicitDims =
-      resolveContractOwnerDims(*contract, explicitRank);
-  if (explicitDims.size() != explicitRank)
-    return std::nullopt;
-
-  Value zero = AC->createIndexConstant(0, loc);
-  SmallVector<Value, 4> elementOffsets;
-  SmallVector<Value, 4> elementSizes;
-  elementOffsets.reserve(blockExtents.size());
-  elementSizes.reserve(blockExtents.size());
-  for (Value extent : blockExtents) {
-    elementOffsets.push_back(zero);
-    elementSizes.push_back(AC->castToIndex(extent, loc));
-  }
-
-  for (unsigned i = 0; i < explicitRank; ++i) {
-    unsigned dim = explicitDims[i];
-    if (dim >= blockExtents.size())
-      return std::nullopt;
-    elementOffsets[dim] = AC->castToIndex(partitionOffsets[i], loc);
-    elementSizes[dim] = AC->castToIndex(partitionSizes[i], loc);
-  }
-
-  ARTS_DEBUG("Synthesized element slice for dep acquire with ownerDims rank "
-             << explicitRank << " and block rank " << blockExtents.size());
-  return std::pair<SmallVector<Value, 4>, SmallVector<Value, 4>>{
-      std::move(elementOffsets), std::move(elementSizes)};
-}
-
 ///===----------------------------------------------------------------------===///
 /// EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
@@ -925,16 +848,15 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
     if (dbAcquireOp) {
       SmallVector<Value, 4> elemOffsets;
       SmallVector<Value, 4> elemSizes;
+      /// Only the committed ESD window (element_offsets/element_sizes) is
+      /// lowered. ARTS-RT does not synthesize a partial window from partition
+      /// hints; an acquire with no committed element window uses the whole-DB
+      /// dependency path below.
       if (!dbAcquireOp.getElementOffsets().empty()) {
         elemOffsets.assign(dbAcquireOp.getElementOffsets().begin(),
                            dbAcquireOp.getElementOffsets().end());
         elemSizes.assign(dbAcquireOp.getElementSizes().begin(),
                          dbAcquireOp.getElementSizes().end());
-      } else if (auto synthesized =
-                     trySynthesizeElementSlice(AC, dbAcquireOp, loc)) {
-        elemOffsets = synthesized->first;
-        elemSizes = synthesized->second;
-        ARTS_DEBUG("Using synthesized element slice for dependency");
       }
 
       if (elemOffsets.empty()) {
@@ -1057,9 +979,9 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
                hasDistributedDbAllocation(allocForHint.getOperation())) {
       /// Distributed acquires carry a committed DB mode (verify-arts-cdag
       /// enforces this before pre-lowering). ARTS-RT does not infer one.
-      return dbAcquireOp.emitOpError()
-             << "acquires a distributed DB without a committed runtime DB mode; "
-                "ARTS-RT must not infer it";
+      return dbAcquireOp.emitOpError() << "acquires a distributed DB without a "
+                                          "committed runtime DB mode; "
+                                          "ARTS-RT must not infer it";
     } else if (allocForHint && dbMode != DbMode::read &&
                artsMode != ArtsMode::inout) {
       DbMode allocMode = allocForHint.getDbMode();

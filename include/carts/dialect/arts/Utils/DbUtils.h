@@ -105,11 +105,11 @@ public:
   ///===----------------------------------------------------------------------===////
   /// DB-space Window Facts
   ///===----------------------------------------------------------------------===////
-  /// A partial acquire reads a strict sub-window of its DB block. ARTS-RT
-  /// reconstructs the halo face window of such acquires at lowering
-  /// (inferStencilFaceSliceForSlot). ARTS must instead commit that window as an
-  /// authoritative fact so ARTS-RT copies it. These predicates name the set
-  /// that requires the committed window and whether it is present.
+  /// A partial acquire reads a strict sub-window of its DB block. ARTS commits
+  /// that window as an authoritative fact (halo_slice) so ARTS-RT consumes it
+  /// at lowering instead of reconstructing the halo face window. These
+  /// predicates name the set that requires the committed window and whether it
+  /// is present.
 
   /// Return true when this acquire realizes a halo sub-window whose extent
   /// ARTS-RT would otherwise reconstruct: a stencil / block-halo acquire that

@@ -116,7 +116,7 @@ static LogicalResult verifyCdagAcquireMode(DbAcquireOp acquire) {
 
 /// (A) Every distributed partial halo acquire carries a committed DB-space
 /// window. Without it ARTS-RT would reconstruct the halo face slice at lowering
-/// (inferStencilFaceSliceForSlot). Reject here, before ARTS-RT, instead.
+/// instead of consuming the committed halo_slice. Reject here, before ARTS-RT.
 static LogicalResult verifyCdagAcquireWindow(DbAcquireOp acquire) {
   DbAllocOp alloc = underlyingAlloc(acquire);
   if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
