@@ -1,0 +1,420 @@
+///==========================================================================///
+/// File: DistributedLaunchConsistency.cpp
+///
+/// Reconciles ARTS EDT placement with distributed DB ownership.
+///==========================================================================///
+
+#define GEN_PASS_DEF_DISTRIBUTEDLAUNCHCONSISTENCY
+#include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
+#include "carts/passes/Passes.h"
+#include "carts/passes/Passes.h.inc"
+#include "carts/utils/ValueAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/Pass/Pass.h"
+#include "llvm/ADT/STLExtras.h"
+
+#include "carts/utils/Debug.h"
+
+#include <optional>
+#include <utility>
+
+ARTS_DEBUG_SETUP(distributed_launch_consistency);
+
+using namespace mlir;
+using namespace mlir::carts;
+using namespace mlir::carts::arts;
+
+namespace {
+
+static Value createIndexConstant(OpBuilder &builder, Location loc,
+                                 int64_t value) {
+  return arith::ConstantIndexOp::create(builder, loc, value);
+}
+
+static Value createBlockCoordFromElementOffset(OpBuilder &builder, Location loc,
+                                               Value elementOffset,
+                                               int64_t blockSize) {
+  if (!elementOffset || blockSize <= 0)
+    return {};
+  Value blockSizeValue = createIndexConstant(builder, loc, blockSize);
+  Value offset = castToIndex(builder, loc, elementOffset);
+  if (!offset)
+    return {};
+  return arith::DivUIOp::create(builder, loc, offset, blockSizeValue);
+}
+
+static std::optional<unsigned> getOwnerSlotForDbDim(const DbOwnerMapPlan &plan,
+                                                    unsigned dbDim) {
+  if (plan.kind == DbOwnerMapKind::linear_mod_nodes) {
+    if (dbDim < plan.blockShape.size())
+      return dbDim;
+    return std::nullopt;
+  }
+
+  for (auto [ownerSlot, rawDim] : llvm::enumerate(plan.dims)) {
+    if (rawDim >= 0 && static_cast<unsigned>(rawDim) == dbDim &&
+        ownerSlot < plan.blockShape.size())
+      return static_cast<unsigned>(ownerSlot);
+  }
+  return std::nullopt;
+}
+
+static std::optional<unsigned>
+getPartitionPhysicalDimForOwnerSlot(DbAllocOp alloc, unsigned ownerSlot,
+                                    unsigned partitionRank) {
+  if (auto planOwnerDims = readI64ArrayAttr(getPlanOwnerDimsAttr(alloc))) {
+    if (ownerSlot < planOwnerDims->size()) {
+      int64_t physicalDim = (*planOwnerDims)[ownerSlot];
+      if (physicalDim >= 0 &&
+          static_cast<unsigned>(physicalDim) < partitionRank)
+        return static_cast<unsigned>(physicalDim);
+    }
+  }
+
+  if (ownerSlot < partitionRank)
+    return ownerSlot;
+  return std::nullopt;
+}
+
+struct OwnerCoordKey {
+  Value value;
+  int64_t divisor = 1;
+  bool implicitZero = false;
+};
+
+static std::optional<OwnerCoordKey>
+getPartitionOwnerCoordKeyForEntry(DbAllocOp alloc, DbAcquireOp acquire,
+                                  const DbOwnerMapPlan &plan, unsigned dbDim,
+                                  size_t entryIdx) {
+  std::optional<unsigned> ownerSlot = getOwnerSlotForDbDim(plan, dbDim);
+  if (!ownerSlot || *ownerSlot >= plan.blockShape.size())
+    return std::nullopt;
+
+  SmallVector<Value> partitionOffsets =
+      acquire.getPartitionOffsetsForEntry(entryIdx);
+  if (partitionOffsets.empty())
+    return std::nullopt;
+
+  std::optional<unsigned> physicalDim = getPartitionPhysicalDimForOwnerSlot(
+      alloc, *ownerSlot, partitionOffsets.size());
+  if (!physicalDim)
+    return std::nullopt;
+
+  int64_t blockSize = plan.blockShape[*ownerSlot];
+  if (blockSize <= 0)
+    return std::nullopt;
+
+  return OwnerCoordKey{partitionOffsets[*physicalDim], blockSize, false};
+}
+
+static bool equivalentIndexValues(Value lhs, Value rhs) {
+  if (lhs == rhs)
+    return true;
+  if (!lhs || !rhs)
+    return false;
+
+  int64_t lhsConstant = 0;
+  int64_t rhsConstant = 0;
+  bool lhsIsConstant = ValueAnalysis::getConstantIndex(
+      ValueAnalysis::stripNumericCasts(lhs), lhsConstant);
+  bool rhsIsConstant = ValueAnalysis::getConstantIndex(
+      ValueAnalysis::stripNumericCasts(rhs), rhsConstant);
+  return lhsIsConstant && rhsIsConstant && lhsConstant == rhsConstant;
+}
+
+static std::optional<int64_t>
+getNormalizedOwnerCoordConstant(OwnerCoordKey key) {
+  if (key.implicitZero)
+    return int64_t{0};
+  if (!key.value || key.divisor <= 0)
+    return std::nullopt;
+
+  int64_t constant = 0;
+  if (!ValueAnalysis::getConstantIndex(
+          ValueAnalysis::stripNumericCasts(key.value), constant))
+    return std::nullopt;
+  if (constant < 0)
+    return std::nullopt;
+  return constant / key.divisor;
+}
+
+static bool equivalentOwnerCoord(OwnerCoordKey lhs, OwnerCoordKey rhs) {
+  if (lhs.implicitZero || rhs.implicitZero) {
+    std::optional<int64_t> lhsConstant = getNormalizedOwnerCoordConstant(lhs);
+    std::optional<int64_t> rhsConstant = getNormalizedOwnerCoordConstant(rhs);
+    return lhsConstant && rhsConstant && *lhsConstant == *rhsConstant;
+  }
+
+  if (lhs.divisor == rhs.divisor && equivalentIndexValues(lhs.value, rhs.value))
+    return true;
+
+  std::optional<int64_t> lhsConstant = getNormalizedOwnerCoordConstant(lhs);
+  std::optional<int64_t> rhsConstant = getNormalizedOwnerCoordConstant(rhs);
+  return lhsConstant && rhsConstant && *lhsConstant == *rhsConstant;
+}
+
+static std::optional<OwnerCoordKey>
+getStablePartitionOwnerCoordKey(DbAllocOp alloc, DbAcquireOp acquire,
+                                const DbOwnerMapPlan &plan, unsigned dbDim) {
+  size_t entries = acquire.getNumPartitionEntries();
+  if (entries == 0)
+    return std::nullopt;
+
+  std::optional<OwnerCoordKey> selected;
+  for (size_t entryIdx = 0; entryIdx < entries; ++entryIdx) {
+    std::optional<OwnerCoordKey> current = getPartitionOwnerCoordKeyForEntry(
+        alloc, acquire, plan, dbDim, entryIdx);
+    if (!current)
+      return std::nullopt;
+    if (!selected) {
+      selected = *current;
+      continue;
+    }
+    if (!equivalentOwnerCoord(*selected, *current))
+      return std::nullopt;
+  }
+  return selected;
+}
+
+static SmallVector<Value, 4>
+getAcquireOwnerCoords(OpBuilder &builder, DbAllocOp alloc, DbAcquireOp acquire,
+                      const DbOwnerMapPlan &plan, unsigned rank) {
+  SmallVector<Value, 4> coords;
+  ValueRange offsets = acquire.getOffsets();
+  ValueRange indices = acquire.getIndices();
+  coords.reserve(rank);
+  for (unsigned i = 0; i < rank; ++i) {
+    if (i < offsets.size()) {
+      coords.push_back(offsets[i]);
+      continue;
+    }
+    if (i < indices.size()) {
+      coords.push_back(indices[i]);
+      continue;
+    }
+    if (std::optional<OwnerCoordKey> partitionKey =
+            getStablePartitionOwnerCoordKey(alloc, acquire, plan, i)) {
+      coords.push_back(createBlockCoordFromElementOffset(
+          builder, acquire.getLoc(), partitionKey->value,
+          partitionKey->divisor));
+      continue;
+    }
+    coords.push_back(createIndexConstant(builder, acquire.getLoc(), 0));
+  }
+  return coords;
+}
+
+struct WriterOwnerTarget {
+  DbAllocOp alloc;
+  DbAcquireOp acquire;
+  DbOwnerMapPlan plan;
+  SmallVector<Value, 4> dbSizes;
+  SmallVector<OwnerCoordKey, 4> coords;
+};
+
+static std::optional<SmallVector<OwnerCoordKey, 4>>
+getAcquireOwnerCoordKeys(DbAllocOp alloc, DbAcquireOp acquire,
+                         const DbOwnerMapPlan &plan, unsigned rank) {
+  SmallVector<OwnerCoordKey, 4> coords;
+  ValueRange offsets = acquire.getOffsets();
+  ValueRange indices = acquire.getIndices();
+  coords.reserve(rank);
+  for (unsigned i = 0; i < rank; ++i) {
+    if (i < offsets.size()) {
+      coords.push_back({offsets[i], 1, false});
+      continue;
+    }
+    if (i < indices.size()) {
+      coords.push_back({indices[i], 1, false});
+      continue;
+    }
+    if (std::optional<OwnerCoordKey> partitionKey =
+            getStablePartitionOwnerCoordKey(alloc, acquire, plan, i)) {
+      coords.push_back(*partitionKey);
+      continue;
+    }
+    if (acquire.getNumPartitionEntries() > 0 &&
+        getOwnerSlotForDbDim(plan, i).has_value())
+      return std::nullopt;
+    coords.push_back({Value{}, 1, true});
+  }
+  return coords;
+}
+
+static bool sameOwnerRoutePlan(const DbOwnerMapPlan &lhs,
+                               const DbOwnerMapPlan &rhs) {
+  if (lhs.kind != rhs.kind)
+    return false;
+  if (lhs.kind == DbOwnerMapKind::linear_mod_nodes)
+    return true;
+  return sameI64Values(lhs.dims, rhs.dims);
+}
+
+static SmallVector<unsigned, 4>
+getRouteComparisonDims(const DbOwnerMapPlan &plan, unsigned dbRank) {
+  SmallVector<unsigned, 4> dims;
+  if (plan.kind == DbOwnerMapKind::linear_mod_nodes) {
+    dims.reserve(dbRank);
+    for (unsigned dim = 0; dim < dbRank; ++dim)
+      dims.push_back(dim);
+    return dims;
+  }
+
+  dims.reserve(plan.dims.size());
+  for (int64_t rawDim : plan.dims) {
+    if (rawDim < 0 || static_cast<unsigned>(rawDim) >= dbRank)
+      return {};
+    dims.push_back(static_cast<unsigned>(rawDim));
+  }
+  return dims;
+}
+
+static bool sameWriterOwnerTarget(const WriterOwnerTarget &lhs,
+                                  const WriterOwnerTarget &rhs) {
+  if (!sameOwnerRoutePlan(lhs.plan, rhs.plan))
+    return false;
+  if (lhs.dbSizes.size() != rhs.dbSizes.size() ||
+      lhs.coords.size() != rhs.coords.size())
+    return false;
+
+  SmallVector<unsigned, 4> dims =
+      getRouteComparisonDims(lhs.plan, lhs.dbSizes.size());
+  if (dims.empty())
+    return false;
+
+  for (unsigned dim : dims) {
+    if (!equivalentIndexValues(lhs.dbSizes[dim], rhs.dbSizes[dim]))
+      return false;
+    if (!equivalentOwnerCoord(lhs.coords[dim], rhs.coords[dim]))
+      return false;
+  }
+
+  return true;
+}
+
+static Value createOwnerRoute(OpBuilder &builder, Location loc, DbAllocOp alloc,
+                              DbAcquireOp acquire, const DbOwnerMapPlan &plan) {
+  SmallVector<Value, 4> dbSizes(alloc.getSizes().begin(),
+                                alloc.getSizes().end());
+  if (dbSizes.empty())
+    return {};
+
+  SmallVector<Value, 4> coords =
+      getAcquireOwnerCoords(builder, alloc, acquire, plan, dbSizes.size());
+  Value totalNodes =
+      RuntimeQueryOp::create(builder, loc, RuntimeQueryKind::totalNodes)
+          .getResult();
+  return createDbOwnerRouteForCoords(builder, loc, dbSizes, coords, totalNodes,
+                                     plan);
+}
+
+static std::optional<WriterOwnerTarget> getWriterOwnerTarget(Value dep) {
+  Operation *underlying = DbUtils::getUnderlyingDb(dep);
+  auto acquire = dyn_cast_or_null<DbAcquireOp>(underlying);
+  if (!acquire || !DbUtils::isWriterMode(acquire.getMode()))
+    return std::nullopt;
+
+  auto alloc = dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
+  if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
+    return std::nullopt;
+  auto ownerMap = getDbOwnerMapPlan(alloc);
+  if (!ownerMap)
+    return std::nullopt;
+
+  SmallVector<Value, 4> dbSizes(alloc.getSizes().begin(),
+                                alloc.getSizes().end());
+  if (dbSizes.empty())
+    return std::nullopt;
+
+  WriterOwnerTarget target;
+  target.alloc = alloc;
+  target.acquire = acquire;
+  target.plan = *ownerMap;
+  target.dbSizes = std::move(dbSizes);
+  std::optional<SmallVector<OwnerCoordKey, 4>> coords =
+      getAcquireOwnerCoordKeys(alloc, acquire, target.plan,
+                               target.dbSizes.size());
+  if (!coords)
+    return std::nullopt;
+  target.coords = std::move(*coords);
+  return target;
+}
+
+struct DistributedLaunchConsistencyPass
+    : public impl::DistributedLaunchConsistencyBase<
+          DistributedLaunchConsistencyPass> {
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    unsigned localized = 0;
+    unsigned routed = 0;
+
+    module.walk([&](EdtOp edt) {
+      if (edt.getConcurrency() != EdtConcurrency::internode)
+        return;
+      if (!DbUtils::hasLocalOnlyDistributedLaunchDependency(edt))
+        return;
+
+      OpBuilder builder(edt);
+      Value localRoute = createCurrentNodeRoute(builder, edt.getLoc());
+      edt.setConcurrency(EdtConcurrency::intranode);
+      edt.getRouteMutable().set(localRoute);
+      ++localized;
+      ARTS_DEBUG(
+          "Localized internode EDT with rejected distributed DB dep: " << edt);
+    });
+
+    module.walk([&](EdtOp edt) {
+      if (edt.getConcurrency() != EdtConcurrency::internode)
+        return;
+      if (DbUtils::hasLocalOnlyDistributedLaunchDependency(edt))
+        return;
+
+      std::optional<WriterOwnerTarget> expectedOwner;
+      bool sawDistributedWriter = false;
+      bool conflict = false;
+      for (Value dep : edt.getDependencies()) {
+        std::optional<WriterOwnerTarget> owner = getWriterOwnerTarget(dep);
+        if (!owner)
+          continue;
+        sawDistributedWriter = true;
+        if (!expectedOwner) {
+          expectedOwner = std::move(owner);
+          continue;
+        }
+        if (!sameWriterOwnerTarget(*expectedOwner, *owner)) {
+          conflict = true;
+          break;
+        }
+      }
+
+      if (!sawDistributedWriter || conflict || !expectedOwner)
+        return;
+
+      OpBuilder builder(edt);
+      builder.setInsertionPoint(edt);
+      Value expectedRoute =
+          createOwnerRoute(builder, edt.getLoc(), expectedOwner->alloc,
+                           expectedOwner->acquire, expectedOwner->plan);
+      if (!expectedRoute)
+        return;
+      edt.getRouteMutable().set(expectedRoute);
+      ++routed;
+      ARTS_DEBUG("Routed internode EDT to distributed DB owner: " << edt);
+    });
+
+    ARTS_INFO("Distributed launch consistency localized "
+              << localized << " EDTs and routed " << routed << " EDTs");
+  }
+};
+
+} // namespace
+
+std::unique_ptr<Pass>
+mlir::carts::arts::createDistributedLaunchConsistencyPass() {
+  return std::make_unique<DistributedLaunchConsistencyPass>();
+}

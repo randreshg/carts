@@ -1,0 +1,36 @@
+///==========================================================================///
+/// File: PartitionPredicates.h
+///
+/// Semantic predicates for PartitionMode enum values.
+/// Replaces scattered multi-mode comparisons with named intent.
+///==========================================================================///
+
+#ifndef CARTS_DIALECT_ARTS_UTILS_PARTITIONPREDICATES_H
+#define CARTS_DIALECT_ARTS_UTILS_PARTITIONPREDICATES_H
+
+#include "carts/dialect/arts/IR/ArtsDialect.h"
+
+namespace mlir {
+namespace carts::arts {
+
+/// Returns true for partition modes that use a blocked (tiled) memory layout.
+/// Matches block and stencil modes (both partition into contiguous chunks).
+inline bool usesBlockLayout(PartitionMode m) {
+  return m == PartitionMode::block || m == PartitionMode::stencil;
+}
+
+/// Returns true for partition modes that require worker bounds planning.
+/// All modes except coarse need partition offsets/sizes.
+inline bool requiresWorkerBoundsPlanning(PartitionMode m) {
+  return m != PartitionMode::coarse;
+}
+
+/// Returns true for partition modes that use element-level addressing.
+inline bool usesElementLayout(PartitionMode m) {
+  return m == PartitionMode::fine_grained;
+}
+
+} // namespace carts::arts
+} // namespace mlir
+
+#endif // CARTS_DIALECT_ARTS_UTILS_PARTITIONPREDICATES_H

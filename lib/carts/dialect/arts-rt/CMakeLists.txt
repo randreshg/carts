@@ -1,0 +1,7 @@
+add_subdirectory(IR)
+add_subdirectory(Conversion)
+add_subdirectory(Transforms)
+add_subdirectory(Utils)
+
+set(CARTS_RT_TO_LLVM_SOURCE_FILES ${CARTS_RT_TO_LLVM_SOURCE_FILES} PARENT_SCOPE)
+set(CARTS_RT_TRANSFORMS_SOURCE_FILES ${CARTS_RT_TRANSFORMS_SOURCE_FILES} PARENT_SCOPE)

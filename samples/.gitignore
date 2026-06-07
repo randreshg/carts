@@ -1,0 +1,21 @@
+# CARTS generated executables
+*_arts*
+*_omp
+
+# CARTS intermediate files
+*.mlir
+*.ll
+*.o
+
+# Build artifacts
+build/
+
+# --all-pipelines output (per-sample pipeline dump tree)
+pipelines/
+
+# Debug/analysis outputs
+counters/
+DbGraph_*.dot
+*.json
+.carts-metadata.json
+.artsPrintLock

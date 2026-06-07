@@ -1,0 +1,36 @@
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout,raise-to-mu-access-window,verify-sde-mu-access-window)' 2>&1 | %FileCheck %s
+
+// After rank expansion converts the committed single-owner block plan
+// (physicalOwnerDims=[0], physicalBlockShape=[16,64]) into memref<8x16x64xf32>,
+// raise-to-mu-access-window materializes one canonical per-CU MU access window
+// per (MU root, mode) in the SAME block-grid coordinate system: A is read-only
+// (read window) and C is write-only (write window), each spanning the full grid
+// [0, 8) with in-tile valid extent [16, 64]. The chained verifiers prove
+// access soundness and window coverage + non-tautological grain.
+
+// CHECK-LABEL: func.func @raise_window_elementwise_2d
+// CHECK: sde.mu_alloc : memref<8x16x64xf32>
+// CHECK: sde.mu_alloc : memref<8x16x64xf32>
+// CHECK: sde.mu_access_window read %{{.*}} : memref<8x16x64xf32> owner_dims(1) block_lo [0] block_hi [8] valid [16, 64]
+// CHECK: sde.mu_access_window write %{{.*}} : memref<8x16x64xf32> owner_dims(1) block_lo [0] block_hi [8] valid [16, 64]
+
+func.func @raise_window_elementwise_2d() {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c64 = arith.constant 64 : index
+  %c128 = arith.constant 128 : index
+  %A = sde.mu_alloc : memref<128x64xf32>
+  %C = sde.mu_alloc : memref<128x64xf32>
+  sde.cu_region <parallel> {
+    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+    ^bb0(%i: index):
+      scf.for %j = %c0 to %c64 step %c1 {
+        %v = memref.load %A[%i, %j] : memref<128x64xf32>
+        memref.store %v, %C[%i, %j] : memref<128x64xf32>
+      }
+      sde.yield
+    } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
+    sde.yield
+  }
+  return
+}

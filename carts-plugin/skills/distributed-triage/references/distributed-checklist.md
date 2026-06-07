@@ -1,0 +1,69 @@
+# Distributed Debug Checklist
+
+Use this checklist when a workload fails only in multinode/distributed runs (vs the `--no-distributed-db` baseline).
+
+## 1. Reproduction Inputs
+
+- benchmark or input path
+- `--arts-config` file
+- node count
+- thread count per node
+- whether `--no-distributed-db` is set (forces the origin-node baseline)
+
+## 2. IR Checks
+
+Inspect these stage boundaries in order:
+
+1. `sde-planning`
+2. `codir-to-arts`
+3. `post-db-refinement`
+4. `pre-lowering`
+
+Look for:
+
+- SDE array-layout facts backed by real loop/layout/source transformation
+  (`physicalOwnerDims`, `physicalBlockShape`, loop tiling, access-window shape)
+- `distribution_kind`, `distribution_pattern`, `distribution_version`
+- CODIR collective/bridge choices derived from compute pattern plus SDE layout
+  mismatch (`dep_collectives`, `dep_storage_views`, `dep_owner_dims`)
+- writable task acquires that should preserve owner hints
+- `DbAllocOp` instances marked `distributed`
+- cases where SDE distribution planning should have produced distributed ARTS
+  DB/EDT contracts but did not
+
+## 3. Ownership Eligibility Questions
+
+- Is the allocation host-level, not inside `arts.edt`?
+- Does it have multiple DB blocks?
+- Is the shape supported for distributed ownership?
+- Are handle users restricted to allowed DB dependency flow?
+- Is there at least one internode writer?
+- Is the case rejected because it is read-only stencil-style internode use?
+- Are DB/MU blocks fine enough for single-writer concurrency without making
+  every tiny DB its own CU/bridge task?
+- Are compute/bridge/communication CUs grouped over block ranges for read-only
+  or copy-like edges?
+- Is any layer recomputing owner dims, block shape, collective family, owner
+  maps, or runtime mode instead of consuming committed upstream facts?
+
+## 4. Runtime Checks
+
+- Are logs retained with `--debug 2` or a runtime debug build?
+- Do node-level JSON counters exist?
+- Is remote work non-zero on nodes other than the primary node?
+- Are there signs of thread starvation from too few worker threads per node?
+
+## 5. Lowering/Runtime Split
+
+Suspect lowering first if:
+
+- routed work is absent in pre-lowering IR
+- `distributed` markers are missing
+- owner hints and partitioning disagree
+- ARTS-RT introduces scheduling, ownership, partition, or collective decisions
+
+Suspect runtime/config first if:
+
+- IR looks correct but one node never executes work
+- logs show progress starvation or configuration mismatch
+- counters exist only for one node despite routed work

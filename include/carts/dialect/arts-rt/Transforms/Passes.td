@@ -1,0 +1,267 @@
+///==========================================================================///
+/// File: Passes.td
+///
+/// Pass declarations for the ARTS Runtime (arts_rt) dialect.
+///==========================================================================///
+#ifndef ARTS_DIALECT_RT_TRANSFORMS_PASSES
+#define ARTS_DIALECT_RT_TRANSFORMS_PASSES
+
+include "mlir/Pass/PassBase.td"
+
+def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {
+  let summary = "Lower ARTS DB handles to runtime-shaped opaque pointers";
+  let description = [{
+    Converts ARTS DataBlocks from typed memrefs to the opaque pointer
+    representation required by the runtime ABI. The ARTS object graph must
+    already be canonical before this ARTS-RT lowering step runs.
+  }];
+  let dependentDialects = [
+    "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect", "::mlir::func::FuncDialect",
+    "::mlir::carts::arts::ArtsDialect", "::mlir::arith::ArithDialect", "::mlir::polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::carts::arts_rt::createDbLoweringPass()";
+}
+
+def ConvertArtsRtToLLVM : Pass<"convert-arts-rt-to-llvm", "mlir::ModuleOp"> {
+  let summary = "Lower runtime-shaped ARTS-RT IR to LLVM dialect calls";
+  let description = [{
+    Lowers ARTS-RT runtime ABI operations to LLVM dialect calls. This pass
+    still accepts a small set of residual ARTS operations while the pre-lowering
+    boundary is being tightened.
+  }];
+  let dependentDialects = [
+    "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect", "::mlir::func::FuncDialect",
+    "::mlir::carts::arts::ArtsDialect", "::mlir::carts::arts_rt::ArtsRtDialect",
+    "::mlir::arith::ArithDialect", "::mlir::polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::carts::arts_rt::createConvertArtsRtToLLVMPass()";
+  let options = [
+    Option<"debug", "debug", "bool", /*default=*/"false", "Enable debug mode.">,
+  ];
+}
+
+def LoweringContractCleanup
+    : Pass<"lowering-contract-cleanup", "mlir::ModuleOp"> {
+  let summary = "Erase arts.lowering_contract metadata ops before LLVM lowering";
+  let description = [{
+    Removes `arts.lowering_contract` operations after ARTS-RT lowering has
+    consumed them. This keeps semantic contracts available through ARTS object
+    refinement while ensuring final LLVM translation does not see dialect-only
+    metadata ops.
+  }];
+  let dependentDialects = [
+    "::mlir::carts::arts::ArtsDialect", "::mlir::func::FuncDialect"
+  ];
+  let constructor =
+      "mlir::carts::arts_rt::createLoweringContractCleanupPass()";
+}
+
+def DataPtrHoisting
+    : Pass<"arts-data-ptr-hoisting", "mlir::ModuleOp"> {
+  let summary =
+      "Hoist invariant dep/db views and recover loop-local blocked slices";
+  let description = [{
+    This pass hoists invariant llvm.load operations that extract dependency or
+    datablock pointers to before enclosing loops.
+
+    It also recognizes blocked worker loops that already stay inside a single
+    owned slice and rewrites them to reuse one hoisted dep view plus the local
+    loop IV, instead of rebuilding dep_gep/div/rem selection on every element.
+
+    Without hoisting, these pointer loads happen inside innermost loops
+    (O(n^3) loads for 3-nested loops). With hoisting, the pointers are loaded
+    once before the loop nest (O(1) loads).
+
+    This is critical for performance because LLVM's LICM cannot hoist these loads
+    without TBAA metadata proving they don't alias with data stores.
+
+    Example transformation:
+    ```mlir
+    scf.for %i = ... {
+      scf.for %j = ... {
+        % ptr = llvm.load % dep_ptr_addr : !llvm.ptr->!llvm.ptr % val =
+                    polygeist.load % ptr[% i, % j] : memref < ? x ? xf64 >
+      }
+    }
+    ```
+    becomes:
+    ```mlir
+    %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr
+    scf.for %i = ... {
+      scf.for %j = ... {
+        % val = polygeist.load % ptr[% i, % j] : memref < ? x ? xf64 >
+      }
+    }
+    ```
+  }];
+  let dependentDialects = [
+    "::mlir::carts::arts::ArtsDialect", "::mlir::LLVM::LLVMDialect",
+    "::mlir::scf::SCFDialect"
+  ];
+  let constructor = "mlir::carts::arts_rt::createDataPtrHoistingPass()";
+}
+
+def GuidRangeCallOpt
+    : Pass<"arts-guid-range-call-opt", "mlir::ModuleOp"> {
+  let summary = "Rewrite per-iteration GUID reserve calls into GUID-range calls";
+  let description = [{
+    Runs after ARTS-RT-to-LLVM lowering and rewrites canonical loops of the form:
+
+      scf.for %i = 0 to N step 1 {
+        %g = call @arts_guid_reserve(...)
+        ...
+      }
+
+    into:
+
+      %range = call @arts_guid_reserve_range(..., N, ...)
+      scf.for %i = 0 to N step 1 {
+        %g = call @arts_guid_from_index(%range, %i)
+        ...
+      }
+
+    This pass is conservative and requires lower-bound 0, step 1,
+    and route(0) to preserve runtime semantics.
+
+    For dynamic trip counts it emits a guarded rewrite:
+    use range reservation only when upperBound > 1 and
+    upperBound <= UINT32_MAX,
+    otherwise preserve per-iteration reserve behavior.
+  }];
+  let dependentDialects = [
+    "::mlir::func::FuncDialect", "::mlir::arith::ArithDialect",
+    "::mlir::scf::SCFDialect", "::mlir::LLVM::LLVMDialect"
+  ];
+  let constructor = "mlir::carts::arts_rt::createGuidRangeCallOptPass()";
+}
+
+def RuntimeCallOpt
+    : Pass<"arts-runtime-call-opt", "mlir::ModuleOp"> {
+  let summary = "Hoist and deduplicate selected pure ARTS runtime calls";
+  let description = [{
+    Runs after ARTS-RT-to-LLVM lowering and optimizes only a conservative set of
+    runtime topology/identity queries that are safe to treat as loop-invariant
+    within a function:
+
+      - arts_get_total_workers
+      - arts_get_total_nodes
+      - arts_get_current_worker
+      - arts_get_current_node
+
+    The pass intentionally ignores stateful runtime calls (guid reserve, DB
+    create, EDT/event signaling, etc.) and only rewrites zero-operand query
+    calls.
+
+    Transformations:
+      1) Hoist loop-invariant calls out of nested `scf.for` loops.
+      2) Deduplicate dominated duplicate calls per callee within a function.
+  }];
+  let dependentDialects = [
+    "::mlir::func::FuncDialect", "::mlir::scf::SCFDialect"
+  ];
+  let constructor = "mlir::carts::arts_rt::createRuntimeCallOptPass()";
+}
+
+def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
+  let summary = "Lower ARTS EDTs to ARTS-RT launch and dependency ops";
+  let dependentDialects = [
+    "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect",
+    "::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect",
+    "::mlir::arith::ArithDialect", "::mlir::polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::carts::arts_rt::createEdtLoweringPass()";
+}
+
+def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
+  let summary = "Lower ARTS epochs and propagate epoch GUIDs to EDTs";
+  let dependentDialects = [
+    "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect",
+    "::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect",
+    "::mlir::arith::ArithDialect", "::mlir::polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::carts::arts_rt::createEpochLoweringPass()";
+}
+
+def VerifyPreLowered : Pass<"verify-pre-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify pre-lowering removed high-level scheduler ops";
+  let dependentDialects = ["::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts_rt::createVerifyPreLoweredPass()";
+}
+
+def VerifyEdtLowered : Pass<"verify-edt-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify all EDTs have been lowered";
+  let dependentDialects = ["::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts_rt::createVerifyEdtLoweredPass()";
+}
+
+def VerifyDbLowered : Pass<"verify-db-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify all DB operations have been lowered";
+  let dependentDialects = ["::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts_rt::createVerifyDbLoweredPass()";
+}
+
+def VerifyEpochLowered : Pass<"verify-epoch-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify all epoch operations have been lowered";
+  let dependentDialects = ["::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts_rt::createVerifyEpochLoweredPass()";
+}
+
+def AliasScopeGen : Pass<"arts-alias-scope-gen", "mlir::ModuleOp"> {
+  let summary = "Generate LLVM alias scope metadata for ARTS data pointers";
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+  let constructor = "mlir::carts::arts_rt::createAliasScopeGenPass()";
+}
+
+def LoopVectorizationHints
+    : Pass<"arts-loop-vectorization-hints", "mlir::ModuleOp"> {
+  let summary = "Attach LLVM loop vectorization hints to EDT function loops";
+  let description = [{
+    This pass attaches LLVM loop optimization hints to loop backedges in EDT
+    functions. It uses MLIR's native LoopAnnotationAttr, which automatically
+    translates to !llvm.loop metadata during LLVM IR emission.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+  let constructor = "mlir::carts::arts_rt::createLoopVectorizationHintsPass()";
+}
+
+def AttachFastMathOnEdt
+    : Pass<"arts-attach-fastmath-on-edt", "mlir::ModuleOp"> {
+  let summary = "Attach LLVM fastmath flags to FP ops inside EDT functions";
+  let description = [{
+    Walks every `llvm.func` whose symbol starts with `__arts_edt_` and stamps
+    `fastmath<reassoc, contract>` on contained `llvm.fmul`, `llvm.fadd`,
+    `llvm.fsub`, `llvm.fdiv`, `llvm.fneg`, and `llvm.frem` ops that do not
+    already carry a non-none fastmath attribute. `reassoc` lets the LLVM
+    loop vectorizer reorder FP reductions; `contract` lets it fuse mul+add
+    into FMA. The unsafe `nnan`, `ninf`, `nsz`, `arcp`, and `afn` flags are
+    deliberately omitted because generated initialization and reduction paths
+    can still observe strict FP semantics that those flags would invalidate.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+  let constructor = "mlir::carts::arts_rt::createAttachFastMathOnEdtPass()";
+}
+
+def ScalarReplacement
+    : Pass<"arts-scalar-replacement", "mlir::ModuleOp"> {
+  let summary = "Transform memory-based reductions to register-based iter_args";
+  let description = [{
+    This pass transforms memory-based reduction patterns in scf.for loops
+    to register-based iter_args patterns to enable LLVM vectorization.
+  }];
+  let dependentDialects = [
+    "::mlir::scf::SCFDialect", "::mlir::memref::MemRefDialect", "::mlir::arith::ArithDialect",
+    "::mlir::polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::carts::arts_rt::createScalarReplacementPass()";
+}
+
+def VerifyLowered : Pass<"verify-lowered", "mlir::ModuleOp"> {
+  let summary = "Verify no ARTS or ARTS-RT ops survive after runtime lowering";
+  let dependentDialects = [
+    "::mlir::carts::arts::ArtsDialect",
+    "::mlir::carts::arts_rt::ArtsRtDialect"
+  ];
+  let constructor = "mlir::carts::arts_rt::createVerifyLoweredPass()";
+}
+
+#endif // ARTS_DIALECT_RT_TRANSFORMS_PASSES

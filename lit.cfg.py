@@ -1,0 +1,170 @@
+# -*- Python -*-
+"""
+Lit configuration for CARTS tests.
+
+Tests are co-located with pass source code under lib/carts/dialect/*/test/,
+with cross-cutting tests (CLI, verify) under tests/. This config discovers
+tests across all these directories.
+
+This file lives at the project root so lit can find it from any test directory
+(lib/carts/dialect/*/test/, tests/cli/, tests/verify/).  When invoked via
+CMake's lit.site.cfg.py, paths come from CMake variables.
+"""
+
+import os
+import shlex
+import shutil
+import sys
+from pathlib import Path
+
+import lit.formats
+import lit.util
+
+import lit.llvm
+lit.llvm.initialize(lit_config, config)
+from lit.llvm import llvm_config
+
+
+config.name = "carts"
+use_lit_shell = True
+lit_shell_env = os.environ.get("LIT_USE_INTERNAL_SHELL")
+if lit_shell_env:
+    use_lit_shell = not lit.util.pythonize_bool(lit_shell_env)
+config.test_format = lit.formats.ShTest(execute_external=not use_lit_shell)
+config.suffixes = [".mlir"]
+
+# --- Path setup ---
+# Detect project root: lit.cfg.py lives at the project root.
+project_root = getattr(config, "carts_source_dir", None) or os.path.dirname(os.path.abspath(__file__))
+tests_dir = os.path.join(project_root, "tests")
+tools_dir = os.path.join(project_root, "tools")
+if tools_dir not in sys.path:
+    sys.path.insert(0, tools_dir)
+from scripts.local_config import (
+    managed_runtime_library_dirs,
+    resolve_build_dir,
+    resolve_carts_home,
+    resolve_install_dir,
+    runtime_library_env_vars,
+)
+
+carts_home = str(resolve_carts_home(Path(project_root)))
+
+# Source root is the project root so lit can discover test/ dirs under lib/.
+config.test_source_root = project_root
+
+# Out-of-source test execution: avoids polluting source tree with Output/ dirs.
+build_root = str(resolve_build_dir(Path(project_root)))
+build_dir = getattr(config, "carts_build_dir", None) or os.path.join(build_root, "carts")
+config.test_exec_root = os.path.join(build_dir, "tests", "lit-output")
+
+# Tell lit which subdirectories to scan for tests (IREE pattern).
+config.test_subdirs = [
+    os.path.join("lib", "carts", "dialect", "codir", "test"),
+    os.path.join("lib", "carts", "dialect", "sde", "test"),
+    os.path.join("lib", "carts", "dialect", "arts", "test"),
+    os.path.join("lib", "carts", "dialect", "arts-rt", "test"),
+    os.path.join("tests", "cli"),
+    os.path.join("tests", "verify"),
+    os.path.join("tests", "attrs"),
+    os.path.join("tests", "boundaries"),
+    os.path.join("tests", "e2e"),
+    os.path.join("tests", "e2e_multinode"),
+]
+
+# Keep llvm-lit resilient to interrupted writes or stray blank lines in the
+# per-suite timing cache. TestTimes.py prefers the exec-root cache and falls
+# back to the source-root cache.
+for test_times_path in (
+    os.path.join(config.test_exec_root, ".lit_test_times.txt"),
+    os.path.join(config.test_source_root, ".lit_test_times.txt"),
+):
+    if os.path.exists(test_times_path):
+        with open(test_times_path, "r") as time_file:
+            cleaned_lines = []
+            for line in time_file:
+                fields = line.split(maxsplit=1)
+                if len(fields) != 2:
+                    continue
+                try:
+                    float(fields[0])
+                except ValueError:
+                    continue
+                cleaned_lines.append(line)
+        with open(test_times_path, "w") as time_file:
+            time_file.writelines(cleaned_lines)
+
+# --- Tool paths ---
+install_root = str(resolve_install_dir(Path(project_root)))
+carts_bin_dir = os.path.join(install_root, "carts", "bin")
+llvm_bin_dir = os.path.join(install_root, "llvm", "bin")
+llvm_lib_dir = os.path.join(install_root, "llvm", "lib")
+build_bin_dir = os.path.join(build_dir, "bin")
+
+carts_compile_tool = getattr(config, "carts_compile_tool", None)
+if not carts_compile_tool:
+    carts_compile_tool = os.path.join(build_bin_dir, "carts-compile")
+    if not os.path.exists(carts_compile_tool):
+        carts_compile_tool = os.path.join(install_root, "carts", "bin", "carts-compile")
+
+filecheck_tool = getattr(config, "filecheck_tool", None)
+if not filecheck_tool:
+    filecheck_tool = os.path.join(llvm_bin_dir, "FileCheck")
+
+required_tools = [
+    ("%carts-compile", carts_compile_tool),
+    ("%FileCheck", filecheck_tool),
+]
+
+for subst, tool in required_tools:
+    if not os.path.exists(tool):
+        lit_config.fatal(
+            f"Required tool '{tool}' was not found. "
+            f"Run `dekk carts build` so the toolchain under {install_root} is up to date."
+        )
+    config.substitutions.append((subst, tool))
+
+carts_tool = getattr(config, "carts_tool", None)
+if not carts_tool:
+    dekk_tool = shutil.which("dekk")
+    if dekk_tool:
+        carts_tool = f"cd {shlex.quote(project_root)} && {shlex.quote(dekk_tool)} carts"
+
+if carts_tool:
+    config.substitutions.append(("%carts", carts_tool))
+
+# --- Test data substitutions ---
+inputs_dir = getattr(config, "carts_inputs_dir", None)
+if not inputs_dir:
+    inputs_dir = os.path.join(project_root, "tests", "inputs")
+samples_dir = os.path.join(project_root, "samples")
+arts_config_path = os.path.join(inputs_dir, "arts_8t.cfg")
+arts_multinode_config_path = os.path.join(samples_dir, "arts_multinode.cfg")
+
+config.substitutions.append(("%inputs_dir", inputs_dir))
+config.substitutions.append(("%samples_dir", samples_dir))
+config.substitutions.append(("%arts_config", arts_config_path))
+config.substitutions.append(("%arts_multinode_config", arts_multinode_config_path))
+
+# Export a few defaults so standard substitutions such as %S/%T are available.
+config.llvm_tools_dir = llvm_bin_dir
+config.llvm_lib_dir = llvm_lib_dir
+
+# Add our installed bins to PATH for convenience.
+config.environment["PATH"] = os.pathsep.join(
+    [build_bin_dir, carts_bin_dir, llvm_bin_dir, config.environment.get("PATH", "")]
+)
+
+# Dynamic-library search path comes from the same CARTS_HOME-aware resolver
+# used by dekk-launched commands and generated Slurm jobs.
+_runtime_dirs = [
+    str(path)
+    for path in managed_runtime_library_dirs(Path(project_root), include_existing_env=True)
+]
+for _lib_var in runtime_library_env_vars():
+    config.environment[_lib_var] = os.pathsep.join(_runtime_dirs)
+
+# Directories that should not be treated as test directories.
+config.excludes = ["inputs", "snapshots", "Output", "counters"]
+
+llvm_config.use_default_substitutions()
