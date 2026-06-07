@@ -360,6 +360,30 @@ SmallVector<Value> DbUtils::getDepOffsetsFromDb(Value dbPtr) {
   return getDepOffsetsFromDb(underlyingDb);
 }
 
+bool DbUtils::acquiresPartialHaloWindow(DbAcquireOp acquire) {
+  /// The halo face reconstruction in ARTS-RT fires for stencil / block-halo
+  /// acquires. The realized access is a strict halo sub-window only when a
+  /// concrete stencil access extent is committed; absent that extent the
+  /// acquire reads the whole block and ARTS-RT needs no window.
+  if (!acquire.isStencil() && !acquire.getStencilSupportedBlockHaloAttr())
+    return false;
+  ArrayAttr lower = acquire.getStencilMinOffsetsAttr();
+  ArrayAttr upper = acquire.getStencilMaxOffsetsAttr();
+  return lower && upper && !lower.empty() && !upper.empty() &&
+         lower.size() == upper.size();
+}
+
+bool DbUtils::hasCommittedDbSpaceWindow(DbAcquireOp acquire) {
+  /// A committed halo_slice is the authoritative per-slot window.
+  if (acquire.getHaloSliceAttr())
+    return true;
+  /// An ESD partial chunk acquire carries its DB-space window as explicit
+  /// element offset/size operands that ARTS-RT copies, not infers.
+  auto offsets = acquire.getElementOffsets();
+  auto sizes = acquire.getElementSizes();
+  return !offsets.empty() && !sizes.empty() && offsets.size() == sizes.size();
+}
+
 bool DbUtils::isWriterMode(ArtsMode mode) {
   return mode == ArtsMode::out || mode == ArtsMode::inout;
 }

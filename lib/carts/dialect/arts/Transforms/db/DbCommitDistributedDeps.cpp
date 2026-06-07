@@ -25,8 +25,12 @@ namespace {
 
 /// Project the committed stencil access window into a per-slot halo_slice so
 /// downstream consumers read a committed halo fact instead of re-deriving it.
+/// Covers every distributed partial halo acquire ARTS-RT would otherwise
+/// reconstruct (stencil partition mode or block-halo signal), not just acquires
+/// whose partition mode is literally `stencil`.
 static void commitHaloSlice(DbAcquireOp acquire) {
-  if (acquire.getHaloSliceAttr() || !acquire.isStencil())
+  if (acquire.getHaloSliceAttr() ||
+      !DbUtils::acquiresPartialHaloWindow(acquire))
     return;
   auto lower = readI64ArrayAttr(acquire.getStencilMinOffsetsAttr());
   auto upper = readI64ArrayAttr(acquire.getStencilMaxOffsetsAttr());

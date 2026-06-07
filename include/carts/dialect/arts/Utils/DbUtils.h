@@ -102,6 +102,27 @@ public:
   /// Extract dependency iteration offsets from a datablock value.
   static SmallVector<Value> getDepOffsetsFromDb(Value dbPtr);
 
+  ///===----------------------------------------------------------------------===////
+  /// DB-space Window Facts
+  ///===----------------------------------------------------------------------===////
+  /// A partial acquire reads a strict sub-window of its DB block. ARTS-RT
+  /// reconstructs the halo face window of such acquires at lowering
+  /// (inferStencilFaceSliceForSlot). ARTS must instead commit that window as an
+  /// authoritative fact so ARTS-RT copies it. These predicates name the set
+  /// that requires the committed window and whether it is present.
+
+  /// Return true when this acquire realizes a halo sub-window whose extent
+  /// ARTS-RT would otherwise reconstruct: a stencil / block-halo acquire that
+  /// carries a concrete stencil access extent (matching lower/upper offsets).
+  /// Without that extent the acquire reads the whole block and needs no window.
+  static bool acquiresPartialHaloWindow(DbAcquireOp acquire);
+
+  /// Return true when this acquire already carries an authoritative committed
+  /// DB-space window: a per-slot halo_slice fact, or explicit element-space
+  /// offsets/sizes operands (an ESD partial chunk) that ARTS-RT copies
+  /// verbatim.
+  static bool hasCommittedDbSpaceWindow(DbAcquireOp acquire);
+
   ///===----------------------------------------------------------------------===///
   /// Access Mode and Hints Analysis
   ///===----------------------------------------------------------------------===///

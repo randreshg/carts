@@ -114,6 +114,22 @@ static LogicalResult verifyCdagAcquireMode(DbAcquireOp acquire) {
   return success();
 }
 
+/// (A) Every distributed partial halo acquire carries a committed DB-space
+/// window. Without it ARTS-RT would reconstruct the halo face slice at lowering
+/// (inferStencilFaceSliceForSlot). Reject here, before ARTS-RT, instead.
+static LogicalResult verifyCdagAcquireWindow(DbAcquireOp acquire) {
+  DbAllocOp alloc = underlyingAlloc(acquire);
+  if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
+    return success();
+  if (!DbUtils::acquiresPartialHaloWindow(acquire))
+    return success();
+  if (DbUtils::hasCommittedDbSpaceWindow(acquire))
+    return success();
+  return acquire.emitOpError()
+         << "acquires a partial halo window of a distributed DB without a "
+            "committed DB-space window; ARTS-RT must not infer it";
+}
+
 /// (C) Single-writer per distributed DB block grain. The writer is the EDT that
 /// consumes the acquired pointer; two distinct EDTs writing the same block
 /// within one epoch (concurrent) violates SWMR.
@@ -140,8 +156,8 @@ static void verifyCdagSwmr(ModuleOp module, bool &failed) {
         continue;
       auto id =
           std::make_tuple(alloc.getOperation(), epoch.getOperation(), *key);
-      auto [it, inserted] = writers.try_emplace(
-          id, std::make_pair(edt.getOperation(), acquire));
+      auto [it, inserted] =
+          writers.try_emplace(id, std::make_pair(edt.getOperation(), acquire));
       if (inserted || it->second.first == edt.getOperation())
         continue;
       InFlightDiagnostic diag =
@@ -206,6 +222,8 @@ struct VerifyArtsCdagPass
     });
     module.walk([&](DbAcquireOp acquire) {
       if (mlir::failed(verifyCdagAcquireMode(acquire)))
+        failed = true;
+      if (mlir::failed(verifyCdagAcquireWindow(acquire)))
         failed = true;
     });
     verifyCdagSwmr(module, failed);
