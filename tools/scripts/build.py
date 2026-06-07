@@ -65,7 +65,7 @@ def _check_rdma_provider_deps() -> None:
         raise Exit(1)
 
 
-# ARTS multinode transport kinds. GASNet-EX is the v4 production default on
+# ARTS multinode transport kinds. GASNet-EX is the production default on
 # Linux; rsocket is an explicit legacy fallback only; TCP is the debug escape.
 ARTS_TRANSPORT_GASNET = "gasnet"
 ARTS_TRANSPORT_RSOCKET = "rsocket"

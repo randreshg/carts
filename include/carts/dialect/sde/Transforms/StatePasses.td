@@ -114,7 +114,7 @@ def SdeCuNormalization
     Structural CU-normalization. Wraps every run of source-executable work that
     is not already inside a CU — non-OpenMP host init loops, scalar
     verification/check code, sequential reductions, and scalar-effect work —
-    into a conservative `sde.cu_region <single>`, so the v4 SDE boundary
+    into a conservative `sde.cu_region <single>`, so the SDE boundary
     invariant "all source executable work lives in a CU" (verify-sde) holds for
     non-OpenMP work too.
 

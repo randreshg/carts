@@ -1,28 +1,27 @@
 ///==========================================================================///
 /// File: VerifySde.cpp
 ///
-/// Structural verifier for the v4 SDE boundary. SDE owns State, Dependency, and
-/// Effect over MU/CU/SU. By the boundary the IR must already be the v4 target
+/// Structural verifier for the SDE boundary. SDE owns State, Dependency, and
+/// Effect over MU/CU/SU. By the boundary the IR must already be the target
 /// shape, and this pass fails closed when it is not. It enforces three rules,
 /// reading only current IR and local op structure (no metadata, no downstream
 /// contract):
 ///
-///   CHECK A — no target SDE dependency graph. SDE carries no mu_dep dependency
+///   No target SDE dependency graph. SDE carries no mu_dep dependency
 ///     graph and no generic token/dataflow dependency graph; ordering edges are
 ///     derived in CODIR after codelet isolation.
-///   CHECK B — all source executable work lives in a CU. Raw scf / source
+///   All source executable work lives in a CU. Raw scf / source
 ///     compute may not sit directly inside an SU body, and (within SDE-bearing
 ///     functions) source work may not sit outside every CU. scf is legal under
 ///     SDE only inside a CU.
-///   CHECK C — CUs are async/schedulable by default. Sibling CUs with a
+///   CUs are async/schedulable by default. Sibling CUs with a
 ///   provable
 ///     MU access conflict must be ordered explicitly, not by textual order.
 ///
 /// Deliberately NOT checked: CU `IsolatedFromAbove` (a CODIR concern), the
 /// presence of an `sde.mu_token` / slice op / any specific access-window
 /// carrier (windows are raised later by RaiseToMuAccessWindow). The pass is
-/// standalone: it is not part of the default pipeline, which still emits the
-/// pre-v4 shape.
+/// standalone and is intended for explicit verification pipelines.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -136,21 +135,20 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
       return found;
     };
 
-    // CHECK A (dependency graph) + CHECK B (CU containment).
+    // Dependency graph rejection plus CU containment.
     module.walk([&](Operation *op) {
-      // CHECK A1 — mu_dep dependency graph (consumer-anchored, DCE-robust).
+      // Reject persistent mu_dep dependency graphs.
       if (auto task = dyn_cast<sde::SdeCuTaskOp>(op)) {
         if (!task.getDeps().empty()) {
           task.emitOpError()
               << "carries a target SDE dependency graph: sde.cu_task deps "
-                 "express an mu_dep dependency graph, which v4 SDE does not "
+                 "express an mu_dep dependency graph, which SDE does not "
                  "have. Order CUs via SU sequence/parallel-wave structure, "
                  "source effect/control ordering, or sde.su_barrier";
           failed = true;
         }
       }
-      // CHECK A1 (net) — an mu_dep consumed as a generic edge (not a cu_task
-      // dep).
+      // Reject mu_dep when consumed as a generic edge instead of a cu_task dep.
       if (auto dep = dyn_cast<sde::SdeMuDepOp>(op)) {
         for (Operation *user : dep.getDep().getUsers()) {
           if (!isa<sde::SdeCuTaskOp>(user)) {
@@ -162,20 +160,20 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
           }
         }
       }
-      // CHECK A2 — generic token/dataflow dependency graph (consumer-anchored).
+      // Reject generic token/dataflow dependency graphs.
       if (auto barrier = dyn_cast<sde::SdeSuBarrierOp>(op)) {
         if (!barrier.getTokens().empty()) {
           barrier.emitOpError()
               << "carries a generic token/dataflow dependency graph: a "
                  "token-carrying sde.su_barrier waits on a completion-token "
-                 "graph, which v4 SDE does not have. Use a plain "
+                 "graph, which SDE does not have. Use a plain "
                  "sde.su_barrier "
                  "or SU sequence/parallel-wave / source effect-control "
                  "ordering";
           failed = true;
         }
       }
-      // CHECK A2 (net) — a control_token consumed as a generic edge.
+      // Reject control_token when consumed as a generic edge.
       if (auto token = dyn_cast<sde::SdeControlTokenOp>(op)) {
         for (Operation *user : token.getToken().getUsers()) {
           if (!isa<sde::SdeSuBarrierOp>(user)) {
@@ -189,9 +187,8 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
         }
       }
 
-      // CHECK B — source executable work belongs in a CU. Diagnose only maximal
-      // compute roots (an op whose parent is structural, not itself compute) so
-      // a whole raw nest yields one diagnostic at its root.
+      // Diagnose only maximal source-compute roots so a whole raw nest yields
+      // one diagnostic at its root.
       if (!isSourceComputeOp(op))
         return;
       Operation *parent = op->getParentOp();
@@ -217,10 +214,9 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
       // else: parent is a CU (or the op is inside a CU) — legal.
     });
 
-    // CHECK C — async-by-default ordering. Within each block, conflicting
-    // sibling cu_work with no explicit ordering between them rely on hidden
+    // Conflicting sibling cu_work without explicit ordering relies on hidden
     // textual order. Distinct SU bands live in distinct blocks, so they are not
-    // flagged. Only fires when access info is representable (mu_token present).
+    // flagged. Only fires when access info is representable.
     module.walk([&](Block *block) {
       llvm::SmallVector<sde::SdeCuWorkOp, 8> cus;
       for (Operation &op : *block)

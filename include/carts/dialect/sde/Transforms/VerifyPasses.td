@@ -146,9 +146,9 @@ def VerifySdeRedistribute
 }
 
 def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
-  let summary = "Verify v4 SDE MU/CU/SU structural legality at the SDE boundary";
+  let summary = "Verify SDE MU/CU/SU structural legality at the SDE boundary";
   let description = [{
-    Structural verifier for the v4 SDE boundary. It enforces that:
+    Structural verifier for the SDE boundary. It enforces that:
 
     - all source executable work lives inside a CU (sde.cu_work / cu_region /
       cu_task / cu_reduce / cu_atomic), and raw scf / source compute never sits

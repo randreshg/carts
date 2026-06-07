@@ -4,12 +4,12 @@
 /// SDE CU normalization for all source executable work.
 ///
 /// Wraps every run of source-executable work that is NOT already inside a CU
-/// into a conservative `sde.cu_region <single>`, so the v4 SDE boundary
+/// into a conservative `sde.cu_region <single>`, so the SDE boundary
 /// invariant "all source executable work lives in a CU" (enforced by
 /// `verify-sde`) holds for non-OpenMP host code too: init loops, scalar
 /// check/verification code, sequential reductions, and scalar-effect work that
-/// `ConvertOpenMPToSde` / `Parallelize` did not already place in a CU. After this
-/// pass an SU body is scheduling-only: it may hold schedule/window/barrier
+/// `ConvertOpenMPToSde` / `Parallelize` did not already place in a CU. After
+/// this pass an SU body is scheduling-only: it may hold schedule/window/barrier
 /// plumbing, but raw scf / source compute is moved under a CU.
 ///
 /// This is a STRUCTURAL transformation only. It:
@@ -23,23 +23,24 @@
 ///   * makes no distribution, movement, DB-grain, or access-window decision;
 ///   * leaves existing valid CUs unchanged.
 ///
-/// `<single>` is the conservative CU kind: one logical execution, no parallelism
-/// claimed. Later parallel-legality and sync passes refine it; this pass only
-/// establishes containment.
+/// `<single>` is the conservative CU kind: one logical execution, no
+/// parallelism claimed. Later parallel-legality and sync passes refine it; this
+/// pass only establishes containment.
 ///
 /// The unit of wrapping is a maximal contiguous run of block-level ops bounded
 /// by SDE structural ops (CUs, SUs, MU declarations, barriers) and the block
-/// terminator, trimmed to its source-compute span. A run is wrapped only when it
-/// contains real source compute; pure schedule/index plumbing that the verifier
-/// permits outside a CU is left in place.
+/// terminator, trimmed to its source-compute span. A run is wrapped only when
+/// it contains real source compute; pure schedule/index plumbing that the
+/// verifier permits outside a CU is left in place.
 ///
 /// Conservative single-CU wrapping is only legal when the span is
 /// self-contained: no SSA value defined in the span may be used by an op that
 /// stays outside it. An `sde.cu_region` result is tied 1:1 to an `iter_args`
 /// input and cannot express an output-only value, so rather than fabricate a
-/// yield/results contract the pass FAILS CLOSED with a diagnostic on an escaping
-/// span and leaves it unwrapped for the verifier to reject. Threading such a
-/// value through SU/CU structure belongs to an earlier real transformation.
+/// yield/results contract the pass FAILS CLOSED with a diagnostic on an
+/// escaping span and leaves it unwrapped for the verifier to reject. Threading
+/// such a value through SU/CU structure belongs to an earlier real
+/// transformation.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -68,8 +69,8 @@ using namespace mlir::carts::sde;
 namespace {
 
 /// True when `fn` contains any SDE op. This matches the verifier's scope: the
-/// "source work outside a CU" rule only applies inside SDE-bearing functions, so
-/// plain host helpers with no SDE structure are left entirely alone.
+/// "source work outside a CU" rule only applies inside SDE-bearing functions,
+/// so plain host helpers with no SDE structure are left entirely alone.
 static bool funcHasSdeOp(func::FuncOp fn) {
   bool found = false;
   fn.walk([&](Operation *op) {
@@ -109,8 +110,8 @@ static Operation *findEscapingOp(ArrayRef<Operation *> span, Block *block) {
   return nullptr;
 }
 
-/// Move the contiguous, self-contained op span [first, last] (direct children of
-/// their block) into a fresh `sde.cu_region <single>` inserted at `first`.
+/// Move the contiguous, self-contained op span [first, last] (direct children
+/// of their block) into a fresh `sde.cu_region <single>` inserted at `first`.
 static void wrapSpanInCuRegion(Operation *first, Operation *last) {
   Block *block = first->getBlock();
   OpBuilder builder(first);
@@ -133,7 +134,8 @@ static void wrapSpanInCuRegion(Operation *first, Operation *last) {
 /// wrapped; the block's other spans are still normalized for maximal evidence.
 static bool normalizeBlock(Block *block) {
   // Snapshot the direct children (excluding the terminator) up front: wrapping
-  // splices ops out of `block`, so we must not be walking a live block iterator.
+  // splices ops out of `block`, so we must not be walking a live block
+  // iterator.
   SmallVector<Operation *> ops;
   for (Operation &op : block->without_terminator())
     ops.push_back(&op);
@@ -151,8 +153,9 @@ static bool normalizeBlock(Block *block) {
     size_t runEnd = i;
     while (runEnd < n && !isSdeDialectOp(ops[runEnd]))
       ++runEnd;
-    // Trim to the source-compute span; edge schedule/index plumbing the verifier
-    // permits outside a CU stays at block scope rather than being pulled in.
+    // Trim to the source-compute span; edge schedule/index plumbing the
+    // verifier permits outside a CU stays at block scope rather than being
+    // pulled in.
     size_t lo = i, hi = runEnd;
     while (lo < hi && !isSourceComputeOp(ops[lo]))
       ++lo;
@@ -186,8 +189,8 @@ struct SdeCuNormalizationPass
     //     illegal — the SU must be scheduling-only), and
     //   * every block of every SDE-bearing func (source work outside any CU is
     //     illegal there).
-    // The cu_regions this pass inserts never move an SU/CU boundary op, so these
-    // collected block pointers stay valid across all wrapping.
+    // The cu_regions this pass inserts never move an SU/CU boundary op, so
+    // these collected block pointers stay valid across all wrapping.
     SmallVector<Block *> targets;
     module.walk([&](Operation *op) {
       if (isSuOp(op)) {
