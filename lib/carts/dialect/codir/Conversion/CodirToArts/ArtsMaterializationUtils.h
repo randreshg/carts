@@ -4650,7 +4650,8 @@ materializeExistingDbComputeBlockIfNeeded(codir::CodeletOp codelet,
   if (!codelet || depIndex >= codelet.getDeps().size())
     return failure();
   if (!codirDepRequiresComputeBlockStorage(codelet, depIndex) ||
-      codirDepRequiresPhaseRedistributionBridge(codelet, depIndex))
+      codirDepRequiresPhaseRedistributionBridge(codelet, depIndex) ||
+      codirDepUsesHaloStencilStorage(codelet, depIndex))
     return success();
   if (!hasCodirTileOwnerSlicePlan(codelet) ||
       !codirDepCanUseBlockStorageAccess(codelet, depIndex))
