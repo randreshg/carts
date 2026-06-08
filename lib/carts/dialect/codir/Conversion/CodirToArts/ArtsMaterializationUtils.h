@@ -44,6 +44,12 @@ isAtomicAddAddressable(Value memref, ValueRange indices,
   auto memrefType = dyn_cast<MemRefType>(memref.getType());
   if (!memrefType)
     return false;
+
+  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(memref);
+  Operation *rootDef = root ? root.getDefiningOp() : nullptr;
+  if (isa_and_nonnull<memref::AllocOp, memref::AllocaOp>(rootDef))
+    return false;
+
   if (memrefType.getRank() == 0)
     return indices.empty();
   if (memrefType.getRank() != 1 || indices.size() != 1)
@@ -103,16 +109,14 @@ static inline unsigned lowerIntegerAddReductionsToAtomics(
 }
 
 // The committed reduction strategy is the structural carrier for reduction
-// lowering. A non-atomic strategy (`local_accumulate`/`tree`) opts out;
-// otherwise stay conservative and lower (an absent strategy keeps the prior
-// safe default so a concurrent accumulation is never left unsynchronized). The
-// body rewrite below only fires on a real same-location integer add, so this
-// stays a no-op on non-accumulating bodies.
+// lowering. Only an explicit atomic strategy may rewrite load/add/store into an
+// ARTS atomic; absent strategy is not a downstream license to rediscover
+// reductions from private scalar updates.
 static inline bool shouldLowerReductionsToAtomics(codir::CodeletOp codelet) {
   if (codelet.getPartialReductionAttr())
     return false;
   auto strategy = codelet.getReductionStrategyAttr();
-  return !strategy ||
+  return strategy &&
          strategy.getValue() == codir::CodirReductionStrategy::atomic;
 }
 
