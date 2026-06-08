@@ -33,6 +33,7 @@ namespace mlir::carts::sde {
 #include "mlir/IR/PatternMatch.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <limits>
@@ -1929,6 +1930,43 @@ chooseDistributionKind(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
   return std::nullopt;
 }
 
+// Multi-worker in-place neighborhood stencils need a wavefront/skew transform;
+// without one, SDE may only preserve the serial single-worker lowering.
+static bool
+requiresUnimplementedStencilWavefront(sde::SdeSuIterateOp op,
+                                      sde::SDECostModel &costModel) {
+  if (costModel.getLogicalWorkerCapacity() <= 1)
+    return false;
+  return op.getInPlaceSharedStateAttr() && !op.getDistributionKindAttr();
+}
+
+static std::string formatI64Array(ArrayAttr attr) {
+  std::string text;
+  llvm::raw_string_ostream os(text);
+  os << '[';
+  if (auto values = readI64ArrayAttr(attr))
+    llvm::interleaveComma(*values, os);
+  os << ']';
+  return os.str();
+}
+
+// Cite committed SDE facts so downstream layers cannot reinterpret this case.
+static void emitStencilWavefrontFailClosed(sde::SdeSuIterateOp op) {
+  op.emitOpError()
+      << "in-place self-read stencil (Gauss-Seidel family) has loop-carried "
+         "neighbor offsets min="
+      << formatI64Array(op.getAccessMinOffsetsAttr())
+      << " max=" << formatI64Array(op.getAccessMaxOffsetsAttr())
+      << " on owner dims " << formatI64Array(op.getOwnerDimsAttr())
+      << "; exposing legal parallelism requires an SDE wavefront/skew "
+         "(loop-skewing) transform that is not implemented. Distributing in "
+         "place without it would violate Gauss-Seidel ordering; preserving "
+         "the order is serial, so the planner refuses multi-worker lowering. "
+         "Implement the SDE wavefront/skew transform, "
+         "prove the loop in-place-safe, or compile with a single logical "
+         "worker.";
+}
+
 struct DistributionPlanningPass
     : public sde::impl::DistributionPlanningBase<DistributionPlanningPass> {
   explicit DistributionPlanningPass(sde::SDECostModel *costModel = nullptr)
@@ -1939,12 +1977,22 @@ struct DistributionPlanningPass
       return;
 
     SmallVector<PlannedDistribution> rewrites;
+    bool failed = false;
+    auto planOrFailClosed = [&](sde::SdeSuIterateOp op) {
+      if (auto kind = chooseDistributionKind(op, *costModel)) {
+        rewrites.push_back({op, *kind});
+        return;
+      }
+      if (requiresUnimplementedStencilWavefront(op, *costModel)) {
+        emitStencilWavefrontFailClosed(op);
+        failed = true;
+      }
+    };
     getOperation().walk([&](sde::SdeSuIterateOp op) {
       if (sde::hasCommittedCuMuPartitionEvidence(op.getOperation()) ||
           op.getDistributionKindAttr()) {
         stampCuMuPartitionGraphAttrs(op, *costModel);
-        if (auto kind = chooseDistributionKind(op, *costModel))
-          rewrites.push_back({op, *kind});
+        planOrFailClosed(op);
         return;
       }
 
@@ -1953,8 +2001,7 @@ struct DistributionPlanningPass
           coarsenExistingLoopIndexedOwnerPlanToTileFloor(op, *costModel);
         }
         stampCuMuPartitionGraphAttrs(op, *costModel);
-        if (auto kind = chooseDistributionKind(op, *costModel))
-          rewrites.push_back({op, *kind});
+        planOrFailClosed(op);
         return;
       }
 
@@ -1972,9 +2019,13 @@ struct DistributionPlanningPass
       stampInPlaceSharedStencilSerialSlice(op, *costModel);
       stampPhysicalPlanFromAssignedLayout(op, *costModel);
       stampCuMuPartitionGraphAttrs(op, *costModel);
-      if (auto kind = chooseDistributionKind(op, *costModel))
-        rewrites.push_back({op, *kind});
+      planOrFailClosed(op);
     });
+
+    if (failed) {
+      signalPassFailure();
+      return;
+    }
 
     for (PlannedDistribution rewrite : rewrites) {
       if (rewrite.op.getNumResults() > 0) {
