@@ -797,6 +797,7 @@ struct PlannedBlockLocalAccessRewrite {
   int64_t blockSize = 1;
   int64_t groupBlockCount = 1;
   bool grouped = false;
+  bool allowFullWindowAccess = false;
 };
 
 static inline Value materializeBlockLocalOrigin(OpBuilder &builder,
@@ -848,16 +849,15 @@ materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
   return arith::SubIOp::create(builder, loc, index, localOrigin).getResult();
 }
 
-static inline FailureOr<Value>
-materializeGroupedBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
-                                  Value ownerBase, int64_t lowerHalo,
-                                  int64_t blockSize, int64_t groupBlockCount,
-                                  Value &relativeBlock) {
+static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
+    OpBuilder &builder, Location loc, Value index, Value ownerBase,
+    int64_t lowerHalo, int64_t blockSize, int64_t groupBlockCount,
+    Value &relativeBlock, bool allowFullWindowAccess = false) {
   if (!index || !ownerBase || blockSize <= 0 || groupBlockCount <= 0)
     return failure();
   if (groupBlockCount > std::numeric_limits<int64_t>::max() / blockSize)
     return failure();
-  if (!indexSelectsOwnerSlice(index, ownerBase))
+  if (!allowFullWindowAccess && !indexSelectsOwnerSlice(index, ownerBase))
     return failure();
 
   int64_t windowExtent = blockSize * groupBlockCount;
@@ -866,6 +866,13 @@ materializeGroupedBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
     int64_t windowExtent = 0;
 
     std::optional<int64_t> getOwnerRelativeConstant(Value candidate) const {
+      std::optional<int64_t> candidateConst =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(candidate);
+      std::optional<int64_t> ownerConst =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(ownerBase);
+      if (candidateConst && ownerConst)
+        return *candidateConst - *ownerConst;
+
       int64_t offset = 0;
       Value base =
           ::mlir::carts::ValueAnalysis::stripConstantOffset(candidate, &offset);
@@ -1056,7 +1063,8 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
         FailureOr<Value> localIndex = materializeGroupedBlockLocalIndex(
             builder, op->getLoc(), indices[rewrite->ownerDim].get(),
             rewrite->ownerBase, rewrite->lowerHalo, rewrite->blockSize,
-            rewrite->groupBlockCount, relativeBlock);
+            rewrite->groupBlockCount, relativeBlock,
+            rewrite->allowFullWindowAccess);
         if (failed(localIndex)) {
           op->emitError("grouped planned block-local access does not stay "
                         "within the block window");
@@ -4536,7 +4544,7 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
   // storage transition. The split factor gives the number of partial blocks to
   // sum.
   bool perBlockSummingSettle =
-      bridgePlan.needsCopyOut &&
+      hasInterNodeRuntime && bridgePlan.needsCopyOut &&
       llvm::any_of(bridgePlan.participants,
                    [](const HostBridgeParticipant &participant) {
                      return codirDepUsesBlockNativeSettle(participant.codelet,

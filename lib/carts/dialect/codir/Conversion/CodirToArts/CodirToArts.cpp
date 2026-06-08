@@ -166,6 +166,7 @@ struct PlannedBlockDepAccessPlan {
   SmallVector<Value, 4> ownerDomainBases;
   SmallVector<int64_t, 4> groupBlockCounts;
   bool grouped = false;
+  bool allowFullWindowAccess = false;
 
   bool empty() const { return ownerDims.empty(); }
 };
@@ -202,6 +203,46 @@ getCodirLogicalOwnerBlockCounts(codir::CodeletOp codelet, unsigned depIndex,
     groupBlocks.push_back(llvm::divideCeil(logicalExtent, blockSize));
   }
   return groupBlocks;
+}
+
+static bool
+planReplicatedReadFullBlockAccess(codir::CodeletOp codelet, unsigned depIndex,
+                                  arts::DbAllocOp alloc, OpBuilder &builder,
+                                  Location loc,
+                                  PlannedBlockDepAccessPlan &plannedAccess) {
+  if (!canUseCodirOwnerSliceForAlloc(codelet, depIndex, alloc))
+    return false;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<int64_t, 4>> blockSizes =
+      getCodirTileOwnerBlockSizes(
+          codelet, depIndex,
+          static_cast<unsigned>(alloc.getElementSizes().size()));
+  if (!ownerDims || !blockSizes || ownerDims->empty() ||
+      ownerDims->size() != blockSizes->size() ||
+      alloc.getSizes().size() != ownerDims->size())
+    return false;
+
+  SmallVector<int64_t, 4> blockCounts;
+  blockCounts.reserve(alloc.getSizes().size());
+  for (Value blockCountValue : alloc.getSizes()) {
+    std::optional<int64_t> blockCount =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(blockCountValue);
+    if (!blockCount || *blockCount <= 0)
+      return false;
+    blockCounts.push_back(*blockCount);
+  }
+
+  plannedAccess.ownerDims.assign(ownerDims->begin(), ownerDims->end());
+  plannedAccess.blockSizes.assign(blockSizes->begin(), blockSizes->end());
+  plannedAccess.ownerParams.assign(ownerDims->size(), Value{});
+  plannedAccess.ownerDomainBases.assign(ownerDims->size(),
+                                        createZeroIndex(builder, loc));
+  plannedAccess.groupBlockCounts.assign(blockCounts.begin(), blockCounts.end());
+  plannedAccess.grouped = true;
+  plannedAccess.allowFullWindowAccess = true;
+  return true;
 }
 
 struct ConvertCodirToArtsPass
@@ -658,6 +699,9 @@ struct ConvertCodirToArtsPass
           plannedAccess.grouped = grouped;
         }
       }
+      if (plannedAccess.empty() && isReplicatedReadDep(codelet, depIdx))
+        planReplicatedReadFullBlockAccess(codelet, depIdx, alloc, builder, loc,
+                                          plannedAccess);
       auto acquire = arts::DbAcquireOp::create(
           builder, loc, convertAccessMode(modeAttr.getValue()), alloc.getGuid(),
           alloc.getPtr(), partitionMode,
@@ -787,7 +831,11 @@ struct ConvertCodirToArtsPass
                     "block-local access rewrite";
         arts::DbAllocOp blockAlloc = findBackingDbAlloc(codelet.getDeps()[idx]);
         for (auto [slot, ownerDim] : llvm::enumerate(accessPlan.ownerDims)) {
-          Value ownerBase = paramBlockArgs.lookup(accessPlan.ownerParams[slot]);
+          Value ownerBase;
+          if (Value ownerParam = accessPlan.ownerParams[slot])
+            ownerBase = paramBlockArgs.lookup(ownerParam);
+          else
+            ownerBase = createZeroIndex(builder, loc);
           if (!ownerBase)
             return codelet.emitOpError()
                    << "failed to materialize owner-base parameter for planned "
@@ -822,7 +870,7 @@ struct ConvertCodirToArtsPass
               {payload, ownerDim, ownerBase, localOrigin, ownerHalo.lower,
                taskBlock.getArgument(idx), static_cast<unsigned>(slot),
                accessPlan.blockSizes[slot], accessPlan.groupBlockCounts[slot],
-               accessPlan.grouped});
+               accessPlan.grouped, accessPlan.allowFullWindowAccess});
         }
       }
       mapper.map(codeletBlock.getArgument(idx), payload);
