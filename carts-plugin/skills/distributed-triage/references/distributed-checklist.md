@@ -24,8 +24,7 @@ Look for:
 - SDE array-layout facts backed by real loop/layout/source transformation
   (`physicalOwnerDims`, `physicalBlockShape`, loop tiling, access-window shape)
 - `distribution_kind`, `distribution_pattern`, `distribution_version`
-- CODIR collective/bridge choices derived from compute pattern plus SDE layout
-  mismatch (`dep_collectives`, `dep_storage_views`, `dep_owner_dims`)
+- CODIR representation of SDE movement structure and storage views
 - writable task acquires that should preserve owner hints
 - `DbAllocOp` instances marked `distributed`
 - cases where SDE distribution planning should have produced distributed ARTS
@@ -35,7 +34,7 @@ Look for:
 
 - Is the allocation host-level, not inside `arts.edt`?
 - Does it have multiple DB blocks?
-- Is the shape supported for distributed ownership?
+- Is the shape supported for owner-map realization?
 - Are handle users restricted to allowed DB dependency flow?
 - Is there at least one internode writer?
 - Is the case rejected because it is read-only stencil-style internode use?
@@ -43,7 +42,7 @@ Look for:
   every tiny DB its own CU/bridge task?
 - Are compute/bridge/communication CUs grouped over block ranges for read-only
   or copy-like edges?
-- Is any layer recomputing owner dims, block shape, collective family, owner
+- Is any layer recomputing owner dims, block shape, movement family, owner
   maps, or runtime mode instead of consuming committed upstream facts?
 
 ## 4. Runtime Checks
@@ -60,7 +59,7 @@ Suspect lowering first if:
 - routed work is absent in pre-lowering IR
 - `distributed` markers are missing
 - owner hints and partitioning disagree
-- ARTS-RT introduces scheduling, ownership, partition, or collective decisions
+- ARTS-RT introduces scheduling, ownership, partition, or movement decisions
 
 Suspect runtime/config first if:
 

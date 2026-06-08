@@ -125,10 +125,9 @@ recover source-level distribution policy after the CODIR-to-ARTS boundary.
 Selection order matters:
 
 1. Pattern override:
-   - `matmul` + internode (`TwoLevel` strategy) -> `tiling_2d`
-   - `matmul` + intranode (`Flat` strategy) -> `block`
+   - `matmul` + internode -> `tiling_2d`
+   - `matmul` + intranode -> `block`
 2. Otherwise by strategy:
-   - internode (`TwoLevel`) -> `two_level`
    - block-cyclic strategy -> `block_cyclic`
    - tiling strategy -> `tiling_2d`
    - flat strategy -> default flat-pattern mapping below
@@ -139,9 +138,8 @@ Selection order matters:
 Operational note:
 - `tiling_2d` for internode matmul is selected by policy, but it is not always
   the fastest choice for every dataset size and machine topology.
-- For small/medium problems where communication dominates, `two_level` may
-  still outperform `tiling_2d`; treat this as a performance-tuning axis, not a
-  correctness requirement.
+- For small/medium problems where communication dominates, matmul distribution
+  remains a performance-tuning axis, not a correctness requirement.
 
 ## 4. Current ARTS-Side Analysis Inputs (Transitional)
 

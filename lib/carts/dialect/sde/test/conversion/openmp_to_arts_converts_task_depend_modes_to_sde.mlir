@@ -7,9 +7,7 @@
 // CHECK: func.func @main
 // CHECK: sde.cu_region <parallel> {
 // CHECK: %[[WRITEDEP:.+]] = sde.mu_dep <write> %arg0 : memref<1xi32> -> !sde.dep
-// CHECK-NOT: sde.cu_task deps
 // CHECK: %[[READDEP:.+]] = sde.mu_dep <read> %arg0 : memref<1xi32> -> !sde.dep
-// CHECK-NOT: sde.cu_task deps
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir (convert-sde-to-codir) //----- //
 // CHECK: codir.codelet deps(%arg0 : memref<1xi32>)
 // CHECK-SAME: dep_modes = [#codir.access_mode<write>]

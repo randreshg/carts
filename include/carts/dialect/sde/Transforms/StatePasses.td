@@ -123,10 +123,10 @@ def SdeCuNormalization
     valid CUs are left unchanged.
 
     The pass is structural only: it adds no CU isolation, MU token, slice, or
-    mu_dep graph, and introduces no CODIR concept. It makes no distribution,
-    movement, DB-grain, or access-window decision; it reads current IR and
-    rewrites structure, stamping no metadata and branching on no downstream
-    contract.
+    consumed dependency edge, and introduces no CODIR concept. It makes no
+    distribution, movement, DB-grain, or access-window decision; it reads
+    current IR and rewrites structure, stamping no metadata and branching on no
+    downstream contract.
 
     Conservative single-CU wrapping requires a self-contained span: if a value
     defined in the span is used outside it (an `sde.cu_region` result cannot

@@ -178,7 +178,7 @@ def SdeResourceQueryKindAttr
 // Geometric redistribution movement family authored by SDE from committed
 // per-array layout facts. It names a GEOMETRIC movement shape (how owner blocks
 // move between two layouts), never a concrete collective, transport algorithm,
-// route, or runtime object — CODIR maps the family to a transport mechanically.
+// route, or runtime object.
 def SdeMovementFamily
     : CartsSde_I32Enum<"SdeMovementFamily",
                       "SDE geometric redistribution movement family", [
@@ -270,15 +270,12 @@ def SdeCuTaskOp
     task op.
   }];
 
-  let arguments = (ins
-    Variadic<SdeDepType>:$deps,
-    OptionalAttr<SdePatternAttr>:$pattern
-  );
+  let arguments = (ins OptionalAttr<SdePatternAttr>:$pattern);
 
   let regions = (region SizedRegion<1>:$body);
 
   let assemblyFormat = [{
-    (`deps` `(` $deps^ `:` type($deps) `)`)? $body attr-dict
+    $body attr-dict
   }];
 }
 
@@ -695,8 +692,7 @@ def SdeRedistOp : CartsSde_Op<"redist", [
     `all_gather_like`, `all_to_all_like`, `reduce_scatter_like`,
     `allreduce_like`, `halo_like`, `phase_redist`). It names no collective,
     transport algorithm, DB, EDT, owner map, route, GUID, or runtime policy:
-    CODIR maps the family to a concrete collective/bridge mechanically. Like
-    `sde.mu_dep`/`sde.mu_access_window` it is consumed (not reinterpreted) by
+    like `sde.mu_dep`/`sde.mu_access_window` it is consumed by
     SDE-to-CODIR lowering and does NOT survive the dialect boundary.
 
     Attributes (element-space geometry, all static `I64 ArrayAttr`):

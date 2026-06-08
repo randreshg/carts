@@ -1,10 +1,7 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
 // Non-reduction layout mismatches remain broad evidence until SDE commits a
-// target layout for them.
-
-// CHECK-LABEL: func.func @unrepresentable
-// CHECK-NOT: sde.redist
+// CHECK: error: {{.*}}redistribution edge
 
 func.func @unrepresentable(%T: memref<256x256xf32>,
                            %G: memref<256x256xf32>) {

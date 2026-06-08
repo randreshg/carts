@@ -44,6 +44,7 @@ struct RedistributionEdge {
   SmallVector<int64_t, 4> sourceBlockShape;
   SmallVector<int64_t, 4> targetOwnerDims; ///< target determined by the family
   SmallVector<int64_t, 4> targetBlockShape;
+  SmallVector<int64_t, 4> haloShape;
   int64_t commVolumeBytes = 0; ///< advisory committed edge cost (0 = none)
 };
 

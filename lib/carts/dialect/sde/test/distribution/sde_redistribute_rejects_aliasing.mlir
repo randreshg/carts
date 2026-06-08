@@ -1,9 +1,6 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
-// Aliased roots are not materialized as sde.redist edges.
-
-// CHECK-LABEL: func.func @aliasing
-// CHECK-NOT: sde.redist
+// CHECK: error: {{.*}}sde.redist: aliasing array-root use blocks redistribution
 
 func.func @aliasing(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
                     %G: memref<256x256xf32>) {

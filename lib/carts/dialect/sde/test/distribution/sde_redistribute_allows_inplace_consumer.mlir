@@ -1,12 +1,9 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
-// In-place scheduling units do not expose a redistribution boundary.
+// CHECK: sde.redist <reduce_scatter_like>
 
-// CHECK-LABEL: func.func @inplace
-// CHECK-NOT: sde.redist
-
-func.func @inplace(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
-                   %G: memref<256x256xf32>) {
+func.func @inplace_consumer(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
+                            %G: memref<256x256xf32>) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c256 = arith.constant 256 : index

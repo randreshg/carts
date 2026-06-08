@@ -41,8 +41,16 @@ struct VerifySdeRedistributePass
         sde::collectRedistributionEdges(module);
     bool failed = false;
 
-    // Completeness for the subset SDE can materialize without inventing a
-    // target layout.
+    for (const sde::RedistributionEdgeFailure &failure : committed.failures) {
+      sde::SdeSuIterateOp consumer = failure.consumer;
+      consumer.emitOpError()
+          << "verify-sde-redistribute: redistribution edge for array "
+          << failure.arrayId
+          << " is not representable and was left coarse: " << failure.reason;
+      failed = true;
+    }
+
+    // Completeness for the subset SDE can materialize.
     for (const sde::RedistributionEdge &edge : committed.edges) {
       bool represented = false;
       for (Operation *user : edge.root.getUsers())

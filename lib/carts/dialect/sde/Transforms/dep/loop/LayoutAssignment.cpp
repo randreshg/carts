@@ -639,7 +639,7 @@ struct LayoutAssignmentPass
             edgeBytes, std::max<int64_t>(1, elementBytes(profile.root)));
         stamps[suId].entries.push_back(entry);
         stamps[suId].commVolumeBytes += edgeBytes;
-        if (edgeBytes > 0)
+        if (edgeBytes > 0 && profile.hasWriter)
           stamps[suId].disagree.push_back(arrayId);
       }
     }

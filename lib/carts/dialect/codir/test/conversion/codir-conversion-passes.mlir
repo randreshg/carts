@@ -17,10 +17,10 @@ module {
     %c4 = arith.constant 4 : index
     %c8 = arith.constant 8 : index
     %root = sde.mu_alloc : memref<16xi32>
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %root[%c4] size[%c8]
       : memref<16xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %c0 = arith.constant 0 : index
       %view = memref.subview %root[%i] [1] [1]
         : memref<16xi32> to memref<1xi32, strided<[1], offset: ?>>
@@ -37,10 +37,10 @@ module {
     %c8 = arith.constant 8 : index
     %c16 = arith.constant 16 : index
     %root = sde.mu_alloc : memref<16x16xi32>
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %root[%c4, %c0] size[%c8, %c16]
       : memref<16x16xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %row = polygeist.subindex %root[%i] () : memref<16x16xi32> -> memref<16xi32>
       %v = memref.load %row[%j] : memref<16xi32>
       memref.store %v, %row[%j] : memref<16xi32>
@@ -54,12 +54,12 @@ module {
     %c1 = arith.constant 1 : index
     %c16 = arith.constant 16 : index
     %root = sde.mu_alloc : memref<16x16xi32>
+    sde.cu_task {
     %read = sde.mu_dep <read> %root[%c0, %c0] size[%c1, %c16]
       : memref<16x16xi32> -> !sde.dep
     %write = sde.mu_dep <write> %root[%c1, %c0] size[%c1, %c16]
       : memref<16x16xi32> -> !sde.dep
 
-    sde.cu_task deps(%read, %write : !sde.dep, !sde.dep) {
       %in = polygeist.subindex %root[%c0] () : memref<16x16xi32> -> memref<16xi32>
       %out = polygeist.subindex %root[%c1] () : memref<16x16xi32> -> memref<16xi32>
       %v = memref.load %in[%j] : memref<16xi32>

@@ -26,7 +26,7 @@ Common workflows:
   `ARTS_GASNET_PREFIX` instead of downloading GASNet
 - `dekk carts build --arts --no-rdma` — rebuild ARTS runtime for TCP fallback (debug)
 - `dekk carts build --arts --legacy-rsocket` — rebuild ARTS on the legacy rsocket
-  RDMA data plane (not the v4 default)
+  RDMA data plane
 - `dekk carts build --arts --debug 3` — rebuild ARTS runtime with full debug logging
 - `dekk carts build --arts --counters 2` — rebuild ARTS with workload counters
 

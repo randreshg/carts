@@ -1,10 +1,7 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
 // Broad mismatch evidence without a committed writer is not a materializable
-// sde.redist edge.
-
-// CHECK-LABEL: func.func @no_writer
-// CHECK-NOT: sde.redist
+// CHECK: error: {{.*}}redistribution edge
 
 func.func @no_writer(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
                      %G: memref<256x256xf32>) {

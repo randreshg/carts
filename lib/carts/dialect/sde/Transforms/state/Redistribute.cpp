@@ -4,13 +4,9 @@
 /// SDE redistribution realization.
 ///
 /// `sde-layout-assignment` records, on each accessing `sde.su_iterate`, the
-/// committed per-array home BLOCK layout (`arrayLayout`) plus a metadata-only
-/// `layoutsDisagree` marker naming the array roots whose consumer access does
-/// not align with that home. This pass emits `sde.redist` only for committed
-/// disagreements that can be grounded as cross-owner reductions. Other
-/// disagreements remain broad layout evidence until SDE can materialize them
-/// directly. It introduces no `sde.mu_token`, slice, `sde.mu_dep`, owner map,
-/// DB, route, collective, or CODIR isolation concept.
+/// committed per-array home BLOCK layout (`arrayLayout`) plus a
+/// `layoutsDisagree` marker. This pass realizes each materializable
+/// disagreement as `sde.redist` and rejects the rest in SDE.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/RedistributionEdges.h"
@@ -52,6 +48,16 @@ struct SdeRedistributePass
     carts::sde::RedistributionEdges committed =
         carts::sde::collectRedistributionEdges(module);
 
+    bool failed = false;
+    for (const carts::sde::RedistributionEdgeFailure &failure :
+         committed.failures) {
+      carts::sde::SdeSuIterateOp consumer = failure.consumer;
+      consumer.emitOpError()
+          << "sde.redist: " << failure.reason << " (array " << failure.arrayId
+          << "); refusing to invent redistribution";
+      failed = true;
+    }
+
     for (const carts::sde::RedistributionEdge &edge : committed.edges) {
       if (alreadyRepresented(edge))
         continue;
@@ -68,8 +74,13 @@ struct SdeRedistributePass
           buildI64ArrayAttr(ctx, edge.sourceBlockShape),
           buildI64ArrayAttr(ctx, edge.targetOwnerDims),
           buildI64ArrayAttr(ctx, edge.targetBlockShape),
-          /*haloShape=*/ArrayAttr(), /*commVolumeBytes=*/costAttr);
+          edge.haloShape.empty() ? ArrayAttr()
+                                 : buildI64ArrayAttr(ctx, edge.haloShape),
+          /*commVolumeBytes=*/costAttr);
     }
+
+    if (failed)
+      signalPassFailure();
   }
 };
 

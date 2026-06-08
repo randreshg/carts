@@ -4,10 +4,10 @@ module {
   func.func @task_sliced_mu_dep_rewrites_direct_source_access(%arg0: memref<16xi32>, %i: index) {
     %c4 = arith.constant 4 : index
     %c8 = arith.constant 8 : index
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %arg0[%c4] size[%c8]
       : memref<16xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %v = memref.load %arg0[%i] : memref<16xi32>
       memref.store %v, %arg0[%i] : memref<16xi32>
       sde.yield
@@ -18,10 +18,10 @@ module {
   func.func @task_sliced_mu_dep_rewrites_body_subview(%arg0: memref<16xi32>, %i: index) {
     %c4 = arith.constant 4 : index
     %c8 = arith.constant 8 : index
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %arg0[%c4] size[%c8]
       : memref<16xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %c0 = arith.constant 0 : index
       %view = memref.subview %arg0[%i] [1] [1]
         : memref<16xi32> to memref<1xi32, strided<[1], offset: ?>>
@@ -35,10 +35,10 @@ module {
   func.func @task_sliced_mu_dep_rewrites_static_body_subview(%arg0: memref<16xi32>) {
     %c4 = arith.constant 4 : index
     %c8 = arith.constant 8 : index
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %arg0[%c4] size[%c8]
       : memref<16xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %c0 = arith.constant 0 : index
       %view = memref.subview %arg0[5] [1] [1]
         : memref<16xi32> to memref<1xi32, strided<[1], offset: 5>>
@@ -54,10 +54,10 @@ module {
     %c8 = arith.constant 8 : index
     %c0 = arith.constant 0 : index
     %c16 = arith.constant 16 : index
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %arg0[%c4, %c0] size[%c8, %c16]
       : memref<16x16xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %row = polygeist.subindex %arg0[%i] () : memref<16x16xi32> -> memref<16xi32>
       %v = memref.load %row[%j] : memref<16xi32>
       memref.store %v, %row[%j] : memref<16xi32>
@@ -69,12 +69,12 @@ module {
   func.func @task_duplicate_same_source_mu_deps_reuses_sliced_view(%arg0: memref<16xi32>, %i: index) {
     %c4 = arith.constant 4 : index
     %c8 = arith.constant 8 : index
+    sde.cu_task {
     %read = sde.mu_dep <read> %arg0[%c4] size[%c8]
       : memref<16xi32> -> !sde.dep
     %write = sde.mu_dep <write> %arg0[%c4] size[%c8]
       : memref<16xi32> -> !sde.dep
 
-    sde.cu_task deps(%read, %write : !sde.dep, !sde.dep) {
       %v = memref.load %arg0[%i] : memref<16xi32>
       memref.store %v, %arg0[%i] : memref<16xi32>
       sde.yield
@@ -85,12 +85,12 @@ module {
   func.func @task_duplicate_same_source_mixed_mu_dep_slices_use_positional_views(%arg0: memref<16xi32>, %i: index) {
     %c0 = arith.constant 0 : index
     %c8 = arith.constant 8 : index
+    sde.cu_task {
     %read = sde.mu_dep <read> %arg0[%c0] size[%c8]
       : memref<16xi32> -> !sde.dep
     %write = sde.mu_dep <write> %arg0[%c8] size[%c8]
       : memref<16xi32> -> !sde.dep
 
-    sde.cu_task deps(%read, %write : !sde.dep, !sde.dep) {
       %in = memref.subview %arg0[0] [8] [1]
         : memref<16xi32> to memref<8xi32, strided<[1]>>
       %out = memref.subview %arg0[8] [8] [1]
@@ -106,12 +106,12 @@ module {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c16 = arith.constant 16 : index
+    sde.cu_task {
     %read = sde.mu_dep <read> %arg0[%c0, %c0] size[%c1, %c16]
       : memref<16x16xi32> -> !sde.dep
     %write = sde.mu_dep <write> %arg0[%c1, %c0] size[%c1, %c16]
       : memref<16x16xi32> -> !sde.dep
 
-    sde.cu_task deps(%read, %write : !sde.dep, !sde.dep) {
       %in = polygeist.subindex %arg0[%c0] () : memref<16x16xi32> -> memref<16xi32>
       %out = polygeist.subindex %arg0[%c1] () : memref<16x16xi32> -> memref<16xi32>
       %v = memref.load %in[%j] : memref<16xi32>
@@ -124,12 +124,12 @@ module {
   func.func @task_duplicate_same_source_mixed_mu_dep_direct_root_access_not_sliced(%arg0: memref<16xi32>, %i: index) {
     %c0 = arith.constant 0 : index
     %c8 = arith.constant 8 : index
+    sde.cu_task {
     %read = sde.mu_dep <read> %arg0[%c0] size[%c8]
       : memref<16xi32> -> !sde.dep
     %write = sde.mu_dep <write> %arg0[%c8] size[%c8]
       : memref<16xi32> -> !sde.dep
 
-    sde.cu_task deps(%read, %write : !sde.dep, !sde.dep) {
       %v = memref.load %arg0[%i] : memref<16xi32>
       memref.store %v, %arg0[%i] : memref<16xi32>
       sde.yield
@@ -141,12 +141,12 @@ module {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c16 = arith.constant 16 : index
+    sde.cu_task {
     %read = sde.mu_dep <read> %arg0[%c0, %c0] size[%c1, %c16]
       : memref<16x16xi32> -> !sde.dep
     %write = sde.mu_dep <write> %arg0[%c1, %c0] size[%c1, %c16]
       : memref<16x16xi32> -> !sde.dep
 
-    sde.cu_task deps(%read, %write : !sde.dep, !sde.dep) {
       %row = polygeist.subindex %arg0[%i] () : memref<16x16xi32> -> memref<16xi32>
       %v = memref.load %row[%j] : memref<16xi32>
       memref.store %v, %row[%j] : memref<16xi32>
@@ -158,12 +158,12 @@ module {
   func.func @task_duplicate_same_source_mixed_mu_dep_direct_root_exact_offsets_sliced(%arg0: memref<16xi32>) {
     %c0 = arith.constant 0 : index
     %c8 = arith.constant 8 : index
+    sde.cu_task {
     %read = sde.mu_dep <read> %arg0[%c0] size[%c8]
       : memref<16xi32> -> !sde.dep
     %write = sde.mu_dep <write> %arg0[%c8] size[%c8]
       : memref<16xi32> -> !sde.dep
 
-    sde.cu_task deps(%read, %write : !sde.dep, !sde.dep) {
       %v = memref.load %arg0[%c0] : memref<16xi32>
       memref.store %v, %arg0[%c8] : memref<16xi32>
       sde.yield
@@ -172,10 +172,10 @@ module {
   }
 
   func.func @task_dynamic_mu_dep_exact_body_subview(%arg0: memref<?xi32>, %off: index, %n: index) {
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %arg0[%off] size[%n]
       : memref<?xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %c0 = arith.constant 0 : index
       %view = memref.subview %arg0[%off] [%n] [1]
         : memref<?xi32> to memref<?xi32, strided<[1], offset: ?>>
@@ -187,10 +187,10 @@ module {
   }
 
   func.func @task_dynamic_mu_dep_exact_root_access_sliced(%arg0: memref<?xi32>, %off: index, %n: index) {
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %arg0[%off] size[%n]
       : memref<?xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %v = memref.load %arg0[%off] : memref<?xi32>
       memref.store %v, %arg0[%off] : memref<?xi32>
       sde.yield
@@ -199,10 +199,10 @@ module {
   }
 
   func.func @task_dynamic_mu_dep_direct_root_access_not_sliced(%arg0: memref<?xi32>, %off: index, %i: index, %n: index) {
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %arg0[%off] size[%n]
       : memref<?xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %v = memref.load %arg0[%i] : memref<?xi32>
       memref.store %v, %arg0[%i] : memref<?xi32>
       sde.yield
@@ -211,10 +211,10 @@ module {
   }
 
   func.func @task_dynamic_mu_dep_mismatched_body_subview_not_sliced(%arg0: memref<?xi32>, %off: index, %other: index, %n: index) {
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %arg0[%off] size[%n]
       : memref<?xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %c0 = arith.constant 0 : index
       %view = memref.subview %arg0[%other] [%n] [1]
         : memref<?xi32> to memref<?xi32, strided<[1], offset: ?>>

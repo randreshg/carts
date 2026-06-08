@@ -619,8 +619,7 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
     if (isWavefrontTaskDependPattern(op.getOperation(), dependSpecs))
       pattern = sde::SdePatternAttr::get(ctx, sde::SdePattern::wavefront_2d);
 
-    auto cuTask =
-        sde::SdeCuTaskOp::create(rewriter, loc, ValueRange{}, pattern);
+    auto cuTask = sde::SdeCuTaskOp::create(rewriter, loc, pattern);
     Block &blk = sde::ensureBlock(cuTask.getBody());
     rewriter.setInsertionPointToStart(&blk);
     for (const TaskDependSpec &dep : dependSpecs) {

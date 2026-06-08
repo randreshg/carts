@@ -19,7 +19,7 @@ structural evidence from `carts-vision`, not benchmark-name special cases.
 Run `dekk carts benchmarks --help` for the latest options. Common:
 - `dekk carts benchmarks list` — list all available benchmarks
 - `dekk carts benchmarks run polybench/gemm --size small` — run a specific benchmark; single-node configs use TCP
-- `dekk carts benchmarks run polybench/gemm --size small --nodes 2` — run a multinode benchmark with RDMA/RoCE transport by default
+- `dekk carts benchmarks run polybench/gemm --size small --nodes 2` — run a multinode benchmark with the production GASNet transport by default
 - `dekk carts benchmarks run polybench/gemm --size small --nodes 2 --no-rdma` — run a multinode TCP fallback experiment
 - `dekk carts benchmarks build --suite polybench` — build a suite
 - `dekk carts benchmarks perf-gate RESULTS --policy POLICY` — regression gate check

@@ -41,8 +41,8 @@ spine is:
 
 - SDE commits real source/layout/alignment/tiling facts and performs the
   source/SU/CU/MU transformations that make them true.
-- CODIR commits collective/bridge/contraction/reduction/halo materialization
-  from SDE layout facts plus compute pattern.
+- CODIR commits isolated codelet graph structure and preserves SDE-authored
+  movement facts.
 - ARTS realizes per-block single-writer DBs, EDTs, owner maps, DB modes, and
   grouped compute/bridge/communication CUs.
 - ARTS-RT mechanically lowers chosen ARTS facts.
@@ -73,7 +73,7 @@ When invoked (default action `next`):
 | 2 (#3) | retired diagnostic | The monolithic partitioning heuristic pass is gone. If metadata-copy recursion or DB-mode churn reappears, inspect the live `copyArtsMetadataAttrs` call sites, `DbAnalysis`, and `DbTransformsPass`; do not recreate the retired partitioning layer. |
 | 3 (#4) | targeted-fix | Edit `lib/carts/dialect/sde/Conversion/PolygeistToSde/MemrefNormalization.cpp` first; `CreateDbs.cpp` is only the ARTS coarse raw bridge and boundary guard. The fix is in shape normalization, NOT in DB partitioning. See `references/triage-rubric.md` anti-pattern #1. |
 | 4 (#5) | per-item iteration | One sample at a time. Use the per-item workflow below. |
-| 5 (#6) | targeted-fix | Keep SDE layout facts target-neutral and real. Add or adjust ARTS realization only when SDE/CODIR have already committed valid layout and collective/bridge facts; ARTS consumes those contracts plus abstract-machine topology without redetecting source patterns or pushing owner policy into ARTS-RT. |
+| 5 (#6) | targeted-fix | Keep SDE layout facts target-neutral and real. Add or adjust ARTS realization only when SDE/CODIR have already committed valid layout and movement structure; ARTS consumes that structure plus abstract-machine topology without redetecting source patterns or pushing owner policy into ARTS-RT. |
 | 6 (#7) | per-item iteration | One sample at a time, multinode. See `references/multinode-failures.md` before opening any file. |
 | 7 (#8) | baseline | Re-run benchmark suite single-node. Document each regression vs the 2026-03-11 snapshot. |
 | 8 (#9) | per-item iteration | One benchmark at a time, multinode. Same workflow as Phase 6. |

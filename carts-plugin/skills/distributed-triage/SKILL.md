@@ -36,7 +36,7 @@ Read these before patching anything:
 1. Confirm that single-node still works.
 2. Reproduce with explicit node/thread/config inputs.
 3. Confirm the requested transport. Single-node benchmark configs use TCP;
-   multinode configs default to RDMA/RoCE unless `--no-rdma` is set.
+   multinode configs default to GASNet unless `--no-rdma` is set.
 4. Check whether distribution is actually active in the failing path.
    It is default-on for multinode; `--no-distributed-db` forces the origin-node
    baseline, and distribution is stripped from single-node rows.
@@ -48,10 +48,10 @@ Read these before patching anything:
 6. Check ownership constraints:
    - SDE layout facts are backed by an actual loop/layout transformation, not
      metadata that downstream must reinterpret
-   - CODIR selected explicit collectives/bridges from SDE layout mismatch and
-     compute pattern when a distributed edge requires communication
+   - CODIR represents already-transformed SDE movement structure when a
+     distributed edge requires communication
    - `distributed` marker present on eligible `DbAllocOp`
-   - SDE planning contracts plus CODIR/ARTS materialization contracts are present when required
+   - SDE/CODIR/ARTS materialized structure is present when required
    - DB/MU block grain and grouped CU/bridge grain are both sane; tiny DBs with
      one EDT each and coarse DBs that serialize independent writers are both
      failures to investigate

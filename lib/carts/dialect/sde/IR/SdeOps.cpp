@@ -1167,7 +1167,6 @@ LogicalResult SdeCuWorkOp::verify() {
     }
   }
 
-  // TODO: single-use token enforcement (dedicated pattern, not a verifier).
   return success();
 }
 

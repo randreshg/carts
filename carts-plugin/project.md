@@ -30,7 +30,7 @@ runtime.
   `ARTS_GASNET_VERSION`, or set `ARTS_GASNET_PREFIX` to use a prebuilt GASNet).
 - `dekk carts build --arts --no-rdma` - rebuild ARTS runtime for TCP fallback.
 - `dekk carts build --arts --legacy-rsocket` - rebuild ARTS on the legacy rsocket
-  RDMA data plane (not the v4 default).
+  RDMA data plane.
 - `dekk carts compile <file> -O3` - compile C/C++ to an ARTS executable.
 - `dekk carts pipeline --json` - inspect pipeline stage tokens.
 - `dekk carts test` - run default pass tests.
@@ -51,12 +51,11 @@ CARTS is migrating toward four project dialect layers:
   It names no collectives, DBs, EDTs, owner maps, routes, GUIDs, or runtime
   policy.
 - CODIR (`codir`) - isolated codelets, explicit deps/params, token-local
-  memref views, first-class MPI distribution patterns, collective/bridge
-  selection from SDE layout mismatch plus compute pattern, and materialized
-  contraction/redistribution/halo structure.
+  memref views, graph optimizations, and mechanical representation of
+  SDE-authored movement structure at the first isolation boundary.
 - ARTS (`arts`) - abstract DB, EDT, epoch, dependency-slot, placement,
-  distributed ownership, per-block single-writer DB realization, owner maps,
-  and grouped compute/bridge/communication CUs.
+  per-block single-writer DB realization, owner maps, DB modes, and grouped
+  compute/bridge/communication CUs.
 - ARTS-RT (`arts_rt`) - runtime ABI, packing, pointer lowering, and
   LLVM-facing cleanup. It mechanically lowers ARTS facts and does not infer
   scheduling, ownership, partition, or collective policy.
@@ -70,7 +69,8 @@ skills disagree with the compiler, the live compiler manifest wins.
   owning dialect, and the runtime/compiler contract before patching symptoms.
 - Before changing compiler IR, state the function and limits of the affected
   dialect layer. SDE owns data layout and the real loop/source transformations
-  that make it true; CODIR owns collective/bridge materialization; ARTS owns
+  that make it true; CODIR owns isolated codelet graph structure and mechanical
+  movement representation; ARTS owns
   DB/EDT/owner-map realization and grouped execution; ARTS-RT owns
   lowering-ready runtime shape.
 - Do not hide correctness behind later cleanup passes, metadata-only promises,

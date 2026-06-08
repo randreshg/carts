@@ -19,7 +19,7 @@ Goal: find the first stage where CARTS stops being semantically equivalent to th
 
 The first bad stage is not automatically the fix stage. Use [[carts-vision]]
 to attribute the wrong committed fact: SDE fixes source/layout/tiling facts,
-CODIR fixes collective/bridge/contraction materialization, ARTS fixes
+CODIR fixes graph/contraction materialization, ARTS fixes
 DB/EDT/owner-map realization and grouped execution, and ARTS-RT fixes only
 mechanical lowering.
 
@@ -53,7 +53,7 @@ Read these before guessing:
    - `dekk carts compile <file> --diagnose --diagnose-output diag.json -O3`
    - Check `LoweringContractInfo`, `distribution_*`, partition modes, full-range vs coarse, and `preserve_access_mode`.
    - Check whether downstream layers are consuming committed facts or
-     recomputing source semantics, owner dims, collective family, storage
+     recomputing source semantics, owner dims, movement family, storage
      grain, or runtime policy.
 6. Reduce the failure once the first bad stage is known.
    - Preserve the exact failing pattern and expected output.

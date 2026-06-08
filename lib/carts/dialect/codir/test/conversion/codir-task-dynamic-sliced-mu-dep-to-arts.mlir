@@ -5,10 +5,10 @@ module {
                                                            %off: index,
                                                            %n: index) {
     %root = sde.mu_alloc(%arg0) : memref<?xi32>
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %root[%off] size[%n]
       : memref<?xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %c0 = arith.constant 0 : index
       %view = memref.subview %root[%off] [%n] [1]
         : memref<?xi32> to memref<?xi32, strided<[1], offset: ?>>
@@ -23,10 +23,10 @@ module {
                                                           %off: index,
                                                           %n: index) {
     %root = sde.mu_alloc(%arg0) : memref<?xi32>
+    sde.cu_task {
     %dep = sde.mu_dep <readwrite> %root[%off] size[%n]
       : memref<?xi32> -> !sde.dep
 
-    sde.cu_task deps(%dep : !sde.dep) {
       %v = memref.load %root[%off] : memref<?xi32>
       memref.store %v, %root[%off] : memref<?xi32>
       sde.yield

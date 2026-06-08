@@ -49,11 +49,11 @@ rg -n '^static .*\\(' lib/carts include/carts --glob '*.cpp' --glob '*.h'
 - SDE semantics, HPF-style data layout, affine access relations, abstract
   communication-volume cost, and real source/SU/CU/MU loop/layout transforms:
   `lib/carts/dialect/sde`.
-- CODIR codelet isolation, first-class collectives/bridges, and
-  contraction/redistribution/halo materialization:
+- CODIR codelet isolation, dependency/parameter graph structure, and mechanical
+  representation of SDE-authored movement:
   `lib/carts/dialect/codir`.
 - ARTS DB/EDT/epoch/analysis, per-block single-writer DB realization, owner
-  maps, distributed ownership, and grouped compute/bridge/communication CUs:
+  maps, DB modes, and grouped compute/bridge/communication CUs:
   `lib/carts/dialect/arts`.
 - ARTS-RT runtime-shaped mechanical lowering:
   `lib/carts/dialect/arts-rt`.
@@ -66,7 +66,7 @@ rg -n '^static .*\\(' lib/carts include/carts --glob '*.cpp' --glob '*.h'
   closed with evidence. Metadata-only contracts that rely on a later layer to
   repair semantics are review findings.
 - Downstream passes consume committed facts. Recomputing owner dims, block
-  shape, collective family, owner maps, DB grain, or runtime mode in a later
+  shape, movement family, owner maps, DB grain, or runtime mode in a later
   layer is a review finding unless the pass explicitly verifies and rejects an
   invalid upstream plan.
 - DB/MU grain and CU/bridge grain are separate. Review distributed changes for
@@ -81,7 +81,7 @@ rg -n '^static .*\\(' lib/carts include/carts --glob '*.cpp' --glob '*.h'
 - Stale docs naming non-live stages or passes.
 - Fixture refresh hiding a real verifier failure.
 - CODIR or ARTS compensating for a bad SDE layout instead of rejecting it.
-- ARTS-RT inferring scheduling, ownership, partition, or collective policy.
+- ARTS-RT inferring scheduling, ownership, partition, or movement policy.
 - New static helpers duplicating existing utilities.
 - Runtime debug build left as final verification.
 - Examples runner mutating sample artifacts during a supposedly read-only task.

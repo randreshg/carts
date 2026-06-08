@@ -26,8 +26,7 @@ def CompletionType : CartsSde_Type<"Completion", "completion"> {
 def DepType : CartsSde_Type<"Dep", "dep"> {
   let summary = "typed SDE dependency token";
   let description = [{
-    `!sde.dep` models an explicit SDE dependency handle produced by
-    `sde.mu_dep` and consumed by SDE task-dependence surfaces.
+    `!sde.dep` is the internal result type for `sde.mu_dep` declarations.
   }];
 }
 

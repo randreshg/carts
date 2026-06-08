@@ -15,8 +15,8 @@
 /// This is a STRUCTURAL transformation only. It:
 ///   * reads current IR and moves existing ops into a CU container — it stamps
 ///     no metadata and branches on no downstream contract;
-///   * requires no CU isolation, no MU token,
-///     no slice, and no SDE mu_dep graph, and it introduces none;
+///   * requires no CU isolation, no MU token, and no slice, and it introduces
+///     none;
 ///   * introduces no CODIR concept and no codelet isolation (`cu_region` is not
 ///     `IsolatedFromAbove`; the wrapped body keeps referencing enclosing SSA
 ///     values directly);

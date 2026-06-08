@@ -34,8 +34,7 @@ inline bool isSdeDialectOp(Operation *op) {
 }
 
 /// CU containers. A CU is the only legal home for source executable work.
-/// `sde.cu_task` is a CU container; carrying a dependency graph on it is a
-/// separate SDE boundary violation, not a reason to treat it as a non-CU.
+/// `sde.cu_task` is a CU container.
 inline bool isCuOp(Operation *op) {
   return isa<SdeCuWorkOp, SdeCuRegionOp, SdeCuTaskOp, SdeCuReduceOp,
              SdeCuAtomicOp>(op);

@@ -67,11 +67,11 @@ tools/compile/Compile.cpp
   declared in TableGen. C++ implements behavior behind generated surfaces.
 - Do not hardcode project attribute names. Use generated ODS accessors such as
   `op.getStencilMinOffsetsAttrName()` or the owning dialect utility API.
-- Do real transformations in the owning layer. SDE commits layout/source facts,
-  CODIR commits collective/bridge facts, ARTS realizes DB/EDT owner maps and
-  grouped execution, and ARTS-RT lowers mechanically. Downstream consumes,
-  verifies, realizes, or rejects committed facts; it does not silently
-  recompute them.
+- Do real transformations in the owning layer. SDE commits layout/source and
+  movement facts, CODIR represents them as graph structure, ARTS realizes
+  DB/EDT owner maps and grouped execution, and ARTS-RT lowers mechanically.
+  Downstream consumes, verifies, realizes, or rejects committed facts; it does
+  not silently recompute them.
 - Keep DB/MU grain separate from CU/bridge grain. Use the hypergraph only as
   grouping and partition-quality evidence over committed MU facts, not as an
   owner-dim shortcut.
@@ -159,7 +159,7 @@ Before editing CARTS sources, scan the Skills inventory below and read the SKILL
 
 | Skill | Description | Path |
 | --- | --- | --- |
-| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, RDMA scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
+| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, GASNet/distributed scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
 | `carts-worktrees` | Use when working on multiple CARTS/ARTS changes in parallel, isolating a risky compiler/runtime change, or running concurrent builds/benchmarks without clobbering the main checkout. Covers the carts-wt tool and the shared-LLVM/Polygeist worktree model. | `carts-plugin/skills/carts-worktrees/SKILL.md` |
 
 <!-- END SKILLS INVENTORY -->

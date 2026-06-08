@@ -143,9 +143,10 @@ private:
                           SmallVector<Type> &packTypes, size_t numUserParams,
                           SmallVectorImpl<unsigned> &livePackIndices);
 
-  void transformDepUses(ArrayRef<Value> originalDeps, Value depv,
-                        ArrayRef<Value> allParams, EdtEnvManager &envManager,
-                        ArrayRef<Value> depIdentifiers);
+  LogicalResult transformDepUses(ArrayRef<Value> originalDeps, Value depv,
+                                 ArrayRef<Value> allParams,
+                                 EdtEnvManager &envManager,
+                                 ArrayRef<Value> depIdentifiers);
 
   void cloneAndRemapEdtBody(Block &sourceBlock, OpBuilder &builder,
                             const DenseMap<Value, Value> &moveValueMapping);
@@ -746,7 +747,9 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
   }
 
   /// Transform dependency uses inside outlined region.
-  transformDepUses(originalDeps, depv, allParams, envManager, depPlaceholders);
+  if (failed(transformDepUses(originalDeps, depv, allParams, envManager,
+                              depPlaceholders)))
+    return failure();
 
   livePackIndices.clear();
   if (paramUnpackOp) {
@@ -1101,10 +1104,9 @@ void EdtLoweringPass::cloneAndRemapEdtBody(
 /// strides for each dependency, adjusting indices to account for datablock
 /// offsets.
 ///===----------------------------------------------------------------------===///
-void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
-                                       ArrayRef<Value> allParams,
-                                       EdtEnvManager &envManager,
-                                       ArrayRef<Value> depIdentifiers) {
+LogicalResult EdtLoweringPass::transformDepUses(
+    ArrayRef<Value> originalDeps, Value depv, ArrayRef<Value> allParams,
+    EdtEnvManager &envManager, ArrayRef<Value> depIdentifiers) {
   /// Get the parameter map
   const auto &paramMap = envManager.getValueToPackIndex();
 
@@ -1201,36 +1203,15 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     /// Needed for DynLoadOp/DynStoreOp when DbRefOp produces multi-dynamic-dim
     /// memrefs.
     SmallVector<Value> allocElementSizes;
-    if (auto *rawAlloc =
-            RtDbUtils::getUnderlyingDbAlloc(originalDeps[depIndex])) {
-      if (auto alloc = dyn_cast<DbAllocOp>(rawAlloc))
-        allocElementSizes.assign(alloc.getElementSizes().begin(),
-                                 alloc.getElementSizes().end());
+    auto *rawAlloc = RtDbUtils::getUnderlyingDbAlloc(originalDeps[depIndex]);
+    auto alloc = rawAlloc ? dyn_cast<DbAllocOp>(rawAlloc) : DbAllocOp();
+    if (!alloc) {
+      placeholder.getDefiningOp()->emitError()
+          << "missing underlying arts.db_alloc for EDT dependency " << depIndex;
+      return failure();
     }
-    /// Fallback for broken DB traces: scan the module for a DbAllocOp with
-    /// matching inner memref element type.
-    if (allocElementSizes.empty()) {
-      auto depType = dyn_cast<MemRefType>(placeholder.getType());
-      if (depType) {
-        Type innerElemType;
-        if (auto innerMrt = dyn_cast<MemRefType>(depType.getElementType()))
-          innerElemType = innerMrt.getElementType();
-        if (innerElemType) {
-          if (auto moduleOp =
-                  placeholder.getDefiningOp()->getParentOfType<ModuleOp>()) {
-            moduleOp.walk([&](DbAllocOp alloc) {
-              if (!allocElementSizes.empty())
-                return WalkResult::interrupt();
-              if (alloc.getElementType() == innerElemType &&
-                  !alloc.getElementSizes().empty())
-                allocElementSizes.assign(alloc.getElementSizes().begin(),
-                                         alloc.getElementSizes().end());
-              return WalkResult::advance();
-            });
-          }
-        }
-      }
-    }
+    allocElementSizes.assign(alloc.getElementSizes().begin(),
+                             alloc.getElementSizes().end());
     ARTS_DEBUG(" - allocElementSizes.size() = " << allocElementSizes.size()
                                                 << " for dep " << depIndex);
 
@@ -1829,6 +1810,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     }
     op->erase();
   }
+  return success();
 }
 
 ///===----------------------------------------------------------------------===///

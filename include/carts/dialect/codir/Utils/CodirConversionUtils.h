@@ -13,6 +13,7 @@
 #include "carts/dialect/codir/Utils/CodirAttrNames.h"
 #include "carts/dialect/codir/Utils/SdeToCodirMetadataUtils.h"
 #include "carts/dialect/codir/Utils/TaskDepSliceUtils.h"
+#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/utils/ArrayAttrUtils.h"
@@ -77,12 +78,10 @@ buildCodirStorageViewAttrs(MLIRContext *ctx,
   return attrs;
 }
 
-/// Mechanical map of a committed SDE geometric movement family to the CODIR
-/// collective family that represents it on a codelet graph edge. CODIR does not
-/// classify movement; it reads the family SDE already committed. `phase_redist`
-/// has no CODIR collective form (its movement would be a phase-redistributed
-/// storage view, which CODIR does not yet realize), so it maps to no collective
-/// and the consumer fails closed rather than dropping the movement.
+/// Edge marker for a committed SDE geometric movement family. CODIR does not
+/// classify movement; it records the family SDE already committed.
+/// `phase_redist` has no CODIR edge form yet, so it maps to no marker and the
+/// consumer fails closed rather than dropping the movement.
 static inline std::optional<codir::CodirCollectiveKind>
 sdeMovementFamilyToCollective(sde::SdeMovementFamily family) {
   switch (family) {
@@ -199,12 +198,45 @@ rejectUncommittedMovement(codir::CodeletOp codelet,
   return success();
 }
 
+static inline void clearConsumedMovementMarkers(codir::CodeletOp codelet) {
+  ArrayAttr disagree = codelet.getLayoutsDisagreeAttr();
+  ArrayAttr arrayIds = codelet.getDepArrayIdsAttr();
+  ArrayAttr collectives = codelet.getDepCollectivesAttr();
+  if (!disagree || !arrayIds || !collectives)
+    return;
+
+  llvm::DenseSet<int64_t> covered;
+  for (auto [index, idAttr] : llvm::enumerate(arrayIds)) {
+    if (index >= collectives.size())
+      break;
+    auto id = dyn_cast<IntegerAttr>(idAttr);
+    auto movement =
+        dyn_cast<codir::CodirCollectiveKindAttr>(collectives[index]);
+    if (!id || !movement ||
+        movement.getValue() == codir::CodirCollectiveKind::none)
+      continue;
+    covered.insert(id.getInt());
+  }
+
+  SmallVector<Attribute> remaining;
+  for (Attribute idAttr : disagree) {
+    auto id = dyn_cast<IntegerAttr>(idAttr);
+    if (!id || !covered.contains(id.getInt()))
+      remaining.push_back(idAttr);
+  }
+  if (remaining.empty())
+    codelet->removeAttr(codelet.getLayoutsDisagreeAttrName());
+  else
+    codelet.setLayoutsDisagreeAttr(
+        ArrayAttr::get(codelet.getContext(), remaining));
+}
+
 /// Consume the committed SDE structural carriers (`sde.mu_access_window` and
 /// `sde.redist`) into the codelet graph: owner-local compute blocks from access
 /// windows, and movement families on the consumer edges from redistributions.
 /// The carriers are read here and erased; they do not survive into CODIR. When
 /// no carrier is present the IR is conservative SDE structure and this is a
-/// no-op, so the legacy body-derived path downstream is unchanged.
+/// no-op.
 static inline LogicalResult consumeCommittedSdeStructure(Operation *root) {
   SmallVector<sde::SdeMuAccessWindowOp> windows;
   SmallVector<sde::SdeRedistOp> redists;
@@ -259,6 +291,8 @@ static inline LogicalResult consumeCommittedSdeStructure(Operation *root) {
   for (codir::CodeletOp codelet : graph.nodes())
     if (failed(rejectUncommittedMovement(codelet, redists)))
       return failure();
+  for (codir::CodeletOp codelet : graph.nodes())
+    clearConsumedMovementMarkers(codelet);
 
   for (sde::SdeMuAccessWindowOp window : windows)
     window.erase();
@@ -593,8 +627,8 @@ selectMuAllocWritePlan(sde::SdeMuAllocOp op) {
     if (!source)
       return WalkResult::advance();
 
-    // Cross-phase intermediates need an explicit M3 token-local phase plan
-    // before they can be block-backed safely. For now, keep row-strip DB
+    // Cross-phase intermediates need an explicit token-local phase plan before
+    // they can be block-backed safely. Keep row-strip DB
     // layout only when every access stays inside the selected scheduling unit.
     if (source != selected || !canAccessRootWithPlan(source, root, selected)) {
       selected = {};
@@ -1279,6 +1313,8 @@ static inline bool hasOnlyLocalizableMemrefUsesInTask(Value memref,
   for (Operation *user : memref.getUsers()) {
     if (!taskRegion.isAncestor(user->getParentRegion()))
       continue;
+    if (isa<sde::SdeMuDepOp>(user))
+      continue;
 
     if (auto load = dyn_cast<memref::LoadOp>(user)) {
       if (load.getMemref() != memref)
@@ -1381,12 +1417,6 @@ collectTaskCaptureClone(Value value, Region &taskRegion,
 static inline LogicalResult buildCodirTaskPlan(sde::SdeCuTaskOp task,
                                                OpBuilder &builder,
                                                CodirTaskPlan &plan) {
-  if (!task.getDeps().empty())
-    return task.emitOpError()
-           << "carries a target SDE dependency graph; convert OpenMP task "
-              "depend clauses to local sde.mu_dep declarations before "
-              "CODIR isolation";
-
   SmallVector<sde::SdeMuDepOp, 4> taskDepDecls;
   for (sde::SdeMuDepOp muDep : task.getBody().front().getOps<sde::SdeMuDepOp>())
     taskDepDecls.push_back(muDep);
@@ -1975,6 +2005,39 @@ struct SuDepArrayIdPlan {
   }
 };
 
+static inline bool isSuExternalRankedRoot(sde::SdeSuIterateOp source,
+                                          Value root) {
+  root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
+  if (!root || sde::isDefinedInside(source.getOperation(), root))
+    return false;
+  auto type = dyn_cast<MemRefType>(root.getType());
+  return type && type.getRank() != 0;
+}
+
+static inline void collectSuDirectAccessRoots(sde::SdeSuIterateOp source,
+                                              llvm::SetVector<Value> &writes,
+                                              llvm::SetVector<Value> &reads) {
+  source.getBody().walk([&](Operation *nested) {
+    if (auto store = dyn_cast<memref::StoreOp>(nested)) {
+      if (!isa<MemRefType>(store.getValueToStore().getType())) {
+        Value root =
+            ::mlir::carts::ValueAnalysis::stripMemrefViewOps(store.getMemref());
+        if (isSuExternalRankedRoot(source, root))
+          writes.insert(root);
+      }
+      return;
+    }
+    if (auto load = dyn_cast<memref::LoadOp>(nested)) {
+      if (!isa<MemRefType>(load.getResult().getType())) {
+        Value root =
+            ::mlir::carts::ValueAnalysis::stripMemrefViewOps(load.getMemref());
+        if (isSuExternalRankedRoot(source, root))
+          reads.insert(root);
+      }
+    }
+  });
+}
+
 static inline bool
 profileAccessesSchedulingUnit(const sde::ArrayAccessProfile &profile,
                               unsigned suId) {
@@ -1996,89 +2059,95 @@ static inline std::optional<int64_t> readLayoutEntryArrayId(Attribute attr) {
   return arrayId.getInt();
 }
 
-static inline void
-collectAccessRootsByCommittedLayoutOrder(sde::SdeSuIterateOp source,
-                                         SmallVectorImpl<Value> &roots) {
-  llvm::SetVector<Value> writeRoots;
-  llvm::SetVector<Value> readRoots;
-
-  auto collectRoot = [&](Value memref, bool isWrite) {
-    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(memref);
-    if (!root || sde::isDefinedInside(source.getOperation(), root))
-      return;
-    auto type = dyn_cast<MemRefType>(root.getType());
-    if (!type || type.getRank() == 0)
-      return;
-    (isWrite ? writeRoots : readRoots).insert(root);
-  };
-
-  source.getBody().walk([&](Operation *nested) {
-    if (auto store = dyn_cast<memref::StoreOp>(nested)) {
-      if (!isa<MemRefType>(store.getValueToStore().getType()))
-        collectRoot(store.getMemref(), /*isWrite=*/true);
-      return;
-    }
-    if (auto load = dyn_cast<memref::LoadOp>(nested)) {
-      if (!isa<MemRefType>(load.getResult().getType()))
-        collectRoot(load.getMemref(), /*isWrite=*/false);
-    }
-  });
-
-  llvm::SetVector<Value> ordered;
-  for (Value root : writeRoots)
-    ordered.insert(root);
-  for (Value root : readRoots)
-    ordered.insert(root);
-  roots.append(ordered.begin(), ordered.end());
-}
-
 static inline LogicalResult buildSuDepArrayIdPlan(Operation *moduleOp,
                                                   SuDepArrayIdPlan &plan) {
+  SmallVector<sde::SdeSuIterateOp> sources;
+  moduleOp->walk(
+      [&](sde::SdeSuIterateOp source) { sources.push_back(source); });
+
   sde::ModuleAccessRelations relations =
       sde::buildModuleAccessRelations(moduleOp);
+  llvm::MapVector<Value, int64_t> stableArrayIds =
+      sde::assignStableArrayIds(relations);
+
+  DenseMap<Value, int64_t> globalArrayIdByRoot;
+  for (const auto &kv : stableArrayIds)
+    globalArrayIdByRoot.try_emplace(kv.first, kv.second);
+
+  for (sde::SdeSuIterateOp source : sources) {
+    ArrayAttr layout = source.getArrayLayoutAttr();
+    if (!layout)
+      continue;
+
+    llvm::SetVector<Value> writeRoots;
+    llvm::SetVector<Value> readRoots;
+    collectSuDirectAccessRoots(source, writeRoots, readRoots);
+
+    SmallVector<int64_t, 2> writeIds;
+    for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout))
+      if (fact.role == sde::LayoutGraphRole::write)
+        writeIds.push_back(fact.id);
+
+    if (writeIds.size() == writeRoots.size())
+      for (auto [root, id] : llvm::zip_equal(writeRoots, writeIds))
+        globalArrayIdByRoot.try_emplace(root, id);
+  }
 
   for (auto [suId, source] : llvm::enumerate(relations.schedulingUnits)) {
     ArrayAttr layout = source.getArrayLayoutAttr();
     if (!layout)
       continue;
 
-    DenseMap<Value, int64_t> arrayIdByRoot;
-    unsigned layoutIndex = 0;
-    for (auto &kv : relations.profiles) {
-      const sde::ArrayAccessProfile &profile = kv.second;
-      if (!profileAccessesSchedulingUnit(profile, static_cast<unsigned>(suId)))
-        continue;
-      if (layoutIndex >= layout.size())
-        return source.emitOpError()
-               << "arrayLayout has fewer entries than analyzed "
-                  "scheduling-unit roots";
-      std::optional<int64_t> arrayId =
-          readLayoutEntryArrayId(layout[layoutIndex]);
+    llvm::DenseSet<int64_t> layoutIds;
+    for (auto [index, entry] : llvm::enumerate(layout)) {
+      std::optional<int64_t> arrayId = readLayoutEntryArrayId(entry);
       if (!arrayId)
-        return source.emitOpError() << "arrayLayout entry #" << layoutIndex
+        return source.emitOpError() << "arrayLayout entry #" << index
                                     << " must carry a non-negative arrayId";
-      arrayIdByRoot.try_emplace(profile.root, *arrayId);
-      ++layoutIndex;
+      layoutIds.insert(*arrayId);
     }
-    if (layoutIndex != layout.size()) {
-      SmallVector<Value, 4> accessRoots;
-      collectAccessRootsByCommittedLayoutOrder(source, accessRoots);
-      if (accessRoots.size() != layout.size())
-        return source.emitOpError()
-               << "arrayLayout entry count (" << layout.size()
-               << ") does not match analyzed scheduling-unit root count ("
-               << layoutIndex << ") or direct access-root count ("
-               << accessRoots.size() << ")";
 
-      arrayIdByRoot.clear();
-      for (auto [index, root] : llvm::enumerate(accessRoots)) {
-        std::optional<int64_t> arrayId = readLayoutEntryArrayId(layout[index]);
-        if (!arrayId)
-          return source.emitOpError() << "arrayLayout entry #" << index
-                                      << " must carry a non-negative arrayId";
-        arrayIdByRoot.try_emplace(root, *arrayId);
-      }
+    DenseMap<Value, int64_t> arrayIdByRoot;
+    for (const auto &kv : relations.profiles) {
+      const sde::ArrayAccessProfile &profile = kv.second;
+      if (!profileAccessesSchedulingUnit(profile, suId))
+        continue;
+      auto idIt = stableArrayIds.find(profile.root);
+      if (idIt == stableArrayIds.end() || !layoutIds.contains(idIt->second))
+        continue;
+      arrayIdByRoot.try_emplace(profile.root, idIt->second);
     }
+
+    llvm::SetVector<Value> writeRoots;
+    llvm::SetVector<Value> readRoots;
+    collectSuDirectAccessRoots(source, writeRoots, readRoots);
+    for (Value root : writeRoots)
+      if (auto idIt = globalArrayIdByRoot.find(root);
+          idIt != globalArrayIdByRoot.end() && layoutIds.contains(idIt->second))
+        arrayIdByRoot.try_emplace(root, idIt->second);
+    for (Value root : readRoots)
+      if (auto idIt = globalArrayIdByRoot.find(root);
+          idIt != globalArrayIdByRoot.end() && layoutIds.contains(idIt->second))
+        arrayIdByRoot.try_emplace(root, idIt->second);
+
+    SmallVector<const sde::LayoutGraphFact *, 4> unmatchedReadFacts;
+    for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout))
+      if (fact.role == sde::LayoutGraphRole::read) {
+        bool alreadyMapped = false;
+        for (auto &mapped : arrayIdByRoot)
+          alreadyMapped |= mapped.second == fact.id;
+        if (!alreadyMapped)
+          unmatchedReadFacts.push_back(&fact);
+      }
+    SmallVector<Value, 4> unmatchedReadRoots;
+    for (Value root : readRoots)
+      if (!arrayIdByRoot.contains(root))
+        unmatchedReadRoots.push_back(root);
+    if (unmatchedReadFacts.size() == unmatchedReadRoots.size())
+      for (auto [root, fact] :
+           llvm::zip_equal(unmatchedReadRoots, unmatchedReadFacts))
+        arrayIdByRoot.try_emplace(root, fact->id);
+
     if (!arrayIdByRoot.empty())
       plan.arrayIdByRootBySu.try_emplace(source.getOperation(),
                                          std::move(arrayIdByRoot));

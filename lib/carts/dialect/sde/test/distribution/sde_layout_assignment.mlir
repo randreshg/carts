@@ -34,12 +34,10 @@
 // CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}], commVolumeBytes = 2097152 : i64
 // CHECK-SAME: layoutsDisagree = [3]
 
-// Boundary proof: CODIR receives the same neutral layout graph facts under CODIR
-// attr names. The per-array layout graph (block kinds, owner dims, per-edge
-// commVolumeBytes) crosses the boundary verbatim as `array_layout`; CODIR does
-// not carry a duplicate aggregate comm-volume attr. The dependency-to-array join
-// crosses as `dep_array_ids`, and the disagreeing edge as `layouts_disagree`.
-// Concrete collective selection remains a CODIR storage-planning decision.
+// Boundary proof: CODIR receives the neutral layout facts as `array_layout` and
+// joins dependency operands to those facts with `dep_array_ids`. Committed SDE
+// movement is consumed as dependency movement, so the disagreement marker is not
+// retained after the boundary.
 // CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir
 // CHECK: func.func @three_mm
 // CHECK: codir.codelet
@@ -48,8 +46,8 @@
 // CHECK: codir.codelet
 // CHECK-SAME: array_layout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}]
 // CHECK-NOT: comm_volume_bytes
-// CHECK-SAME: dep_array_ids = [3, 6, 0]
-// CHECK-SAME: layouts_disagree = [3]
+// CHECK-SAME: dep_array_ids = [0, 3, 6]
+// CHECK-SAME: dep_collectives = [#codir.collective<none>, #codir.collective<reduce_scatter>, #codir.collective<none>]
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,

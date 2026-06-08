@@ -65,8 +65,8 @@ Read these before editing invalidation behavior:
 - Never bypass analysis APIs to “fix” a stale-analysis symptom
 - Do not widen invalidation without checking downstream compile-time cost
 - If a pass mutates DB/EDT structure, assume cached facts may be stale until proven otherwise
-- Invalidation fixes must preserve committed-fact flow: SDE layout facts,
-  CODIR collective/bridge facts, ARTS owner maps/DB/EDT facts, and ARTS-RT
+- Invalidation fixes must preserve committed-fact flow: SDE layout and movement
+  facts, CODIR graph facts, ARTS owner maps/DB/EDT facts, and ARTS-RT
   mechanical lowering facts stay in their owning layers.
 
 ## Hand-off

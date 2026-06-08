@@ -154,8 +154,8 @@ def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
       cu_task / cu_reduce / cu_atomic), and raw scf / source compute never sits
       directly inside an SU body (sde.su_iterate / su_distribute) — scf is legal
       under SDE only inside a CU;
-    - SDE carries no target dependency graph: no mu_dep dependency graph
-      (sde.cu_task deps / consumed sde.mu_dep) and no generic token/dataflow
+    - SDE carries no target dependency graph: no consumed sde.mu_dep dependency
+      graph and no generic token/dataflow
       dependency graph (token-carrying sde.su_barrier / consumed
       sde.control_token);
     - CUs are async/schedulable by default — sibling CUs with a provable MU

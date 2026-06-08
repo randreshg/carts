@@ -210,6 +210,8 @@ bool hasExactSubviewAccessProofInTask(sde::SdeMuDepOp muDep,
   for (Operation *user : muDep.getSource().getUsers()) {
     if (!taskRegion.isAncestor(user->getParentRegion()))
       continue;
+    if (isa<sde::SdeMuDepOp>(user))
+      continue;
 
     auto subview = dyn_cast<memref::SubViewOp>(user);
     if (!subview || !subviewMatchesMuDepSlice(subview, muDep) ||
@@ -226,6 +228,8 @@ bool hasExactRootAccessProofInTask(sde::SdeMuDepOp muDep, Region &taskRegion) {
   bool sawMatchingAccess = false;
   for (Operation *user : muDep.getSource().getUsers()) {
     if (!taskRegion.isAncestor(user->getParentRegion()))
+      continue;
+    if (isa<sde::SdeMuDepOp>(user))
       continue;
 
     if (rootAccessMatchesMuDepOffsets(user, muDep)) {
@@ -245,6 +249,8 @@ bool hasPartitionedExactAccessProofInTask(Value source,
   bool sawMatchingAccess = false;
   for (Operation *user : source.getUsers()) {
     if (!taskRegion.isAncestor(user->getParentRegion()))
+      continue;
+    if (isa<sde::SdeMuDepOp>(user))
       continue;
 
     bool matchesSourceDep = false;

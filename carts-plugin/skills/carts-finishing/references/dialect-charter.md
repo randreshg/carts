@@ -67,7 +67,7 @@ materialization between SDE planning and ARTS object creation.
 
 ### ARTS (`arts.*`) — Abstract runtime object realization
 
-**Owns:** structural realization of SDE/CODIR contracts as abstract ARTS
+**Owns:** structural realization of SDE/CODIR facts as abstract ARTS
 objects.
 
 - DBs: per-block single-writer allocation, partition, owner maps,
@@ -125,9 +125,10 @@ These are placement rules. If you are tempted to break one, update the charter f
 4. **SDE does not include any header from retired ARTS-era path aliases.** Mechanical check; grep for old path aliases.
 
 5. **Cost-model-driven decisions belong in the *decision-owner*, not the
-   realizer.** SDE stamps layout and tile geometry; CODIR stamps collective
-   family and bridges; ARTS realizes DB/EDT owner maps and grouped CUs. If two
-   layers compute the same owner dims, block shape, collective family, or
+   realizer.** SDE stamps layout, tile geometry, and movement family; CODIR
+   represents those facts on isolated graph edges; ARTS realizes DB/EDT owner
+   maps and grouped CUs. If two layers compute the same owner dims, block shape,
+   movement family, or
    storage grain, one is wrong.
 
 6. **DB/MU grain and CU/bridge grain are separate.** Hypergraph analysis may
@@ -141,7 +142,7 @@ These do not block correctness but should be cleaned up in Phase 9. Cite when de
 | # | Violation | Files | Fix |
 |---|---|---|---|
 | 1 | Wavefront family detection in ARTS, should be SDE (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp`, `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` | Move family + tile geometry into `PatternAnalysis` or a later SDE wavefront-planning pass; refactor ARTS realizers to consume the contract. |
-| 2 | ARTS re-detects elementwise/stencil/matmul facts that SDE already proved (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp`, `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` | Refactor ARTS refinement to consume SDE/CODIR contracts instead of reclassifying source semantics. |
+| 2 | ARTS re-detects elementwise/stencil/matmul facts that SDE already proved (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp`, `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` | Refactor ARTS refinement to consume SDE/CODIR facts instead of reclassifying source semantics. |
 | 3 | ARTS creates epoch/EDT structure from re-detected wavefront/Jacobi patterns (Invariants 1 & 5) | `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp`, `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` | Enhance `PatternAnalysis` and SDE dependency planning; refactor ARTS materialization/refinement to consume lowered SDE contracts. |
 | 4 | Historical docs disagreed about `arts.lowering_contract` ownership. | Archived planning notes under `.carts/sessions/...` | The live contract is in `docs/compiler/dialect-layering.md`: ARTS may carry abstract lowering contracts, but SDE/CODIR must materialize source facts before ARTS. |
 

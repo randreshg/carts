@@ -119,7 +119,7 @@ If a sample passes single-node but fails multinode:
 
 - `docs/compiler/dialects/arts-rt/README.md` — ARTS-RT lowering contract
 - `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` — DB/window refinement
-- `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp` and `lib/carts/dialect/arts/Analysis/db/DbDistributedEligibility.cpp` — distributed ownership gates
+- `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp` and `lib/carts/dialect/arts/Analysis/db/DbDistributedEligibility.cpp` — owner-map realization gates
 - `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp` — DB/acquire facts
 - `tools/compile/Compile.cpp` — canonical pipeline tokens and stage ordering
 - `carts-plugin/skills/distributed-triage/SKILL.md` — sister triage skill

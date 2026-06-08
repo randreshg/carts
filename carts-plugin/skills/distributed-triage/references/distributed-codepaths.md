@@ -1,6 +1,6 @@
 # Distributed Codepaths
 
-Primary files for distributed ownership and multi-node routing:
+Primary files for owner-map realization and multi-node routing:
 
 - `docs/heuristics/distribution.md`
 - `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp`

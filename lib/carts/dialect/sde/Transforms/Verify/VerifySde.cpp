@@ -7,9 +7,9 @@
 /// reading only current IR and local op structure (no metadata, no downstream
 /// contract):
 ///
-///   No target SDE dependency graph. SDE carries no mu_dep dependency
-///     graph and no generic token/dataflow dependency graph; ordering edges are
-///     derived in CODIR after codelet isolation.
+///   No consumed dependency graph. SDE carries no generic token/dataflow
+///     dependency graph; ordering edges are derived in CODIR after codelet
+///     isolation.
 ///   All source executable work lives in a CU. Raw scf / source
 ///     compute may not sit directly inside an SU body, and (within SDE-bearing
 ///     functions) source work may not sit outside every CU. scf is legal under
@@ -136,27 +136,13 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
 
     // Dependency graph rejection plus CU containment.
     module.walk([&](Operation *op) {
-      // Reject persistent mu_dep dependency graphs.
-      if (auto task = dyn_cast<sde::SdeCuTaskOp>(op)) {
-        if (!task.getDeps().empty()) {
-          task.emitOpError()
-              << "carries a target SDE dependency graph: sde.cu_task deps "
-                 "express an mu_dep dependency graph, which SDE does not "
-                 "have. Order CUs via SU sequence/parallel-wave structure, "
-                 "source effect/control ordering, or sde.su_barrier";
-          failed = true;
-        }
-      }
-      // Reject mu_dep when consumed as a generic edge instead of a cu_task dep.
+      // Reject mu_dep when consumed as a generic edge.
       if (auto dep = dyn_cast<sde::SdeMuDepOp>(op)) {
-        for (Operation *user : dep.getDep().getUsers()) {
-          if (!isa<sde::SdeCuTaskOp>(user)) {
-            dep.emitOpError()
-                << "result feeds a target SDE dependency graph; SDE has no "
-                   "target mu_dep dependency graph";
-            failed = true;
-            break;
-          }
+        if (!dep.getDep().use_empty()) {
+          dep.emitOpError()
+              << "result is consumed; sde.mu_dep must remain a local "
+                 "declaration";
+          failed = true;
         }
       }
       // Reject generic token/dataflow dependency graphs.

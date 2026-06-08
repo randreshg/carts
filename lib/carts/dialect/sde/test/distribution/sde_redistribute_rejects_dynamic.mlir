@@ -1,9 +1,6 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
-// Dynamic roots do not have a static sde.redist layout.
-
-// CHECK-LABEL: func.func @dynamic
-// CHECK-NOT: sde.redist
+// CHECK: error: {{.*}}redistribution edge
 
 func.func @dynamic(%T: memref<?x256xf32>, %E: memref<?x256xf32>,
                    %G: memref<?x256xf32>) {

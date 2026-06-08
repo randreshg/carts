@@ -36,14 +36,13 @@ Paths:
 - tests: `lib/carts/dialect/codir/test/`
 
 Purpose: isolated codelet bodies with explicit dependencies, params,
-codelet-local verification, and first-class distribution patterns. CODIR
-consumes committed SDE layout facts, selects collectives/bridges from compute
-pattern plus layout mismatch, and materializes contraction, redistribution, and
-halo structure before ARTS realization.
+codelet-local verification, and graph structure. CODIR consumes committed SDE
+layout, access-window, and movement facts, representing them mechanically before
+ARTS realization.
 
 Limits: CODIR should not encode runtime ABI or redo SDE data-layout analysis.
-SDE hands codelets and layout facts here; ARTS picks up explicit distribution
-intent for orchestration.
+SDE hands codelets, layout facts, and movement structure here; ARTS picks up
+that structure for orchestration.
 
 Important areas:
 
@@ -63,14 +62,14 @@ Paths:
 Purpose: high-level ARTS orchestration IR: EDTs, DBs, epochs, implementation
 `scf.for` loops inside tasks/dispatch, barriers, atomics, runtime queries,
 lowering contracts, per-block single-writer DB realization, owner maps,
-distributed ownership, DB/EDT graph analysis, and grouped
-compute/bridge/communication CU realization.
+DB modes, DB/EDT graph analysis, and grouped compute/bridge/communication CU
+realization.
 
 Limits: ARTS should not become a runtime ABI shim or a place to patch
 frontend semantic loss. It should own orchestration invariants and
 analysis-backed decisions over committed SDE/CODIR facts. It may verify,
 consume, realize, or reject upstream plans; it must not silently recompute
-owner dims, block shape, collective family, storage grain, or runtime mode.
+owner dims, block shape, movement family, storage grain, or runtime mode.
 
 Important areas:
 
