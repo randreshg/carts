@@ -629,12 +629,12 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
     canonical access window in the SAME block-grid coordinate system that
     `sde-rank-expand-mu` established on the `sde.mu_alloc` result type.
 
-    Placed at the top of the enclosing `sde.cu_region` body, one per
-    (MU root, access mode). The `mu` operand is the rank-expanded `sde.mu_alloc`
-    result (visible because `sde.cu_region` is NOT `IsolatedFromAbove`). It names
-    no collective, DB, EDT, owner map, route, GUID, or runtime policy — it is a
-    pure SDE structural fact, consumed (not reinterpreted) by mechanical
-    SDE-to-CODIR lowering.
+    Placed near the top of the enclosing `sde.cu_region` body after any
+    same-block `sde.mu_alloc` it names, one per (MU root, access mode). The `mu`
+    operand is the rank-expanded `sde.mu_alloc` result (visible because
+    `sde.cu_region` is NOT `IsolatedFromAbove`). It names no collective, DB,
+    EDT, owner map, route, GUID, or runtime policy — it is a pure SDE structural
+    fact, consumed (not reinterpreted) by mechanical SDE-to-CODIR lowering.
 
     Attributes (block-grid coordinates, all static `I64 ArrayAttr`):
       - `mode`          : SdeAccessMode, `read` or `write`. A CU that both reads

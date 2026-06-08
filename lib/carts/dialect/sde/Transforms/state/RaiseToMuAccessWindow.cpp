@@ -5,9 +5,10 @@
 ///
 /// For every `sde.mu_alloc` that rank expansion converted into a
 /// single-contiguous-owner block-grid MU (elementwise/stencil, fully static),
-/// this pass raises one `sde.mu_access_window` fact at the top of each
-/// enclosing `sde.cu_region`, per (MU root, read/write mode), in the SAME
-/// block-grid coordinate system the carrier type already encodes.
+/// this pass raises one `sde.mu_access_window` fact near the top of each
+/// enclosing `sde.cu_region`, after any same-block `sde.mu_alloc` it names, per
+/// (MU root, read/write mode), in the SAME block-grid coordinate system the
+/// carrier type already encodes.
 ///
 /// It is a pure ADDITIVE raiser: it reads the committed plan + expanded type
 /// VERBATIM (via the shared `planAccessWindows` query — it never recomputes
@@ -38,6 +39,19 @@ using namespace mlir;
 
 namespace {
 
+static Operation *findWindowInsertionPoint(carts::sde::SdeCuRegionOp cu,
+                                           Value mu) {
+  Block &body = cu.getBody().front();
+  if (Operation *def = mu.getDefiningOp())
+    if (def->getBlock() == &body)
+      return def->getNextNode();
+
+  for (Operation &op : body)
+    if (!isa<carts::sde::SdeMuAccessWindowOp>(op))
+      return &op;
+  return nullptr;
+}
+
 struct RaiseToMuAccessWindowPass
     : public carts::sde::impl::SdeRaiseToMuAccessWindowBase<
           RaiseToMuAccessWindowPass> {
@@ -55,22 +69,18 @@ struct RaiseToMuAccessWindowPass
         continue; // out of scope -> conservative, no window
 
       for (const carts::sde::RaisedWindowPlan &plan : plans) {
-        // Find the insertion point (first non-window op in the CU body) and
-        // detect an already-raised window for this (MU, mode) so the pass is
-        // idempotent.
+        // Find the earliest dominance-safe insertion point and detect an
+        // already-raised window for this (MU, mode) so the pass is idempotent.
         carts::sde::SdeCuRegionOp cu = plan.cu;
         Block &body = cu.getBody().front();
         bool exists = false;
-        Operation *insertBefore = nullptr;
         for (Operation &op : body) {
           if (auto win = dyn_cast<carts::sde::SdeMuAccessWindowOp>(op)) {
             if (win.getMu() == plan.mu && win.getMode() == plan.mode)
               exists = true;
-            continue;
           }
-          if (!insertBefore)
-            insertBefore = &op;
         }
+        Operation *insertBefore = findWindowInsertionPoint(cu, plan.mu);
         if (exists || !insertBefore)
           continue;
 

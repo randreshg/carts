@@ -144,9 +144,10 @@ def SdeRaiseToMuAccessWindow
     Structural access-window carrier. After the final SDE shape rewrites, for
     every `sde.mu_alloc` rank-expanded into a single-contiguous-owner block-grid
     MU (elementwise/stencil, fully static), this pass raises one
-    `sde.mu_access_window` fact at the top of the enclosing `sde.cu_region`, per
-    (MU root, read/write mode), in the SAME block-grid coordinate system the
-    carrier type already encodes.
+    `sde.mu_access_window` fact near the top of the enclosing `sde.cu_region`,
+    after any same-block `sde.mu_alloc` it names, per (MU root, read/write
+    mode), in the SAME block-grid coordinate system the carrier type already
+    encodes.
 
     It is a pure ADDITIVE raiser: it reads the committed plan and the expanded
     type VERBATIM (never recomputing owner dims or block shape), proves the
