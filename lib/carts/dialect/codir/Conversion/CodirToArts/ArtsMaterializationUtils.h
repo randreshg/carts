@@ -800,6 +800,7 @@ struct PlannedBlockLocalAccessRewrite {
   unsigned ownerSlot = 0;
   int64_t blockSize = 1;
   int64_t groupBlockCount = 1;
+  int64_t sourceDimExtent = ShapedType::kDynamic;
   bool grouped = false;
   bool allowFullWindowAccess = false;
 };
@@ -856,7 +857,9 @@ materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
 static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
     OpBuilder &builder, Location loc, Value index, Value ownerBase,
     int64_t lowerHalo, int64_t blockSize, int64_t groupBlockCount,
-    Value &relativeBlock, bool allowFullWindowAccess = false) {
+    int64_t sourceDimExtent, Value &relativeBlock,
+    bool allowFullWindowAccess = false,
+    const DenseMap<Value, Value> *sourceByBlockArgument = nullptr) {
   if (!index || !ownerBase || blockSize <= 0 || groupBlockCount <= 0)
     return failure();
   if (groupBlockCount > std::numeric_limits<int64_t>::max() / blockSize)
@@ -868,6 +871,194 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
   struct WindowProof {
     Value ownerBase;
     int64_t windowExtent = 0;
+    const DenseMap<Value, Value> *sourceByBlockArgument = nullptr;
+
+    struct ConstantRange {
+      int64_t lower = 0;
+      int64_t upper = 0;
+    };
+
+    Value getSourceValue(Value candidate) const {
+      if (!sourceByBlockArgument || !candidate)
+        return {};
+      auto it = sourceByBlockArgument->find(candidate);
+      if (it == sourceByBlockArgument->end() || it->second == candidate)
+        return {};
+      return it->second;
+    }
+
+    static std::optional<int64_t> checkedAdd(int64_t lhs, int64_t rhs) {
+      if (lhs < 0 || rhs < 0 || lhs > std::numeric_limits<int64_t>::max() - rhs)
+        return std::nullopt;
+      return lhs + rhs;
+    }
+
+    static std::optional<int64_t> checkedMul(int64_t lhs, int64_t rhs) {
+      if (lhs < 0 || rhs < 0)
+        return std::nullopt;
+      if (lhs != 0 && rhs > std::numeric_limits<int64_t>::max() / lhs)
+        return std::nullopt;
+      return lhs * rhs;
+    }
+
+    static std::optional<int64_t> ceilDivNonNegative(int64_t lhs, int64_t rhs) {
+      if (lhs < 0 || rhs <= 0)
+        return std::nullopt;
+      return llvm::divideCeil(lhs, rhs);
+    }
+
+    bool hasZeroOwnerBase() const {
+      return ::mlir::carts::ValueAnalysis::isZeroConstant(ownerBase);
+    }
+
+    bool absoluteRangeStaysInWindow(Value candidate,
+                                    bool allowEnd = false) const {
+      if (!hasZeroOwnerBase())
+        return false;
+      std::optional<ConstantRange> range = getUnsignedRange(candidate);
+      if (!range || range->lower < 0)
+        return false;
+      return allowEnd ? range->upper <= windowExtent
+                      : range->upper < windowExtent;
+    }
+
+    std::optional<ConstantRange> getUnsignedRange(Value candidate,
+                                                  unsigned depth = 0) const {
+      if (!candidate || depth > 12)
+        return std::nullopt;
+      candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+      if (std::optional<int64_t> constant =
+              ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(candidate)) {
+        if (*constant < 0)
+          return std::nullopt;
+        return ConstantRange{*constant, *constant};
+      }
+      if (Value source = getSourceValue(candidate))
+        if (std::optional<ConstantRange> range =
+                getUnsignedRange(source, depth + 1))
+          return range;
+
+      if (auto blockArg = dyn_cast<BlockArgument>(candidate)) {
+        auto loop =
+            dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+        if (!loop || loop.getInductionVar() != candidate)
+          return std::nullopt;
+        if (!::mlir::carts::ValueAnalysis::isConstantAtLeastOne(loop.getStep()))
+          return std::nullopt;
+        std::optional<ConstantRange> lower =
+            getUnsignedRange(loop.getLowerBound(), depth + 1);
+        std::optional<ConstantRange> upper =
+            getUnsignedRange(loop.getUpperBound(), depth + 1);
+        if (!lower || !upper || upper->upper == 0)
+          return std::nullopt;
+        return ConstantRange{lower->lower, upper->upper - 1};
+      }
+
+      Operation *def = candidate.getDefiningOp();
+      if (!def)
+        return std::nullopt;
+      auto rangeOfOperand = [&](Value operand) -> std::optional<ConstantRange> {
+        return getUnsignedRange(operand, depth + 1);
+      };
+
+      if (auto add = dyn_cast<arith::AddIOp>(def)) {
+        auto lhs = rangeOfOperand(add.getLhs());
+        auto rhs = rangeOfOperand(add.getRhs());
+        if (!lhs || !rhs)
+          return std::nullopt;
+        auto lower = checkedAdd(lhs->lower, rhs->lower);
+        auto upper = checkedAdd(lhs->upper, rhs->upper);
+        if (!lower || !upper)
+          return std::nullopt;
+        return ConstantRange{*lower, *upper};
+      }
+      if (auto sub = dyn_cast<arith::SubIOp>(def)) {
+        auto lhs = rangeOfOperand(sub.getLhs());
+        auto rhs = rangeOfOperand(sub.getRhs());
+        if (!lhs || !rhs || lhs->lower < rhs->upper || lhs->upper < rhs->lower)
+          return std::nullopt;
+        return ConstantRange{lhs->lower - rhs->upper, lhs->upper - rhs->lower};
+      }
+      if (auto mul = dyn_cast<arith::MulIOp>(def)) {
+        auto lhs = rangeOfOperand(mul.getLhs());
+        auto rhs = rangeOfOperand(mul.getRhs());
+        if (!lhs || !rhs)
+          return std::nullopt;
+        auto lower = checkedMul(lhs->lower, rhs->lower);
+        auto upper = checkedMul(lhs->upper, rhs->upper);
+        if (!lower || !upper)
+          return std::nullopt;
+        return ConstantRange{*lower, *upper};
+      }
+      if (auto div = dyn_cast<arith::DivUIOp>(def)) {
+        auto lhs = rangeOfOperand(div.getLhs());
+        auto rhs = rangeOfOperand(div.getRhs());
+        if (!lhs || !rhs || rhs->lower <= 0)
+          return std::nullopt;
+        return ConstantRange{lhs->lower / rhs->upper, lhs->upper / rhs->lower};
+      }
+      if (auto div = dyn_cast<arith::DivSIOp>(def)) {
+        auto lhs = rangeOfOperand(div.getLhs());
+        auto rhs = rangeOfOperand(div.getRhs());
+        if (!lhs || !rhs || rhs->lower <= 0)
+          return std::nullopt;
+        return ConstantRange{lhs->lower / rhs->upper, lhs->upper / rhs->lower};
+      }
+      if (auto div = dyn_cast<arith::CeilDivUIOp>(def)) {
+        auto lhs = rangeOfOperand(div.getLhs());
+        auto rhs = rangeOfOperand(div.getRhs());
+        if (!lhs || !rhs || rhs->lower <= 0)
+          return std::nullopt;
+        auto lower = ceilDivNonNegative(lhs->lower, rhs->upper);
+        auto upper = ceilDivNonNegative(lhs->upper, rhs->lower);
+        if (!lower || !upper)
+          return std::nullopt;
+        return ConstantRange{*lower, *upper};
+      }
+      if (auto div = dyn_cast<arith::CeilDivSIOp>(def)) {
+        auto lhs = rangeOfOperand(div.getLhs());
+        auto rhs = rangeOfOperand(div.getRhs());
+        if (!lhs || !rhs || rhs->lower <= 0)
+          return std::nullopt;
+        auto lower = ceilDivNonNegative(lhs->lower, rhs->upper);
+        auto upper = ceilDivNonNegative(lhs->upper, rhs->lower);
+        if (!lower || !upper)
+          return std::nullopt;
+        return ConstantRange{*lower, *upper};
+      }
+      if (auto rem = dyn_cast<arith::RemUIOp>(def)) {
+        auto lhs = rangeOfOperand(rem.getLhs());
+        auto rhs = rangeOfOperand(rem.getRhs());
+        if (!lhs || !rhs || rhs->lower <= 0)
+          return std::nullopt;
+        return ConstantRange{0, std::min(lhs->upper, rhs->upper - 1)};
+      }
+      if (auto min = dyn_cast<arith::MinUIOp>(def)) {
+        auto lhs = rangeOfOperand(min.getLhs());
+        auto rhs = rangeOfOperand(min.getRhs());
+        if (!lhs || !rhs)
+          return std::nullopt;
+        return ConstantRange{std::min(lhs->lower, rhs->lower),
+                             std::min(lhs->upper, rhs->upper)};
+      }
+      if (auto max = dyn_cast<arith::MaxUIOp>(def)) {
+        auto lhs = rangeOfOperand(max.getLhs());
+        auto rhs = rangeOfOperand(max.getRhs());
+        if (!lhs || !rhs)
+          return std::nullopt;
+        return ConstantRange{std::max(lhs->lower, rhs->lower),
+                             std::max(lhs->upper, rhs->upper)};
+      }
+      if (auto select = dyn_cast<arith::SelectOp>(def)) {
+        auto trueRange = rangeOfOperand(select.getTrueValue());
+        auto falseRange = rangeOfOperand(select.getFalseValue());
+        if (!trueRange || !falseRange)
+          return std::nullopt;
+        return ConstantRange{std::min(trueRange->lower, falseRange->lower),
+                             std::max(trueRange->upper, falseRange->upper)};
+      }
+      return std::nullopt;
+    }
 
     std::optional<int64_t> getOwnerRelativeConstant(Value candidate) const {
       std::optional<int64_t> candidateConst =
@@ -904,6 +1095,8 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
     bool pointStaysInWindow(Value candidate, unsigned depth = 0) const {
       if (!candidate || depth > 8)
         return false;
+      if (absoluteRangeStaysInWindow(candidate))
+        return true;
       std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
       if (offset)
         return *offset >= 0 && *offset < windowExtent;
@@ -923,6 +1116,8 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
     }
 
     bool upperOffsetStaysInWindow(Value candidate) const {
+      if (absoluteRangeStaysInWindow(candidate, /*allowEnd=*/true))
+        return true;
       std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
       return offset && *offset >= 0 && *offset <= windowExtent;
     }
@@ -931,6 +1126,11 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
                                       unsigned depth) const {
       if (!base || offset < 0 || depth > 8)
         return false;
+      if (hasZeroOwnerBase()) {
+        std::optional<ConstantRange> range = getUnsignedRange(base);
+        if (range && range->lower >= 0 && range->upper <= windowExtent - offset)
+          return true;
+      }
       if (std::optional<int64_t> baseOffset = getOwnerRelativeConstant(base))
         return *baseOffset >= 0 && *baseOffset + offset <= windowExtent;
 
@@ -966,7 +1166,7 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
       return false;
     }
   };
-  WindowProof proof{ownerBase, windowExtent};
+  WindowProof proof{ownerBase, windowExtent, sourceByBlockArgument};
   auto pointStaysInWindow = [&](Value candidate) {
     return proof.pointStaysInWindow(candidate);
   };
@@ -986,6 +1186,12 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
       }
     }
   }
+  // Full-window read acquires every backing block. A static source extent that
+  // fits in that window proves every in-bounds source index selects one of
+  // them.
+  if (!provenInWindow && allowFullWindowAccess && sourceDimExtent >= 0 &&
+      sourceDimExtent <= windowExtent)
+    provenInWindow = true;
   if (!provenInWindow)
     return failure();
 
@@ -1011,7 +1217,8 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
 }
 
 static inline LogicalResult rewritePlannedBlockLocalAccesses(
-    arts::EdtOp task, ArrayRef<PlannedBlockLocalAccessRewrite> rewrites) {
+    arts::EdtOp task, ArrayRef<PlannedBlockLocalAccessRewrite> rewrites,
+    const DenseMap<Value, Value> *sourceByBlockArgument = nullptr) {
   if (rewrites.empty())
     return success();
 
@@ -1067,8 +1274,8 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
         FailureOr<Value> localIndex = materializeGroupedBlockLocalIndex(
             builder, op->getLoc(), indices[rewrite->ownerDim].get(),
             rewrite->ownerBase, rewrite->lowerHalo, rewrite->blockSize,
-            rewrite->groupBlockCount, relativeBlock,
-            rewrite->allowFullWindowAccess);
+            rewrite->groupBlockCount, rewrite->sourceDimExtent, relativeBlock,
+            rewrite->allowFullWindowAccess, sourceByBlockArgument);
         if (failed(localIndex)) {
           op->emitError("grouped planned block-local access does not stay "
                         "within the block window");

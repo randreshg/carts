@@ -245,6 +245,214 @@ planReplicatedReadFullBlockAccess(codir::CodeletOp codelet, unsigned depIndex,
   return true;
 }
 
+static std::optional<SmallVector<int64_t, 4>>
+getBackingAllocOwnerBlockSizes(codir::CodeletOp codelet, unsigned depIndex,
+                               arts::DbAllocOp alloc) {
+  if (!alloc)
+    return std::nullopt;
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->empty())
+    return std::nullopt;
+
+  std::optional<SmallVector<int64_t, 4>> allocBlockShape = readI64ArrayAttr(
+      arts::getPlanPhysicalBlockShapeAttr(alloc.getOperation()));
+  if (!allocBlockShape || allocBlockShape->empty())
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> blockSizes;
+  blockSizes.reserve(ownerDims->size());
+  unsigned memrefRank = static_cast<unsigned>(alloc.getElementSizes().size());
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    std::optional<int64_t> blockSize;
+    if (allocBlockShape->size() == ownerDims->size()) {
+      blockSize = (*allocBlockShape)[slot];
+    } else if (allocBlockShape->size() == memrefRank) {
+      if (ownerDim >= allocBlockShape->size())
+        return std::nullopt;
+      blockSize = (*allocBlockShape)[ownerDim];
+    } else if (allocBlockShape->size() == 1 && ownerDims->size() == 1) {
+      blockSize = allocBlockShape->front();
+    }
+    if (!blockSize || *blockSize <= 0)
+      return std::nullopt;
+    blockSizes.push_back(*blockSize);
+  }
+  return blockSizes;
+}
+
+static MemRefType getCodeletDepSourceType(codir::CodeletOp codelet,
+                                          unsigned depIndex) {
+  if (!codelet.getBody().empty() &&
+      depIndex < codelet.getBody().front().getNumArguments())
+    if (auto depType = dyn_cast<MemRefType>(
+            codelet.getBody().front().getArgument(depIndex).getType()))
+      return depType;
+  if (depIndex < codelet.getDeps().size())
+    return dyn_cast<MemRefType>(codelet.getDeps()[depIndex].getType());
+  return {};
+}
+
+static bool
+planReadOnlyHostWholeBlockAccess(codir::CodeletOp codelet, unsigned depIndex,
+                                 arts::DbAllocOp alloc, OpBuilder &builder,
+                                 Location loc,
+                                 PlannedBlockDepAccessPlan &plannedAccess) {
+  std::optional<codir::CodirAccessMode> mode =
+      getCodirDepAccessMode(codelet, depIndex);
+  if (!mode || *mode != codir::CodirAccessMode::read)
+    return false;
+  std::optional<codir::CodirStorageViewKind> view =
+      getCodirDepStorageViewKind(codelet, depIndex);
+  if (!view || *view != codir::CodirStorageViewKind::host_whole)
+    return false;
+  if (!hasCodirTileOwnerSlicePlan(codelet) || !alloc)
+    return false;
+  std::optional<arts::PartitionMode> partitionMode =
+      arts::getPartitionMode(alloc.getOperation());
+  if (!partitionMode || (*partitionMode != arts::PartitionMode::block &&
+                         *partitionMode != arts::PartitionMode::stencil))
+    return false;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->empty() ||
+      alloc.getSizes().size() != ownerDims->size())
+    return false;
+  ArrayAttr depOwnerDims = getCodirDepOwnerDimsAttr(codelet, depIndex);
+  if (!depOwnerDims ||
+      arts::getPlanOwnerDimsAttr(alloc.getOperation()) != depOwnerDims)
+    return false;
+  std::optional<SmallVector<int64_t, 4>> blockSizes =
+      getBackingAllocOwnerBlockSizes(codelet, depIndex, alloc);
+  if (!blockSizes)
+    return false;
+
+  SmallVector<int64_t, 4> blockCounts;
+  blockCounts.reserve(alloc.getSizes().size());
+  MemRefType depType = getCodeletDepSourceType(codelet, depIndex);
+  for (auto [slot, blockCountValue] : llvm::enumerate(alloc.getSizes())) {
+    std::optional<int64_t> blockCount =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(blockCountValue);
+    if (!blockCount && depType &&
+        (*ownerDims)[slot] < static_cast<unsigned>(depType.getRank())) {
+      int64_t extent = depType.getDimSize((*ownerDims)[slot]);
+      if (extent >= 0)
+        blockCount = llvm::divideCeil(extent, (*blockSizes)[slot]);
+    }
+    if (!blockCount || *blockCount <= 0)
+      return false;
+    blockCounts.push_back(*blockCount);
+  }
+
+  plannedAccess.ownerDims.assign(ownerDims->begin(), ownerDims->end());
+  plannedAccess.blockSizes.assign(blockSizes->begin(), blockSizes->end());
+  plannedAccess.ownerParams.assign(ownerDims->size(), Value{});
+  plannedAccess.ownerDomainBases.assign(ownerDims->size(),
+                                        createZeroIndex(builder, loc));
+  plannedAccess.groupBlockCounts.assign(blockCounts.begin(), blockCounts.end());
+  plannedAccess.grouped = true;
+  plannedAccess.allowFullWindowAccess = true;
+  return true;
+}
+
+static bool planReadOnlyBlockStorageAccessFromBackingAlloc(
+    codir::CodeletOp codelet, unsigned depIndex, arts::DbAllocOp alloc,
+    OpBuilder &builder, Location loc, SmallVectorImpl<Value> &dbOffsets,
+    SmallVectorImpl<Value> &dbSizes, PlannedBlockDepAccessPlan &plannedAccess) {
+  std::optional<codir::CodirAccessMode> mode =
+      getCodirDepAccessMode(codelet, depIndex);
+  if (!mode || *mode != codir::CodirAccessMode::read)
+    return false;
+  std::optional<codir::CodirStorageViewKind> view =
+      getCodirDepStorageViewKind(codelet, depIndex);
+  if (!view || !codirStorageViewUsesComputeBlock(*view))
+    return false;
+  if (!hasCodirTileOwnerSlicePlan(codelet) || !alloc)
+    return false;
+  std::optional<arts::PartitionMode> partitionMode =
+      arts::getPartitionMode(alloc.getOperation());
+  if (!partitionMode || (*partitionMode != arts::PartitionMode::block &&
+                         *partitionMode != arts::PartitionMode::stencil))
+    return false;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->empty() ||
+      alloc.getSizes().size() != ownerDims->size())
+    return false;
+  ArrayAttr depOwnerDims = getCodirDepOwnerDimsAttr(codelet, depIndex);
+  if (!depOwnerDims ||
+      arts::getPlanOwnerDimsAttr(alloc.getOperation()) != depOwnerDims)
+    return false;
+
+  std::optional<SmallVector<int64_t, 4>> blockSizes =
+      getBackingAllocOwnerBlockSizes(codelet, depIndex, alloc);
+  if (!blockSizes || blockSizes->size() != ownerDims->size())
+    return false;
+
+  SmallVector<Value, 4> ownerParams =
+      getCodirDepOwnerParamValues(codelet, depIndex);
+  if (ownerParams.size() != ownerDims->size())
+    return false;
+
+  std::optional<SmallVector<int64_t, 4>> groupBlockCounts =
+      getCodirLogicalOwnerBlockCounts(
+          codelet, depIndex,
+          static_cast<unsigned>(alloc.getElementSizes().size()), *blockSizes);
+  if (!groupBlockCounts || groupBlockCounts->size() != ownerDims->size())
+    return false;
+
+  bool hasHaloWindow = false;
+  for (unsigned ownerDim : *ownerDims) {
+    CodirOwnerHaloWindow halo = getCodirBlockStorageHaloWindowForDim(
+        codelet, depIndex, ownerDim,
+        static_cast<unsigned>(alloc.getElementSizes().size()));
+    hasHaloWindow |= !halo.empty();
+  }
+  bool grouped =
+      llvm::any_of(*groupBlockCounts, [](int64_t count) { return count > 1; });
+  if (grouped && hasHaloWindow &&
+      !codirDepAccessesStayWithinSingleOwnerSlice(codelet, depIndex))
+    return false;
+
+  dbOffsets.clear();
+  dbSizes.clear();
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    Value blockSizeValue =
+        createConstantIndex(builder, loc, (*blockSizes)[slot]);
+    Value base = ownerParams[slot];
+    Value domainBase =
+        materializeCodirOwnerDomainBase(builder, loc, codelet, base);
+    Value relativeBase =
+        ::mlir::carts::ValueAnalysis::sameValue(base, domainBase)
+            ? createZeroIndex(builder, loc)
+            : arith::SubIOp::create(builder, loc, base, domainBase).getResult();
+    Value blockIndex =
+        arith::DivUIOp::create(builder, loc, relativeBase, blockSizeValue);
+    dbOffsets.push_back(blockIndex);
+
+    int64_t groupBlockCount = (*groupBlockCounts)[slot];
+    if (groupBlockCount <= 1) {
+      dbSizes.push_back(createOneIndex(builder, loc));
+    } else {
+      Value requestedBlocks =
+          createConstantIndex(builder, loc, groupBlockCount);
+      Value remainingBlocks = arith::SubIOp::create(
+          builder, loc, alloc.getSizes()[slot], blockIndex);
+      dbSizes.push_back(arith::MinUIOp::create(builder, loc, remainingBlocks,
+                                               requestedBlocks));
+    }
+    plannedAccess.ownerDims.push_back(ownerDim);
+    plannedAccess.blockSizes.push_back((*blockSizes)[slot]);
+    plannedAccess.ownerParams.push_back(ownerParams[slot]);
+    plannedAccess.ownerDomainBases.push_back(domainBase);
+    plannedAccess.groupBlockCounts.push_back(groupBlockCount);
+  }
+  plannedAccess.grouped = grouped;
+  return true;
+}
+
 struct ConvertCodirToArtsPass
     : public codir::impl::ConvertCodirToArtsBase<ConvertCodirToArtsPass> {
   llvm::SmallDenseSet<Operation *, 16> loopCompletionBarriers;
@@ -618,7 +826,14 @@ struct ConvertCodirToArtsPass
         dbSizes.push_back(createOneIndex(builder, loc));
       }
       PlannedBlockDepAccessPlan plannedAccess;
-      if (codirDepAllowsComputeBlockStorage(codelet, depIdx) &&
+      planReadOnlyHostWholeBlockAccess(codelet, depIdx, alloc, builder, loc,
+                                       plannedAccess);
+      if (plannedAccess.empty())
+        planReadOnlyBlockStorageAccessFromBackingAlloc(codelet, depIdx, alloc,
+                                                       builder, loc, dbOffsets,
+                                                       dbSizes, plannedAccess);
+      if (plannedAccess.empty() &&
+          codirDepAllowsComputeBlockStorage(codelet, depIdx) &&
           canUseCodirOwnerSliceForAlloc(codelet, depIdx, alloc) &&
           codirDepCanUseBlockStorageAccess(codelet, depIdx) &&
           !codelet.getParams().empty()) {
@@ -866,11 +1081,16 @@ struct ConvertCodirToArtsPass
             if (allocHalo.lower > 0)
               ownerHalo = allocHalo;
           }
+          int64_t sourceDimExtent = ShapedType::kDynamic;
+          if (MemRefType depType = getCodeletDepSourceType(codelet, idx))
+            if (ownerDim < static_cast<unsigned>(depType.getRank()))
+              sourceDimExtent = depType.getDimSize(ownerDim);
           localAccessRewrites.push_back(
               {payload, ownerDim, ownerBase, localOrigin, ownerHalo.lower,
                taskBlock.getArgument(idx), static_cast<unsigned>(slot),
                accessPlan.blockSizes[slot], accessPlan.groupBlockCounts[slot],
-               accessPlan.grouped, accessPlan.allowFullWindowAccess});
+               sourceDimExtent, accessPlan.grouped,
+               accessPlan.allowFullWindowAccess});
         }
       }
       mapper.map(codeletBlock.getArgument(idx), payload);
@@ -885,7 +1105,8 @@ struct ConvertCodirToArtsPass
     if (shouldLowerReductionsToAtomics(codelet))
       lowerIntegerAddReductionsToAtomics(task.getBody(), sourceByBlockArgument);
 
-    if (failed(rewritePlannedBlockLocalAccesses(task, localAccessRewrites)))
+    if (failed(rewritePlannedBlockLocalAccesses(task, localAccessRewrites,
+                                                &sourceByBlockArgument)))
       return codelet.emitOpError()
              << "failed to rewrite planned block dependency accesses to "
                 "block-local indices";
