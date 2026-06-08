@@ -1,18 +1,17 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
-// A redistribution edge on a pure input (read-only, no committed writer home)
-// has no source layout to redistribute from; the pass fails closed.
+// Broad mismatch evidence without a committed writer is not a materializable
+// sde.redist edge.
 
-// CHECK: error: {{.*}}no committed writer layout to redistribute from
+// CHECK-LABEL: func.func @no_writer
+// CHECK-NOT: sde.redist
 
-func.func @diagnose_no_writer(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
-                              %G: memref<256x256xf32>) {
+func.func @no_writer(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
+                     %G: memref<256x256xf32>) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c256 = arith.constant 256 : index
   sde.cu_region <parallel> {
-    // %T is read on its contraction axis but is never written: no home. It is
-    // loaded first so it is arrayId 0 (the disagree edge target).
     sde.su_iterate (%c0, %c0) to (%c256, %c256) step (%c1, %c1) {
     ^bb0(%i: index, %j: index):
       scf.for %k = %c0 to %c256 step %c1 {

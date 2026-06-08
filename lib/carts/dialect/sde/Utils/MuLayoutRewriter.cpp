@@ -166,7 +166,12 @@ std::optional<int64_t> findOwnerIterationExtent(SdeSuIterateOp si,
                                                 int64_t gridExtent) {
   if (!si || blockExtent <= 0)
     return std::nullopt;
-  for (auto [lb, ub] : llvm::zip(si.getLowerBounds(), si.getUpperBounds())) {
+  std::optional<llvm::SmallVector<int64_t, 4>> halo =
+      readI64ArrayAttr(si.getPhysicalHaloShapeAttr());
+  for (auto it :
+       llvm::enumerate(llvm::zip(si.getLowerBounds(), si.getUpperBounds()))) {
+    unsigned dim = it.index();
+    auto [lb, ub] = it.value();
     std::optional<int64_t> lbc = getConstantIntValue(lb);
     std::optional<int64_t> ubc = getConstantIntValue(ub);
     if (!lbc || !ubc)
@@ -176,6 +181,12 @@ std::optional<int64_t> findOwnerIterationExtent(SdeSuIterateOp si,
       continue;
     if ((extent + blockExtent - 1) / blockExtent == gridExtent)
       return extent;
+    if (halo && dim < halo->size()) {
+      int64_t widened = extent + 2 * (*halo)[dim];
+      if (widened > 0 &&
+          (widened + blockExtent - 1) / blockExtent == gridExtent)
+        return widened;
+    }
   }
   return std::nullopt;
 }

@@ -1,12 +1,10 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
 
-// Diagnose: a multi-owner committed block plan (physicalOwnerDims = [0, 1]) is out
-// of the single-contiguous-owner realize scope. The verifier fails closed with a
-// reason rather than realize a multi-owner grid.
+// Multi-owner plans are not handled by the single-owner realize gate.
 
-// CHECK: error: {{.*}}multi-owner block plan realization is not supported here
+// CHECK-LABEL: func.func @accepts_multiowner
 
-func.func @diagnose_multiowner() {
+func.func @accepts_multiowner() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c64 = arith.constant 64 : index

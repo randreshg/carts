@@ -1,12 +1,10 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
 
-// Diagnose: an in-place read+write of one MU (marked inPlaceSafe, no committed
-// block plan) exposes no independent single-writer blocks. The verifier fails
-// closed with a reason.
+// In-place MUs are accepted unless SDE has a realizable committed block plan.
 
-// CHECK: error: {{.*}}in-place read+write of one MU exposes no independent single-writer
+// CHECK-LABEL: func.func @accepts_inplace
 
-func.func @diagnose_inplace() {
+func.func @accepts_inplace() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c64 = arith.constant 64 : index

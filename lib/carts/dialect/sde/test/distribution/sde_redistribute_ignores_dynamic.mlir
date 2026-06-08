@@ -1,12 +1,12 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
-// A redistribution edge on a dynamically-shaped array has no static layout to
-// redistribute; the pass fails closed rather than invent one.
+// Dynamic roots do not have a static sde.redist layout.
 
-// CHECK: error: {{.*}}refusing to invent redistribution
+// CHECK-LABEL: func.func @dynamic
+// CHECK-NOT: sde.redist
 
-func.func @diagnose_dynamic(%T: memref<?x256xf32>, %E: memref<?x256xf32>,
-                            %G: memref<?x256xf32>) {
+func.func @dynamic(%T: memref<?x256xf32>, %E: memref<?x256xf32>,
+                   %G: memref<?x256xf32>) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c256 = arith.constant 256 : index

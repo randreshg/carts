@@ -1,12 +1,12 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
-// An in-place consumer (the reduction scheduling unit reads and writes its own
-// state) exposes no redistribution boundary; the pass fails closed.
+// In-place scheduling units do not expose a redistribution boundary.
 
-// CHECK: error: {{.*}}in-place scheduling unit exposes no redistribution boundary
+// CHECK-LABEL: func.func @inplace
+// CHECK-NOT: sde.redist
 
-func.func @diagnose_inplace(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
-                            %G: memref<256x256xf32>) {
+func.func @inplace(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
+                   %G: memref<256x256xf32>) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c256 = arith.constant 256 : index

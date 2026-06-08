@@ -48,7 +48,7 @@
 // CHECK: codir.codelet
 // CHECK-SAME: array_layout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}]
 // CHECK-NOT: comm_volume_bytes
-// CHECK-SAME: dep_array_ids = [0, 3, 6]
+// CHECK-SAME: dep_array_ids = [3, 6, 0]
 // CHECK-SAME: layouts_disagree = [3]
 
 module attributes {

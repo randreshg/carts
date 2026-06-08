@@ -1,11 +1,10 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
 
-// Diagnose: a dynamic owner extent cannot be statically rank-expanded into a
-// block grid. The verifier fails closed with a reason.
+// Dynamic MUs are not statically realizable as a block grid.
 
-// CHECK: error: {{.*}}dynamic MU shape has no static block grid
+// CHECK-LABEL: func.func @accepts_dynamic
 
-func.func @diagnose_dynamic(%n: index) {
+func.func @accepts_dynamic(%n: index) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c64 = arith.constant 64 : index

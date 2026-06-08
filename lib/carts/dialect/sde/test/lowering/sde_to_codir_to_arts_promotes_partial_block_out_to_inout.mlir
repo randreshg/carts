@@ -7,8 +7,8 @@
 // CHECK-LABEL: func.func @partial_block_out_slice
 // CHECK: arts.db_alloc
 // CHECK: arts.db_alloc
-// CHECK: arts.db_acquire[<in>]
-// CHECK: arts.db_acquire[<out>]
+// CHECK: arts.db_acquire[<inout>]
+// CHECK: arts.db_acquire[<inout>]
 // CHECK: arts.edt <task> <intranode>
 // CHECK: arts.db_ref
 // CHECK: memref.load

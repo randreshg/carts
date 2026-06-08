@@ -1,24 +1,16 @@
 ///==========================================================================///
 /// File: Redistribute.cpp
 ///
-/// SDE redistribution-edge realization.
+/// SDE redistribution realization.
 ///
 /// `sde-layout-assignment` records, on each accessing `sde.su_iterate`, the
 /// committed per-array home BLOCK layout (`arrayLayout`) plus a metadata-only
 /// `layoutsDisagree` marker naming the array roots whose consumer access does
-/// not align with that home (a redistribution edge). This pass turns every such
-/// committed edge into explicit `sde.redist` structure: the committed home is
-/// the source layout, the consumer's grounded access kind picks the geometric
-/// movement family, and the family determines the target relative to the home.
-///
-/// The committed edge analysis (source, family, target, and the fail-closed
-/// reasons) lives in `collectRedistributionEdges`, shared with
-/// `verify-sde-redistribute` so the producer and the gate never drift. This
-/// pass emits one `sde.redist` per representable edge and fails closed
-/// (diagnostic + signalPassFailure), inventing nothing, on each unrepresentable
-/// edge. It owns the geometric movement family only; CODIR maps it to a
-/// transport mechanically. It introduces no `sde.mu_token`, slice,
-/// `sde.mu_dep`, owner map, DB, route, collective, or CODIR isolation concept.
+/// not align with that home. This pass emits `sde.redist` only for committed
+/// disagreements that can be grounded as cross-owner reductions. Other
+/// disagreements remain broad layout evidence until SDE can materialize them
+/// directly. It introduces no `sde.mu_token`, slice, `sde.mu_dep`, owner map,
+/// DB, route, collective, or CODIR isolation concept.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/RedistributionEdges.h"
@@ -60,15 +52,6 @@ struct SdeRedistributePass
     carts::sde::RedistributionEdges committed =
         carts::sde::collectRedistributionEdges(module);
 
-    bool failed = false;
-    for (const carts::sde::RedistributionEdgeFailure &f : committed.failures) {
-      carts::sde::SdeSuIterateOp consumer = f.consumer;
-      consumer.emitOpError()
-          << "sde.redist: " << f.reason << " (array " << f.arrayId
-          << "); refusing to invent redistribution";
-      failed = true;
-    }
-
     for (const carts::sde::RedistributionEdge &edge : committed.edges) {
       if (alreadyRepresented(edge))
         continue;
@@ -87,9 +70,6 @@ struct SdeRedistributePass
           buildI64ArrayAttr(ctx, edge.targetBlockShape),
           /*haloShape=*/ArrayAttr(), /*commVolumeBytes=*/costAttr);
     }
-
-    if (failed)
-      signalPassFailure();
   }
 };
 

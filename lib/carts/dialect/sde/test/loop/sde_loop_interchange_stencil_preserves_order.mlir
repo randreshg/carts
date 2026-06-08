@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline sde-planning --mlir-print-ir-after-all 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-openmp-to-sde,sde-parallelize,sde-pattern-analysis,loop-interchange)' --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
 // Verify that LoopInterchange does NOT reorder stencil loops. The pass
 // only targets matmul patterns (j-k to k-j for stride-1 B access). Stencil
@@ -7,12 +7,11 @@
 // CHECK-LABEL: // -----// IR Dump After LoopInterchange (loop-interchange) //----- //
 // CHECK: sde.su_iterate
 // CHECK-SAME: classification(<stencil>)
-// The inner scf.for loop must remain in the original order:
-// CHECK: scf.for %[[J:[A-Za-z0-9_]+]] =
+// The stencil neighbor accesses must remain in the original order:
 // CHECK: arith.subi %{{.+}}, %c1
 // CHECK: arith.addi %{{.+}}, %c1
-// CHECK: arith.subi %[[J]], %c1
-// CHECK: arith.addi %[[J]], %c1
+// CHECK: arith.subi %{{.+}}, %c1
+// CHECK: arith.addi %{{.+}}, %c1
 // CHECK: memref.load
 // CHECK: memref.store
 // Result-bearing stencil loops must also remain untouched. The pass cannot

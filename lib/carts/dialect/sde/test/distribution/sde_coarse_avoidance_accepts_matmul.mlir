@@ -1,13 +1,10 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
 
-// Diagnose: a matmul contraction is out of the single-writer block-grid scope and
-// would need cross-tile redistribution (an op that does not exist yet). The
-// verifier fails closed with a reason rather than letting coarse pass silently;
-// nothing invents a redistribution op or a finer block.
+// Matmul scratch is accepted until SDE commits materializable movement.
 
-// CHECK: error: {{.*}}matmul contraction needs cross-tile redistribution
+// CHECK-LABEL: func.func @accepts_matmul
 
-func.func @diagnose_matmul() {
+func.func @accepts_matmul() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c64 = arith.constant 64 : index

@@ -1,11 +1,10 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
 
-// Diagnose: a reduction carrier has no single-writer block grain. The verifier
-// fails closed with a reason.
+// Reduction carriers are accepted unless SDE has a realizable block plan.
 
-// CHECK: error: {{.*}}reduction carrier has no single-writer block grain
+// CHECK-LABEL: func.func @accepts_reduction
 
-func.func @diagnose_reduction() {
+func.func @accepts_reduction() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c64 = arith.constant 64 : index

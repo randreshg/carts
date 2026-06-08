@@ -7,7 +7,7 @@
 /// - Reduction combiner kind + identity
 /// - Nowait semantics
 /// - Schedule + chunk size
-/// - Task completion tokens
+/// - Task dependency slices
 ///
 /// Example:
 ///   Before:
@@ -587,42 +587,30 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
 
-    // Collect task dependencies as sde.mu_dep ops
-    SmallVector<Value> deps;
     SmallVector<TaskDependSpec, 4> dependSpecs;
     rewriter.setInsertionPoint(op);
     auto dependList = op.getDependKindsAttr();
-    if (dependList && !dependList.empty() &&
-        dependList.size() == op.getDependVars().size()) {
-      for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
+    if (dependList && !dependList.empty()) {
+      if (dependList.size() != op.getDependVars().size())
+        return op.emitOpError()
+               << "requires one depend kind per depend variable";
+      unsigned count = dependList.size();
+      for (unsigned i = 0; i < count; ++i) {
         auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(dependList[i]);
         if (!depClause)
-          continue;
+          return op.emitOpError() << "has unsupported task depend attribute";
 
         auto depSlice =
             extractDependSlice(op.getDependVars()[i], rewriter, loc);
         if (!depSlice)
-          continue;
+          return op.emitOpError()
+                 << "requires task depend variable to resolve to memref "
+                    "storage or an SDE dependency declaration";
 
         auto sdeMode = convertDependMode(depClause.getValue());
         if (!sdeMode)
           return failure();
 
-        if (auto existingMuDep =
-                op.getDependVars()[i].getDefiningOp<sde::SdeMuDepOp>()) {
-          if (existingMuDep.getMode() != *sdeMode)
-            return op.emitOpError()
-                   << "SDE dependency carrier mode disagrees with omp.task "
-                      "depend clause";
-          deps.push_back(op.getDependVars()[i]);
-        } else {
-          rewriter.setInsertionPoint(op);
-          auto muDep = sde::SdeMuDepOp::create(
-              rewriter, loc, sde::DepType::get(ctx),
-              sde::SdeAccessModeAttr::get(ctx, *sdeMode), depSlice->source,
-              depSlice->offsets, depSlice->sizes);
-          deps.push_back(muDep.getDep());
-        }
         dependSpecs.push_back(TaskDependSpec{*sdeMode, std::move(*depSlice)});
       }
     }
@@ -631,15 +619,19 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
     if (isWavefrontTaskDependPattern(op.getOperation(), dependSpecs))
       pattern = sde::SdePatternAttr::get(ctx, sde::SdePattern::wavefront_2d);
 
-    auto cuTask = sde::SdeCuTaskOp::create(rewriter, loc, deps, pattern);
+    auto cuTask =
+        sde::SdeCuTaskOp::create(rewriter, loc, ValueRange{}, pattern);
     Block &blk = sde::ensureBlock(cuTask.getBody());
+    rewriter.setInsertionPointToStart(&blk);
+    for (const TaskDependSpec &dep : dependSpecs) {
+      sde::SdeMuDepOp::create(rewriter, loc, sde::DepType::get(ctx),
+                              sde::SdeAccessModeAttr::get(ctx, dep.mode),
+                              dep.slice.source, ValueRange(dep.slice.offsets),
+                              ValueRange(dep.slice.sizes));
+    }
 
     Block &old = op.getRegion().front();
     blk.getOperations().splice(blk.end(), old.getOperations());
-
-    rewriter.setInsertionPointAfter(cuTask);
-    sde::SdeControlTokenOp::create(rewriter, loc,
-                                   sde::CompletionType::get(ctx));
 
     ++numTasksConverted;
     rewriter.eraseOp(op);

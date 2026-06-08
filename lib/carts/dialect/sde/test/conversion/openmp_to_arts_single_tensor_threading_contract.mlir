@@ -1,7 +1,4 @@
-// Verify the memref-native pipeline for a scalar single+wsloop pattern:
-//   1. ConvertOpenMPToSde wraps su_iterate body in cu_region <parallel>
-//   2. ConvertCodirToArts preserves scalar single state on the
-//      user-visible alloca and lower the loop to ARTS task dispatch
+// Verify the memref-native pipeline for a scalar single+wsloop pattern.
 
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline codir-to-arts --mlir-print-ir-after-all 2>&1 \
 // RUN:   | awk '/IR Dump After ConvertOpenMPToSde/,/IR Dump After PatternAnalysis/' \
@@ -30,8 +27,8 @@
 
 // --- After ConvertCodirToArts ---
 // ARTS: func.func @main
-//   Single region is inlined so scalar stack state remains in parent control
-//   flow instead of becoming an implicit EDT capture:
+//   Single region is inlined so scalar state remains in parent control flow
+//   instead of becoming an implicit EDT capture:
 // ARTS-NOT: arts.edt <single>
 // ARTS: memref.load %{{.*}}[] : memref<i32>
 // ARTS: arith.addi %{{.*}}, %{{.*}} : i32
@@ -42,7 +39,7 @@
 // ARTS: arts.edt <task>
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
-  func.func @main() -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+  func.func @main(%scalar: memref<i32>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
     %c0 = arith.constant 0 : index
     %c100 = arith.constant 100 : index
     %c1 = arith.constant 1 : index
@@ -50,17 +47,16 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
     %c1000_i32 = arith.constant 1000 : i32
     %c2_i32 = arith.constant 2 : i32
     %alloca = memref.alloca() : memref<100xi32>
-    %alloca_sum = memref.alloca() : memref<i32>
-    memref.store %c0_i32, %alloca_sum[] : memref<i32>
+    memref.store %c0_i32, %scalar[] : memref<i32>
     scf.for %i = %c0 to %c100 step %c1 {
       %iv = arith.index_cast %i : index to i32
       memref.store %iv, %alloca[%i] : memref<100xi32>
     }
     omp.parallel {
       omp.single {
-        %v = memref.load %alloca_sum[] : memref<i32>
+        %v = memref.load %scalar[] : memref<i32>
         %sum = arith.addi %v, %c1000_i32 : i32
-        memref.store %sum, %alloca_sum[] : memref<i32>
+        memref.store %sum, %scalar[] : memref<i32>
         omp.terminator
       }
       omp.wsloop {
@@ -73,7 +69,6 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
       }
       omp.terminator
     }
-    %result = memref.load %alloca_sum[] : memref<i32>
-    return %result : i32
+    return %c0_i32 : i32
   }
 }

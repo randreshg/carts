@@ -1,10 +1,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
 
-// A matmul-classified MU is a coarse last resort to verify-sde-coarse-avoidance
-// (see sde_coarse_avoidance_diagnose_matmul.mlir for the error direction). Once
-// its movement is explicit as sde.redist, its redistribution is owned by
-// sde-redistribute / verify-sde-redistribute, so the coarse-avoidance gate
-// accepts it (exit 0) instead of diagnosing a last resort.
+// Once movement is explicit as sde.redist, redistribution is owned by
+// sde-redistribute / verify-sde-redistribute.
 
 // CHECK-LABEL: func.func @retires_coarse
 // CHECK: sde.redist <reduce_scatter_like>

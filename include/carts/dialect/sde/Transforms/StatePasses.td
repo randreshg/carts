@@ -180,10 +180,8 @@ def SdeCoarseAvoidance
         elementwise/stencil BLOCK plan that proves a real grid is realized as
         structure via the shared block-grid realize gate and rewriter — the
         committed plan is consumed VERBATIM, never re-authored;
-      * every other coarse MU is left flat. Whether a flat MU is an avoidable bug
-        or a legitimate last resort (dynamic, in-place, reduction, matmul,
-        multi-owner, aliasing) is the fail-closed diagnosis owned by
-        `verify-sde-coarse-avoidance`, so coarse is never accepted silently.
+      * every other coarse MU is left flat because SDE has not committed a
+        materializable single-owner grid for it.
 
     The only hard failure is a committed plan that cannot be realized end to end:
     rather than leave a partial owner-dim promise, the pass fails closed with
@@ -193,8 +191,8 @@ def SdeCoarseAvoidance
     rewrites that move no op across a CU/SU boundary), so CU legality is preserved.
 
     Production SDE planning runs this after access-window and redistribution
-    structure is available, then verifies that avoidable coarse MU shape did not
-    survive before crossing into CODIR.
+    structure is available, then verifies that in-scope committed grids did not
+    remain coarse before crossing into CODIR.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect",
@@ -206,26 +204,22 @@ def SdeRedistribute
     : Pass<"sde-redistribute", "mlir::ModuleOp"> {
   let summary = "Make committed layout-disagreement edges explicit sde.redist";
   let description = [{
-    Realizes the redistribution edges `sde-layout-assignment` records as the
-    metadata-only `layoutsDisagree` marker into explicit `sde.redist` structure.
-    The only edge currently representable from the committed facts is a
-    cross-owner reduction read: when a consumer reduces a committed home's owned
-    axis, the pass emits a `reduce_scatter_like` movement over that home block
-    layout (source == target == the committed writer-role home; the movement is
-    the reduction, not a re-layout). The home layout is read VERBATIM from the
-    committed `arrayLayout` writer-role entry and the family from the consumer's
-    grounded `reductionIndexed` access kind; owner dims, block shape, and family
-    are never recomputed. The array root for an `arrayId` is recovered through the
-    single `assignStableArrayIds` numbering shared with `sde-layout-assignment`.
+    Realizes the subset of `layoutsDisagree` edges that can be grounded as
+    explicit `sde.redist` structure from committed SDE facts. The currently
+    representable edge is a cross-owner reduction read: when a consumer reduces a
+    committed home's owned axis, the pass emits a `reduce_scatter_like` movement
+    over that home block layout (source == target == the committed writer-role
+    home; the movement is the reduction, not a re-layout). The home layout is
+    read verbatim from the committed `arrayLayout` writer-role entry and the
+    family from the consumer's grounded `reductionIndexed` access kind; owner
+    dims, block shape, and family are never recomputed. The array root for an
+    `arrayId` is recovered through the single `assignStableArrayIds` numbering
+    shared with `sde-layout-assignment`.
 
-    A re-layout edge (transpose/gather/halo) is NOT representable from the
-    committed facts: it would need the consumer's required target layout, which
-    `sde-layout-assignment` discards (it stamps the home plus a disagreement
-    flag). The pass fails closed (diagnostic + signalPassFailure), inventing no
-    movement, on every such edge and on a dynamic array shape, an in-place
-    reader/writer, an aliasing array-root use, or a missing committed writer
-    home. It introduces no `sde.mu_token`, slice, `sde.mu_dep`, owner map, DB,
-    route, collective, or CODIR isolation concept.
+    Other layout disagreements remain broad mismatch evidence until SDE commits
+    enough target-layout structure to materialize them directly. This pass
+    introduces no `sde.mu_token`, slice,
+    `sde.mu_dep`, owner map, DB, route, collective, or CODIR isolation concept.
 
     Production SDE planning runs this before CODIR conversion so movement edges
     are committed as SDE structure before a downstream layer consumes them.

@@ -1,12 +1,12 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
-// An aliasing use of the array root (a memref.cast that escapes the block-grid
-// view) blocks a clean redistribution boundary; the pass fails closed.
+// Aliased roots are not materialized as sde.redist edges.
 
-// CHECK: error: {{.*}}aliasing array-root use blocks redistribution
+// CHECK-LABEL: func.func @aliasing
+// CHECK-NOT: sde.redist
 
-func.func @diagnose_aliasing(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
-                             %G: memref<256x256xf32>) {
+func.func @aliasing(%T: memref<256x256xf32>, %E: memref<256x256xf32>,
+                    %G: memref<256x256xf32>) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c256 = arith.constant 256 : index

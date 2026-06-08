@@ -19,6 +19,7 @@
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -45,13 +46,12 @@ inline bool isSuOp(Operation *op) {
   return isa<SdeSuIterateOp, SdeSuDistributeOp>(op);
 }
 
-/// Schedule/index/window plumbing: a pure, region-free op whose results are all
-/// `index` (constants, loop-bound arithmetic, affine.apply, memref.dim, ...),
-/// plus constant-like values of any type. These are the SU-local /
-/// function-scope values the charter permits outside a CU; everything else that
-/// computes a program value or has an effect is source compute.
+/// Schedule/index/window plumbing: constants, loop-bound arithmetic,
+/// dimensions, and view/type carriers. These are legal outside CUs.
 inline bool isSchedulePlumbing(Operation *op) {
   if (op->hasTrait<OpTrait::ConstantLike>())
+    return true;
+  if (isa<memref::CastOp>(op))
     return true;
   return isMemoryEffectFree(op) && op->getNumRegions() == 0 &&
          llvm::all_of(op->getResultTypes(),

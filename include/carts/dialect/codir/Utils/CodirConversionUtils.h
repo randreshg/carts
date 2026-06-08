@@ -1381,19 +1381,27 @@ collectTaskCaptureClone(Value value, Region &taskRegion,
 static inline LogicalResult buildCodirTaskPlan(sde::SdeCuTaskOp task,
                                                OpBuilder &builder,
                                                CodirTaskPlan &plan) {
+  if (!task.getDeps().empty())
+    return task.emitOpError()
+           << "carries a target SDE dependency graph; convert OpenMP task "
+              "depend clauses to local sde.mu_dep declarations before "
+              "CODIR isolation";
+
+  SmallVector<sde::SdeMuDepOp, 4> taskDepDecls;
+  for (sde::SdeMuDepOp muDep : task.getBody().front().getOps<sde::SdeMuDepOp>())
+    taskDepDecls.push_back(muDep);
+
   DenseMap<Value, unsigned> depSourceCounts;
   DenseMap<Value, sde::SdeMuDepOp> depSourceRepresentative;
   DenseMap<Value, SmallVector<sde::SdeMuDepOp>> depSourceOps;
   DenseSet<Value> depSourcesWithMixedSlices;
-  for (Value dep : task.getDeps()) {
-    if (auto muDep = dep.getDefiningOp<sde::SdeMuDepOp>()) {
-      ++depSourceCounts[muDep.getSource()];
-      depSourceOps[muDep.getSource()].push_back(muDep);
-      auto [it, inserted] =
-          depSourceRepresentative.try_emplace(muDep.getSource(), muDep);
-      if (!inserted && !haveSameMuDepSlice(it->second, muDep))
-        depSourcesWithMixedSlices.insert(muDep.getSource());
-    }
+  for (sde::SdeMuDepOp muDep : taskDepDecls) {
+    ++depSourceCounts[muDep.getSource()];
+    depSourceOps[muDep.getSource()].push_back(muDep);
+    auto [it, inserted] =
+        depSourceRepresentative.try_emplace(muDep.getSource(), muDep);
+    if (!inserted && !haveSameMuDepSlice(it->second, muDep))
+      depSourcesWithMixedSlices.insert(muDep.getSource());
   }
 
   DenseMap<Value, bool> depSourceHasPartitionedAccessProof;
@@ -1413,14 +1421,7 @@ static inline LogicalResult buildCodirTaskPlan(sde::SdeCuTaskOp task,
     return {};
   };
 
-  for (Value dep : task.getDeps()) {
-    auto muDep = dep.getDefiningOp<sde::SdeMuDepOp>();
-    if (!muDep)
-      return task.emitOpError()
-             << "convert-sde-to-codir requires cu_task dependency to be "
-                "defined by sde.mu_dep, got "
-             << dep.getType();
-
+  for (sde::SdeMuDepOp muDep : taskDepDecls) {
     Value codirDep = muDep.getSource();
     bool sourceHasMixedSlices =
         depSourcesWithMixedSlices.contains(muDep.getSource());
@@ -1501,7 +1502,7 @@ static inline LogicalResult buildCodirTaskPlan(sde::SdeCuTaskOp task,
 
   Region &taskRegion = task.getBody();
   WalkResult walkResult = taskRegion.walk([&](Operation *nested) {
-    if (isa<sde::SdeYieldOp>(nested))
+    if (isa<sde::SdeYieldOp, sde::SdeMuDepOp>(nested))
       return WalkResult::advance();
     if (auto subview = dyn_cast<memref::SubViewOp>(nested);
         subview && plan.exactSubviewDepIndex.contains(subview.getResult()))
@@ -1610,7 +1611,10 @@ static inline LogicalResult convertCuTaskToCodir(sde::SdeCuTaskOp task) {
       builder, task.getLoc(), builder.getArrayAttr(depModeAttrs),
       builder.getArrayAttr(depStorageViewAttrs), plan.deps, plan.params,
       getCodirMetadataFromTask(task));
-  if (!task.getDeps().empty())
+  bool hasTaskDependDecls =
+      llvm::any_of(task.getBody().front().getOps<sde::SdeMuDepOp>(),
+                   [](sde::SdeMuDepOp) { return true; });
+  if (hasTaskDependDecls)
     codelet.setTaskDependAttr(builder.getUnitAttr());
   bool hasSlicedTaskDepend =
       llvm::any_of(plan.deps, [](Value dep) { return isCodirViewDep(dep); });
@@ -1695,7 +1699,7 @@ static inline LogicalResult convertCuTaskToCodir(sde::SdeCuTaskOp task) {
   };
 
   for (Operation &nested : task.getBody().front()) {
-    if (isa<sde::SdeYieldOp>(&nested))
+    if (isa<sde::SdeYieldOp, sde::SdeMuDepOp>(&nested))
       continue;
     if (auto subview = dyn_cast<memref::SubViewOp>(&nested);
         subview && plan.exactSubviewDepIndex.contains(subview.getResult()))
@@ -1756,15 +1760,7 @@ static inline LogicalResult convertCuTaskToCodir(sde::SdeCuTaskOp task) {
     return task.emitOpError()
            << "failed to rewrite sliced task dependency accesses";
 
-  SmallVector<sde::SdeMuDepOp> muDeps;
-  for (Value dep : task.getDeps())
-    if (auto muDep = dep.getDefiningOp<sde::SdeMuDepOp>())
-      muDeps.push_back(muDep);
-
   task.erase();
-  for (sde::SdeMuDepOp muDep : muDeps)
-    if (muDep->use_empty())
-      muDep.erase();
   return success();
 }
 

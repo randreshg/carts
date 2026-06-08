@@ -1,12 +1,10 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-sde-coarse-avoidance)' 2>&1 | %FileCheck %s
 
-// Diagnose: an aliasing use of the MU root (a memref.cast) is not localizable by
-// the block-grid rewriter, and with no committed block plan no grid can be
-// realized. The verifier fails closed with a reason.
+// Unsupported aliasing is not an avoidable single-owner block-grid case.
 
-// CHECK: error: {{.*}}unsupported/aliasing use of the MU root blocks block-grid
+// CHECK-LABEL: func.func @accepts_aliasing
 
-func.func @diagnose_aliasing() {
+func.func @accepts_aliasing() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c64 = arith.constant 64 : index

@@ -263,10 +263,11 @@ def SdeCuTaskOp
       SingleBlock, NoTerminator,
       RecursiveMemoryEffects
     ]> {
-  let summary = "Task with explicit data dependencies";
+  let summary = "Task body";
   let description = [{
-    Captures `omp.task` with `depend(in/out/inout)` clauses. Dependencies
-    are specified via `sde.mu_dep` results.
+    Captures `omp.task` executable work. Source task-depend slices are local
+    `sde.mu_dep` declarations in the body, not target dependency edges on the
+    task op.
   }];
 
   let arguments = (ins
@@ -480,8 +481,8 @@ def SdeSuBarrierOp
     : CartsSde_Op<"su_barrier", [MemoryEffects<[MemWrite]>]> {
   let summary = "Synchronization point";
   let description = [{
-    Captures `omp.barrier` (implicit) and `omp.taskwait` (explicit tokens).
-    When tokens are provided, waits only for those specific tasks.
+    Captures source synchronization such as `omp.barrier` and `omp.taskwait`.
+    Optional tokens narrow the wait to specific SDE completion producers.
   }];
 
   let arguments = (ins
@@ -500,18 +501,18 @@ def SdeSuBarrierOp
 //===----------------------------------------------------------------------===//
 
 def SdeMuDepOp
-    : CartsSde_Op<"mu_dep", [Pure, AttrSizedOperandSegments]> {
+    : CartsSde_Op<"mu_dep", [AttrSizedOperandSegments]> {
   let summary = "SDE memref dependency declaration";
   let description = [{
-    Declares a memory-unit dependency with access mode and region: the SDE
-    representation of source dependency slices from `omp.task depend(...)` and of
-    SDE-authored owner-slice dependencies for raw memref work. It is distinct
-    from `sde.control_token` (ordering/completion) and `sde.mu_token` (an MU
-    access token).
+    Declares a memory-unit dependency with access mode and region. It is the
+    SDE representation of source dependency slices from `omp.task depend(...)`
+    and is distinct from `sde.control_token` (ordering/completion) and
+    `sde.mu_token` (an MU access token).
 
-    `sde.mu_dep` is an SDE-only declaration consumed by the SDE-to-CODIR/ARTS
-    conversion, which materializes concrete storage and access requests; it does
-    not survive the dialect boundary.
+    `sde.mu_dep` is an SDE-only declaration consumed by SDE-to-CODIR
+    conversion, which materializes concrete storage and access requests. It does
+    not survive the dialect boundary and must not be wired as a target
+    dependency graph.
   }];
 
   let arguments = (ins
