@@ -13,6 +13,10 @@
 // CHECK: %[[OFF:.*]] = arith.remui %{{.*}}, %c30
 // CHECK: memref.store %{{.*}}, %{{.*}}[%[[BID]], %[[OFF]], %{{.*}}] : memref<4x30x64xf32>
 
+// CHECK-LABEL: func.func @rank_expand_scalar_loaded_extent
+// CHECK: sde.mu_alloc : memref<4x30xf32>
+// CHECK: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<4x30xf32>
+
 func.func @rank_expand_ceil_grid() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
@@ -28,6 +32,28 @@ func.func @rank_expand_ceil_grid() {
       }
       sde.yield
     } {physicalOwnerDims = [0], physicalBlockShape = [30, 64]}
+    sde.yield
+  }
+  return
+}
+
+func.func @rank_expand_scalar_loaded_extent() {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c30 = arith.constant 30 : index
+  %c100_i64 = arith.constant 100 : i64
+  %cst = arith.constant 1.0 : f32
+  %extent = memref.alloca() : memref<i64>
+  memref.store %c100_i64, %extent[] : memref<i64>
+  %loaded = memref.load %extent[] : memref<i64>
+  %ub = arith.index_cast %loaded : i64 to index
+  %A = sde.mu_alloc : memref<100xf32>
+  sde.cu_region <parallel> {
+    sde.su_iterate (%c0) to (%ub) step (%c1) classification(<elementwise>) {
+    ^bb0(%i: index):
+      memref.store %cst, %A[%i] : memref<100xf32>
+      sde.yield
+    } {physicalOwnerDims = [0], physicalBlockShape = [30]}
     sde.yield
   }
   return

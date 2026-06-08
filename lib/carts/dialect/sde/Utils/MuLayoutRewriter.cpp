@@ -7,11 +7,11 @@
 
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Operation.h"
 #include "polygeist/Ops.h"
 #include "llvm/ADT/STLExtras.h"
@@ -186,8 +186,8 @@ std::optional<int64_t> findOwnerIterationExtent(SdeSuIterateOp si,
        llvm::enumerate(llvm::zip(si.getLowerBounds(), si.getUpperBounds()))) {
     unsigned dim = it.index();
     auto [lb, ub] = it.value();
-    std::optional<int64_t> lbc = getConstantIntValue(lb);
-    std::optional<int64_t> ubc = getConstantIntValue(ub);
+    std::optional<int64_t> lbc = ValueAnalysis::tryFoldConstantIndex(lb);
+    std::optional<int64_t> ubc = ValueAnalysis::tryFoldConstantIndex(ub);
     if (!lbc || !ubc)
       continue;
     int64_t extent = *ubc - *lbc;
