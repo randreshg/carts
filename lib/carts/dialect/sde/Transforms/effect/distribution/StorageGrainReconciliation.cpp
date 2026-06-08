@@ -129,7 +129,8 @@ static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
     OperandRange indices = storeOp.getIndices();
     for (auto [ownerSlot, ownerDim] : llvm::enumerate(ownerDims)) {
       if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= indices.size() ||
-          !sde::isOwnerDependentIndex(indices[ownerDim], (*loopIvs)[ownerSlot])) {
+          !sde::isOwnerDependentIndex(indices[ownerDim],
+                                      (*loopIvs)[ownerSlot])) {
         rejected = true;
         return;
       }
@@ -138,16 +139,10 @@ static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
   return sawExternalStore && !rejected;
 }
 
-// An affine-disjoint multi-store data-parallel writer (e.g. an init loop
-// `a[i]=..;b[i]=..;c[i]=..`): it writes more than one DISTINCT distributable
-// array, every write block-parallel with identical owner dims and the same
-// node-agnostic budget grain. singleWriteFact deliberately declines these (>1
-// write fact), so DistributionPlanning's per-array budget stamper and Phase A
-// skip them and the writer keeps a coarse worker-tiling grain while the single
-// write kernels of the SAME arrays commit the finer budget grain; the divergent
-// grain splits the host bridge. Returns a representative fact carrying the
-// shared owner dims + budget grain, or nullopt (fail closed) when the writes are
-// not a uniform set of distinct block-parallel budget arrays.
+// A multi-store data-parallel writer is reconcilable only when every write fact
+// names a distinct distributable array and all writes agree on owner dims and
+// budget grain. The representative fact carries the shared grain; any aliasing,
+// non-block layout, or grain disagreement fails closed.
 static std::optional<sde::LayoutGraphFact>
 affineDisjointMultiStoreBudgetFact(sde::SdeSuIterateOp op) {
   ArrayAttr layout = op.getArrayLayoutAttr();
@@ -313,14 +308,10 @@ struct StorageGrainReconciliationPass
       authorPlan(op, wf->ownerDims, block, ctx);
     });
 
-    // ---- Phase A2: unify affine-disjoint multi-store data-parallel writers ----
-    // A multi-store init (a[i]=..;b[i]=..;c[i]=..) is declined by singleWriteFact
-    // everywhere, so it keeps a coarse worker-tiling grain while the single-write
-    // kernels of the same arrays commit the finer budget grain; the divergent
-    // grain prevents the CODIR host bridge from merging, so the arrays relay
-    // through a coarse host_whole master. Re-author the writer at the shared
-    // budget grain (clamped to the realized step, exactly like Phase A) so every
-    // co-written array matches its compute kernels.
+    // Phase A2: unify affine-disjoint multi-store data-parallel writers.
+    // Re-author a uniform multi-store writer to its shared budget grain so
+    // all co-written arrays expose the same DB block grain to downstream
+    // bridges.
     module.walk([&](sde::SdeSuIterateOp op) {
       if (isHardExcludedFamily(op) || !isDataParallel(op) ||
           op.getInPlaceSafeAttr() || op.getReductionAccumulators().size() != 0)
@@ -331,8 +322,8 @@ struct StorageGrainReconciliationPass
           affineDisjointMultiStoreBudgetFact(op);
       if (!wf || wf->ownerDims.size() > op.getSteps().size())
         return;
-      // A multi-store SU is atomic: decline if ANY co-written array is protected
-      // (touched by a stencil/matmul SU, or mixed-orientation).
+      // A multi-store SU is atomic: decline if ANY co-written array is
+      // protected (touched by a stencil/matmul SU, or mixed-orientation).
       bool anyProtected = false;
       for (const sde::LayoutGraphFact &fact :
            sde::parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
@@ -346,8 +337,8 @@ struct StorageGrainReconciliationPass
         return;
       if (!allExternalStoresCoverOwnerDims(op, wf->ownerDims))
         return;
-      // Block = budget grain clamped per owner dim to the realized loop step, so
-      // block <= step and no loop retile is needed: the SDE->CODIR dispatch
+      // Block = budget grain clamped per owner dim to the realized loop step,
+      // so block <= step and no loop retile is needed: the SDE->CODIR dispatch
       // retiles the cloned body to the finer block window (the same path the
       // single-write budget kernels already take).
       SmallVector<int64_t, 4> block(wf->budgetBlockShape.begin(),
@@ -372,7 +363,8 @@ struct StorageGrainReconciliationPass
       if (!ok)
         return;
       // Re-author only when there is no plan yet or the committed plan is
-      // strictly coarser on some owner dim; never coarsen a finer committed plan.
+      // strictly coarser on some owner dim; never coarsen a finer committed
+      // plan.
       if (std::optional<SmallVector<int64_t, 4>> existing =
               readI64ArrayAttr(op.getPhysicalBlockShapeAttr())) {
         if (existing->size() != block.size())
@@ -393,10 +385,10 @@ struct StorageGrainReconciliationPass
                  << wf->id << ")");
       authorPlan(op, wf->ownerDims, block, ctx);
       // The re-authored grain invalidates any committed partition evidence: it
-      // was sized from the coarse worker grain and the rescale ratio need not be
-      // integral. Drop it; CODIR/ARTS distribute from physicalOwnerDims +
-      // physicalBlockShape, and the partition verifier only checks evidence when
-      // present.
+      // was sized from the coarse worker grain and the rescale ratio need not
+      // be integral. Drop it; CODIR/ARTS distribute from physicalOwnerDims +
+      // physicalBlockShape, and the partition verifier only checks evidence
+      // when present.
       op->removeAttr(sde::AttrNames::PartitionGraph);
       op->removeAttr(sde::AttrNames::PartitionScore);
     });
