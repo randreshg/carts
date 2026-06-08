@@ -19,6 +19,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LLVM.h"
@@ -177,6 +178,100 @@ unsigned sinkExternalAllocasInEdt(EdtOp edt) {
   }
   return sunkAllocas;
 }
+
+bool isBarrierSegmentBoundary(Operation &op) {
+  return isa<arts::BarrierOp, arts::EpochOp>(&op);
+}
+
+void collectSegmentEdts(Operation *op, SmallVectorImpl<arts::EdtOp> &edts) {
+  if (!op)
+    return;
+  if (auto edt = dyn_cast<arts::EdtOp>(op)) {
+    edts.push_back(edt);
+    return;
+  }
+  op->walk([&](arts::EdtOp edt) { edts.push_back(edt); });
+}
+
+bool isContinuationSafeAfterBarrierOp(Operation *op) {
+  if (!op)
+    return false;
+  if (isa<arts::EdtOp, arts::DbAcquireOp, arts::LoweringContractOp>(op))
+    return true;
+  if (op->hasTrait<OpTrait::IsTerminator>())
+    return true;
+  if (isa<arts::BarrierOp, arts::EpochOp>(op))
+    return false;
+  if (op->getNumRegions() == 0)
+    return isMemoryEffectFree(op);
+  if (!isa<scf::ForOp, scf::IfOp>(op))
+    return false;
+
+  for (Region &region : op->getRegions())
+    for (Block &block : region)
+      for (Operation &nested : block)
+        if (!isContinuationSafeAfterBarrierOp(&nested))
+          return false;
+  return true;
+}
+
+bool collectContinuationSafeAfterSegment(Block::iterator begin,
+                                         Block::iterator end,
+                                         SmallVectorImpl<arts::EdtOp> &edts) {
+  for (auto it = begin; it != end; ++it) {
+    Operation *op = &*it;
+    if (!isContinuationSafeAfterBarrierOp(op))
+      return false;
+    collectSegmentEdts(op, edts);
+  }
+  return true;
+}
+
+Block *findLoopLatchContinuationBlock(arts::BarrierOp barrier) {
+  Block *block = barrier->getBlock();
+  if (!block)
+    return nullptr;
+  if (isa_and_nonnull<scf::ForOp>(block->getParentOp()))
+    return block;
+
+  Operation *parent = block->getParentOp();
+  while (parent) {
+    if (!isa<scf::IfOp>(parent))
+      return nullptr;
+
+    Block *parentBlock = parent->getBlock();
+    if (!parentBlock)
+      return nullptr;
+
+    SmallVector<arts::EdtOp, 4> ignoredEdts;
+    auto afterParent = std::next(Block::iterator(parent));
+    if (!collectContinuationSafeAfterSegment(afterParent, parentBlock->end(),
+                                             ignoredEdts) ||
+        !ignoredEdts.empty())
+      return nullptr;
+
+    if (isa_and_nonnull<scf::ForOp>(parentBlock->getParentOp()))
+      return parentBlock;
+    parent = parentBlock->getParentOp();
+  }
+
+  return nullptr;
+}
+
+bool collectLoopPrefixContinuationTasks(Block *loopBody,
+                                        SmallVectorImpl<arts::EdtOp> &edts) {
+  if (!loopBody)
+    return false;
+
+  auto prefixEnd = loopBody->begin();
+  while (prefixEnd != loopBody->end() && !isBarrierSegmentBoundary(*prefixEnd))
+    ++prefixEnd;
+  if (prefixEnd == loopBody->begin() || prefixEnd == loopBody->end())
+    return false;
+
+  return collectContinuationSafeAfterSegment(loopBody->begin(), prefixEnd,
+                                             edts);
+}
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -251,16 +346,24 @@ void EdtStructuralOptPass::runOnOperation() {
     numExternalAllocasSunkStat += sunk;
   });
 
+  bool changed = false;
   if (runAnalysis) {
     ARTS_INFO("Running EDT pass with analysis");
-    /// IMM-2: Re-enable graph-driven barrier removal (AM is guaranteed
-    /// non-null).
-    removeBarriers();
+    if (AM)
+      AM->invalidate();
+    changed |= removeBarriers();
   } else {
     ARTS_INFO("Running EDT pass without analysis");
-    inlineNoDepEdts();
-    processSyncTaskEdts();
+    changed |= inlineNoDepEdts();
+    changed |= processSyncTaskEdts();
+    if (AM) {
+      AM->invalidate();
+      changed |= removeBarriers();
+    }
   }
+
+  if (changed && AM)
+    AM->invalidate();
 
   /// Re-run alloca sinking after EDT rewrites to keep task-local buffers inside
   /// their regions.
@@ -339,13 +442,23 @@ bool EdtStructuralOptPass::inlineNoDepEdts() {
 /// computed EDT dependencies (graph-informed pruning).
 bool EdtStructuralOptPass::removeBarriers() {
   bool changed = false;
-  module.walk([&](func::FuncOp func) {
-    auto &edtGraph = AM->getEdtAnalysis().getOrCreateEdtGraph(func);
-    if (edtGraph.size() == 0)
-      return;
+  bool iterationChanged = true;
+  while (iterationChanged) {
+    iterationChanged = false;
+    if (AM)
+      AM->invalidate();
 
-    changed |= removeRedundantBarriersWithGraphs(func, edtGraph);
-  });
+    SmallVector<func::FuncOp, 8> funcs;
+    module.walk([&](func::FuncOp func) { funcs.push_back(func); });
+    for (func::FuncOp func : funcs) {
+      auto &edtGraph = AM->getEdtAnalysis().getOrCreateEdtGraph(func);
+      if (edtGraph.size() == 0)
+        continue;
+
+      iterationChanged |= removeRedundantBarriersWithGraphs(func, edtGraph);
+    }
+    changed |= iterationChanged;
+  }
   return changed;
 }
 
@@ -428,22 +541,45 @@ bool EdtStructuralOptPass::removeRedundantBarriersWithGraphs(
     func::FuncOp func, arts::EdtGraph &graph) {
   bool changed = false;
 
-  /// Collect barriers within this function and check redundancy
+  /// Collect barriers within this function and check redundancy. A removable
+  /// barrier separates adjacent EDT launch segments whose DB-frontier graph
+  /// already proves all required ordering. Host side effects after the barrier
+  /// keep the barrier because they cannot wait on DB-frontier continuations.
   SmallVector<arts::BarrierOp, 8> toErase;
   func.walk([&](arts::BarrierOp barrier) {
     Block *block = barrier->getBlock();
-    /// Partition EDTs in the same block into before/after
+    if (!block)
+      return;
+
     SmallVector<arts::EdtOp, 8> beforeTasks;
     SmallVector<arts::EdtOp, 8> afterTasks;
-    bool pastBarrier = false;
-    for (Operation &op : *block) {
-      if (&op == barrier.getOperation()) {
-        pastBarrier = true;
-        continue;
-      }
-      if (auto edt = dyn_cast<arts::EdtOp>(&op)) {
-        (pastBarrier ? afterTasks : beforeTasks).push_back(edt);
-      }
+
+    auto barrierIt = Block::iterator(barrier.getOperation());
+    auto beforeBegin = barrierIt;
+    while (beforeBegin != block->begin()) {
+      auto prev = std::prev(beforeBegin);
+      if (isBarrierSegmentBoundary(*prev))
+        break;
+      beforeBegin = prev;
+    }
+
+    auto afterBegin = std::next(barrierIt);
+    auto afterEnd = afterBegin;
+    while (afterEnd != block->end() && !isBarrierSegmentBoundary(*afterEnd))
+      ++afterEnd;
+
+    for (auto it = beforeBegin; it != barrierIt; ++it)
+      collectSegmentEdts(&*it, beforeTasks);
+
+    if (!collectContinuationSafeAfterSegment(afterBegin, afterEnd, afterTasks))
+      return;
+
+    if (afterTasks.empty()) {
+      Block *loopBody = findLoopLatchContinuationBlock(barrier);
+      if (!loopBody)
+        return;
+      if (!collectLoopPrefixContinuationTasks(loopBody, afterTasks))
+        return;
     }
 
     if (beforeTasks.empty() || afterTasks.empty())
