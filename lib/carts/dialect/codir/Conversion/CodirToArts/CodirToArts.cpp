@@ -735,6 +735,7 @@ struct ConvertCodirToArtsPass
           return codelet.emitOpError()
                  << "failed to materialize owner-base parameters for planned "
                     "block-local access rewrite";
+        arts::DbAllocOp blockAlloc = findBackingDbAlloc(codelet.getDeps()[idx]);
         for (auto [slot, ownerDim] : llvm::enumerate(accessPlan.ownerDims)) {
           Value ownerBase = paramBlockArgs.lookup(accessPlan.ownerParams[slot]);
           if (!ownerBase)
@@ -744,6 +745,13 @@ struct ConvertCodirToArtsPass
           CodirOwnerHaloWindow ownerHalo = getCodirBlockStorageHaloWindowForDim(
               codelet, idx, ownerDim,
               static_cast<unsigned>(payloadType.getRank()));
+          // Keep producer stores aligned with the DB's storage halo.
+          if (ownerHalo.lower <= 0) {
+            CodirOwnerHaloWindow allocHalo =
+                blockAllocStorageHaloForDim(blockAlloc, ownerDim);
+            if (allocHalo.lower > 0)
+              ownerHalo = allocHalo;
+          }
           localAccessRewrites.push_back(
               {payload, ownerDim, ownerBase, ownerHalo.lower,
                taskBlock.getArgument(idx), static_cast<unsigned>(slot),

@@ -1372,6 +1372,49 @@ getCodirBlockStorageHaloWindowForDim(codir::CodeletOp codelet,
   return empty;
 }
 
+// Use the DB allocation padding as the storage-halo authority when read/write
+// dependency values are split before CODIR.
+static inline CodirOwnerHaloWindow
+blockAllocStorageHaloForDim(arts::DbAllocOp blockAlloc, unsigned ownerDim) {
+  CodirOwnerHaloWindow window;
+  window.ownerDim = ownerDim;
+  if (!blockAlloc)
+    return window;
+  Operation *op = blockAlloc.getOperation();
+  std::optional<SmallVector<int64_t, 4>> ownerDims =
+      readI64ArrayAttr(arts::getPlanOwnerDimsAttr(op));
+  std::optional<SmallVector<int64_t, 4>> haloShape =
+      readI64ArrayAttr(arts::getPlanHaloShapeAttr(op));
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      readI64ArrayAttr(arts::getPlanPhysicalBlockShapeAttr(op));
+  if (!ownerDims || !haloShape || !blockShape)
+    return window;
+  int slot = -1;
+  for (auto [i, d] : llvm::enumerate(*ownerDims))
+    if (d >= 0 && static_cast<unsigned>(d) == ownerDim) {
+      slot = static_cast<int>(i);
+      break;
+    }
+  if (slot < 0 || static_cast<size_t>(slot) >= haloShape->size() ||
+      static_cast<size_t>(slot) >= blockShape->size())
+    return window;
+  int64_t halo = (*haloShape)[slot];
+  int64_t block = (*blockShape)[slot];
+  if (halo <= 0)
+    return window;
+  ValueRange elementSizes = blockAlloc.getElementSizes();
+  if (ownerDim >= elementSizes.size())
+    return window;
+  std::optional<int64_t> elem =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
+          elementSizes[ownerDim]);
+  if (!elem || *elem < block + 2 * halo)
+    return window;
+  window.lower = halo;
+  window.upper = halo;
+  return window;
+}
+
 static inline std::optional<codir::CodirStorageViewKind>
 getCodirDepStorageViewKind(codir::CodeletOp codelet, unsigned depIndex) {
   ArrayAttr views = codelet ? codelet.getDepStorageViewsAttr() : ArrayAttr{};
@@ -2677,6 +2720,14 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
   SmallVector<CodirOwnerHaloWindow, 4> ownerHalos =
       getCodirBlockStorageHaloWindows(
           codelet, depIndex, static_cast<unsigned>(hostType.getRank()));
+  // Keep reload/write-back offsets consistent with the DB's storage halo.
+  for (CodirOwnerHaloWindow &window : ownerHalos)
+    if (window.lower <= 0) {
+      CodirOwnerHaloWindow allocHalo =
+          blockAllocStorageHaloForDim(blockAlloc, window.ownerDim);
+      if (allocHalo.lower > 0)
+        window = allocHalo;
+    }
   SmallVector<Value, 4> ownerParams =
       getCodirDepOwnerParamValues(codelet, depIndex);
 
@@ -2767,7 +2818,23 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
             createConstantIndex(builder, loc, ownerHalo.upper));
       Value ownerCopyEnd = arith::MinUIOp::create(builder, loc, requestedEnd,
                                                   logicalSizes[ownerDim]);
+      // Write back only the owner iteration range; reload keeps halo extent.
+      if (!copyIntoBlock) {
+        std::optional<unsigned> ownerSlot =
+            getCodirOwnerDimSlot(codelet, ownerDim);
+        if (std::optional<int64_t> maxOffset = getCodirOwnerDimValue(
+                codelet.getAccessMaxOffsetsAttr(), ownerDim, ownerSlot,
+                static_cast<unsigned>(hostType.getRank())))
+          if (*maxOffset > 0) {
+            Value writeEnd = arith::SubIOp::create(
+                builder, loc, logicalSizes[ownerDim],
+                createConstantIndex(builder, loc, *maxOffset));
+            ownerCopyEnd =
+                arith::MinUIOp::create(builder, loc, ownerCopyEnd, writeEnd);
+          }
+      }
       lanePlan.hostOffsets[ownerDim] = ownerCopyStart;
+      // The owned payload starts after the lower-halo ring.
       if (!copyIntoBlock && ownerHalo.lower > 0)
         lanePlan.blockOffsets[ownerDim] =
             arith::SubIOp::create(builder, loc, ownerOffset, blockPayloadStart);
