@@ -175,15 +175,15 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 }
 
 // CHECK-LABEL: func.func @per_block_single_writer_stencil
-// CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
-// CHECK-DAG: %[[C1:.*]] = arith.constant 1 : index
-// CHECK-DAG: %[[C8:.*]] = arith.constant 8 : index
-// CHECK-DAG: %[[C9:.*]] = arith.constant 9 : index
-// CHECK-DAG: %[[C10:.*]] = arith.constant 10 : index
-// CHECK-DAG: %[[C4:.*]] = arith.constant 4 : index
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant 0 : index
+// CHECK-DAG: %[[ONE:.*]] = arith.constant 1 : index
+// CHECK-DAG: %[[EIGHT:.*]] = arith.constant 8 : index
+// CHECK-DAG: %[[NINE:.*]] = arith.constant 9 : index
+// CHECK-DAG: %[[TEN:.*]] = arith.constant 10 : index
+// CHECK-DAG: %[[FOUR:.*]] = arith.constant 4 : index
 
 // CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
-// CHECK-SAME: elementSizes[%[[C10]], %[[C4]]]
+// CHECK-SAME: elementSizes[%[[TEN]], %[[FOUR]]]
 // CHECK-SAME: perBlockSingleWriterStencil
 // CHECK-SAME: planHaloShape = [1, 0]
 // CHECK-SAME: stencil_supported_block_halo
@@ -192,8 +192,8 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>)
 // CHECK: %[[LOWER_OK:.*]] = arith.cmpi ugt
 // CHECK: %[[UPPER_OK:.*]] = arith.cmpi ult
-// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[LOWER_OK]]) element_offsets[%[[C8]], %[[C0]]] element_sizes[%[[C1]], %[[C4]]]
-// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[UPPER_OK]]) element_offsets[%[[C1]], %[[C0]]] element_sizes[%[[C1]], %[[C4]]]
+// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[LOWER_OK]]) element_offsets[%[[EIGHT]], %[[ZERO]]] element_sizes[%[[ONE]], %[[FOUR]]]
+// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[UPPER_OK]]) element_offsets[%[[ONE]], %[[ZERO]]] element_sizes[%[[ONE]], %[[FOUR]]]
 // CHECK: %[[TOTAL_NODES:.*]] = arts.runtime_query <total_nodes> -> i32
 // CHECK: %[[NODES_IDX:.*]] = arith.index_cast %[[TOTAL_NODES]] : i32 to index
 // CHECK: %[[SCALED:.*]] = arith.muli %{{.*}}, %[[NODES_IDX]] : index
@@ -203,34 +203,34 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: perBlockHaloExchange
 // CHECK-SAME: storageBridgeCopy
 // CHECK: scf.if
-// CHECK: memref.load %{{.*}}[%[[C0]], %{{.*}}]
-// CHECK: memref.store %{{.*}}, %{{.*}}[%[[C0]], %{{.*}}]
+// CHECK: memref.load %{{.*}}[%[[ZERO]], %{{.*}}]
+// CHECK: memref.store %{{.*}}, %{{.*}}[%[[ZERO]], %{{.*}}]
 // CHECK: scf.if
-// CHECK: memref.load %{{.*}}[%[[C0]], %{{.*}}]
-// CHECK: memref.store %{{.*}}, %{{.*}}[%[[C9]], %{{.*}}]
+// CHECK: memref.load %{{.*}}[%[[ZERO]], %{{.*}}]
+// CHECK: memref.store %{{.*}}, %{{.*}}[%[[NINE]], %{{.*}}]
 // CHECK: arts.barrier
 
 // CHECK: arts.edt <task> <internode> route{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK: %[[COMPUTED:.*]] = arith.mulf
 // CHECK: %[[STORE_ORIGIN_OK:.*]] = arith.cmpi uge
 // CHECK: %[[STORE_ORIGIN_RAW:.*]] = arith.subi
-// CHECK: %[[STORE_ORIGIN:.*]] = arith.select %[[STORE_ORIGIN_OK]], %[[STORE_ORIGIN_RAW]], %[[C0]]
+// CHECK: %[[STORE_ORIGIN:.*]] = arith.select %[[STORE_ORIGIN_OK]], %[[STORE_ORIGIN_RAW]], %[[ZERO]]
 // CHECK: %[[STORE_ROW:.*]] = arith.subi %{{.*}}, %[[STORE_ORIGIN]]
 // CHECK: memref.store %[[COMPUTED]], %{{.*}}[%[[STORE_ROW]], %{{.*}}]
 
 // CHECK-LABEL: func.func @per_block_halo_groups_contiguous_owner_routes
-// CHECK-DAG: %[[C0_G:.*]] = arith.constant 0 : index
-// CHECK-DAG: %[[C1_G:.*]] = arith.constant 1 : index
-// CHECK-DAG: %[[C2_G:.*]] = arith.constant 2 : index
-// CHECK-DAG: %[[C8_G:.*]] = arith.constant 8 : index
-// CHECK-DAG: %[[C16_G:.*]] = arith.constant 16 : index
+// CHECK-DAG: %[[ZERO_G:.*]] = arith.constant 0 : index
+// CHECK-DAG: %[[ONE_G:.*]] = arith.constant 1 : index
+// CHECK-DAG: %[[TWO_G:.*]] = arith.constant 2 : index
+// CHECK-DAG: %[[EIGHT_G:.*]] = arith.constant 8 : index
+// CHECK-DAG: %[[SIXTEEN_G:.*]] = arith.constant 16 : index
 // CHECK: owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>
-// CHECK: scf.for %{{.*}} = %[[C0_G]] to %[[C16_G]] step %[[C2_G]]
+// CHECK: scf.for %{{.*}} = %[[ZERO_G]] to %[[SIXTEEN_G]] step %[[TWO_G]]
 // CHECK: attributes {storageBridgeCopy}
-// CHECK: scf.for %[[BLOCK_BASE:.*]] = %[[C0_G]] to %[[C16_G]] step %[[C2_G]]
+// CHECK: scf.for %[[BLOCK_BASE:.*]] = %[[ZERO_G]] to %[[SIXTEEN_G]] step %[[TWO_G]]
 // CHECK: arts.db_acquire[<out>]
 // CHECK-SAME: partitioning(<block>)
-// CHECK: %[[LANE1:.*]] = arith.addi %[[BLOCK_BASE]], %[[C1_G]] : index
+// CHECK: %[[LANE1:.*]] = arith.addi %[[BLOCK_BASE]], %[[ONE_G]] : index
 // CHECK-NOT: arts.db_acquire[<in>]
 // CHECK: arts.db_acquire[<out>]
 // CHECK-SAME: partitioning(<block>)
@@ -238,8 +238,8 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: bounds_valid
 // CHECK: arts.db_acquire[<in>]
 // CHECK-SAME: bounds_valid
-// CHECK: %[[SCALED_G:.*]] = arith.muli %[[BLOCK_BASE]], %[[C8_G]] : index
-// CHECK: %[[ROUTE_IDX_G:.*]] = arith.divui %[[SCALED_G]], %[[C16_G]] : index
+// CHECK: %[[SCALED_G:.*]] = arith.muli %[[BLOCK_BASE]], %[[EIGHT_G]] : index
+// CHECK: %[[ROUTE_IDX_G:.*]] = arith.divui %[[SCALED_G]], %[[SIXTEEN_G]] : index
 // CHECK: %[[ROUTE_G:.*]] = arith.index_cast %[[ROUTE_IDX_G]] : index to i32
 // CHECK: arts.edt <task> <internode> route(%[[ROUTE_G]]) (%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) :
 // CHECK-SAME: perBlockHaloExchange
