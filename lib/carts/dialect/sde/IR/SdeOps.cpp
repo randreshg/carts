@@ -185,12 +185,11 @@ LogicalResult SdeCuRegionOp::verify() {
     return emitOpError() << "expects no block arguments without iter_args";
   }
 
+  auto yield = dyn_cast_or_null<SdeYieldOp>(entry.getTerminator());
+  if (!yield)
+    return emitOpError() << "expects body to terminate with sde.yield";
+
   if (getNumResults() != 0 || numIterArgs > 0) {
-    auto yield = dyn_cast_or_null<SdeYieldOp>(entry.getTerminator());
-    if (!yield)
-      return emitOpError()
-             << "expects body to terminate with sde.yield when results or "
-                "iter_args are present";
     if (yield.getValues().size() != getNumResults())
       return emitOpError() << "sde.yield operand count ("
                            << yield.getValues().size()
@@ -204,7 +203,7 @@ LogicalResult SdeCuRegionOp::verify() {
                << "sde.yield operand #" << i << " type (" << yielded.getType()
                << ") does not match result type (" << resultTy << ")";
     }
-  } else if (auto yield = dyn_cast_or_null<SdeYieldOp>(entry.getTerminator())) {
+  } else {
     if (!yield.getValues().empty())
       return emitOpError()
              << "sde.yield operands require matching cu_region results";

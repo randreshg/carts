@@ -1,21 +1,14 @@
 // RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-sde)' 2>&1 \
 // RUN:   | %FileCheck %s
 
-// FAIL: host scf.for compute at function scope, outside any CU, in a function
-// that also contains SDE structure (the sde.mu_alloc). All source executable
-// work belongs in a CU.
+// FAIL: sde.cu_region bodies must use sde.yield as the region terminator.
 module {
-  func.func @source_outside_cu(%A: memref<8xf32>) {
-    %c0 = arith.constant 0 : index
-    %c1 = arith.constant 1 : index
-    %c8 = arith.constant 8 : index
-    %B = sde.mu_alloc : memref<4xf32>
-    scf.for %j = %c0 to %c8 step %c1 {
-      %v = memref.load %A[%j] : memref<8xf32>
-      memref.store %v, %A[%j] : memref<8xf32>
+  func.func @cu_region_bad_terminator() {
+    sde.cu_region <parallel> {
+      llvm.unreachable
     }
     return
   }
 }
 
-// CHECK: source executable work outside any CU
+// CHECK: expects body to terminate with sde.yield
