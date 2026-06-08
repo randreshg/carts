@@ -21,14 +21,18 @@
 namespace mlir::carts::sde {
 
 /// Get the computation block inside su_iterate, looking through an optional
-/// cu_region <parallel> wrapper.
+/// cu_region wrapper inserted by OpenMP conversion or CU normalization.
 inline Block *getSuIterateComputeBlock(SdeSuIterateOp op) {
   Block &body = op.getBody().front();
+  Operation *onlyChild = nullptr;
   for (Operation &inner : body.without_terminator()) {
-    if (auto cuRegion = dyn_cast<SdeCuRegionOp>(inner);
-        cuRegion && cuRegion.getKind() == SdeCuKind::parallel)
-      return &cuRegion.getBody().front();
+    if (onlyChild)
+      return &body;
+    onlyChild = &inner;
   }
+  if (auto cuRegion = dyn_cast_or_null<SdeCuRegionOp>(onlyChild))
+    if (!cuRegion.getBody().empty())
+      return &cuRegion.getBody().front();
   return &body;
 }
 
