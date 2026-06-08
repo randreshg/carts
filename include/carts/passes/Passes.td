@@ -270,6 +270,23 @@ def EpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::arts::createEpochOptPass()";
 }
 
+def EpochTailContinuation
+    : Pass<"arts-epoch-tail-continuation", "mlir::ModuleOp"> {
+  let summary = "Outline final post-epoch host tails into continuation EDTs";
+  let description = [{
+    Authors a real ARTS continuation EDT for timer/checksum/cleanup tails that
+    follow a final epoch in main. The continuation carries DB payloads as real
+    read-only dependencies and scalar state as EDT params, then owns shutdown
+    with arts.shutdown. ARTS-RT consumes this structure mechanically.
+  }];
+  let dependentDialects = [
+    "::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect",
+    "::mlir::scf::SCFDialect", "::mlir::arith::ArithDialect",
+    "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect"
+  ];
+  let constructor = "mlir::carts::arts::createEpochTailContinuationPass()";
+}
+
 def Hoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
   let summary = "Hoist loop-invariant ARTS operations";
   let description = [{

@@ -20,12 +20,15 @@
 #include "ConvertArtsRtToLLVMInternal.h"
 
 #include "CodegenInternal.h"
+#include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/dialect/arts-rt/Transforms/Passes.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/OperationAttributes.h"
 namespace mlir::carts::arts_rt {
 #define GEN_PASS_DEF_CONVERTARTSRTTOLLVM
 #include "carts/dialect/arts-rt/Transforms/Passes.h.inc"
 } // namespace mlir::carts::arts_rt
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -45,6 +48,40 @@ namespace arts_rt_to_llvm = mlir::carts::arts_rt::convert_arts_rt_to_llvm;
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 namespace {
+
+static func::FuncOp getOutlinedFunction(ModuleOp module, EdtCreateOp create) {
+  auto outlinedName = create->getAttrOfType<StringAttr>(
+      ::mlir::carts::arts::AttrNames::Operation::OutlinedFunc);
+  if (!outlinedName)
+    return {};
+  return module.lookupSymbol<func::FuncOp>(outlinedName.getValue());
+}
+
+static bool containsShutdown(func::FuncOp func) {
+  if (!func)
+    return false;
+  bool found = false;
+  func.walk([&](arts::ShutdownOp) { found = true; });
+  return found;
+}
+
+static bool hasReachableShutdownContinuation(ModuleOp module) {
+  auto main = module.lookupSymbol<func::FuncOp>("main");
+  if (!main)
+    return false;
+
+  bool found = false;
+  main.walk([&](CreateEpochOp epoch) {
+    if (found || !epoch.hasFinishTarget())
+      return;
+    auto create = epoch.getFinishEdtGuid().getDefiningOp<EdtCreateOp>();
+    if (!create)
+      return;
+    found = containsShutdown(getOutlinedFunction(module, create));
+  });
+  return found;
+}
+
 struct ConvertArtsRtToLLVMPass
     : public mlir::carts::arts_rt::impl::ConvertArtsRtToLLVMBase<
           ConvertArtsRtToLLVMPass> {
@@ -81,6 +118,7 @@ void ConvertArtsRtToLLVMPass::runOnOperation() {
   AC = ownedAC.get();
   AC->setDistributedInitInWorkers(distributedInitPerWorker);
   AC->setRuntimeConfig(machine);
+  AC->setAuthoredShutdownInProgram(hasReachableShutdownContinuation(module));
   ARTS_DEBUG_TYPE("ArtsCodegen initialized successfully");
 
   //// Apply patterns with greedy rewriter (four runs)

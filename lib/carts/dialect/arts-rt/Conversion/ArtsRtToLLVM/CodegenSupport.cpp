@@ -638,8 +638,12 @@ func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
   }
   create<func::CallOp>(loc, callback, callArgs);
 
-  /// Shutdown the runtime.
-  createRuntimeCall(ARTSRTL_arts_shutdown, {}, loc);
+  /// Default synchronous programs return from mainBody before shutdown. When
+  /// ARTS authored a reachable final continuation EDT with a real
+  /// arts.shutdown, that continuation owns termination and main_edt must not
+  /// race it.
+  if (!hasAuthoredShutdownInProgram())
+    createRuntimeCall(ARTSRTL_arts_shutdown, {}, loc);
   create<func::ReturnOp>(loc);
   return newFn;
 }

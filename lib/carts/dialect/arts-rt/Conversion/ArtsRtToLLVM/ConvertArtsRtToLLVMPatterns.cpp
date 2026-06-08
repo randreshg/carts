@@ -278,6 +278,22 @@ struct BarrierPattern : public ArtsRtToLLVMPattern<BarrierOp> {
   }
 };
 
+/// Pattern to convert an authored ARTS runtime shutdown to the runtime call.
+struct ShutdownPattern : public ArtsRtToLLVMPattern<ShutdownOp> {
+  using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
+
+  LogicalResult matchAndRewrite(ShutdownOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering Shutdown Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
+    RCB.callVoid(types::ARTSRTL_arts_shutdown, {});
+    rewriter.eraseOp(op);
+    ++numMiscOpsConverted;
+    return success();
+  }
+};
+
 /// Pattern to convert arts.get_edt_epoch_guid operations
 struct GetEdtEpochGuidPattern : public ArtsRtToLLVMPattern<GetEdtEpochGuidOp> {
   using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
@@ -1663,7 +1679,7 @@ void populateRuntimePatterns(RewritePatternSet &patterns, ArtsCodegen *AC) {
   patterns.add<RuntimeQueryPattern>(context, AC);
 
   /// Synchronization patterns
-  patterns.add<BarrierPattern, AtomicAddPattern>(context, AC);
+  patterns.add<BarrierPattern, ShutdownPattern, AtomicAddPattern>(context, AC);
 
   /// Builtin patterns (Polygeist emits these as calls, not intrinsics)
   patterns.add<BuiltinObjectSizePattern>(context);

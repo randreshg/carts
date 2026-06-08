@@ -17,8 +17,9 @@ inline bool isArtsRegion(Operation *op) {
 }
 
 inline bool isArtsOp(Operation *op) {
-  return isArtsRegion(op) || isa<BarrierOp, AllocOp, DbAllocOp, DbAcquireOp,
-                                 DbReleaseOp, DbFreeOp, RuntimeQueryOp>(op);
+  return isArtsRegion(op) ||
+         isa<BarrierOp, AllocOp, DbAllocOp, DbAcquireOp, DbReleaseOp, DbFreeOp,
+             RuntimeQueryOp, ShutdownOp>(op);
 }
 
 } // namespace carts::arts

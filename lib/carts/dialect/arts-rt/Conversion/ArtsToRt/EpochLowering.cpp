@@ -21,13 +21,16 @@ namespace mlir::carts::arts_rt {
 } // namespace mlir::carts::arts_rt
 #include "../ArtsRtToLLVM/CodegenInternal.h"
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
+#include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/passes/Passes.h"
+#include "carts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 
 #include "llvm/ADT/DenseSet.h"
@@ -64,7 +67,17 @@ struct TailFinishContinuation {
 };
 
 static bool isAllowedContinuationSetupOp(Operation *op) {
-  return isa<EdtParamPackOp>(op) || op->hasTrait<OpTrait::ConstantLike>();
+  return isa<EdtParamPackOp>(op) || op->hasTrait<OpTrait::ConstantLike>() ||
+         (op->getNumRegions() == 0 && isMemoryEffectFree(op));
+}
+
+static bool isAllowedContinuationTailOp(Operation *op) {
+  return isa<DbAcquireOp, LoweringContractOp, RecordDepOp>(op) ||
+         isAllowedContinuationSetupOp(op);
+}
+
+static bool isBeforeOrSame(Operation *lhs, Operation *rhs) {
+  return lhs == rhs || lhs->isBeforeInBlock(rhs);
 }
 
 static bool
@@ -81,52 +94,116 @@ operandsDominateEpoch(Operation *op, Operation *epochOp,
   return true;
 }
 
+static LogicalResult collectMovableCreateSlice(
+    EdtCreateOp continuation, Operation *epochOp,
+    const llvm::SmallDenseSet<Operation *, 16> &segmentOps,
+    SmallVectorImpl<Operation *> &opsToMove) {
+  llvm::SmallDenseSet<Operation *, 16> moveSet;
+  SmallVector<Operation *, 8> worklist;
+
+  auto enqueueDef = [&](Value value) {
+    Operation *def = value.getDefiningOp();
+    if (!def || !segmentOps.contains(def) || moveSet.contains(def))
+      return;
+    if (!isBeforeOrSame(def, continuation.getOperation()))
+      return;
+    worklist.push_back(def);
+  };
+
+  for (Value operand : continuation->getOperands())
+    enqueueDef(operand);
+
+  while (!worklist.empty()) {
+    Operation *op = worklist.pop_back_val();
+    if (!moveSet.insert(op).second)
+      continue;
+    if (!isAllowedContinuationSetupOp(op))
+      return failure();
+    for (Value operand : op->getOperands())
+      enqueueDef(operand);
+  }
+
+  moveSet.insert(continuation.getOperation());
+  opsToMove.assign(moveSet.begin(), moveSet.end());
+  llvm::sort(opsToMove,
+             [](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
+
+  llvm::SmallDenseSet<Operation *, 4> opsToMoveSet(opsToMove.begin(),
+                                                   opsToMove.end());
+  for (Operation *op : opsToMove)
+    if (!operandsDominateEpoch(op, epochOp, opsToMoveSet))
+      return failure();
+
+  return success();
+}
+
 static FailureOr<TailFinishContinuation>
 findTailFinishContinuation(EpochOp epochOp) {
+  auto parentFunc = epochOp->getParentOfType<func::FuncOp>();
+  if (!parentFunc || parentFunc.getSymName() != "main")
+    return failure();
+
   Block *block = epochOp->getBlock();
   if (!block)
     return failure();
 
   TailFinishContinuation candidate;
+  SmallVector<Operation *, 8> segmentOps;
   auto it = std::next(Block::iterator(epochOp.getOperation()));
   for (; it != block->end(); ++it) {
     Operation *op = &*it;
-    if (op->hasTrait<OpTrait::IsTerminator>())
-      return failure();
+    if (auto returnOp = dyn_cast<func::ReturnOp>(op)) {
+      (void)returnOp;
+      break;
+    }
 
     if (auto continuation = dyn_cast<EdtCreateOp>(op)) {
       if (continuation.getEpochGuid())
         return failure();
-      if (!matchPattern(continuation.getDepCount(), m_Zero()))
+      if (candidate.continuation)
         return failure();
       candidate.continuation = continuation;
       candidate.finishSlot = continuation.getDepCount();
-      candidate.opsToMove.push_back(op);
-      ++it;
-      break;
+      segmentOps.push_back(op);
+      continue;
     }
 
-    if (!isAllowedContinuationSetupOp(op))
+    if (!isAllowedContinuationTailOp(op))
       return failure();
-    candidate.opsToMove.push_back(op);
+    segmentOps.push_back(op);
   }
 
   if (!candidate.continuation)
     return failure();
 
-  for (; it != block->end(); ++it) {
-    auto returnOp = dyn_cast<func::ReturnOp>(&*it);
-    if (!returnOp)
-      return failure();
-    if (returnOp.getNumOperands() != 0)
-      return failure();
-  }
+  if (it == block->end() || !isa<func::ReturnOp>(&*it))
+    return failure();
 
-  llvm::SmallDenseSet<Operation *, 4> opsToMoveSet(candidate.opsToMove.begin(),
-                                                   candidate.opsToMove.end());
-  for (Operation *op : candidate.opsToMove)
-    if (!operandsDominateEpoch(op, epochOp.getOperation(), opsToMoveSet))
-      return failure();
+  ++it;
+  if (it != block->end())
+    return failure();
+
+  llvm::SmallDenseSet<Operation *, 16> segmentSet(segmentOps.begin(),
+                                                  segmentOps.end());
+  if (failed(collectMovableCreateSlice(candidate.continuation,
+                                       epochOp.getOperation(), segmentSet,
+                                       candidate.opsToMove)))
+    return failure();
+
+  auto outlinedName = candidate.continuation->getAttrOfType<StringAttr>(
+      ::mlir::carts::arts::AttrNames::Operation::OutlinedFunc);
+  if (!outlinedName)
+    return failure();
+  auto outlined =
+      epochOp->getParentOfType<ModuleOp>().lookupSymbol<func::FuncOp>(
+          outlinedName.getValue());
+  if (!outlined)
+    return failure();
+
+  bool continuationOwnsShutdown = false;
+  outlined.walk([&](ShutdownOp) { continuationOwnsShutdown = true; });
+  if (!continuationOwnsShutdown)
+    return failure();
 
   return candidate;
 }
@@ -138,9 +215,18 @@ moveTailFinishContinuationBeforeEpoch(EpochOp epochOp,
     op->moveBefore(epochOp);
 
   OpBuilder builder(continuation.continuation);
-  Value one = arith::ConstantIntOp::create(
-      builder, continuation.continuation.getLoc(), 1, 32);
-  continuation.continuation.getDepCountMutable().set(one);
+  Value oldDepCount = continuation.finishSlot;
+  Value newDepCount;
+  if (matchPattern(oldDepCount, m_Zero())) {
+    newDepCount = arith::ConstantIntOp::create(
+        builder, continuation.continuation.getLoc(), 1, 32);
+  } else {
+    Value one = arith::ConstantIntOp::create(
+        builder, continuation.continuation.getLoc(), 1, 32);
+    newDepCount = arith::AddIOp::create(
+        builder, continuation.continuation.getLoc(), oldDepCount, one);
+  }
+  continuation.continuation.getDepCountMutable().set(newDepCount);
   return continuation;
 }
 

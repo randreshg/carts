@@ -44,6 +44,19 @@ def UndefOp : Arts_Op<"undef", [Pure]> {
 }
 
 ///===----------------------------------------------------------------------===///
+/// arts.shutdown
+///===----------------------------------------------------------------------===///
+def ShutdownOp : Arts_Op<"shutdown", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Terminate the ARTS runtime from an authored continuation";
+  let description = [{
+    Terminates the ARTS runtime when execution reaches this point. ARTS uses
+    this op to make final continuation EDTs own process shutdown explicitly;
+    ARTS-RT lowers it mechanically to the runtime shutdown call.
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+///===----------------------------------------------------------------------===///
 /// arts.alloc
 ///===----------------------------------------------------------------------===///
 def AllocOp : Arts_Op<"alloc", []> {

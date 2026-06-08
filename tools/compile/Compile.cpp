@@ -349,10 +349,14 @@ static const std::array<llvm::StringLiteral, 7> kLateConcurrencyCleanupPasses =
      "EdtAllocaSinking",
      "ArtsDeadCodeElimination",
      "Mem2Reg"};
-static const std::array<llvm::StringLiteral, 7> kEpochsPasses = {
-    "PolygeistCanonicalize",       "CreateEpochs",
-    "VerifyEpochCreated",          "EpochOpt[amortization]",
-    "PolygeistCanonicalize",       "DbCommitDistributedDeps (conditional)",
+static const std::array<llvm::StringLiteral, 8> kEpochsPasses = {
+    "PolygeistCanonicalize",
+    "CreateEpochs",
+    "VerifyEpochCreated",
+    "EpochOpt[amortization]",
+    "EpochTailContinuation",
+    "PolygeistCanonicalize",
+    "DbCommitDistributedDeps (conditional)",
     "VerifyArtsCdag (conditional)"};
 static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
     "EdtAllocaSinking",
@@ -704,6 +708,7 @@ void registerDialects(DialectRegistry &registry) {
   registerMatmulContractionMaterialization();
   registerDistributedLaunchConsistency();
   registerRealizeEdtDistributionPlan();
+  registerEpochTailContinuation();
   registerVerifyDistributedDbPlacement();
   registerVerifyArtsCdag();
   registerDbCommitDistributedDeps();
@@ -1304,6 +1309,7 @@ void buildEpochsPipeline(PassManager &pm, bool enableDistributedDb) {
   /// Realize the committed repeated-timestep epoch shape on newly created
   /// epochs.
   pm.addPass(arts::createEpochOptPass(/*amortization=*/true));
+  pm.addPass(arts::createEpochTailContinuationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   /// Commit distributed acquire DB modes / halo after epoch shaping, then
   /// verify the canonical-owner DAG fails closed before pre-lowering.

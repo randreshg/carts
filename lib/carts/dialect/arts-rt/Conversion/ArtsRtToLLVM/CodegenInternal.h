@@ -133,6 +133,12 @@ public:
   void setDistributedInitInWorkers(bool value) {
     distributedInitInWorkers = value;
   }
+  void setAuthoredShutdownInProgram(bool value) {
+    authoredShutdownInProgram = value;
+  }
+  bool hasAuthoredShutdownInProgram() const {
+    return authoredShutdownInProgram;
+  }
   void setRuntimeConfig(const arts::RuntimeConfig *machine) {
     runtimeConfig = machine;
   }
@@ -226,6 +232,7 @@ private:
   SmallVector<func::FuncOp, 8> distributedInitNodeCallbacks;
   SmallVector<func::FuncOp, 8> distributedInitWorkerCallbacks;
   bool distributedInitInWorkers = false;
+  bool authoredShutdownInProgram = false;
   const arts::RuntimeConfig *runtimeConfig = nullptr;
 
   /// Helper functions

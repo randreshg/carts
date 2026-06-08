@@ -55,6 +55,7 @@ std::unique_ptr<Pass> createEdtPtrRematerializationPass();
 /// Realize the committed repeated-timestep epoch shape.
 std::unique_ptr<Pass> createEpochOptPass();
 std::unique_ptr<Pass> createEpochOptPass(bool enableAmortization);
+std::unique_ptr<Pass> createEpochTailContinuationPass();
 std::unique_ptr<Pass> createHoistingPass();
 std::unique_ptr<Pass> createBlockLoopStripMiningPass();
 
