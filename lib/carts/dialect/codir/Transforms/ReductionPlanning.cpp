@@ -324,6 +324,13 @@ stampPartialReductionSplitPlan(codir::CodeletOp codelet,
   if (!resultAccess)
     return verifyAll();
 
+  // The split requires a rank-1 per-owner partial tile. Owner-tiled
+  // multi-dimensional results keep the unsplit per-owner reduction shape.
+  auto resultType =
+      dyn_cast<MemRefType>(codelet.getDeps()[resultAccess->depIndex].getType());
+  if (!resultType || resultType.getRank() != 1)
+    return verifyAll();
+
   std::optional<int64_t> computedOwnerTaskCount =
       computeStaticResultOwnerTaskCount(codelet, *resultAccess);
   if (!computedOwnerTaskCount || *computedOwnerTaskCount <= 0)
