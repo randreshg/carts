@@ -1248,8 +1248,7 @@ struct DepGepOpPattern : public ArtsRtToLLVMPattern<DepGepOp> {
     Value depEntryPtr = AC->create<LLVM::GEPOp>(
         loc, AC->llvmPtr, AC->ArtsEdtDep, typedDepPtr, ValueRange{linearIndex});
 
-    /// Extract both guid (field #0) and ptr (field #1) from depv
-    /// v2 arts_edt_dep_t layout: { guid, ptr, mode }
+    /// Extract both guid (field #0) and ptr (field #1) from depv.
     auto c0 = AC->createIntConstant(0, AC->Int64, loc);
     auto cPtrIdx = AC->createIntConstant(1, AC->Int64, loc);
 

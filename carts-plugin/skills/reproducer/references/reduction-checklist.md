@@ -18,7 +18,7 @@
 
 - the dep pattern
 - the partition mode / full-range behavior
-- `distribution_*` attrs if H2 is relevant
+- `distribution_*` attrs if distribution strategy is relevant
 - contract attributes and metadata IDs if the verifier or lowering relies on them
 
 ## Prefer the Smallest Test Form

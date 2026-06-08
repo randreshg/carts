@@ -95,7 +95,7 @@ def _get_pinned_submodule_hash(carts_dir: Path, submodule: str) -> Optional[str]
 
 
 def _update_submodule_checkout(carts_dir: Path, submodule: str) -> None:
-    """Update a top-level submodule and only the nested pieces required by v2."""
+    """Update a top-level submodule and only the required nested pieces."""
     recursive = submodule != SUBMODULE_ARTS
     args = ["git", "submodule", "update", "--init"]
     if recursive:

@@ -6,14 +6,10 @@
 /// lifetime cleanup stays in the DB layer.
 ///
 /// Current transforms:
-///   DT-1: Contract persistence -- persist refined AcquireContractSummary
-///         back to IR via upsertLoweringContract().
-///   DT-2: Stencil halo consolidation -- unify halo bounds from graph
-///         analysis, raw IR attrs, and contract into unified min/max offsets.
-///   DT-6: DB lifetime shortening -- remove cleanup-only acquire chains once
-///         the reachable DB-use graph proves they feed no computation.
-///   DT-7: Dead DB elimination -- remove root DBs whose reachable use graph is
-///         entirely cleanup/forwarding plumbing.
+///   Contract persistence -- persist refined AcquireContractSummary back to IR.
+///   Stencil halo consolidation -- unify halo bounds into lowering contracts.
+///   DB lifetime shortening -- remove cleanup-only acquire chains.
+///   Dead DB elimination -- remove root DBs with no semantic users.
 ///
 ///==========================================================================///
 
@@ -74,16 +70,12 @@ struct DbTransformsPass : public impl::DbTransformsBase<DbTransformsPass> {
 private:
   mlir::carts::arts::AnalysisManager *AM = nullptr;
 
-  /// DT-1: Contract persistence
   unsigned persistContracts();
 
-  /// DT-2: Stencil halo consolidation
   unsigned consolidateStencilHalos();
 
-  /// DT-6: Cleanup-only acquire elimination
   unsigned shortenDbLifetimes();
 
-  /// DT-7: Root DB cleanup once no semantic users remain
   unsigned eliminateDeadDbs();
 };
 } // namespace
@@ -99,7 +91,7 @@ void DbTransformsPass::runOnOperation() {
   AM->getDbAnalysis().invalidate();
 
   ///===------------------------------------------------------------------===///
-  /// DT-1: Contract persistence
+  /// Contract persistence.
   ///
   /// Walk all DbAcquireOps, query DbAnalysis for the refined
   /// AcquireContractSummary, and when refinedByDbAnalysis is true persist
@@ -109,10 +101,10 @@ void DbTransformsPass::runOnOperation() {
   unsigned dt1Count = persistContracts();
   numContractsPersisted += dt1Count;
   if (dt1Count > 0)
-    ARTS_INFO("DT-1: persisted " << dt1Count << " refined contracts");
+    ARTS_INFO("persisted " << dt1Count << " refined contracts");
 
   ///===------------------------------------------------------------------===///
-  /// DT-2: Stencil halo consolidation
+  /// Stencil halo consolidation.
   ///
   /// Unify halo bounds from graph analysis, raw IR attrs, and the existing
   /// LoweringContractOp into the contract's minOffsets/maxOffsets. After
@@ -121,11 +113,10 @@ void DbTransformsPass::runOnOperation() {
   unsigned dt2Count = consolidateStencilHalos();
   numStencilHalosConsolidated += dt2Count;
   if (dt2Count > 0)
-    ARTS_INFO("DT-2: consolidated stencil halos on " << dt2Count
-                                                     << " acquires");
+    ARTS_INFO("consolidated stencil halos on " << dt2Count << " acquires");
 
   ///===------------------------------------------------------------------===///
-  /// DT-6: DB lifetime shortening
+  /// DB lifetime shortening.
   ///
   /// Remove cleanup-only acquire subgraphs after proving through the reachable
   /// DB-use graph that they do not feed computation, task dependencies, or
@@ -134,11 +125,10 @@ void DbTransformsPass::runOnOperation() {
   unsigned dt6Count = shortenDbLifetimes();
   numCleanupOnlyAcquireChainsRemoved += dt6Count;
   if (dt6Count > 0)
-    ARTS_INFO("DT-6: shortened " << dt6Count
-                                 << " cleanup-only acquire lifetimes");
+    ARTS_INFO("shortened " << dt6Count << " cleanup-only acquire lifetimes");
 
   ///===------------------------------------------------------------------===///
-  /// DT-7: Dead DB elimination
+  /// Dead DB elimination.
   ///
   /// Remove root DB chains when the full reachable DB-use graph is reduced to
   /// forwarding and cleanup plumbing only.
@@ -146,13 +136,13 @@ void DbTransformsPass::runOnOperation() {
   unsigned dt7Count = eliminateDeadDbs();
   numDeadDbRootsEliminated += dt7Count;
   if (dt7Count > 0)
-    ARTS_INFO("DT-7: eliminated " << dt7Count << " dead DB roots");
+    ARTS_INFO("eliminated " << dt7Count << " dead DB roots");
 
   ARTS_INFO_FOOTER(DbTransformsPass);
 }
 
 ///===----------------------------------------------------------------------===///
-/// DT-1: Contract persistence
+/// Contract persistence.
 ///===----------------------------------------------------------------------===///
 unsigned DbTransformsPass::persistContracts() {
   ModuleOp module = getOperation();
@@ -187,7 +177,7 @@ unsigned DbTransformsPass::persistContracts() {
                              persistedContract);
       ++count;
 
-      ARTS_DEBUG("DT-1: persisted contract for acquire " << acquire);
+      ARTS_DEBUG("persisted contract for acquire " << acquire);
     }
   });
 
@@ -195,7 +185,7 @@ unsigned DbTransformsPass::persistContracts() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// DT-2: Stencil halo consolidation
+/// Stencil halo consolidation.
 ///===----------------------------------------------------------------------===///
 unsigned DbTransformsPass::consolidateStencilHalos() {
   ModuleOp module = getOperation();
@@ -211,7 +201,7 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       if (!contractSummary || !contractSummary->usesStencilSemantics())
         continue;
 
-      ARTS_DEBUG("DT-2: processing stencil acquire " << acquire);
+      ARTS_DEBUG("processing stencil acquire " << acquire);
 
       unsigned rank = 0;
 
@@ -231,7 +221,7 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       }
 
       if (rank == 0) {
-        ARTS_DEBUG("DT-2: no halo bounds available, skipping");
+        ARTS_DEBUG("no halo bounds available, skipping");
         continue;
       }
 
@@ -241,14 +231,12 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
       if (rawMinOffsets) {
         for (unsigned d = 0; d < rawMinOffsets->size() && d < rank; ++d)
           unifiedMin[d] = std::min(unifiedMin[d], (*rawMinOffsets)[d]);
-        ARTS_DEBUG(
-            "DT-2:   raw min offsets present, size=" << rawMinOffsets->size());
+        ARTS_DEBUG("raw min offsets present, size=" << rawMinOffsets->size());
       }
       if (rawMaxOffsets) {
         for (unsigned d = 0; d < rawMaxOffsets->size() && d < rank; ++d)
           unifiedMax[d] = std::max(unifiedMax[d], (*rawMaxOffsets)[d]);
-        ARTS_DEBUG(
-            "DT-2:   raw max offsets present, size=" << rawMaxOffsets->size());
+        ARTS_DEBUG("raw max offsets present, size=" << rawMaxOffsets->size());
       }
 
       if (contractHalo) {
@@ -257,9 +245,9 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
           unifiedMin[d] = std::min(unifiedMin[d], contractMins[d]);
         for (unsigned d = 0; d < contractMaxs.size() && d < rank; ++d)
           unifiedMax[d] = std::max(unifiedMax[d], contractMaxs[d]);
-        ARTS_DEBUG("DT-2:   contract halo present, min_rank="
-                   << contractMins.size()
-                   << " max_rank=" << contractMaxs.size());
+        ARTS_DEBUG("contract halo present, min_rank=" << contractMins.size()
+                                                      << " max_rank="
+                                                      << contractMaxs.size());
       }
 
       bool allZero = true;
@@ -270,7 +258,7 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
         }
       }
       if (allZero) {
-        ARTS_DEBUG("DT-2: unified bounds are all zero, skipping");
+        ARTS_DEBUG("unified bounds are all zero, skipping");
         continue;
       }
 
@@ -311,7 +299,7 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
 
       ++count;
 
-      ARTS_DEBUG("DT-2: consolidated halo for acquire "
+      ARTS_DEBUG("consolidated halo for acquire "
                  << acquire << " -> unified min/max with rank=" << rank);
     }
   });
@@ -320,7 +308,7 @@ unsigned DbTransformsPass::consolidateStencilHalos() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// DT-6: DB lifetime shortening
+/// DB lifetime shortening.
 ///===----------------------------------------------------------------------===///
 unsigned DbTransformsPass::shortenDbLifetimes() {
   ModuleOp module = getOperation();
@@ -358,7 +346,7 @@ unsigned DbTransformsPass::shortenDbLifetimes() {
       }
 
       ++removedAcquireChains;
-      ARTS_DEBUG("DT-6: removing cleanup-only acquire chain rooted at "
+      ARTS_DEBUG("removing cleanup-only acquire chain rooted at "
                  << acquireNode->getHierId());
     }
 
@@ -376,7 +364,7 @@ unsigned DbTransformsPass::shortenDbLifetimes() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// DT-7: Dead DB elimination
+/// Dead DB elimination.
 ///===----------------------------------------------------------------------===///
 unsigned DbTransformsPass::eliminateDeadDbs() {
   ModuleOp module = getOperation();
@@ -414,7 +402,7 @@ unsigned DbTransformsPass::eliminateDeadDbs() {
       }
 
       ++removedRoots;
-      ARTS_DEBUG("DT-7: removing dead DB root " << allocNode->getHierId());
+      ARTS_DEBUG("removing dead DB root " << allocNode->getHierId());
     }
 
     if (opsToRemove.empty())
@@ -430,9 +418,6 @@ unsigned DbTransformsPass::eliminateDeadDbs() {
   return removedRoots;
 }
 
-///===----------------------------------------------------------------------===///
-/// DT-3: ESD annotation
-///===----------------------------------------------------------------------===///
 ///===----------------------------------------------------------------------===///
 /// Pass creation
 ///===----------------------------------------------------------------------===///

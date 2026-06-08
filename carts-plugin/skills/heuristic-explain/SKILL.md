@@ -10,7 +10,7 @@ parameters:
     gather: "Path to MLIR or C input file to analyze"
   - name: focus
     type: str
-    gather: "What to explain: 'partition' (H1 DB partitioning), 'distribution' (H2 EDT strategy), or 'both'"
+    gather: "What to explain: 'partition' (DB partitioning), 'distribution' (EDT strategy), or 'both'"
 ---
 
 # CARTS Heuristic Decision Explainer
@@ -48,25 +48,26 @@ dekk carts compile <file> --diagnose --diagnose-output .carts/outputs/heuristics
 
 ## DB Partition Decision Surface
 
-Use these labels as diagnostic categories, not as source-file entry points:
+Use these diagnostic categories as explanations, not as source-file entry
+points:
 
-| Rule | Condition | Result | Typical Trigger |
-|------|-----------|--------|-----------------|
-| H1.C0 | Tiny read-only stencil coefficient | COARSE | Small constant arrays |
-| H1.C1 | Pointer-of-pointer type | COARSE | `memref<memref<T>>` |
-| H1.C2 | Single-node + all read-only | COARSE | Read-only arrays on 1 node |
-| H1.C3 | Explicit coarse contract | COARSE | Consumer override |
-| H1.C4 | No block/element capability | COARSE | No partition dims found |
-| H1.B1 | Indirect reads + block writes | BLOCK | Mixed access patterns |
-| H1.B2 | Uniform direct access | BLOCK | Regular array operations |
-| H1.B3 | Double-buffer stencil (Jacobi) | BLOCK | Alternating buffers |
-| H1.B4 | Indexed access + block capable | BLOCK | Index-based patterns |
-| H1.S1 | Element-wise stencil | STENCIL | Fine-grained stencil |
-| H1.S2 | Block-capable stencil | STENCIL | Block stencil with halo |
-| H1.E1 | Element-wise capable | FINE | Per-element partitioning |
+| Category | Condition | Result | Typical Trigger |
+|----------|-----------|--------|-----------------|
+| tiny read-only coefficient | Tiny read-only stencil coefficient | COARSE | Small constant arrays |
+| pointer-of-pointer | Pointer-of-pointer type | COARSE | `memref<memref<T>>` |
+| single-node read-only | Single-node + all read-only | COARSE | Read-only arrays on 1 node |
+| explicit coarse contract | Explicit coarse contract | COARSE | Consumer override |
+| no block capability | No block/element capability | COARSE | No partition dims found |
+| indirect reads with block writes | Indirect reads + block writes | BLOCK | Mixed access patterns |
+| uniform direct access | Uniform direct access | BLOCK | Regular array operations |
+| double-buffer stencil | Double-buffer stencil (Jacobi) | BLOCK | Alternating buffers |
+| indexed block-capable access | Indexed access + block capable | BLOCK | Index-based patterns |
+| element-wise stencil | Element-wise stencil | STENCIL | Fine-grained stencil |
+| block-capable stencil | Block-capable stencil | STENCIL | Block stencil with halo |
+| element-wise capable | Element-wise capable | FINE | Per-element partitioning |
 | Residual raw bridge | Unsupported or unproven ownership | COARSE or diagnostic | Coarse only for residual raw memrefs; non-coarse raw layout plans fail at `CreateDbs` |
 
-## H2 Distribution Strategy Selection
+## Distribution Strategy Selection
 
 | Pattern | Machine | Result |
 |---------|---------|--------|
@@ -105,7 +106,7 @@ lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp — CODIR-to-ARTS
 
 When the user asks to explain a heuristic decision:
 
-1. Identify the focus: partitioning (H1) or distribution (H2)
+1. Identify the focus: partitioning or distribution.
 2. Compile with the relevant `--arts-debug` channel to capture decisions
 3. Dump IR at the decision stage (`sde-planning`, `codir-to-arts`, `db-opt`, or `post-db-refinement`)
 4. Parse debug output for which heuristic rule fired

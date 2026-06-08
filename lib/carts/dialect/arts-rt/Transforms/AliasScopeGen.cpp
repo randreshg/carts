@@ -104,9 +104,7 @@ static bool isDepStructPointerLoad(LLVM::LoadOp loadOp) {
   int32_t penultimate = rawIndices[rawIndices.size() - 2];
   int32_t last = rawIndices.back();
 
-  /// Current v2 lowering stores the dependency pointer field in slot 1. Slot 2
-  /// can still appear in archived IR snapshots consumed by debug tools.
-  return penultimate == 0 && (last == 1 || last == 2);
+  return penultimate == 0 && last == 1;
 }
 
 struct DepIndexInfo {
@@ -121,7 +119,7 @@ static DepIndexInfo extractDepIndexInfo(LLVM::LoadOp loadOp) {
 
   /// Prefer LLVM GEP pattern after ARTS-RT-to-LLVM lowering:
   ///   %depEntry = llvm.getelementptr %depv[%idx]
-  ///   %ptrField = llvm.getelementptr %depEntry[0, 2]
+  ///   %ptrField = llvm.getelementptr %depEntry[0, 1]
   ///   %ptr = llvm.load %ptrField : !llvm.ptr
   if (auto ptrFieldGep = loadOp.getAddr().getDefiningOp<LLVM::GEPOp>()) {
     if (isDepStructPointerLoad(loadOp)) {

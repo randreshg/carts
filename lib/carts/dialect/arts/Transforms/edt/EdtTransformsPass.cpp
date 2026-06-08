@@ -9,12 +9,12 @@
 ///              subpartitioned acquire of the same root DB without
 ///              planned-block evidence; the single grain belongs upstream.
 ///
-///   ET-1:      Task granularity control -- estimate task cost from EdtInfo
-///              metrics and warn on trivially small tasks.
+///   Task granularity diagnostics -- estimate task cost from EdtInfo metrics
+///              and warn on trivially small tasks.
 ///
-///   EXT-EDT-2: Dead dependency elimination -- remove unused dependency
-///              slots whose block arguments have zero uses or are only
-///              consumed by cleanup or true-only compiler control-token stores.
+///   Dead dependency elimination -- remove unused dependency slots whose block
+///              arguments have zero uses or are only consumed by cleanup or
+///              true-only compiler control-token stores.
 ///
 ///==========================================================================///
 
@@ -54,10 +54,9 @@ ARTS_DEBUG_SETUP(edt_transforms);
 
 static llvm::Statistic numGranularityAnnotations{
     "edt_transforms", "NumGranularityAnnotations",
-    "Number of ET-1 granularity annotations"};
+    "Number of task granularity diagnostics"};
 static llvm::Statistic numDeadDepsRemoved{
-    "edt_transforms", "NumDeadDepsRemoved",
-    "Number of EXT-EDT-2 dead deps removed"};
+    "edt_transforms", "NumDeadDepsRemoved", "Number of dead deps removed"};
 
 namespace {
 
@@ -79,11 +78,11 @@ struct EdtTransformsPass : public ::impl::EdtTransformsBase<EdtTransformsPass> {
 private:
   mlir::carts::arts::AnalysisManager *AM = nullptr;
 
-  /// ET-1: Estimate task granularity and warn on trivially small tasks.
+  /// Estimate task granularity and warn on trivially small tasks.
   /// Returns the number of warned EDTs.
   unsigned estimateTaskGranularity();
 
-  /// EXT-EDT-2: Walk all EDTs and remove unused dependency slots.
+  /// Walk all EDTs and remove unused dependency slots.
   /// Returns the number of eliminated dependencies.
   unsigned eliminateDeadDependencies();
 
@@ -114,7 +113,7 @@ void EdtTransformsPass::runOnOperation() {
   }
 
   ///===--------------------------------------------------------------------===///
-  /// ET-1: Task granularity control
+  /// Task granularity diagnostics.
   ///
   /// Walk all EDTs, compute a cost estimate from EdtInfo metrics, and emit a
   /// diagnostic warning for trivially small tasks (< threshold).
@@ -122,10 +121,10 @@ void EdtTransformsPass::runOnOperation() {
   unsigned et1Count = estimateTaskGranularity();
   numGranularityAnnotations += et1Count;
   if (et1Count > 0)
-    ARTS_INFO("ET-1: warned on " << et1Count << " trivially small EDTs");
+    ARTS_INFO("warned on " << et1Count << " trivially small EDTs");
 
   ///===--------------------------------------------------------------------===///
-  /// EXT-EDT-2: Dead dependency elimination
+  /// Dead dependency elimination.
   ///
   /// Walk all EDTs and remove dependency slots whose block arguments are
   /// unused or only consumed by DbReleaseOps. This tightens the task graph
@@ -134,7 +133,7 @@ void EdtTransformsPass::runOnOperation() {
   unsigned extEdt2Count = eliminateDeadDependencies();
   numDeadDepsRemoved += extEdt2Count;
   if (extEdt2Count > 0)
-    ARTS_INFO("EXT-EDT-2: eliminated " << extEdt2Count << " dead dependencies");
+    ARTS_INFO("eliminated " << extEdt2Count << " dead dependencies");
 
   logModuleEdtSummary(metrics);
 
@@ -177,7 +176,7 @@ void EdtTransformsPass::logModuleEdtSummary(
 }
 
 ///===----------------------------------------------------------------------===///
-/// ET-1: Task granularity control
+/// Task granularity diagnostics.
 ///===----------------------------------------------------------------------===///
 unsigned EdtTransformsPass::estimateTaskGranularity() {
   ModuleOp module = getOperation();
@@ -210,13 +209,13 @@ unsigned EdtTransformsPass::estimateTaskGranularity() {
         cost = depthScale;
       }
 
-      ARTS_DEBUG("ET-1: EDT [" << node->getHierId() << "]"
-                               << " maxLoopDepth=" << info.maxLoopDepth
-                               << " => estimatedTaskCost=" << cost);
+      ARTS_DEBUG("EDT [" << node->getHierId() << "]"
+                         << " maxLoopDepth=" << info.maxLoopDepth
+                         << " => estimatedTaskCost=" << cost);
 
       /// Warn about trivially small tasks that may benefit from fusion.
       if (cost < kSmallTaskThreshold) {
-        edt.emitWarning("ET-1: trivially small task (estimated cost ")
+        edt.emitWarning("trivially small task (estimated cost ")
             << cost << " < " << kSmallTaskThreshold
             << "); consider fusing with a neighbour EDT";
         ++count;
@@ -228,7 +227,7 @@ unsigned EdtTransformsPass::estimateTaskGranularity() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// EXT-EDT-2: Dead dependency elimination
+/// Dead dependency elimination.
 ///===----------------------------------------------------------------------===///
 unsigned EdtTransformsPass::eliminateDeadDependencies() {
   ModuleOp module = getOperation();
@@ -252,9 +251,8 @@ unsigned EdtTransformsPass::eliminateDeadDependencies() {
       DbAcquireOp acquire = deps[i].getDefiningOp<DbAcquireOp>();
 
       if (acquire && acquire.getPreserveDepEdge()) {
-        ARTS_DEBUG("EXT-EDT-2: keeping cleanup-only dep " << i
-                                                          << " due to "
-                                                             "preserveDepEdge");
+        ARTS_DEBUG("keeping cleanup-only dep " << i
+                                               << " due to preserveDepEdge");
         continue;
       }
 
@@ -270,9 +268,7 @@ unsigned EdtTransformsPass::eliminateDeadDependencies() {
       deadIndices.push_back(i);
       for (Operation *op : cleanupChain)
         cleanupOpsToErase.insert(op);
-      ARTS_DEBUG("EXT-EDT-2: block arg " << i
-                                         << " is cleanup-only and can be "
-                                            "eliminated");
+      ARTS_DEBUG("block arg " << i << " is cleanup-only and can be eliminated");
     }
 
     if (deadIndices.empty())
@@ -316,8 +312,7 @@ unsigned EdtTransformsPass::eliminateDeadDependencies() {
     }
 
     totalEliminated += deadIndices.size();
-    ARTS_DEBUG("EXT-EDT-2: eliminated " << deadIndices.size()
-                                        << " dead deps from EDT");
+    ARTS_DEBUG("eliminated " << deadIndices.size() << " dead deps from EDT");
   });
 
   return totalEliminated;

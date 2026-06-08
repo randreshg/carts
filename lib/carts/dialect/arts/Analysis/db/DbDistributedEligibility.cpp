@@ -385,11 +385,9 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc,
     /// keeps one writer frontier per block.
     if (alloc.getPerBlockSingleWriterStencil().value_or(false))
       return {true, DistributedDbEligibilityRejectReason::None};
-    /// EXT-DIST-1: Allow read-only stencil DBs as replicated distributed DBs.
     /// CODIR storage planning marks acquires with `replicatedRead` when the
-    /// codelet wants the whole DB on every node (DT-5 emits PREFER_DUPLICATE
-    /// in lowering). Without that marker, the codelet asked for a block view
-    /// and we must not unilaterally replicate.
+    /// codelet wants the whole DB on every node. Without that marker, the
+    /// codelet asked for a block view and ARTS must not unilaterally replicate.
     bool readOnly =
         facts.allAcquiresReadOnly || hasReadOnlyAfterInitAttr(alloc);
     if (readOnly && facts.isStencilFamily &&

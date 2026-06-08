@@ -669,9 +669,8 @@ DbAnalysis::getAcquireContractSummary(DbAcquireOp acquire) {
       summary.refinedByDbAnalysis = refined;
     }
     populateSummaryFromCanonicalContract(summary, acquire);
-    /// FIX-3: Contract persistence is handled by DT-1 in DbTransformsPass
-    /// to avoid double-emission when getAcquireContractSummary() is called
-    /// multiple times during analysis.
+    /// DbTransformsPass persists contracts so repeated analysis queries do not
+    /// emit duplicate IR.
     mergeDerivedFactEvidence(summary, *facts);
   }
 

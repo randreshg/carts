@@ -85,15 +85,10 @@ def DbTransforms : Pass<"db-transforms", "mlir::ModuleOp"> {
   let description = [{
     Hosts DB-level transformations that run after DB partitioning and
     distributed ownership decisions are known. Current transforms:
-    - DT-1: Contract persistence -- persist refined AcquireContractSummary
-      back to IR via upsertLoweringContract().
-    - DT-2: Stencil halo consolidation
-    - DT-6: DB lifetime shortening
-    - DT-7: Dead DB elimination
-
-    Placeholder slots:
-    - DT-3: ESD annotation
-    - DT-5: Acquire coalescing
+    - Contract persistence: persist refined AcquireContractSummary back to IR.
+    - Stencil halo consolidation.
+    - DB lifetime shortening.
+    - Dead DB elimination.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
@@ -229,10 +224,9 @@ def EdtTransforms : Pass<"edt-transforms", "mlir::ModuleOp"> {
   let summary = "Post-DB EDT transforms (granularity, affinity, dependency cleanup)";
   let description = [{
     Hosts EDT-level transformations that run after DB partitioning and
-    mode decisions are known. Current placeholder slots:
-    - ET-1: Task granularity control
-    - ET-2: Data affinity placement
-    - EXT-EDT-2: Dead dependency elimination
+    mode decisions are known. Current transforms:
+    - Task granularity diagnostics.
+    - Dead dependency elimination.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
