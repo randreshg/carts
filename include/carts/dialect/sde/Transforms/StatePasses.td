@@ -103,7 +103,8 @@ def SdeRankExpandMu
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect",
-                           "::mlir::arith::ArithDialect"];
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::polygeist::PolygeistDialect"];
   let constructor = "mlir::carts::sde::createSdeRankExpandMuPass()";
 }
 
@@ -195,7 +196,8 @@ def SdeCoarseAvoidance
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect",
-                           "::mlir::arith::ArithDialect"];
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::polygeist::PolygeistDialect"];
   let constructor = "mlir::carts::sde::createSdeCoarseAvoidancePass()";
 }
 

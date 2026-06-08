@@ -249,12 +249,42 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       }
       std::optional<LayoutGraphFact> readerFact =
           findLayoutFact(reader, arrayId);
+      std::optional<SmallVector<int64_t, 4>> haloShape =
+          getCommittedHaloShape(reader);
+      // Rank expansion can hide reduction accesses behind block-local div/mod
+      // indexing; committed layout facts remain the stable source of truth.
+      if (!hasOwnerReduction && readerFact && !home.ownerDims.empty() &&
+          !haloShape && readerFact->ownerDims == home.ownerDims &&
+          (reader.getPartialReductionAttr() ||
+           reader.getReductionStrategyAttr())) {
+        // An sde.redist edge can only carry geometry that fits its grounded
+        // root; rank-expanded intermediates may require a richer carrier.
+        bool geometryFitsRoot = true;
+        for (auto [slot, d] : llvm::enumerate(home.ownerDims)) {
+          int64_t blockExtent =
+              home.blockShape.size() == home.ownerDims.size()
+                  ? home.blockShape[slot]
+                  : (d >= 0 && d < static_cast<int64_t>(home.blockShape.size())
+                         ? home.blockShape[d]
+                         : 0);
+          if (d < 0 || d >= muType.getRank() || blockExtent <= 0 ||
+              blockExtent > muType.getShape()[d])
+            geometryFitsRoot = false;
+        }
+        if (geometryFitsRoot)
+          hasOwnerReduction = true;
+        else {
+          fail(
+              "cross-owner reduction of a rank-expanded distributed "
+              "intermediate is recognized but not yet realizable as sde.redist "
+              "(the home block geometry does not fit the expanded root)");
+          continue;
+        }
+      }
       bool committedContractionLayout =
           home.layoutKind == ArrayLayoutKind::blockContraction ||
           (readerFact &&
            readerFact->layoutKind == ArrayLayoutKind::blockContraction);
-      std::optional<SmallVector<int64_t, 4>> haloShape =
-          getCommittedHaloShape(reader);
       bool committedHaloLayout =
           haloShape && readerFact && home.ownerDims == readerFact->ownerDims;
       if (!hasOwnerReduction && !committedContractionLayout) {

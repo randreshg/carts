@@ -9,9 +9,11 @@
 #include "carts/utils/ArrayAttrUtils.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Operation.h"
+#include "polygeist/Ops.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -123,11 +125,23 @@ SdeSuIterateOp findCommittedBlockPlanWriter(SdeMuAllocOp muAlloc) {
   return result;
 }
 
+// Rank expansion preserves the allocation base pointer. Pointer comparisons can
+// be repointed; dereferencing pointer uses keep the MU conservative.
+static bool isLayoutInvariantBasePointer(polygeist::Memref2PointerOp m2p) {
+  for (Operation *user : m2p.getResult().getUsers())
+    if (!isa<LLVM::ICmpOp>(user))
+      return false;
+  return true;
+}
+
 bool muRootHasUnsupportedUse(Value root) {
   for (Operation *user : root.getUsers()) {
     if (isa<memref::LoadOp, memref::StoreOp, memref::DeallocOp,
             SdeMuAccessWindowOp, SdeRedistOp>(user))
       continue;
+    if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(user))
+      if (isLayoutInvariantBasePointer(m2p))
+        continue;
     return true;
   }
   return false;
@@ -204,6 +218,7 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
   llvm::SmallVector<memref::LoadOp, 8> loads;
   llvm::SmallVector<memref::StoreOp, 8> stores;
   llvm::SmallVector<memref::DeallocOp, 2> deallocs;
+  llvm::SmallVector<polygeist::Memref2PointerOp, 2> basePointers;
   for (OpOperand &use : oldMemref.getUses()) {
     Operation *user = use.getOwner();
     if (auto dealloc = dyn_cast<memref::DeallocOp>(user)) {
@@ -224,8 +239,13 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
       stores.push_back(store);
       continue;
     }
-    // Subview / cast / capture / escape: not yet supported by rank expansion.
-    // Fail closed.
+    // Only layout-invariant base-pointer checks can follow the expanded memref.
+    if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(user)) {
+      if (isLayoutInvariantBasePointer(m2p)) {
+        basePointers.push_back(m2p);
+        continue;
+      }
+    }
     return failure();
   }
 
@@ -257,6 +277,15 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
     memref::StoreOp::create(b, store.getLoc(), store.getValueToStore(),
                             newMemref, ValueRange(idx));
     store.erase();
+  }
+
+  // Preserve allocation identity checks after replacing the MU root.
+  for (polygeist::Memref2PointerOp m2p : basePointers) {
+    OpBuilder b(m2p);
+    auto repl = polygeist::Memref2PointerOp::create(b, m2p.getLoc(),
+                                                    m2p.getType(), newMemref);
+    m2p.getResult().replaceAllUsesWith(repl.getResult());
+    m2p.erase();
   }
 
   for (memref::DeallocOp dealloc : deallocs)

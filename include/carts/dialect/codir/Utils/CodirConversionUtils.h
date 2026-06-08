@@ -2130,23 +2130,69 @@ static inline LogicalResult buildSuDepArrayIdPlan(Operation *moduleOp,
           idIt != globalArrayIdByRoot.end() && layoutIds.contains(idIt->second))
         arrayIdByRoot.try_emplace(root, idIt->second);
 
-    SmallVector<const sde::LayoutGraphFact *, 4> unmatchedReadFacts;
+    // Keep ids by value because parseArrayLayoutFacts returns a temporary.
+    // Logical element counts give block-localized reads a stable join key when
+    // SSA identity is unavailable.
+    struct UnmatchedReadFact {
+      int64_t id;
+      int64_t logicalCount;
+    };
+    SmallVector<UnmatchedReadFact, 4> unmatchedReadFacts;
     for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout))
       if (fact.role == sde::LayoutGraphRole::read) {
         bool alreadyMapped = false;
         for (auto &mapped : arrayIdByRoot)
           alreadyMapped |= mapped.second == fact.id;
-        if (!alreadyMapped)
-          unmatchedReadFacts.push_back(&fact);
+        if (alreadyMapped)
+          continue;
+        int64_t count = fact.muBlockCount > 0 ? fact.muBlockCount : 1;
+        for (int64_t b : fact.blockShape)
+          count *= b;
+        unmatchedReadFacts.push_back({fact.id, count});
       }
     SmallVector<Value, 4> unmatchedReadRoots;
     for (Value root : readRoots)
       if (!arrayIdByRoot.contains(root))
         unmatchedReadRoots.push_back(root);
-    if (unmatchedReadFacts.size() == unmatchedReadRoots.size())
-      for (auto [root, fact] :
-           llvm::zip_equal(unmatchedReadRoots, unmatchedReadFacts))
-        arrayIdByRoot.try_emplace(root, fact->id);
+    if (unmatchedReadFacts.size() == unmatchedReadRoots.size()) {
+      llvm::BitVector usedFact(unmatchedReadFacts.size(), false);
+      // Prefer the unique remaining fact with the same logical element count.
+      for (Value root : unmatchedReadRoots) {
+        auto type = dyn_cast<MemRefType>(root.getType());
+        if (!type || !type.hasStaticShape())
+          continue;
+        int64_t rootCount = 1;
+        for (int64_t d : type.getShape())
+          rootCount *= d;
+        int matchIdx = -1;
+        bool ambiguous = false;
+        for (auto [i, fact] : llvm::enumerate(unmatchedReadFacts)) {
+          if (usedFact[i] || fact.logicalCount != rootCount)
+            continue;
+          if (matchIdx >= 0) {
+            ambiguous = true;
+            break;
+          }
+          matchIdx = static_cast<int>(i);
+        }
+        if (!ambiguous && matchIdx >= 0) {
+          usedFact[matchIdx] = true;
+          arrayIdByRoot.try_emplace(root, unmatchedReadFacts[matchIdx].id);
+        }
+      }
+      // Ties and dynamic roots keep the committed fact order.
+      unsigned nextFact = 0;
+      for (Value root : unmatchedReadRoots) {
+        if (arrayIdByRoot.contains(root))
+          continue;
+        while (nextFact < usedFact.size() && usedFact[nextFact])
+          ++nextFact;
+        if (nextFact >= unmatchedReadFacts.size())
+          break;
+        usedFact[nextFact] = true;
+        arrayIdByRoot.try_emplace(root, unmatchedReadFacts[nextFact].id);
+      }
+    }
 
     if (!arrayIdByRoot.empty())
       plan.arrayIdByRootBySu.try_emplace(source.getOperation(),

@@ -13,7 +13,9 @@ add_mlir_dialect_library(MLIRCartsSdeUtils
 
   LINK_LIBS PUBLIC
     MLIRArithDialect
+    MLIRLLVMDialect
     MLIRMemRefDialect
     MLIRIR
     MLIRCartsSde
+    MLIRPolygeist
 )
