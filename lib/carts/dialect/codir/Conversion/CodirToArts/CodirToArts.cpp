@@ -163,6 +163,7 @@ struct PlannedBlockDepAccessPlan {
   SmallVector<unsigned, 4> ownerDims;
   SmallVector<int64_t, 4> blockSizes;
   SmallVector<Value, 4> ownerParams;
+  SmallVector<Value, 4> ownerDomainBases;
   SmallVector<int64_t, 4> groupBlockCounts;
   bool grouped = false;
 
@@ -651,6 +652,7 @@ struct ConvertCodirToArtsPass
             plannedAccess.ownerDims.push_back(ownerDim);
             plannedAccess.blockSizes.push_back((*blockSizes)[slot]);
             plannedAccess.ownerParams.push_back(ownerParams[slot]);
+            plannedAccess.ownerDomainBases.push_back(domainBase);
             plannedAccess.groupBlockCounts.push_back(groupBlockCount);
           }
           plannedAccess.grouped = grouped;
@@ -690,6 +692,16 @@ struct ConvertCodirToArtsPass
             containsValue(taskParams, elementSize))
           continue;
         taskParams.push_back(elementSize);
+      }
+    }
+    for (const PlannedBlockDepAccessPlan &accessPlan :
+         plannedBlockAccessPlans) {
+      for (Value domainBase : accessPlan.ownerDomainBases) {
+        if (!domainBase || !isCodirScalarParamType(domainBase.getType()) ||
+            ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(domainBase) ||
+            containsValue(taskParams, domainBase))
+          continue;
+        taskParams.push_back(domainBase);
       }
     }
     // CODIR carries only generic worker-plan facts. The ARTS boundary is the
@@ -768,6 +780,7 @@ struct ConvertCodirToArtsPass
             plannedBlockAccessPlans[idx];
         if (accessPlan.ownerParams.size() != accessPlan.ownerDims.size() ||
             accessPlan.blockSizes.size() != accessPlan.ownerDims.size() ||
+            accessPlan.ownerDomainBases.size() != accessPlan.ownerDims.size() ||
             accessPlan.groupBlockCounts.size() != accessPlan.ownerDims.size())
           return codelet.emitOpError()
                  << "failed to materialize owner-base parameters for planned "
@@ -779,6 +792,22 @@ struct ConvertCodirToArtsPass
             return codelet.emitOpError()
                    << "failed to materialize owner-base parameter for planned "
                       "block-local access rewrite";
+          Value ownerDomainBase = accessPlan.ownerDomainBases[slot];
+          if (std::optional<int64_t> folded =
+                  ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
+                      ownerDomainBase)) {
+            ownerDomainBase = createConstantIndex(builder, loc, *folded);
+          } else if (Value mappedDomainBase =
+                         paramBlockArgs.lookup(ownerDomainBase)) {
+            ownerDomainBase = mappedDomainBase;
+          } else {
+            return codelet.emitOpError()
+                   << "failed to materialize owner-domain base parameter for "
+                      "planned block-local access rewrite";
+          }
+          Value localOrigin = materializeBlockLocalOrigin(
+              builder, loc, ownerBase, ownerDomainBase,
+              accessPlan.blockSizes[slot]);
           CodirOwnerHaloWindow ownerHalo = getCodirBlockStorageHaloWindowForDim(
               codelet, idx, ownerDim,
               static_cast<unsigned>(payloadType.getRank()));
@@ -790,7 +819,7 @@ struct ConvertCodirToArtsPass
               ownerHalo = allocHalo;
           }
           localAccessRewrites.push_back(
-              {payload, ownerDim, ownerBase, ownerHalo.lower,
+              {payload, ownerDim, ownerBase, localOrigin, ownerHalo.lower,
                taskBlock.getArgument(idx), static_cast<unsigned>(slot),
                accessPlan.blockSizes[slot], accessPlan.groupBlockCounts[slot],
                accessPlan.grouped});

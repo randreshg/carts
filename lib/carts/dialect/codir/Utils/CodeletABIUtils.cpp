@@ -43,6 +43,13 @@ static bool isPositiveI64(DictionaryAttr dict, StringRef key) {
   return value && value.getInt() > 0;
 }
 
+static bool isPositiveI64Array(ArrayAttr attr) {
+  std::optional<SmallVector<int64_t, 4>> values = readI64ArrayAttr(attr);
+  if (!values || values->empty())
+    return false;
+  return llvm::all_of(*values, [](int64_t value) { return value > 0; });
+}
+
 static bool hasStringValue(DictionaryAttr dict, StringRef key,
                            StringRef expected) {
   auto value = dyn_cast_or_null<StringAttr>(dict ? dict.get(key) : Attribute{});
@@ -383,6 +390,60 @@ DictionaryAttr getArrayLayoutEntryForDep(CodeletOp codelet, unsigned depIndex) {
       return entry;
   }
   return {};
+}
+
+ArrayAttr getDepPhysicalBlockShapeAttr(CodeletOp codelet, unsigned depIndex) {
+  std::optional<int64_t> depArrayId = getDepArrayId(codelet, depIndex);
+  std::optional<CodirAccessMode> mode = getDepAccessMode(codelet, depIndex);
+  if (depArrayId && mode) {
+    ArrayAttr graph = codelet ? dyn_cast_or_null<ArrayAttr>(
+                                    codelet->getAttr(AttrNames::PartitionGraph))
+                              : ArrayAttr{};
+    ArrayAttr firstMatchingShape;
+    if (graph) {
+      ArrayAttr ownerBlockShape;
+      ArrayAttr readBlockShape;
+      for (Attribute attr : graph) {
+        auto entry = dyn_cast<DictionaryAttr>(attr);
+        if (!entry)
+          continue;
+        auto muId = dyn_cast_or_null<IntegerAttr>(
+            entry.get(AttrNames::PartitionGraphKeys::MuId));
+        if (!muId || muId.getInt() != *depArrayId)
+          continue;
+        if (!isRoleCompatible(entry, *mode))
+          continue;
+        auto blockShape = dyn_cast_or_null<ArrayAttr>(
+            entry.get(AttrNames::PartitionGraphKeys::BlockShape));
+        if (!isPositiveI64Array(blockShape))
+          continue;
+        if (!firstMatchingShape)
+          firstMatchingShape = blockShape;
+        if (hasStringValue(entry, AttrNames::PartitionGraphKeys::LayoutKind,
+                           AttrNames::PartitionGraphValues::OwnerBlock)) {
+          if (!ownerBlockShape)
+            ownerBlockShape = blockShape;
+          continue;
+        }
+        if (!readBlockShape)
+          readBlockShape = blockShape;
+      }
+      if (codirAccessMayWrite(*mode) && ownerBlockShape)
+        return ownerBlockShape;
+      if (codirAccessMayRead(*mode) && readBlockShape)
+        return readBlockShape;
+    }
+    if (firstMatchingShape)
+      return firstMatchingShape;
+  }
+
+  DictionaryAttr layoutEntry = getArrayLayoutEntryForDep(codelet, depIndex);
+  auto layoutShape = dyn_cast_or_null<ArrayAttr>(
+      layoutEntry ? layoutEntry.get(AttrNames::LayoutGraphKeys::BlockShape)
+                  : Attribute{});
+  if (isPositiveI64Array(layoutShape))
+    return layoutShape;
+  return codelet ? codelet.getTileShapeAttr() : ArrayAttr{};
 }
 
 std::optional<CodirAccessMode> getDepAccessMode(CodeletOp codelet,

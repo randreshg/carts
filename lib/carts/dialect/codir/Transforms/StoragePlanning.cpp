@@ -449,7 +449,8 @@ static bool hasSameBlockStoragePlan(codir::CodeletOp lhs, unsigned lhsDepIndex,
   // describes CU grouping and may legitimately differ between a full-timestep
   // uniform copy and the stencil that consumes the same physical blocks.
   return lhsOwnerDims && rhsOwnerDims && *lhsOwnerDims == *rhsOwnerDims &&
-         lhs.getTileShapeAttr() == rhs.getTileShapeAttr();
+         codir::getDepPhysicalBlockShapeAttr(lhs, lhsDepIndex) ==
+             codir::getDepPhysicalBlockShapeAttr(rhs, rhsDepIndex);
 }
 
 static bool rootHasCompatibleStencilBlockParticipant(codir::CodeletOp seed,
@@ -775,6 +776,21 @@ static bool shouldUseReplicatedReadDep(codir::CodeletOp codelet,
   return !depAccessesStayWithinSingleOwnerSlice(codelet, depIndex);
 }
 
+static bool shouldDemoteMatmulDepToComputeBlock(codir::CodeletOp codelet,
+                                                unsigned depIndex) {
+  if (!isMatmulCodelet(codelet) || !hasTileOwnerSlicePlan(codelet))
+    return false;
+  std::optional<codir::CodirAccessMode> mode =
+      getDepAccessMode(codelet, depIndex);
+  if (!mode)
+    return false;
+  if (*mode == codir::CodirAccessMode::read &&
+      shouldUseReplicatedReadDep(codelet, depIndex))
+    return false;
+  return accessModeMayWrite(*mode) ||
+         depAccessesStayWithinSingleOwnerSlice(codelet, depIndex);
+}
+
 static ArrayAttr
 buildOwnerDimsAttr(MLIRContext *ctx,
                    std::optional<SmallVector<unsigned, 4>> ownerDims) {
@@ -834,8 +850,11 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
       shouldDemoteStencilHaloReadToComputeBlock(codelet, depIndex);
   bool uniformRequiresComputeBlock =
       shouldDemoteFullTimestepUniformDepToComputeBlock(codelet, depIndex);
-  bool semanticComputeBlock =
-      stencilRequiresComputeBlock || uniformRequiresComputeBlock;
+  bool matmulRequiresComputeBlock =
+      shouldDemoteMatmulDepToComputeBlock(codelet, depIndex);
+  bool semanticComputeBlock = stencilRequiresComputeBlock ||
+                              uniformRequiresComputeBlock ||
+                              matmulRequiresComputeBlock;
   /// Replicated-read eligibility is a semantic property of the dep (matmul
   /// inner operand, or stencil read with halo crossing). The initial view the
   /// SDE→CODIR materializer stamps (host_whole for whole-storage tokens,
@@ -850,6 +869,9 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
     requested = codir::CodirStorageViewKind::compute_block;
   if (requested == codir::CodirStorageViewKind::host_whole &&
       stencilRequiresComputeBlock)
+    requested = codir::CodirStorageViewKind::compute_block;
+  if (requested == codir::CodirStorageViewKind::host_whole &&
+      matmulRequiresComputeBlock)
     requested = codir::CodirStorageViewKind::compute_block;
   if (requested != codir::CodirStorageViewKind::compute_block)
     return requested;
@@ -878,7 +900,7 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
 
   bool needsHostBridge = isa_and_nonnull<BlockArgument>(root) ||
                          hasHostMemrefAccessOutsideCodelet(root);
-  if (needsHostBridge && !uniformRequiresComputeBlock &&
+  if (needsHostBridge && !semanticComputeBlock &&
       shouldUseHostWholeReadOnlyDep(codelet, depIndex, dep))
     return codir::CodirStorageViewKind::host_whole;
 

@@ -37,6 +37,12 @@ std::optional<int64_t> getDepArrayId(CodeletOp codelet, unsigned depIndex);
 /// use this helper instead of indexing per-array layout facts by dep slot.
 DictionaryAttr getArrayLayoutEntryForDep(CodeletOp codelet, unsigned depIndex);
 
+/// Return the committed physical block shape for the dependency. Partition
+/// graph entries are preferred because they describe the actual MU/DB home
+/// shape for the edge; array_layout is the fallback global layout fact, and
+/// tile_shape is the legacy owner-tile fallback.
+ArrayAttr getDepPhysicalBlockShapeAttr(CodeletOp codelet, unsigned depIndex);
+
 /// True when a stencil codelet's per-iteration write footprint fits inside its
 /// owner-dim tile slice. Storage planning and collective selection share this
 /// gate so `halo` cannot be named for a dep whose block storage was rejected.

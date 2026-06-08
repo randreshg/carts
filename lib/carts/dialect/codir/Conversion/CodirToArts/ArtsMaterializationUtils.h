@@ -405,10 +405,12 @@ static inline bool canUseCodirOwnerSliceForAlloc(codir::CodeletOp codelet,
     return false;
 
   ArrayAttr ownerDims = getCodirDepOwnerDimsAttr(codelet, depIndex);
+  ArrayAttr blockShape = codir::getDepPhysicalBlockShapeAttr(codelet, depIndex);
   return ownerDims &&
          arts::getPlanOwnerDimsAttr(alloc.getOperation()) == ownerDims &&
+         blockShape &&
          arts::getPlanPhysicalBlockShapeAttr(alloc.getOperation()) ==
-             codelet.getTileShapeAttr();
+             blockShape;
 }
 
 static inline std::optional<codir::CodirAccessMode>
@@ -426,23 +428,23 @@ getCodirTileOwnerBlockSizes(codir::CodeletOp codelet, unsigned depIndex,
   if (!ownerDims || ownerDims->empty())
     return std::nullopt;
 
-  std::optional<SmallVector<int64_t, 4>> tileShape =
-      readI64ArrayAttr(codelet.getTileShapeAttr());
-  if (!tileShape || tileShape->empty())
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      readI64ArrayAttr(codir::getDepPhysicalBlockShapeAttr(codelet, depIndex));
+  if (!blockShape || blockShape->empty())
     return std::nullopt;
 
   SmallVector<int64_t, 4> blockSizes;
   blockSizes.reserve(ownerDims->size());
   for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
     std::optional<int64_t> blockSize;
-    if (tileShape->size() == memrefRank) {
-      if (ownerDim >= tileShape->size())
+    if (blockShape->size() == memrefRank) {
+      if (ownerDim >= blockShape->size())
         return std::nullopt;
-      blockSize = (*tileShape)[ownerDim];
-    } else if (tileShape->size() == ownerDims->size()) {
-      blockSize = (*tileShape)[slot];
-    } else if (tileShape->size() == 1 && ownerDims->size() == 1) {
-      blockSize = tileShape->front();
+      blockSize = (*blockShape)[ownerDim];
+    } else if (blockShape->size() == ownerDims->size()) {
+      blockSize = (*blockShape)[slot];
+    } else if (blockShape->size() == 1 && ownerDims->size() == 1) {
+      blockSize = blockShape->front();
     }
     if (!blockSize || *blockSize <= 0)
       return std::nullopt;
@@ -788,6 +790,7 @@ struct PlannedBlockLocalAccessRewrite {
   Value localMemref;
   unsigned ownerDim = 0;
   Value ownerBase;
+  Value localOrigin;
   int64_t lowerHalo = 0;
   Value groupedSourcePtr;
   unsigned ownerSlot = 0;
@@ -796,12 +799,36 @@ struct PlannedBlockLocalAccessRewrite {
   bool grouped = false;
 };
 
+static inline Value materializeBlockLocalOrigin(OpBuilder &builder,
+                                                Location loc, Value ownerBase,
+                                                Value ownerDomainBase,
+                                                int64_t blockSize) {
+  Value localOrigin = ownerBase;
+  if (blockSize > 1) {
+    if (!ownerDomainBase)
+      ownerDomainBase = createZeroIndex(builder, loc);
+    Value relativeBase =
+        ::mlir::carts::ValueAnalysis::sameValue(ownerBase, ownerDomainBase)
+            ? createZeroIndex(builder, loc)
+            : arith::SubIOp::create(builder, loc, ownerBase, ownerDomainBase)
+                  .getResult();
+    Value blockSizeValue = createConstantIndex(builder, loc, blockSize);
+    Value blockIndex =
+        arith::DivUIOp::create(builder, loc, relativeBase, blockSizeValue);
+    Value blockOffset =
+        arith::MulIOp::create(builder, loc, blockIndex, blockSizeValue);
+    localOrigin =
+        arith::AddIOp::create(builder, loc, ownerDomainBase, blockOffset);
+  }
+  return localOrigin;
+}
+
 static inline FailureOr<Value>
 materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
-                           Value ownerBase, int64_t lowerHalo) {
-  if (!index || !ownerBase)
+                           Value ownerBase, Value localOrigin,
+                           int64_t lowerHalo) {
+  if (!index || !ownerBase || !localOrigin)
     return failure();
-  Value localOrigin = ownerBase;
   if (lowerHalo > 0) {
     Value halo = createConstantIndex(builder, loc, lowerHalo);
     Value zero = createZeroIndex(builder, loc);
@@ -1054,7 +1081,7 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
       OpBuilder builder(op);
       FailureOr<Value> localIndex = materializeBlockLocalIndex(
           builder, op->getLoc(), indices[rewrite->ownerDim].get(),
-          rewrite->ownerBase, rewrite->lowerHalo);
+          rewrite->ownerBase, rewrite->localOrigin, rewrite->lowerHalo);
       if (failed(localIndex)) {
         op->emitError("planned block-local access does not stay within the "
                       "owner slice");
@@ -1152,12 +1179,14 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
   ArrayAttr ownerDims = depIndex
                             ? getCodirDepOwnerDimsAttr(planSource, *depIndex)
                             : planSource.getTileOwnerDimsAttr();
+  ArrayAttr blockShape =
+      depIndex ? codir::getDepPhysicalBlockShapeAttr(planSource, *depIndex)
+               : planSource.getTileShapeAttr();
   if (!ownerDims)
     return failure();
   FailureOr<arts::DbPhysicalLayoutPlan> physicalPlan =
-      arts::resolvePhysicalDbLayoutPlan(ownerDims,
-                                        planSource.getTileShapeAttr(),
-                                        dbElementSizes, builder, loc);
+      arts::resolvePhysicalDbLayoutPlan(ownerDims, blockShape, dbElementSizes,
+                                        builder, loc);
   if (failed(physicalPlan))
     return failure();
 
@@ -1188,7 +1217,7 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
                          physicalPlan->innerSizes.end()),
       physicalPlan->mode);
   arts::setPlanOwnerDimsAttr(dbAlloc.getOperation(), ownerDims);
-  if (auto blockShape = planSource.getTileShapeAttr())
+  if (blockShape)
     arts::setPlanPhysicalBlockShapeAttr(dbAlloc.getOperation(), blockShape);
   if (auto haloShape = planSource.getHaloShapeAttr())
     arts::setPlanHaloShapeAttr(dbAlloc.getOperation(), haloShape);
@@ -2052,7 +2081,8 @@ static inline bool hasSameHostBridgePlan(codir::CodeletOp lhs,
   // CU and a stencil/compute CU that share the same physical block DBs.
   return getCodirDepOwnerDimsAttr(lhs, lhsDepIndex) ==
              getCodirDepOwnerDimsAttr(rhs, rhsDepIndex) &&
-         lhs.getTileShapeAttr() == rhs.getTileShapeAttr();
+         codir::getDepPhysicalBlockShapeAttr(lhs, lhsDepIndex) ==
+             codir::getDepPhysicalBlockShapeAttr(rhs, rhsDepIndex);
 }
 
 static inline std::optional<unsigned>
