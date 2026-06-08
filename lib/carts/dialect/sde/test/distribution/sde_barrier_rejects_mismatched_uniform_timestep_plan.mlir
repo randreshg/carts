@@ -1,10 +1,40 @@
-// RUN: not %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline codir-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline codir-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Same trip counts are not enough to form a repeated timestep. SDE must reject
-// the mismatched layout instead of inventing a redistribution target.
+// Same trip counts are not enough to form a repeated timestep. SDE must expose
+// legal nested output parallelism and carry the resulting owner-tile/owner-strip
+// plans to CODIR/ARTS instead of inventing an SDE redistribution target.
 
-// CHECK: sde.redist: redistribution edge is not a cross-owner reduction or halo
-// CHECK-SAME: refusing to invent redistribution
+// CHECK-LABEL: // -----// IR Dump After PatternAnalysis (sde-pattern-analysis) //----- //
+// CHECK: func.func @mismatched_uniform_adjacent
+// CHECK: sde.su_iterate (%c0, %c0) to (%c8, %c8) step (%c1, %c1) classification(<elementwise>)
+// CHECK: sde.su_iterate (%c0) to (%c8) step (%c1) classification(<elementwise>)
+
+// CHECK-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
+// CHECK: func.func @mismatched_uniform_adjacent
+// CHECK: iterationTopology = #sde.iteration_topology<owner_tile>
+// CHECK-SAME: logicalWorkerSlice = [6, 3]
+// CHECK-SAME: partitionGraph = [
+// CHECK-SAME: blockShape = [3, 3]
+// CHECK-SAME: muBlockCount = 9 : i64
+// CHECK-SAME: ownerDims = [0, 1]
+// CHECK-SAME: physicalBlockShape = [3, 3]
+// CHECK-SAME: physicalOwnerDims = [0, 1]
+// CHECK: iterationTopology = #sde.iteration_topology<owner_strip>
+// CHECK-SAME: logicalWorkerSlice = [3]
+// CHECK-SAME: physicalBlockShape = [3]
+// CHECK-SAME: physicalOwnerDims = [0]
+
+// CHECK-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
+// CHECK: attributes {storageBridgeCopy}
+// CHECK: planIterationTopology = #arts.plan_iteration_topology<owner_tile>
+// CHECK-SAME: planLogicalWorkerSlice = [6, 3]
+// CHECK-SAME: planOwnerDims = [0, 1]
+// CHECK-SAME: planPhysicalBlockShape = [3, 3]
+// CHECK: arts.barrier
+// CHECK: planIterationTopology = #arts.plan_iteration_topology<owner_strip>
+// CHECK-SAME: planLogicalWorkerSlice = [3]
+// CHECK-SAME: planOwnerDims = [0]
+// CHECK-SAME: planPhysicalBlockShape = [3]
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @mismatched_uniform_adjacent(%A: memref<8x8xf64>, %B: memref<8x8xf64>, %Mean: memref<8xf64>) {

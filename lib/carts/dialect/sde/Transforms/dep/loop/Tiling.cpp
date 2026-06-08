@@ -222,10 +222,14 @@ struct PhysicalTilePlan {
   sde::SdeIterationTopology topology = sde::SdeIterationTopology::owner_strip;
 };
 
+static std::optional<int64_t> getPositiveConstantIndex(Value value);
+
 static std::optional<DirectMatmulTilePlan>
 buildDirectMatmulTilePlan(OpBuilder &builder, Location loc,
                           sde::SdeSuIterateOp op,
                           sde::SDECostModel &costModel) {
+  if (op.getLowerBounds().size() != 1)
+    return std::nullopt;
   if (!sde::hasDistinctExternalMatmulInputRoots(op))
     return std::nullopt;
 
@@ -391,6 +395,122 @@ static bool isDirectMemoryMatmulCandidate(sde::SdeSuIterateOp op, Block &body) {
 static SmallVector<bool> getParallelDimMask(sde::SdeSuIterateOp op) {
   unsigned numDims = op.getLowerBounds().size();
   return SmallVector<bool>(numDims, true);
+}
+
+static Value getExternalAccessRoot(sde::SdeSuIterateOp op, Value value) {
+  if (!value)
+    return {};
+  Value root = value;
+  if (isa<BaseMemRefType>(root.getType()))
+    root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
+  if (!root || sde::isDefinedInside(op.getOperation(), root))
+    return {};
+  auto type = dyn_cast<MemRefType>(root.getType());
+  if (!type || type.getRank() == 0)
+    return {};
+  return root;
+}
+
+static bool
+hasNonPointExternalSelfRead(sde::SdeSuIterateOp op,
+                            const sde::StructuredLoopSummary &summary) {
+  for (const sde::MemrefAccessEntry &write : summary.writes) {
+    Value writeRoot = getExternalAccessRoot(op, write.memref);
+    if (!writeRoot)
+      continue;
+    for (const sde::MemrefAccessEntry &read : summary.reads) {
+      Value readRoot = getExternalAccessRoot(op, read.memref);
+      if (readRoot == writeRoot && read.indexingMap != write.indexingMap)
+        return true;
+    }
+  }
+  return false;
+}
+
+static bool hasPromotedParallelOutputSchedule(sde::SdeSuIterateOp op) {
+  unsigned scheduleRank = op.getLowerBounds().size();
+  if (scheduleRank < 2 || op.getUpperBounds().size() != scheduleRank ||
+      op.getSteps().size() != scheduleRank)
+    return false;
+
+  std::optional<sde::StructuredLoopSummary> summary =
+      sde::analyzeStructuredLoop(op);
+  if (!summary || summary->iterTypes.size() < scheduleRank ||
+      summary->nest.ivs.size() < scheduleRank)
+    return false;
+  for (unsigned dim = 0; dim < scheduleRank; ++dim)
+    if (summary->iterTypes[dim] != utils::IteratorType::parallel)
+      return false;
+  if (!sde::findCompatibleOutputLayoutPlan(*summary))
+    return false;
+  return !hasNonPointExternalSelfRead(op, *summary);
+}
+
+static std::optional<PhysicalTilePlan>
+buildPromotedMatmulPhysicalTilePlan(sde::SdeSuIterateOp op,
+                                    sde::SDECostModel &costModel) {
+  if (!hasPromotedParallelOutputSchedule(op))
+    return std::nullopt;
+
+  std::optional<sde::StructuredOutputLayoutPlan> outputPlan =
+      sde::findCompatibleOutputLayoutPlan(op);
+  if (!outputPlan || outputPlan->shape.size() < 2 ||
+      outputPlan->loopDimToPhysicalDim.size() < op.getLowerBounds().size())
+    return std::nullopt;
+
+  PhysicalTilePlan plan;
+  unsigned scheduleRank = op.getLowerBounds().size();
+  for (unsigned loopDim = 0; loopDim < scheduleRank; ++loopDim) {
+    int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
+    if (physicalDim < 0 ||
+        static_cast<size_t>(physicalDim) >= outputPlan->shape.size())
+      return std::nullopt;
+    plan.ownerPhysicalDims.push_back(physicalDim);
+  }
+  if (plan.ownerPhysicalDims.size() < 2)
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> ownerExtents;
+  ownerExtents.reserve(plan.ownerPhysicalDims.size());
+  for (int64_t physicalDim : plan.ownerPhysicalDims) {
+    int64_t extent = outputPlan->shape[physicalDim];
+    if (extent <= 0)
+      return std::nullopt;
+    ownerExtents.push_back(extent);
+  }
+
+  SmallVector<int64_t, 4> workerGrid = sde::factorWorkersAcrossDims(
+      std::max<int64_t>(1, getTargetTileTasks(op, costModel)), ownerExtents);
+  if (workerGrid.size() != plan.ownerPhysicalDims.size())
+    return std::nullopt;
+
+  plan.blockShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
+  for (auto [slot, physicalDim] : llvm::enumerate(plan.ownerPhysicalDims))
+    plan.blockShape[physicalDim] =
+        sde::ceilDivPositive(outputPlan->shape[physicalDim], workerGrid[slot]);
+
+  plan.tileIterations.assign(scheduleRank, 1);
+  for (unsigned loopDim = 0; loopDim < scheduleRank; ++loopDim) {
+    int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
+    int64_t tile = plan.blockShape[physicalDim];
+    if (tile <= 0)
+      return std::nullopt;
+    std::optional<int64_t> step =
+        getPositiveConstantIndex(op.getSteps()[loopDim]);
+    if (!step || *step != 1)
+      return std::nullopt;
+    plan.tileIterations[loopDim] = tile;
+  }
+
+  if (!sde::buildBlockAlignedLogicalWorkerSlice(
+          outputPlan->shape, plan.ownerPhysicalDims, plan.blockShape,
+          getTargetTileTasks(op, costModel), plan.logicalWorkerSlice))
+    plan.logicalWorkerSlice.assign(plan.blockShape.begin(),
+                                   plan.blockShape.end());
+  plan.topology = plan.ownerPhysicalDims.size() == 2
+                      ? sde::SdeIterationTopology::owner_tile_2d
+                      : sde::SdeIterationTopology::owner_tile;
+  return plan;
 }
 
 static bool isStencilCandidate(sde::SdeSuIterateOp op, Block &body) {
@@ -1032,12 +1152,13 @@ static bool isTilingCandidate(sde::SdeSuIterateOp op, Block &body) {
   case sde::SdeStructuredClassification::matmul:
     if (op.getReductionAccumulators().size() != 0)
       return false;
-    return isDirectMemoryMatmulCandidate(op, body);
+    return isDirectMemoryMatmulCandidate(op, body) ||
+           hasPromotedParallelOutputSchedule(op);
   case sde::SdeStructuredClassification::reduction:
     if (op.getReductionAccumulators().size() != 0)
       return false;
     if (!sde::isOwnerLocalPipelineReduction(op))
-      return false;
+      return hasPromotedParallelOutputSchedule(op);
     return isExecutableInnermostBody(body) ||
            hasPerfectNestedScalarLoopNest(body, /*numLoops=*/2);
   }
@@ -1158,18 +1279,26 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           sde::SdeStructuredClassification::matmul) {
         directMatmulPlan =
             buildDirectMatmulTilePlan(rewriter, loc, op, *costModel);
-        if (!directMatmulPlan)
+        if (directMatmulPlan) {
+          directMatmul = true;
+        } else if (!hasPromotedParallelOutputSchedule(op)) {
           continue;
-        directMatmul = true;
+        }
       }
 
       // Determine which dims are parallel (should tile) vs reduction (skip).
       SmallVector<bool> parallelMask = getParallelDimMask(op);
 
       std::optional<PhysicalTilePlan> physicalTilePlan;
-      if (!directMatmul)
-        physicalTilePlan =
-            buildBudgetReconciledElementwiseTilePlan(op, *costModel);
+      if (!directMatmul) {
+        if (op.getStructuredClassification() ==
+            sde::SdeStructuredClassification::matmul)
+          physicalTilePlan =
+              buildPromotedMatmulPhysicalTilePlan(op, *costModel);
+        if (!physicalTilePlan)
+          physicalTilePlan =
+              buildBudgetReconciledElementwiseTilePlan(op, *costModel);
+      }
 
       // Compute per-dim tile iterations.
       SmallVector<Value> perDimTileIter;
