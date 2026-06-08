@@ -23,7 +23,7 @@ using namespace mlir::carts::sde;
 //===----------------------------------------------------------------------===//
 
 // Print: sde.cu_region <kind> [nowait]
-//        [iter_args(%a = %init : type) -> (type)]
+//        [iter_args(%a = %init : type) -> (type) | -> (type)]
 //        { body } [attr-dict]
 void SdeCuRegionOp::print(OpAsmPrinter &p) {
   // Print kind enum in angle-bracket form: <parallel>, <single>, <task>
@@ -43,15 +43,20 @@ void SdeCuRegionOp::print(OpAsmPrinter &p) {
     p << " -> (";
     llvm::interleaveComma(getResultTypes(), p);
     p << ")";
+  } else if (getNumResults() != 0) {
+    p << " -> (";
+    llvm::interleaveComma(getResultTypes(), p);
+    p << ")";
   }
   p << " ";
   p.printRegion(getBody(), /*printEntryBlockArgs=*/false,
-                /*printBlockTerminators=*/!getIterArgs().empty());
+                /*printBlockTerminators=*/getNumResults() != 0 ||
+                    !getIterArgs().empty());
   p.printOptionalAttrDict((*this)->getAttrs(), {"kind", "nowait"});
 }
 
 // Parse: sde.cu_region <kind> [nowait]
-//        [iter_args(%a = %init : type) -> (type)]
+//        [iter_args(%a = %init : type) -> (type) | -> (type)]
 //        { body } [attr-dict]
 ParseResult SdeCuRegionOp::parse(OpAsmParser &parser, OperationState &result) {
   MLIRContext *ctx = parser.getContext();
@@ -112,6 +117,11 @@ ParseResult SdeCuRegionOp::parse(OpAsmParser &parser, OperationState &result) {
 
       result.addTypes(resultTypes);
     }
+  } else if (succeeded(parser.parseOptionalArrow())) {
+    if (parser.parseLParen() || parser.parseTypeList(resultTypes) ||
+        parser.parseRParen())
+      return failure();
+    result.addTypes(resultTypes);
   }
 
   // Parse region
@@ -127,7 +137,7 @@ ParseResult SdeCuRegionOp::parse(OpAsmParser &parser, OperationState &result) {
   // Match the custom assembly form that omits empty yields for no-result
   // regions.
   Block &entry = body->front();
-  if (!hasIterArgs &&
+  if (!hasIterArgs && result.types.empty() &&
       (entry.empty() || !entry.back().hasTrait<OpTrait::IsTerminator>())) {
     // Build the implicit yield from the parser context, not from the region:
     // during parse the body region is not yet attached to its op, so deriving a
@@ -153,7 +163,6 @@ LogicalResult SdeCuRegionOp::verify() {
   unsigned numIterArgs = getIterArgs().size();
 
   if (numIterArgs > 0) {
-    // With iter_args: block args must match iter_args types
     if (entry.getNumArguments() != numIterArgs)
       return emitOpError() << "expects " << numIterArgs
                            << " block argument(s) for iter_args; got "
@@ -168,18 +177,20 @@ LogicalResult SdeCuRegionOp::verify() {
                << ")";
     }
 
-    // Result count must match iter_args count
     if (getNumResults() != numIterArgs)
       return emitOpError() << "expects " << numIterArgs
                            << " result(s) matching iter_args; got "
                            << getNumResults();
+  } else if (entry.getNumArguments() != 0) {
+    return emitOpError() << "expects no block arguments without iter_args";
+  }
 
-    // Yield must match results
+  if (getNumResults() != 0 || numIterArgs > 0) {
     auto yield = dyn_cast_or_null<SdeYieldOp>(entry.getTerminator());
     if (!yield)
       return emitOpError()
-             << "expects body to terminate with sde.yield when iter_args "
-                "are present";
+             << "expects body to terminate with sde.yield when results or "
+                "iter_args are present";
     if (yield.getValues().size() != getNumResults())
       return emitOpError() << "sde.yield operand count ("
                            << yield.getValues().size()
@@ -193,6 +204,10 @@ LogicalResult SdeCuRegionOp::verify() {
                << "sde.yield operand #" << i << " type (" << yielded.getType()
                << ") does not match result type (" << resultTy << ")";
     }
+  } else if (auto yield = dyn_cast_or_null<SdeYieldOp>(entry.getTerminator())) {
+    if (!yield.getValues().empty())
+      return emitOpError()
+             << "sde.yield operands require matching cu_region results";
   }
 
   return success();

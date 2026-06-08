@@ -237,11 +237,11 @@ def SdeCuRegionOp
     semantics such as parallel, single, or task; concrete machine topology and
     distributed placement are resolved later.
 
-    The `nowait` attribute preserves OpenMP nowait semantics. The
-    Optional `iter_args` thread loop-carried SSA values through the region body.
-    When present, the body block receives matching block arguments and the
-    region must terminate with `sde.yield` returning updated values. When
-    absent, the body may omit a terminator or yield empty.
+    The `nowait` attribute preserves OpenMP nowait semantics. Optional
+    `iter_args` thread loop-carried SSA values through the region body. Result
+    values without `iter_args` carry SSA values produced by the region and used
+    afterward. A region with results terminates with `sde.yield`; a no-result
+    body may omit the printed terminator.
   }];
 
   let arguments = (ins

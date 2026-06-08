@@ -31,16 +31,8 @@
 /// by SDE structural ops (CUs, SUs, MU declarations, barriers) and the block
 /// terminator, trimmed to its source-compute span. A run is wrapped only when
 /// it contains real source compute; pure schedule/index plumbing that the
-/// verifier permits outside a CU is left in place.
-///
-/// Conservative single-CU wrapping is only legal when the span is
-/// self-contained: no SSA value defined in the span may be used by an op that
-/// stays outside it. An `sde.cu_region` result is tied 1:1 to an `iter_args`
-/// input and cannot express an output-only value, so rather than fabricate a
-/// yield/results contract the pass FAILS CLOSED with a diagnostic on an
-/// escaping span and leaves it unwrapped for the verifier to reject. Threading
-/// such a value through SU/CU structure belongs to an earlier real
-/// transformation.
+/// verifier permits outside a CU is left in place. Values produced by a wrapped
+/// span and used afterward are threaded through `sde.cu_region` results.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -92,31 +84,41 @@ static Operation *blockLevelAncestor(Operation *user, Block *block) {
   return cursor;
 }
 
-/// Returns the first op in `span` that defines a value used outside `span`, or
-/// null when the span is self-contained. Only direct-child results can escape:
-/// a value defined inside a span op's nested regions is SSA-scoped to those
-/// regions and can never be referenced from outside the op. A use by the block
-/// terminator, or by an op above `block`, also counts as an escape (its
-/// block-level ancestor is not in the span).
-static Operation *findEscapingOp(ArrayRef<Operation *> span, Block *block) {
+static bool isNestedUnder(Operation *op, Operation *container) {
+  for (Operation *cursor = op; cursor; cursor = cursor->getParentOp())
+    if (cursor == container)
+      return true;
+  return false;
+}
+
+/// Collect direct-child results that are used outside `span`.
+static void collectEscapingValues(ArrayRef<Operation *> span, Block *block,
+                                  SmallVectorImpl<Value> &escaping) {
   llvm::DenseSet<Operation *> spanSet(span.begin(), span.end());
   for (Operation *op : span)
     for (Value result : op->getResults())
       for (Operation *user : result.getUsers()) {
         Operation *ancestor = blockLevelAncestor(user, block);
-        if (!ancestor || !spanSet.contains(ancestor))
-          return op;
+        if (!ancestor || !spanSet.contains(ancestor)) {
+          escaping.push_back(result);
+          break;
+        }
       }
-  return nullptr;
 }
 
-/// Move the contiguous, self-contained op span [first, last] (direct children
-/// of their block) into a fresh `sde.cu_region <single>` inserted at `first`.
-static void wrapSpanInCuRegion(Operation *first, Operation *last) {
+/// Move the contiguous op span [first, last] into a fresh
+/// `sde.cu_region <single>` inserted at `first`.
+static void wrapSpanInCuRegion(Operation *first, Operation *last,
+                               ArrayRef<Value> escaping) {
   Block *block = first->getBlock();
   OpBuilder builder(first);
+  SmallVector<Type> resultTypes;
+  resultTypes.reserve(escaping.size());
+  for (Value value : escaping)
+    resultTypes.push_back(value.getType());
+
   auto cuRegion = SdeCuRegionOp::create(
-      builder, first->getLoc(), /*resultTypes=*/TypeRange{},
+      builder, first->getLoc(), resultTypes,
       SdeCuKindAttr::get(builder.getContext(), SdeCuKind::single),
       /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
   Block &body = ensureBlock(cuRegion.getBody());
@@ -126,7 +128,15 @@ static void wrapSpanInCuRegion(Operation *first, Operation *last) {
                               first->getIterator(),
                               std::next(last->getIterator()));
   OpBuilder yieldBuilder = OpBuilder::atBlockEnd(&body);
-  SdeYieldOp::create(yieldBuilder, first->getLoc(), ValueRange{});
+  SdeYieldOp::create(yieldBuilder, first->getLoc(), escaping);
+
+  for (auto pair : llvm::zip(escaping, cuRegion->getResults())) {
+    Value oldValue = std::get<0>(pair);
+    Value newValue = std::get<1>(pair);
+    oldValue.replaceUsesWithIf(newValue, [&](OpOperand &use) {
+      return !isNestedUnder(use.getOwner(), cuRegion);
+    });
+  }
 }
 
 /// Wrap every source-compute span in `block` that is not already inside a CU.
@@ -163,16 +173,9 @@ static bool normalizeBlock(Block *block) {
       --hi;
     if (lo < hi) {
       ArrayRef<Operation *> span(ops.data() + lo, hi - lo);
-      if (Operation *escaping = findEscapingOp(span, block)) {
-        escaping->emitOpError()
-            << "defines a value used outside the conservative CU that would "
-               "wrap this source executable work; SDE cannot place it in a CU "
-               "without fabricating a cu_region results/yield contract. Thread "
-               "the value through SU/CU structure in an earlier transformation";
-        ok = false;
-      } else {
-        wrapSpanInCuRegion(ops[lo], ops[hi - 1]);
-      }
+      SmallVector<Value> escaping;
+      collectEscapingValues(span, block, escaping);
+      wrapSpanInCuRegion(ops[lo], ops[hi - 1], escaping);
     }
     i = runEnd;
   }

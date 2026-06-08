@@ -3168,18 +3168,33 @@ static inline LogicalResult inlineSdeSuDistribute(sde::SdeSuDistributeOp op) {
 }
 
 static inline LogicalResult inlineSdeCuRegion(sde::SdeCuRegionOp op) {
-  if (op.getNumResults() != 0 || !op.getIterArgs().empty() ||
-      op.getBody().empty() || op.getBody().front().getNumArguments() != 0)
+  if (op.getBody().empty())
     return op.emitOpError()
            << "must be materialized to CODIR before SDE-to-CODIR cleanup";
   Block &body = op.getBody().front();
+  if (body.getNumArguments() != op.getIterArgs().size())
+    return op.emitOpError()
+           << "has mismatched body arguments before SDE-to-CODIR cleanup";
+
+  for (auto [arg, iterArg] : llvm::zip(body.getArguments(), op.getIterArgs()))
+    arg.replaceAllUsesWith(iterArg);
+
+  SmallVector<Value> yielded;
   if (!body.empty())
-    if (auto yield = dyn_cast<sde::SdeYieldOp>(&body.back()))
+    if (auto yield = dyn_cast<sde::SdeYieldOp>(&body.back())) {
+      yielded.append(yield.getValues().begin(), yield.getValues().end());
       yield.erase();
+    }
+  if (yielded.size() != op.getNumResults())
+    return op.emitOpError()
+           << "has mismatched yield/result count before SDE-to-CODIR cleanup";
+
   OpBuilder builder(op);
   builder.setInsertionPoint(op);
   op->getBlock()->getOperations().splice(Block::iterator(op.getOperation()),
                                          body.getOperations());
+  for (auto [result, replacement] : llvm::zip(op.getResults(), yielded))
+    result.replaceAllUsesWith(replacement);
   op.erase();
   return success();
 }

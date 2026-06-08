@@ -52,9 +52,9 @@ static void appendUniqueRoot(SmallVectorImpl<Value> &roots, Value root,
   roots.push_back(root);
 }
 
-static SmallVector<Value, 4> collectLayoutRoots(SdeSuIterateOp su) {
-  SmallVector<Value, 4> writes;
-  SmallVector<Value, 4> reads;
+static void collectLayoutRoots(SdeSuIterateOp su,
+                               SmallVectorImpl<Value> &writes,
+                               SmallVectorImpl<Value> &reads) {
   su.walk([&](Operation *op) {
     if (auto store = dyn_cast<memref::StoreOp>(op)) {
       if (!isa<MemRefType>(store.getValueToStore().getType()))
@@ -66,13 +66,6 @@ static SmallVector<Value, 4> collectLayoutRoots(SdeSuIterateOp su) {
         appendUniqueRoot(reads, load.getMemref(), su);
     }
   });
-
-  SmallVector<Value, 4> roots;
-  roots.append(writes.begin(), writes.end());
-  for (Value root : reads)
-    if (!llvm::is_contained(roots, root))
-      roots.push_back(root);
-  return roots;
 }
 
 static void
@@ -83,11 +76,23 @@ addGroundedLayoutRoots(Operation *moduleOp,
     if (!layout)
       return;
     SmallVector<LayoutGraphFact, 4> facts = parseArrayLayoutFacts(layout);
-    SmallVector<Value, 4> roots = collectLayoutRoots(su);
-    for (auto [idx, fact] : llvm::enumerate(facts)) {
-      if (idx >= roots.size())
-        break;
-      rootByArrayId.try_emplace(fact.id, roots[idx]);
+    SmallVector<Value, 4> writes;
+    SmallVector<Value, 4> reads;
+    collectLayoutRoots(su, writes, reads);
+    unsigned writeIdx = 0;
+    unsigned readIdx = 0;
+    for (const LayoutGraphFact &fact : facts) {
+      if (rootByArrayId.contains(fact.id))
+        continue;
+      if (fact.role == LayoutGraphRole::write) {
+        if (writeIdx < writes.size())
+          rootByArrayId.try_emplace(fact.id, writes[writeIdx]);
+        ++writeIdx;
+        continue;
+      }
+      if (readIdx < reads.size())
+        rootByArrayId.try_emplace(fact.id, reads[readIdx]);
+      ++readIdx;
     }
   });
 }
@@ -99,6 +104,17 @@ static std::optional<LayoutGraphFact> findLayoutFact(SdeSuIterateOp su,
       if (fact.id == arrayId)
         return fact;
   return std::nullopt;
+}
+
+static const ArrayAccessProfile *
+findProfileForRoot(const ModuleAccessRelations &relations, Value root) {
+  auto direct = relations.profiles.find(root);
+  if (direct != relations.profiles.end())
+    return &direct->second;
+  for (const auto &entry : relations.profiles)
+    if (::mlir::carts::ValueAnalysis::sameMemrefRoot(entry.first, root))
+      return &entry.second;
+  return nullptr;
 }
 
 static std::optional<SmallVector<int64_t, 4>>
@@ -222,9 +238,9 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       // discards — those fail closed.
       bool hasOwnerReduction = false;
       if (suIdIt != suIdOf.end()) {
-        auto pit = relations.profiles.find(root);
-        if (pit != relations.profiles.end())
-          for (auto [pos, posUses] : llvm::enumerate(pit->second.positionUses))
+        if (const ArrayAccessProfile *profile =
+                findProfileForRoot(relations, root))
+          for (auto [pos, posUses] : llvm::enumerate(profile->positionUses))
             for (const ArrayPositionUse &use : posUses)
               if (use.suId == suIdIt->second && !use.isWrite &&
                   use.kind == ArrayDimKind::reductionIndexed &&

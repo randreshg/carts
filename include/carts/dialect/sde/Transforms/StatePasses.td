@@ -128,10 +128,9 @@ def SdeCuNormalization
     current IR and rewrites structure, stamping no metadata and branching on no
     downstream contract.
 
-    Conservative single-CU wrapping requires a self-contained span: if a value
-    defined in the span is used outside it (an `sde.cu_region` result cannot
-    express an output-only value), the pass fails closed with a diagnostic rather
-    than fabricate a results/yield contract for a later layer to repair.
+    Values defined by a wrapped span and consumed afterward are threaded through
+    `sde.cu_region` results, so the producer-side CU containment invariant
+    remains explicit in SDE IR.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createSdeCuNormalizationPass()";
