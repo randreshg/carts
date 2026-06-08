@@ -32,6 +32,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include <functional>
 using namespace mlir;
 using namespace mlir::carts;
@@ -1830,8 +1831,10 @@ static inline Value buildSuDispatchStepFromExtent(sde::SdeSuIterateOp source,
   if (!stepConst)
     stepConst = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(step);
   if (stepConst) {
-    if (*stepConst >= extent)
+    if (*stepConst == extent)
       return step;
+    if (*stepConst > extent)
+      return createConstantIndex(builder, loc, extent);
     int64_t dispatch = ((*stepConst + extent - 1) / *stepConst) * *stepConst;
     return createConstantIndex(builder, loc, dispatch);
   }
@@ -2888,6 +2891,81 @@ mapSuEquivalentConstantIndexParams(sde::SdeSuIterateOp source,
   });
 }
 
+static inline bool isSuDispatchStepKnownFiner(Value dispatchStep,
+                                              Value sourceStep) {
+  std::optional<int64_t> dispatchConst =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(dispatchStep);
+  std::optional<int64_t> sourceConst =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(sourceStep);
+  return dispatchConst && sourceConst && *dispatchConst > 0 &&
+         *sourceConst > 0 && *dispatchConst < *sourceConst;
+}
+
+static inline bool isSuIvPlusStep(Value value, Value ownerIv,
+                                  Value sourceStep) {
+  auto add = value.getDefiningOp<arith::AddIOp>();
+  if (!add)
+    return false;
+  return (::mlir::carts::ValueAnalysis::sameValue(add.getLhs(), ownerIv) &&
+          ::mlir::carts::ValueAnalysis::sameValue(add.getRhs(), sourceStep)) ||
+         (::mlir::carts::ValueAnalysis::sameValue(add.getLhs(), sourceStep) &&
+          ::mlir::carts::ValueAnalysis::sameValue(add.getRhs(), ownerIv));
+}
+
+static inline LogicalResult
+mapSuCoarseTileBoundsToDispatchWindow(sde::SdeSuIterateOp source, unsigned dim,
+                                      Value dispatchStep, Value rawEnd,
+                                      Value localEnd, IRMapping &mapper) {
+  if (dim >= source.getSteps().size() ||
+      dim >= source.getUpperBounds().size() ||
+      !isSuDispatchStepKnownFiner(dispatchStep, source.getSteps()[dim]))
+    return success();
+  if (source.getBody().empty() ||
+      source.getBody().front().getNumArguments() <= dim)
+    return failure();
+
+  Value ownerIv = source.getBody().front().getArgument(dim);
+  Value sourceStep = source.getSteps()[dim];
+  Value sourceUpper = source.getUpperBounds()[dim];
+  SmallPtrSet<Value, 4> tileLimits;
+  bool mappedTileEnd = false;
+
+  source.getBody().walk([&](Operation *op) {
+    if (auto add = dyn_cast<arith::AddIOp>(op)) {
+      Value result = add.getResult();
+      if (mapper.contains(result))
+        return;
+      if (isSuIvPlusStep(result, ownerIv, sourceStep)) {
+        mapper.map(result, rawEnd);
+        tileLimits.insert(result);
+      }
+      return;
+    }
+
+    if (auto min = dyn_cast<arith::MinUIOp>(op)) {
+      if (mapper.contains(min.getResult()))
+        return;
+      Value lhs = min.getLhs();
+      Value rhs = min.getRhs();
+      bool lhsIsLimit = tileLimits.contains(lhs) ||
+                        ::mlir::carts::ValueAnalysis::sameValue(lhs, rawEnd);
+      bool rhsIsLimit = tileLimits.contains(rhs) ||
+                        ::mlir::carts::ValueAnalysis::sameValue(rhs, rawEnd);
+      if (lhsIsLimit &&
+          ::mlir::carts::ValueAnalysis::sameValue(rhs, sourceUpper)) {
+        mapper.map(min.getResult(), localEnd);
+        mappedTileEnd = true;
+      } else if (rhsIsLimit &&
+                 ::mlir::carts::ValueAnalysis::sameValue(lhs, sourceUpper)) {
+        mapper.map(min.getResult(), localEnd);
+        mappedTileEnd = true;
+      }
+    }
+  });
+
+  return success(mappedTileEnd);
+}
+
 static inline bool areAllResultsMapped(Operation &op, IRMapping &mapper) {
   if (op.getNumResults() == 0)
     return false;
@@ -3075,7 +3153,18 @@ static inline LogicalResult convertSuOwnerTileNdToCodir(
     Value span = mapper.lookup(dispatchSteps[loopDim]);
     Value rawEnd = arith::AddIOp::create(builder, loc, base, span);
     Value localEnd = arith::MinUIOp::create(builder, loc, rawEnd, upper);
-    auto localLoop = scf::ForOp::create(builder, loc, base, localEnd, step);
+    if (failed(mapSuCoarseTileBoundsToDispatchWindow(
+            source, loopDim, dispatchSteps[loopDim], rawEnd, localEnd, mapper)))
+      return source.emitOpError()
+             << "has a committed owner-tile block/window finer than the "
+                "scheduling step, but its body does not expose a retileable "
+                "tile bound";
+    Value localStep = isSuDispatchStepKnownFiner(dispatchSteps[loopDim],
+                                                 source.getSteps()[loopDim])
+                          ? span
+                          : step;
+    auto localLoop =
+        scf::ForOp::create(builder, loc, base, localEnd, localStep);
     mapper.map(source.getBody().front().getArgument(loopDim),
                localLoop.getInductionVar());
     builder.setInsertionPointToStart(localLoop.getBody());
@@ -3172,7 +3261,17 @@ static inline LogicalResult convertSuIterateToCodir(
   Value span = mapper.lookup(dispatchStep);
   Value rawEnd = arith::AddIOp::create(builder, loc, base, span);
   Value localEnd = arith::MinUIOp::create(builder, loc, rawEnd, upper);
-  auto localLoop = scf::ForOp::create(builder, loc, base, localEnd, step);
+  if (failed(mapSuCoarseTileBoundsToDispatchWindow(
+          source, /*dim=*/0, dispatchStep, rawEnd, localEnd, mapper)))
+    return source.emitOpError()
+           << "has a committed owner-strip block/window finer than the "
+              "scheduling step, but its body does not expose a retileable "
+              "tile bound";
+  Value localStep =
+      isSuDispatchStepKnownFiner(dispatchStep, source.getSteps().front())
+          ? span
+          : step;
+  auto localLoop = scf::ForOp::create(builder, loc, base, localEnd, localStep);
   if (!source.getBody().front().getArguments().empty())
     mapper.map(source.getBody().front().getArgument(0),
                localLoop.getInductionVar());
