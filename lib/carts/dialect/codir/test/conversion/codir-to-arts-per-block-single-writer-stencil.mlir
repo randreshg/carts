@@ -171,6 +171,118 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
     return
   }
 
+  func.func @read_compute_block_uses_storage_block_origin() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c4 = arith.constant 4 : index
+    %c15 = arith.constant 15 : index
+    %c16 = arith.constant 16 : index
+    %A = memref.alloc() : memref<16x16xf32>
+    %B = memref.alloc() : memref<16x16xf32>
+
+    scf.for %i = %c1 to %c15 step %c2 {
+      scf.for %j = %c1 to %c15 step %c4 {
+        codir.codelet deps(%A, %B : memref<16x16xf32>, memref<16x16xf32>)
+            params(%i, %j : index, index)
+            attributes {access_max_offsets = [1, 1],
+                        access_min_offsets = [-1, -1],
+                        array_layout = [{arrayId = 0 : i64, blockShape = [8, 8], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"},
+                                        {arrayId = 1 : i64, blockShape = [2, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 32 : i64, ownerDims = [0, 1], role = "write"}],
+                        dep_array_ids = [0, 1],
+                        dep_collectives = [#codir.collective<halo>, #codir.collective<none>],
+                        dep_modes = [#codir.access_mode<read>, #codir.access_mode<write>],
+                        dep_owner_dims = [[0, 1], [0, 1]],
+                        dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>],
+                        distribution_kind = #codir.distribution_kind<owner_compute>,
+                        halo_shape = [1, 1],
+                        iteration_topology = #codir.iteration_topology<owner_tile>,
+                        logical_worker_slice = [2, 4],
+                        partition_graph = [{blockShape = [8, 8], edgeClass = "layout_mismatch", edgeCommBytes = 0 : i64, layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "read", tilePayloadBytes = 256 : i64},
+                                           {blockShape = [2, 4], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "owner_block", muBlockCount = 32 : i64, muId = 1 : i64, ownerDims = [0, 1], role = "write", tilePayloadBytes = 32 : i64}],
+                        pattern = #codir.pattern<stencil_tiling_nd>,
+                        plan_owner_dims = [0, 1],
+                        spatial_dims = [0, 1],
+                        tile_owner_dims = [0, 1],
+                        tile_shape = [2, 4],
+                        write_footprint = [1, 1]} {
+        ^bb0(%src: memref<16x16xf32>, %dst: memref<16x16xf32>,
+             %base_i: index, %base_j: index):
+          %inner_c1 = arith.constant 1 : index
+          %row_m = arith.subi %base_i, %inner_c1 : index
+          %col_p = arith.addi %base_j, %inner_c1 : index
+          %a0 = memref.load %src[%row_m, %base_j] : memref<16x16xf32>
+          %a1 = memref.load %src[%base_i, %col_p] : memref<16x16xf32>
+          %sum = arith.addf %a0, %a1 : f32
+          memref.store %sum, %dst[%base_i, %base_j] : memref<16x16xf32>
+          codir.yield
+        }
+      }
+    }
+
+    %result = memref.load %B[%c0, %c0] : memref<16x16xf32>
+    func.call @use(%result) : (f32) -> ()
+    memref.dealloc %B : memref<16x16xf32>
+    memref.dealloc %A : memref<16x16xf32>
+    return
+  }
+
+  func.func @read_compute_block_retiles_unaligned_halo_block() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c4 = arith.constant 4 : index
+    %c15 = arith.constant 15 : index
+    %c16 = arith.constant 16 : index
+    %A = memref.alloc() : memref<16x16xf32>
+    %B = memref.alloc() : memref<16x16xf32>
+
+    scf.for %i = %c1 to %c15 step %c2 {
+      scf.for %j = %c1 to %c15 step %c4 {
+        codir.codelet deps(%A, %B : memref<16x16xf32>, memref<16x16xf32>)
+            params(%i, %j : index, index)
+            attributes {access_max_offsets = [1, 1],
+                        access_min_offsets = [-1, -1],
+                        array_layout = [{arrayId = 0 : i64, blockShape = [7, 7], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 9 : i64, ownerDims = [0, 1], role = "read"},
+                                        {arrayId = 1 : i64, blockShape = [2, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 32 : i64, ownerDims = [0, 1], role = "write"}],
+                        dep_array_ids = [0, 1],
+                        dep_collectives = [#codir.collective<halo>, #codir.collective<none>],
+                        dep_modes = [#codir.access_mode<read>, #codir.access_mode<write>],
+                        dep_owner_dims = [[0, 1], [0, 1]],
+                        dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>],
+                        distribution_kind = #codir.distribution_kind<owner_compute>,
+                        halo_shape = [1, 1],
+                        iteration_topology = #codir.iteration_topology<owner_tile>,
+                        logical_worker_slice = [2, 4],
+                        partition_graph = [{blockShape = [7, 7], edgeClass = "layout_mismatch", edgeCommBytes = 0 : i64, layoutKind = "block_parallel", muBlockCount = 9 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "read", tilePayloadBytes = 196 : i64},
+                                           {blockShape = [2, 4], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "owner_block", muBlockCount = 32 : i64, muId = 1 : i64, ownerDims = [0, 1], role = "write", tilePayloadBytes = 32 : i64}],
+                        pattern = #codir.pattern<stencil_tiling_nd>,
+                        plan_owner_dims = [0, 1],
+                        spatial_dims = [0, 1],
+                        tile_owner_dims = [0, 1],
+                        tile_shape = [2, 4],
+                        write_footprint = [1, 1]} {
+        ^bb0(%src: memref<16x16xf32>, %dst: memref<16x16xf32>,
+             %base_i: index, %base_j: index):
+          %inner_c1 = arith.constant 1 : index
+          %row_m = arith.subi %base_i, %inner_c1 : index
+          %col_p = arith.addi %base_j, %inner_c1 : index
+          %a0 = memref.load %src[%row_m, %base_j] : memref<16x16xf32>
+          %a1 = memref.load %src[%base_i, %col_p] : memref<16x16xf32>
+          %sum = arith.addf %a0, %a1 : f32
+          memref.store %sum, %dst[%base_i, %base_j] : memref<16x16xf32>
+          codir.yield
+        }
+      }
+    }
+
+    %result = memref.load %B[%c0, %c0] : memref<16x16xf32>
+    func.call @use(%result) : (f32) -> ()
+    memref.dealloc %B : memref<16x16xf32>
+    memref.dealloc %A : memref<16x16xf32>
+    return
+  }
+
   func.func private @use(f32)
 }
 
@@ -258,5 +370,28 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: arts.edt <task> <internode> route{{.*}}memref<?xmemref<?x?xf32>>, memref<?x?xmemref<?x?xf32>>{{.*}}storageBridgeCopy
 // CHECK: arts.edt <task> <intranode> route{{.*}}memref<?x?xmemref<?x?xf32>>, memref<?x?xmemref<?x?xf32>>, memref<?x?xmemref<?x?xf32>>{{.*}}depPattern = #arts.dep_pattern<alternating_buffer_stencil>
 // CHECK-SAME: planOwnerDims = [0, 1]
+
+// CHECK-LABEL: func.func @read_compute_block_uses_storage_block_origin
+// CHECK-DAG: %[[ONE_R:.*]] = arith.constant 1 : index
+// CHECK-DAG: %[[EIGHT_R:.*]] = arith.constant 8 : index
+// CHECK: arts.db_alloc
+// CHECK-SAME: planPhysicalBlockShape = [8, 8]
+// CHECK: arts.edt <task>
+// CHECK-SAME: depPattern = #arts.dep_pattern<stencil_tiling_nd>
+// CHECK: %[[READ_RELATIVE_I:.*]] = arith.subi %{{.*}}, %[[ONE_R]]
+// CHECK: %[[READ_BLOCK_I:.*]] = arith.divui %[[READ_RELATIVE_I]], %[[EIGHT_R]]
+// CHECK: %[[READ_OFFSET_I:.*]] = arith.muli %[[READ_BLOCK_I]], %[[EIGHT_R]]
+// CHECK: %[[READ_ORIGIN_I:.*]] = arith.addi %[[READ_OFFSET_I]], %[[ONE_R]]
+// CHECK: %[[READ_HALO_OK_I:.*]] = arith.cmpi uge, %[[READ_ORIGIN_I]], %[[ONE_R]]
+// CHECK: %[[READ_PAYLOAD_BASE_I:.*]] = arith.select %[[READ_HALO_OK_I]], %[[READ_OFFSET_I]], %{{.*}}
+// CHECK: arith.subi %{{.*}}, %[[READ_PAYLOAD_BASE_I]]
+
+// CHECK-LABEL: func.func @read_compute_block_retiles_unaligned_halo_block
+// CHECK: arts.db_alloc[<in>, <heap>, <read>, <block>]
+// CHECK-SAME: planPhysicalBlockShape = [2, 4]
+// CHECK-SAME: stencil_supported_block_halo
+// CHECK: arts.edt <task>
+// CHECK-SAME: depPattern = #arts.dep_pattern<stencil_tiling_nd>
+// CHECK-SAME: planPhysicalBlockShape = [2, 4]
 
 // func.func private @use

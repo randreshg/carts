@@ -838,8 +838,8 @@ materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
     Value halo = createConstantIndex(builder, loc, lowerHalo);
     Value zero = createZeroIndex(builder, loc);
     Value canSubtract = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::uge, ownerBase, halo);
-    Value shifted = arith::SubIOp::create(builder, loc, ownerBase, halo);
+        builder, loc, arith::CmpIPredicate::uge, localOrigin, halo);
+    Value shifted = arith::SubIOp::create(builder, loc, localOrigin, halo);
     localOrigin =
         arith::SelectOp::create(builder, loc, canSubtract, shifted, zero);
   }
