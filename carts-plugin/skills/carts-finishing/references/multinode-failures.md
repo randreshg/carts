@@ -1,10 +1,10 @@
 # Multinode-Only Failure Modes
 
-These failure modes only appear in distributed runs. Single-node testing does not catch them. When a sample/benchmark passes single-node but fails in multinode/distributed runs (vs the `--no-distributed-db` baseline) with `samples/arts_multinode.cfg` (or similar), this is your first reference.
+These failure modes only appear in distributed runs. Single-node testing does not catch them. When a sample/benchmark passes single-node but fails in multinode/distributed runs with `samples/arts_multinode.cfg` (or similar), this is your first reference.
 
 ## How to use
 
-1. Confirm the failure is multinode-only: same compile flags except `--no-distributed-db` on the baseline, single-node passes.
+1. Confirm the failure is multinode-only: same compile flags, single-node passes.
 2. Match the runtime symptom to the surface table.
 3. Inspect the named source location.
 4. Apply the fix in the layer named under "fix usually belongs."
@@ -98,7 +98,7 @@ If a sample passes single-node but fails multinode:
 1. Generate dumps for both modes:
 
    ```bash
-   dekk carts compile samples/<sample> -O3 --no-distributed-db -o .carts/outputs/multinode/<sample>-single
+   dekk carts compile samples/<sample> -O3 -o .carts/outputs/multinode/<sample>-single
    dekk carts compile samples/<sample> -O3 -o .carts/outputs/multinode/<sample>-multi
    dekk carts compile samples/<sample> -O3 --all-pipelines -o .carts/outputs/multinode/<sample>-stages/
    ```
@@ -106,7 +106,7 @@ If a sample passes single-node but fails multinode:
 2. Diff single-node vs distributed at each stage boundary:
 
    ```bash
-   dekk carts compile samples/<sample> --no-distributed-db --pipeline=post-db-refinement > .carts/outputs/multinode/<sample>-single-post-db.mlir
+   dekk carts compile samples/<sample> --pipeline=post-db-refinement > .carts/outputs/multinode/<sample>-single-post-db.mlir
    dekk carts compile samples/<sample> --pipeline=post-db-refinement > .carts/outputs/multinode/<sample>-multi-post-db.mlir
    diff .carts/outputs/multinode/<sample>-single-post-db.mlir .carts/outputs/multinode/<sample>-multi-post-db.mlir | head -200
    ```

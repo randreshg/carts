@@ -163,16 +163,6 @@ static cl::opt<bool> RuntimeStaticWorkers(
              "worker count when the module embeds a valid ARTS config"),
     cl::init(false));
 
-/// Distribution baseline escape. Multinode builds distribute by default
-/// (owner-ranked single-writer DBs + per-worker init). This forces the
-/// conservative baseline where every DB is created on its origin node, for
-/// baseline/debug comparisons.
-static cl::opt<bool> NoDistributedDb(
-    "no-distributed-db",
-    cl::desc("Disable default distribution: create every DB on its origin "
-             "node (baseline/debug comparison)"),
-    cl::init(false));
-
 /// Output-tile byte floor for distributed plans. When > 0, distribution
 /// writers coarsen the per-EDT output tile until it carries at least this
 /// many bytes; reduces remote DB-acquire round-trips on RTT-bound multinode
@@ -215,7 +205,7 @@ struct StageExecutionContext {
   bool stopAfterStage = false;
   bool runAdditionalOpt = false;
   bool emitLLVM = false;
-  /// Distribute by default on multinode configs unless --no-distributed-db.
+  /// Distribute by default on multinode configs.
   bool enableDistributedDb = false;
 };
 
@@ -1677,13 +1667,9 @@ buildPassManager(ModuleOp module, MLIRContext &context,
   arts::setRuntimeTotalNodes(module, machine.getNodeCount());
   arts::setRuntimeStaticWorkers(module, RuntimeStaticWorkers);
 
-  /// Multinode configs distribute by default; --no-distributed-db forces the
-  /// origin-node baseline. Single-node configs have nothing to distribute.
-  const bool enableDistributedDb =
-      !NoDistributedDb && machine.getNodeCount() > 1;
-  if (machine.getNodeCount() > 1 && NoDistributedDb)
-    ARTS_WARN("--no-distributed-db: distribution disabled, every DB is created "
-              "on its origin node");
+  /// Multinode configs distribute by default. Single-node configs have nothing
+  /// to distribute.
+  const bool enableDistributedDb = machine.getNodeCount() > 1;
   /// Create shared timing data for pass instrumentation.
   PassTimingData timingData;
   PassTimingData *timingDataPtr = PassTiming ? &timingData : nullptr;

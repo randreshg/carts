@@ -13,7 +13,6 @@ Primary files for owner-map realization and multi-node routing:
 High-value grep tokens:
 
 - `distributed`
-- `--no-distributed-db`
 - `DbOwnerMapRealization`
 - `DistributionPlanning`
 - `distributed_db_init`

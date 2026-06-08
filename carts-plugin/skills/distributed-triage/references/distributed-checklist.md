@@ -1,6 +1,6 @@
 # Distributed Debug Checklist
 
-Use this checklist when a workload fails only in multinode/distributed runs (vs the `--no-distributed-db` baseline).
+Use this checklist when a workload fails only in multinode/distributed runs.
 
 ## 1. Reproduction Inputs
 
@@ -8,7 +8,7 @@ Use this checklist when a workload fails only in multinode/distributed runs (vs 
 - `--arts-config` file
 - node count
 - thread count per node
-- whether `--no-distributed-db` is set (forces the origin-node baseline)
+- whether the run is single-node or multinode
 
 ## 2. IR Checks
 

@@ -114,7 +114,7 @@ The triage rubric tells you the originating layer. Once you know it, delegate th
 | Symptom class | Delegate to |
 |---|---|
 | Wrong output / silent miscompilation | `carts-miscompile-triage` |
-| Failure only in multinode/distributed runs (vs the `--no-distributed-db` baseline) | `carts-distributed-triage` |
+| Failure only in multinode/distributed runs | `carts-distributed-triage` |
 | Behavior depends on pass order, stale graphs, metadata inconsistency | `carts-analysis-triage` |
 | Crash, segfault, or generic compile error | `carts-debug` |
 | Need to compare IR between two stages | `carts-stage-diff` |

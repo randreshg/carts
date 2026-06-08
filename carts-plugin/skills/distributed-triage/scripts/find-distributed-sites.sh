@@ -13,6 +13,5 @@ git grep -n \
   -e 'distributed_db_init_worker' \
   -e 'artsGetTotalNodes' \
   -e 'artsGuidGetRank' \
-  -e '--no-distributed-db' \
   -e 'route = linearIndex' \
   -- docs include lib tools .agents

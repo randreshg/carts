@@ -1,8 +1,8 @@
 # ARTS RDMA Stencil Validation Status - 2026-05-31
 
 > Historical record. Commands below were run before the v4 driver cleanup; the
-> positive `--distributed-db` flag has since been removed (distribution is
-> default-on under `-O3`, with `--no-distributed-db` as the baseline escape).
+> `--distributed-db` and `--no-distributed-db` flags have since been removed;
+> distribution is default-on under multinode `-O3`.
 
 ## Summary
 

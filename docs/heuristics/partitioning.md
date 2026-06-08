@@ -64,8 +64,7 @@ Index mapping always has two levels:
 ## 1.1) Relationship to Distributed DB Ownership
 
 Distributed ownership is an ownership/routing concern, not a partition
-mode. It is default-on for multinode builds; the `--no-distributed-db`
-baseline forces origin-node DBs instead.
+mode. It is default-on for multinode builds.
 
 - H1 partitioning still decides DB layout (`coarse`, `block`, `stencil`,
   `fine_grained`) and acquire localization.
@@ -73,9 +72,8 @@ baseline forces origin-node DBs instead.
   `DbAllocOp`s with `distributed`.
 - Lowering then chooses per-block owner routes for marked allocations
   (currently round-robin).
-- The distributed init path (reserve in `initPerNode`, owner-local create
-  in `initPerWorker`) is used for marked DBs; `--no-distributed-db` falls
-  back to origin-node creation instead.
+- The distributed init path reserves DBs in `initPerNode` and creates them
+  owner-locally in `initPerWorker` for marked DBs.
 - A coarse single-block aggregate DB is not an acceptable backing store for an
   internode task. The verifier treats that as a dialect-boundary error, because
   ARTS cannot recover token-local block views after SDE/CODIR skipped

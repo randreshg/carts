@@ -211,8 +211,7 @@ Current implementation:
 - Pass: `DbOwnerMapRealizationPass`
   (`lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp`).
 - Pipeline placement: ARTS DB refinement after SDE distribution planning
-  (default-on for multinode in `carts-compile`; `--no-distributed-db` forces the
-  origin-node baseline).
+  (default-on for multinode in `carts-compile`).
 - Default distribution relies on SDE-authored work units and ARTS DB ownership
   marking; late ARTS loop-carrier producers are not part of the contract.
 - Lowering support: `ConvertArtsRtToLLVM` uses round-robin route selection for

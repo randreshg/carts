@@ -89,7 +89,7 @@ For each failing sample or benchmark:
 3. **Apply the decision tree.** Match symptom against `references/triage-rubric.md` "Triage decision tree". Identify the originating layer.
 4. **Delegate.** Invoke the matching triage skill via `Skill`:
    - Wrong output / silent miscompilation → `carts-miscompile-triage`
-   - Failure only in multinode/distributed runs (vs the `--no-distributed-db` baseline) → `carts-distributed-triage`
+   - Failure only in multinode/distributed runs → `carts-distributed-triage`
    - Behavior depends on pass order, stale graphs, metadata inconsistency → `carts-analysis-triage`
    - Crash, segfault, generic compile error → `carts-debug`
    - Need to compare two stages → `carts-stage-diff`

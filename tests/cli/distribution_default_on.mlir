@@ -1,12 +1,8 @@
 // Distribution is default-on for multinode configs: staged -O3 compilation
-// realizes owner-ranked single-writer DBs with no opt-in flag. The only
-// distribution knob is --no-distributed-db, which forces the origin-node
-// baseline for debug/comparison.
+// realizes owner-ranked single-writer DBs with no opt-in flag.
 
 // RUN: %carts-compile %s --pipeline post-db-refinement --start-from post-db-refinement --arts-config %inputs_dir/arts_multinode.cfg \
 // RUN:   | %FileCheck %s --check-prefix=DEFAULT
-// RUN: %carts-compile %s --pipeline post-db-refinement --start-from post-db-refinement --arts-config %inputs_dir/arts_multinode.cfg --no-distributed-db \
-// RUN:   | %FileCheck %s --check-prefix=BASELINE --implicit-check-not=owner_map_kind --implicit-check-not=owner_scattered
 
 // Default: the block-planned DB is realized as distributed storage with an
 // explicit owner map and an owner-scattered home. No flag was passed.
@@ -15,11 +11,6 @@
 // DEFAULT-SAME: distributed
 // DEFAULT-SAME: owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>
 // DEFAULT: arts.edt <task> <internode>
-
-// Baseline: --no-distributed-db keeps the DB on its origin node; the owner map
-// is not realized (owner_map_kind / owner_scattered checked absent above).
-// BASELINE: arts.db_alloc
-// BASELINE-SAME: local_only
 
 module {
   func.func @block_planned_db() {

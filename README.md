@@ -119,7 +119,5 @@ and close-after-send unless provider-triage knobs explicitly opt out. Use
 or when running an intentional TCP fallback experiment.
 Benchmark runs use TCP for single-node configs and use the requested
 `--rdma/--no-rdma` transport only for multinode configs. The compiler
-distributes by default for multinode configs; `--no-distributed-db` selects the
-conservative origin-node baseline. The carts-benchmarks harness and experiment
-configs still pass the removed `--distributed-db` flag and must drop it before
-multinode benchmark builds work default-on.
+distributes by default for multinode configs and has no distribution compiler
+toggle.

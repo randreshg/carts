@@ -62,7 +62,7 @@ Only use stage names from `dekk carts pipeline --json`.
    - hypergraph evidence supports grouping decisions;
    - no benchmark-name branch is needed.
 
-If the regression is multi-node specific or appears only in multinode/distributed runs (vs the `--no-distributed-db` baseline), switch to `carts-distributed-triage`.
+If the regression is multi-node specific or appears only in distributed runs, switch to `carts-distributed-triage`.
 
 ## OpenMP Baseline
 

@@ -137,8 +137,7 @@ barrier/epoch optimization.
 - Run `dekk carts format`, focused lit tests, `dekk carts build`, and the
   affected benchmark.
 - For distributed DB work, validate real 64-thread RDMA runs in order:
-  1 node, 2 nodes with `-O3 --no-distributed-db` (origin-node baseline), then
-  2 nodes with plain `-O3` (default-on distribution). Use megalarge only after
-  compiler shape is sane.
+  1 node, then 2 nodes with plain `-O3` (default-on distribution). Use
+  megalarge only after compiler shape is sane.
   Confirm checksums, distributed `arts.db_alloc` block counts, owner maps,
   rank logs, and non-owner allocation behavior.

@@ -1,6 +1,6 @@
 ---
 name: carts-distributed-triage
-description: Use when a failure only appears in multinode/distributed runs (vs the `--no-distributed-db` baseline), multiple nodes, SDE/CODIR/ARTS distributed work materialization, or uneven remote work distribution.
+description: Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/CODIR/ARTS distributed work materialization, or uneven remote work distribution.
 user-invocable: true
 allowed-tools: Bash, Read, Write, Grep, Glob, Agent
 argument-hint: [<input-file | benchmark-path>]
@@ -38,8 +38,7 @@ Read these before patching anything:
 3. Confirm the requested transport. Single-node benchmark configs use TCP;
    multinode configs default to GASNet unless `--no-rdma` is set.
 4. Check whether distribution is actually active in the failing path.
-   It is default-on for multinode; `--no-distributed-db` forces the origin-node
-   baseline, and distribution is stripped from single-node rows.
+   It is default-on for multinode and stripped from single-node rows.
 5. Inspect IR around:
    - `sde-planning`
    - `codir-to-arts`
