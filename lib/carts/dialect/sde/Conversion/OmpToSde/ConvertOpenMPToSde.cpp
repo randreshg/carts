@@ -894,6 +894,48 @@ struct TaskwaitToSdePattern : public OpRewritePattern<omp::TaskwaitOp> {
 //===----------------------------------------------------------------------===//
 
 namespace {
+
+/// Sink static parallel-private scratch into its consuming worksharing loop.
+/// Such storage is iteration-local once every use is contained by one
+/// su_iterate; leaving it at parallel-region scope makes it look shared.
+static void sinkParallelPrivateScratch(ModuleOp module) {
+  SmallVector<sde::SdeSuIterateOp> iters;
+  module.walk([&](sde::SdeSuIterateOp it) { iters.push_back(it); });
+  for (sde::SdeSuIterateOp it : iters) {
+    Block *parent = it->getBlock();
+    if (!parent)
+      continue;
+    auto parentCu = dyn_cast_or_null<sde::SdeCuRegionOp>(parent->getParentOp());
+    if (!parentCu || parentCu.getKind() != sde::SdeCuKind::parallel)
+      continue;
+    Block &body = it.getBody().front();
+    if (body.empty())
+      continue;
+    auto innerCu = dyn_cast<sde::SdeCuRegionOp>(&body.front());
+    if (!innerCu)
+      continue;
+    SmallVector<memref::AllocaOp> toSink;
+    for (Operation &op : *parent) {
+      auto alloca = dyn_cast<memref::AllocaOp>(&op);
+      if (!alloca || alloca->getNumOperands() != 0)
+        continue;
+      bool anyUse = false, allInside = true;
+      for (Operation *user : alloca->getUsers()) {
+        anyUse = true;
+        if (!it.getBody().isAncestor(user->getParentRegion())) {
+          allInside = false;
+          break;
+        }
+      }
+      if (anyUse && allInside)
+        toSink.push_back(alloca);
+    }
+    Block &dest = sde::ensureBlock(innerCu.getBody());
+    for (memref::AllocaOp alloca : toSink)
+      alloca->moveBefore(&dest, dest.begin());
+  }
+}
+
 struct ConvertOpenMPToSdePass
     : public sde::impl::ConvertOpenMPToSdeBase<ConvertOpenMPToSdePass> {
   using ConvertOpenMPToSdeBase::ConvertOpenMPToSdeBase;
@@ -925,6 +967,8 @@ struct ConvertOpenMPToSdePass
         [&](omp::DeclareReductionOp op) { declReductions.push_back(op); });
     for (auto op : declReductions)
       op.erase();
+
+    sinkParallelPrivateScratch(module);
 
     attachTaskwaitControlTokens(module);
 
