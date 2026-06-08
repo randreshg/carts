@@ -5,18 +5,17 @@
 ///
 /// For every `sde.mu_alloc` that rank expansion converted into a
 /// single-contiguous-owner block-grid MU (elementwise/stencil, fully static),
-/// this pass raises one
-/// `sde.mu_access_window` fact at the top of the enclosing `sde.cu_region`, per
-/// (MU root, read/write mode), in the SAME block-grid coordinate system the
-/// carrier type already encodes.
+/// this pass raises one `sde.mu_access_window` fact at the top of each
+/// enclosing `sde.cu_region`, per (MU root, read/write mode), in the SAME
+/// block-grid coordinate system the carrier type already encodes.
 ///
 /// It is a pure ADDITIVE raiser: it reads the committed plan + expanded type
-/// VERBATIM (via the shared `planAccessWindow` query — it never recomputes
+/// VERBATIM (via the shared `planAccessWindows` query — it never recomputes
 /// owner dims or block shape), proves the structure against the writer
 /// su_iterate iteration domain, and inserts explicit window structure.
-/// Out-of-scope MUs (dynamic, matmul/reduction, multi-owner, in-place,
-/// multi-CU, unsupported use) are skipped conservatively — no window, no error,
-/// no existing op mutated. It introduces no `sde.mu_token`, slice,
+/// Out-of-scope MUs/CU accesses (dynamic, matmul/reduction, multi-owner,
+/// same-CU in-place, unsupported use) are skipped conservatively — no window,
+/// no error, no existing op mutated. It introduces no `sde.mu_token`, slice,
 /// `sde.mu_dep`, or CODIR concept.
 ///==========================================================================///
 
@@ -50,37 +49,40 @@ struct RaiseToMuAccessWindowPass
     module.walk([&](carts::sde::SdeMuAllocOp mu) { worklist.push_back(mu); });
 
     for (carts::sde::SdeMuAllocOp mu : worklist) {
-      std::optional<carts::sde::RaisedWindowPlan> plan =
-          carts::sde::planAccessWindow(mu);
-      if (!plan)
+      llvm::SmallVector<carts::sde::RaisedWindowPlan, 4> plans =
+          carts::sde::planAccessWindows(mu);
+      if (plans.empty())
         continue; // out of scope -> conservative, no window
 
-      // Find the insertion point (first non-window op in the CU body) and
-      // detect an already-raised window for this (MU, mode) so the pass is
-      // idempotent.
-      Block &body = plan->cu.getBody().front();
-      bool exists = false;
-      Operation *insertBefore = nullptr;
-      for (Operation &op : body) {
-        if (auto win = dyn_cast<carts::sde::SdeMuAccessWindowOp>(op)) {
-          if (win.getMu() == plan->mu && win.getMode() == plan->mode)
-            exists = true;
-          continue;
+      for (const carts::sde::RaisedWindowPlan &plan : plans) {
+        // Find the insertion point (first non-window op in the CU body) and
+        // detect an already-raised window for this (MU, mode) so the pass is
+        // idempotent.
+        carts::sde::SdeCuRegionOp cu = plan.cu;
+        Block &body = cu.getBody().front();
+        bool exists = false;
+        Operation *insertBefore = nullptr;
+        for (Operation &op : body) {
+          if (auto win = dyn_cast<carts::sde::SdeMuAccessWindowOp>(op)) {
+            if (win.getMu() == plan.mu && win.getMode() == plan.mode)
+              exists = true;
+            continue;
+          }
+          if (!insertBefore)
+            insertBefore = &op;
         }
-        if (!insertBefore)
-          insertBefore = &op;
-      }
-      if (exists || !insertBefore)
-        continue;
+        if (exists || !insertBefore)
+          continue;
 
-      OpBuilder builder(insertBefore);
-      carts::sde::SdeMuAccessWindowOp::create(
-          builder, mu.getLoc(), plan->mu,
-          carts::sde::SdeAccessModeAttr::get(ctx, plan->mode),
-          builder.getI64IntegerAttr(plan->ownerDimCount),
-          builder.getI64ArrayAttr(plan->blockLo),
-          builder.getI64ArrayAttr(plan->blockHi),
-          builder.getI64ArrayAttr(plan->validExtents));
+        OpBuilder builder(insertBefore);
+        carts::sde::SdeMuAccessWindowOp::create(
+            builder, mu.getLoc(), plan.mu,
+            carts::sde::SdeAccessModeAttr::get(ctx, plan.mode),
+            builder.getI64IntegerAttr(plan.ownerDimCount),
+            builder.getI64ArrayAttr(plan.blockLo),
+            builder.getI64ArrayAttr(plan.blockHi),
+            builder.getI64ArrayAttr(plan.validExtents));
+      }
     }
   }
 };

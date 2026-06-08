@@ -305,6 +305,36 @@ struct ConvertCodirToArtsPass
     return success();
   }
 
+  bool isRankExpandedOwnerStripReadOnlyHaloDep(codir::CodeletOp codelet,
+                                               unsigned depIdx) {
+    auto topology = codelet.getIterationTopology();
+    if (!topology || *topology != codir::CodirIterationTopology::owner_strip)
+      return false;
+    if (!codirDepRequiresComputeBlockStorage(codelet, depIdx))
+      return false;
+    if (getFinalizedCodirDepCollectiveKind(codelet, depIdx) !=
+        codir::CodirCollectiveKind::halo)
+      return false;
+    std::optional<codir::CodirAccessMode> mode =
+        getCodirDepAccessMode(codelet, depIdx);
+    if (!mode || !codirAccessMayRead(*mode) || codirAccessMayWrite(*mode))
+      return false;
+    std::optional<SmallVector<unsigned, 4>> depOwnerDims =
+        getCodirDepOwnerDims(codelet, depIdx);
+    std::optional<SmallVector<int64_t, 4>> tileOwnerDims =
+        readI64ArrayAttr(codelet.getTileOwnerDimsAttr());
+    if (!depOwnerDims || !tileOwnerDims || depOwnerDims->empty() ||
+        depOwnerDims->size() != tileOwnerDims->size())
+      return false;
+    for (auto [slot, depOwnerDim] : llvm::enumerate(*depOwnerDims)) {
+      int64_t tileOwnerDim = (*tileOwnerDims)[slot];
+      if (tileOwnerDim < 0 ||
+          static_cast<unsigned>(tileOwnerDim) != depOwnerDim)
+        return true;
+    }
+    return false;
+  }
+
   // Movement that derives from committed structure must have the structure it
   // needs. A committed halo collective on a compute-block dep is realized from
   // access-window halo facts; fail closed when those facts are missing instead
@@ -320,6 +350,13 @@ struct ConvertCodirToArtsPass
                << "dependency #" << depIdx
                << " commits a halo collective but has no access-window halo "
                   "facts to materialize block-native halo storage";
+      if (isRankExpandedOwnerStripReadOnlyHaloDep(codelet, depIdx))
+        return codelet.emitOpError()
+               << "dependency #" << depIdx
+               << " commits a rank-expanded owner-strip read-only halo; "
+                  "CODIR/ARTS owner-strip RO halo materialization is not yet "
+                  "implemented, so this path fails closed instead of "
+                  "materializing a partial halo";
     }
     return success();
   }

@@ -4,12 +4,10 @@
 /// Verifies that per-CU MU access windows cover and describe rank-expanded
 /// block-grid MUs.
 ///
-///   R1 — coverage: every in-scope MU (a converted single-owner block-grid
-///        MU read or written by exactly one elementwise/stencil CU, not in
-///        place — exactly the `planAccessWindow` predicate the raiser uses) has
-///        EXACTLY ONE `sde.mu_access_window` in its enclosing `sde.cu_region`.
-///        Zero => the raiser did not run; more than one => the idempotency
-///        guard is broken.
+///   R1 — coverage: every in-scope (MU, CU, mode) access planned by
+///        `planAccessWindows` has EXACTLY ONE `sde.mu_access_window` in its
+///        enclosing `sde.cu_region`. Zero => the raiser did not run; more than
+///        one => the idempotency guard is broken.
 ///
 ///   R2 — grain consistency: every `sde.mu_access_window`'s `blockHi` is the
 ///        `ceilDiv` of a REAL iteration extent on the writer `su_iterate` (an
@@ -47,38 +45,72 @@ struct VerifySdeMuAccessWindowPass
     ModuleOp module = getOperation();
     bool failed = false;
 
-    // R1 — coverage: each in-scope MU has exactly one window in its CU.
-    module.walk([&](sde::SdeMuAllocOp mu) {
-      std::optional<sde::RaisedWindowPlan> plan = sde::planAccessWindow(mu);
-      if (!plan)
-        return; // out of scope -> no window required
-      unsigned countMu = 0, countModeMatch = 0;
-      for (Operation &op : plan->cu.getBody().front())
-        if (auto win = dyn_cast<sde::SdeMuAccessWindowOp>(op))
-          if (win.getMu() == plan->mu) {
-            ++countMu;
-            if (win.getMode() == plan->mode)
-              ++countModeMatch;
+    // R1 — coverage: each in-scope per-CU MU access has exactly one matching
+    // window in that CU.
+    module.walk(
+        [&](sde::SdeMuAllocOp mu) {
+          llvm::SmallVector<sde::RaisedWindowPlan, 4> plans =
+              sde::planAccessWindows(mu);
+          if (plans.empty())
+            return; // out of scope -> no window required
+          for (const sde::RaisedWindowPlan &plan : plans) {
+            unsigned countModeMatch = 0;
+            sde::SdeCuRegionOp cu = plan.cu;
+            for (Operation &op : cu.getBody().front())
+              if (auto win = dyn_cast<sde::SdeMuAccessWindowOp>(op))
+                if (win.getMu() == plan.mu && win.getMode() == plan.mode)
+                  ++countModeMatch;
+            if (countModeMatch == 0) {
+              mu.emitOpError()
+                  << "converted block-grid MU is in scope but has no "
+                     "sde.mu_access_window for "
+                  << sde::stringifySdeAccessMode(plan.mode)
+                  << " access in its enclosing cu_region; run "
+                     "raise-to-mu-access-window first";
+              failed = true;
+            } else if (countModeMatch > 1) {
+              mu.emitOpError()
+                  << "duplicate sde.mu_access_window for this MU/mode in its "
+                     "cu_region (raise-to-mu-access-window idempotency broken)";
+              failed = true;
+            }
           }
-      if (countMu == 0) {
-        mu.emitOpError()
-            << "converted block-grid MU is in scope but has no "
-               "sde.mu_access_window in its enclosing cu_region; run "
-               "raise-to-mu-access-window first";
-        failed = true;
-      } else if (countMu > 1) {
-        mu.emitOpError()
-            << "duplicate sde.mu_access_window for this MU in its cu_region "
-               "(raise-to-mu-access-window idempotency broken)";
-        failed = true;
-      } else if (countModeMatch == 0) {
-        // Exactly one window, but its mode disagrees with how the CU actually
-        // accesses the MU (a window must faithfully describe the access).
-        mu.emitOpError() << "sde.mu_access_window has the wrong access mode; "
-                            "the CU accesses "
-                            "this MU as "
-                         << sde::stringifySdeAccessMode(plan->mode);
-        failed = true;
+        });
+
+    module.walk([&](sde::SdeCuRegionOp cu) {
+      for (Operation &op : cu.getBody().front()) {
+        auto win = dyn_cast<sde::SdeMuAccessWindowOp>(op);
+        if (!win)
+          continue;
+        if (auto muAlloc = win.getMu().getDefiningOp<sde::SdeMuAllocOp>()) {
+          llvm::SmallVector<sde::RaisedWindowPlan, 4> expected =
+              sde::planAccessWindows(muAlloc);
+          bool hasExpected = false;
+          for (const sde::RaisedWindowPlan &plan : expected)
+            if (plan.cu == cu && plan.mu == win.getMu() &&
+                plan.mode == win.getMode()) {
+              hasExpected = true;
+              break;
+            }
+          if (!hasExpected) {
+            win.emitOpError()
+                << "does not match any in-scope per-CU access-window plan";
+            failed = true;
+          }
+        }
+        unsigned duplicates = 0;
+        for (Operation &otherOp : cu.getBody().front()) {
+          auto other = dyn_cast<sde::SdeMuAccessWindowOp>(otherOp);
+          if (other && other.getMu() == win.getMu() &&
+              other.getMode() == win.getMode())
+            ++duplicates;
+        }
+        if (duplicates > 1) {
+          win.emitOpError()
+              << "duplicate sde.mu_access_window for this MU/mode in one "
+                 "cu_region";
+          failed = true;
+        }
       }
     });
 

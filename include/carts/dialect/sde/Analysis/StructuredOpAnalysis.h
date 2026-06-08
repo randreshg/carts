@@ -90,6 +90,16 @@ findCompatibleOutputLayoutPlan(const StructuredLoopSummary &summary);
 std::optional<StructuredOutputLayoutPlan>
 findCompatibleOutputLayoutPlan(SdeSuIterateOp op);
 
+/// Return true when a point-local (`inPlaceSafe`) stencil whose access
+/// footprint spans more physical dimensions than the realized loop rank can
+/// still be realized as a `<= loopRank` owner strip: its parallel loop band
+/// maps onto a compatible static output layout. In that case the wide
+/// `ownerDims` footprint is not an unrealizable N-D owner *contract* — the
+/// remaining cross-owner neighbor reads must be carried as a read-only halo
+/// along the strip. Used to distinguish this realizable case from a genuine
+/// nested-owner contract that must fail closed.
+bool hasRealizableOwnerStripPlan(SdeSuIterateOp op);
+
 /// Return true when a one-dimensional apparent reduction is only reducing
 /// within the owner-local output slice. These loops can use elementwise
 /// pipeline planning because no cross-owner reduction carrier is needed.

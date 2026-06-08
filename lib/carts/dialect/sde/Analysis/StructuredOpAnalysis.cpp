@@ -6,6 +6,7 @@
 
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
+#include "carts/utils/ArrayAttrUtils.h"
 
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -1251,6 +1252,49 @@ findCompatibleOutputLayoutPlan(SdeSuIterateOp op) {
   if (!summary)
     return std::nullopt;
   return findCompatibleOutputLayoutPlan(*summary);
+}
+
+bool hasRealizableOwnerStripPlan(SdeSuIterateOp op) {
+  // Restricted to inPlaceSafe (proven point-local self-read) stencils so it
+  // never reinterprets a Gauss-Seidel / inPlaceSharedState owner contract.
+  if (!op.getInPlaceSafe())
+    return false;
+  auto classification = op.getStructuredClassification();
+  if (!classification ||
+      *classification != SdeStructuredClassification::stencil)
+    return false;
+
+  unsigned loopRank = op.getLowerBounds().size();
+  if (loopRank == 0)
+    return false;
+
+  // (1) Realized form: an owner strip/tile physical plan has already been
+  // committed whose owner dimensions fit within the realized loop rank. After
+  // tiling the loop carries inner element loops, so the access-derived layout
+  // recovery below no longer matches; the committed owner-dim count is the
+  // authoritative realizability signal at that point.
+  if (auto committed = readI64ArrayAttr(op.getPhysicalOwnerDimsAttr())) {
+    if (!committed->empty() && committed->size() <= loopRank &&
+        llvm::all_of(*committed, [](int64_t d) { return d >= 0; }))
+      return true;
+  }
+
+  // (2) Pre-stamp form: at least one parallel loop band maps 1:1 onto a static
+  // output physical dimension; that band is the realizable owner strip. The
+  // wider access footprint still has to be carried as read-only halo movement.
+  std::optional<StructuredOutputLayoutPlan> plan =
+      findCompatibleOutputLayoutPlan(op);
+  if (!plan)
+    return false;
+  for (unsigned loopDim = 0;
+       loopDim < loopRank && loopDim < plan->loopDimToPhysicalDim.size();
+       ++loopDim) {
+    int64_t physicalDim = plan->loopDimToPhysicalDim[loopDim];
+    if (physicalDim >= 0 &&
+        static_cast<size_t>(physicalDim) < plan->shape.size())
+      return true;
+  }
+  return false;
 }
 
 //===----------------------------------------------------------------------===//

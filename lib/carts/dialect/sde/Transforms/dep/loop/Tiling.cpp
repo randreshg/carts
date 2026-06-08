@@ -285,6 +285,13 @@ static bool isStencilTileBodyOp(Operation &op) {
   if (isScalarExecutableOp(op))
     return true;
 
+  // Point-local stencil bodies carry per-iteration scalar scratch as
+  // `memref.alloca` slots (hoisted locals not promoted to SSA). These are
+  // function-local stack scratch, not shared loop state, so they do not block
+  // tiling of an otherwise point-local stencil nest.
+  if (isa<memref::AllocaOp>(op))
+    return true;
+
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     for (Region &region : ifOp->getRegions()) {
       if (!llvm::all_of(region,
@@ -719,7 +726,13 @@ buildStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
 static std::optional<PhysicalTilePlan>
 buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
                                sde::SDECostModel &costModel) {
-  if (op.getLowerBounds().size() <= 1 || op.getPhysicalOwnerDimsAttr() ||
+  // Accept loop rank >= 1: a 1-D parallel band over a multi-dim access
+  // footprint (point-local stencil) realizes a 1-D owner strip; the wider
+  // access footprint must be carried as read-only halo movement along that
+  // strip. The owner-dim selection below already filters `ownerDims` to entries
+  // within the loop rank, so a too-wide footprint never produces an over-ranked
+  // plan.
+  if (op.getLowerBounds().empty() || op.getPhysicalOwnerDimsAttr() ||
       op.getPhysicalBlockShapeAttr() || op.getInPlaceSharedStateAttr())
     return std::nullopt;
   auto pattern = op.getPattern();
@@ -729,7 +742,10 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
     return std::nullopt;
 
   auto effects = sde::collectStructuredMemoryEffects(op.getBody());
-  if (effects.hasUnknownEffects || sde::hasInPlaceSelfRead(effects))
+  // A proven point-local stencil (`inPlaceSafe`) self-reads its own cell only;
+  // that is a tileable owner-local read, not a loop-carried neighbor read.
+  if (effects.hasUnknownEffects ||
+      (sde::hasInPlaceSelfRead(effects) && !op.getInPlaceSafe()))
     return std::nullopt;
 
   std::optional<sde::StructuredOutputLayoutPlan> outputPlan =

@@ -2,6 +2,7 @@
 /// File: VerifySdePartitionPlan.cpp
 ///==========================================================================///
 
+#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
@@ -423,7 +424,8 @@ static void verifyPhysicalPlanRealizability(
   }
 
   if (!sde::hasCommittedCuMuPartitionEvidence(op.getOperation()) ||
-      !sde::hasNestedStencilOwnerContract(op))
+      !sde::hasNestedStencilOwnerContract(op) ||
+      sde::hasRealizableOwnerStripPlan(op))
     return;
 
   op.emitOpError()

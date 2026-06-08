@@ -1386,7 +1386,8 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
     return;
   if (classification && !isStencil)
     return;
-  if (isStencil && sde::hasNestedStencilOwnerContract(op))
+  if (isStencil && sde::hasNestedStencilOwnerContract(op) &&
+      !sde::hasRealizableOwnerStripPlan(op))
     return;
 
   /// First-dimension unclassified loops are owned by the uniform/matmul
@@ -1913,7 +1914,8 @@ chooseDistributionKind(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
   case sde::SdeStructuredClassification::elementwise_pipeline:
     return sde::SdeDistributionKind::blocked;
   case sde::SdeStructuredClassification::stencil:
-    if (sde::hasNestedStencilOwnerContract(op))
+    if (sde::hasNestedStencilOwnerContract(op) &&
+        !sde::hasRealizableOwnerStripPlan(op))
       return std::nullopt;
     if (isInPlaceSelfReadStencil(op) && !op.getInPlaceSafeAttr())
       return std::nullopt;

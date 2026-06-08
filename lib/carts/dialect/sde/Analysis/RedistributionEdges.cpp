@@ -144,6 +144,87 @@ getCommittedHaloShape(SdeSuIterateOp reader) {
   return halo;
 }
 
+static std::optional<int64_t> getOwnerHaloRadius(ArrayRef<int64_t> haloShape,
+                                                 unsigned logicalRank,
+                                                 ArrayRef<int64_t> ownerDims,
+                                                 unsigned ownerSlot,
+                                                 unsigned logicalOwnerDim) {
+  if (haloShape.empty())
+    return std::nullopt;
+  if (haloShape.size() == logicalRank && logicalOwnerDim < haloShape.size())
+    return haloShape[logicalOwnerDim];
+  if (haloShape.size() == ownerDims.size() && ownerSlot < haloShape.size())
+    return haloShape[ownerSlot];
+  if (haloShape.size() == 1 && ownerDims.size() == 1)
+    return haloShape.front();
+  return std::nullopt;
+}
+
+static std::optional<SmallVector<int64_t, 4>>
+expandHaloShapeToRootRank(ArrayRef<int64_t> haloShape,
+                          ArrayRef<int64_t> ownerDims, unsigned rootRank) {
+  if (haloShape.size() == rootRank)
+    return SmallVector<int64_t, 4>(haloShape.begin(), haloShape.end());
+
+  SmallVector<int64_t, 4> expanded(rootRank, 0);
+  if (haloShape.size() == ownerDims.size()) {
+    for (auto [slot, ownerDim] : llvm::enumerate(ownerDims)) {
+      if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= rootRank)
+        return std::nullopt;
+      expanded[ownerDim] = haloShape[slot];
+    }
+    return expanded;
+  }
+
+  if (haloShape.size() == 1 && ownerDims.size() == 1) {
+    int64_t ownerDim = ownerDims.front();
+    if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= rootRank)
+      return std::nullopt;
+    expanded[ownerDim] = haloShape.front();
+    return expanded;
+  }
+
+  return std::nullopt;
+}
+
+static bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
+                                        SdeSuIterateOp reader,
+                                        MemRefType rootType,
+                                        ArrayRef<int64_t> committedHaloShape) {
+  std::optional<ExpandedBlockGridMu> expanded =
+      recognizeExpandedBlockGridMu(reader, rootType);
+  if (!expanded)
+    return false;
+  if (edge.sourceOwnerDims.size() != 1 || edge.targetOwnerDims.size() != 1)
+    return false;
+  if (edge.sourceOwnerDims.front() !=
+          static_cast<int64_t>(expanded->ownerDim) ||
+      edge.targetOwnerDims.front() != static_cast<int64_t>(expanded->ownerDim))
+    return false;
+
+  std::optional<int64_t> radius = getOwnerHaloRadius(
+      committedHaloShape, expanded->logicalRank, edge.sourceOwnerDims,
+      /*ownerSlot=*/0, expanded->ownerDim);
+  if (!radius || *radius <= 0)
+    return false;
+
+  // Rank expansion makes the leading grid dimension the structural owner
+  // coordinate. A halo along the logical owner strip is therefore represented
+  // as reach on grid dim 0, while the trailing tile dimensions keep their full
+  // in-block extents.
+  ArrayRef<int64_t> shape = rootType.getShape();
+  SmallVector<int64_t, 4> blockShape(shape.begin(), shape.end());
+  blockShape.front() = 1;
+
+  edge.sourceOwnerDims.assign(1, 0);
+  edge.targetOwnerDims.assign(1, 0);
+  edge.sourceBlockShape.assign(blockShape.begin(), blockShape.end());
+  edge.targetBlockShape.assign(blockShape.begin(), blockShape.end());
+  edge.haloShape.assign(rootType.getRank(), 0);
+  edge.haloShape.front() = *radius;
+  return true;
+}
+
 } // namespace
 
 RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
@@ -308,8 +389,26 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
                                    home.blockShape.end());
       edge.targetOwnerDims = edge.sourceOwnerDims;
       edge.targetBlockShape = edge.sourceBlockShape;
-      if (edge.family == SdeMovementFamily::halo_like)
-        edge.haloShape = std::move(*haloShape);
+      if (edge.family == SdeMovementFamily::halo_like) {
+        if (recognizeExpandedBlockGridMu(reader, muType)) {
+          if (!projectRankExpandedHaloEdge(edge, reader, muType, *haloShape)) {
+            fail("rank-expanded halo redistribution cannot be projected into "
+                 "the expanded owner-grid coordinate system");
+            continue;
+          }
+        } else {
+          std::optional<SmallVector<int64_t, 4>> expandedHalo =
+              expandHaloShapeToRootRank(
+                  *haloShape, edge.sourceOwnerDims,
+                  static_cast<unsigned>(muType.getRank()));
+          if (!expandedHalo) {
+            fail("halo redistribution has no rank-length halo shape for the "
+                 "grounded root");
+            continue;
+          }
+          edge.haloShape = std::move(*expandedHalo);
+        }
+      }
 
       // Advisory committed edge cost, if the reader stamped one.
       if (ArrayAttr readerLayout = reader.getArrayLayoutAttr())
