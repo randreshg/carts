@@ -125,7 +125,7 @@ findRepresentativeAccess(unsigned depIndex,
 
 static int64_t findResultDim(Value depIndex, ValueRange resultIndices) {
   for (auto [resultDim, resultIndex] : llvm::enumerate(resultIndices))
-    if (ValueAnalysis::sameValue(depIndex, resultIndex))
+    if (ValueAnalysis::areValuesEquivalent(depIndex, resultIndex))
       return static_cast<int64_t>(resultDim);
   return -1;
 }

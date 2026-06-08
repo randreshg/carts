@@ -36,6 +36,11 @@ struct HomeLayout {
   SmallVector<int64_t, 4> blockShape;
 };
 
+struct RedistEndpoint {
+  SmallVector<int64_t, 4> ownerDims;
+  SmallVector<int64_t, 4> blockShape;
+};
+
 static bool isStaticExternalDataRoot(Value root, SdeSuIterateOp su) {
   root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
   if (!root || isDefinedInside(su.getOperation(), root))
@@ -225,6 +230,40 @@ static bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
   return true;
 }
 
+static bool logicalEndpointFitsRoot(const HomeLayout &home, MemRefType muType) {
+  for (auto [slot, d] : llvm::enumerate(home.ownerDims)) {
+    int64_t blockExtent =
+        home.blockShape.size() == home.ownerDims.size()
+            ? home.blockShape[slot]
+            : (d >= 0 && d < static_cast<int64_t>(home.blockShape.size())
+                   ? home.blockShape[d]
+                   : 0);
+    if (d < 0 || d >= muType.getRank() || blockExtent <= 0 ||
+        blockExtent > muType.getShape()[d])
+      return false;
+  }
+  return true;
+}
+
+static std::optional<RedistEndpoint>
+getRankExpandedReductionEndpoint(const HomeLayout &home, MemRefType muType) {
+  if (!muType || home.ownerDims.size() != 1)
+    return std::nullopt;
+  std::optional<ExpandedBlockGridMu> expanded =
+      recognizeExpandedBlockGridMu(home.writer, muType);
+  if (!expanded || home.ownerDims.front() != expanded->ownerDim)
+    return std::nullopt;
+
+  RedistEndpoint endpoint;
+  endpoint.ownerDims.push_back(0);
+  endpoint.blockShape.reserve(muType.getRank());
+  endpoint.blockShape.push_back(1);
+  ArrayRef<int64_t> shape = muType.getShape();
+  for (unsigned d = 0; d < expanded->logicalRank; ++d)
+    endpoint.blockShape.push_back(shape[1 + d]);
+  return endpoint;
+}
+
 } // namespace
 
 RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
@@ -332,27 +371,16 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
           findLayoutFact(reader, arrayId);
       std::optional<SmallVector<int64_t, 4>> haloShape =
           getCommittedHaloShape(reader);
+      std::optional<RedistEndpoint> expandedEndpoint =
+          getRankExpandedReductionEndpoint(home, muType);
+      bool geometryFitsRoot = logicalEndpointFitsRoot(home, muType);
       // Rank expansion can hide reduction accesses behind block-local div/mod
-      // indexing; committed layout facts remain the stable source of truth.
+      // indexing; committed SDE layout/MU facts remain the stable source.
       if (!hasOwnerReduction && readerFact && !home.ownerDims.empty() &&
           !haloShape && readerFact->ownerDims == home.ownerDims &&
           (reader.getPartialReductionAttr() ||
            reader.getReductionStrategyAttr())) {
-        // An sde.redist edge can only carry geometry that fits its grounded
-        // root; rank-expanded intermediates may require a richer carrier.
-        bool geometryFitsRoot = true;
-        for (auto [slot, d] : llvm::enumerate(home.ownerDims)) {
-          int64_t blockExtent =
-              home.blockShape.size() == home.ownerDims.size()
-                  ? home.blockShape[slot]
-                  : (d >= 0 && d < static_cast<int64_t>(home.blockShape.size())
-                         ? home.blockShape[d]
-                         : 0);
-          if (d < 0 || d >= muType.getRank() || blockExtent <= 0 ||
-              blockExtent > muType.getShape()[d])
-            geometryFitsRoot = false;
-        }
-        if (geometryFitsRoot)
+        if (geometryFitsRoot || expandedEndpoint)
           hasOwnerReduction = true;
         else {
           fail(
@@ -361,6 +389,12 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
               "(the home block geometry does not fit the expanded root)");
           continue;
         }
+      }
+      if (hasOwnerReduction && !geometryFitsRoot && !expandedEndpoint) {
+        fail("cross-owner reduction of a rank-expanded distributed "
+             "intermediate is recognized but not yet realizable as sde.redist "
+             "(the home block geometry does not fit the expanded root)");
+        continue;
       }
       bool committedContractionLayout =
           home.layoutKind == ArrayLayoutKind::blockContraction ||
@@ -384,9 +418,17 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
                             !committedContractionLayout
                         ? SdeMovementFamily::halo_like
                         : SdeMovementFamily::reduce_scatter_like;
-      edge.sourceOwnerDims.assign(home.ownerDims.begin(), home.ownerDims.end());
-      edge.sourceBlockShape.assign(home.blockShape.begin(),
-                                   home.blockShape.end());
+      if (hasOwnerReduction && expandedEndpoint) {
+        edge.sourceOwnerDims.assign(expandedEndpoint->ownerDims.begin(),
+                                    expandedEndpoint->ownerDims.end());
+        edge.sourceBlockShape.assign(expandedEndpoint->blockShape.begin(),
+                                     expandedEndpoint->blockShape.end());
+      } else {
+        edge.sourceOwnerDims.assign(home.ownerDims.begin(),
+                                    home.ownerDims.end());
+        edge.sourceBlockShape.assign(home.blockShape.begin(),
+                                     home.blockShape.end());
+      }
       edge.targetOwnerDims = edge.sourceOwnerDims;
       edge.targetBlockShape = edge.sourceBlockShape;
       if (edge.family == SdeMovementFamily::halo_like) {
