@@ -64,7 +64,9 @@ def DistributionPlanning
     The target boundary is responsible for materializing this advisory into
     downstream distribution metadata.
   }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::scf::SCFDialect"];
   let constructor = "mlir::carts::sde::createDistributionPlanningPass()";
 }
 

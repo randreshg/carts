@@ -1,21 +1,48 @@
-// Multi-worker in-place neighborhood stencils require an explicit wavefront
-// transform; SDE fails closed until that transform exists.
+// Multi-worker row-major unit-radius in-place stencils become an SDE wavefront.
+// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
+// RUN:   --start-from sde-planning --pipeline sde-planning \
+// RUN:   | %FileCheck %s --check-prefix=MULTI \
+// RUN:     --implicit-check-not=wavefront_2d \
+// RUN:     --implicit-check-not=arrayLayout \
+// RUN:     --implicit-check-not=commVolumeBytes \
+// RUN:     --implicit-check-not=physicalBlockShape \
+// RUN:     --implicit-check-not=physicalOwnerDims \
+// RUN:     --implicit-check-not=logicalWorkerSlice \
+// RUN:     --implicit-check-not=physicalHaloShape \
+// RUN:     --implicit-check-not=inPlaceSharedState
+
+// SDE currently has a real wavefront schedule but no truthful multi-owner
+// storage carrier for the row/column-tile DB grain. CODIR must fail closed
+// instead of falling back to host_whole/coarse storage.
 // RUN: not %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-planning 2>&1 \
-// RUN:   | %FileCheck %s --check-prefix=FAIL
+// RUN:   --start-from sde-planning --pipeline sde-to-codir 2>&1 \
+// RUN:   | %FileCheck %s --check-prefix=CODIR-FAIL
 
 // Single-worker lowering remains serial and undistributed.
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_1t.cfg \
 // RUN:   --start-from sde-planning --pipeline sde-planning \
-// RUN:   --mlir-print-ir-after-all 2>&1 \
 // RUN:   | %FileCheck %s --check-prefix=SERIAL
 
-// FAIL: in-place self-read stencil (Gauss-Seidel family) has loop-carried neighbor offsets
-// FAIL-SAME: wavefront/skew
-// FAIL-SAME: not implemented
+// MULTI-LABEL: func.func @seidel_in_place
+// MULTI: scf.for
+// MULTI: sde.su_distribute <owner_compute>
+// MULTI: sde.su_iterate
+// MULTI: sde.cu_region <parallel>
+// MULTI: scf.if
+// MULTI: accessMaxOffsets = [1, 1]
+// MULTI-SAME: accessMinOffsets = [-1, -1]
+// MULTI-SAME: ownerDims = [0, 1]
+// MULTI-SAME: pattern = #sde.pattern<stencil_tiling_nd>
+// MULTI-SAME: spatialDims = [0, 1]
+// MULTI-SAME: writeFootprint = [1, 1]
+
+// CODIR-FAIL: owner-compute stencil has no realized tile storage plan
+// CODIR-FAIL-SAME: tile_owner_dims and tile_shape
+// CODIR-FAIL-SAME: refusing host_whole/coarse storage fallback
 
 // SERIAL-LABEL: func.func @seidel_in_place
 // SERIAL: inPlaceSharedState
+// SERIAL-NOT: wavefront_2d
 // SERIAL-NOT: sde.su_distribute
 
 module attributes {

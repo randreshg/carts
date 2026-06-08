@@ -20,6 +20,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -45,12 +46,41 @@ inline bool isSuOp(Operation *op) {
   return isa<SdeSuIterateOp, SdeSuDistributeOp>(op);
 }
 
+inline bool isSchedulePlumbing(Operation *op);
+
+/// True for SCF control flow that carries only SDE scheduling structure and
+/// index arithmetic. This lets SDE represent wavefront/frontier schedule loops
+/// without hiding source compute in a CU.
+inline bool isScheduleControlOp(Operation *op) {
+  if (!isa<scf::ForOp, scf::IfOp>(op))
+    return false;
+
+  bool ok = true;
+  for (Region &region : op->getRegions()) {
+    for (Block &block : region) {
+      for (Operation &nested : block) {
+        if (nested.hasTrait<OpTrait::IsTerminator>())
+          continue;
+        if (isSdeDialectOp(&nested))
+          continue;
+        if (isSchedulePlumbing(&nested))
+          continue;
+        ok = false;
+        return ok;
+      }
+    }
+  }
+  return ok;
+}
+
 /// Schedule/index/window plumbing: constants, loop-bound arithmetic,
 /// dimensions, and view/type carriers. These are legal outside CUs.
 inline bool isSchedulePlumbing(Operation *op) {
   if (op->hasTrait<OpTrait::ConstantLike>())
     return true;
   if (isa<memref::CastOp>(op))
+    return true;
+  if (isScheduleControlOp(op))
     return true;
   return isMemoryEffectFree(op) && op->getNumRegions() == 0 &&
          llvm::all_of(op->getResultTypes(),

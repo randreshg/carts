@@ -24,14 +24,19 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Utils/SdePlanUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/LoopUtils.h"
+#include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -181,6 +186,423 @@ static bool isInPlaceSelfReadStencil(sde::SdeSuIterateOp op) {
 
   auto effects = sde::collectStructuredMemoryEffects(op.getBody());
   return !effects.hasUnknownEffects && sde::hasInPlaceSelfRead(effects);
+}
+
+static bool isOneIndex(Value value) {
+  return ::mlir::carts::ValueAnalysis::isOneConstant(
+             ::mlir::carts::ValueAnalysis::stripNumericCasts(value)) ||
+         ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value).value_or(
+             0) == 1;
+}
+
+struct RectangularWavefrontLoopNest {
+  SmallVector<Value, 4> lowerBounds;
+  SmallVector<Value, 4> upperBounds;
+  SmallVector<Value, 4> steps;
+  SmallVector<Value, 4> sourceIvs;
+  SmallVector<scf::ForOp, 4> innerForChain;
+  Block *sourceComputeBlock = nullptr;
+};
+
+static bool valueDependsOnAny(Value value, ArrayRef<Value> candidates) {
+  for (Value candidate : candidates)
+    if (::mlir::carts::ValueAnalysis::dependsOn(value, candidate))
+      return true;
+  return false;
+}
+
+static scf::ForOp findOnlyNestedForWithClosedPrefix(Block *block) {
+  if (!block)
+    return {};
+
+  scf::ForOp nestedFor;
+  SmallVector<Operation *, 4> prefixOps;
+  for (Operation &bodyOp : block->without_terminator()) {
+    auto forOp = dyn_cast<scf::ForOp>(&bodyOp);
+    if (forOp) {
+      if (nestedFor)
+        return {};
+      nestedFor = forOp;
+      continue;
+    }
+    if (nestedFor)
+      return {};
+    if (bodyOp.getNumRegions() != 0 || !isMemoryEffectFree(&bodyOp))
+      return {};
+    prefixOps.push_back(&bodyOp);
+  }
+  if (!nestedFor)
+    return {};
+
+  llvm::SmallPtrSet<Operation *, 8> allowedUsers;
+  allowedUsers.insert(nestedFor.getOperation());
+  for (Operation *prefix : prefixOps)
+    allowedUsers.insert(prefix);
+  for (Operation *prefix : prefixOps) {
+    for (Value result : prefix->getResults()) {
+      for (Operation *user : result.getUsers()) {
+        if (!allowedUsers.contains(user) && !nestedFor->isAncestor(user))
+          return {};
+      }
+    }
+  }
+  return nestedFor;
+}
+
+static bool collectNestedRectangularLoops(sde::SdeSuIterateOp op,
+                                          Block *startBlock,
+                                          RectangularWavefrontLoopNest &shape) {
+  Block *current = startBlock;
+  while (current) {
+    scf::ForOp nestedFor = findOnlyNestedForWithClosedPrefix(current);
+    if (!nestedFor)
+      break;
+    if (!isOneIndex(nestedFor.getStep()) || !nestedFor.getInitArgs().empty() ||
+        nestedFor.getNumResults() != 0)
+      return false;
+
+    for (Value bound : {nestedFor.getLowerBound(), nestedFor.getUpperBound(),
+                        nestedFor.getStep()}) {
+      if (!bound || sde::isDefinedInside(op.getOperation(), bound) ||
+          valueDependsOnAny(bound, shape.sourceIvs))
+        return false;
+    }
+
+    shape.lowerBounds.push_back(nestedFor.getLowerBound());
+    shape.upperBounds.push_back(nestedFor.getUpperBound());
+    shape.steps.push_back(nestedFor.getStep());
+    shape.sourceIvs.push_back(nestedFor.getInductionVar());
+    shape.innerForChain.push_back(nestedFor);
+    current = nestedFor.getBody();
+  }
+  return true;
+}
+
+static bool
+collectRectangularWavefrontLoopNest(sde::SdeSuIterateOp op,
+                                    RectangularWavefrontLoopNest &shape) {
+  if (!op || op.getLowerBounds().empty() ||
+      op.getLowerBounds().size() != op.getUpperBounds().size() ||
+      op.getLowerBounds().size() != op.getSteps().size())
+    return false;
+  if (op.getChunkSize() || op.getNumResults() != 0 ||
+      !op.getReductionAccumulators().empty() || op.getReductionKindsAttr())
+    return false;
+
+  Block *computeBlock = sde::getSuIterateComputeBlock(op);
+  if (!computeBlock || op.getBody().empty())
+    return false;
+
+  unsigned rootRank = op.getLowerBounds().size();
+  if (op.getBody().front().getNumArguments() < rootRank)
+    return false;
+
+  bool rootIsElementDomain =
+      llvm::all_of(op.getSteps(), [](Value step) { return isOneIndex(step); });
+  if (rootIsElementDomain) {
+    shape.sourceComputeBlock = computeBlock;
+    for (unsigned dim = 0; dim < rootRank; ++dim) {
+      shape.lowerBounds.push_back(op.getLowerBounds()[dim]);
+      shape.upperBounds.push_back(op.getUpperBounds()[dim]);
+      shape.steps.push_back(op.getSteps()[dim]);
+      shape.sourceIvs.push_back(op.getBody().front().getArgument(dim));
+    }
+    if (!collectNestedRectangularLoops(op, computeBlock, shape))
+      return false;
+  } else {
+    if (rootRank != 1)
+      return false;
+    scf::ForOp elementLoop = findOnlyNestedForWithClosedPrefix(computeBlock);
+    if (!elementLoop || !isOneIndex(elementLoop.getStep()) ||
+        !elementLoop.getInitArgs().empty() || elementLoop.getNumResults() != 0)
+      return false;
+    shape.lowerBounds.push_back(op.getLowerBounds().front());
+    shape.upperBounds.push_back(op.getUpperBounds().front());
+    shape.steps.push_back(elementLoop.getStep());
+    shape.sourceIvs.push_back(elementLoop.getInductionVar());
+    shape.sourceComputeBlock = elementLoop.getBody();
+    if (!collectNestedRectangularLoops(op, elementLoop.getBody(), shape))
+      return false;
+  }
+
+  return shape.lowerBounds.size() >= 2;
+}
+
+static std::optional<sde::StructuredNeighborhoodInfo>
+getWavefrontNeighborhood(sde::SdeSuIterateOp op, unsigned rank) {
+  sde::StructuredNeighborhoodInfo info;
+
+  auto minOffsets = readI64ArrayAttr(op.getAccessMinOffsetsAttr());
+  auto maxOffsets = readI64ArrayAttr(op.getAccessMaxOffsetsAttr());
+  auto writeFootprint = readI64ArrayAttr(op.getWriteFootprintAttr());
+  if (!minOffsets || !maxOffsets || minOffsets->size() != rank ||
+      maxOffsets->size() != rank || !writeFootprint ||
+      writeFootprint->size() != rank) {
+    std::optional<sde::StructuredLoopSummary> summary =
+        sde::analyzeStructuredLoop(op);
+    if (!summary)
+      return std::nullopt;
+    std::optional<sde::StructuredNeighborhoodInfo> extracted =
+        sde::extractNeighborhoodSummary(*summary);
+    if (!extracted || extracted->minOffsets.size() != rank ||
+        extracted->maxOffsets.size() != rank ||
+        extracted->writeFootprint.size() != rank)
+      return std::nullopt;
+    return extracted;
+  }
+
+  info.minOffsets.assign(minOffsets->begin(), minOffsets->end());
+  info.maxOffsets.assign(maxOffsets->begin(), maxOffsets->end());
+  info.writeFootprint.assign(writeFootprint->begin(), writeFootprint->end());
+
+  auto ownerDims = readI64ArrayAttr(op.getOwnerDimsAttr());
+  if (ownerDims && ownerDims->size() == rank)
+    info.ownerDims.assign(ownerDims->begin(), ownerDims->end());
+  else
+    for (unsigned dim = 0; dim < rank; ++dim)
+      info.ownerDims.push_back(dim);
+
+  auto spatialDims = readI64ArrayAttr(op.getSpatialDimsAttr());
+  if (spatialDims && spatialDims->size() == rank)
+    info.spatialDims.assign(spatialDims->begin(), spatialDims->end());
+  else
+    for (unsigned dim = 0; dim < rank; ++dim)
+      info.spatialDims.push_back(dim);
+
+  return info;
+}
+
+static std::optional<SmallVector<int64_t, 4>>
+deriveLexicographicWaveCoefficients(ArrayRef<int64_t> minOffsets,
+                                    ArrayRef<int64_t> maxOffsets) {
+  if (minOffsets.empty() || minOffsets.size() != maxOffsets.size())
+    return std::nullopt;
+
+  unsigned rank = minOffsets.size();
+  SmallVector<int64_t, 4> maxAbs(rank, 0);
+  bool sawCarriedOffset = false;
+  for (unsigned dim = 0; dim < rank; ++dim) {
+    if (minOffsets[dim] > maxOffsets[dim])
+      return std::nullopt;
+    maxAbs[dim] =
+        std::max(std::abs(minOffsets[dim]), std::abs(maxOffsets[dim]));
+    sawCarriedOffset |= maxAbs[dim] != 0;
+  }
+  if (!sawCarriedOffset)
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> coefficients(rank, 1);
+  for (int64_t dim = static_cast<int64_t>(rank) - 2; dim >= 0; --dim) {
+    int64_t guard = 1;
+    for (unsigned tail = dim + 1; tail < rank; ++tail) {
+      if (maxAbs[tail] == 0)
+        continue;
+      if (coefficients[tail] >
+          (std::numeric_limits<int64_t>::max() - guard) / maxAbs[tail])
+        return std::nullopt;
+      guard += coefficients[tail] * maxAbs[tail];
+    }
+    coefficients[dim] = guard;
+  }
+  return coefficients;
+}
+
+struct WavefrontSkewPlan {
+  RectangularWavefrontLoopNest shape;
+  sde::StructuredNeighborhoodInfo neighborhood;
+  SmallVector<int64_t, 4> waveCoefficients;
+};
+
+static Value buildWeightedIndexSum(OpBuilder &builder, Location loc,
+                                   ArrayRef<Value> values,
+                                   ArrayRef<int64_t> coefficients) {
+  assert(values.size() == coefficients.size() && "rank mismatch");
+  Value sum;
+  for (auto [value, coefficient] : llvm::zip(values, coefficients)) {
+    Value term = value;
+    if (coefficient != 1)
+      term = arith::MulIOp::create(
+          builder, loc, term, createConstantIndex(builder, loc, coefficient));
+    sum = sum ? arith::AddIOp::create(builder, loc, sum, term) : term;
+  }
+  return sum ? sum : createZeroIndex(builder, loc);
+}
+
+static Value buildWavefrontLastCoordinate(OpBuilder &builder, Location loc,
+                                          Value waveIv,
+                                          ArrayRef<Value> leadingIvs,
+                                          ArrayRef<int64_t> coefficients) {
+  assert(!coefficients.empty() && coefficients.back() == 1 &&
+         "last wave coefficient must be one");
+  SmallVector<int64_t, 4> leadingCoefficients(coefficients.drop_back());
+  Value leadingSum =
+      buildWeightedIndexSum(builder, loc, leadingIvs, leadingCoefficients);
+  return arith::SubIOp::create(builder, loc, waveIv, leadingSum);
+}
+
+static void cloneWavefrontBody(OpBuilder &builder, Block *sourceBlock,
+                               ArrayRef<scf::ForOp> innerForChain,
+                               unsigned depth, IRMapping &mapping) {
+  scf::ForOp nestedFor =
+      depth < innerForChain.size() ? innerForChain[depth] : scf::ForOp();
+  for (Operation &bodyOp : sourceBlock->without_terminator()) {
+    if (nestedFor && &bodyOp == nestedFor.getOperation()) {
+      cloneWavefrontBody(builder, nestedFor.getBody(), innerForChain, depth + 1,
+                         mapping);
+      return;
+    }
+    builder.clone(bodyOp, mapping);
+  }
+}
+
+static std::optional<WavefrontSkewPlan>
+buildWavefrontSkewPlan(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
+  if (costModel.getLogicalWorkerCapacity() <= 1)
+    return std::nullopt;
+  if (!op || !op.getInPlaceSharedStateAttr() || !isInPlaceSelfReadStencil(op))
+    return std::nullopt;
+
+  RectangularWavefrontLoopNest shape;
+  if (!collectRectangularWavefrontLoopNest(op, shape))
+    return std::nullopt;
+
+  std::optional<StaticOutputStoragePlan> storePlan =
+      findSingleExternalStoreShape(op);
+  if (!storePlan || storePlan->shape.size() < shape.lowerBounds.size())
+    return std::nullopt;
+
+  std::optional<sde::StructuredNeighborhoodInfo> neighborhood =
+      getWavefrontNeighborhood(op, shape.lowerBounds.size());
+  if (!neighborhood)
+    return std::nullopt;
+
+  std::optional<SmallVector<int64_t, 4>> waveCoefficients =
+      deriveLexicographicWaveCoefficients(neighborhood->minOffsets,
+                                          neighborhood->maxOffsets);
+  if (!waveCoefficients)
+    return std::nullopt;
+
+  WavefrontSkewPlan plan;
+  plan.shape = std::move(shape);
+  plan.neighborhood = std::move(*neighborhood);
+  plan.waveCoefficients = std::move(*waveCoefficients);
+  return plan;
+}
+
+static sde::SdeSuIterateOp materializeWavefrontSkew(sde::SdeSuIterateOp op,
+                                                    WavefrontSkewPlan &plan) {
+  OpBuilder builder(op);
+  Location loc = op.getLoc();
+  MLIRContext *ctx = op.getContext();
+
+  Value one = createOneIndex(builder, loc);
+  SmallVector<Value, 4> lastValues;
+  lastValues.reserve(plan.shape.upperBounds.size());
+  for (Value upper : plan.shape.upperBounds)
+    lastValues.push_back(arith::SubIOp::create(builder, loc, upper, one));
+  Value waveFirst = buildWeightedIndexSum(builder, loc, plan.shape.lowerBounds,
+                                          plan.waveCoefficients);
+  Value waveLast =
+      buildWeightedIndexSum(builder, loc, lastValues, plan.waveCoefficients);
+  Value waveUb = arith::AddIOp::create(builder, loc, waveLast, one);
+
+  auto waveLoop = scf::ForOp::create(builder, loc, waveFirst, waveUb, one);
+  OpBuilder::InsertionGuard waveGuard(builder);
+  builder.setInsertionPointToStart(waveLoop.getBody());
+  Value waveIv = waveLoop.getInductionVar();
+
+  auto distribution = sde::SdeSuDistributeOp::create(
+      builder, loc,
+      sde::SdeDistributionKindAttr::get(
+          ctx, sde::SdeDistributionKind::owner_compute));
+  Block &distributionBody = sde::ensureBlock(distribution.getBody());
+  builder.setInsertionPointToStart(&distributionBody);
+
+  SmallVector<Value, 4> leadingLowerBounds(plan.shape.lowerBounds.begin(),
+                                           plan.shape.lowerBounds.end() - 1);
+  SmallVector<Value, 4> leadingUpperBounds(plan.shape.upperBounds.begin(),
+                                           plan.shape.upperBounds.end() - 1);
+  SmallVector<Value, 4> leadingSteps(plan.shape.steps.begin(),
+                                     plan.shape.steps.end() - 1);
+  ArrayAttr ownerDimsAttr = buildI64ArrayAttr(ctx, plan.neighborhood.ownerDims);
+  ArrayAttr spatialDimsAttr =
+      buildI64ArrayAttr(ctx, plan.neighborhood.spatialDims);
+  ArrayAttr writeFootprintAttr =
+      buildI64ArrayAttr(ctx, plan.neighborhood.writeFootprint);
+  auto newOp = sde::SdeSuIterateOp::create(
+      builder, loc, /*resultTypes=*/TypeRange{}, ValueRange(leadingLowerBounds),
+      ValueRange(leadingUpperBounds), ValueRange(leadingSteps),
+      op.getScheduleAttr(), op.getChunkSize(), op.getNowaitAttr(),
+      op.getReductionAccumulators(), op.getReductionKindsAttr(),
+      op.getReductionStrategyAttr(), op.getPartialReductionAttr(),
+      op.getPartialReductionDimsAttr(), op.getPartialReductionOwnerDimsAttr(),
+      op.getStructuredClassificationAttr(),
+      sde::SdePatternAttr::get(ctx, sde::SdePattern::stencil_tiling_nd),
+      buildI64ArrayAttr(ctx, plan.neighborhood.minOffsets),
+      buildI64ArrayAttr(ctx, plan.neighborhood.maxOffsets), ownerDimsAttr,
+      spatialDimsAttr, writeFootprintAttr,
+      /*physicalOwnerDims=*/nullptr, /*physicalBlockShape=*/nullptr,
+      /*logicalWorkerSlice=*/nullptr, /*physicalHaloShape=*/nullptr,
+      /*iterationTopology=*/nullptr, op.getRepetitionStructureAttr(),
+      op.getAsyncStrategyAttr(), /*distributionKind=*/nullptr,
+      /*inPlaceSafe=*/nullptr, /*inPlaceSharedState=*/nullptr,
+      /*arrayLayout=*/nullptr, /*layoutsDisagree=*/nullptr,
+      /*commVolumeBytes=*/nullptr);
+
+  Block &newBody = sde::ensureBlock(newOp.getBody());
+  while (newBody.getNumArguments() < leadingLowerBounds.size())
+    newBody.addArgument(builder.getIndexType(), loc);
+
+  builder.setInsertionPointToStart(&newBody);
+  auto newCuRegion = sde::SdeCuRegionOp::create(
+      builder, loc, /*resultTypes=*/TypeRange{},
+      sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
+      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  Block &newComputeBlock = sde::ensureBlock(newCuRegion.getBody());
+  builder.setInsertionPointToStart(&newComputeBlock);
+
+  SmallVector<Value, 4> candidateIvs;
+  for (unsigned dim = 0; dim < leadingLowerBounds.size(); ++dim)
+    candidateIvs.push_back(newBody.getArgument(dim));
+  Value lastIv = buildWavefrontLastCoordinate(
+      builder, loc, waveIv, candidateIvs, plan.waveCoefficients);
+  candidateIvs.push_back(lastIv);
+
+  Value geLower = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sge,
+                                        lastIv, plan.shape.lowerBounds.back());
+  Value ltUpper = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::slt,
+                                        lastIv, plan.shape.upperBounds.back());
+  Value valid = arith::AndIOp::create(builder, loc, geLower, ltUpper);
+
+  auto ifOp = scf::IfOp::create(builder, loc, TypeRange{}, valid,
+                                /*withElseRegion=*/false);
+  Block &thenBlock = ifOp.getThenRegion().front();
+  builder.setInsertionPointToStart(&thenBlock);
+  IRMapping mapper;
+  for (auto [sourceIv, candidateIv] :
+       llvm::zip(plan.shape.sourceIvs, candidateIvs))
+    mapper.map(sourceIv, candidateIv);
+  cloneWavefrontBody(builder, plan.shape.sourceComputeBlock,
+                     plan.shape.innerForChain, 0, mapper);
+
+  builder.setInsertionPointAfter(ifOp);
+  sde::SdeYieldOp::create(builder, loc, ValueRange{});
+  builder.setInsertionPointAfter(newCuRegion);
+  sde::SdeYieldOp::create(builder, loc, ValueRange{});
+
+  op.erase();
+  return newOp;
+}
+
+static std::optional<sde::SdeSuIterateOp>
+tryMaterializeWavefrontSkew(sde::SdeSuIterateOp op,
+                            sde::SDECostModel &costModel) {
+  if (!op || op->getParentOfType<sde::SdeSuDistributeOp>())
+    return std::nullopt;
+  std::optional<WavefrontSkewPlan> plan = buildWavefrontSkewPlan(op, costModel);
+  if (!plan)
+    return std::nullopt;
+  return materializeWavefrontSkew(op, *plan);
 }
 
 static SmallVector<unsigned, 4>
@@ -1840,6 +2262,8 @@ static void stampInPlaceSharedStencilSerialSlice(sde::SdeSuIterateOp op,
     return;
   if (!op.getInPlaceSharedStateAttr())
     return;
+  if (op->getParentOfType<sde::SdeSuDistributeOp>())
+    return;
   if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
       op.getSteps().size() != 1)
     return;
@@ -1939,6 +2363,8 @@ requiresUnimplementedStencilWavefront(sde::SdeSuIterateOp op,
                                       sde::SDECostModel &costModel) {
   if (costModel.getLogicalWorkerCapacity() <= 1)
     return false;
+  if (op->getParentOfType<sde::SdeSuDistributeOp>())
+    return false;
   return op.getInPlaceSharedStateAttr() && !op.getDistributionKindAttr();
 }
 
@@ -1990,12 +2416,25 @@ struct DistributionPlanningPass
         failed = true;
       }
     };
-    getOperation().walk([&](sde::SdeSuIterateOp op) {
+    SmallVector<sde::SdeSuIterateOp, 16> iterates;
+    getOperation().walk(
+        [&](sde::SdeSuIterateOp op) { iterates.push_back(op); });
+
+    for (sde::SdeSuIterateOp original : iterates) {
+      if (!original || !original->getBlock())
+        continue;
+      sde::SdeSuIterateOp op = original;
+      if (std::optional<sde::SdeSuIterateOp> wavefront =
+              tryMaterializeWavefrontSkew(op, *costModel)) {
+        (void)*wavefront;
+        continue;
+      }
+
       if (sde::hasCommittedCuMuPartitionEvidence(op.getOperation()) ||
           op.getDistributionKindAttr()) {
         stampCuMuPartitionGraphAttrs(op, *costModel);
         planOrFailClosed(op);
-        return;
+        continue;
       }
 
       if (hasPhysicalLayoutPlan(op)) {
@@ -2004,7 +2443,7 @@ struct DistributionPlanningPass
         }
         stampCuMuPartitionGraphAttrs(op, *costModel);
         planOrFailClosed(op);
-        return;
+        continue;
       }
 
       coarsenExistingLoopIndexedOwnerPlanToTileFloor(op, *costModel);
@@ -2022,7 +2461,7 @@ struct DistributionPlanningPass
       stampPhysicalPlanFromAssignedLayout(op, *costModel);
       stampCuMuPartitionGraphAttrs(op, *costModel);
       planOrFailClosed(op);
-    });
+    }
 
     if (failed) {
       signalPassFailure();

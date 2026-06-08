@@ -101,6 +101,23 @@ static bool isStencilCodelet(codir::CodeletOp codelet) {
   return pattern && isStencilPattern(pattern.getValue());
 }
 
+static bool isOwnerComputeCodelet(codir::CodeletOp codelet) {
+  auto kind = codelet ? codelet.getDistributionKindAttr() : nullptr;
+  return kind && kind.getValue() == codir::CodirDistributionKind::owner_compute;
+}
+
+static LogicalResult
+rejectOwnerComputeStencilWithoutTilePlan(codir::CodeletOp codelet) {
+  if (!isOwnerComputeCodelet(codelet) || !isStencilCodelet(codelet) ||
+      hasTileOwnerSlicePlan(codelet))
+    return success();
+
+  return codelet.emitOpError()
+         << "owner-compute stencil has no realized tile storage plan "
+            "(tile_owner_dims and tile_shape); refusing host_whole/coarse "
+            "storage fallback for partitioned SDE shape";
+}
+
 static SmallVector<Value, 4> getOwnerBaseArguments(codir::CodeletOp codelet,
                                                    unsigned ownerDimCount) {
   SmallVector<Value, 4> bases;
@@ -887,6 +904,11 @@ struct StoragePlanningPass
     bool hadFailure = false;
     llvm::SmallPtrSet<Operation *, 16> finalizedPlans;
     getOperation().walk([&](codir::CodeletOp codelet) {
+      if (failed(rejectOwnerComputeStencilWithoutTilePlan(codelet))) {
+        hadFailure = true;
+        return;
+      }
+
       bool finalized = hasFinalizedStoragePlanningFacts(codelet);
       if (finalized)
         finalizedPlans.insert(codelet.getOperation());
