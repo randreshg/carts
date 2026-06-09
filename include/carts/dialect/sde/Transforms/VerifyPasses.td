@@ -18,6 +18,51 @@ def VerifySdePartitionPlan : Pass<"verify-sde-partition-plan", "mlir::ModuleOp">
   let constructor = "mlir::carts::sde::createVerifySdePartitionPlanPass()";
 }
 
+def VerifySdePhysicalConsistency
+    : Pass<"verify-sde-physical-consistency", "mlir::ModuleOp"> {
+  let summary = "Fail closed on a committed SDE physical plan that disagrees "
+                "with its arrayLayout, SU schedule, or CU body";
+  let description = [{
+    The pre-window physical-plan/body consistency gate. Before the rank-expand
+    and access-window transforms turn a committed physical plan into real MU/CU/SU
+    structure, this verifier rejects the stale-grain shape the boundary forbids:
+    one `sde.su_iterate` carrying several incompatible truths at once (the
+    jacobi-for class). For every `sde.su_iterate` that carries a committed
+    physical plan (`physicalOwnerDims` + `physicalBlockShape`) it checks:
+
+      (a) PLAN WELL-FORMEDNESS: every `physicalOwnerDims` entry indexes a
+          `physicalBlockShape` dimension and every block extent is positive.
+
+      (b) SCHEDULE CONSISTENCY: the plan names no more owner dimensions than the
+          SU has realized loop dimensions.
+
+      (c) BUDGET AGREEMENT (the jacobi-for-class catcher): for every written
+          block-parallel array carrying a node-agnostic `budgetBlockShape`, no
+          `physicalBlockShape` extent on that array's own owner dimensions is
+          COARSER than the budget grain. The cost-model physical tile may refine
+          the budget (finer or equal) but may never coarsen past it. A row strip
+          (`physicalBlockShape` `[1280, 10240]`) stamped over a 2-D `[512, 512]`
+          owner-tile budget fails here. The physical owner-tile dims (a CU
+          compute-grain decision) need NOT equal an array's storage owner dims --
+          DB/MU grain is kept separate from CU grain -- so only the budget
+          relation is enforced.
+
+    Residual global-index access against an already rank-expanded MU is the
+    companion `verify-sde-mu-layout` gate's job; flat owner-tile bodies CODIR
+    still localizes from committed SU-local bounds are contract-correct, so this
+    gate does not re-derive body locality.
+
+    It reads the committed facts and current IR only through generated ODS
+    accessors and the shared `parseArrayLayoutFacts` view; it stamps nothing and
+    recomputes no owner dims or block shape. Out-of-scope SUs (no physical plan)
+    are skipped.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor =
+      "mlir::carts::sde::createVerifySdePhysicalConsistencyPass()";
+}
+
 def VerifySdeMuLayout : Pass<"verify-sde-mu-layout", "mlir::ModuleOp"> {
   let summary = "Verify the structural block-grid carrier on sde.mu_alloc";
   let description = [{

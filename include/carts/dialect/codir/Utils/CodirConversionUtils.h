@@ -2718,87 +2718,25 @@ static inline bool isSuDispatchStepKnownFiner(Value dispatchStep,
          *sourceConst > 0 && *dispatchConst < *sourceConst;
 }
 
-static inline bool isSuDispatchStepKnownNoCoarser(Value dispatchStep,
-                                                  Value sourceStep) {
-  if (::mlir::carts::ValueAnalysis::sameValue(dispatchStep, sourceStep))
-    return true;
-  std::optional<int64_t> dispatchConst =
-      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(dispatchStep);
-  std::optional<int64_t> sourceConst =
-      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(sourceStep);
-  return dispatchConst && sourceConst && *dispatchConst > 0 &&
-         *sourceConst > 0 && *dispatchConst <= *sourceConst;
-}
-
-static inline bool isSuIvPlusStep(Value value, Value ownerIv,
-                                  Value sourceStep) {
-  if (!value.getType().isIndex())
-    return false;
-  auto add = value.getDefiningOp<arith::AddIOp>();
-  if (!add)
-    return false;
-  if (!add.getLhs().getType().isIndex() || !add.getRhs().getType().isIndex())
-    return false;
-  return (::mlir::carts::ValueAnalysis::sameValue(add.getLhs(), ownerIv) &&
-          ::mlir::carts::ValueAnalysis::sameValue(add.getRhs(), sourceStep)) ||
-         (::mlir::carts::ValueAnalysis::sameValue(add.getLhs(), sourceStep) &&
-          ::mlir::carts::ValueAnalysis::sameValue(add.getRhs(), ownerIv));
-}
-
+// CODIR consumes the committed SDE grain; it must not retile a coarse SU body
+// to a finer dispatch window. When the dispatch step is finer than the source
+// loop step, the SU body still carries the old coarse tile bounds while SDE has
+// committed a finer block grain -- the stale-grain shape the SDE boundary
+// verifiers reject. CODIR fails closed instead of repairing it: the real retile
+// is an SDE transform (Tiling), not an SDE-to-CODIR repair.
+//
+// When the dispatch step is no finer than the source step, no retile window is
+// needed and the existing body bounds are already correct; this is a no-op.
 static inline LogicalResult
 mapSuCoarseTileBoundsToDispatchWindow(sde::SdeSuIterateOp source, unsigned dim,
-                                      Value dispatchStep, Value rawEnd,
-                                      Value localEnd, IRMapping &mapper) {
+                                      Value dispatchStep, Value /*rawEnd*/,
+                                      Value /*localEnd*/, IRMapping & /*mapper*/) {
   if (dim >= source.getSteps().size() ||
-      dim >= source.getUpperBounds().size() ||
-      !isSuDispatchStepKnownNoCoarser(dispatchStep, source.getSteps()[dim]))
+      dim >= source.getUpperBounds().size())
     return success();
-  if (source.getBody().empty() ||
-      source.getBody().front().getNumArguments() <= dim)
+  if (isSuDispatchStepKnownFiner(dispatchStep, source.getSteps()[dim]))
     return failure();
-
-  bool requiresRetiledWindow =
-      isSuDispatchStepKnownFiner(dispatchStep, source.getSteps()[dim]);
-  Value ownerIv = source.getBody().front().getArgument(dim);
-  Value sourceStep = source.getSteps()[dim];
-  Value sourceUpper = source.getUpperBounds()[dim];
-  SmallPtrSet<Value, 4> tileLimits;
-  bool mappedTileEnd = false;
-
-  source.getBody().walk([&](Operation *op) {
-    if (auto add = dyn_cast<arith::AddIOp>(op)) {
-      Value result = add.getResult();
-      if (mapper.contains(result))
-        return;
-      if (isSuIvPlusStep(result, ownerIv, sourceStep)) {
-        mapper.map(result, rawEnd);
-        tileLimits.insert(result);
-      }
-      return;
-    }
-
-    if (auto min = dyn_cast<arith::MinUIOp>(op)) {
-      if (mapper.contains(min.getResult()))
-        return;
-      Value lhs = min.getLhs();
-      Value rhs = min.getRhs();
-      bool lhsIsLimit = tileLimits.contains(lhs) ||
-                        ::mlir::carts::ValueAnalysis::sameValue(lhs, rawEnd);
-      bool rhsIsLimit = tileLimits.contains(rhs) ||
-                        ::mlir::carts::ValueAnalysis::sameValue(rhs, rawEnd);
-      if (lhsIsLimit &&
-          ::mlir::carts::ValueAnalysis::sameValue(rhs, sourceUpper)) {
-        mapper.map(min.getResult(), localEnd);
-        mappedTileEnd = true;
-      } else if (rhsIsLimit &&
-                 ::mlir::carts::ValueAnalysis::sameValue(lhs, sourceUpper)) {
-        mapper.map(min.getResult(), localEnd);
-        mappedTileEnd = true;
-      }
-    }
-  });
-
-  return success(mappedTileEnd || !requiresRetiledWindow);
+  return success();
 }
 
 static inline bool areAllResultsMapped(Operation &op, IRMapping &mapper) {
@@ -3055,14 +2993,11 @@ convertSuOwnerTileNdToCodir(sde::SdeSuIterateOp source,
             source, loopDim, dispatchSteps[loopDim], rawEnd, localEnd, mapper)))
       return source.emitOpError()
              << "has a committed owner-tile block/window finer than the "
-                "scheduling step, but its body does not expose a retileable "
-                "tile bound";
-    Value localStep = isSuDispatchStepKnownFiner(dispatchSteps[loopDim],
-                                                 source.getSteps()[loopDim])
-                          ? span
-                          : step;
-    auto localLoop =
-        scf::ForOp::create(builder, loc, base, localEnd, localStep);
+                "scheduling step; SDE must commit that grain as real loop/MU "
+                "shape, CODIR does not retile a stale SU body";
+    // The fail-closed guard above rejects a finer dispatch step, so the local
+    // loop walks the committed source step.
+    auto localLoop = scf::ForOp::create(builder, loc, base, localEnd, step);
     mapper.map(source.getBody().front().getArgument(loopDim),
                localLoop.getInductionVar());
     builder.setInsertionPointToStart(localLoop.getBody());
@@ -3169,13 +3104,11 @@ convertSuIterateToCodir(sde::SdeSuIterateOp source,
           source, /*dim=*/0, dispatchStep, rawEnd, localEnd, mapper)))
     return source.emitOpError()
            << "has a committed owner-strip block/window finer than the "
-              "scheduling step, but its body does not expose a retileable "
-              "tile bound";
-  Value localStep =
-      isSuDispatchStepKnownFiner(dispatchStep, source.getSteps().front())
-          ? span
-          : step;
-  auto localLoop = scf::ForOp::create(builder, loc, base, localEnd, localStep);
+              "scheduling step; SDE must commit that grain as real loop/MU "
+              "shape, CODIR does not retile a stale SU body";
+  // The fail-closed guard above rejects a finer dispatch step, so the local
+  // loop walks the committed source step.
+  auto localLoop = scf::ForOp::create(builder, loc, base, localEnd, step);
   if (!source.getBody().front().getArguments().empty())
     mapper.map(source.getBody().front().getArgument(0),
                localLoop.getInductionVar());

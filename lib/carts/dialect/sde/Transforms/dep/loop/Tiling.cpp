@@ -909,10 +909,9 @@ static bool isBudgetReconciledTileCandidate(sde::SdeSuIterateOp op) {
 // ownerDims + budgetBlockShape + block_parallel kind, so one shared budget grain
 // is correct for all of them. A true multi-writer (same id stored twice), any
 // owner/grain/kind disagreement, or a non-block layout fails closed -- the SU
-// then keeps the generic tiler, never an unverifiable shared grain. This mirrors
-// StorageGrainReconciliation::affineDisjointMultiStoreBudgetFact, but applies it
-// while the loop is still step-1 and can be retiled to the budget grain instead
-// of being clamped to an already-coarse step downstream.
+// then keeps the generic tiler, never an unverifiable shared grain. Tiling owns
+// this multi-store budget grain as a real loop retile while the loop is still
+// step-1, so the grain is structurally true rather than an attr-only promise.
 static std::optional<sde::LayoutGraphFact>
 selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
                                   bool allowSingleOwnerDim) {

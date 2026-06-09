@@ -280,7 +280,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "SdeCuNormalization",
     "Parallelize",
@@ -293,17 +293,22 @@ static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
     "ChunkOpt",
     "ReductionStrategy",
     "DistributionPlanning",
-    "StorageGrainReconciliation",
     "IterationSpaceDecomposition",
     "BarrierElimination",
     "MemoryUnitMaterialization",
     "SdeCuNormalization",
     "SdeRankExpandMu",
+    "VerifySdeMuLayout",
     "RaiseToMuAccessWindow",
+    "VerifySdeMuAccessWindow",
     "MuAccessWindowSyncOpt",
+    "VerifySdeMuAccessWindowSync",
     "SdeRedistribute",
+    "VerifySdeRedistribute",
     "SdeCoarseAvoidance",
-    "VerifySde"};
+    "VerifySdeCoarseAvoidance",
+    "VerifySde",
+    "VerifySdePhysicalConsistency"};
 static const std::array<llvm::StringLiteral, 1> kSdeToCodirPasses = {
     "ConvertSdeToCodir"};
 static const std::array<llvm::StringLiteral, 5> kCodirGraphTransformsPasses = {
@@ -1166,17 +1171,27 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createChunkOptPass(costModel));
   pm.addPass(sde::createReductionStrategyPass(costModel));
   pm.addPass(sde::createDistributionPlanningPass(costModel));
-  pm.addPass(sde::createStorageGrainReconciliationPass());
   pm.addPass(sde::createIterationSpaceDecompositionPass());
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createMemoryUnitMaterializationPass());
   pm.addPass(sde::createSdeCuNormalizationPass());
+  // Each real SDE grain transform is immediately gated by its companion
+  // verifier in the production order, so a stale or mismatched physical grain
+  // fails closed at the SDE boundary instead of being repaired downstream.
   pm.addPass(sde::createSdeRankExpandMuPass());
+  pm.addPass(sde::createVerifySdeMuLayoutPass());
   pm.addPass(sde::createRaiseToMuAccessWindowPass());
+  pm.addPass(sde::createVerifySdeMuAccessWindowPass());
   pm.addPass(sde::createMuAccessWindowSyncOptPass());
+  pm.addPass(sde::createVerifySdeMuAccessWindowSyncPass());
   pm.addPass(sde::createSdeRedistributePass());
+  pm.addPass(sde::createVerifySdeRedistributePass());
   pm.addPass(sde::createSdeCoarseAvoidancePass());
+  pm.addPass(sde::createVerifySdeCoarseAvoidancePass());
   pm.addPass(sde::createVerifySdePass());
+  // Aggregate pre-CODIR gate: the committed physical plan must agree with its
+  // arrayLayout, SU schedule, and CU body before CODIR consumes it.
+  pm.addPass(sde::createVerifySdePhysicalConsistencyPass());
 }
 
 /// SDE-to-CODIR materialization. This is the mechanical codelet conversion:

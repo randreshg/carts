@@ -70,27 +70,6 @@ def DistributionPlanning
   let constructor = "mlir::carts::sde::createDistributionPlanningPass()";
 }
 
-def StorageGrainReconciliation
-    : Pass<"storage-grain-reconciliation", "mlir::ModuleOp"> {
-  let summary = "Reconcile the DB block grain across an array's su_iterate writers";
-  let description = [{
-    Runs after `distribution-planning` has stamped a per-writer physical plan.
-    When one array is written by structurally different `sde.su_iterate`
-    scheduling units that committed DIFFERENT `physicalBlockShape`s (e.g. a
-    data-parallel init and a pipeline kernel), the ARTS DB materializer cannot
-    share one per-block distributed DB and the array coarsens into a
-    `host_whole` DB plus a bridge. This pass reconciles those writers to one DB
-    grain -- the per-dim GCD of their blocks (<= every realized loop step, so no
-    retile is needed) -- by rewriting only `physicalBlockShape`. The per-writer
-    `logicalWorkerSlice` (CU grain) is left untouched, keeping DB grain and CU
-    grain separate. Fail-closed: single-writer, already-coherent, owner-dim
-    mismatched, and matmul/stencil/in-place arrays are byte-identical no-ops.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
-  let constructor =
-      "mlir::carts::sde::createStorageGrainReconciliationPass()";
-}
-
 def BarrierElimination
     : Pass<"barrier-elimination", "mlir::ModuleOp"> {
   let summary = "Remove redundant SDE barriers and stamp timestep stages";

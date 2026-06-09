@@ -85,7 +85,6 @@ std::unique_ptr<Pass>
 createReductionStrategyPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createDistributionPlanningPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass> createStorageGrainReconciliationPass();
 std::unique_ptr<Pass>
 createBarrierEliminationPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createMuAccessWindowSyncOptPass();
@@ -95,6 +94,7 @@ std::unique_ptr<Pass> createConvertOpenMPToSdePass();
 
 // --- Verification ---
 std::unique_ptr<Pass> createVerifySdePartitionPlanPass();
+std::unique_ptr<Pass> createVerifySdePhysicalConsistencyPass();
 std::unique_ptr<Pass> createVerifySdeLoweredPass();
 std::unique_ptr<Pass> createVerifySdeMuLayoutPass();
 std::unique_ptr<Pass> createVerifySdeMuAccessWindowPass();

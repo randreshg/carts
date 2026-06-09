@@ -23,7 +23,6 @@ set(CARTS_SDE_TRANSFORMS_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/BarrierElimination.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/MuAccessWindowSyncOpt.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/DistributionPlanning.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/StorageGrainReconciliation.cpp"
 )
 set(CARTS_SDE_TRANSFORMS_SOURCE_FILES ${CARTS_SDE_TRANSFORMS_SOURCE_FILES} PARENT_SCOPE)
 set(CARTS_SDE_VERIFY_SOURCE_FILES ${CARTS_SDE_VERIFY_SOURCE_FILES} PARENT_SCOPE)
