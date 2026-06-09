@@ -101,8 +101,23 @@ llvm::SmallVector<Value, 6> MuBlockIndexer::localize(ValueRange logicalIndices,
   return result;
 }
 
+// A writer whose entire iteration domain folds to constants is the strongest
+// witness for the non-tautological grid-count proof: its bounds literally name
+// the committed logical extent. Writers whose bounds came in as a dynamic
+// `index_cast` of a source parameter (the same logical extent the array was
+// allocated with, but un-propagated by the frontend) cannot serve that proof.
+static bool hasStaticIterationDomain(SdeSuIterateOp si) {
+  for (auto [lb, ub] : llvm::zip(si.getLowerBounds(), si.getUpperBounds())) {
+    if (!ValueAnalysis::tryFoldConstantIndex(lb) ||
+        !ValueAnalysis::tryFoldConstantIndex(ub))
+      return false;
+  }
+  return true;
+}
+
 SdeSuIterateOp findCommittedBlockPlanWriter(SdeMuAllocOp muAlloc) {
   SdeSuIterateOp result;
+  SdeSuIterateOp staticResult;
   ArrayAttr ownerA, blockA;
   for (Operation *user : muAlloc.getMemref().getUsers()) {
     if (!isa<memref::LoadOp, memref::StoreOp>(user))
@@ -121,8 +136,14 @@ SdeSuIterateOp findCommittedBlockPlanWriter(SdeMuAllocOp muAlloc) {
                si.getPhysicalBlockShapeAttr() != blockA) {
       return SdeSuIterateOp(); // conflicting committed plans -> conservative
     }
+    // Among writers that committed the IDENTICAL block plan, retain the first
+    // with a fully-static iteration domain so the shared grid-count proof has a
+    // constant witness even when a later writer's bound is a dynamic source
+    // parameter. The committed owner-dims/block-shape are the same either way.
+    if (!staticResult && hasStaticIterationDomain(si))
+      staticResult = si;
   }
-  return result;
+  return staticResult ? staticResult : result;
 }
 
 // Rank expansion preserves the allocation base pointer. Pointer comparisons can
