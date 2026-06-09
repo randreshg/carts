@@ -37,7 +37,7 @@ def DbModeTightening : Pass<"db-mode-tightening", "mlir::ModuleOp"> {
     Option<"forceInout", "force-inout", "bool", "false",
            "Force all stores to use inout mode (disables mode tightening to out)">
   ];
-  let constructor = "mlir::carts::arts::createDbModeTighteningPass(nullptr)";
+  let constructor = "mlir::carts::arts::createDbModeTighteningPass()";
 }
 
 def DbScratchElimination : Pass<"db-scratch-elimination", "mlir::ModuleOp"> {
@@ -62,7 +62,7 @@ def DbOwnerMapRealization
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect", "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::carts::arts::createDbOwnerMapRealizationPass(nullptr)";
+  let constructor = "mlir::carts::arts::createDbOwnerMapRealizationPass()";
 }
 
 def DbCommitDistributedDeps
@@ -80,19 +80,42 @@ def DbCommitDistributedDeps
   let constructor = "mlir::carts::arts::createDbCommitDistributedDepsPass()";
 }
 
-def DbTransforms : Pass<"db-transforms", "mlir::ModuleOp"> {
-  let summary = "Post-DB transforms (contracts, halo, cleanup)";
+def DbConsolidateStencilHalos
+    : Pass<"db-consolidate-stencil-halos", "mlir::ModuleOp"> {
+  let summary = "Consolidate DB stencil halo windows";
   let description = [{
-    Hosts DB-level transformations that run after DB partitioning and
-    distributed ownership decisions are known. Current transforms:
-    - Contract persistence: persist refined AcquireContractSummary back to IR.
-    - Stencil halo consolidation.
-    - DB lifetime shortening.
-    - Dead DB elimination.
+    Unifies stencil halo bounds from graph analysis, raw acquire attrs, and
+    lowering contracts into one contract window, then removes redundant raw
+    attrs from the acquire.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
-  let constructor = "mlir::carts::arts::createDbTransformsPass(nullptr)";
+  let constructor =
+      "mlir::carts::arts::createDbConsolidateStencilHalosPass()";
+}
+
+def DbShortenLifetimes : Pass<"db-shorten-lifetimes", "mlir::ModuleOp"> {
+  let summary = "Remove cleanup-only DB acquire chains";
+  let description = [{
+    Removes DB acquire chains whose guid and pointer uses feed only cleanup
+    plumbing, after checking the reachable DB-use graph.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts::createDbShortenLifetimesPass()";
+}
+
+def DbDeadRootElimination
+    : Pass<"db-dead-root-elimination", "mlir::ModuleOp"> {
+  let summary = "Remove dead DB root chains";
+  let description = [{
+    Removes root DB allocation chains whose guid and pointer uses are reduced
+    to forwarding and cleanup plumbing only.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
+  let constructor =
+      "mlir::carts::arts::createDbDeadRootEliminationPass()";
 }
 
 def PartialReductionSplitMaterialization
@@ -149,26 +172,14 @@ def DistributedLaunchConsistency
       "mlir::carts::arts::createDistributedLaunchConsistencyPass()";
 }
 
-def VerifyDistributedDbPlacement
-    : Pass<"verify-distributed-db-placement", "mlir::ModuleOp"> {
-  let summary = "Verify distributed DB owner-map placement contracts";
-  let description = [{
-    Rejects distributed DB allocations that reach the ARTS/ARTS-RT boundary
-    without an explicit owner-map policy, owner-map version, owner dimensions,
-    block shape, and non-rejected distributed ownership status.
-  }];
-  let dependentDialects =
-      ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
-  let constructor =
-      "mlir::carts::arts::createVerifyDistributedDbPlacementPass()";
-}
-
 def VerifyArtsCdag : Pass<"verify-arts-cdag", "mlir::ModuleOp"> {
-  let summary = "Verify the ARTS canonical-owner DAG after epoch creation";
+  let summary = "Verify the ARTS boundary before ARTS-RT lowering";
   let description = [{
-    Fail-closed verification of the ARTS memory model after CreateEpochs:
+    Fail-closed verification at the ARTS/ARTS-RT boundary:
+    - no EDT mixes incompatible DB dep grains;
     - every distributed `arts.db_acquire` carries a committed runtime DB mode;
     - distributed DB owner-map / placement facts are consistent;
+    - no internode EDT depends on a coarse aggregate user DB;
     - SDE-partitioned MUs are preserved (not coarsened or localized);
     - single-writer-multiple-reader holds per distributed DB block grain;
     - the EDT happens-before graph is acyclic.
@@ -185,18 +196,7 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
     "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect", "::mlir::func::FuncDialect",
     "::mlir::carts::arts::ArtsDialect", "::mlir::arith::ArithDialect", "::mlir::polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::carts::arts::createCreateDbsPass(nullptr)";
-}
-
-def EdtStructuralOpt : Pass<"edt-structural-opt", "mlir::ModuleOp"> {
-  let summary = "Optimize EDTs";
-  let dependentDialects = [
-    "::mlir::memref::MemRefDialect", "::mlir::LLVM::LLVMDialect", "::mlir::func::FuncDialect",
-    "::mlir::carts::arts::ArtsDialect", "::mlir::arith::ArithDialect", "::mlir::polygeist::PolygeistDialect"
-  ];
-  let constructor = "mlir::carts::arts::createEdtStructuralOptPass(nullptr, true)";
-  let options = [Option<"runAnalysis", "run-analysis", "bool",
-                        /*default=*/"true", "Enable EDT analysis.">];
+  let constructor = "mlir::carts::arts::createCreateDbsPass()";
 }
 
 def RealizeEdtDistributionPlan
@@ -220,17 +220,31 @@ def EdtAllocaSinking : Pass<"edt-alloca-sinking", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::arts::createEdtAllocaSinkingPass()";
 }
 
-def EdtTransforms : Pass<"edt-transforms", "mlir::ModuleOp"> {
-  let summary = "Post-DB EDT transforms (granularity, affinity, dependency cleanup)";
+def EdtInlineNoDepTasks
+    : Pass<"edt-inline-no-dep-tasks", "mlir::ModuleOp"> {
+  let summary = "Inline top-level dep-free EDT bodies";
   let description = [{
-    Hosts EDT-level transformations that run after DB partitioning and
-    mode decisions are known. Current transforms:
-    - Task granularity diagnostics.
-    - Dead dependency elimination.
+    Splices top-level task or sync EDT bodies that have no deps into the
+    parent block. It does not reason about barriers, DB frontiers, epochs, or
+    memory dependence; those ordering decisions belong to SDE/CODIR structure and
+    ARTS epoch realization.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
-  let constructor = "mlir::carts::arts::createEdtTransformsPass(nullptr)";
+  let constructor = "mlir::carts::arts::createEdtInlineNoDepTasksPass()";
+}
+
+def EdtDeadDepElimination
+    : Pass<"edt-dead-dep-elimination", "mlir::ModuleOp"> {
+  let summary = "Remove cleanup-only EDT dep slots";
+  let description = [{
+    Removes dep slots whose EDT block arguments are unused or only feed
+    cleanup/control-token plumbing. It does not reason about placement, DB grain,
+    barriers, or epochs.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts::createEdtDeadDepEliminationPass()";
 }
 
 def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {
@@ -251,23 +265,20 @@ def EdtPtrRematerialization
   let constructor = "mlir::carts::arts::createEdtPtrRematerializationPass()";
 }
 
-def EpochOpt : Pass<"arts-epoch-opt", "mlir::ModuleOp"> {
-  let summary = "Realize the committed repeated-timestep epoch shape";
+def EpochAmortizeRepeatedLoop
+    : Pass<"arts-epoch-amortize-repeated-loop", "mlir::ModuleOp"> {
+  let summary = "Amortize committed repeated-timestep epoch loops";
   let description = [{
-    Repetition amortization - amortize epoch create/wait overhead for a
-    repeated epoch loop by hoisting it out of the timestep loop and wrapping
-    the EDT bodies with repeat loops. This realizes the committed SDE
+    Hoists a repeated epoch out of a timestep loop and wraps its EDT bodies in
+    repeat loops. This is a narrow ARTS realization of the committed SDE
     full_timestep repetition plan; it does not re-derive cross-timestep
-    legality.
+    legality or perform general epoch optimization.
   }];
-  let options = [
-    Option<"enableAmortization", "amortization", "bool", "false",
-           "Enable repetition amortization for repeated epoch loops">
-  ];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect", "::mlir::scf::SCFDialect",
        "::mlir::arith::ArithDialect"];
-  let constructor = "mlir::carts::arts::createEpochOptPass()";
+  let constructor =
+      "mlir::carts::arts::createEpochAmortizeRepeatedLoopPass()";
 }
 
 def EpochTailContinuation
@@ -308,63 +319,9 @@ def Hoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::arts::createHoistingPass()";
 }
 
-def BlockLoopStripMining : Pass<"block-stripmine", "mlir::func::FuncOp"> {
-  let summary = "Strip-mine block-partitioned loops to remove div/rem overhead";
-  let description = [{Matches block-partitioned loop indexing patterns and
-                      rewrites them into block-local loops that reuse db_ref.
-                      The 1-D path handles innermost div/rem loops, while the
-                      neighborhood-aware path can also rewrite
-                      enclosing stencil loops that carry block-neighbor
-                      indexing state.}];
-  let dependentDialects = [
-    "::mlir::func::FuncDialect", "::mlir::scf::SCFDialect", "::mlir::arith::ArithDialect",
-    "::mlir::carts::arts::ArtsDialect"
-  ];
-  let constructor = "mlir::carts::arts::createBlockLoopStripMiningPass()";
-}
-
-def ContractValidation : Pass<"contract-validation", "mlir::ModuleOp"> {
-  let summary = "Validate LoweringContractOp integrity across the module";
-  let description = [{
-    Lightweight verification pass that walks all arts.lowering_contract
-    operations and checks structural invariants:
-    - Target value exists and is a valid memref
-    - supported_block_halo requires a stencil-family dep_pattern
-    - min_offsets/max_offsets must have matching rank
-    - block_shape rank > 0 if present
-    - owner_dims values are non-negative
-
-    Also warns about DbAcquireOps carrying stencil attributes with no
-    corresponding LoweringContractOp on the source pointer (orphans).
-
-    Collects per-pattern statistics and optionally fails on errors.
-  }];
-  let dependentDialects =
-      ["::mlir::memref::MemRefDialect", "::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
-  let options = [
-    Option<"failOnError", "fail-on-error", "bool", "false",
-           "Fail compilation if any contract validation errors are found">,
-    Option<"warnOnProofGaps", "warn-on-proof-gaps", "bool", "false",
-           "Emit advisory warnings for ownership proof gaps">
-  ];
-  let constructor = "mlir::carts::arts::createContractValidationPass()";
-}
-
 ///===----------------------------------------------------------------------===///
 /// Verification Passes
 ///===----------------------------------------------------------------------===///
-
-def VerifyEdtCreated : Pass<"verify-edt-created", "mlir::ModuleOp"> {
-  let summary = "Verify EDT operations exist after OpenMP conversion";
-  let dependentDialects = ["::mlir::carts::arts::ArtsDialect"];
-  let constructor = "mlir::carts::arts::createVerifyEdtCreatedPass()";
-}
-
-def VerifyEpochCreated : Pass<"verify-epoch-created", "mlir::ModuleOp"> {
-  let summary = "Verify epoch operations exist after epoch creation";
-  let dependentDialects = ["::mlir::carts::arts::ArtsDialect"];
-  let constructor = "mlir::carts::arts::createVerifyEpochCreatedPass()";
-}
 
 def VerifyArtsObjectsOnly : Pass<"verify-arts-objects-only", "mlir::ModuleOp"> {
   let summary = "Verify the CODIR-to-ARTS boundary contains only ARTS objects";

@@ -12,11 +12,13 @@
 // SDE: sde.su_iterate
 
 // SDE-LABEL: // -----// IR Dump After BarrierElimination (barrier-elimination) //----- //
-// SDE: sde.su_barrier {barrierEliminated, barrierReason = #sde.barrier_reason<redundant>}
+// SDE-LABEL: func.func @main
+// SDE: sde.su_iterate
+// SDE-NOT: sde.su_barrier
 // SDE: sde.su_iterate
 // SDE-LABEL: func.func @write_only_successor_disjoint
 // SDE: sde.su_iterate
-// SDE: sde.su_barrier {barrierEliminated, barrierReason = #sde.barrier_reason<redundant>}
+// SDE-NOT: sde.su_barrier
 // SDE: sde.su_iterate
 
 // After boundary materialization, the eliminated SDE barrier is not emitted.

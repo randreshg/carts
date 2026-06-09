@@ -12,7 +12,7 @@
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/RuntimeConfig.h"
@@ -503,12 +503,11 @@ private:
   enum class DbInterleavePlacement { Default, Interleaved };
 
   std::optional<DbOwnerMapPlan> requireOwnerMapPlan(DbAllocOp op) const {
-    DbOwnerMapContractFailure contractFailure =
-        getDistributedDbOwnerMapContractFailure(op);
-    if (contractFailure != DbOwnerMapContractFailure::None) {
+    DbOwnerMapPlanFailure planFailure = getDistributedDbOwnerMapPlanFailure(op);
+    if (planFailure != DbOwnerMapPlanFailure::None) {
       op.emitOpError()
           << "distributed DB lowering requires a verified owner-map plan: "
-          << toString(contractFailure);
+          << toString(planFailure);
       return std::nullopt;
     }
 
@@ -1167,11 +1166,11 @@ private:
     auto depPattern = getDepPattern(op.getOperation());
     bool hasBlockPlan =
         static_cast<bool>(getPlanPhysicalBlockShapeAttr(op.getOperation()));
-    if (auto contract = getLoweringContract(op.getPtr())) {
-      if (!depPattern && contract->pattern.depPattern)
-        depPattern = contract->pattern.depPattern;
-      hasBlockPlan = hasBlockPlan || !contract->spatial.blockShape.empty() ||
-                     !contract->spatial.staticBlockShape.empty();
+    if (auto facts = getLoweringFacts(op.getPtr())) {
+      if (!depPattern && facts->pattern.depPattern)
+        depPattern = facts->pattern.depPattern;
+      hasBlockPlan = hasBlockPlan || !facts->spatial.blockShape.empty() ||
+                     !facts->spatial.staticBlockShape.empty();
     }
 
     if (depPattern && isUniformFamilyDepPattern(*depPattern) &&

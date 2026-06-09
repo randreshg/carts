@@ -66,7 +66,7 @@ struct CodirCodeletMetadata {
   Attribute partitionScore;
 };
 
-inline Attribute translatePartitionScoreToCodirContract(Attribute attr) {
+inline Attribute translatePartitionScoreToCodirFact(Attribute attr) {
   auto score = dyn_cast_or_null<DictionaryAttr>(attr);
   if (!score)
     return attr;
@@ -144,7 +144,7 @@ getCodirMetadataFromSchedulingUnit(sde::SdeSuIterateOp source) {
   metadata.arrayLayout = source.getArrayLayoutAttr();
   metadata.layoutsDisagree = source.getLayoutsDisagreeAttr();
   metadata.partitionGraph = source->getAttr(sde::AttrNames::PartitionGraph);
-  metadata.partitionScore = translatePartitionScoreToCodirContract(
+  metadata.partitionScore = translatePartitionScoreToCodirFact(
       source->getAttr(sde::AttrNames::PartitionScore));
   return metadata;
 }

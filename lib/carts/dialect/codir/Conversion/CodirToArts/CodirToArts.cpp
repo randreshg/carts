@@ -3,7 +3,7 @@
 ///
 /// Materializes CODIR codelets as abstract ARTS DB/EDT objects.
 ///==========================================================================///
-#include "ArtsMaterializationUtils.h"
+#include "CodirToArtsHostBridgeMaterialization.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/codir/Conversion/Passes.h"
 namespace mlir::carts::codir {
@@ -157,6 +157,84 @@ static LogicalResult rejectResidualSdeOps(ModuleOp module) {
     found = true;
   });
   return failure(found);
+}
+
+static void translateCodirAtomicsToArts(Region &region) {
+  SmallVector<codir::AtomicAddOp, 4> atomics;
+  region.walk([&](codir::AtomicAddOp atomic) { atomics.push_back(atomic); });
+  for (codir::AtomicAddOp atomic : atomics) {
+    OpBuilder builder(atomic);
+    arts::AtomicAddOp::create(builder, atomic.getLoc(), atomic.getAddr(),
+                              atomic.getValue());
+    atomic.erase();
+  }
+}
+
+struct CodirDepSlice {
+  bool sliced = false;
+  bool subindex = false;
+  Value subindexIndex;
+  SmallVector<Value> offsets;
+  SmallVector<Value> sizes;
+  SmallVector<OpFoldResult> mixedOffsets;
+  SmallVector<OpFoldResult> mixedSizes;
+  SmallVector<OpFoldResult> mixedStrides;
+};
+
+static CodirDepSlice getCodirDepSlice(Value dep, OpBuilder &builder,
+                                      Location loc) {
+  CodirDepSlice slice;
+  auto subview = dep.getDefiningOp<memref::SubViewOp>();
+  if (subview) {
+    slice.sliced = true;
+    slice.mixedOffsets = subview.getMixedOffsets();
+    slice.mixedSizes = subview.getMixedSizes();
+    slice.mixedStrides = subview.getMixedStrides();
+    slice.offsets =
+        materializeIndexFoldResults(builder, loc, slice.mixedOffsets);
+    slice.sizes = materializeIndexFoldResults(builder, loc, slice.mixedSizes);
+    return slice;
+  }
+
+  auto subindex = dep.getDefiningOp<polygeist::SubIndexOp>();
+  if (!subindex)
+    return slice;
+
+  auto sourceType = dyn_cast<MemRefType>(subindex.getSource().getType());
+  auto resultType = dyn_cast<MemRefType>(subindex.getResult().getType());
+  if (!sourceType || !resultType || sourceType.getRank() == 0 ||
+      resultType.getRank() + 1 != sourceType.getRank())
+    return slice;
+
+  slice.sliced = true;
+  slice.subindex = true;
+  slice.subindexIndex = subindex.getIndex();
+  slice.mixedOffsets.push_back(subindex.getIndex());
+  slice.mixedSizes.push_back(builder.getIndexAttr(1));
+  slice.mixedStrides.push_back(builder.getIndexAttr(1));
+
+  ValueRange dynamicSizes = subindex.getSizes();
+  unsigned dynamicSizeIdx = 0;
+  for (int64_t dim = 0, rank = resultType.getRank(); dim < rank; ++dim) {
+    slice.mixedOffsets.push_back(builder.getIndexAttr(0));
+    if (resultType.isDynamicDim(dim)) {
+      if (dynamicSizeIdx >= dynamicSizes.size()) {
+        slice.sliced = false;
+        slice.mixedOffsets.clear();
+        slice.mixedSizes.clear();
+        slice.mixedStrides.clear();
+        return slice;
+      }
+      slice.mixedSizes.push_back(dynamicSizes[dynamicSizeIdx++]);
+    } else {
+      slice.mixedSizes.push_back(
+          builder.getIndexAttr(resultType.getDimSize(dim)));
+    }
+    slice.mixedStrides.push_back(builder.getIndexAttr(1));
+  }
+  slice.offsets = materializeIndexFoldResults(builder, loc, slice.mixedOffsets);
+  slice.sizes = materializeIndexFoldResults(builder, loc, slice.mixedSizes);
+  return slice;
 }
 
 struct PlannedBlockDepAccessPlan {
@@ -1239,8 +1317,7 @@ struct ConvertCodirToArtsPass
     for (Operation &nested : codeletBlock.without_terminator())
       builder.insert(nested.clone(mapper));
 
-    if (shouldLowerReductionsToAtomics(codelet))
-      lowerIntegerAddReductionsToAtomics(task.getBody(), sourceByBlockArgument);
+    translateCodirAtomicsToArts(task.getBody());
 
     if (failed(rewritePlannedBlockLocalAccesses(task, localAccessRewrites,
                                                 &sourceByBlockArgument)))

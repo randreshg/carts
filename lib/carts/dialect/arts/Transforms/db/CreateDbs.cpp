@@ -38,8 +38,6 @@
 /// must lower through canonical storage/codelet form before ARTS.
 ///==========================================================================///
 
-#include "carts/dialect/arts/Analysis/AnalysisManager.h"
-#include "carts/dialect/arts/Analysis/db/DbAnalysis.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbLayoutPlanUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
@@ -48,7 +46,7 @@
 #define GEN_PASS_DEF_CREATEDBS
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
@@ -232,15 +230,12 @@ static LogicalResult rewriteCoarseRawAccess(Operation *op, Value expectedRoot,
 ///===----------------------------------------------------------------------===///
 
 struct CreateDbsPass : public impl::CreateDbsBase<CreateDbsPass> {
-  CreateDbsPass(mlir::carts::arts::AnalysisManager *AM) : AM(AM) {
-    assert(AM && "AnalysisManager must be provided externally");
-  }
+  CreateDbsPass() = default;
 
   void runOnOperation() override;
 
 private:
   ModuleOp module;
-  mlir::carts::arts::AnalysisManager *AM = nullptr;
   OpBuilder *builder = nullptr;
   SetVector<Operation *> opsToRemove;
 
@@ -263,9 +258,7 @@ private:
   void createDbAllocOps();
   void lowerEdtExternalDependencies();
   void cleanupAndFinalize();
-  void projectSemanticContractToDbValue(Operation *sourceOp,
-                                        Operation *targetOp,
-                                        Value contractTarget);
+  void projectSemanticAttrsToDbValue(Operation *sourceOp, Operation *targetOp);
   void createDbAcquireOps(EdtOp edt, SetVector<Value> &externalDeps);
   Value findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
                                 ArtsMode requestedMode);
@@ -337,8 +330,7 @@ void CreateDbsPass::reconcileExternalDepAccessModes() {
         continue; // already a DB
 
       MemrefInfo &info = memrefInfo[underlyingOp];
-      ArtsMode inferredMode =
-          AM->getDbAnalysis().inferEdtAccessMode(underlyingOp, edt);
+      ArtsMode inferredMode = DbUtils::inferEdtAccessMode(underlyingOp, edt);
       if (inferredMode == ArtsMode::uninitialized)
         inferredMode = ArtsMode::inout;
 
@@ -390,18 +382,12 @@ void CreateDbsPass::cleanupAndFinalize() {
   removalMgr.removeAllMarked(module, /*recursive=*/true);
 }
 
-void CreateDbsPass::projectSemanticContractToDbValue(Operation *sourceOp,
-                                                     Operation *targetOp,
-                                                     Value contractTarget) {
-  if (!sourceOp || !targetOp || !contractTarget)
+void CreateDbsPass::projectSemanticAttrsToDbValue(Operation *sourceOp,
+                                                  Operation *targetOp) {
+  if (!sourceOp || !targetOp)
     return;
 
-  transferOperationContract(sourceOp, targetOp);
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointAfter(targetOp);
-  transferLoweringContract(sourceOp, contractTarget, *builder,
-                           targetOp->getLoc());
+  transferOperationFacts(sourceOp, targetOp);
 }
 
 Operation *CreateDbsPass::findPhysicalLayoutPlanSource(Operation *alloc) {
@@ -698,21 +684,13 @@ void CreateDbsPass::createDbAllocOps() {
     dbAllocOp.setDbMemoryPlacement(DbMemoryPlacement::node_local);
     ++numDbAllocsCreated;
 
-    projectSemanticContractToDbValue(alloc, dbAllocOp.getOperation(),
-                                     dbAllocOp.getPtr());
+    projectSemanticAttrsToDbValue(alloc, dbAllocOp.getOperation());
 
     /// Initialize global DBs
     initializeGlobalDbIfNeeded(alloc, dbAllocOp, allocType);
 
     /// Copy ARTS ID from original allocation to DbAllocOp
     copyArtsMetadataAttrs(alloc, dbAllocOp.getOperation());
-
-    /// Record allocation strategy decision for diagnostics
-    AM->getDbHeuristics().recordDecision(
-        "AllocationStrategy", true, "Coarse raw-memref bridge allocation",
-        alloc,
-        {{"outerRank", static_cast<int64_t>(sizes.size())},
-         {"innerRank", static_cast<int64_t>(elementSizes.size())}});
 
     /// Store mappings for later use
     info.dbAllocOp = dbAllocOp;
@@ -842,8 +820,8 @@ Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
 
     if (Operation *dbOp = DbUtils::getUnderlyingDb(v)) {
       if (auto acquire = dyn_cast<DbAcquireOp>(dbOp)) {
-        if (!DbAnalysis::accessModeCanSeedNestedAcquire(acquire.getMode(),
-                                                        requestedMode))
+        if (!DbUtils::accessModeCanSeedNestedAcquire(acquire.getMode(),
+                                                     requestedMode))
           return false;
       }
     }
@@ -971,8 +949,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       }
     }
 
-    ArtsMode acquireMode =
-        AM->getDbAnalysis().inferEdtAccessMode(underlyingOp, edt);
+    ArtsMode acquireMode = DbUtils::inferEdtAccessMode(underlyingOp, edt);
     if (acquireMode == ArtsMode::uninitialized) {
       acquireMode = (info.accessMode == ArtsMode::uninitialized)
                         ? ArtsMode::inout
@@ -1014,8 +991,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     auto acquireOp = createAcquire(edt.getLoc());
     ++numDbAcquireGroupsCreated;
 
-    projectSemanticContractToDbValue(
-        edt.getOperation(), acquireOp.getOperation(), acquireOp.getPtr());
+    projectSemanticAttrsToDbValue(edt.getOperation(), acquireOp.getOperation());
 
     ARTS_DEBUG(" - Created raw bridge acquire, mode="
                << acquireMode << ", partition="
@@ -1040,7 +1016,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     edt.walk([&](Operation *op) {
       if (op->getParentOfType<EdtOp>() != edt)
         return;
-      if (!DbAnalysis::opMatchesAccessMode(op, underlyingOp, acquireMode))
+      if (!DbUtils::opMatchesAccessMode(op, underlyingOp, acquireMode))
         return;
       addOpIfNew(op);
     });
@@ -1288,9 +1264,8 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace carts::arts {
-std::unique_ptr<Pass>
-createCreateDbsPass(mlir::carts::arts::AnalysisManager *AM) {
-  return std::make_unique<CreateDbsPass>(AM);
+std::unique_ptr<Pass> createCreateDbsPass() {
+  return std::make_unique<CreateDbsPass>();
 }
 } // namespace carts::arts
 } // namespace mlir

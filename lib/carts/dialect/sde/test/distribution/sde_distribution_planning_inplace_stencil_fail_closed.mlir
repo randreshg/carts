@@ -15,7 +15,7 @@
 // storage carrier for the row/column-tile DB grain. CODIR must fail closed
 // instead of falling back to host_whole/coarse storage.
 // RUN: not %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-to-codir 2>&1 \
+// RUN:   --start-from sde-planning --pipeline codir-graph-transforms 2>&1 \
 // RUN:   | %FileCheck %s --check-prefix=CODIR-FAIL
 
 // Single-worker lowering remains serial and undistributed.

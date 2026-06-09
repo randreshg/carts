@@ -15,7 +15,7 @@
 namespace mlir {
 namespace carts::arts {
 
-inline void copyStencilContractAttrs(Operation *source, Operation *dest);
+inline void copyStencilFactAttrs(Operation *source, Operation *dest);
 
 namespace AttrNames {
 
@@ -27,7 +27,7 @@ namespace AttrNames {
 namespace Operation {
 using namespace llvm;
 
-// ArtsId, ArtsCreateId, OutlinedFunc, and StripMiningGenerated live in
+// ArtsId, ArtsCreateId, and OutlinedFunc live in
 // carts/dialect/arts/Utils/ArtsAttrNames.h.
 
 // `nowait`, `preserve_access_mode`, and `preserve_dep_edge` are ODS-declared
@@ -52,18 +52,9 @@ using namespace llvm;
 // generated getLocalOnly()/setLocalOnly(...)/removeLocalOnlyAttr() and the
 // matching ReadOnlyAfterInit accessors rather than raw strings.
 
-// LoweringContractOp attribute names.
-//
-// `owner_dims`, `supported_block_halo`, `stencil_independent_dims`,
-// `post_db_refined`, and `spatial_dims` had zero in-tree consumers and were
-// dropped. `narrowable_dep` is a cross-dialect
-// discardable key (propagated via copySemanticContractAttrs onto non-ARTS
-// source ops like memref.alloc); it lives in
-// carts/dialect/arts/Utils/ArtsAttrNames.h under the Contract namespace.
-
-// Proof-driven ownership attributes (Proof::OwnerDimReachability,
-// PartitionAccessMapping, HaloLegality, DepSliceSoundness) live in
-// carts/dialect/arts/Utils/ArtsAttrNames.h.
+// Extra cross-dialect semantic marker names live in
+// carts/dialect/arts/Utils/ArtsAttrNames.h. Prefer ODS accessors for ARTS ops
+// and these shared constants only for discardable attrs on non-ARTS source ops.
 
 } // namespace Operation
 
@@ -583,7 +574,7 @@ inline void inheritDepPatternAttrs(Operation *source, Operation *dest) {
 }
 
 /// Copy distribution_* attributes between operations.
-/// This intentionally transfers only distribution contracts:
+/// This intentionally transfers only distribution facts:
 ///   - distribution_kind
 ///   - distribution_pattern
 ///   - distribution_version
@@ -655,20 +646,20 @@ inline void copyArtsMetadataAttrs(Operation *source, Operation *dest) {
   }
 }
 
-/// Copy only the semantic contract attrs that specialized pattern detection
+/// Copy only the semantic fact attrs that specialized pattern detection
 /// stamps before DB values exist. Structural rewrites should use this helper
 /// when they want to preserve pattern meaning without also copying unrelated
 /// ids or bookkeeping metadata.
-inline void copySemanticContractAttrs(Operation *source, Operation *dest) {
+inline void copySemanticFactAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;
   copyPatternAttrs(source, dest);
-  copyStencilContractAttrs(source, dest);
-  if (source->hasAttr(AttrNames::Contract::NarrowableDep))
-    dest->setAttr(AttrNames::Contract::NarrowableDep,
+  copyStencilFactAttrs(source, dest);
+  if (source->hasAttr(AttrNames::Semantic::NarrowableDep))
+    dest->setAttr(AttrNames::Semantic::NarrowableDep,
                   UnitAttr::get(dest->getContext()));
   else
-    dest->removeAttr(AttrNames::Contract::NarrowableDep);
+    dest->removeAttr(AttrNames::Semantic::NarrowableDep);
 }
 
 } // namespace carts::arts

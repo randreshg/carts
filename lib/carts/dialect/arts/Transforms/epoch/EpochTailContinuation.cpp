@@ -180,9 +180,9 @@ static bool isDirectRankZeroAlloca(Value value) {
   return type && type.getRank() == 0;
 }
 
-static bool allStoresToAllocaAreTrueWithDominatingStore(Value memref,
-                                                        memref::LoadOp load,
-                                                        DominanceInfo &domInfo) {
+static bool
+allStoresToAllocaAreTrueWithDominatingStore(Value memref, memref::LoadOp load,
+                                            DominanceInfo &domInfo) {
   if (!isDirectRankZeroAlloca(memref))
     return false;
 
@@ -254,7 +254,8 @@ static bool canProveTrue(Value value, DominanceInfo &domInfo,
 }
 
 static std::optional<int64_t> getConstantTripCount(scf::ForOp loop) {
-  if (std::optional<int64_t> tripCount = getStaticTripCount(loop.getOperation()))
+  if (std::optional<int64_t> tripCount =
+          getStaticTripCount(loop.getOperation()))
     return tripCount;
 
   std::optional<int64_t> lower =
@@ -355,8 +356,7 @@ static LogicalResult exposeFinalNestedEpoch(func::FuncOp func, TailPlan &plan) {
 }
 
 static LogicalResult validateTailIsolation(TailPlan &plan) {
-  llvm::DenseSet<Operation *> tailSet(plan.tailOps.begin(),
-                                      plan.tailOps.end());
+  llvm::DenseSet<Operation *> tailSet(plan.tailOps.begin(), plan.tailOps.end());
 
   for (Value operand : plan.returnOp.getOperands())
     if (isDefinedInside(operand, tailSet))
@@ -399,7 +399,8 @@ static bool canEraseDeadExternalStackStore(memref::StoreOp store) {
     if (auto load = dyn_cast<memref::LoadOp>(user)) {
       if (load.getMemRef() != memref || !load.getIndices().empty())
         return false;
-      Operation *loadAncestor = getAncestorInBlock(load.getOperation(), storeBlock);
+      Operation *loadAncestor =
+          getAncestorInBlock(load.getOperation(), storeBlock);
       if (!loadAncestor)
         return false;
       if (store->isBeforeInBlock(loadAncestor))
@@ -433,9 +434,10 @@ static void pruneDeadExternalStackStores(TailPlan &plan) {
   plan.tailOps = std::move(pruned);
 }
 
-static bool canRematerializeExternalStackAlloca(
-    Value memref, const llvm::DenseSet<Operation *> &tailSet,
-    DominanceInfo &domInfo) {
+static bool
+canRematerializeExternalStackAlloca(Value memref,
+                                    const llvm::DenseSet<Operation *> &tailSet,
+                                    DominanceInfo &domInfo) {
   auto alloca = memref.getDefiningOp<memref::AllocaOp>();
   if (!alloca || alloca->getNumOperands() != 0)
     return false;
@@ -477,8 +479,7 @@ static bool canRematerializeExternalStackAlloca(
 }
 
 static LogicalResult classifyCaptures(TailPlan &plan) {
-  llvm::DenseSet<Operation *> tailSet(plan.tailOps.begin(),
-                                      plan.tailOps.end());
+  llvm::DenseSet<Operation *> tailSet(plan.tailOps.begin(), plan.tailOps.end());
   auto func = plan.frontier->getParentOfType<func::FuncOp>();
   if (!func)
     return failure();
@@ -499,7 +500,8 @@ static LogicalResult classifyCaptures(TailPlan &plan) {
 
         if (isa<BaseMemRefType>(type)) {
           if (isExternalStackAlloca(operand)) {
-            if (canRematerializeExternalStackAlloca(operand, tailSet, domInfo)) {
+            if (canRematerializeExternalStackAlloca(operand, tailSet,
+                                                    domInfo)) {
               plan.rematerializedCaptures.insert(operand);
               continue;
             }
@@ -548,9 +550,8 @@ static std::optional<PartitionMode> getPartitionModeForSource(Value sourcePtr) {
   return std::nullopt;
 }
 
-static FailureOr<DbCapture> createDbCaptureAcquire(OpBuilder &builder,
-                                                   Location loc,
-                                                   Value captured) {
+static FailureOr<DbCapture>
+createDbCaptureAcquire(OpBuilder &builder, Location loc, Value captured) {
   auto ref = captured.getDefiningOp<DbRefOp>();
   if (!ref)
     return failure();

@@ -166,7 +166,6 @@ static void attachPendingControlTokensInBlock(Block &block) {
     if (barrier.getTokens().empty() && !pendingTokens.empty()) {
       OpBuilder builder(barrier);
       sde::SdeSuBarrierOp::create(builder, barrier.getLoc(), pendingTokens,
-                                  barrier.getBarrierEliminatedAttr(),
                                   barrier.getBarrierReasonAttr());
       barrier.erase();
     }
@@ -409,7 +408,6 @@ struct MasterToSdePattern : public OpRewritePattern<omp::MasterOp> {
     // omp.master has implicit barrier (no nowait clause).
     rewriter.setInsertionPointAfter(cuRegion);
     sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                /*barrierEliminated=*/nullptr,
                                 /*barrierReason=*/nullptr);
     rewriter.eraseOp(op);
     return success();
@@ -437,7 +435,6 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
     if (!op.getNowait()) {
       rewriter.setInsertionPointAfter(cuRegion);
       sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                  /*barrierEliminated=*/nullptr,
                                   /*barrierReason=*/nullptr);
     }
     rewriter.eraseOp(op);
@@ -565,7 +562,6 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     if (!nw && hasWorkAfterInParentBlock(op.getOperation())) {
       rewriter.setInsertionPointAfter(suIter);
       sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                  /*barrierEliminated=*/nullptr,
                                   /*barrierReason=*/nullptr);
     }
 
@@ -775,7 +771,6 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
     if (hasWorkAfterInParentBlock(op.getOperation())) {
       rewriter.setInsertionPointAfter(cuRegion);
       sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                  /*barrierEliminated=*/nullptr,
                                   /*barrierReason=*/nullptr);
     }
 
@@ -866,9 +861,8 @@ struct BarrierToSdePattern : public OpRewritePattern<omp::BarrierOp> {
     if (isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     ARTS_INFO("Converting omp.barrier to sde.su_barrier");
-    rewriter.replaceOpWithNewOp<sde::SdeSuBarrierOp>(
-        op, ValueRange{}, /*barrierEliminated=*/nullptr,
-        /*barrierReason=*/nullptr);
+    rewriter.replaceOpWithNewOp<sde::SdeSuBarrierOp>(op, ValueRange{},
+                                                     /*barrierReason=*/nullptr);
     return success();
   }
 };
@@ -882,9 +876,8 @@ struct TaskwaitToSdePattern : public OpRewritePattern<omp::TaskwaitOp> {
     if (isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     ARTS_INFO("Converting omp.taskwait to sde.su_barrier");
-    rewriter.replaceOpWithNewOp<sde::SdeSuBarrierOp>(
-        op, ValueRange{}, /*barrierEliminated=*/nullptr,
-        /*barrierReason=*/nullptr);
+    rewriter.replaceOpWithNewOp<sde::SdeSuBarrierOp>(op, ValueRange{},
+                                                     /*barrierReason=*/nullptr);
     return success();
   }
 };

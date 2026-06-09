@@ -2,10 +2,10 @@
 /// File: CodirAccessTraceUtils.h
 ///
 /// SDE-free owner-dim access-tracing helpers shared by the CODIR
-/// StoragePlanning transform and the CODIR -> ARTS conversion. These were split
-/// out of CodirConversionUtils.h so CODIR transforms that only need to trace a
-/// memref access back to a dependency root do not take a transitive dependency
-/// on the SDE dialect. Keep this header free of any `sde::` symbol.
+/// DepStorageAssignment transform and the CODIR -> ARTS conversion. These were
+/// split out of CodirConversionUtils.h so CODIR transforms that only need to
+/// trace a memref access back to a dependency root do not take a transitive
+/// dependency on the SDE dialect. Keep this header free of any `sde::` symbol.
 ///==========================================================================///
 #ifndef CARTS_DIALECT_CODIR_UTILS_CODIRACCESSTRACEUTILS_H
 #define CARTS_DIALECT_CODIR_UTILS_CODIRACCESSTRACEUTILS_H

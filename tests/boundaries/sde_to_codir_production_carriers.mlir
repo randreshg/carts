@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from=sde-planning --pipeline=sde-planning | %FileCheck %s --check-prefix=SDE
-// RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from=sde-planning --pipeline=sde-to-codir | %FileCheck %s --check-prefix=CODIR --implicit-check-not=sde.mu_access_window
+// RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from=sde-planning --pipeline=codir-graph-transforms | %FileCheck %s --check-prefix=CODIR --implicit-check-not=sde.mu_access_window
 
 // SDE production creates a committed MU access-window carrier, and the
 // SDE-to-CODIR boundary consumes it rather than letting it cross the dialect

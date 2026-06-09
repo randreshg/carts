@@ -321,7 +321,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: memref.load %{{.*}}[%[[ZERO]], %{{.*}}]
 // CHECK: memref.store %{{.*}}, %{{.*}}[%[[NINE]], %{{.*}}]
 
-// CHECK-NOT: arts.barrier
+// CHECK: arts.barrier {barrierReason = #arts.barrier_reason<required_memory>}
 // CHECK: arts.edt <task> <internode> route{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK: %[[COMPUTED:.*]] = arith.mulf
 // CHECK: %[[STORE_ORIGIN_OK:.*]] = arith.cmpi uge

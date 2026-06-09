@@ -3,7 +3,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(db-commit-distributed-deps,verify-arts-cdag)' \
 // RUN:   | %FileCheck %s --check-prefix=AFTER
 
-// ARTS -> ARTS-RT handoff contract for partial acquires: a distributed partial
+// ARTS -> ARTS-RT boundary rule for partial acquires: a distributed partial
 // halo acquire may only reach ARTS-RT once ARTS has committed an authoritative
 // DB-space window for it. ARTS-RT must copy that window, never reconstruct the
 // halo face slice.

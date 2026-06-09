@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: VerifyArtsObjectsOnly.cpp
 ///
-/// Verification pass for the target CODIR-to-ARTS boundary contract.
+/// Verification pass for the target CODIR-to-ARTS boundary facts.
 ///==========================================================================///
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
@@ -28,7 +28,7 @@ static bool isInsideHostOpenMPIsland(Operation *op) {
 }
 
 // The "no internode task depends on a coarse aggregate DB" invariant is
-// verified in VerifyDistributedDbPlacement: it must run AFTER
+// verified in VerifyArtsCdag: it must run AFTER
 // DbOwnerMapRealization realizes owner maps and DistributedLaunchConsistency
 // localizes host-bridge EDTs to intranode, which only happen in
 // post-db-refinement. Checking it here (end of codir-to-arts) would reject

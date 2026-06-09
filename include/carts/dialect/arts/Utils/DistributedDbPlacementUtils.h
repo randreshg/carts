@@ -25,7 +25,7 @@ struct DbOwnerMapPlan {
   SmallVector<int64_t, 4> blockShape;
 };
 
-enum class DbOwnerMapContractFailure {
+enum class DbOwnerMapPlanFailure {
   None,
   MissingOwnerMapPlan,
   UnsupportedVersion,
@@ -389,71 +389,71 @@ inline bool ownerMapPreservesPlanBlockShape(DbAllocOp alloc,
          sameI64Values(plan.blockShape, *dbOwnerBlockShape);
 }
 
-inline DbOwnerMapContractFailure
-getDistributedDbOwnerMapContractFailure(DbAllocOp alloc) {
+inline DbOwnerMapPlanFailure
+getDistributedDbOwnerMapPlanFailure(DbAllocOp alloc) {
   if (!alloc)
-    return DbOwnerMapContractFailure::MissingOwnerMapPlan;
+    return DbOwnerMapPlanFailure::MissingOwnerMapPlan;
 
   auto plan = getDbOwnerMapPlan(alloc);
   if (!plan)
-    return DbOwnerMapContractFailure::MissingOwnerMapPlan;
+    return DbOwnerMapPlanFailure::MissingOwnerMapPlan;
 
   if (!alloc.getOwnerMapVersionAttr() ||
       alloc.getOwnerMapVersionAttr().getInt() != kDbOwnerMapVersion)
-    return DbOwnerMapContractFailure::UnsupportedVersion;
+    return DbOwnerMapPlanFailure::UnsupportedVersion;
 
   if (!getPlanOwnerDimsAttr(alloc.getOperation()) ||
       !getPlanPhysicalBlockShapeAttr(alloc.getOperation()))
-    return DbOwnerMapContractFailure::MissingPreservedPlan;
+    return DbOwnerMapPlanFailure::MissingPreservedPlan;
 
   if (alloc.getLocalOnly().value_or(false))
-    return DbOwnerMapContractFailure::LocalOnlyConflict;
+    return DbOwnerMapPlanFailure::LocalOnlyConflict;
   if (alloc.getDistributedRejectReasonAttr())
-    return DbOwnerMapContractFailure::RejectReasonConflict;
+    return DbOwnerMapPlanFailure::RejectReasonConflict;
 
   if (!ownerMapPreservesPlanOwnerDims(alloc, *plan))
-    return DbOwnerMapContractFailure::OwnerDimsDoNotPreservePlan;
+    return DbOwnerMapPlanFailure::OwnerDimsDoNotPreservePlan;
   if (!ownerMapPreservesPlanBlockShape(alloc, *plan))
-    return DbOwnerMapContractFailure::BlockShapeDoesNotPreservePlan;
+    return DbOwnerMapPlanFailure::BlockShapeDoesNotPreservePlan;
 
   switch (plan->kind) {
   case DbOwnerMapKind::linear_mod_nodes:
   case DbOwnerMapKind::owner_dim_contiguous:
     if (!ownerDimsAddressDbRank(plan->dims, alloc.getSizes().size()))
-      return DbOwnerMapContractFailure::OwnerDimsOutsideDbRank;
+      return DbOwnerMapPlanFailure::OwnerDimsOutsideDbRank;
     break;
   case DbOwnerMapKind::owner_dim_grid:
   case DbOwnerMapKind::explicit_rank_table:
-    return DbOwnerMapContractFailure::UnsupportedOwnerMapKind;
+    return DbOwnerMapPlanFailure::UnsupportedOwnerMapKind;
   }
 
-  return DbOwnerMapContractFailure::None;
+  return DbOwnerMapPlanFailure::None;
 }
 
-inline const char *toString(DbOwnerMapContractFailure failure) {
+inline const char *toString(DbOwnerMapPlanFailure failure) {
   switch (failure) {
-  case DbOwnerMapContractFailure::None:
+  case DbOwnerMapPlanFailure::None:
     return "valid";
-  case DbOwnerMapContractFailure::MissingOwnerMapPlan:
+  case DbOwnerMapPlanFailure::MissingOwnerMapPlan:
     return "missing owner-map plan";
-  case DbOwnerMapContractFailure::UnsupportedVersion:
+  case DbOwnerMapPlanFailure::UnsupportedVersion:
     return "unsupported owner-map version";
-  case DbOwnerMapContractFailure::MissingPreservedPlan:
+  case DbOwnerMapPlanFailure::MissingPreservedPlan:
     return "missing preserved owner dims or physical block shape";
-  case DbOwnerMapContractFailure::LocalOnlyConflict:
+  case DbOwnerMapPlanFailure::LocalOnlyConflict:
     return "distributed/local_only conflict";
-  case DbOwnerMapContractFailure::RejectReasonConflict:
+  case DbOwnerMapPlanFailure::RejectReasonConflict:
     return "distributed reject-reason conflict";
-  case DbOwnerMapContractFailure::OwnerDimsDoNotPreservePlan:
+  case DbOwnerMapPlanFailure::OwnerDimsDoNotPreservePlan:
     return "owner_map_dims do not preserve planOwnerDims";
-  case DbOwnerMapContractFailure::BlockShapeDoesNotPreservePlan:
+  case DbOwnerMapPlanFailure::BlockShapeDoesNotPreservePlan:
     return "owner_block_shape does not preserve planPhysicalBlockShape";
-  case DbOwnerMapContractFailure::OwnerDimsOutsideDbRank:
+  case DbOwnerMapPlanFailure::OwnerDimsOutsideDbRank:
     return "owner_map_dims outside DB rank";
-  case DbOwnerMapContractFailure::UnsupportedOwnerMapKind:
+  case DbOwnerMapPlanFailure::UnsupportedOwnerMapKind:
     return "unsupported owner-map kind";
   }
-  return "unknown owner-map contract failure";
+  return "unknown owner-map plan failure";
 }
 
 /// Precise reason a not-yet-realized owner-map kind fails closed. ARTS realizes

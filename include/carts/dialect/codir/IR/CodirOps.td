@@ -93,4 +93,18 @@ def CartsCodir_YieldOp
   let assemblyFormat = "($results^ `:` type($results))? attr-dict";
 }
 
+def CartsCodir_AtomicAddOp
+    : CartsCodir_Op<"atomic_add", [MemoryEffects<[MemWrite]>]> {
+  let summary = "atomic add to a codelet dependency element";
+  let description = [{
+    CODIR representation of a codelet-local atomic add. SDE owns source
+    reduction/atomic legality; CODIR carries the isolated codelet operation so
+    CODIR-to-ARTS can translate it mechanically.
+  }];
+
+  let arguments = (ins AnyType:$addr, AnyType:$value);
+  let assemblyFormat =
+      "`(` $addr `,` $value `:` type($addr) `,` type($value) `)` attr-dict";
+}
+
 #endif // CARTS_CODIR_OPS

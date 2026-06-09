@@ -110,7 +110,7 @@ static bool containsEdtLaunch(Operation *op) {
 }
 
 static bool isMovableBarrierSegmentOp(Operation *op) {
-  if (isa<DbAcquireOp, LoweringContractOp>(op))
+  if (isa<DbAcquireOp>(op))
     return true;
 
   // Scalar SSA helpers that feed only moved EDTs must move with the EDTs when
@@ -233,7 +233,7 @@ static void processBarrierOp(BarrierOp barrier) {
       if (epochInsertionOp && op->isBeforeInBlock(epochInsertionOp))
         continue;
       // Skip ops with side effects that we cannot safely reorder. db_acquire
-      // and lowering contracts are dep-tracking SSA producers, and pure
+      // and lowering facts are dep-tracking SSA producers, and pure
       // regionless scalar ops are safe to move alongside the EDTs that consume
       // them.
       if (!isMovableBarrierSegmentOp(op))

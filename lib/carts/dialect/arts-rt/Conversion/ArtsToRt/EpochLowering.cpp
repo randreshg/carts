@@ -72,8 +72,7 @@ static bool isAllowedContinuationSetupOp(Operation *op) {
 }
 
 static bool isAllowedContinuationTailOp(Operation *op) {
-  return isa<DbAcquireOp, LoweringContractOp, RecordDepOp>(op) ||
-         isAllowedContinuationSetupOp(op);
+  return isa<DbAcquireOp, RecordDepOp>(op) || isAllowedContinuationSetupOp(op);
 }
 
 static bool isBeforeOrSame(Operation *lhs, Operation *rhs) {

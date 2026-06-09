@@ -1359,7 +1359,7 @@ struct PatternAnalysisPass
       clearPartialReductionIntent(op);
 
       sde::SdeStructuredClassification classification = summary->classification;
-      bool hasExplicitStencilContract = false;
+      bool hasExplicitStencilFacts = false;
       if (auto existingClassification = op.getStructuredClassification();
           existingClassification &&
           *existingClassification ==
@@ -1370,7 +1370,7 @@ struct PatternAnalysisPass
         // neighborhood contract. Do not let a later scalar-shape refresh
         // rediscover a different family and lose the authored stencil meaning.
         classification = *existingClassification;
-        hasExplicitStencilContract = true;
+        hasExplicitStencilFacts = true;
       } else if (existingClassification &&
                  *existingClassification ==
                      sde::SdeStructuredClassification::elementwise_pipeline &&
@@ -1389,7 +1389,7 @@ struct PatternAnalysisPass
         classification = *existingClassification;
       }
 
-      if (!hasExplicitStencilContract) {
+      if (!hasExplicitStencilFacts) {
         if (sde::SdeSuIterateOp promoted =
                 tryPromoteNestedParallelPrefix(op, *summary);
             promoted != op) {
@@ -1428,7 +1428,7 @@ struct PatternAnalysisPass
       if (classification == sde::SdeStructuredClassification::stencil) {
         neighborhoodSummary = sde::extractNeighborhoodSummary(*summary);
         if (!neighborhoodSummary) {
-          if (hasExplicitStencilContract) {
+          if (hasExplicitStencilFacts) {
             if (!op.getPatternAttr())
               op.setPatternAttr(sde::SdePatternAttr::get(
                   &getContext(), sde::SdePattern::stencil_tiling_nd));
@@ -1439,7 +1439,7 @@ struct PatternAnalysisPass
 
         sde::SdeSuIterateOp promoted = tryPromoteOutOfPlaceStencilOwnerLoop(
             op, *summary, *neighborhoodSummary,
-            /*requireExistingContractMatch=*/hasExplicitStencilContract);
+            /*requireExistingContractMatch=*/hasExplicitStencilFacts);
         if (promoted != op) {
           op = promoted;
           summary = sde::analyzeStructuredLoop(op);
@@ -1460,7 +1460,7 @@ struct PatternAnalysisPass
             &getContext(),
             derivePattern(*summary, classification, neighborhoodSummary)));
 
-        if (hasExplicitStencilContract) {
+        if (hasExplicitStencilFacts) {
           ARTS_DEBUG("preserved explicit SDE stencil pattern on su_iterate");
           return;
         }

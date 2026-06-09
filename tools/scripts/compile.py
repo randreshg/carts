@@ -1384,15 +1384,19 @@ def _compile_all_pipelines(
           3_codir/                           # codelet isolation work
             stages/
               NN_sde-to-codir.mlir
+              NN_codir-graph-transforms.mlir
             passes/
               NN_sde-to-codir/
+              NN_codir-graph-transforms/
           4_core/                            # ARTS core dialect work
             stages/
               NN_codir-to-arts.mlir          # output is core (post conversion)
-              NN_edt-transforms.mlir … NN_epochs.mlir
+              NN_edt-dep-realization.mlir
+              NN_edt-local-cleanup.mlir … NN_epochs.mlir
             passes/
               NN_codir-to-arts/
-              NN_edt-transforms/ … NN_epochs/
+              NN_edt-dep-realization/
+              NN_edt-local-cleanup/ … NN_epochs/
               NN_pre-lowering/               # core passes before rt-lowering
           5_rt/                              # arts_rt dialect + lowering
             stages/

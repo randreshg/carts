@@ -1,6 +1,6 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,codir-codelet-opt,reduction-planning,storage-planning,verify-codir)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,codir-codelet-dce,reduction-dep-mapping,dep-storage-assignment,verify-codir)' \
 // RUN:   | %FileCheck %s --check-prefix=CODIR
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,codir-codelet-opt,reduction-planning,storage-planning,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,realize-edt-distribution-plan,verify-arts-objects-only)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(convert-sde-to-codir,verify-codir,codir-codelet-dce,reduction-dep-mapping,dep-storage-assignment,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,realize-edt-distribution-plan,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s --check-prefix=ARTS --implicit-check-not=sde.redist --implicit-check-not=codir.codelet
 
 // The reduce_scatter movement that SDE commits as sde.redist is consumed into

@@ -41,41 +41,20 @@ inline constexpr llvm::StringLiteral ArtsCreateId = "arts.create_id";
 /// Symbol of the outlined EDT body function carried on the launch op.
 inline constexpr llvm::StringLiteral OutlinedFunc = "arts.outlined_func";
 
-/// Marker stamped on loops produced by ARTS block-loop strip-mining so the
-/// support pass can recognize and clear its own outputs.
-inline constexpr llvm::StringLiteral StripMiningGenerated =
-    "arts.block_loop_strip_mining.generated";
-
 } // namespace Operation
 
-/// Proof-driven ownership annotations stamped by OwnershipProof and consumed
-/// by downstream lowering / verifier passes. These are operation-level
-/// marker attrs attached to non-ARTS host ops (e.g. the outlined launch
-/// site), so they live alongside the other ARTS markers rather than as
-/// inherent ODS attributes on a CARTS op.
-namespace Proof {
-
-inline constexpr llvm::StringLiteral OwnerDimReachability =
-    "arts.proof.owner_dim_reachability";
-inline constexpr llvm::StringLiteral PartitionAccessMapping =
-    "arts.proof.partition_access_mapping";
-inline constexpr llvm::StringLiteral HaloLegality = "arts.proof.halo_legality";
-inline constexpr llvm::StringLiteral DepSliceSoundness =
-    "arts.proof.dep_slice_soundness";
-
-} // namespace Proof
-
-/// Contract marker keys propagated through copySemanticContractAttrs across
+/// Semantic marker keys propagated through copySemanticFactAttrs across
 /// dialect boundaries. The source op is often non-ARTS (e.g. memref.alloc),
 /// so these cannot be inherent ODS attributes on a CARTS op; the constants
 /// live here as the single source of truth shared by every producer and
 /// consumer.
-namespace Contract {
+namespace Semantic {
 
-/// Marker stamped on dependency sources that the contract layer can narrow.
+/// Marker stamped on dependency sources whose dependency window can be
+/// narrowed.
 inline constexpr llvm::StringLiteral NarrowableDep = "narrowable_dep";
 
-} // namespace Contract
+} // namespace Semantic
 
 } // namespace mlir::carts::arts::AttrNames
 

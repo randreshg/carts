@@ -11,7 +11,7 @@
 #include "CodegenInternal.h"
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
@@ -169,28 +169,28 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
 
 private:
   SmallVector<Value, 4>
-  inferStencilCenterCoordsFromContract(DbAcquireOp dbAcquireOp,
-                                       const DbLoweringInfo &dbInfo,
-                                       Location loc) const {
+  inferStencilCenterCoordsFromFacts(DbAcquireOp dbAcquireOp,
+                                    const DbLoweringInfo &dbInfo,
+                                    Location loc) const {
     SmallVector<Value, 4> globalCoords;
     if (!dbAcquireOp || dbInfo.sizes.empty())
       return globalCoords;
 
-    auto contract = getAcquireStencilContract(dbAcquireOp, loc);
-    if (!contract ||
-        !(contract->isStencilFamily() || contract->usesStencilDistribution()))
+    auto facts = getAcquireStencilFacts(dbAcquireOp, loc);
+    if (!facts ||
+        !(facts->isStencilFamily() || facts->usesStencilDistribution()))
       return globalCoords;
-    if (contract->spatial.minOffsets.empty()) {
-      if (contract->spatial.centerOffset)
-        return inferSymmetricStencilCenterCoords(
-            *contract->spatial.centerOffset, dbInfo, loc);
+    if (facts->spatial.minOffsets.empty()) {
+      if (facts->spatial.centerOffset)
+        return inferSymmetricStencilCenterCoords(*facts->spatial.centerOffset,
+                                                 dbInfo, loc);
       return globalCoords;
     }
 
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
-                                       contract->spatial.minOffsets.size());
-    if (!contract->spatial.writeFootprint.empty())
-      rank = std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
+                                       facts->spatial.minOffsets.size());
+    if (!facts->spatial.writeFootprint.empty())
+      rank = std::min<unsigned>(rank, facts->spatial.writeFootprint.size());
     if (rank == 0)
       return globalCoords;
 
@@ -199,10 +199,10 @@ private:
 
     globalCoords.reserve(rank);
     for (unsigned i = 0; i < rank; ++i) {
-      Value writeCoord = contract->spatial.writeFootprint.empty()
+      Value writeCoord = facts->spatial.writeFootprint.empty()
                              ? zero
-                             : contract->spatial.writeFootprint[i];
-      Value minOffset = contract->spatial.minOffsets[i];
+                             : facts->spatial.writeFootprint[i];
+      Value minOffset = facts->spatial.minOffsets[i];
       Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
 
       Value rawCoord =
@@ -349,7 +349,7 @@ private:
     Value baseOffset = nullptr;
     Value stencilCenterLinear;
     SmallVector<Value, 4> stencilCenterCoords;
-    std::optional<LoweringContractInfo> stencilContract;
+    std::optional<LoweringFactInfo> stencilFacts;
     SmallVector<unsigned, 4> blockOwnerDims;
     SmallVector<Value, 4> blockElementSizes;
     Value scalarSize = nullptr;
@@ -386,7 +386,7 @@ private:
   /// Build the per-slot read-only halo face byte slice from the committed
   /// halo_slice window. ARTS-RT consumes the committed element extents (lower /
   /// upper) and performs only the element-to-byte arithmetic; it does not
-  /// reconstruct the window from the stencil contract.
+  /// reconstruct the window from the stencil facts.
   std::pair<Value, Value> buildCommittedHaloFaceSliceForSlot(
       const DepDbInfo &depInfo, Value linearIndex,
       ArrayRef<Value> directIndices, Location loc) const {
@@ -562,39 +562,38 @@ private:
                                   globalCoordValues, loc);
   }
 
-  std::optional<LoweringContractInfo>
-  getAcquireStencilContract(DbAcquireOp dbAcquireOp, Location loc) const {
+  std::optional<LoweringFactInfo>
+  getAcquireStencilFacts(DbAcquireOp dbAcquireOp, Location loc) const {
     if (!dbAcquireOp)
       return std::nullopt;
 
-    if (auto info = getLoweringContract(dbAcquireOp.getPtr()))
+    if (auto info = getLoweringFacts(dbAcquireOp.getPtr()))
       return info;
-    return getLoweringContract(dbAcquireOp.getOperation(), AC->getBuilder(),
-                               loc);
+    return getLoweringFacts(dbAcquireOp.getOperation(), AC->getBuilder(), loc);
   }
 
-  Value inferStencilCenterLinearFromContract(DbAcquireOp dbAcquireOp,
-                                             const DbLoweringInfo &dbInfo,
-                                             ArrayRef<Value> allocSizes,
-                                             Location loc) const {
+  Value inferStencilCenterLinearFromFacts(DbAcquireOp dbAcquireOp,
+                                          const DbLoweringInfo &dbInfo,
+                                          ArrayRef<Value> allocSizes,
+                                          Location loc) const {
     if (!dbAcquireOp || dbInfo.sizes.empty())
       return nullptr;
 
-    auto contract = getAcquireStencilContract(dbAcquireOp, loc);
-    if (!contract ||
-        !(contract->isStencilFamily() || contract->usesStencilDistribution()))
+    auto facts = getAcquireStencilFacts(dbAcquireOp, loc);
+    if (!facts ||
+        !(facts->isStencilFamily() || facts->usesStencilDistribution()))
       return nullptr;
-    if (contract->spatial.minOffsets.empty()) {
-      if (contract->spatial.centerOffset)
-        return inferSymmetricStencilCenterLinear(
-            *contract->spatial.centerOffset, dbInfo, allocSizes, loc);
+    if (facts->spatial.minOffsets.empty()) {
+      if (facts->spatial.centerOffset)
+        return inferSymmetricStencilCenterLinear(*facts->spatial.centerOffset,
+                                                 dbInfo, allocSizes, loc);
       return nullptr;
     }
 
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
-                                       contract->spatial.minOffsets.size());
-    if (!contract->spatial.writeFootprint.empty())
-      rank = std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
+                                       facts->spatial.minOffsets.size());
+    if (!facts->spatial.writeFootprint.empty())
+      rank = std::min<unsigned>(rank, facts->spatial.writeFootprint.size());
     if (rank == 0)
       return nullptr;
 
@@ -604,10 +603,10 @@ private:
     SmallVector<Value, 4> localCoords;
     localCoords.reserve(rank);
     for (unsigned i = 0; i < rank; ++i) {
-      Value writeCoord = contract->spatial.writeFootprint.empty()
+      Value writeCoord = facts->spatial.writeFootprint.empty()
                              ? zero
-                             : contract->spatial.writeFootprint[i];
-      Value minOffset = contract->spatial.minOffsets[i];
+                             : facts->spatial.writeFootprint[i];
+      Value minOffset = facts->spatial.minOffsets[i];
       Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
 
       Value rawCoord =
@@ -693,21 +692,21 @@ private:
       result.allocSizes = resolveOuterSizesForGuid(dbGuid);
       /// Stencil writer acquires frequently cover [halo..., center, halo...]
       /// DB entries. Recording every entry as WRITE over-serializes adjacent
-      /// blocks. Use the acquire's stencil contract to identify the owned
+      /// blocks. Use the acquire's stencil facts to identify the owned
       /// center block and downgrade only the non-center entries to read-only.
       ///
-      /// Prefer the full lowering contract so boundary-clamped windows keep
+      /// Prefer the full lowering facts so boundary-clamped windows keep
       /// the correct owned-center block. stencil_center_offset is only a
-      /// symmetric-radius fallback when richer contract data is unavailable.
+      /// symmetric-radius fallback when richer facts data is unavailable.
       int32_t writeMode = static_cast<int32_t>(DbMode::write);
       bool writerMode = !acquireMode || *acquireMode == writeMode;
       auto partitionMode = dbAcquireOp.getPartitionMode();
       if (writerMode && partitionMode && usesBlockLayout(*partitionMode)) {
-        result.stencilContract = getAcquireStencilContract(dbAcquireOp, loc);
-        result.stencilCenterLinear = inferStencilCenterLinearFromContract(
+        result.stencilFacts = getAcquireStencilFacts(dbAcquireOp, loc);
+        result.stencilCenterLinear = inferStencilCenterLinearFromFacts(
             dbAcquireOp, result.dbInfo, result.allocSizes, loc);
-        result.stencilCenterCoords = inferStencilCenterCoordsFromContract(
-            dbAcquireOp, result.dbInfo, loc);
+        result.stencilCenterCoords =
+            inferStencilCenterCoordsFromFacts(dbAcquireOp, result.dbInfo, loc);
       }
 
       if (auto alloc = dyn_cast_or_null<DbAllocOp>(
@@ -723,14 +722,14 @@ private:
                                         allocExtents.end());
 
         unsigned ownerRank = result.dbInfo.sizes.size();
-        if (result.stencilContract &&
-            !result.stencilContract->spatial.ownerDims.empty())
+        if (result.stencilFacts &&
+            !result.stencilFacts->spatial.ownerDims.empty())
           ownerRank = static_cast<unsigned>(
-              result.stencilContract->spatial.ownerDims.size());
+              result.stencilFacts->spatial.ownerDims.size());
         if (ownerRank != 0) {
-          if (result.stencilContract)
+          if (result.stencilFacts)
             result.blockOwnerDims =
-                resolveContractOwnerDims(*result.stencilContract, ownerRank);
+                resolveFactOwnerDims(*result.stencilFacts, ownerRank);
           else
             for (unsigned dim = 0; dim < ownerRank; ++dim)
               result.blockOwnerDims.push_back(dim);
@@ -1038,7 +1037,7 @@ private:
         /// The committed halo face slice keeps the consumer IR on the original
         /// block coordinate system (for example, Seidel's left halo still
         /// indexes row 252 of the predecessor block). Compact slice payloads
-        /// would break that contract, so committed face slices must request the
+        /// would break that facts, so committed face slices must request the
         /// shape-preserving runtime path.
         committedFaceSlice = true;
         int32_t depFlagBits = effectiveDepFlags.value_or(0);
@@ -1048,7 +1047,7 @@ private:
     }
     if (preserveShape && !committedFaceSlice) {
       /// Explicit preserve-shape markings currently act as an analysis-time
-      /// "do not compact this acquire" contract. Keep those on the whole-DB
+      /// "do not compact this acquire" facts. Keep those on the whole-DB
       /// path until the upstream acquire rewrite carries a compact index space.
       effectiveByteOffset = nullptr;
       effectiveByteSize = nullptr;

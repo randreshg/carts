@@ -13,7 +13,7 @@
 /// 5. Replace EDT with edt_create call returning GUID
 /// 6. Add dependency management (record_in_dep)
 ///
-/// Dep contract (before/after):
+/// Dep facts (before/after):
 ///   BEFORE:
 ///     %t = arts.edt ... (%dep0, %dep1)
 ///
@@ -37,7 +37,7 @@ namespace mlir::carts::arts_rt {
 #include "carts/dialect/arts-rt/Utils/OperationAttributes.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
@@ -246,8 +246,8 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   }
 
   /// Recompute the live capture environment from the current EDT body.
-  /// EpochOpt and other structural passes can rewrite continuation captures
-  /// late in the pipeline; lowering must follow the final IR contract, not a
+  /// ARTS epoch/continuation passes can rewrite continuation captures late in
+  /// the pipeline; lowering must follow the final IR facts, not a
   /// potentially stale cached summary.
   EdtEnvManager envManager(edtOp);
   for (Value captured : envManager.getCapturedValues()) {
@@ -274,11 +274,11 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
 
   /// Normalize dependency slices before outlining so the packed parameters,
   /// outlined dep_gep math, depCount, and rec_dep lowering all observe the
-  /// same DB-space contract.
+  /// same DB-space facts.
   for (Value dep : edtDeps)
     if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
-      if (auto contract = resolveAcquireContract(acquire))
-        normalizeTaskDepSlice(AC, acquire, *contract);
+      if (auto facts = resolveAcquireFacts(acquire))
+        normalizeTaskDepSlice(AC, acquire, *facts);
 
   SmallVector<Type> packTypes;
   SmallVector<Value> packedValues;
@@ -1022,7 +1022,7 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
       byteSize = zeroIdx;
       hasExplicitSlice = false;
     }
-    /// Explicit element slices already encode the producer/consumer contract.
+    /// Explicit element slices already encode the producer/consumer facts.
     /// When upstream rewrites localize the consumer to a compact halo view,
     /// forcing "preserve shape" here would discard the byte slice later in
     /// ConvertArtsRtToLLVM and hand the task a whole DB block instead.

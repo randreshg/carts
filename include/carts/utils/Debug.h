@@ -62,7 +62,7 @@ static inline llvm::raw_ostream &debugStream() {
 
 /// Debug section with automatic header/footer around a region.
 /// Example:
-///   ARTS_DEBUG_SECTION("StringAnalysis",
+///   ARTS_DEBUG_SECTION("StringUtils",
 ///     ARTS_DBGS() << "String memrefs:\n";
 ///     for (auto value : stringMemRefs)
 ///       ARTS_DBGS() << "  " << value << "\n";

@@ -12,7 +12,7 @@ compiler pipeline:
   ARTS orchestration ops.
 
 Shared conversion-only helpers live in `ConversionUtils.h`. Helpers that depend
-on SDE contracts, such as task-dependency slice proof logic, stay under
+on SDE facts, such as task-dependency slice proof logic, stay under
 `SdeToCodir/` instead of `codir/Utils` so the CODIR dialect library remains
 isolated from SDE and ARTS.
 

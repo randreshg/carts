@@ -450,7 +450,7 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
       launch.route ? launch.route : createCurrentNodeRoute(builder, loc);
   auto producer = EdtOp::create(builder, loc, EdtType::task, launch.concurrency,
                                 route, deps, params);
-  // Carry the plan metadata so downstream placement/contract passes treat the
+  // Carry the plan metadata so downstream placement/fact passes treat the
   // producer like the original owner-block matmul worker.
   if (auto ownerDims = t.gEdt.getPlanOwnerDimsAttr())
     producer.setPlanOwnerDimsAttr(ownerDims);

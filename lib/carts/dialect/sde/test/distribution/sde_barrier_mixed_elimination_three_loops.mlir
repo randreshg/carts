@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline codir-to-arts --mlir-print-ir-after-all 2>&1 \
-// RUN:   | awk '/IR Dump After BarrierElimination/,/IR Dump After VerifySdePartitionPlan/' \
+// RUN:   | awk '/IR Dump After BarrierElimination/,/IR Dump After MemoryUnitMaterialization/' \
 // RUN:   | %FileCheck %s --check-prefix=SDE
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline codir-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=ARTS
 
@@ -9,10 +9,12 @@
 // Barrier 2: B writes D, C reads D — overlap → PRESERVED.
 
 // SDE-LABEL: // -----// IR Dump After BarrierElimination (barrier-elimination) //----- //
-// Barrier 1 is eliminated (disjoint), barrier 2 is preserved (overlap):
-// SDE: sde.su_barrier {barrierEliminated, barrierReason = #sde.barrier_reason<redundant>}
+// Barrier 1 is erased in SDE (disjoint), barrier 2 is preserved (overlap):
+// SDE: sde.su_iterate
+// SDE-NOT: sde.su_barrier
+// SDE: sde.su_iterate
 // SDE: sde.su_barrier
-// SDE-NOT: arts.barrierEliminated
+// SDE-NOT: barrierEliminated
 
 // After ConvertCodirToArts: only the second barrier survives.
 // ARTS-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //

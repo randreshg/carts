@@ -51,8 +51,9 @@ bool stencilWriteFitsInTile(CodeletOp codelet);
 /// --- First-class CODIR collective selection -------------------------------
 /// These predicates are the EXACT gate bodies that ConvertCodirToArts has
 /// historically used to decide the all-gather and cross-owner reduce
-/// realizations (ArtsMaterializationUtils.h). Hoisted here so StoragePlanning
-/// can stamp the first-class `dep_collectives` carrier from the same bodies.
+/// realizations (ArtsMaterializationUtils.h). Hoisted here so
+/// DepStorageAssignment can stamp the first-class `dep_collectives` carrier
+/// from the same bodies.
 
 /// True when |producer|'s |depIndex| coarse intermediate buffer is read by a
 /// sibling `replicated_read` contraction consumer. This is the all-gather

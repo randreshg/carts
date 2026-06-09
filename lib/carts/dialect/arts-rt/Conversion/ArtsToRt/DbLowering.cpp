@@ -30,7 +30,7 @@ namespace mlir::carts::arts_rt {
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/utils/Debug.h"
@@ -81,8 +81,8 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   auto mode = acquire.getPartitionMode();
   if (!mode || !usesBlockLayout(*mode))
     return;
-  auto contractInfo = getLoweringContract(acquire.getPtr());
-  if (!contractInfo || !contractInfo->supportsBlockHalo())
+  auto factInfo = getLoweringFacts(acquire.getPtr());
+  if (!factInfo || !factInfo->supportsBlockHalo())
     return;
 
   /// Upstream passes already encode the dependency window in DB-space on the
@@ -102,7 +102,7 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     return;
 
   bool usePartitionSlice =
-      shouldUsePartitionSliceAsDepWindow(*contractInfo, acquire);
+      shouldUsePartitionSliceAsDepWindow(*factInfo, acquire);
   auto offsetRange =
       usePartitionSlice ? acquire.getPartitionOffsets() : acquire.getOffsets();
   auto sizeRange =
@@ -114,7 +114,7 @@ static void normalizeBlockHaloAcquireSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   if (rank == 0)
     return;
 
-  SmallVector<unsigned, 4> dims = resolveContractOwnerDims(*contractInfo, rank);
+  SmallVector<unsigned, 4> dims = resolveFactOwnerDims(*factInfo, rank);
 
   auto outerSizes = alloc.getSizes();
   auto elementSizes = alloc.getElementSizes();
@@ -219,12 +219,12 @@ void DbLoweringPass::convertDbAllocOps() {
     }
 
     if (hasDistributedDbAllocation(oldOp.getOperation())) {
-      DbOwnerMapContractFailure contractFailure =
-          getDistributedDbOwnerMapContractFailure(oldOp);
-      if (contractFailure != DbOwnerMapContractFailure::None) {
+      DbOwnerMapPlanFailure planFailure =
+          getDistributedDbOwnerMapPlanFailure(oldOp);
+      if (planFailure != DbOwnerMapPlanFailure::None) {
         oldOp.emitOpError()
             << "cannot lower distributed DB with unverified owner-map plan: "
-            << toString(contractFailure);
+            << toString(planFailure);
         signalPassFailure();
         return;
       }
@@ -280,8 +280,6 @@ void DbLoweringPass::convertDbAllocOps() {
       ARTS_DEBUG("  - DB arts.create_id=" << createId << " (base=" << baseId
                                           << " x stride=" << idStride << ")");
     }
-    moveValueContract(oldOp.getPtr(), newOp.getPtr(), AC->getBuilder(),
-                      newOp.getLoc());
     updateAllocUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
     ++numAllocsLowered;
@@ -447,16 +445,13 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   // committed fact instead of reconstructing the face slice from raw offsets.
   if (auto attr = acquireOp.getHaloSliceAttr())
     newAcquireOp.setHaloSliceAttr(attr);
-  /// Rebuilt acquires must preserve the semantic stencil/distribution contract
+  /// Rebuilt acquires must preserve the semantic stencil/distribution facts
   /// in addition to generic `arts.*` bookkeeping. Downstream passes such as
-  /// dep lowering rely on these attrs (or the mirrored value contract) to
+  /// dep lowering rely on these attrs (or the mirrored value facts) to
   /// distinguish owned-write entries from read-only halo entries without
   /// teaching generic lowering code about specific dep families.
-  copySemanticContractAttrs(acquireOp.getOperation(),
-                            newAcquireOp.getOperation());
+  copySemanticFactAttrs(acquireOp.getOperation(), newAcquireOp.getOperation());
   newAcquireOp.copyPartitionSegmentsFrom(acquireOp);
-  moveValueContract(acquireOp.getPtr(), newAcquireOp.getPtr(), AC->getBuilder(),
-                    newAcquireOp.getLoc());
   normalizeBlockHaloAcquireSlice(AC, newAcquireOp, sourcePtr);
   ++numAcquiresRewritten;
   ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
@@ -560,7 +555,6 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   }
 
   blockArg.setType(newPtr.getType());
-  eraseLoweringContracts(blockArg);
 
   SmallVector<Value> edtElementSizes(elementSizes.begin(), elementSizes.end());
   ValueRange edtParams = edtUser.getParams();

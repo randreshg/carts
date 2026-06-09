@@ -267,19 +267,19 @@ def ArtsDepPatternAttr
 def PreserveAccessModeAttr : AttrDef<ArtsDialect, "PreserveAccessMode"> {
   let summary = "Preserve explicit access-mode semantics on a DbAcquireOp";
   let description = [{
-    Marks DbAcquireOps whose access mode should be treated as an explicit
-    dependency contract rather than inferred from loads/stores. This attribute
-    is only set when the compiler already knows the exact mode and later passes
-    should not re-check or optimize it.
+    Marks DbAcquireOps whose access mode should be preserved rather than
+    inferred from loads/stores. This attribute is only set when the compiler
+    already knows the exact mode and later passes should not re-check or
+    optimize it.
   }];
   let mnemonic = "preserve_access_mode";
   let assemblyFormat = "";
 }
 
 /// Marker on DbAcquireOp to preserve an explicit dependency edge.
-/// This is set for acquires materialized from explicit SDE task dependency
-/// contracts whose EDT dependency must not be DCE'd away just because the
-/// local pointer/block argument is otherwise unused.
+/// This is set for acquires materialized from explicit SDE task dependencies
+/// whose EDT dependency must not be DCE'd away just because the local
+/// pointer/block argument is otherwise unused.
 def PreserveDepEdgeAttr : AttrDef<ArtsDialect, "PreserveDepEdge"> {
   let summary = "Preserve explicit dependency edge semantics on a DbAcquireOp";
   let description = [{
@@ -290,45 +290,6 @@ def PreserveDepEdgeAttr : AttrDef<ArtsDialect, "PreserveDepEdge"> {
   }];
   let mnemonic = "preserve_dep_edge";
   let assemblyFormat = "";
-}
-
-/// Canonical semantic pattern payload shared by lowering contracts.
-def PatternAttr : Arts_Attr<"Pattern", "pattern"> {
-  let summary = "Canonical ARTS semantic pattern payload";
-  let description = [{
-    Bundles the semantic pattern family and distribution selection into one
-    typed attribute so lowering contracts do not need to spread the same
-    meaning across unrelated top-level attrs.
-  }];
-  let parameters = (ins
-    OptionalParameter<"::mlir::carts::arts::ArtsDepPatternAttr">:$depPattern,
-    OptionalParameter<"::mlir::carts::arts::EdtDistributionKindAttr">:$distributionKind,
-    OptionalParameter<"::mlir::carts::arts::EdtDistributionPatternAttr">:$distributionPattern,
-    OptionalParameter<"::mlir::IntegerAttr">:$distributionVersion
-  );
-  let assemblyFormat = "`<` struct(params) `>`";
-}
-
-/// Canonical static lowering-contract payload shared by lowering contracts.
-def ContractAttr : Arts_Attr<"Contract", "contract"> {
-  let summary = "Canonical ARTS lowering-contract payload";
-  let description = [{
-    Bundles static lowering-contract refinements such as owner dimensions,
-    stencil center/halo semantics, and post-DB analysis flags into one typed
-    attribute. Dynamic quantities remain SSA operands on
-    `arts.lowering_contract`.
-  }];
-  let parameters = (ins
-    OptionalParameter<"::mlir::DenseI64ArrayAttr">:$ownerDims,
-    OptionalParameter<"::mlir::IntegerAttr">:$centerOffset,
-    OptionalParameter<"::mlir::DenseI64ArrayAttr">:$spatialDims,
-    OptionalParameter<"::mlir::DenseI64ArrayAttr">:$stencilIndependentDims,
-    OptionalParameter<"::mlir::BoolAttr">:$supportedBlockHalo,
-    OptionalParameter<"::mlir::BoolAttr">:$narrowableDep,
-    OptionalParameter<"::mlir::BoolAttr">:$postDbRefined,
-    OptionalParameter<"::mlir::IntegerAttr">:$contractKind
-  );
-  let assemblyFormat = "`<` struct(params) `>`";
 }
 
 /// Committed per-slot halo extents on a distributed stencil DbAcquireOp.

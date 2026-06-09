@@ -5,6 +5,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 #include "carts/utils/Utils.h"
@@ -66,8 +67,6 @@ static bool isCleanupTerminalOp(Operation *op, Value current) {
     return release.getSource() == current;
   if (auto free = dyn_cast<DbFreeOp>(op))
     return free.getSource() == current;
-  if (auto contract = dyn_cast<LoweringContractOp>(op))
-    return contract.getTarget() == current;
   return false;
 }
 
@@ -200,6 +199,102 @@ ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2) {
 }
 
 } // namespace mlir::carts::arts
+
+ArtsMode DbUtils::classifyMemrefUserAccessMode(Operation *op,
+                                               Operation *underlyingOp) {
+  if (!op || !underlyingOp)
+    return ArtsMode::uninitialized;
+
+  bool hasRead = false;
+  bool hasWrite = false;
+
+  auto safeGetMemrefUnderlying = [&](Value v) -> Operation * {
+    if (!v || !isa<BaseMemRefType>(v.getType()))
+      return nullptr;
+    return arts::getUnderlyingOperation(v);
+  };
+
+  if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    hasRead = safeGetMemrefUnderlying(load->getOperand(0)) == underlyingOp;
+  } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+    hasWrite = safeGetMemrefUnderlying(store->getOperand(1)) == underlyingOp;
+  } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
+    hasRead = safeGetMemrefUnderlying(load->getOperand(0)) == underlyingOp;
+  } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
+    hasWrite = safeGetMemrefUnderlying(store->getOperand(1)) == underlyingOp;
+  } else if (auto copy = dyn_cast<memref::CopyOp>(op)) {
+    hasRead = safeGetMemrefUnderlying(copy.getSource()) == underlyingOp;
+    hasWrite = safeGetMemrefUnderlying(copy.getTarget()) == underlyingOp;
+  }
+
+  if (hasRead && hasWrite)
+    return ArtsMode::inout;
+  if (hasWrite)
+    return ArtsMode::out;
+  if (hasRead)
+    return ArtsMode::in;
+  return ArtsMode::uninitialized;
+}
+
+ArtsMode DbUtils::inferEdtAccessMode(Operation *underlyingOp, EdtOp edt) {
+  if (!underlyingOp || !edt)
+    return ArtsMode::uninitialized;
+
+  ArtsMode combined = ArtsMode::uninitialized;
+  edt.walk([&](Operation *op) {
+    if (op->getParentOfType<EdtOp>() != edt)
+      return;
+    combined = combineAccessModes(
+        combined, classifyMemrefUserAccessMode(op, underlyingOp));
+  });
+  return combined;
+}
+
+bool DbUtils::opMatchesAccessMode(Operation *op, Operation *underlyingOp,
+                                  ArtsMode requestedMode) {
+  ArtsMode actualMode = classifyMemrefUserAccessMode(op, underlyingOp);
+  if (actualMode == ArtsMode::uninitialized)
+    return false;
+  if (requestedMode == ArtsMode::inout)
+    return true;
+  return actualMode == requestedMode;
+}
+
+bool DbUtils::accessModeCanSeedNestedAcquire(ArtsMode availableMode,
+                                             ArtsMode requestedMode) {
+  if (requestedMode == ArtsMode::uninitialized)
+    return true;
+  if (availableMode == ArtsMode::inout)
+    return true;
+  return availableMode == requestedMode;
+}
+
+bool DbUtils::isCoarseGrained(DbAllocOp alloc) {
+  if (auto mode = getPartitionMode(alloc.getOperation()))
+    return *mode == PartitionMode::coarse;
+
+  return llvm::all_of(alloc.getSizes(), [](Value v) {
+    int64_t val;
+    return ValueAnalysis::getConstantIndex(v, val) && val == 1;
+  });
+}
+
+bool DbUtils::isSameMemoryObject(Value lhsMemref, Value rhsMemref) {
+  lhsMemref = ValueAnalysis::stripNumericCasts(lhsMemref);
+  rhsMemref = ValueAnalysis::stripNumericCasts(rhsMemref);
+
+  Operation *lhsRoot = DbUtils::getUnderlyingDbAlloc(lhsMemref);
+  Operation *rhsRoot = DbUtils::getUnderlyingDbAlloc(rhsMemref);
+  if (lhsRoot && rhsRoot)
+    return lhsRoot == rhsRoot;
+
+  lhsRoot = arts::getUnderlyingOperation(lhsMemref);
+  rhsRoot = arts::getUnderlyingOperation(rhsMemref);
+  if (lhsRoot && rhsRoot)
+    return lhsRoot == rhsRoot;
+
+  return lhsMemref == rhsMemref;
+}
 
 Value DbUtils::getAccessedMemref(Operation *memOp) {
   if (!memOp)

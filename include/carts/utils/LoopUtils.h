@@ -3,8 +3,7 @@
 ///
 /// Utility functions for querying SCF loop properties.
 /// Lightweight helpers for innermost-loop checks, loop IV recognition, and
-/// trip-count estimates. Complements the heavier LoopAnalysis framework
-/// without requiring an AnalysisManager.
+/// trip-count estimates.
 ///==========================================================================///
 
 #ifndef CARTS_UTILS_LOOPUTILS_H
