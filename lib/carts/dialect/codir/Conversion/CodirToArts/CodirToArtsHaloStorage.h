@@ -95,6 +95,23 @@ getCodirBlockStorageHaloWindows(codir::CodeletOp codelet, unsigned depIndex,
   return windows;
 }
 
+static inline ArrayAttr
+buildSymmetricPlanHaloShapeAttr(MLIRContext *context,
+                                ArrayRef<CodirOwnerHaloWindow> ownerHalos) {
+  SmallVector<int64_t, 4> haloShape;
+  haloShape.reserve(ownerHalos.size());
+  bool hasHalo = false;
+  for (const CodirOwnerHaloWindow &halo : ownerHalos) {
+    if (halo.lower != halo.upper)
+      return {};
+    hasHalo |= halo.lower > 0;
+    haloShape.push_back(std::max<int64_t>(0, halo.lower));
+  }
+  if (!hasHalo)
+    return {};
+  return buildI64ArrayAttr(context, haloShape);
+}
+
 static inline CodirOwnerHaloWindow
 getCodirBlockStorageHaloWindowForDim(codir::CodeletOp codelet,
                                      unsigned depIndex, unsigned ownerDim,
@@ -124,7 +141,7 @@ blockAllocStorageHaloForDim(arts::DbAllocOp blockAlloc, unsigned ownerDim) {
       readI64ArrayAttr(arts::getPlanHaloShapeAttr(op));
   std::optional<SmallVector<int64_t, 4>> blockShape =
       readI64ArrayAttr(arts::getPlanPhysicalBlockShapeAttr(op));
-  if (!ownerDims || !haloShape || !blockShape)
+  if (!ownerDims || !blockShape)
     return window;
   int slot = -1;
   for (auto [i, d] : llvm::enumerate(*ownerDims))
@@ -132,20 +149,27 @@ blockAllocStorageHaloForDim(arts::DbAllocOp blockAlloc, unsigned ownerDim) {
       slot = static_cast<int>(i);
       break;
     }
-  if (slot < 0 || static_cast<size_t>(slot) >= haloShape->size() ||
-      static_cast<size_t>(slot) >= blockShape->size())
+  if (slot < 0 || static_cast<size_t>(slot) >= blockShape->size())
     return window;
-  int64_t halo = (*haloShape)[slot];
   int64_t block = (*blockShape)[slot];
-  if (halo <= 0)
-    return window;
   ValueRange elementSizes = blockAlloc.getElementSizes();
   if (ownerDim >= elementSizes.size())
     return window;
   std::optional<int64_t> elem =
       ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
           elementSizes[ownerDim]);
-  if (!elem || *elem < block + 2 * halo)
+  if (!elem)
+    return window;
+  int64_t halo = 0;
+  if (haloShape && static_cast<size_t>(slot) < haloShape->size()) {
+    halo = (*haloShape)[slot];
+  } else if (op->hasAttr(blockAlloc.getStencilSupportedBlockHaloAttrName())) {
+    int64_t padded = *elem - block;
+    if (padded <= 0 || padded % 2 != 0)
+      return window;
+    halo = padded / 2;
+  }
+  if (halo <= 0 || *elem < block + 2 * halo)
     return window;
   window.lower = halo;
   window.upper = halo;

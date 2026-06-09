@@ -153,6 +153,59 @@ module {
     memref.dealloc %out : memref<16xf64>
     return
   }
+
+  func.func @phase_redistributed_uniform_copy_uses_block_deps_for_nested_shapes() {
+    %c0 = arith.constant 0 : index
+    %c4 = arith.constant 4 : index
+    %c8 = arith.constant 8 : index
+    %c16 = arith.constant 16 : index
+    %src = memref.alloc() : memref<16x16xf64>
+    %dst = memref.alloc() : memref<16x16xf64>
+
+    scf.for %i = %c0 to %c16 step %c4 {
+      scf.for %j = %c0 to %c16 step %c8 {
+        codir.codelet deps(%src, %dst : memref<16x16xf64>, memref<16x16xf64>)
+            params(%c16, %i, %j : index, index, index)
+            attributes {array_layout = [{arrayId = 0 : i64, blockShape = [8, 8], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"},
+                                        {arrayId = 1 : i64, blockShape = [4, 8], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0, 1], role = "write"}],
+                        dep_array_ids = [0, 1],
+                        dep_collectives = [#codir.collective<none>, #codir.collective<none>],
+                        dep_modes = [#codir.access_mode<read>, #codir.access_mode<write>],
+                        dep_owner_dims = [[0, 1], [0, 1]],
+                        dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<phase_redistributed>],
+                        distribution_kind = #codir.distribution_kind<blocked>,
+                        iteration_topology = #codir.iteration_topology<owner_tile>,
+                        logical_worker_slice = [4, 8],
+                        partition_graph = [{blockShape = [8, 8], layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "read"},
+                                           {blockShape = [4, 8], layoutKind = "owner_block", muBlockCount = 8 : i64, muId = 1 : i64, ownerDims = [0, 1], role = "write"}],
+                        pattern = #codir.pattern<uniform>,
+                        repetition_structure = #codir.repetition_structure<full_timestep>,
+                        tile_owner_dims = [0, 1],
+                        tile_shape = [4, 8]} {
+        ^bb0(%src_arg: memref<16x16xf64>, %dst_arg: memref<16x16xf64>, %n: index, %base_i: index, %base_j: index):
+          %inner_c1 = arith.constant 1 : index
+          %inner_c4 = arith.constant 4 : index
+          %inner_c8 = arith.constant 8 : index
+          %inner_c16 = arith.constant 16 : index
+          %i_end_raw = arith.addi %base_i, %inner_c4 : index
+          %i_end = arith.minui %i_end_raw, %n : index
+          %j_end_raw = arith.addi %base_j, %inner_c8 : index
+          %j_end = arith.minui %j_end_raw, %inner_c16 : index
+          scf.for %ii = %base_i to %i_end step %inner_c1 {
+            scf.for %jj = %base_j to %j_end step %inner_c1 {
+              %v = memref.load %src_arg[%ii, %jj] : memref<16x16xf64>
+              memref.store %v, %dst_arg[%ii, %jj] : memref<16x16xf64>
+            }
+          }
+          codir.yield
+        }
+      }
+    }
+
+    memref.dealloc %dst : memref<16x16xf64>
+    memref.dealloc %src : memref<16x16xf64>
+    return
+  }
 }
 
 // CHECK-LABEL: func.func @host_whole_block_read_uses_dynamic_ref
@@ -173,3 +226,12 @@ module {
 // CHECK: scf.for %[[IV:arg[0-9]+]] =
 // CHECK: [[LOCAL_INDEX:%[A-Za-z0-9_]+]] = arith.subi %[[IV]], %{{[A-Za-z0-9_]+}} : index
 // CHECK: memref.load [[READ_REF]]{{\[}}[[LOCAL_INDEX]]{{\]}} : memref<?xf64>
+
+// CHECK-LABEL: func.func @phase_redistributed_uniform_copy_uses_block_deps_for_nested_shapes
+// CHECK: arts.db_alloc{{.*}}<block>{{.*}}planOwnerDims = [0, 1]{{.*}}planPhysicalBlockShape = [8, 8]
+// CHECK: arts.db_alloc{{.*}}<block>{{.*}}planOwnerDims = [0, 1]{{.*}}planPhysicalBlockShape = [4, 8]
+// CHECK: arts.db_acquire[<in>]{{.*}}partitioning(<block>)
+// CHECK: arts.db_acquire[<out>]{{.*}}partitioning(<block>)
+// CHECK: arts.edt <task>
+// CHECK-SAME: depPattern = #arts.dep_pattern<uniform>
+// CHECK-SAME: planPhysicalBlockShape = [4, 8]

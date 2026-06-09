@@ -69,8 +69,12 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
   arts::setPlanOwnerDimsAttr(dbAlloc.getOperation(), ownerDims);
   if (blockShape)
     arts::setPlanPhysicalBlockShapeAttr(dbAlloc.getOperation(), blockShape);
-  if (auto haloShape = planSource.getHaloShapeAttr())
+  if (auto haloShape = planSource.getHaloShapeAttr()) {
     arts::setPlanHaloShapeAttr(dbAlloc.getOperation(), haloShape);
+  } else if (ArrayAttr haloShape = buildSymmetricPlanHaloShapeAttr(
+                 dbAlloc.getContext(), ownerHalos)) {
+    arts::setPlanHaloShapeAttr(dbAlloc.getOperation(), haloShape);
+  }
   if (llvm::any_of(ownerHalos, [](const CodirOwnerHaloWindow &halo) {
         return !halo.empty();
       }))

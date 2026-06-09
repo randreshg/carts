@@ -133,6 +133,86 @@ module {
     memref.dealloc %f : memref<8x8xf64>
     return
   }
+
+  func.func @full_timestep_uniform_copy_shared_with_stencil_uses_block_storage_for_nested_shapes() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %c8 = arith.constant 8 : index
+    %c16 = arith.constant 16 : index
+    %cst = arith.constant 1.000000e+00 : f64
+    %f = memref.alloc() : memref<16x16xf64>
+    %u = memref.alloc() : memref<16x16xf64>
+    %unew = memref.alloc() : memref<16x16xf64>
+    memref.store %cst, %f[%c0, %c0] : memref<16x16xf64>
+    memref.store %cst, %u[%c0, %c0] : memref<16x16xf64>
+    memref.store %cst, %unew[%c0, %c0] : memref<16x16xf64>
+    scf.for %i = %c0 to %c16 step %c4 {
+      scf.for %j = %c0 to %c16 step %c8 {
+        codir.codelet deps(%unew, %u : memref<16x16xf64>, memref<16x16xf64>)
+            params(%c16, %i, %j : index, index, index)
+            attributes {array_layout = [{arrayId = 0 : i64, blockShape = [8, 8], kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"},
+                                        {arrayId = 1 : i64, blockShape = [4, 8], kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0, 1], role = "write"}],
+                        dep_array_ids = [0, 1],
+                        dep_modes = [#codir.access_mode<read>, #codir.access_mode<write>],
+                        dep_storage_views = [#codir.storage_view<host_whole>, #codir.storage_view<host_whole>],
+                        distribution_kind = #codir.distribution_kind<blocked>,
+                        iteration_topology = #codir.iteration_topology<owner_tile>,
+                        logical_worker_slice = [4, 8],
+                        partition_graph = [{blockShape = [8, 8], layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "read"},
+                                           {blockShape = [4, 8], layoutKind = "owner_block", muBlockCount = 8 : i64, muId = 1 : i64, ownerDims = [0, 1], role = "write"}],
+                        pattern = #codir.pattern<uniform>,
+                        repetition_structure = #codir.repetition_structure<full_timestep>,
+                        tile_owner_dims = [0, 1],
+                        tile_shape = [4, 8]} {
+        ^bb0(%src: memref<16x16xf64>, %dst: memref<16x16xf64>, %n: index, %base_i: index, %base_j: index):
+          %v = memref.load %src[%base_i, %base_j] : memref<16x16xf64>
+          memref.store %v, %dst[%base_i, %base_j] : memref<16x16xf64>
+          codir.yield
+        }
+        codir.codelet deps(%f, %unew, %u : memref<16x16xf64>, memref<16x16xf64>, memref<16x16xf64>)
+            params(%c16, %i, %j : index, index, index)
+            attributes {access_max_offsets = [1, 1],
+                        access_min_offsets = [-1, -1],
+                        array_layout = [{arrayId = 0 : i64, blockShape = [8, 8], kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"},
+                                        {arrayId = 1 : i64, blockShape = [4, 8], kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0, 1], role = "write"},
+                                        {arrayId = 2 : i64, blockShape = [8, 8], kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"}],
+                        dep_array_ids = [2, 1, 0],
+                        dep_modes = [#codir.access_mode<read>, #codir.access_mode<write>, #codir.access_mode<read>],
+                        dep_storage_views = [#codir.storage_view<host_whole>, #codir.storage_view<host_whole>, #codir.storage_view<host_whole>],
+                        distribution_kind = #codir.distribution_kind<owner_compute>,
+                        halo_shape = [1, 1],
+                        iteration_topology = #codir.iteration_topology<owner_tile>,
+                        logical_worker_slice = [4, 8],
+                        partition_graph = [{blockShape = [8, 8], edgeClass = "layout_mismatch", layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 2 : i64, ownerDims = [0, 1], role = "read"},
+                                           {blockShape = [4, 8], edgeClass = "layout_mismatch", layoutKind = "owner_block", muBlockCount = 8 : i64, muId = 1 : i64, ownerDims = [0, 1], role = "write"},
+                                           {blockShape = [8, 8], edgeClass = "aligned", layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "read"}],
+                        pattern = #codir.pattern<alternating_buffer_stencil>,
+                        plan_owner_dims = [0, 1],
+                        repetition_structure = #codir.repetition_structure<full_timestep>,
+                        spatial_dims = [0, 1],
+                        tile_owner_dims = [0, 1],
+                        tile_shape = [4, 8],
+                        write_footprint = [1, 1]} {
+        ^bb0(%forcing: memref<16x16xf64>, %dst: memref<16x16xf64>, %src: memref<16x16xf64>, %n: index, %base_i: index, %base_j: index):
+          %inner_c1 = arith.constant 1 : index
+          %row_next = arith.addi %base_i, %inner_c1 : index
+          %col_next = arith.addi %base_j, %inner_c1 : index
+          %f0 = memref.load %forcing[%base_i, %base_j] : memref<16x16xf64>
+          %u0 = memref.load %src[%row_next, %base_j] : memref<16x16xf64>
+          %u1 = memref.load %src[%base_i, %col_next] : memref<16x16xf64>
+          %sum = arith.addf %u0, %u1 : f64
+          %out = arith.addf %sum, %f0 : f64
+          memref.store %out, %dst[%base_i, %base_j] : memref<16x16xf64>
+          codir.yield
+        }
+      }
+    }
+    memref.dealloc %unew : memref<16x16xf64>
+    memref.dealloc %u : memref<16x16xf64>
+    memref.dealloc %f : memref<16x16xf64>
+    return
+  }
 }
 
 // CHECK-LABEL: func.func @multi_dimensional_alternating_stencil_preserves_tile_owner_dims
@@ -147,5 +227,15 @@ module {
 // CHECK-SAME: logical_worker_slice = [16, 8]
 // CHECK-SAME: pattern = #codir.pattern<uniform>
 // CHECK: codir.codelet
+// CHECK-SAME: dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>, #codir.storage_view<compute_block>]
+// CHECK-SAME: pattern = #codir.pattern<alternating_buffer_stencil>
+
+// CHECK-LABEL: func.func @full_timestep_uniform_copy_shared_with_stencil_uses_block_storage_for_nested_shapes
+// CHECK: codir.codelet
+// CHECK-SAME: dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<phase_redistributed>]
+// CHECK-SAME: logical_worker_slice = [4, 8]
+// CHECK-SAME: pattern = #codir.pattern<uniform>
+// CHECK: codir.codelet
+// CHECK-SAME: dep_collectives = [#codir.collective<none>, #codir.collective<none>, #codir.collective<halo>]
 // CHECK-SAME: dep_storage_views = [#codir.storage_view<compute_block>, #codir.storage_view<compute_block>, #codir.storage_view<compute_block>]
 // CHECK-SAME: pattern = #codir.pattern<alternating_buffer_stencil>

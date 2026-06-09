@@ -14,9 +14,11 @@
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace mlir::carts::codir {
@@ -439,6 +441,40 @@ static bool hasSameBlockStoragePlan(codir::CodeletOp lhs, unsigned lhsDepIndex,
              codir::getDepPhysicalBlockShapeAttr(rhs, rhsDepIndex);
 }
 
+static bool areCommensurateBlockShapes(ArrayAttr lhs, ArrayAttr rhs) {
+  std::optional<SmallVector<int64_t, 4>> lhsShape = readI64ArrayAttr(lhs);
+  std::optional<SmallVector<int64_t, 4>> rhsShape = readI64ArrayAttr(rhs);
+  if (!lhsShape || !rhsShape || lhsShape->empty() ||
+      lhsShape->size() != rhsShape->size())
+    return false;
+
+  for (auto [lhsDim, rhsDim] : llvm::zip_equal(*lhsShape, *rhsShape)) {
+    if (lhsDim <= 0 || rhsDim <= 0)
+      return false;
+    int64_t larger = std::max(lhsDim, rhsDim);
+    int64_t smaller = std::min(lhsDim, rhsDim);
+    if (larger % smaller != 0)
+      return false;
+  }
+  return true;
+}
+
+static bool hasCompatibleBlockStoragePlan(codir::CodeletOp lhs,
+                                          unsigned lhsDepIndex,
+                                          codir::CodeletOp rhs,
+                                          unsigned rhsDepIndex) {
+  if (!lhs || !rhs)
+    return false;
+  std::optional<SmallVector<unsigned, 4>> lhsOwnerDims =
+      getDepOwnerDims(lhs, lhsDepIndex);
+  std::optional<SmallVector<unsigned, 4>> rhsOwnerDims =
+      getDepOwnerDims(rhs, rhsDepIndex);
+  return lhsOwnerDims && rhsOwnerDims && *lhsOwnerDims == *rhsOwnerDims &&
+         areCommensurateBlockShapes(
+             codir::getDepPhysicalBlockShapeAttr(lhs, lhsDepIndex),
+             codir::getDepPhysicalBlockShapeAttr(rhs, rhsDepIndex));
+}
+
 static bool rootHasCompatibleStencilBlockParticipant(codir::CodeletOp seed,
                                                      unsigned seedDepIndex,
                                                      Value root) {
@@ -458,8 +494,48 @@ static bool rootHasCompatibleStencilBlockParticipant(codir::CodeletOp seed,
         continue;
       if (!stencilDepRequiresComputeBlock(candidate, candidateDepIndex))
         continue;
-      if (!hasSameBlockStoragePlan(seed, seedDepIndex, candidate,
-                                   candidateDepIndex))
+      if (!hasCompatibleBlockStoragePlan(seed, seedDepIndex, candidate,
+                                         candidateDepIndex))
+        continue;
+      found = true;
+      return;
+    }
+  });
+  return found;
+}
+
+static bool rootHasIncompatibleStencilBlockParticipant(codir::CodeletOp seed,
+                                                       unsigned seedDepIndex,
+                                                       Value root) {
+  if (!seed || !root)
+    return false;
+  Operation *scope = seed->getParentOfType<ModuleOp>();
+  if (!scope)
+    return false;
+
+  std::optional<SmallVector<unsigned, 4>> seedOwnerDims =
+      getDepOwnerDims(seed, seedDepIndex);
+  if (!seedOwnerDims)
+    return false;
+
+  bool found = false;
+  scope->walk([&](codir::CodeletOp candidate) {
+    if (found || candidate == seed)
+      return;
+    for (auto [idx, dep] : llvm::enumerate(candidate.getDeps())) {
+      unsigned candidateDepIndex = static_cast<unsigned>(idx);
+      if (stripStorageViews(dep) != root)
+        continue;
+      if (!stencilDepRequiresComputeBlock(candidate, candidateDepIndex))
+        continue;
+      std::optional<SmallVector<unsigned, 4>> candidateOwnerDims =
+          getDepOwnerDims(candidate, candidateDepIndex);
+      if (!candidateOwnerDims || *candidateOwnerDims != *seedOwnerDims)
+        continue;
+      if (areCommensurateBlockShapes(
+              codir::getDepPhysicalBlockShapeAttr(seed, seedDepIndex),
+              codir::getDepPhysicalBlockShapeAttr(candidate,
+                                                  candidateDepIndex)))
         continue;
       found = true;
       return;
@@ -482,6 +558,27 @@ shouldDemoteFullTimestepUniformDepToComputeBlock(codir::CodeletOp codelet,
     return false;
   return rootHasCompatibleStencilBlockParticipant(
       codelet, depIndex, stripStorageViews(codelet.getDeps()[depIndex]));
+}
+
+static LogicalResult
+rejectFullTimestepUniformWithIncompatibleStencilBlockParticipant(
+    codir::CodeletOp codelet) {
+  if (!isFullTimestepUniformCodelet(codelet) || !hasTileOwnerSlicePlan(codelet))
+    return success();
+
+  for (unsigned depIndex = 0, depCount = codelet.getDeps().size();
+       depIndex < depCount; ++depIndex) {
+    if (!depAccessesStayWithinSingleOwnerSlice(codelet, depIndex))
+      continue;
+    if (!rootHasIncompatibleStencilBlockParticipant(
+            codelet, depIndex, stripStorageViews(codelet.getDeps()[depIndex])))
+      continue;
+    return codelet.emitOpError()
+           << "full-timestep uniform dependency " << depIndex
+           << " shares partitioned stencil storage with incompatible block "
+              "shapes; refusing host_whole/coarse storage fallback";
+  }
+  return success();
 }
 
 static bool depSemanticallyRequiresComputeBlock(codir::CodeletOp codelet,
@@ -906,6 +1003,12 @@ struct DepStorageAssignmentPass
     llvm::SmallPtrSet<Operation *, 16> finalizedPlans;
     getOperation().walk([&](codir::CodeletOp codelet) {
       if (failed(rejectOwnerComputeStencilWithoutTilePlan(codelet))) {
+        hadFailure = true;
+        return;
+      }
+      if (failed(
+              rejectFullTimestepUniformWithIncompatibleStencilBlockParticipant(
+                  codelet))) {
         hadFailure = true;
         return;
       }

@@ -137,8 +137,8 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
           copyIntoBlock
               ? subtractClampZero(builder, loc, ownerOffset, ownerHalo.lower)
               : ownerOffset;
-      Value blockPayloadStart =
-          subtractClampZero(builder, loc, ownerOffset, ownerHalo.lower);
+      Value storageOrigin =
+          subtractStorageHalo(builder, loc, ownerOffset, ownerHalo.lower);
       Value requestedEnd =
           arith::AddIOp::create(builder, loc, ownerOffset, ownerBlockSize);
       if (copyIntoBlock && ownerHalo.upper > 0)
@@ -147,26 +147,12 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
             createConstantIndex(builder, loc, ownerHalo.upper));
       Value ownerCopyEnd = arith::MinUIOp::create(builder, loc, requestedEnd,
                                                   logicalSizes[ownerDim]);
-      // Write back only the owner iteration range; reload keeps halo extent.
-      if (!copyIntoBlock) {
-        std::optional<unsigned> ownerSlot =
-            getCodirOwnerDimSlot(codelet, ownerDim);
-        if (std::optional<int64_t> maxOffset = getCodirOwnerDimValue(
-                codelet.getAccessMaxOffsetsAttr(), ownerDim, ownerSlot,
-                static_cast<unsigned>(hostType.getRank())))
-          if (*maxOffset > 0) {
-            Value writeEnd = arith::SubIOp::create(
-                builder, loc, logicalSizes[ownerDim],
-                createConstantIndex(builder, loc, *maxOffset));
-            ownerCopyEnd =
-                arith::MinUIOp::create(builder, loc, ownerCopyEnd, writeEnd);
-          }
-      }
       lanePlan.hostOffsets[ownerDim] = ownerCopyStart;
-      // The owned payload starts after the lower-halo ring.
-      if (!copyIntoBlock && ownerHalo.lower > 0)
+      if (ownerHalo.lower > 0) {
+        Value blockCopyStart = copyIntoBlock ? ownerCopyStart : ownerOffset;
         lanePlan.blockOffsets[ownerDim] =
-            arith::SubIOp::create(builder, loc, ownerOffset, blockPayloadStart);
+            arith::SubIOp::create(builder, loc, blockCopyStart, storageOrigin);
+      }
       lanePlan.copySizes[ownerDim] = materializePositiveDifferenceOrZero(
           builder, loc, ownerCopyEnd, ownerCopyStart);
     }

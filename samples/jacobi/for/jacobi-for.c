@@ -1,8 +1,5 @@
 /*
  * CARTS Jacobi-For Test Example
- * Demonstrates two distinct data access patterns:
- * 1. Loop 1: Uniform access (copy) - each worker writes only its assigned rows
- * 2. Loop 2: Stencil computation - neighbor access (reads u[i-1], u[i], u[i+1])
  *
  * Original: https://github.com/viroulep/kastors
  * License: GNU LGPL
@@ -15,17 +12,14 @@
 
 #include "carts/utils/testing/CartsTest.h"
 
-/// Sequential version for verification
 static void sweep_seq(int nx, int ny, double dx, double dy, double **f,
                       int itold, int itnew, double **u, double **unew) {
   for (int it = itold + 1; it <= itnew; it++) {
-    /// Save the current estimate
     for (int i = 0; i < nx; i++) {
       for (int j = 0; j < ny; j++)
         u[i][j] = unew[i][j];
     }
 
-    /// Compute a new estimate
     for (int i = 0; i < nx; i++) {
       for (int j = 0; j < ny; j++) {
         if (i == 0 || j == 0 || i == nx - 1 || j == ny - 1) {
@@ -45,23 +39,18 @@ static void sweep(int nx, int ny, double dx, double dy, double **f, int itold,
   int i, j, it;
 
   for (it = itold + 1; it <= itnew; it++) {
-    /// LOOP 1: Save the current estimate - UNIFORM access pattern
-    /// Each worker writes ONLY its assigned rows (no halo needed)
 #pragma omp parallel for private(j)
     for (i = 0; i < nx; i++) {
       for (j = 0; j < ny; j++)
         u[i][j] = unew[i][j];
     }
 
-    /// LOOP 2: Compute a new estimate - STENCIL access pattern
-    /// Each worker reads its rows PLUS neighboring rows (halo needed)
 #pragma omp parallel for private(j)
     for (i = 0; i < nx; i++) {
       for (j = 0; j < ny; j++) {
         if (i == 0 || j == 0 || i == nx - 1 || j == ny - 1) {
           unew[i][j] = f[i][j];
         } else {
-          /// 5-point stencil: reads u[i-1], u[i], u[i+1]
           unew[i][j] = 0.25 * (u[i - 1][j] + u[i][j + 1] + u[i][j - 1] +
                                u[i + 1][j] + f[i][j] * dx * dy);
         }
@@ -84,10 +73,6 @@ int main(void) {
   double dy = 1.0 / (ny - 1);
 
   printf("Jacobi-For Test: %d x %d grid, %d iterations\n", nx, ny, itnew);
-  printf(
-      "Demonstrating uniform (Loop 1) vs stencil (Loop 2) access patterns\n");
-
-  /// Allocate 2D arrays
   double **f = (double **)malloc(nx * sizeof(double *));
   double **u = (double **)malloc(nx * sizeof(double *));
   double **unew = (double **)malloc(nx * sizeof(double *));
@@ -100,27 +85,18 @@ int main(void) {
     unew_seq[i] = (double *)malloc(ny * sizeof(double));
   }
 
-  /// Initialize arrays
   for (int i = 0; i < nx; i++) {
     for (int j = 0; j < ny; j++) {
-      f[i][j] = 0.0;
+      f[i][j] = ((i + j) % 17 + 1) * 0.01;
       u[i][j] = 0.0;
       unew[i][j] = 0.0;
       unew_seq[i][j] = 0.0;
     }
   }
 
-  /// Run sequential version for verification
   printf("Running sequential version for verification...\n");
   sweep_seq(nx, ny, dx, dy, f, itold, itnew, u, unew_seq);
 
-  /// Save sequential result
-  for (int i = 0; i < nx; i++) {
-    for (int j = 0; j < ny; j++)
-      unew_seq[i][j] = unew[i][j];
-  }
-
-  /// Re-initialize for parallel version
   for (int i = 0; i < nx; i++) {
     for (int j = 0; j < ny; j++) {
       u[i][j] = 0.0;
@@ -128,11 +104,9 @@ int main(void) {
     }
   }
 
-  /// Run parallel version
   printf("Running parallel version with #pragma omp parallel for...\n");
   sweep(nx, ny, dx, dy, f, itold, itnew, u, unew, block_size);
 
-  /// Compare results
   double error = 0.0;
   double max_error = 0.0;
   for (int i = 0; i < nx; i++) {
@@ -148,7 +122,6 @@ int main(void) {
   printf("RMS error: %e\n", error);
   printf("Max error: %e\n", max_error);
 
-  /// Free 2D arrays
   for (int i = 0; i < nx; i++) {
     free(f[i]);
     free(u[i]);

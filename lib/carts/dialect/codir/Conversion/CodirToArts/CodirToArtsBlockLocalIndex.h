@@ -29,6 +29,14 @@ static inline Value subtractClampZero(OpBuilder &builder, Location loc,
   return arith::SelectOp::create(builder, loc, canSubtract, shifted, zero);
 }
 
+static inline Value subtractStorageHalo(OpBuilder &builder, Location loc,
+                                        Value value, int64_t amount) {
+  if (amount <= 0)
+    return value;
+  return arith::SubIOp::create(builder, loc, value,
+                               createConstantIndex(builder, loc, amount));
+}
+
 struct PlannedBlockLocalAccessRewrite {
   Value localMemref;
   unsigned ownerDim = 0;
@@ -75,13 +83,7 @@ materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
   if (!index || !ownerBase || !localOrigin)
     return failure();
   if (lowerHalo > 0) {
-    Value halo = createConstantIndex(builder, loc, lowerHalo);
-    Value zero = createZeroIndex(builder, loc);
-    Value canSubtract = arith::CmpIOp::create(
-        builder, loc, arith::CmpIPredicate::uge, localOrigin, halo);
-    Value shifted = arith::SubIOp::create(builder, loc, localOrigin, halo);
-    localOrigin =
-        arith::SelectOp::create(builder, loc, canSubtract, shifted, zero);
+    localOrigin = subtractStorageHalo(builder, loc, localOrigin, lowerHalo);
   }
   if (::mlir::carts::ValueAnalysis::sameValue(index, localOrigin))
     return createZeroIndex(builder, loc);
@@ -149,7 +151,7 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
 
   Value blockPayloadBase = blockBase;
   if (lowerHalo > 0)
-    blockPayloadBase = subtractClampZero(builder, loc, blockBase, lowerHalo);
+    blockPayloadBase = subtractStorageHalo(builder, loc, blockBase, lowerHalo);
 
   if (::mlir::carts::ValueAnalysis::sameValue(index, blockPayloadBase))
     return createZeroIndex(builder, loc);

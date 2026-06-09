@@ -302,7 +302,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: stencil_supported_block_halo
 
 // CHECK: scf.for
-// CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>)
+// CHECK: arts.db_acquire[<inout>] {{.*}} partitioning(<block>)
 // CHECK-NOT: element_offsets
 // CHECK: %[[LOWER_OK:.*]] = arith.cmpi ugt
 // CHECK: %[[UPPER_OK:.*]] = arith.cmpi ult
@@ -326,9 +326,8 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: arts.barrier {barrierReason = #arts.barrier_reason<required_memory>}
 // CHECK: arts.edt <task> <internode> route{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK: %[[COMPUTED:.*]] = arith.mulf
-// CHECK: %[[STORE_ORIGIN_OK:.*]] = arith.cmpi uge
-// CHECK: %[[STORE_ORIGIN_RAW:.*]] = arith.subi
-// CHECK: %[[STORE_ORIGIN:.*]] = arith.select %[[STORE_ORIGIN_OK]], %[[STORE_ORIGIN_RAW]], %[[ZERO]]
+// CHECK: %[[STORE_ORIGIN:.*]] = arith.subi %{{.*}}, %[[ONE]]
+// CHECK-NOT: arith.select
 // CHECK: %[[STORE_ROW:.*]] = arith.subi %{{.*}}, %[[STORE_ORIGIN]]
 // CHECK: memref.store %[[COMPUTED]], %{{.*}}[%[[STORE_ROW]], %{{.*}}]
 
@@ -345,7 +344,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: scf.for %[[BLOCK_BASE:.*]] = %[[ZERO_G]] to %[[SIXTEEN_G]] step %[[TWO_G]]
 // CHECK: %[[LANE1_RAW:.*]] = arith.addi %[[BLOCK_BASE]], %[[ONE_G]] : index
 // CHECK: %[[LANE1:.*]] = arith.remui %[[LANE1_RAW]], %[[SIXTEEN_G]] : index
-// CHECK: arts.db_acquire[<out>]
+// CHECK: arts.db_acquire[<inout>]
 // CHECK-SAME: partitioning(<block>)
 // CHECK: arts.db_acquire[<in>]
 // CHECK-SAME: bounds_valid
@@ -394,10 +393,8 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: %[[READ_RELATIVE_I:.*]] = arith.subi %{{.*}}, %[[ONE_R]]
 // CHECK: %[[READ_BLOCK_I:.*]] = arith.divui %[[READ_RELATIVE_I]], %[[EIGHT_R]]
 // CHECK: %[[READ_OFFSET_I:.*]] = arith.muli %[[READ_BLOCK_I]], %[[EIGHT_R]]
-// CHECK: %[[READ_ORIGIN_I:.*]] = arith.addi %[[READ_OFFSET_I]], %[[ONE_R]]
-// CHECK: %[[READ_HALO_OK_I:.*]] = arith.cmpi uge, %[[READ_ORIGIN_I]], %[[ONE_R]]
-// CHECK: %[[READ_PAYLOAD_BASE_I:.*]] = arith.select %[[READ_HALO_OK_I]], %[[READ_OFFSET_I]], %{{.*}}
-// CHECK: arith.subi %{{.*}}, %[[READ_PAYLOAD_BASE_I]]
+// CHECK-NOT: arith.select
+// CHECK: arith.subi %{{.*}}, %[[READ_OFFSET_I]]
 
 // CHECK-LABEL: func.func @read_compute_block_retiles_unaligned_halo_block
 // CHECK: arts.db_alloc[<in>, <heap>, <read>, <block>]

@@ -111,7 +111,7 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
     SmallVector<Value> blockWindowSizes(blockCoords.size(), one);
 
     auto dstAcquire = materializeBridgeAcquire(
-        builder, loc, blockAlloc, arts::ArtsMode::out,
+        builder, loc, blockAlloc, arts::ArtsMode::inout,
         arts::PartitionMode::block, blockCoords, blockWindowSizes);
     dstAcquire.setPreserveAccessMode();
     unsigned dstArg = static_cast<unsigned>(deps.size());

@@ -143,6 +143,9 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
             /*copyIntoBlock=*/true,
             /*crossNodeGather=*/false, &bridgePlan)))
       return failure();
+    auto reason = arts::ArtsBarrierReasonAttr::get(
+        builder.getContext(), arts::ArtsBarrierReason::required_memory);
+    arts::BarrierOp::create(builder, loc, reason);
   }
 
   if (perBlockStencilHalo) {
