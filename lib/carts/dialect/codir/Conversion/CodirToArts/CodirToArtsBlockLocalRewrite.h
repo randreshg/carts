@@ -67,9 +67,11 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
         Value relativeBlock;
         FailureOr<Value> localIndex = materializeGroupedBlockLocalIndex(
             builder, op->getLoc(), indices[rewrite->ownerDim].get(),
-            rewrite->ownerBase, rewrite->lowerHalo, rewrite->blockSize,
-            rewrite->groupBlockCount, rewrite->sourceDimExtent, relativeBlock,
-            rewrite->allowFullWindowAccess, sourceByBlockArgument);
+            rewrite->ownerBase, rewrite->localOrigin, rewrite->lowerHalo,
+            rewrite->upperHalo, rewrite->blockSize, rewrite->groupBlockCount,
+            rewrite->ownerWindowExtent, rewrite->sourceDimExtent, relativeBlock,
+            rewrite->allowFullWindowAccess, rewrite->requireOwnerWindowProof,
+            sourceByBlockArgument);
         if (failed(localIndex)) {
           op->emitError("grouped planned block-local access does not stay "
                         "within the block window");

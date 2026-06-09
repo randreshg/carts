@@ -390,11 +390,30 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: planPhysicalBlockShape = [8, 8]
 // CHECK: arts.edt <task>
 // CHECK-SAME: depPattern = #arts.dep_pattern<stencil_tiling_nd>
-// CHECK: %[[READ_RELATIVE_I:.*]] = arith.subi %{{.*}}, %[[ONE_R]]
+// CHECK: ^bb0(%{{.*}}, %{{.*}}, %[[BASE_I:arg[0-9]+]]: index, %[[BASE_J:arg[0-9]+]]: index):
+// CHECK: %[[READ_RELATIVE_I:.*]] = arith.subi %[[BASE_I]], %[[ONE_R]]
 // CHECK: %[[READ_BLOCK_I:.*]] = arith.divui %[[READ_RELATIVE_I]], %[[EIGHT_R]]
 // CHECK: %[[READ_OFFSET_I:.*]] = arith.muli %[[READ_BLOCK_I]], %[[EIGHT_R]]
-// CHECK-NOT: arith.select
-// CHECK: arith.subi %{{.*}}, %[[READ_OFFSET_I]]
+// CHECK: %[[READ_WINDOW_BASE_I:.*]] = arith.addi %[[READ_OFFSET_I]], %[[ONE_R]]
+// CHECK: %[[WRITE_RELATIVE_I:.*]] = arith.subi %[[BASE_I]], %[[ONE_R]]
+// CHECK: %[[WRITE_BLOCK_I:.*]] = arith.divui %[[WRITE_RELATIVE_I]], %{{.*}}
+// CHECK: %[[WRITE_OFFSET_I:.*]] = arith.muli %[[WRITE_BLOCK_I]], %{{.*}}
+// CHECK: %[[WRITE_WINDOW_BASE_I:.*]] = arith.addi %[[WRITE_OFFSET_I]], %[[ONE_R]]
+// CHECK: %[[WRITE_RELATIVE_J:.*]] = arith.subi %[[BASE_J]], %[[ONE_R]]
+// CHECK: %[[WRITE_BLOCK_J:.*]] = arith.divui %[[WRITE_RELATIVE_J]], %{{.*}}
+// CHECK: %[[WRITE_OFFSET_J:.*]] = arith.muli %[[WRITE_BLOCK_J]], %{{.*}}
+// CHECK: %[[WRITE_WINDOW_BASE_J:.*]] = arith.addi %[[WRITE_OFFSET_J]], %[[ONE_R]]
+// CHECK: %[[LOWER_READ_I:.*]] = arith.subi %[[BASE_I]], %[[ONE_R]]
+// CHECK-NEXT: %[[UPPER_READ_J:.*]] = arith.addi %[[BASE_J]], %[[ONE_R]]
+// CHECK-NEXT: %[[CLAMPED_READ_I:.*]] = arith.maxui %[[LOWER_READ_I]], %[[READ_WINDOW_BASE_I]]
+// CHECK: %[[READ_UPPER_LIMIT_I:.*]] = arith.addi %{{.*}}, %{{.*}} : index
+// CHECK: %[[WINDOW_CLAMPED_READ_I:.*]] = arith.minui %[[CLAMPED_READ_I]], %[[READ_UPPER_LIMIT_I]]
+// CHECK: %[[READ_LOCAL_REL_I:.*]] = arith.subi %[[WINDOW_CLAMPED_READ_I]], %[[READ_WINDOW_BASE_I]]
+// CHECK: %[[READ_REF_I:.*]] = arith.divui %[[READ_LOCAL_REL_I]], %[[EIGHT_R]]
+// CHECK: %[[READ_REF_OFFSET_I:.*]] = arith.muli %[[READ_REF_I]], %[[EIGHT_R]]
+// CHECK: %[[READ_BLOCK_BASE_I:.*]] = arith.addi %[[READ_WINDOW_BASE_I]], %[[READ_REF_OFFSET_I]]
+// CHECK: %[[READ_PAYLOAD_BASE_I:.*]] = arith.subi %[[READ_BLOCK_BASE_I]], %[[ONE_R]]
+// CHECK: arith.subi %[[LOWER_READ_I]], %[[READ_PAYLOAD_BASE_I]]
 
 // CHECK-LABEL: func.func @read_compute_block_retiles_unaligned_halo_block
 // CHECK: arts.db_alloc[<in>, <heap>, <read>, <block>]

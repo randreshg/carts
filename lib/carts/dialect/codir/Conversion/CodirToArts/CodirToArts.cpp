@@ -6,6 +6,7 @@
 #include "CodirToArtsHostBridgeMaterialization.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/codir/Conversion/Passes.h"
+#include <numeric>
 namespace mlir::carts::codir {
 #define GEN_PASS_DEF_CONVERTCODIRTOARTS
 #include "carts/dialect/codir/Conversion/Passes.h.inc"
@@ -244,10 +245,12 @@ struct PlannedBlockDepAccessPlan {
   SmallVector<Value, 4> ownerDomainBases;
   SmallVector<Value, 4> acquiredElementBases;
   SmallVector<int64_t, 4> groupBlockCounts;
+  SmallVector<int64_t, 4> ownerWindowExtents;
   SmallVector<int64_t, 4> lowerHaloBlockCounts;
   SmallVector<int64_t, 4> upperHaloBlockCounts;
+  SmallVector<bool, 4> allowFullWindowAccesses;
+  SmallVector<bool, 4> requireOwnerWindowProofs;
   bool grouped = false;
-  bool allowFullWindowAccess = false;
 
   bool empty() const { return ownerDims.empty(); }
 };
@@ -332,10 +335,18 @@ planReplicatedReadFullBlockAccess(codir::CodeletOp codelet, unsigned depIndex,
   plannedAccess.acquiredElementBases.assign(ownerDims->size(),
                                             createZeroIndex(builder, loc));
   plannedAccess.groupBlockCounts.assign(blockCounts.begin(), blockCounts.end());
+  plannedAccess.ownerWindowExtents.reserve(blockCounts.size());
+  for (auto [slot, blockCount] : llvm::enumerate(blockCounts)) {
+    if (blockCount > std::numeric_limits<int64_t>::max() / (*blockSizes)[slot])
+      return false;
+    plannedAccess.ownerWindowExtents.push_back(blockCount *
+                                               (*blockSizes)[slot]);
+  }
   plannedAccess.lowerHaloBlockCounts.assign(ownerDims->size(), 0);
   plannedAccess.upperHaloBlockCounts.assign(ownerDims->size(), 0);
+  plannedAccess.allowFullWindowAccesses.assign(ownerDims->size(), true);
+  plannedAccess.requireOwnerWindowProofs.assign(ownerDims->size(), false);
   plannedAccess.grouped = true;
-  plannedAccess.allowFullWindowAccess = true;
   return true;
 }
 
@@ -432,6 +443,117 @@ static std::optional<unsigned> findOwnerDimSlot(ArrayRef<unsigned> ownerDims,
   if (it == ownerDims.end())
     return std::nullopt;
   return static_cast<unsigned>(std::distance(ownerDims.begin(), it));
+}
+
+static bool isKnownMultipleOfBlock(Value value, int64_t blockSize,
+                                   unsigned depth = 0) {
+  if (!value || blockSize <= 0 || depth > 6)
+    return false;
+  if (blockSize == 1)
+    return true;
+  value = ::mlir::carts::ValueAnalysis::stripNumericCasts(value);
+  if (std::optional<int64_t> constant =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value))
+    return *constant % blockSize == 0;
+
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    auto loop =
+        dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+    if (!loop || loop.getInductionVar() != blockArg)
+      return false;
+    std::optional<int64_t> step =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+    return step && *step % blockSize == 0 &&
+           isKnownMultipleOfBlock(loop.getLowerBound(), blockSize, depth + 1);
+  }
+
+  if (auto add = value.getDefiningOp<arith::AddIOp>())
+    return isKnownMultipleOfBlock(add.getLhs(), blockSize, depth + 1) &&
+           isKnownMultipleOfBlock(add.getRhs(), blockSize, depth + 1);
+  if (auto sub = value.getDefiningOp<arith::SubIOp>())
+    return isKnownMultipleOfBlock(sub.getLhs(), blockSize, depth + 1) &&
+           isKnownMultipleOfBlock(sub.getRhs(), blockSize, depth + 1);
+  if (auto mul = value.getDefiningOp<arith::MulIOp>())
+    return isKnownMultipleOfBlock(mul.getLhs(), blockSize, depth + 1) ||
+           isKnownMultipleOfBlock(mul.getRhs(), blockSize, depth + 1);
+  return false;
+}
+
+static int64_t gcdPositive(int64_t lhs, int64_t rhs) {
+  lhs = std::abs(lhs);
+  rhs = std::abs(rhs);
+  if (lhs == 0)
+    return rhs;
+  if (rhs == 0)
+    return lhs;
+  return std::gcd(lhs, rhs);
+}
+
+static int64_t getKnownAlignmentWithinBlock(Value value, int64_t blockSize,
+                                            unsigned depth = 0) {
+  if (!value || blockSize <= 1 || depth > 6)
+    return 1;
+  value = ::mlir::carts::ValueAnalysis::stripNumericCasts(value);
+  if (std::optional<int64_t> constant =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value))
+    return *constant == 0 ? blockSize : gcdPositive(*constant, blockSize);
+
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    auto loop =
+        dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+    if (!loop || loop.getInductionVar() != blockArg)
+      return 1;
+    int64_t lowerAlignment = getKnownAlignmentWithinBlock(loop.getLowerBound(),
+                                                          blockSize, depth + 1);
+    std::optional<int64_t> step =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+    if (!step)
+      return lowerAlignment;
+    return gcdPositive(gcdPositive(lowerAlignment, *step), blockSize);
+  }
+
+  if (auto add = value.getDefiningOp<arith::AddIOp>())
+    return gcdPositive(
+        getKnownAlignmentWithinBlock(add.getLhs(), blockSize, depth + 1),
+        getKnownAlignmentWithinBlock(add.getRhs(), blockSize, depth + 1));
+  if (auto sub = value.getDefiningOp<arith::SubIOp>())
+    return gcdPositive(
+        getKnownAlignmentWithinBlock(sub.getLhs(), blockSize, depth + 1),
+        getKnownAlignmentWithinBlock(sub.getRhs(), blockSize, depth + 1));
+  if (auto mul = value.getDefiningOp<arith::MulIOp>()) {
+    auto scaledAlignment = [&](Value scaled, Value factor) -> int64_t {
+      int64_t alignment =
+          getKnownAlignmentWithinBlock(scaled, blockSize, depth + 1);
+      std::optional<int64_t> factorConstant =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(factor);
+      if (!factorConstant)
+        return alignment;
+      if (*factorConstant == 0)
+        return blockSize;
+      if (alignment >
+          std::numeric_limits<int64_t>::max() / std::abs(*factorConstant))
+        return blockSize;
+      return gcdPositive(alignment * std::abs(*factorConstant), blockSize);
+    };
+    return std::max(scaledAlignment(mul.getLhs(), mul.getRhs()),
+                    scaledAlignment(mul.getRhs(), mul.getLhs()));
+  }
+  return 1;
+}
+
+static std::optional<int64_t>
+getGuaranteedOwnerWindowExtent(int64_t blockSize, int64_t groupBlockCount,
+                               int64_t baseAlignment) {
+  if (blockSize <= 0 || groupBlockCount <= 0 || baseAlignment <= 0 ||
+      baseAlignment > blockSize)
+    return std::nullopt;
+  if (groupBlockCount > std::numeric_limits<int64_t>::max() / blockSize)
+    return std::nullopt;
+  int64_t windowExtent = groupBlockCount * blockSize;
+  int64_t worstCasePrefix = blockSize - baseAlignment;
+  if (windowExtent <= worstCasePrefix)
+    return std::nullopt;
+  return windowExtent - worstCasePrefix;
 }
 
 static bool canUseBackingAllocBlockWindowForDep(codir::CodeletOp codelet,
@@ -543,8 +665,16 @@ planReadOnlyHostWholeBlockAccess(codir::CodeletOp codelet, unsigned depIndex,
   plannedAccess.ownerDomainBases.assign(ownerDims->size(),
                                         createZeroIndex(builder, loc));
   plannedAccess.groupBlockCounts.assign(blockCounts.begin(), blockCounts.end());
+  plannedAccess.ownerWindowExtents.reserve(blockCounts.size());
+  for (auto [slot, blockCount] : llvm::enumerate(blockCounts)) {
+    if (blockCount > std::numeric_limits<int64_t>::max() / (*blockSizes)[slot])
+      return false;
+    plannedAccess.ownerWindowExtents.push_back(blockCount *
+                                               (*blockSizes)[slot]);
+  }
+  plannedAccess.allowFullWindowAccesses.assign(ownerDims->size(), true);
+  plannedAccess.requireOwnerWindowProofs.assign(ownerDims->size(), false);
   plannedAccess.grouped = true;
-  plannedAccess.allowFullWindowAccess = true;
   return true;
 }
 
@@ -591,12 +721,9 @@ static bool planReadOnlyBlockStorageAccessFromBackingAlloc(
 
   SmallVector<std::optional<unsigned>, 4> depSlotByAllocSlot;
   depSlotByAllocSlot.reserve(allocOwnerDims->size());
-  bool hasFullBackingWindowDim = false;
   for (unsigned allocOwnerDim : *allocOwnerDims) {
     std::optional<unsigned> depSlot =
         findOwnerDimSlot(*ownerDims, allocOwnerDim);
-    if (!depSlot)
-      hasFullBackingWindowDim = true;
     depSlotByAllocSlot.push_back(depSlot);
   }
   for (unsigned depOwnerDim : *ownerDims)
@@ -618,6 +745,8 @@ static bool planReadOnlyBlockStorageAccessFromBackingAlloc(
     std::optional<unsigned> depSlot = depSlotByAllocSlot[slot];
     Value blockIndex = createZeroIndex(builder, loc);
     int64_t groupBlockCount = 1;
+    int64_t ownerWindowExtent = 1;
+    bool allowFullWindowAccess = false;
     Value ownerParam;
     Value domainBase = createZeroIndex(builder, loc);
 
@@ -630,8 +759,7 @@ static bool planReadOnlyBlockStorageAccessFromBackingAlloc(
         logicalExtent = blockSize;
       if (*logicalExtent <= 0)
         return false;
-      logicalExtent = std::max<int64_t>(*logicalExtent, blockSize);
-      groupBlockCount = llvm::divideCeil(*logicalExtent, blockSize);
+      int64_t exactLogicalExtent = *logicalExtent;
 
       Value blockSizeValue = createConstantIndex(builder, loc, blockSize);
       ownerParam = ownerParams[*depSlot];
@@ -642,9 +770,55 @@ static bool planReadOnlyBlockStorageAccessFromBackingAlloc(
               ? createZeroIndex(builder, loc)
               : arith::SubIOp::create(builder, loc, ownerParam, domainBase)
                     .getResult();
+      int64_t baseAlignment =
+          getKnownAlignmentWithinBlock(relativeBase, blockSize);
+      int64_t maxCoveredExtent =
+          exactLogicalExtent + (blockSize - baseAlignment);
+      groupBlockCount =
+          std::max<int64_t>(1, llvm::divideCeil(maxCoveredExtent, blockSize));
+      std::optional<int64_t> computedOwnerWindowExtent =
+          getGuaranteedOwnerWindowExtent(blockSize, groupBlockCount,
+                                         baseAlignment);
+      if (!computedOwnerWindowExtent)
+        return false;
+      ownerWindowExtent = exactLogicalExtent;
       blockIndex =
           arith::DivUIOp::create(builder, loc, relativeBase, blockSizeValue);
       dbOffsets.push_back(blockIndex);
+
+      if (groupBlockCount > 1) {
+        Value blockOffset =
+            arith::MulIOp::create(builder, loc, blockIndex, blockSizeValue);
+        Value intraBlockOffset =
+            arith::SubIOp::create(builder, loc, relativeBase, blockOffset);
+        Value logicalExtentValue =
+            createConstantIndex(builder, loc, exactLogicalExtent);
+        Value coveredExtent = arith::AddIOp::create(
+            builder, loc, intraBlockOffset, logicalExtentValue);
+        Value ceilNumerator = arith::AddIOp::create(
+            builder, loc, coveredExtent,
+            createConstantIndex(builder, loc, blockSize - 1));
+        Value dynamicGroupBlockCount =
+            arith::DivUIOp::create(builder, loc, ceilNumerator, blockSizeValue);
+        Value maxGroupBlockCount =
+            createConstantIndex(builder, loc, groupBlockCount);
+        Value requestedBlockCount = arith::MinUIOp::create(
+            builder, loc, dynamicGroupBlockCount, maxGroupBlockCount);
+        Value remainingBlocks = arith::SubIOp::create(
+            builder, loc, alloc.getSizes()[slot], blockIndex);
+        dbSizes.push_back(arith::MinUIOp::create(builder, loc, remainingBlocks,
+                                                 requestedBlockCount));
+        grouped = true;
+        plannedAccess.ownerDims.push_back(ownerDim);
+        plannedAccess.blockSizes.push_back((*blockSizes)[slot]);
+        plannedAccess.ownerParams.push_back(ownerParam);
+        plannedAccess.ownerDomainBases.push_back(domainBase);
+        plannedAccess.groupBlockCounts.push_back(groupBlockCount);
+        plannedAccess.ownerWindowExtents.push_back(ownerWindowExtent);
+        plannedAccess.allowFullWindowAccesses.push_back(false);
+        plannedAccess.requireOwnerWindowProofs.push_back(true);
+        continue;
+      }
     } else {
       std::optional<int64_t> blockCount =
           ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
@@ -652,6 +826,11 @@ static bool planReadOnlyBlockStorageAccessFromBackingAlloc(
       if (!blockCount || *blockCount <= 0)
         return false;
       groupBlockCount = *blockCount;
+      if (groupBlockCount >
+          std::numeric_limits<int64_t>::max() / (*blockSizes)[slot])
+        return false;
+      ownerWindowExtent = groupBlockCount * (*blockSizes)[slot];
+      allowFullWindowAccess = true;
       dbOffsets.push_back(blockIndex);
     }
 
@@ -671,12 +850,14 @@ static bool planReadOnlyBlockStorageAccessFromBackingAlloc(
     plannedAccess.ownerParams.push_back(ownerParam);
     plannedAccess.ownerDomainBases.push_back(domainBase);
     plannedAccess.groupBlockCounts.push_back(groupBlockCount);
+    plannedAccess.ownerWindowExtents.push_back(ownerWindowExtent);
+    plannedAccess.allowFullWindowAccesses.push_back(allowFullWindowAccess);
+    plannedAccess.requireOwnerWindowProofs.push_back(false);
   }
   if (grouped && hasHaloWindow &&
       !codirDepAccessesStayWithinSingleOwnerSlice(codelet, depIndex))
     return false;
   plannedAccess.grouped = grouped;
-  plannedAccess.allowFullWindowAccess = hasFullBackingWindowDim;
   return true;
 }
 
@@ -1162,6 +1343,15 @@ struct ConvertCodirToArtsPass
             Value blockIndex = arith::DivUIOp::create(
                 builder, loc, relativeBase, blockSizeValue);
             int64_t groupBlockCount = (*groupBlockCounts)[slot];
+            int64_t baseAlignment =
+                getKnownAlignmentWithinBlock(relativeBase, (*blockSizes)[slot]);
+            std::optional<int64_t> ownerWindowExtent =
+                getGuaranteedOwnerWindowExtent((*blockSizes)[slot],
+                                               groupBlockCount, baseAlignment);
+            if (!ownerWindowExtent)
+              return codelet.emitOpError()
+                     << "failed to prove owner window coverage for dependency #"
+                     << depIdx;
             Value ownedBlockCount;
             if (groupBlockCount <= 1) {
               ownedBlockCount = createOneIndex(builder, loc);
@@ -1183,8 +1373,11 @@ struct ConvertCodirToArtsPass
             plannedAccess.ownerDomainBases.push_back(domainBase);
             plannedAccess.acquiredElementBases.push_back(base);
             plannedAccess.groupBlockCounts.push_back(groupBlockCount);
+            plannedAccess.ownerWindowExtents.push_back(*ownerWindowExtent);
             plannedAccess.lowerHaloBlockCounts.push_back(0);
             plannedAccess.upperHaloBlockCounts.push_back(0);
+            plannedAccess.allowFullWindowAccesses.push_back(false);
+            plannedAccess.requireOwnerWindowProofs.push_back(false);
           }
           plannedAccess.grouped = grouped;
         }
@@ -1324,7 +1517,13 @@ struct ConvertCodirToArtsPass
         if (accessPlan.ownerParams.size() != accessPlan.ownerDims.size() ||
             accessPlan.blockSizes.size() != accessPlan.ownerDims.size() ||
             accessPlan.ownerDomainBases.size() != accessPlan.ownerDims.size() ||
-            accessPlan.groupBlockCounts.size() != accessPlan.ownerDims.size())
+            accessPlan.groupBlockCounts.size() != accessPlan.ownerDims.size() ||
+            accessPlan.ownerWindowExtents.size() !=
+                accessPlan.ownerDims.size() ||
+            accessPlan.allowFullWindowAccesses.size() !=
+                accessPlan.ownerDims.size() ||
+            accessPlan.requireOwnerWindowProofs.size() !=
+                accessPlan.ownerDims.size())
           return codelet.emitOpError()
                  << "failed to materialize owner-base parameters for planned "
                     "block-local access rewrite";
@@ -1353,18 +1552,30 @@ struct ConvertCodirToArtsPass
                    << "failed to materialize owner-domain base parameter for "
                       "planned block-local access rewrite";
           }
-          Value localOrigin = materializeBlockLocalOrigin(
-              builder, loc, ownerBase, ownerDomainBase,
-              accessPlan.blockSizes[slot]);
+          Value sourceOwnerParam = accessPlan.ownerParams[slot];
+          Value sourceDomainBase = accessPlan.ownerDomainBases[slot];
+          bool alignedOwnerBase =
+              sourceOwnerParam && sourceDomainBase &&
+              ::mlir::carts::ValueAnalysis::isZeroConstant(sourceDomainBase) &&
+              isKnownMultipleOfBlock(sourceOwnerParam,
+                                     accessPlan.blockSizes[slot]);
+          Value localOrigin =
+              alignedOwnerBase
+                  ? ownerBase
+                  : materializeBlockLocalOrigin(builder, loc, ownerBase,
+                                                ownerDomainBase,
+                                                accessPlan.blockSizes[slot]);
           CodirOwnerHaloWindow ownerHalo = getCodirBlockStorageHaloWindowForDim(
               codelet, idx, ownerDim,
               static_cast<unsigned>(payloadType.getRank()));
           // Keep producer stores aligned with the DB's storage halo.
-          if (ownerHalo.lower <= 0) {
+          if (ownerHalo.lower <= 0 || ownerHalo.upper <= 0) {
             CodirOwnerHaloWindow allocHalo =
                 blockAllocStorageHaloForDim(blockAlloc, ownerDim);
             if (allocHalo.lower > 0)
-              ownerHalo = allocHalo;
+              ownerHalo.lower = allocHalo.lower;
+            if (ownerHalo.upper <= 0 && allocHalo.upper > 0)
+              ownerHalo.upper = allocHalo.upper;
           }
           int64_t sourceDimExtent = ShapedType::kDynamic;
           if (MemRefType depType = getCodeletDepSourceType(codelet, idx))
@@ -1372,10 +1583,11 @@ struct ConvertCodirToArtsPass
               sourceDimExtent = depType.getDimSize(ownerDim);
           localAccessRewrites.push_back(
               {payload, ownerDim, ownerBase, localOrigin, ownerHalo.lower,
-               groupedReadSource, static_cast<unsigned>(slot),
+               ownerHalo.upper, groupedReadSource, static_cast<unsigned>(slot),
                accessPlan.blockSizes[slot], accessPlan.groupBlockCounts[slot],
-               sourceDimExtent, accessPlan.grouped,
-               accessPlan.allowFullWindowAccess});
+               accessPlan.ownerWindowExtents[slot], sourceDimExtent,
+               accessPlan.grouped, accessPlan.allowFullWindowAccesses[slot],
+               accessPlan.requireOwnerWindowProofs[slot]});
         }
       }
       mapper.map(codeletBlock.getArgument(idx), payload);
