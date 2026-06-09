@@ -14,6 +14,12 @@ struct HostBridgeParticipant {
   codir::CodeletOp codelet;
   unsigned depIndex = 0;
   codir::CodirAccessMode mode = codir::CodirAccessMode::readwrite;
+  // OpOperand to repoint at the block DB. When the codelet consumes the MU
+  // through a view op (memref.subview etc.), this is the view's source operand
+  // so the block DB lands UNDER the view (mirroring the normal lowerMuAlloc
+  // replaceAllUsesWith path). When null, the codelet dep operand itself is
+  // repointed.
+  OpOperand *repointOperand = nullptr;
 };
 
 enum class BridgeWorkloadKind {

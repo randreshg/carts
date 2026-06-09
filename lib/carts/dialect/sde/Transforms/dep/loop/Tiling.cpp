@@ -31,6 +31,7 @@ namespace mlir::carts::sde {
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -901,6 +902,17 @@ static bool isBudgetReconciledTileCandidate(sde::SdeSuIterateOp op) {
   return false;
 }
 
+// The op's representative write-role budget fact. Single-store writers return
+// their one fact. An affine-disjoint MULTI-store writer (e.g. a jacobi-style
+// init that writes f/u/unew in one nest) returns a representative fact only
+// when every written array names a distinct id and all writes agree on
+// ownerDims + budgetBlockShape + block_parallel kind, so one shared budget grain
+// is correct for all of them. A true multi-writer (same id stored twice), any
+// owner/grain/kind disagreement, or a non-block layout fails closed -- the SU
+// then keeps the generic tiler, never an unverifiable shared grain. This mirrors
+// StorageGrainReconciliation::affineDisjointMultiStoreBudgetFact, but applies it
+// while the loop is still step-1 and can be retiled to the budget grain instead
+// of being clamped to an already-coarse step downstream.
 static std::optional<sde::LayoutGraphFact>
 selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
                                   bool allowSingleOwnerDim) {
@@ -908,17 +920,26 @@ selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
   if (!layout)
     return std::nullopt;
 
-  std::optional<sde::LayoutGraphFact> selected;
+  const unsigned minOwnerDims = allowSingleOwnerDim ? 1u : 2u;
+  std::optional<sde::LayoutGraphFact> rep;
+  llvm::SmallDenseSet<int64_t, 4> writtenIds;
   for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
-    if (fact.role != sde::LayoutGraphRole::write ||
-        fact.ownerDims.size() < (allowSingleOwnerDim ? 1u : 2u) ||
-        fact.budgetBlockShape.empty())
+    if (fact.role != sde::LayoutGraphRole::write)
       continue;
-    if (selected)
+    if (fact.id < 0 || fact.layoutKind != sde::ArrayLayoutKind::blockParallel ||
+        fact.ownerDims.size() < minOwnerDims || fact.budgetBlockShape.empty())
       return std::nullopt;
-    selected = fact;
+    if (!writtenIds.insert(fact.id).second)
+      return std::nullopt; // same id written twice => true multi-writer
+    if (!rep) {
+      rep = fact;
+      continue;
+    }
+    if (rep->ownerDims != fact.ownerDims ||
+        rep->budgetBlockShape != fact.budgetBlockShape)
+      return std::nullopt; // arrays disagree on grain/owner => no shared block
   }
-  return selected;
+  return rep;
 }
 
 static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,

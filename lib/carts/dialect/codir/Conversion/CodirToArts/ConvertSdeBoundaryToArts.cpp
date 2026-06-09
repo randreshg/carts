@@ -215,7 +215,12 @@ static LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op) {
   if (selectedStorage && rawCodirDependencyNeedsHostBridge(op.getMemref())) {
     FailureOr<Value> bridged = materializeHostWholeToComputeBlockBridge(
         selectedStorage->codelet, selectedStorage->depIndex, op.getMemref());
-    return failed(bridged) ? failure() : success();
+    if (failed(bridged))
+      return failure();
+    eraseDeallocUsers(op.getMemref());
+    if (op.getMemref().use_empty())
+      op.erase();
+    return success();
   }
 
   OpBuilder builder(op);

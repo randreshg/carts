@@ -1186,8 +1186,39 @@ static void stampCuMuPartitionGraphAttrs(sde::SdeSuIterateOp op,
                     sde::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
               : StringRef(sde::AttrNames::PartitionGraphValues::EdgeAligned);
 
-      if (!addedPrimaryOwnerBlock &&
-          role == sde::AttrNames::LayoutGraphValues::RoleWrite) {
+      // Prefer the committed budget grain (the authority) over the abstract
+      // pre-distribution blockShape so read edges (and non-primary writes) carry
+      // the writer's owner_block grain instead of a coarse fallback. The primary
+      // write below still overrides with the realized physical block.
+      SmallVector<int64_t, 4> entryBudgetShape;
+      if (auto budgetBlock = dyn_cast_or_null<ArrayAttr>(
+              dict.get(sde::AttrNames::LayoutGraph::BudgetBlockShape))) {
+        if (!budgetBlock.empty()) {
+          layoutBlockShape = budgetBlock;
+          if (auto budgetVec = readI64ArrayAttr(budgetBlock))
+            entryBudgetShape = std::move(*budgetVec);
+          if (auto budgetBlocks = dyn_cast_or_null<IntegerAttr>(
+                  dict.get(sde::AttrNames::LayoutGraph::BudgetMuBlockCount)))
+            entryMuBlockCount = std::max<int64_t>(1, budgetBlocks.getInt());
+        }
+      }
+
+      // A multi-store data-parallel codelet writes several arrays at the same
+      // budget grain (e.g. jacobi-for init writes f/u/unew, all owner-tiled at
+      // [512,512] over dims [0,1]). The realized physical plan owns every such
+      // write, not only the first one, so the conversion subviews each write to
+      // its compute_block. Promote any write entry whose committed budget grain
+      // and owner dims match the primary physical plan to owner_block; leave
+      // heterogeneous-grain writes on their own grain rather than forcing them
+      // onto the primary block (that would misdescribe their storage).
+      auto entryOwnerVec = readI64ArrayAttr(layoutOwnerDims);
+      bool writeMatchesPrimary =
+          role == sde::AttrNames::LayoutGraphValues::RoleWrite &&
+          entryOwnerVec && *entryOwnerVec == *ownerDims &&
+          !entryBudgetShape.empty() && entryBudgetShape == *blockShape;
+
+      if (role == sde::AttrNames::LayoutGraphValues::RoleWrite &&
+          (!addedPrimaryOwnerBlock || writeMatchesPrimary)) {
         layoutKind = sde::AttrNames::PartitionGraphValues::OwnerBlock;
         layoutOwnerDims = buildI64ArrayAttr(ctx, *ownerDims);
         layoutBlockShape = buildI64ArrayAttr(ctx, *blockShape);

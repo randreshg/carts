@@ -50,6 +50,13 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
     return codirAccessMayWrite(participant.mode);
   });
 
+  // The canonical MU root. After the coarse swap below only repoints the host
+  // accesses, the root's remaining uses are the array's compute_block subviews,
+  // which may live in dispatch anchors other than the seed anchor (e.g. the
+  // separate init/timestep dispatch loops of a double-buffered stencil). They
+  // must all land on the single canonical block DB, not just the seed anchor's.
+  Value muRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(hostView);
+
   OpBuilder builder(anchor);
   Location loc = codelet.getLoc();
   FailureOr<Value> materializedHostView =
@@ -205,8 +212,65 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
     }
   }
 
-  for (HostBridgeParticipant &participant : participants)
-    participant.codelet->setOperand(participant.depIndex, blockView);
+  Value blockStaticView = blockView;
+  if (blockStaticView.getType() != memrefType) {
+    builder.setInsertionPointAfterValue(blockView);
+    blockStaticView =
+        memref::CastOp::create(builder, loc, memrefType, blockView);
+  }
+  Operation *castDef = blockStaticView.getDefiningOp();
+  auto repointViewSource = [&](OpOperand &viewSource) {
+    Operation *viewOp = viewSource.getOwner();
+    if (castDef && viewOp && viewOp->getBlock() == castDef->getBlock() &&
+        viewOp->isBeforeInBlock(castDef))
+      viewOp->moveAfter(castDef);
+    viewSource.set(blockStaticView);
+  };
+  for (HostBridgeParticipant &participant : participants) {
+    if (participant.repointOperand)
+      repointViewSource(*participant.repointOperand);
+    else
+      participant.codelet->setOperand(participant.depIndex, blockStaticView);
+  }
+
+  // An sde.mu_alloc host-bridge root MUST be fully drained: convert-codir-to-arts
+  // rejects any surviving sde op. The coarse swap already moved the genuine host
+  // accesses onto the coarse DB and the seed loop repointed the seed anchor, so
+  // any MU use left here is a compute_block view living in a sibling dispatch
+  // anchor (e.g. the separate init/timestep dispatch loops of a double-buffered
+  // stencil). Repoint each onto the single canonical block DB when it commits
+  // the SAME block grain as the seed; fail closed with evidence otherwise,
+  // rather than leaving the MU to surface as an opaque "SDE operation reached
+  // CODIR-to-ARTS" or repointing an incompatible grain that aborts the
+  // block-local access rewrite downstream. memref.alloc roots are not subject to
+  // this rule: their residual per-dep uses are materialized later, so leave them
+  // for the existing materializeRawCodirDependency path.
+  if (muRoot && muRoot != blockView &&
+      isa_and_nonnull<sde::SdeMuAllocOp>(muRoot.getDefiningOp())) {
+    for (OpOperand &use : llvm::make_early_inc_range(muRoot.getUses())) {
+      Operation *owner = use.getOwner();
+      if (isa_and_nonnull<memref::DeallocOp, memref::DimOp>(owner))
+        continue;
+      std::optional<HostBridgeCodeletUse> codeletUse =
+          resolveHostBridgeCodeletUse(use);
+      if (!codeletUse)
+        return codelet.emitOpError()
+               << "host-read array has a residual non-compute use that the "
+                  "host-whole to compute-block bridge cannot drain";
+      if (!isCompatibleHostBridgeParticipant(codelet, depIndex,
+                                             codeletUse->codelet,
+                                             codeletUse->depIndex))
+        return codeletUse->codelet.emitOpError()
+               << "host-read array is consumed at an incompatible block grain "
+                  "across dispatch anchors; a single canonical block DB cannot "
+                  "serve both this access and the seed compute_block grain "
+                  "(cross-anchor storage-grain reconciliation required)";
+      if (codeletUse->viewSourceOperand)
+        repointViewSource(*codeletUse->viewSourceOperand);
+      else
+        codeletUse->codelet->setOperand(codeletUse->depIndex, blockStaticView);
+    }
+  }
   return blockView;
 }
 

@@ -1076,9 +1076,15 @@ static LogicalResult verifyFinalizedStorageAttr(codir::CodeletOp codelet,
                                                 StringRef attrName) {
   if (existing == desired)
     return success();
-  return codelet.emitOpError()
-         << "existing " << attrName
-         << " does not match recomputed CODIR storage fact";
+  InFlightDiagnostic diag = codelet.emitOpError()
+                            << "existing " << attrName
+                            << " does not match recomputed CODIR storage fact";
+  if (existing)
+    diag << " (committed " << existing << " vs recomputed " << desired << ")";
+  diag << "; the committed SDE dependency shape (whole-MU tokens with empty "
+          "owner dims) cannot satisfy the owner-tiled storage this codelet's "
+          "body access requires";
+  return diag;
 }
 
 static codir::CodirStorageViewKind

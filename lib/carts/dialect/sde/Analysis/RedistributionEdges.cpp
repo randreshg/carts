@@ -348,7 +348,15 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       home.writer = su;
       home.layoutKind = f.layoutKind;
       home.ownerDims.assign(f.ownerDims.begin(), f.ownerDims.end());
-      home.blockShape.assign(f.blockShape.begin(), f.blockShape.end());
+      // budgetBlockShape is the committed authority grain; the abstract
+      // blockShape can be a coarse pre-distribution fallback. Author the home
+      // (and thus the redist) at the budget grain so reads/redist match the
+      // writer's owner_block grain; fall back to blockShape only when budget is
+      // absent (non-budget kernels).
+      ArrayRef<int64_t> homeBlock = f.budgetBlockShape.empty()
+                                        ? ArrayRef<int64_t>(f.blockShape)
+                                        : ArrayRef<int64_t>(f.budgetBlockShape);
+      home.blockShape.assign(homeBlock.begin(), homeBlock.end());
       auto it = homeByArrayId.find(f.id);
       if (it == homeByArrayId.end())
         homeByArrayId[f.id] = std::move(home);

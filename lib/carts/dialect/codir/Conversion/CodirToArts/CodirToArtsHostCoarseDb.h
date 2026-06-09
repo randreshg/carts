@@ -60,6 +60,106 @@ materializeCoarseHostDbForBlockArgument(OpBuilder &builder, Location loc,
   return replacement;
 }
 
+// True when the forward cone of `value` reaches a codir.codelet dep operand or
+// an SDE scheduling-unit use. Such uses must stay on the canonical block DB and
+// must NOT be repointed onto the coarse host DB.
+static inline bool hostBridgeValueFeedsCodeletDep(Value value) {
+  if (!value)
+    return false;
+  SmallVector<Value, 8> worklist{value};
+  llvm::SmallPtrSet<Value, 16> visited;
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!current || !visited.insert(current).second)
+      continue;
+    for (OpOperand &use : current.getUses()) {
+      Operation *owner = use.getOwner();
+      if (!owner)
+        continue;
+      if (isa<codir::CodeletOp>(owner))
+        return true;
+      if (owner->getParentOfType<codir::CodeletOp>() ||
+          owner->getParentOfType<sde::SdeSuIterateOp>())
+        return true;
+      if (isCodirViewDep(current) || isMemrefForwardingOp(owner))
+        for (Value result : owner->getResults())
+          if (isa<MemRefType>(result.getType()))
+            worklist.push_back(result);
+    }
+  }
+  return false;
+}
+
+// True when the forward cone of `value` reaches a genuine host memref load/store
+// outside any scheduling unit (mirrors hasHostMemrefAccessOutsideSchedulingUnit
+// in CodirConversionUtils.h, but rooted at an arbitrary intermediate value).
+static inline bool hostBridgeValueFeedsHostAccess(Value value) {
+  if (!value)
+    return false;
+  SmallVector<Value, 8> worklist{value};
+  llvm::SmallPtrSet<Value, 16> visited;
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!current || !visited.insert(current).second)
+      continue;
+    for (Operation *user : current.getUsers()) {
+      if (!user || user->getParentOfType<codir::CodeletOp>() ||
+          user->getParentOfType<sde::SdeSuIterateOp>())
+        continue;
+      if (isa<memref::DeallocOp, memref::DimOp>(user))
+        continue;
+      if (isa<memref::LoadOp, memref::StoreOp>(user))
+        return true;
+      if (isMemrefForwardingOp(user))
+        for (Value result : user->getResults())
+          if (isa<MemRefType>(result.getType()))
+            worklist.push_back(result);
+    }
+  }
+  return false;
+}
+
+// A use is served by the coarse host DB only when the consuming op (the use's
+// owner) is, or forwards to, a genuine host load/store outside any scheduling
+// unit and NEVER a codelet dep. The classification is per-use, not per-value:
+// the MU root feeds both compute_block subviews (kept on the block DB) and the
+// host read (moved to the coarse DB), so we must reason about THIS use's owner
+// cone, not the shared root's whole cone. Mirrors the
+// materializeCoarseHostDbForBlockArgument replaceUsesWithIf intent.
+static inline bool hostBridgeUseServedByCoarseHostDb(OpOperand &use) {
+  Operation *owner = use.getOwner();
+  if (!owner)
+    return false;
+  // Inside a scheduling unit: this is compute storage, keep it on the block DB.
+  if (owner->getParentOfType<codir::CodeletOp>() ||
+      owner->getParentOfType<sde::SdeSuIterateOp>())
+    return false;
+  // Genuine host access directly on the root: served by the coarse host DB.
+  if (isa<memref::LoadOp, memref::StoreOp>(owner))
+    return true;
+  // Deallocs/dims are never the discriminator and stay with whichever storage
+  // ultimately owns the root.
+  if (isa<memref::DeallocOp, memref::DimOp>(owner))
+    return false;
+  // View/forwarding op: follow its results. Move it to the coarse host DB only
+  // when its forward cone reaches a host access and never a codelet dep.
+  if (isCodirViewDep(use.get()) || isMemrefForwardingOp(owner)) {
+    for (Value result : owner->getResults()) {
+      if (!isa<MemRefType>(result.getType()))
+        continue;
+      if (hostBridgeValueFeedsCodeletDep(result))
+        return false;
+    }
+    for (Value result : owner->getResults()) {
+      if (!isa<MemRefType>(result.getType()))
+        continue;
+      if (hostBridgeValueFeedsHostAccess(result))
+        return true;
+    }
+  }
+  return false;
+}
+
 static inline FailureOr<Value>
 materializeCoarseHostDbForHostBridge(OpBuilder &builder, Location loc,
                                      Value hostView) {
@@ -113,11 +213,18 @@ materializeCoarseHostDbForHostBridge(OpBuilder &builder, Location loc,
                                   dynamicSizes, replacement)))
     return failure();
 
-  root.replaceAllUsesWith(replacement);
-  for (memref::DeallocOp dealloc : deallocs)
-    dealloc.erase();
-  if (def->use_empty())
-    def->erase();
+  Operation *replacementDef = replacement.getDefiningOp();
+  root.replaceUsesWithIf(replacement, [&](OpOperand &use) {
+    if (replacementDef && use.getOwner() == replacementDef)
+      return false;
+    return hostBridgeUseServedByCoarseHostDb(use);
+  });
+  if (root.use_empty()) {
+    for (memref::DeallocOp dealloc : deallocs)
+      dealloc.erase();
+    if (def->use_empty())
+      def->erase();
+  }
   return replacement;
 }
 
