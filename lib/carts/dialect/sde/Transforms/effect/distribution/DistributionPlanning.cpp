@@ -71,6 +71,7 @@ static bool
 physicalPlanMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
                                      ArrayRef<int64_t> ownerDims,
                                      ArrayRef<int64_t> physicalBlockShape);
+static std::optional<int64_t> getPositiveConstantIndex(Value value);
 
 static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
   return saturatingMultiplyPositive(costModel.getLogicalWorkerCapacity(),
@@ -410,8 +411,72 @@ deriveLexicographicWaveCoefficients(ArrayRef<int64_t> minOffsets,
 struct WavefrontSkewPlan {
   RectangularWavefrontLoopNest shape;
   sde::StructuredNeighborhoodInfo neighborhood;
+  StaticOutputStoragePlan outputStorage;
   SmallVector<int64_t, 4> waveCoefficients;
+  int64_t targetComputeUnits = 1;
 };
+
+struct WavefrontOwnerStoragePlan {
+  SmallVector<int64_t, 4> ownerPhysicalDims;
+  SmallVector<int64_t, 4> physicalBlockShape;
+  SmallVector<int64_t, 4> logicalWorkerSlice;
+  SmallVector<int64_t, 4> haloShape;
+};
+
+static std::optional<WavefrontOwnerStoragePlan>
+buildWavefrontOwnerStoragePlan(const WavefrontSkewPlan &plan) {
+  unsigned rank = plan.shape.lowerBounds.size();
+  if (rank < 2 || plan.outputStorage.shape.size() != rank ||
+      plan.neighborhood.ownerDims.size() != rank ||
+      plan.neighborhood.minOffsets.size() != rank ||
+      plan.neighborhood.maxOffsets.size() != rank ||
+      plan.shape.steps.size() != rank)
+    return std::nullopt;
+
+  SmallVector<char, 4> seen(rank, false);
+  for (int64_t dim : plan.neighborhood.ownerDims) {
+    if (dim < 0 || static_cast<unsigned>(dim) >= rank || seen[dim])
+      return std::nullopt;
+    seen[dim] = true;
+  }
+
+  WavefrontOwnerStoragePlan storage;
+  storage.physicalBlockShape.assign(plan.outputStorage.shape.begin(),
+                                    plan.outputStorage.shape.end());
+  storage.ownerPhysicalDims.assign(plan.neighborhood.ownerDims.begin(),
+                                   plan.neighborhood.ownerDims.end() - 1);
+  if (storage.ownerPhysicalDims.empty())
+    return std::nullopt;
+
+  for (auto [slot, ownerDim] : llvm::enumerate(storage.ownerPhysicalDims)) {
+    std::optional<int64_t> step =
+        getPositiveConstantIndex(plan.shape.steps[slot]);
+    if (!step || *step <= 0)
+      return std::nullopt;
+    if (ownerDim < 0 ||
+        static_cast<size_t>(ownerDim) >= storage.physicalBlockShape.size() ||
+        *step > storage.physicalBlockShape[ownerDim])
+      return std::nullopt;
+    storage.physicalBlockShape[ownerDim] = *step;
+
+    int64_t halo =
+        std::max<int64_t>(0, std::max(-plan.neighborhood.minOffsets[slot],
+                                      plan.neighborhood.maxOffsets[slot]));
+    storage.haloShape.push_back(halo);
+  }
+
+  storage.logicalWorkerSlice.assign(storage.physicalBlockShape.begin(),
+                                    storage.physicalBlockShape.end());
+  bool hasHalo = llvm::any_of(storage.haloShape,
+                              [](int64_t halo) { return halo > 0; });
+  if (!hasHalo && storage.ownerPhysicalDims.size() == 1)
+    (void)sde::buildBlockAlignedLogicalWorkerSlice(
+        plan.outputStorage.shape, storage.ownerPhysicalDims,
+        storage.physicalBlockShape,
+        std::max<int64_t>(1, plan.targetComputeUnits),
+        storage.logicalWorkerSlice);
+  return storage;
+}
 
 static Value buildWeightedIndexSum(OpBuilder &builder, Location loc,
                                    ArrayRef<Value> values,
@@ -485,7 +550,10 @@ buildWavefrontSkewPlan(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
   WavefrontSkewPlan plan;
   plan.shape = std::move(shape);
   plan.neighborhood = std::move(*neighborhood);
+  plan.outputStorage = std::move(*storePlan);
   plan.waveCoefficients = std::move(*waveCoefficients);
+  plan.targetComputeUnits =
+      std::max<int64_t>(1, costModel.getLogicalWorkerCapacity());
   return plan;
 }
 
@@ -529,6 +597,28 @@ static sde::SdeSuIterateOp materializeWavefrontSkew(sde::SdeSuIterateOp op,
       buildI64ArrayAttr(ctx, plan.neighborhood.spatialDims);
   ArrayAttr writeFootprintAttr =
       buildI64ArrayAttr(ctx, plan.neighborhood.writeFootprint);
+  std::optional<WavefrontOwnerStoragePlan> storagePlan =
+      buildWavefrontOwnerStoragePlan(plan);
+  ArrayAttr physicalOwnerDimsAttr;
+  ArrayAttr physicalBlockShapeAttr;
+  ArrayAttr logicalWorkerSliceAttr;
+  ArrayAttr physicalHaloShapeAttr;
+  sde::SdeIterationTopologyAttr iterationTopologyAttr;
+  if (storagePlan) {
+    physicalOwnerDimsAttr =
+        buildI64ArrayAttr(ctx, storagePlan->ownerPhysicalDims);
+    physicalBlockShapeAttr =
+        buildI64ArrayAttr(ctx, storagePlan->physicalBlockShape);
+    logicalWorkerSliceAttr =
+        buildI64ArrayAttr(ctx, storagePlan->logicalWorkerSlice);
+    if (llvm::any_of(storagePlan->haloShape,
+                     [](int64_t halo) { return halo > 0; }))
+      physicalHaloShapeAttr = buildI64ArrayAttr(ctx, storagePlan->haloShape);
+    iterationTopologyAttr = sde::SdeIterationTopologyAttr::get(
+        ctx, storagePlan->ownerPhysicalDims.size() > 1
+                 ? sde::SdeIterationTopology::owner_tile
+                 : sde::SdeIterationTopology::owner_strip);
+  }
   auto newOp = sde::SdeSuIterateOp::create(
       builder, loc, /*resultTypes=*/TypeRange{}, ValueRange(leadingLowerBounds),
       ValueRange(leadingUpperBounds), ValueRange(leadingSteps),
@@ -540,10 +630,9 @@ static sde::SdeSuIterateOp materializeWavefrontSkew(sde::SdeSuIterateOp op,
       sde::SdePatternAttr::get(ctx, sde::SdePattern::stencil_tiling_nd),
       buildI64ArrayAttr(ctx, plan.neighborhood.minOffsets),
       buildI64ArrayAttr(ctx, plan.neighborhood.maxOffsets), ownerDimsAttr,
-      spatialDimsAttr, writeFootprintAttr,
-      /*physicalOwnerDims=*/nullptr, /*physicalBlockShape=*/nullptr,
-      /*logicalWorkerSlice=*/nullptr, /*physicalHaloShape=*/nullptr,
-      /*iterationTopology=*/nullptr, op.getRepetitionStructureAttr(),
+      spatialDimsAttr, writeFootprintAttr, physicalOwnerDimsAttr,
+      physicalBlockShapeAttr, logicalWorkerSliceAttr, physicalHaloShapeAttr,
+      iterationTopologyAttr, op.getRepetitionStructureAttr(),
       op.getAsyncStrategyAttr(), /*distributionKind=*/nullptr,
       /*inPlaceSafe=*/nullptr, /*inPlaceSharedState=*/nullptr,
       /*arrayLayout=*/nullptr, /*layoutsDisagree=*/nullptr,

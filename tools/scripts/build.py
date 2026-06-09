@@ -181,6 +181,9 @@ def build(
         False, "--gasnet-no-bootstrap",
         help="Do not download/build GASNet; require a prebuilt ARTS_GASNET_PREFIX "
              "(--arts only)"),
+    arts_tests: bool = Option(
+        False, "--arts-tests",
+        help="Build ARTS runtime test binaries (--arts only)"),
     cc: Optional[str] = Option(
         None, "--cc",
         help="C compiler for LLVM bootstrap (default: clang; use gcc on systems without clang)"),
@@ -203,6 +206,9 @@ def build(
     selected_targets = sum((1 if arts else 0, 1 if polygeist else 0, 1 if llvm else 0))
     if selected_targets > 1:
         print_error("Choose only one target flag among --arts, --polygeist, --llvm.")
+        raise Exit(1)
+    if arts_tests and not arts:
+        print_error("--arts-tests is only valid with --arts.")
         raise Exit(1)
 
     # Determine build target
@@ -229,6 +235,8 @@ def build(
         #   2 -> INFO
         #   3 -> DEBUG (+ Debug build)
         make_vars.append(f"ARTS_LOG_LEVEL={debug_level}")
+        if arts_tests:
+            make_vars.append("ARTS_BUILD_TESTS=ON")
         if debug_level >= 3:
             make_vars.extend([
                 "ARTS_BUILD_TYPE=Debug",

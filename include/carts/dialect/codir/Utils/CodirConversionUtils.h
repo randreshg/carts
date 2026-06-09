@@ -1925,12 +1925,12 @@ static inline Value buildSuDispatchStep(sde::SdeSuIterateOp source,
                                         OpBuilder &builder) {
   Value step = source.getSteps().front();
   if (hasOwnerStripTopology(source)) {
-    if (std::optional<int64_t> block = getOwnerStripDispatchExtent(
-            source, source.getPhysicalBlockShapeAttr()))
-      return buildSuDispatchStepFromExtent(source, step, *block, builder);
     if (std::optional<int64_t> slice = getOwnerStripDispatchExtent(
             source, source.getLogicalWorkerSliceAttr()))
       return buildSuDispatchStepFromExtent(source, step, *slice, builder);
+    if (std::optional<int64_t> block = getOwnerStripDispatchExtent(
+            source, source.getPhysicalBlockShapeAttr()))
+      return buildSuDispatchStepFromExtent(source, step, *block, builder);
   }
 
   if (std::optional<int64_t> block =

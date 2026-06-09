@@ -16,6 +16,7 @@ Run the CARTS test suite. Run `dekk carts test --help` and `dekk carts lit --hel
 dekk carts test                                     # Run contract tests
 dekk carts test --suite all -v                      # All tests, verbose
 dekk carts test --suite benchmarks                  # Benchmark harness pytest suite
+dekk carts test --suite arts --filter halo          # ARTS runtime CTest subset
 dekk carts lit lib/carts/dialect/arts/test/my_test.mlir  # Single test
 dekk carts lit -v lib/carts/dialect/sde/test/           # Directory, verbose
 dekk carts lit -- --filter=pattern lib/carts/dialect/    # Filter by pattern
@@ -29,6 +30,7 @@ dekk carts lit -- --filter=pattern lib/carts/dialect/    # Filter by pattern
 - `tests/cli/` — CLI flag tests
 - `tests/verify/` — Cross-dialect verifier tests
 - `samples/` — Integration tests (end-to-end compile + run)
+- `external/arts/tests/` — ARTS runtime tests, built with `dekk carts build --arts --arts-tests` and run with `dekk carts test --suite arts`
 - `external/carts-benchmarks/tests/` — Benchmark harness pytest tests, run through `dekk carts test --suite benchmarks`
 
 ## Writing New Tests

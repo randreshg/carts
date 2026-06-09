@@ -1,7 +1,12 @@
-// RUN: %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg | %FileCheck %s --implicit-check-not="stencil_read_internode_use"
+// RUN: not %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg 2>&1 \
+// RUN:   | %FileCheck %s
 
-// Owner-strip read-only halo deps are materialized as distributed per-block DBs
-// with explicit partial-window acquires for every RO input.
+// This 3D owner-strip fixture halos along the innermost physical dimension.
+// Those faces are strided in row-major storage, so CODIR must fail closed
+// instead of widening to full DB blocks. Contiguous multi-input halo
+// materialization is covered by codir-to-arts-owner-strip-ro-halo-multi-input.
+
+// CHECK: cannot materialize non-contiguous lower halo destination slice
 
 module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_workers = 512 : i64} {
   func.func @owner_strip_ro_halo_materializes_all_inputs(%vx: memref<8x8x16xf64>,
@@ -59,37 +64,3 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
     return
   }
 }
-
-// CHECK-LABEL: func.func @owner_strip_ro_halo_materializes_all_inputs
-// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
-// CHECK-SAME: distributed
-// CHECK-SAME: perBlockSingleWriterStencil
-// CHECK-SAME: planOwnerDims = [2]
-// CHECK-SAME: planPhysicalBlockShape = [8, 8, 4]
-// CHECK-SAME: stencil_supported_block_halo
-// CHECK-SAME: storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
-// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}offsets[{{.*}}]{{.*}}sizes[{{.*}}]{{.*}}bounds_valid
-// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}offsets[{{.*}}]{{.*}}sizes[{{.*}}]{{.*}}bounds_valid
-// CHECK: perBlockHaloExchange
-// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
-// CHECK-SAME: distributed
-// CHECK-SAME: perBlockSingleWriterStencil
-// CHECK-SAME: planOwnerDims = [2]
-// CHECK-SAME: planPhysicalBlockShape = [8, 8, 4]
-// CHECK-SAME: stencil_supported_block_halo
-// CHECK-SAME: storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
-// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}offsets[{{.*}}]{{.*}}sizes[{{.*}}]{{.*}}bounds_valid
-// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}offsets[{{.*}}]{{.*}}sizes[{{.*}}]{{.*}}bounds_valid
-// CHECK: perBlockHaloExchange
-// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
-// CHECK-SAME: distributed
-// CHECK-SAME: perBlockSingleWriterStencil
-// CHECK-SAME: planOwnerDims = [2]
-// CHECK-SAME: planPhysicalBlockShape = [8, 8, 4]
-// CHECK-SAME: stencil_supported_block_halo
-// CHECK-SAME: storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
-// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}offsets[{{.*}}]{{.*}}sizes[{{.*}}]{{.*}}bounds_valid
-// CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}offsets[{{.*}}]{{.*}}sizes[{{.*}}]{{.*}}bounds_valid
-// CHECK: perBlockHaloExchange
-// CHECK: arts.edt <task> <internode>
-// CHECK-SAME: depPattern = #arts.dep_pattern<cross_dim_stencil_3d>

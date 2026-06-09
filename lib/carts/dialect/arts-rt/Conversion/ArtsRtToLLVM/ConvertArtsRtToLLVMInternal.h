@@ -66,6 +66,8 @@ private:
 ///===----------------------------------------------------------------------===///
 
 static constexpr int32_t kArtsDepFlagPreserveShape = 1 << 1;
+static constexpr int32_t kArtsDepFlagHaloView = 1 << 2;
+static constexpr int32_t kArtsDepFlagHaloCompact = 1 << 3;
 
 ///===----------------------------------------------------------------------===///
 /// Helper Functions

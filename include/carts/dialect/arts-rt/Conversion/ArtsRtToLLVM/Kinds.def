@@ -309,24 +309,23 @@ __ARTS_RTL(arts_add_dependence_ex, Void, ArtsGuid, ArtsGuid, Int32, Int32,
 __ARTS_RTL_ATTRS(arts_add_dependence_ex, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, SExt, ZExt))
 
-/// void arts_add_dependence_at(arts_guid_t source, arts_guid_t destination,
-///                             uint32_t slot, arts_db_access_mode_t mode,
-///                             uint64_t byte_offset, uint64_t len);
-__ARTS_RTL(arts_add_dependence_at, Void, ArtsGuid, ArtsGuid, Int32, Int32,
-           Int64, Int64)
-__ARTS_RTL_ATTRS(arts_add_dependence_at, ControlAttrs, EmptyAttrs,
-                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, SExt, EmptyAttrs,
+/// void arts_add_halo_dependence(arts_guid_t source,
+///                               arts_guid_t destination, uint32_t slot,
+///                               uint64_t byte_offset, uint64_t len);
+__ARTS_RTL(arts_add_halo_dependence, Void, ArtsGuid, ArtsGuid, Int32, Int64,
+           Int64)
+__ARTS_RTL_ATTRS(arts_add_halo_dependence, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, EmptyAttrs,
                             EmptyAttrs))
 
-/// void arts_add_dependence_at_ex(arts_guid_t source,
-///                                arts_guid_t destination, uint32_t slot,
-///                                arts_db_access_mode_t mode,
-///                                uint64_t byte_offset, uint64_t len,
-///                                uint32_t flags);
-__ARTS_RTL(arts_add_dependence_at_ex, Void, ArtsGuid, ArtsGuid, Int32, Int32,
-           Int64, Int64, Int32)
-__ARTS_RTL_ATTRS(arts_add_dependence_at_ex, ControlAttrs, EmptyAttrs,
-                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, SExt, EmptyAttrs,
+/// void arts_add_halo_dependence_ex(arts_guid_t source,
+///                                  arts_guid_t destination, uint32_t slot,
+///                                  uint64_t byte_offset, uint64_t len,
+///                                  uint32_t flags);
+__ARTS_RTL(arts_add_halo_dependence_ex, Void, ArtsGuid, ArtsGuid, Int32, Int64,
+           Int64, Int32)
+__ARTS_RTL_ATTRS(arts_add_halo_dependence_ex, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, EmptyAttrs,
                             EmptyAttrs, ZExt))
 /// }
 

@@ -2,8 +2,8 @@
 
 // A distributed acquire that carries the block-halo signal (stencil_supported_
 // block_halo) and a concrete stencil access extent also gets a committed
-// halo_slice, even when its partition mode is not literally `stencil`. This is
-// the same set ARTS-RT would otherwise reconstruct via the halo-face inference.
+// halo_slice, even when its partition mode is not literally `stencil`. The
+// slice is diagnostic reach metadata; byte windows remain explicit operands.
 
 // CHECK-LABEL: func.func @distributed_block_halo_acquire_commits_window
 // CHECK: arts.db_acquire

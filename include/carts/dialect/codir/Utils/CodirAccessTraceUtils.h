@@ -28,12 +28,29 @@ static inline bool indexSelectsOwnerSlice(Value index, Value ownerIv,
                                           llvm::SmallPtrSetImpl<Value> &seen) {
   if (!index || !ownerIv)
     return false;
+  index = ::mlir::carts::ValueAnalysis::stripNumericCasts(index);
+  ownerIv = ::mlir::carts::ValueAnalysis::stripNumericCasts(ownerIv);
   if (index == ownerIv)
-    return true;
-  if (::mlir::carts::ValueAnalysis::dependsOn(index, ownerIv))
     return true;
   if (!seen.insert(index).second)
     return false;
+
+  Operation *def = index.getDefiningOp();
+  if (auto rem = dyn_cast_or_null<arith::RemUIOp>(def))
+    if (::mlir::carts::ValueAnalysis::isOneConstant(rem.getRhs()))
+      return false;
+  if (auto rem = dyn_cast_or_null<arith::RemSIOp>(def))
+    if (::mlir::carts::ValueAnalysis::isOneConstant(rem.getRhs()))
+      return false;
+  if (auto div = dyn_cast_or_null<arith::DivUIOp>(def))
+    if (::mlir::carts::ValueAnalysis::isOneConstant(div.getRhs()))
+      return indexSelectsOwnerSlice(div.getLhs(), ownerIv, seen);
+  if (auto div = dyn_cast_or_null<arith::DivSIOp>(def))
+    if (::mlir::carts::ValueAnalysis::isOneConstant(div.getRhs()))
+      return indexSelectsOwnerSlice(div.getLhs(), ownerIv, seen);
+
+  if (::mlir::carts::ValueAnalysis::dependsOn(index, ownerIv))
+    return true;
 
   auto blockArg = dyn_cast<BlockArgument>(index);
   if (blockArg) {
@@ -52,7 +69,6 @@ static inline bool indexSelectsOwnerSlice(Value index, Value ownerIv,
            indexSelectsOwnerSlice(loop.getUpperBound(), ownerIv, upperSeen);
   }
 
-  Operation *def = index.getDefiningOp();
   if (!isa_and_nonnull<
           arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
           arith::DivUIOp, arith::RemSIOp, arith::RemUIOp, arith::IndexCastOp,

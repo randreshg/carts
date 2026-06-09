@@ -1,11 +1,9 @@
 // RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-arts-cdag)' 2>&1 | %FileCheck %s
 
-// A distributed partial halo acquire that reaches the post-epoch CDAG without a
-// committed DB-space window is rejected, before ARTS-RT can reconstruct the halo
-// face slice at lowering. The acquire already carries its runtime DB mode, so
-// the window verdict is the only missing committed fact.
+// A distributed partial halo acquire that reaches the post-epoch CDAG without
+// explicit element-window operands is rejected before ARTS-RT lowering.
 
-// CHECK: acquires a partial halo window of a distributed DB without a committed DB-space window
+// CHECK: acquires a partial halo window of a distributed DB without explicit element_offsets/element_sizes
 
 module {
   func.func @missing_partial_acquire_window() {

@@ -4,6 +4,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
+#include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Types.h"
@@ -16,8 +17,14 @@ using namespace mlir::carts::arts_rt;
 #include "carts/dialect/arts-rt/IR/ArtsRtOps.cpp.inc"
 
 namespace {
+constexpr int32_t kArtsRtDepFlagHaloView = 1 << 2;
+
 Value createZeroI32(OpBuilder &builder, Location loc) {
   return arith::ConstantIntOp::create(builder, loc, 0, 32);
+}
+
+bool isProvablyNonZero(Value value) {
+  return ValueAnalysis::isProvablyNonZero(ValueAnalysis::stripNumericCasts(value));
 }
 
 static LogicalResult verifyParamvScalarTypes(Operation *op, TypeRange types,
@@ -106,6 +113,17 @@ LogicalResult RecordDepOp::verify() {
     if (flags->size() != dbCount)
       return emitOpError("dep_flags entries (")
              << flags->size() << ") must match datablocks (" << dbCount << ")";
+    bool hasByteWindows = !getByteOffsets().empty() && !getByteSizes().empty();
+    for (auto [index, flag] : llvm::enumerate(*flags)) {
+      if ((flag & kArtsRtDepFlagHaloView) == 0)
+        continue;
+      if (!hasByteWindows)
+        return emitOpError("HALO_VIEW dependency #")
+               << index << " requires byte_offsets and byte_sizes";
+      if (!isProvablyNonZero(getByteSizes()[index]))
+        return emitOpError("HALO_VIEW dependency #")
+               << index << " requires provably nonzero byte_size";
+    }
   }
 
   if (getByteOffsets().empty() != getByteSizes().empty())

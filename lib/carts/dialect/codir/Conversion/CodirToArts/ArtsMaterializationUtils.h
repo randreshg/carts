@@ -441,6 +441,8 @@ getCodirTileOwnerBlockSizes(codir::CodeletOp codelet, unsigned depIndex,
       if (ownerDim >= blockShape->size())
         return std::nullopt;
       blockSize = (*blockShape)[ownerDim];
+    } else if (ownerDim < blockShape->size()) {
+      blockSize = (*blockShape)[ownerDim];
     } else if (blockShape->size() == ownerDims->size()) {
       blockSize = (*blockShape)[slot];
     } else if (blockShape->size() == 1 && ownerDims->size() == 1) {
@@ -742,10 +744,19 @@ codirDepAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
       getCodirTileOwnerDims(codelet);
   if (!tileOwnerDims)
     return false;
-  SmallVector<Value, 4> ownerBases =
+  SmallVector<Value, 4> tileOwnerBases =
       getCodirOwnerBaseArguments(codelet, tileOwnerDims->size());
-  if (ownerBases.size() != tileOwnerDims->size())
+  if (tileOwnerBases.size() != tileOwnerDims->size())
     return false;
+  SmallVector<Value, 4> depOwnerBases;
+  depOwnerBases.reserve(ownerDims->size());
+  for (unsigned ownerDim : *ownerDims) {
+    auto it = llvm::find(*tileOwnerDims, ownerDim);
+    if (it == tileOwnerDims->end())
+      return false;
+    depOwnerBases.push_back(
+        tileOwnerBases[std::distance(tileOwnerDims->begin(), it)]);
+  }
 
   bool sawDepAccess = false;
   bool rejected = false;
@@ -757,28 +768,36 @@ codirDepAccessesStayWithinSingleOwnerSlice(codir::CodeletOp codelet,
     if (!access)
       return WalkResult::advance();
 
-    SmallVector<unsigned, 4> accessDims;
     bool sawRootedAccess = false;
-    for (Value ownerBase : ownerBases) {
+    SmallVector<CodirAccessOwnerDims, 4> traces;
+    traces.reserve(depOwnerBases.size());
+    for (Value ownerBase : depOwnerBases) {
       CodirAccessOwnerDims traced = traceCodirAccessToRoot(
           access->memref, access->indices, depArg, ownerBase);
       if (traced.status == CodirAccessTraceStatus::NotRooted)
+        traces.push_back(traced);
+      else
+        sawRootedAccess = true;
+      if (traced.status == CodirAccessTraceStatus::NotRooted)
         continue;
-      sawRootedAccess = true;
-      if (traced.status == CodirAccessTraceStatus::Unsupported ||
-          traced.ownerDims.size() > 1) {
+      if (traced.status == CodirAccessTraceStatus::Unsupported) {
         rejected = true;
         return WalkResult::interrupt();
       }
-      if (!traced.ownerDims.empty())
-        accessDims.push_back(traced.ownerDims.front());
+      traces.push_back(traced);
     }
     if (!sawRootedAccess)
       return WalkResult::advance();
     sawDepAccess = true;
-    if (accessDims != *ownerDims) {
+    if (traces.size() != ownerDims->size()) {
       rejected = true;
       return WalkResult::interrupt();
+    }
+    for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+      if (!llvm::is_contained(traces[slot].ownerDims, ownerDim)) {
+        rejected = true;
+        return WalkResult::interrupt();
+      }
     }
     return WalkResult::advance();
   });
@@ -792,12 +811,18 @@ struct PlannedBlockLocalAccessRewrite {
   Value ownerBase;
   Value localOrigin;
   int64_t lowerHalo = 0;
+  int64_t upperHalo = 0;
+  Value acquiredElementBase;
   Value groupedSourcePtr;
+  Value groupedWriteSourcePtr;
   unsigned ownerSlot = 0;
   int64_t blockSize = 1;
   int64_t groupBlockCount = 1;
+  int64_t lowerHaloBlockCount = 0;
+  int64_t upperHaloBlockCount = 0;
   bool grouped = false;
   bool allowFullWindowAccess = false;
+  bool directHaloWindowAccess = false;
 };
 
 static inline Value materializeBlockLocalOrigin(OpBuilder &builder,
@@ -849,23 +874,79 @@ materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
   return arith::SubIOp::create(builder, loc, index, localOrigin).getResult();
 }
 
-static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
-    OpBuilder &builder, Location loc, Value index, Value ownerBase,
-    int64_t lowerHalo, int64_t blockSize, int64_t groupBlockCount,
-    Value &relativeBlock, bool allowFullWindowAccess = false) {
+static inline FailureOr<Value>
+materializeGroupedBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
+                                  Value ownerBase, Value acquiredElementBase,
+                                  int64_t lowerHalo, int64_t upperHalo,
+                                  int64_t blockSize, int64_t groupBlockCount,
+                                  int64_t lowerHaloBlockCount,
+                                  int64_t upperHaloBlockCount,
+                                  Value &relativeBlock,
+                                  bool allowFullWindowAccess = false,
+                                  bool directHaloWindowAccess = false) {
   if (!index || !ownerBase || blockSize <= 0 || groupBlockCount <= 0)
     return failure();
   if (groupBlockCount > std::numeric_limits<int64_t>::max() / blockSize)
+    return failure();
+  if (directHaloWindowAccess && !acquiredElementBase)
     return failure();
   if (!allowFullWindowAccess && !indexSelectsOwnerSlice(index, ownerBase))
     return failure();
 
   int64_t windowExtent = blockSize * groupBlockCount;
+  int64_t acquiredBlockCount = groupBlockCount;
+  if (directHaloWindowAccess) {
+    int64_t lowerBlocks = std::max<int64_t>(0, lowerHaloBlockCount);
+    int64_t upperBlocks = std::max<int64_t>(0, upperHaloBlockCount);
+    if (acquiredBlockCount >
+        std::numeric_limits<int64_t>::max() - lowerBlocks)
+      return failure();
+    acquiredBlockCount += lowerBlocks;
+    if (acquiredBlockCount >
+        std::numeric_limits<int64_t>::max() - upperBlocks)
+      return failure();
+    acquiredBlockCount += upperBlocks;
+  }
+  if (acquiredBlockCount <= 0 ||
+      acquiredBlockCount > std::numeric_limits<int64_t>::max() / blockSize)
+    return failure();
   struct WindowProof {
     Value ownerBase;
     int64_t windowExtent = 0;
+    int64_t lowerHalo = 0;
+    int64_t upperHalo = 0;
+
+    Value stripUnitDiv(Value value) const {
+      value = ::mlir::carts::ValueAnalysis::stripNumericCasts(value);
+      while (value) {
+        Operation *def = value.getDefiningOp();
+        if (auto div = dyn_cast_or_null<arith::DivUIOp>(def)) {
+          if (!::mlir::carts::ValueAnalysis::isOneConstant(div.getRhs()))
+            break;
+          value = ::mlir::carts::ValueAnalysis::stripNumericCasts(div.getLhs());
+          continue;
+        }
+        if (auto div = dyn_cast_or_null<arith::DivSIOp>(def)) {
+          if (!::mlir::carts::ValueAnalysis::isOneConstant(div.getRhs()))
+            break;
+          value = ::mlir::carts::ValueAnalysis::stripNumericCasts(div.getLhs());
+          continue;
+        }
+        break;
+      }
+      return value;
+    }
+
+    bool pointOffsetStaysInWindow(int64_t offset) const {
+      return offset >= -lowerHalo && offset < windowExtent + upperHalo;
+    }
+
+    bool upperOffsetStaysInWindow(int64_t offset) const {
+      return offset >= -lowerHalo && offset <= windowExtent + upperHalo;
+    }
 
     std::optional<int64_t> getOwnerRelativeConstant(Value candidate) const {
+      candidate = stripUnitDiv(candidate);
       std::optional<int64_t> candidateConst =
           ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(candidate);
       std::optional<int64_t> ownerConst =
@@ -881,9 +962,62 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
       return std::nullopt;
     }
 
+    bool pointPlusOffsetStaysInWindow(Value base, int64_t offset,
+                                      unsigned depth) const {
+      if (!base || depth > 8)
+        return false;
+      if (std::optional<int64_t> baseOffset = getOwnerRelativeConstant(base))
+        return pointOffsetStaysInWindow(*baseOffset + offset);
+
+      base = stripUnitDiv(base);
+      auto blockArg = dyn_cast<BlockArgument>(base);
+      if (!blockArg)
+        return false;
+      auto loop =
+          dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+      if (!loop || loop.getInductionVar() != base)
+        return false;
+      std::optional<int64_t> step =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+      return step && *step > 0 &&
+             pointPlusOffsetStaysInWindow(loop.getLowerBound(), offset,
+                                          depth + 1) &&
+             upperPlusOffsetStaysInWindow(loop.getUpperBound(), offset,
+                                          depth + 1);
+    }
+
+    bool upperPlusOffsetStaysInWindow(Value base, int64_t offset,
+                                      unsigned depth) const {
+      if (!base || depth > 8)
+        return false;
+      if (std::optional<int64_t> baseOffset = getOwnerRelativeConstant(base))
+        return upperOffsetStaysInWindow(*baseOffset + offset);
+
+      base = stripUnitDiv(base);
+      if (auto min = base.getDefiningOp<arith::MinUIOp>())
+        return upperPlusOffsetStaysInWindow(min.getLhs(), offset, depth + 1) ||
+               upperPlusOffsetStaysInWindow(min.getRhs(), offset, depth + 1);
+      if (auto min = base.getDefiningOp<arith::MinSIOp>())
+        return upperPlusOffsetStaysInWindow(min.getLhs(), offset, depth + 1) ||
+               upperPlusOffsetStaysInWindow(min.getRhs(), offset, depth + 1);
+
+      auto blockArg = dyn_cast<BlockArgument>(base);
+      if (!blockArg)
+        return false;
+      auto loop =
+          dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+      if (!loop || loop.getInductionVar() != base)
+        return false;
+      std::optional<int64_t> step =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+      return step && *step > 0 &&
+             upperPlusOffsetStaysInWindow(loop.getUpperBound(), offset,
+                                          depth + 1);
+    }
+
     std::optional<std::pair<Value, int64_t>>
     splitAddConstant(Value candidate) const {
-      candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+      candidate = stripUnitDiv(candidate);
       if (auto add = candidate.getDefiningOp<arith::AddIOp>()) {
         if (std::optional<int64_t> rhs =
                 ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
@@ -902,9 +1036,15 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
         return false;
       std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
       if (offset)
-        return *offset >= 0 && *offset < windowExtent;
+        return pointOffsetStaysInWindow(*offset);
 
-      candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+      candidate = stripUnitDiv(candidate);
+      int64_t constantOffset = 0;
+      Value base = ::mlir::carts::ValueAnalysis::stripConstantOffset(
+          candidate, &constantOffset);
+      if (base && !::mlir::carts::ValueAnalysis::sameValue(base, candidate))
+        return pointPlusOffsetStaysInWindow(base, constantOffset, depth + 1);
+
       if (auto blockArg = dyn_cast<BlockArgument>(candidate)) {
         auto loop =
             dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
@@ -912,36 +1052,16 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
           return false;
         if (!::mlir::carts::ValueAnalysis::isConstantAtLeastOne(loop.getStep()))
           return false;
-        return pointStaysInWindow(loop.getLowerBound(), depth + 1) &&
-               upperStaysInWindow(loop.getUpperBound(), depth + 1);
+        return pointPlusOffsetStaysInWindow(loop.getLowerBound(), 0,
+                                            depth + 1) &&
+               upperPlusOffsetStaysInWindow(loop.getUpperBound(), 0, depth + 1);
       }
       return false;
     }
 
     bool upperOffsetStaysInWindow(Value candidate) const {
       std::optional<int64_t> offset = getOwnerRelativeConstant(candidate);
-      return offset && *offset >= 0 && *offset <= windowExtent;
-    }
-
-    bool pointPlusOffsetStaysInWindow(Value base, int64_t offset,
-                                      unsigned depth) const {
-      if (!base || offset < 0 || depth > 8)
-        return false;
-      if (std::optional<int64_t> baseOffset = getOwnerRelativeConstant(base))
-        return *baseOffset >= 0 && *baseOffset + offset <= windowExtent;
-
-      base = ::mlir::carts::ValueAnalysis::stripNumericCasts(base);
-      auto blockArg = dyn_cast<BlockArgument>(base);
-      if (!blockArg)
-        return false;
-      auto loop =
-          dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
-      if (!loop || loop.getInductionVar() != base)
-        return false;
-      std::optional<int64_t> step =
-          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(loop.getStep());
-      return step && *step > 0 && offset <= *step &&
-             upperStaysInWindow(loop.getUpperBound(), depth + 1);
+      return offset && upperOffsetStaysInWindow(*offset);
     }
 
     bool upperStaysInWindow(Value candidate, unsigned depth = 0) const {
@@ -950,9 +1070,14 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
       if (upperOffsetStaysInWindow(candidate))
         return true;
       if (auto add = splitAddConstant(candidate))
-        if (pointPlusOffsetStaysInWindow(add->first, add->second, depth + 1))
+        if (upperPlusOffsetStaysInWindow(add->first, add->second, depth + 1))
           return true;
-      candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+      candidate = stripUnitDiv(candidate);
+      int64_t constantOffset = 0;
+      Value base = ::mlir::carts::ValueAnalysis::stripConstantOffset(
+          candidate, &constantOffset);
+      if (base && !::mlir::carts::ValueAnalysis::sameValue(base, candidate))
+        return upperPlusOffsetStaysInWindow(base, constantOffset, depth + 1);
       if (auto min = candidate.getDefiningOp<arith::MinUIOp>())
         return upperStaysInWindow(min.getLhs(), depth + 1) ||
                upperStaysInWindow(min.getRhs(), depth + 1);
@@ -962,7 +1087,8 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
       return false;
     }
   };
-  WindowProof proof{ownerBase, windowExtent};
+  WindowProof proof{ownerBase, windowExtent, std::max<int64_t>(0, lowerHalo),
+                    std::max<int64_t>(0, upperHalo)};
   auto pointStaysInWindow = [&](Value candidate) {
     return proof.pointStaysInWindow(candidate);
   };
@@ -985,16 +1111,34 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
   if (!provenInWindow)
     return failure();
 
+  Value zero = createZeroIndex(builder, loc);
   Value blockSizeValue = createConstantIndex(builder, loc, blockSize);
+  Value windowBase = directHaloWindowAccess ? acquiredElementBase : ownerBase;
+  Value acquiredWindowExtentValue =
+      createConstantIndex(builder, loc, blockSize * acquiredBlockCount);
+  Value windowEnd = arith::AddIOp::create(builder, loc, windowBase,
+                                          acquiredWindowExtentValue);
+  Value beforeWindow = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::slt, index, windowBase);
+  Value afterWindow = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::sge, index, windowEnd);
+  Value normalIndex =
+      arith::SelectOp::create(builder, loc, beforeWindow, windowBase, index);
   Value relativeIndex =
-      ::mlir::carts::ValueAnalysis::sameValue(index, ownerBase)
-          ? createZeroIndex(builder, loc)
-          : arith::SubIOp::create(builder, loc, index, ownerBase).getResult();
-  relativeBlock =
+      ::mlir::carts::ValueAnalysis::sameValue(normalIndex, windowBase)
+          ? zero
+          : arith::SubIOp::create(builder, loc, normalIndex, windowBase)
+                .getResult();
+  Value normalBlock =
       arith::DivUIOp::create(builder, loc, relativeIndex, blockSizeValue);
+  Value lastBlock = createConstantIndex(builder, loc, acquiredBlockCount - 1);
+  Value upperSelected = arith::SelectOp::create(builder, loc, afterWindow,
+                                                lastBlock, normalBlock);
+  relativeBlock =
+      arith::SelectOp::create(builder, loc, beforeWindow, zero, upperSelected);
   Value blockOffset =
       arith::MulIOp::create(builder, loc, relativeBlock, blockSizeValue);
-  Value blockBase = arith::AddIOp::create(builder, loc, ownerBase, blockOffset);
+  Value blockBase = arith::AddIOp::create(builder, loc, windowBase, blockOffset);
 
   Value blockPayloadBase = blockBase;
   if (lowerHalo > 0)
@@ -1012,7 +1156,8 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
     return success();
 
   auto rewriteIndices = [&](Operation *op, MutableOperandRange memrefOperand,
-                            MutableOperandRange indices) -> WalkResult {
+                            MutableOperandRange indices,
+                            bool isStore) -> WalkResult {
     Value memref = memrefOperand[0].get();
     SmallVector<const PlannedBlockLocalAccessRewrite *, 4> matching;
     for (const PlannedBlockLocalAccessRewrite &rewrite : rewrites)
@@ -1029,6 +1174,11 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
       Value sourcePtr;
       unsigned sourceRank = 0;
       for (const PlannedBlockLocalAccessRewrite *rewrite : matching) {
+        Value rewriteSourcePtr =
+            isStore && rewrite->directHaloWindowAccess &&
+                    rewrite->groupedWriteSourcePtr
+                ? rewrite->groupedWriteSourcePtr
+                : rewrite->groupedSourcePtr;
         if (!rewrite->grouped || !rewrite->groupedSourcePtr ||
             rewrite->blockSize <= 0 || rewrite->groupBlockCount <= 0) {
           op->emitError("grouped planned block-local access requires "
@@ -1036,8 +1186,8 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
           return WalkResult::interrupt();
         }
         if (!sourcePtr)
-          sourcePtr = rewrite->groupedSourcePtr;
-        if (sourcePtr != rewrite->groupedSourcePtr) {
+          sourcePtr = rewriteSourcePtr;
+        if (sourcePtr != rewriteSourcePtr) {
           op->emitError("grouped planned block-local access mixes dependency "
                         "sources");
           return WalkResult::interrupt();
@@ -1060,11 +1210,15 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
           return WalkResult::interrupt();
         }
         Value relativeBlock;
+        bool useDirectHaloWindow =
+            rewrite->directHaloWindowAccess && !isStore;
         FailureOr<Value> localIndex = materializeGroupedBlockLocalIndex(
             builder, op->getLoc(), indices[rewrite->ownerDim].get(),
-            rewrite->ownerBase, rewrite->lowerHalo, rewrite->blockSize,
-            rewrite->groupBlockCount, relativeBlock,
-            rewrite->allowFullWindowAccess);
+            rewrite->ownerBase, rewrite->acquiredElementBase,
+            rewrite->lowerHalo, rewrite->upperHalo, rewrite->blockSize,
+            rewrite->groupBlockCount, rewrite->lowerHaloBlockCount,
+            rewrite->upperHaloBlockCount, relativeBlock,
+            rewrite->allowFullWindowAccess, useDirectHaloWindow);
         if (failed(localIndex)) {
           op->emitError("grouped planned block-local access does not stay "
                         "within the block window");
@@ -1104,10 +1258,10 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
   WalkResult result = body.walk([&](Operation *op) {
     if (auto load = dyn_cast<memref::LoadOp>(op))
       return rewriteIndices(op, load.getMemrefMutable(),
-                            load.getIndicesMutable());
+                            load.getIndicesMutable(), /*isStore=*/false);
     if (auto store = dyn_cast<memref::StoreOp>(op))
       return rewriteIndices(op, store.getMemrefMutable(),
-                            store.getIndicesMutable());
+                            store.getIndicesMutable(), /*isStore=*/true);
     return WalkResult::advance();
   });
 
@@ -1603,6 +1757,59 @@ static inline bool codirDepUsesHaloStencilStorage(codir::CodeletOp codelet,
   return getFinalizedCodirDepCollectiveKind(codelet, depIndex) ==
              codir::CodirCollectiveKind::halo &&
          codirDepHasHaloWindow(codelet, depIndex);
+}
+
+static inline bool
+codirDepUsesGroupedOwnerComputeHaloAccess(codir::CodeletOp codelet,
+                                          unsigned depIndex) {
+  if (!codirDepUsesHaloStencilStorage(codelet, depIndex))
+    return false;
+  auto kind = codelet.getDistributionKindAttr();
+  if (!kind ||
+      kind.getValue() != codir::CodirDistributionKind::owner_compute)
+    return false;
+  auto topology = codelet.getIterationTopologyAttr();
+  if (!topology ||
+      topology.getValue() != codir::CodirIterationTopology::owner_strip)
+    return false;
+  std::optional<codir::CodirAccessMode> mode =
+      getCodirDepAccessMode(codelet, depIndex);
+  if (!mode || *mode != codir::CodirAccessMode::readwrite)
+    return false;
+
+  auto memrefType = dyn_cast<MemRefType>(codelet.getDeps()[depIndex].getType());
+  if (!memrefType || memrefType.getRank() == 0)
+    return false;
+  unsigned memrefRank = static_cast<unsigned>(memrefType.getRank());
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->size() != 1)
+    return false;
+  std::optional<SmallVector<int64_t, 4>> blockSizes =
+      getCodirTileOwnerBlockSizes(codelet, depIndex, memrefRank);
+  if (!blockSizes || blockSizes->size() != 1 || blockSizes->front() <= 0)
+    return false;
+
+  std::optional<SmallVector<int64_t, 4>> logicalSlice =
+      readI64ArrayAttr(codelet.getLogicalWorkerSliceAttr());
+  if (!logicalSlice || logicalSlice->empty())
+    return false;
+
+  unsigned ownerDim = ownerDims->front();
+  std::optional<int64_t> logicalExtent;
+  if (logicalSlice->size() == memrefRank) {
+    if (ownerDim >= logicalSlice->size())
+      return false;
+    logicalExtent = (*logicalSlice)[ownerDim];
+  } else if (ownerDim < logicalSlice->size()) {
+    logicalExtent = (*logicalSlice)[ownerDim];
+  } else if (logicalSlice->size() == ownerDims->size()) {
+    logicalExtent = logicalSlice->front();
+  } else if (logicalSlice->size() == 1) {
+    logicalExtent = logicalSlice->front();
+  }
+  return logicalExtent && *logicalExtent > blockSizes->front();
 }
 
 static inline bool codirDepUsesBlockNativeSettle(codir::CodeletOp codelet,
@@ -3184,6 +3391,45 @@ readPartitionScoreConcurrencyFloor(codir::CodeletOp codelet) {
   return 0;
 }
 
+static inline int64_t getOwnerStripLogicalBridgeGroupSize(
+    codir::CodeletOp codelet, unsigned depIndex, unsigned memrefRank) {
+  if (!codelet || depIndex >= codelet.getDeps().size())
+    return 0;
+  auto topology = codelet.getIterationTopologyAttr();
+  if (!topology ||
+      topology.getValue() != codir::CodirIterationTopology::owner_strip)
+    return 0;
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->size() != 1)
+    return 0;
+  std::optional<SmallVector<int64_t, 4>> blockSizes =
+      getCodirTileOwnerBlockSizes(codelet, depIndex, memrefRank);
+  if (!blockSizes || blockSizes->size() != 1 || blockSizes->front() <= 0)
+    return 0;
+  std::optional<SmallVector<int64_t, 4>> logicalSlice =
+      readI64ArrayAttr(codelet.getLogicalWorkerSliceAttr());
+  if (!logicalSlice || logicalSlice->empty())
+    return 0;
+
+  unsigned ownerDim = ownerDims->front();
+  std::optional<int64_t> logicalExtent;
+  if (logicalSlice->size() == memrefRank) {
+    if (ownerDim >= logicalSlice->size())
+      return 0;
+    logicalExtent = (*logicalSlice)[ownerDim];
+  } else if (ownerDim < logicalSlice->size()) {
+    logicalExtent = (*logicalSlice)[ownerDim];
+  } else if (logicalSlice->size() == ownerDims->size()) {
+    logicalExtent = logicalSlice->front();
+  } else if (logicalSlice->size() == 1) {
+    logicalExtent = logicalSlice->front();
+  }
+  if (!logicalExtent || *logicalExtent <= blockSizes->front())
+    return 0;
+  return llvm::divideCeil(*logicalExtent, blockSizes->front());
+}
+
 struct BridgePartitionGraphEvidence {
   int64_t muBlockCount = 0;
   int64_t cuGroupSize = 0;
@@ -3706,6 +3952,16 @@ chooseBridgeGroupSize(const BridgePlan &plan,
     desired = std::min(desired, std::max<int64_t>(1, maxGroupForConcurrency));
   }
 
+  if (evidence.workloadKind == BridgeWorkloadKind::halo) {
+    int64_t logicalGroupSize = getOwnerStripLogicalBridgeGroupSize(
+        plan.seedCodelet, plan.seedDepIndex,
+        blockAlloc ? static_cast<unsigned>(blockAlloc.getElementSizes().size())
+                   : 0);
+    if (logicalGroupSize > 1)
+      desired = std::max<int64_t>(
+          desired, std::min<int64_t>(logicalGroupSize, *blockCount));
+  }
+
   int64_t authoredGroupSize = graphEvidence.cuGroupSize;
   if (authoredGroupSize > 0)
     desired = std::min<int64_t>(desired, authoredGroupSize);
@@ -4129,11 +4385,11 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
     int64_t width = 0;
     unsigned conditionParam = 0;
     bool compactSource = false;
+    bool compactDest = false;
   };
   struct HaloLanePlan {
     SmallVector<Value, 4> blockCoords;
     SmallVector<Value, 4> blockWindowSizes;
-    unsigned dstArg = 0;
   };
   struct HaloSlicePlan {
     SmallVector<Value, 4> elementOffsets;
@@ -4144,7 +4400,7 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
   SmallVector<Value, 8> actionConditions;
   SmallVector<Value> deps;
   deps.reserve(static_cast<size_t>(blockGroupSize) *
-               (1 + ownerHalos.size() * 2));
+               static_cast<size_t>(ownerHalos.size() * 4));
   SmallVector<HaloLanePlan, 8> lanes;
   lanes.reserve(static_cast<size_t>(blockGroupSize));
   SmallVector<int64_t, 4> blockStrides =
@@ -4159,33 +4415,14 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
         builder, loc, blockOrdinal, blockAlloc.getSizes());
     SmallVector<Value> blockWindowSizes(blockCoords.size(), one);
 
-    auto dstAcquire = materializeBridgeAcquire(
-        builder, loc, blockAlloc, arts::ArtsMode::out,
-        arts::PartitionMode::block, blockCoords, blockWindowSizes);
-    dstAcquire.setPreserveAccessMode();
-    unsigned dstArg = static_cast<unsigned>(deps.size());
-    deps.push_back(dstAcquire.getPtr());
-
-    lanes.push_back(
-        {std::move(blockCoords), std::move(blockWindowSizes), dstArg});
+    lanes.push_back({std::move(blockCoords), std::move(blockWindowSizes)});
   }
 
-  auto getInGroupSourceArg = [&](int64_t lane, unsigned slot,
-                                 bool lower) -> std::optional<unsigned> {
-    if (blockGroupSize <= 1 || slot >= blockStrides.size())
-      return std::nullopt;
-    int64_t stride = blockStrides[slot];
-    if (stride <= 0)
-      return std::nullopt;
-    int64_t sourceLane = lower ? lane - stride : lane + stride;
-    if (sourceLane < 0 || sourceLane >= static_cast<int64_t>(lanes.size()))
-      return std::nullopt;
-    return lanes[static_cast<size_t>(sourceLane)].dstArg;
-  };
+  (void)blockStrides;
   std::optional<SmallVector<int64_t, 4>> staticElementSizes =
       getStaticElementSizes(blockAlloc);
-  auto buildSourceSlicePlan = [&](unsigned actionSlot, bool lower,
-                                  int64_t width) {
+  auto buildHaloSlicePlan = [&](unsigned actionSlot, bool lower, int64_t width,
+                                bool destination) {
     HaloSlicePlan slice;
     if (!staticElementSizes)
       return slice;
@@ -4199,8 +4436,11 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
       int64_t blockSize = (*ownerBlockSizes)[slot];
       if (slot == actionSlot) {
         staticSizes[ownerDim] = width;
-        staticOffsets[ownerDim] =
-            lower ? halo.lower + blockSize - width : halo.lower;
+        if (destination)
+          staticOffsets[ownerDim] = lower ? 0 : halo.lower + blockSize;
+        else
+          staticOffsets[ownerDim] =
+              lower ? halo.lower + blockSize - width : halo.lower;
       } else {
         staticSizes[ownerDim] = blockSize;
         staticOffsets[ownerDim] = halo.lower;
@@ -4242,48 +4482,82 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
       lowerCoords[slot] = lowerCoord;
       upperCoords[slot] = upperCoord;
       if (halo.lower > 0) {
-        std::optional<unsigned> sourceArg = getInGroupSourceArg(
-            static_cast<int64_t>(lane), static_cast<unsigned>(slot), true);
-        bool compactSource = false;
-        if (!sourceArg) {
-          HaloSlicePlan sourceSlice = buildSourceSlicePlan(
-              static_cast<unsigned>(slot), true, halo.lower);
-          auto lowerAcquire = materializeBridgeAcquire(
-              builder, loc, blockAlloc, arts::ArtsMode::in,
-              arts::PartitionMode::block, lowerCoords,
-              lanePlan.blockWindowSizes, hasLower, sourceSlice.elementOffsets,
-              sourceSlice.elementSizes);
-          compactSource = sourceSlice.compact;
-          sourceArg = static_cast<unsigned>(deps.size());
-          deps.push_back(lowerAcquire.getPtr());
-        }
+        HaloSlicePlan destSlice = buildHaloSlicePlan(
+            static_cast<unsigned>(slot), true, halo.lower,
+            /*destination=*/true);
+        if (!destSlice.compact)
+          return codelet.emitOpError()
+                 << "cannot materialize non-contiguous lower halo destination "
+                    "slice for dependency #"
+                 << depIndex;
+        auto dstAcquire = materializeBridgeAcquire(
+            builder, loc, blockAlloc, arts::ArtsMode::out,
+            arts::PartitionMode::block, lanePlan.blockCoords,
+            lanePlan.blockWindowSizes, hasLower, destSlice.elementOffsets,
+            destSlice.elementSizes);
+        dstAcquire.setPreserveAccessMode();
+        unsigned dstArg = static_cast<unsigned>(deps.size());
+        deps.push_back(dstAcquire.getPtr());
+
+        HaloSlicePlan sourceSlice = buildHaloSlicePlan(
+            static_cast<unsigned>(slot), true, halo.lower,
+            /*destination=*/false);
+        if (!sourceSlice.compact)
+          return codelet.emitOpError()
+                 << "cannot materialize non-contiguous lower halo source slice "
+                    "for dependency #"
+                 << depIndex;
+        auto lowerAcquire = materializeBridgeAcquire(
+            builder, loc, blockAlloc, arts::ArtsMode::in,
+            arts::PartitionMode::block, lowerCoords, lanePlan.blockWindowSizes,
+            hasLower, sourceSlice.elementOffsets, sourceSlice.elementSizes);
+        unsigned sourceArg = static_cast<unsigned>(deps.size());
+        deps.push_back(lowerAcquire.getPtr());
         unsigned conditionParam = actionConditions.size();
         actionConditions.push_back(hasLower);
-        copyActions.push_back({lanePlan.dstArg, *sourceArg,
+        copyActions.push_back({dstArg, sourceArg,
                                static_cast<unsigned>(slot), true, halo.lower,
-                               conditionParam, compactSource});
+                               conditionParam, sourceSlice.compact,
+                               destSlice.compact});
       }
       if (halo.upper > 0) {
-        std::optional<unsigned> sourceArg = getInGroupSourceArg(
-            static_cast<int64_t>(lane), static_cast<unsigned>(slot), false);
-        bool compactSource = false;
-        if (!sourceArg) {
-          HaloSlicePlan sourceSlice = buildSourceSlicePlan(
-              static_cast<unsigned>(slot), false, halo.upper);
-          auto upperAcquire = materializeBridgeAcquire(
-              builder, loc, blockAlloc, arts::ArtsMode::in,
-              arts::PartitionMode::block, upperCoords,
-              lanePlan.blockWindowSizes, hasUpper, sourceSlice.elementOffsets,
-              sourceSlice.elementSizes);
-          compactSource = sourceSlice.compact;
-          sourceArg = static_cast<unsigned>(deps.size());
-          deps.push_back(upperAcquire.getPtr());
-        }
+        HaloSlicePlan destSlice = buildHaloSlicePlan(
+            static_cast<unsigned>(slot), false, halo.upper,
+            /*destination=*/true);
+        if (!destSlice.compact)
+          return codelet.emitOpError()
+                 << "cannot materialize non-contiguous upper halo destination "
+                    "slice for dependency #"
+                 << depIndex;
+        auto dstAcquire = materializeBridgeAcquire(
+            builder, loc, blockAlloc, arts::ArtsMode::out,
+            arts::PartitionMode::block, lanePlan.blockCoords,
+            lanePlan.blockWindowSizes, hasUpper, destSlice.elementOffsets,
+            destSlice.elementSizes);
+        dstAcquire.setPreserveAccessMode();
+        unsigned dstArg = static_cast<unsigned>(deps.size());
+        deps.push_back(dstAcquire.getPtr());
+
+        HaloSlicePlan sourceSlice = buildHaloSlicePlan(
+            static_cast<unsigned>(slot), false, halo.upper,
+            /*destination=*/false);
+        if (!sourceSlice.compact)
+          return codelet.emitOpError()
+                 << "cannot materialize non-contiguous upper halo source slice "
+                    "for dependency #"
+                 << depIndex;
+        auto upperAcquire = materializeBridgeAcquire(
+            builder, loc, blockAlloc, arts::ArtsMode::in,
+            arts::PartitionMode::block, upperCoords, lanePlan.blockWindowSizes,
+            hasUpper, sourceSlice.elementOffsets, sourceSlice.elementSizes);
+        unsigned sourceArg = static_cast<unsigned>(deps.size());
+        deps.push_back(upperAcquire.getPtr());
         unsigned conditionParam = actionConditions.size();
         actionConditions.push_back(hasUpper);
-        copyActions.push_back({lanePlan.dstArg, *sourceArg,
+        copyActions.push_back({dstArg, sourceArg,
                                static_cast<unsigned>(slot), false, halo.upper,
-                               conditionParam, compactSource});
+                               conditionParam, sourceSlice.compact,
+                               destSlice.compact});
       }
     }
   }
@@ -4342,13 +4616,15 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
           int64_t dstStart = action.lower ? 0 : halo.lower + blockSize;
           if (!action.compactSource)
             srcOffsets[ownerDim] = createConstantIndex(builder, loc, srcStart);
-          dstOffsets[ownerDim] = createConstantIndex(builder, loc, dstStart);
+          if (!action.compactDest)
+            dstOffsets[ownerDim] = createConstantIndex(builder, loc, dstStart);
         } else {
           copySizes[ownerDim] = blockSizeValue;
           Value haloLower = createConstantIndex(builder, loc, halo.lower);
           if (!action.compactSource)
             srcOffsets[ownerDim] = haloLower;
-          dstOffsets[ownerDim] = haloLower;
+          if (!action.compactDest)
+            dstOffsets[ownerDim] = haloLower;
         }
       }
       SmallVector<Value> indices;
@@ -4411,7 +4687,9 @@ static inline bool
 isHaloReadParticipant(const HostBridgeParticipant &participant) {
   return codirAccessMayRead(participant.mode) &&
          codirDepUsesHaloStencilStorage(participant.codelet,
-                                        participant.depIndex);
+                                        participant.depIndex) &&
+         !codirDepUsesGroupedOwnerComputeHaloAccess(participant.codelet,
+                                                    participant.depIndex);
 }
 
 static inline LogicalResult emitPerBlockStencilHaloBeforeReadPhases(

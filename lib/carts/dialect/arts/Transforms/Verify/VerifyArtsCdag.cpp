@@ -114,9 +114,9 @@ static LogicalResult verifyCdagAcquireMode(DbAcquireOp acquire) {
   return success();
 }
 
-/// (A) Every distributed partial halo acquire carries a committed DB-space
-/// window. Without it ARTS-RT would reconstruct the halo face slice at lowering
-/// instead of consuming the committed halo_slice. Reject here, before ARTS-RT.
+/// (A) Every distributed partial halo acquire carries explicit element-window
+/// operands. A halo_slice is diagnostic reach metadata only; ARTS-RT must not
+/// reconstruct byte slices from it. Reject here, before ARTS-RT.
 static LogicalResult verifyCdagAcquireWindow(DbAcquireOp acquire) {
   DbAllocOp alloc = underlyingAlloc(acquire);
   if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
@@ -126,8 +126,8 @@ static LogicalResult verifyCdagAcquireWindow(DbAcquireOp acquire) {
   if (DbUtils::hasCommittedDbSpaceWindow(acquire))
     return success();
   return acquire.emitOpError()
-         << "acquires a partial halo window of a distributed DB without a "
-            "committed DB-space window; ARTS-RT must not infer it";
+       << "acquires a partial halo window of a distributed DB without explicit "
+          "element_offsets/element_sizes; ARTS-RT must not infer it";
 }
 
 /// (C) Single-writer per distributed DB block grain. The writer is the EDT that

@@ -73,7 +73,7 @@ multiple disjoint write targets that map to **distinct DBs**.
    Use coarse only when partitioning is unsafe or when EDTs are read-only.
 
 5. **Stencils benefit from block or stencil partitioning.**
-   Use ESD/halo handling to preserve locality without full-range accesses.
+   Use halo-view handling to preserve locality without full-range accesses.
 
 For partitioning mechanics and mode definitions, see
 `docs/heuristics/partitioning.md`.

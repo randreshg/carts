@@ -716,6 +716,8 @@ bool ValueAnalysis::isConstantAtLeastOne(Value v) {
   // integer constants that the bounds infrastructure rejects.
   if (auto atLeastOne = proveValueAtLeast(v, 1); atLeastOne)
     return *atLeastOne;
+  if (auto folded = tryFoldConstantIndex(v))
+    return *folded >= 1;
   int64_t val = 0;
   if (getConstantIndex(v, val))
     return val >= 1;

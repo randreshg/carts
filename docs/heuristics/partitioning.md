@@ -148,10 +148,13 @@ Today the partitioning pipeline is built from these layers of state:
      - `hasIndirectAccess`
 
 3. DB refinement and lowering consumers
-   - `DbModeTightening`, `CreateDbs`, and ARTS-RT slice normalization consume
-     the pass-facing summary and the canonical lowering-contract attrs.
-   - These consumers may refine modes, block-localized sizes, and dependency
-     slices, but they do not own semantic distribution or source-pattern
+   - `DbModeTightening` and `CreateDbs` consume the pass-facing summary and
+     canonical lowering-contract attrs.
+   - ARTS/DB refinement may validate committed dependency windows and refine
+     modes or block-localized sizes. ARTS-RT mechanically lowers committed halo
+     windows and flags to the runtime API; it must not synthesize or refine
+     halo byte windows.
+   - These consumers do not own semantic distribution or source-pattern
      authority.
 
 ### 2.2) Current Canonical Model
@@ -233,7 +236,7 @@ no longer exist):
 - H1.3b: Double-buffer stencil (jacobi-style) -> Block when all writes are uniform
   - Detects: stencil reads + uniform writes (no cross-element write dependencies)
   - Enables block partitioning for write phases (no halo overhead)
-  - Preserves ESD for read phases when needed
+  - Preserves halo-view windows for read phases when needed
 - H1.3 (indexed): Indexed patterns -> Block when possible, else element-wise
 - H1.4: Uniform direct access -> Block
 - H1.5: Multi-node -> Prefer Block (else fine-grained) for network efficiency
@@ -260,7 +263,7 @@ Current H2 tie-in:
 
 Important naming detail:
 - In the implementation, "block" is a family: PartitioningDecision::isBlock()
-  returns true for both Block and Stencil (Stencil is "Block + ESD halos").
+  returns true for both Block and Stencil (Stencil is "Block + halo views").
 
 ### 3.2 Per-Acquire Full-Range (H1.7)
 
@@ -373,18 +376,18 @@ A[i,j], block rows by B
   localI   = i % B        -> view[localI, j]
 ```
 
-### Stencil (Block + Halo / ESD)
+### Stencil (Block + Halo Views)
 
 Stencil keeps Block allocation layout, but dependency delivery is augmented with
-halo slices (ESD): each worker sees owned block data plus neighbor boundary
-slices (`leftHalo`, `rightHalo`) for ghost-cell accesses.
+read-only halo views: each worker sees owned block data plus neighbor boundary
+windows (`leftHalo`, `rightHalo`) for ghost-cell accesses.
 
 ```
 neighbor block   owned block   neighbor block
     |                |               |
     v                v               v
  leftHalo         owned view      rightHalo
- (ESD slice)      (full block)    (ESD slice)
+ (RO halo view)   (full block)    (RO halo view)
 ```
 
 ### Coarse vs Full-Range (Important)
@@ -686,22 +689,27 @@ Transformation (Block, 1D-blocked-on-rows example):
 
 ---
 
-## 7) Mode 4 - Stencil (Block + Halo / ESD)
+## 7) Mode 4 - Stencil (Block + Halo Views)
 
-Meaning: Block layout plus halos for neighbor access, implemented using ESD
-(Ephemeral Slice Dependencies).
+Meaning: Block layout plus read-only halo views for neighbor access.
 
-### 7.1 What ESD Is (Runtime Semantics)
+### 7.1 Halo Runtime Semantics
 
-ESD is a runtime capability: an EDT can depend on a *byte slice* of a DB.
-When the DB becomes ready, the runtime signals the EDT with a pointer to:
+An EDT can depend on a read-only byte window of a DB using
+`arts_add_halo_dependence`. When the DB reaches the correct CDAG reader
+generation, the runtime delivers the dependency as `DB_MODE_RO`, preserves the
+source DB GUID and byte window metadata, and EDT code reads the window through:
 
-  dbData + byteOffset
+  arts_dep_halo_ptr(&depv[slot])
 
-and a payload size. On multi-node, the runtime sends only that byte slice.
+Owner-local halos borrow the source DB payload while holding the normal RO
+frontier reader until EDT release. Remote halos send only the requested byte
+window and materialize a private compact snapshot at the destination.
+Halo windows must have `len > 0`; normal whole-DB reads and writes use ordinary
+`arts_add_dependence` edges instead of pretending the whole block is a halo.
 
 This is the right primitive for distributed ghost-cell exchange: minimal halo
-traffic while preserving blocked compute.
+traffic while preserving blocked compute and DB-mode ordering.
 
 ### 7.2 Stencil Layout (Conceptual View)
 
@@ -709,10 +717,10 @@ Stencil keeps the same *allocation layout* as Block (outerSizes/innerSizes).
 What changes is the *dependency delivery* to the EDT:
 
 - owned: the worker's chunk (normal block acquire)
-- leftHalo: a partial slice from the previous chunk (ESD)
-- rightHalo: a partial slice from the next chunk (ESD)
+- leftHalo: a read-only byte window from the previous chunk
+- rightHalo: a read-only byte window from the next chunk
 
-Transformation (Stencil / ESD, row-partitioned example):
+Transformation (Stencil / halo-view dependency, row-partitioned example):
 
 ```
   A : memref<[D0 x D1] x T>
@@ -735,15 +743,16 @@ Transformation (Stencil / ESD, row-partitioned example):
   | owned acquire     |   | left halo acquire |   | right halo acquire|
   | offsets=[k],      |   | offsets=[k-1],    |   | offsets=[k+1],    |
   | sizes=[1]         |   | sizes=[1]         |   | sizes=[1]         |
-  | full block        |   | ESD slice of DB   |   | ESD slice of DB   |
+  | full block        |   | RO halo view      |   | RO halo view      |
   +-------------------+   +-------------------+   +-------------------+
            |                       |                       |
            v                       v                       v
         owned view              leftHalo view           rightHalo view
 
   Multi-node note:
-    halo acquires use ESD byteOffset/size, so the runtime transfers ONLY halo
-    bytes between nodes (ghost-cell exchange), not the full neighbor block.
+    halo acquires use committed byteOffset/size windows, so the runtime
+    transfers only halo bytes between nodes (ghost-cell exchange), not the full
+    neighbor block.
 ```
 
 Example (1D rows, blockSize=4, haloLeft=1, haloRight=1, worker owns rows 4-7):
@@ -799,7 +808,7 @@ Then for an access at globalRow:
 Correctness rule:
 - stores must target owned only; halos are read-only.
 
-### 7.3 Plan: "ESD Per Row" Lowering (Avoid Per-Element Branching)
+### 7.3 Plan: "Halo View Per Row" Lowering (Avoid Per-Element Branching)
 
 Problem:
 - A naive stencil indexer that selects (owned vs halo) per load generates
@@ -830,7 +839,7 @@ first row:     r = 0                 (uses leftHalo for r-1)
 last row:      r = blockSize-1        (uses rightHalo for r+1)
 ```
 
-Theorem (Per-row ESD Overhead):
+Theorem (Per-row Halo Overhead):
 If halo widths are O(1) and blockSize is large, then:
 - compute overhead from halo selection is O(haloLeft + haloRight) per chunk
 - the innermost loop is branch-free in the interior
@@ -906,7 +915,7 @@ No runtime realignment to 0 is applied.
 
 ### 7.5 Stencil Limitations (Current)
 
-- Stencil ESD is restricted to leading partitioned dimensions.
+- Stencil halo views are restricted to leading partitioned dimensions.
 - If partitionedDims is non-leading, stencil is downgraded to Block.
 
 ---
@@ -1050,11 +1059,12 @@ Example access A[i,j,k]:
 - Layout materialization: direct SDE/CODIR-to-ARTS lowering for MU storage and
   tokens; `CreateDbs` only for remaining coarse raw memrefs.
 - Index localization for tiled layouts: SDE/CODIR token-local memref rewrite.
-- ESD runtime semantics: byte-slice deps (`artsRecordDepAt`) + pointer signaling
+- Halo runtime semantics: `arts_add_halo_dependence`, `DB_MODE_RO`, and
+  `arts_dep_halo_ptr`
 
 This keeps semantics explicit: SDE pattern analysis and distribution planning
 decide layout and task slices; SDE/CODIR materialization rewrites token-local
-accesses; ARTS creates DB/acquire objects; and the runtime implements the ESD
+accesses; ARTS creates DB/acquire objects; and the runtime realizes halo-view
 transport.
 
 ---

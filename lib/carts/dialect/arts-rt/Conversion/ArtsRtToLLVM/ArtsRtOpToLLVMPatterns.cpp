@@ -109,6 +109,77 @@ struct WaitOnEpochPattern : public ArtsRtToLLVMPattern<WaitOnEpochOp> {
 /// Dependency Patterns
 ///===----------------------------------------------------------------------===///
 
+static Value getDepEntryFieldPtr(ArtsCodegen *AC, Value depEntryPtr,
+                                 unsigned field, Location loc) {
+  auto c0 = AC->createIntConstant(0, AC->Int64, loc);
+  auto fieldIdx = AC->createIntConstant(field, AC->Int64, loc);
+  return AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
+                                 depEntryPtr, ValueRange{c0, fieldIdx});
+}
+
+static Value buildDepReadablePayloadPtr(ArtsCodegen *AC, Value depEntryPtr,
+                                        Value payloadPtr, Location loc) {
+  Value flagsPtr = getDepEntryFieldPtr(AC, depEntryPtr, /*field=*/3, loc);
+  Value offsetPtr = getDepEntryFieldPtr(AC, depEntryPtr, /*field=*/4, loc);
+  Value flags = AC->create<LLVM::LoadOp>(loc, AC->Int32, flagsPtr);
+  Value sliceOffset = AC->create<LLVM::LoadOp>(loc, AC->Int64, offsetPtr);
+
+  Value haloMask =
+      AC->createIntConstant(kArtsDepFlagHaloView, AC->Int32, loc);
+  Value compactMask =
+      AC->createIntConstant(kArtsDepFlagHaloCompact, AC->Int32, loc);
+  Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
+  Value haloBits = AC->create<arith::AndIOp>(loc, flags, haloMask);
+  Value compactBits = AC->create<arith::AndIOp>(loc, flags, compactMask);
+  Value isHalo = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+                                           haloBits, zeroI32);
+  Value isCompact = AC->create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::ne, compactBits, zeroI32);
+  Value notCompact = AC->create<arith::XOrIOp>(
+      loc, isCompact, AC->create<arith::ConstantIntOp>(loc, 1, 1));
+  Value needsOffset =
+      AC->create<arith::AndIOp>(loc, isHalo, notCompact);
+
+  Value shifted = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->Int8,
+                                          payloadPtr, ValueRange{sliceOffset});
+  return LLVM::SelectOp::create(AC->getBuilder(), loc, AC->llvmPtr,
+                                needsOffset, shifted, payloadPtr);
+}
+
+static Value buildDepReadablePayloadSlotPtr(ArtsCodegen *AC, Value depEntryPtr,
+                                            Value dataPtrAddr, Location loc) {
+  Value payloadPtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, dataPtrAddr);
+  Value adjustedPayload =
+      buildDepReadablePayloadPtr(AC, depEntryPtr, payloadPtr, loc);
+
+  Value flagsPtr = getDepEntryFieldPtr(AC, depEntryPtr, /*field=*/3, loc);
+  Value flags = AC->create<LLVM::LoadOp>(loc, AC->Int32, flagsPtr);
+  Value haloMask =
+      AC->createIntConstant(kArtsDepFlagHaloView, AC->Int32, loc);
+  Value compactMask =
+      AC->createIntConstant(kArtsDepFlagHaloCompact, AC->Int32, loc);
+  Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
+  Value haloBits = AC->create<arith::AndIOp>(loc, flags, haloMask);
+  Value compactBits = AC->create<arith::AndIOp>(loc, flags, compactMask);
+  Value isHalo = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+                                           haloBits, zeroI32);
+  Value isCompact = AC->create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::ne, compactBits, zeroI32);
+  Value notCompact = AC->create<arith::XOrIOp>(
+      loc, isCompact, AC->create<arith::ConstantIntOp>(loc, 1, 1));
+  Value needsOffset =
+      AC->create<arith::AndIOp>(loc, isHalo, notCompact);
+
+  auto slotType = MemRefType::get({1}, AC->llvmPtr);
+  Value adjustedSlot = AC->create<memref::AllocaOp>(loc, slotType);
+  Value zeroIdx = AC->createIndexConstant(0, loc);
+  AC->create<memref::StoreOp>(loc, adjustedPayload, adjustedSlot,
+                              ValueRange{zeroIdx});
+  Value adjustedSlotPtr = AC->castToLLVMPtr(adjustedSlot, loc);
+  return LLVM::SelectOp::create(AC->getBuilder(), loc, AC->llvmPtr,
+                                needsOffset, adjustedSlotPtr, dataPtrAddr);
+}
+
 /// Pattern to convert arts.record_dep operations
 struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
   using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
@@ -120,7 +191,6 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
     auto loc = op.getLoc();
     auto edtGuid = op.getEdtGuid();
 
-    /// Get access mode from attribute
     auto accessMode = op.getAccessMode();
     auto acquireModesAttr = op.getAcquireModes();
     ArrayRef<int32_t> acquireModeValues =
@@ -129,19 +199,15 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
     ArrayRef<int32_t> depFlagValues =
         depFlagsAttr ? *depFlagsAttr : ArrayRef<int32_t>{};
 
-    /// Get bounds validity flags for stencil boundary guarding
     auto boundsValids = op.getBoundsValids();
 
-    /// Get ESD byte_offsets and byte_sizes for halo dependencies
     auto byteOffsets = op.getByteOffsets();
     auto byteSizes = op.getByteSizes();
 
-    /// Create shared slot counter for all dependencies
     auto slotTy = MemRefType::get({}, AC->Int32);
     Value sharedSlotAlloc = AC->create<memref::AllocaOp>(loc, slotTy);
     Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
     AC->create<memref::StoreOp>(loc, zeroI32, sharedSlotAlloc);
-    /// Add dependencies for each datablock using shared slot counter
     unsigned dbIdx = 0;
     for (Value dbGuid : op.getDatablocks()) {
       std::optional<int32_t> acquireMode = std::nullopt;
@@ -150,15 +216,15 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
       std::optional<int32_t> depFlags = std::nullopt;
       if (dbIdx < depFlagValues.size())
         depFlags = depFlagValues[dbIdx];
-      /// Get bounds_valid for this dependency if available
       Value boundsValid =
           (dbIdx < boundsValids.size()) ? boundsValids[dbIdx] : Value();
-      /// Get ESD byte offset/size for this dependency if available
       Value byteOffset =
           (dbIdx < byteOffsets.size()) ? byteOffsets[dbIdx] : Value();
       Value byteSize = (dbIdx < byteSizes.size()) ? byteSizes[dbIdx] : Value();
-      recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, accessMode, acquireMode,
-                      depFlags, boundsValid, byteOffset, byteSize, loc);
+      if (failed(recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, accessMode,
+                                 acquireMode, depFlags, boundsValid, byteOffset,
+                                 byteSize, loc)))
+        return failure();
       ++dbIdx;
     }
 
@@ -340,8 +406,8 @@ private:
   /// Holds extracted dependency info for a single datablock source.
   struct DepDbInfo {
     DbLoweringInfo dbInfo;
-    /// The originating distributed acquire, used to read its committed
-    /// halo_slice window. Null for dep-struct or fallback sources.
+    /// The originating acquire, used only to fail closed if a stale halo_slice
+    /// reaches ARTS-RT without explicit byte windows.
     DbAcquireOp dbAcquireOp = nullptr;
     SmallVector<Value, 4> allocSizes;
     Value guidStorage = nullptr;
@@ -350,183 +416,7 @@ private:
     Value stencilCenterLinear;
     SmallVector<Value, 4> stencilCenterCoords;
     std::optional<LoweringContractInfo> stencilContract;
-    SmallVector<unsigned, 4> blockOwnerDims;
-    SmallVector<Value, 4> blockElementSizes;
-    Value scalarSize = nullptr;
   };
-
-  static Value buildTrailingExtentProduct(ArtsCodegen *AC,
-                                          ArrayRef<Value> extents,
-                                          unsigned firstDim, Location loc) {
-    return AC->computeTotalElements(extents.drop_front(firstDim), loc);
-  }
-
-  static std::pair<Value, Value>
-  buildFaceSliceByteRange(ArtsCodegen *AC, ArrayRef<Value> blockExtents,
-                          unsigned dim, int64_t haloExtent, bool upperFace,
-                          Value scalarSize, Location loc) {
-    Value zero = AC->createIndexConstant(0, loc);
-    Value halo = AC->createIndexConstant(haloExtent, loc);
-    Value dimExtent = AC->castToIndex(blockExtents[dim], loc);
-    Value clampedHalo = AC->create<arith::MinUIOp>(loc, halo, dimExtent);
-    Value trailingExtent =
-        buildTrailingExtentProduct(AC, blockExtents, dim + 1, loc);
-    Value elementOffset = zero;
-    if (upperFace)
-      elementOffset = AC->create<arith::SubIOp>(loc, dimExtent, clampedHalo);
-    Value linearOffset =
-        AC->create<arith::MulIOp>(loc, elementOffset, trailingExtent);
-    Value elementCount =
-        AC->create<arith::MulIOp>(loc, clampedHalo, trailingExtent);
-    Value byteOffset = AC->create<arith::MulIOp>(loc, linearOffset, scalarSize);
-    Value byteSize = AC->create<arith::MulIOp>(loc, elementCount, scalarSize);
-    return {byteOffset, byteSize};
-  }
-
-  /// Build the per-slot read-only halo face byte slice from the committed
-  /// halo_slice window. ARTS-RT consumes the committed element extents (lower /
-  /// upper) and performs only the element-to-byte arithmetic; it does not
-  /// reconstruct the window from the stencil contract.
-  std::pair<Value, Value> buildCommittedHaloFaceSliceForSlot(
-      const DepDbInfo &depInfo, Value linearIndex,
-      ArrayRef<Value> directIndices, Location loc) const {
-    if (!depInfo.dbAcquireOp || !depInfo.scalarSize ||
-        depInfo.blockElementSizes.empty())
-      return {Value(), Value()};
-
-    DbAcquireOp acquire = depInfo.dbAcquireOp;
-    auto haloSlice = acquire.getHaloSliceAttr();
-    if (!haloSlice)
-      return {Value(), Value()};
-    ArrayRef<int64_t> lower = haloSlice.getLower().asArrayRef();
-    ArrayRef<int64_t> upper = haloSlice.getUpper().asArrayRef();
-    if (lower.empty() || upper.empty() || lower.size() != upper.size())
-      return {Value(), Value()};
-
-    Value zero = AC->createIndexConstant(0, loc);
-    Value zeroSize = AC->createIndexConstant(0, loc);
-    Value trueI1 = AC->create<arith::ConstantIntOp>(loc, 1, 1);
-    Value selectedOffset = zero;
-    Value selectedSize = zeroSize;
-
-    auto applyCandidate = [&](Value match, std::pair<Value, Value> slice) {
-      selectedOffset =
-          AC->create<arith::SelectOp>(loc, match, slice.first, selectedOffset);
-      selectedSize =
-          AC->create<arith::SelectOp>(loc, match, slice.second, selectedSize);
-    };
-
-    if (!directIndices.empty() && !depInfo.stencilCenterCoords.empty()) {
-      unsigned ownerRank = std::min<unsigned>(
-          directIndices.size(),
-          std::min<unsigned>(
-              depInfo.stencilCenterCoords.size(),
-              std::min<unsigned>(
-                  depInfo.blockOwnerDims.empty()
-                      ? depInfo.blockElementSizes.size()
-                      : depInfo.blockOwnerDims.size(),
-                  std::min<unsigned>(lower.size(), upper.size()))));
-      for (unsigned dim = 0; dim < ownerRank; ++dim) {
-        unsigned physicalDim =
-            depInfo.blockOwnerDims.empty() ? dim : depInfo.blockOwnerDims[dim];
-        if (physicalDim >= depInfo.blockElementSizes.size())
-          continue;
-
-        // A byte slice can only represent a contiguous face. If any leading
-        // extent above the narrowed dimension is wider than 1, the face would
-        // become strided and must stay on the whole-DB dependency path.
-        bool contiguousFace = true;
-        for (unsigned lead = 0; lead < physicalDim; ++lead)
-          contiguousFace &=
-              ValueAnalysis::isOneConstant(ValueAnalysis::stripNumericCasts(
-                  depInfo.blockElementSizes[lead]));
-        if (!contiguousFace)
-          continue;
-
-        Value sameOtherDims = trueI1;
-        for (unsigned other = 0; other < ownerRank; ++other) {
-          if (other == dim)
-            continue;
-          Value equalCoord = AC->create<arith::CmpIOp>(
-              loc, arith::CmpIPredicate::eq, directIndices[other],
-              depInfo.stencilCenterCoords[other]);
-          sameOtherDims =
-              AC->create<arith::AndIOp>(loc, sameOtherDims, equalCoord);
-        }
-
-        int64_t haloBefore = std::max<int64_t>(0, -lower[dim]);
-        int64_t haloAfter = std::max<int64_t>(0, upper[dim]);
-        if (haloBefore > 0) {
-          Value isLowerNeighbor = AC->create<arith::CmpIOp>(
-              loc, arith::CmpIPredicate::ult, directIndices[dim],
-              depInfo.stencilCenterCoords[dim]);
-          Value match =
-              AC->create<arith::AndIOp>(loc, sameOtherDims, isLowerNeighbor);
-          applyCandidate(match, buildFaceSliceByteRange(
-                                    AC, depInfo.blockElementSizes, physicalDim,
-                                    haloBefore, /*upperFace=*/true,
-                                    depInfo.scalarSize, loc));
-        }
-        if (haloAfter > 0) {
-          Value isUpperNeighbor = AC->create<arith::CmpIOp>(
-              loc, arith::CmpIPredicate::ugt, directIndices[dim],
-              depInfo.stencilCenterCoords[dim]);
-          Value match =
-              AC->create<arith::AndIOp>(loc, sameOtherDims, isUpperNeighbor);
-          applyCandidate(match, buildFaceSliceByteRange(
-                                    AC, depInfo.blockElementSizes, physicalDim,
-                                    haloAfter, /*upperFace=*/false,
-                                    depInfo.scalarSize, loc));
-        }
-      }
-      return {selectedOffset, selectedSize};
-    }
-
-    if (depInfo.stencilCenterLinear && !depInfo.blockElementSizes.empty()) {
-      unsigned ownerRank =
-          depInfo.blockOwnerDims.empty()
-              ? static_cast<unsigned>(lower.size())
-              : static_cast<unsigned>(depInfo.blockOwnerDims.size());
-      if (ownerRank != 1)
-        return {Value(), Value()};
-
-      unsigned physicalDim =
-          depInfo.blockOwnerDims.empty() ? 0 : depInfo.blockOwnerDims.front();
-      if (physicalDim >= depInfo.blockElementSizes.size())
-        return {Value(), Value()};
-
-      for (unsigned lead = 0; lead < physicalDim; ++lead)
-        if (!ValueAnalysis::isOneConstant(ValueAnalysis::stripNumericCasts(
-                depInfo.blockElementSizes[lead])))
-          return {Value(), Value()};
-
-      int64_t haloBefore = std::max<int64_t>(0, -lower[0]);
-      int64_t haloAfter = std::max<int64_t>(0, upper[0]);
-      if (haloBefore > 0) {
-        Value isLowerNeighbor = AC->create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::ult, AC->castToIndex(linearIndex, loc),
-            AC->castToIndex(depInfo.stencilCenterLinear, loc));
-        applyCandidate(isLowerNeighbor,
-                       buildFaceSliceByteRange(AC, depInfo.blockElementSizes,
-                                               physicalDim, haloBefore,
-                                               /*upperFace=*/true,
-                                               depInfo.scalarSize, loc));
-      }
-      if (haloAfter > 0) {
-        Value isUpperNeighbor = AC->create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::ugt, AC->castToIndex(linearIndex, loc),
-            AC->castToIndex(depInfo.stencilCenterLinear, loc));
-        applyCandidate(isUpperNeighbor,
-                       buildFaceSliceByteRange(AC, depInfo.blockElementSizes,
-                                               physicalDim, haloAfter,
-                                               /*upperFace=*/false,
-                                               depInfo.scalarSize, loc));
-      }
-      return {selectedOffset, selectedSize};
-    }
-
-    return {Value(), Value()};
-  }
 
   Value localLinearToGlobalLinear(Value localLinear,
                                   const DbLoweringInfo &dbInfo,
@@ -709,33 +599,6 @@ private:
         result.stencilCenterCoords = inferStencilCenterCoordsFromContract(
             dbAcquireOp, result.dbInfo, loc);
       }
-
-      if (auto alloc = dyn_cast_or_null<DbAllocOp>(
-              RtDbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()))) {
-        Type elementType = alloc.getElementType();
-        if (auto memrefType = dyn_cast<MemRefType>(elementType))
-          elementType = memrefType.getElementType();
-        result.scalarSize = AC->create<polygeist::TypeSizeOp>(
-            loc, IndexType::get(AC->getContext()), elementType);
-
-        auto allocExtents = alloc.getElementSizes();
-        result.blockElementSizes.assign(allocExtents.begin(),
-                                        allocExtents.end());
-
-        unsigned ownerRank = result.dbInfo.sizes.size();
-        if (result.stencilContract &&
-            !result.stencilContract->spatial.ownerDims.empty())
-          ownerRank = static_cast<unsigned>(
-              result.stencilContract->spatial.ownerDims.size());
-        if (ownerRank != 0) {
-          if (result.stencilContract)
-            result.blockOwnerDims =
-                resolveContractOwnerDims(*result.stencilContract, ownerRank);
-          else
-            for (unsigned dim = 0; dim < ownerRank; ++dim)
-              result.blockOwnerDims.push_back(dim);
-        }
-      }
     } else if (depDbAcquireOp) {
       result.dbInfo = RtDbUtils::extractDbLoweringInfo(depDbAcquireOp);
       rebaseDepIterationWindow(result, loc);
@@ -780,13 +643,13 @@ private:
   }
 
   /// Iterate over DB elements and emit record-dep calls for each index.
-  void emitRecordDepCalls(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
-                          DepAccessMode accessMode,
-                          std::optional<int32_t> acquireMode,
-                          std::optional<int32_t> depFlags, Value boundsValid,
-                          Value byteOffset, Value byteSize,
-                          const DepDbInfo &depInfo, const DepBoundsInfo &bounds,
-                          Location loc) const {
+  LogicalResult
+  emitRecordDepCalls(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
+                     DepAccessMode accessMode,
+                     std::optional<int32_t> acquireMode,
+                     std::optional<int32_t> depFlags, Value boundsValid,
+                     Value byteOffset, Value byteSize, const DepDbInfo &depInfo,
+                     const DepBoundsInfo &bounds, Location loc) const {
     auto guidStorageType = dyn_cast<MemRefType>(
         (depInfo.guidStorage ? depInfo.guidStorage : dbGuid).getType());
     bool useDirectCoords = !bounds.useDepv && guidStorageType &&
@@ -795,8 +658,11 @@ private:
     if (useDirectCoords) {
       Value one = AC->createIndexConstant(1, loc);
       SmallVector<Value, 4> globalCoords;
+      LogicalResult result = success();
 
       std::function<void(unsigned)> emitForCoords = [&](unsigned dim) {
+        if (failed(result))
+          return;
         if (dim == depInfo.dbInfo.sizes.size()) {
           SmallVector<Value, 4> localCoords;
           localCoords.reserve(globalCoords.size());
@@ -812,13 +678,13 @@ private:
                                   : AC->computeLinearIndex(bounds.allocSizes,
                                                            globalCoords, loc);
 
-          recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
-                         linearIndex, ArrayRef<Value>(globalCoords),
-                         bounds.allocSizes, accessMode, acquireMode, depFlags,
-                         boundsValid, depInfo.depStruct, depInfo.baseOffset,
-                         bounds.totalDBs, byteOffset, byteSize,
-                         depInfo.stencilCenterLinear,
-                         depInfo.stencilCenterCoords, &depInfo, loc);
+          result = recordSingleDb(
+              dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc, linearIndex,
+              ArrayRef<Value>(globalCoords), bounds.allocSizes, accessMode,
+              acquireMode, depFlags, boundsValid, depInfo.depStruct,
+              depInfo.baseOffset, bounds.totalDBs, byteOffset, byteSize,
+              depInfo.stencilCenterLinear, depInfo.stencilCenterCoords, &depInfo,
+              loc);
           return;
         }
 
@@ -835,62 +701,89 @@ private:
       };
 
       emitForCoords(0);
-      return;
+      return result;
     }
 
     if (!bounds.useDepv && depInfo.dbInfo.isSingleElement &&
         !depInfo.dbInfo.indices.empty()) {
       Value zero = AC->createIndexConstant(0, loc);
-      recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
-                     zero, depInfo.dbInfo.indices, bounds.allocSizes,
-                     accessMode, acquireMode, depFlags, boundsValid,
-                     depInfo.depStruct, depInfo.baseOffset, bounds.totalDBs,
-                     byteOffset, byteSize, depInfo.stencilCenterLinear,
-                     depInfo.stencilCenterCoords, &depInfo, loc);
-      return;
+      return recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid,
+                            sharedSlotAlloc, zero, depInfo.dbInfo.indices,
+                            bounds.allocSizes, accessMode, acquireMode,
+                            depFlags, boundsValid, depInfo.depStruct,
+                            depInfo.baseOffset, bounds.totalDBs, byteOffset,
+                            byteSize, depInfo.stencilCenterLinear,
+                            depInfo.stencilCenterCoords, &depInfo, loc);
     }
 
+    LogicalResult result = success();
     AC->iterateDbElements(
         dbGuid, edtGuid, depInfo.dbInfo.sizes, depInfo.dbInfo.offsets,
         depInfo.dbInfo.isSingleElement, loc,
         [&](Value linearIndex) {
-          recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
-                         linearIndex, ArrayRef<Value>(), bounds.allocSizes,
-                         accessMode, acquireMode, depFlags, boundsValid,
-                         depInfo.depStruct, depInfo.baseOffset, bounds.totalDBs,
-                         byteOffset, byteSize, depInfo.stencilCenterLinear,
-                         depInfo.stencilCenterCoords, &depInfo, loc);
+          if (failed(result))
+            return;
+          result = recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid,
+                                  sharedSlotAlloc, linearIndex, ArrayRef<Value>(),
+                                  bounds.allocSizes, accessMode, acquireMode,
+                                  depFlags, boundsValid, depInfo.depStruct,
+                                  depInfo.baseOffset, bounds.totalDBs, byteOffset,
+                                  byteSize, depInfo.stencilCenterLinear,
+                                  depInfo.stencilCenterCoords, &depInfo, loc);
         },
         bounds.allocSizes);
+    return result;
   }
 
   /// Record all dependencies for a single datablock
-  void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
-                       DepAccessMode accessMode,
-                       std::optional<int32_t> acquireMode,
-                       std::optional<int32_t> depFlags, Value boundsValid,
-                       Value byteOffset, Value byteSize, Location loc) const {
+  LogicalResult recordDepsForDb(Value dbGuid, Value edtGuid,
+                                Value sharedSlotAlloc, DepAccessMode accessMode,
+                                std::optional<int32_t> acquireMode,
+                                std::optional<int32_t> depFlags,
+                                Value boundsValid, Value byteOffset,
+                                Value byteSize, Location loc) const {
     DepDbInfo depInfo = extractDbInfoForDeps(dbGuid, acquireMode, loc);
     DepBoundsInfo bounds =
         computeDepBounds(dbGuid, depInfo, accessMode, boundsValid);
-    emitRecordDepCalls(dbGuid, edtGuid, sharedSlotAlloc, accessMode,
-                       acquireMode, depFlags, boundsValid, byteOffset, byteSize,
-                       depInfo, bounds, loc);
+    return emitRecordDepCalls(dbGuid, edtGuid, sharedSlotAlloc, accessMode,
+                              acquireMode, depFlags, boundsValid, byteOffset,
+                              byteSize, depInfo, bounds, loc);
+  }
+
+  static bool hasDepFlag(std::optional<int32_t> flags, int32_t mask) {
+    return flags && ((*flags & mask) != 0);
+  }
+
+  static std::optional<int32_t>
+  clearDepFlags(std::optional<int32_t> flags, int32_t mask) {
+    if (!flags)
+      return std::nullopt;
+    int32_t bits = *flags & ~mask;
+    if (bits == 0)
+      return std::nullopt;
+    return bits;
   }
 
   /// Emit the appropriate runtime call for recording a dependency.
   /// Standard path: arts_add_dependence(dbGuid, edtGuid, slot, mode)
-  /// ESD path: arts_add_dependence_at(dbGuid, edtGuid, slot, mode, offset,
-  /// size)
-  void emitRecordDepCall(Value dbGuidValue, Value edtGuidValue,
-                         Value currentSlotI32, Value modeValue,
-                         Value byteOffsetI64, Value byteSizeI64,
-                         std::optional<int32_t> depFlags, Location loc) const {
+  /// Halo path: arts_add_halo_dependence(dbGuid, edtGuid, slot, offset, size)
+  LogicalResult emitRecordDepCall(Value dbGuidValue, Value edtGuidValue,
+                                  Value currentSlotI32, Value modeValue,
+                                  Value byteOffsetI64, Value byteSizeI64,
+                                  std::optional<int32_t> depFlags,
+                                  Location loc) const {
+    const bool haloView = hasDepFlag(depFlags, kArtsDepFlagHaloView);
+    std::optional<int32_t> wholeDbFlags =
+        clearDepFlags(depFlags,
+                      kArtsDepFlagHaloView | kArtsDepFlagHaloCompact);
+    std::optional<int32_t> haloFlags =
+        clearDepFlags(depFlags,
+                      kArtsDepFlagHaloView | kArtsDepFlagHaloCompact);
+
     auto emitWholeDbDep = [&]() {
       ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-      /// Standard path: full datablock dependency
-      if (depFlags && *depFlags != 0) {
-        Value flagsValue = AC->createIntConstant(*depFlags, AC->Int32, loc);
+      if (wholeDbFlags && *wholeDbFlags != 0) {
+        Value flagsValue = AC->createIntConstant(*wholeDbFlags, AC->Int32, loc);
         RCB.callVoid(
             types::ARTSRTL_arts_add_dependence_ex,
             {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, flagsValue});
@@ -900,24 +793,36 @@ private:
       }
     };
 
-    auto emitSliceDep = [&]() {
+    auto emitHaloDep = [&]() {
       ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
-      /// ESD path: partial slice dependency with byte offset/size
-      if (depFlags && *depFlags != 0) {
-        Value flagsValue = AC->createIntConstant(*depFlags, AC->Int32, loc);
-        RCB.callVoid(types::ARTSRTL_arts_add_dependence_at_ex,
-                     {dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                      byteOffsetI64, byteSizeI64, flagsValue});
+      if (haloFlags && *haloFlags != 0) {
+        Value flagsValue = AC->createIntConstant(*haloFlags, AC->Int32, loc);
+        RCB.callVoid(types::ARTSRTL_arts_add_halo_dependence_ex,
+                     {dbGuidValue, edtGuidValue, currentSlotI32, byteOffsetI64,
+                      byteSizeI64, flagsValue});
       } else {
-        RCB.callVoid(types::ARTSRTL_arts_add_dependence_at,
-                     {dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                      byteOffsetI64, byteSizeI64});
+        RCB.callVoid(types::ARTSRTL_arts_add_halo_dependence,
+                     {dbGuidValue, edtGuidValue, currentSlotI32, byteOffsetI64,
+                      byteSizeI64});
       }
     };
 
+    if (haloView) {
+      if (!byteOffsetI64 || !byteSizeI64) {
+        return mlir::emitError(loc)
+               << "HALO_VIEW dependency requires an explicit byte window";
+      }
+      Value normalizedByteSize = ValueAnalysis::stripNumericCasts(byteSizeI64);
+      if (!ValueAnalysis::isProvablyNonZero(normalizedByteSize))
+        return mlir::emitError(loc)
+               << "HALO_VIEW dependency requires provably nonzero byte_size";
+      emitHaloDep();
+      return success();
+    }
+
     if (!byteOffsetI64 || !byteSizeI64) {
       emitWholeDbDep();
-      return;
+      return success();
     }
 
     Value normalizedByteSize = ValueAnalysis::stripNumericCasts(byteSizeI64);
@@ -926,35 +831,17 @@ private:
     /// known after runtime guards (whole-block or center-block fallback).
     if (ValueAnalysis::isZeroConstant(normalizedByteSize)) {
       emitWholeDbDep();
-      return;
+      return success();
     }
-    if (ValueAnalysis::isProvablyNonZero(normalizedByteSize)) {
-      emitSliceDep();
-      return;
-    }
-
-    Value zeroI64 = AC->createIntConstant(0, AC->Int64, loc);
-    Value useWholeDbDep = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, byteSizeI64, zeroI64);
-    auto ifOp =
-        AC->create<scf::IfOp>(loc, useWholeDbDep, /*withElseRegion=*/true);
-    AC->setInsertionPointToStart(&ifOp.getThenRegion().front());
-    emitWholeDbDep();
-    AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
-    emitSliceDep();
-    AC->setInsertionPointAfter(ifOp);
+    return mlir::emitError(loc)
+           << "explicit byte window without HALO_VIEW is unsupported; ARTS-RT "
+              "must lower stencil halos through arts_add_halo_dependence or "
+              "use a whole-DB dependency";
   }
 
-  /// Record a single datablock dependency for an EDT slot.
-  ///
-  /// Two main paths:
-  /// 1. Guarded (boundsValid set): if-else to handle boundary workers
-  ///    - Then: arts_add_dependence[_at] for valid indices
-  ///    - Else: arts_signal_edt_null for out-of-bounds
-  /// 2. Unconditional: direct arts_add_dependence[_at] call
-  ///
-  /// Within each path, ESD vs standard is handled by emitRecordDepCall.
-  void recordSingleDb(
+  /// Record a single DB dependency, using a guarded null signal for invalid
+  /// boundary slots and the halo runtime API for explicit byte windows.
+  LogicalResult recordSingleDb(
       Value dbGuid, Value guidStorage, Value edtGuid, Value slotAlloc,
       Value linearIndex, ArrayRef<Value> directIndices,
       ArrayRef<Value> directLayoutSizes, DepAccessMode accessMode,
@@ -982,7 +869,6 @@ private:
           AC->create<arith::AndIOp>(loc, boundsValid, indexInBounds);
     }
 
-    /// Prepare common values
     Value edtGuidValue = edtGuid;
     if (auto mt = dyn_cast<MemRefType>(edtGuid.getType())) {
       auto zeroIndex = AC->createIndexConstant(0, loc);
@@ -1017,36 +903,21 @@ private:
                                               readValue);
     }
 
-    // When an acquire expands into multiple DB slots, copy the committed
-    // halo_slice window per emitted slot instead of widening every neighbor
-    // block back to a whole-DB dependence.
     Value effectiveByteOffset = byteOffset;
     Value effectiveByteSize = byteSize;
     std::optional<int32_t> effectiveDepFlags = depFlags;
     bool preserveShape =
         depFlags && ((*depFlags & kArtsDepFlagPreserveShape) != 0);
-    bool committedFaceSlice = false;
-    bool hasExplicitSlice = byteOffset && byteSize &&
-                            !ValueAnalysis::isZeroConstant(
-                                ValueAnalysis::stripNumericCasts(byteSize));
-    if (!preserveShape && !hasExplicitSlice && depInfo) {
-      auto faceSlice = buildCommittedHaloFaceSliceForSlot(*depInfo, linearIndex,
-                                                          directIndices, loc);
-      if (faceSlice.first && faceSlice.second) {
-        effectiveByteOffset = faceSlice.first;
-        effectiveByteSize = faceSlice.second;
-        /// The committed halo face slice keeps the consumer IR on the original
-        /// block coordinate system (for example, Seidel's left halo still
-        /// indexes row 252 of the predecessor block). Compact slice payloads
-        /// would break that contract, so committed face slices must request the
-        /// shape-preserving runtime path.
-        committedFaceSlice = true;
-        int32_t depFlagBits = effectiveDepFlags.value_or(0);
-        depFlagBits |= kArtsDepFlagPreserveShape;
-        effectiveDepFlags = depFlagBits;
-      }
-    }
-    if (preserveShape && !committedFaceSlice) {
+    bool hasExplicitSlice =
+        byteOffset && byteSize &&
+        ValueAnalysis::isProvablyNonZero(
+            ValueAnalysis::stripNumericCasts(byteSize));
+    DbAcquireOp sourceAcquire = depInfo ? depInfo->dbAcquireOp : DbAcquireOp();
+    if (!hasExplicitSlice && sourceAcquire && sourceAcquire.getHaloSliceAttr())
+      return sourceAcquire.emitOpError()
+             << "carries halo_slice without an explicit provably nonzero byte "
+                "window; ARTS-RT must not infer halo face slices";
+    if (preserveShape) {
       /// Explicit preserve-shape markings currently act as an analysis-time
       /// "do not compact this acquire" contract. Keep those on the whole-DB
       /// path until the upstream acquire rewrite carries a compact index space.
@@ -1061,15 +932,13 @@ private:
       }
     }
 
-    /// Prepare ESD values if needed (cast Index to Int64).
-    /// byte_size == 0 denotes "no partial slice" and should use full-db deps.
     bool hasPartialSlice =
         effectiveByteOffset && effectiveByteSize &&
         !ValueAnalysis::isZeroConstant(
             ValueAnalysis::stripNumericCasts(effectiveByteSize));
     if (hasPartialSlice && modeInt != readMode && !isCenterBlock) {
-      /// ARTS runtime only supports arts_add_dependence_at (sliced deps) for
-      /// DB_MODE_RO. For write-mode (EW) deps without stencil center-block
+      /// ARTS-RT only lowers committed byte windows as HALO_VIEW read slices.
+      /// For write-mode (EW) deps without stencil center-block
       /// semantics, fall back to whole-DB dependencies.
       effectiveByteOffset = nullptr;
       effectiveByteSize = nullptr;
@@ -1091,19 +960,18 @@ private:
     }
 
     if (effectiveBoundsValid) {
-      /// GUARDED PATH: boundary workers may have invalid indices
       auto ifOp = AC->create<scf::IfOp>(loc, effectiveBoundsValid,
                                         /*withElseRegion=*/true);
 
-      /// Then: valid index - record the dependency
       AC->setInsertionPointToStart(&ifOp.getThenRegion().front());
       Value dbGuidValue = loadDbGuidValue(dbGuid, guidStorage, linearIndex,
                                           directIndices, directLayoutSizes,
                                           useDepv, depStruct, baseOffset, loc);
-      emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                        byteOffsetI64, byteSizeI64, effectiveDepFlags, loc);
+      if (failed(emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32,
+                                   modeValue, byteOffsetI64, byteSizeI64,
+                                   effectiveDepFlags, loc)))
+        return failure();
 
-      /// Else: invalid index - signal null dependency
       AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
       ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
       RCB.callVoid(types::ARTSRTL_arts_signal_edt_null,
@@ -1111,19 +979,20 @@ private:
 
       AC->setInsertionPointAfter(ifOp);
     } else {
-      /// UNCONDITIONAL PATH: all indices are valid
       Value dbGuidValue = loadDbGuidValue(dbGuid, guidStorage, linearIndex,
                                           directIndices, directLayoutSizes,
                                           useDepv, depStruct, baseOffset, loc);
-      emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
-                        byteOffsetI64, byteSizeI64, effectiveDepFlags, loc);
+      if (failed(emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32,
+                                   modeValue, byteOffsetI64, byteSizeI64,
+                                   effectiveDepFlags, loc)))
+        return failure();
     }
 
-    /// Increment slot counter
     auto oneI32 = AC->createIntConstant(1, AC->Int32, loc);
     auto incrementedSlot =
         AC->create<arith::AddIOp>(loc, currentSlotI32, oneI32);
     AC->create<memref::StoreOp>(loc, incrementedSlot, slotAlloc);
+    return success();
   }
 };
 
@@ -1259,9 +1128,11 @@ struct DepGepOpPattern : public ArtsRtToLLVMPattern<DepGepOp> {
     /// Get the data pointer (field #1)
     auto dataPtr = AC->create<LLVM::GEPOp>(
         loc, AC->llvmPtr, AC->ArtsEdtDep, depEntryPtr, ValueRange{c0, cPtrIdx});
+    Value readableDataPtr =
+        buildDepReadablePayloadSlotPtr(AC, depEntryPtr, dataPtr, loc);
 
     /// Return both: guid pointer and data pointer
-    rewriter.replaceOp(op, ValueRange{guidPtr, dataPtr});
+    rewriter.replaceOp(op, ValueRange{guidPtr, readableDataPtr});
     ++numDepOpsConverted;
     return success();
   }
@@ -1323,6 +1194,8 @@ struct DepDbAcquireOpPattern : public ArtsRtToLLVMPattern<DepDbAcquireOp> {
     Value dataPtrAddr = AC->create<LLVM::GEPOp>(
         loc, AC->llvmPtr, AC->ArtsEdtDep, depEntryPtr, ValueRange{c0, cPtrIdx});
     Value payloadPtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, dataPtrAddr);
+    Value readablePayloadPtr =
+        buildDepReadablePayloadPtr(AC, depEntryPtr, payloadPtr, loc);
 
     /// DepDbAcquireOp feeds two distinct downstream shapes:
     /// - flat payload memrefs (e.g. memref<?x?xf32>) expect the dep entry's
@@ -1336,11 +1209,12 @@ struct DepDbAcquireOpPattern : public ArtsRtToLLVMPattern<DepDbAcquireOp> {
     /// Some outlined paths may preserve memref<?xmemref<...>> types (the
     /// original pre-DbAlloc types) instead of memref<?x!llvm.ptr>. Both
     /// represent block-partitioned pointer tables and need dataPtrAddr.
-    Value ptrBase = payloadPtr;
+    Value ptrBase = readablePayloadPtr;
     if (auto ptrType = dyn_cast<MemRefType>(op.getPtr().getType())) {
       auto elemTy = ptrType.getElementType();
       if (isa<LLVM::LLVMPointerType>(elemTy) || isa<MemRefType>(elemTy))
-        ptrBase = dataPtrAddr;
+        ptrBase =
+            buildDepReadablePayloadSlotPtr(AC, depEntryPtr, dataPtrAddr, loc);
     }
 
     auto guidView = AC->create<polygeist::Pointer2MemrefOp>(

@@ -889,7 +889,7 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
                                normalized->sizes.end());
               /// ARTS ESD is copy-based RO transport. If the normalized slice
               /// still covers the entire local DB block, using
-              /// arts_add_dependence_at would only copy the whole block instead
+              /// the halo runtime API would only copy the whole block instead
               /// of reusing the normal whole-DB dependence path.
               Value sliceNarrowerThanBlock = AC->create<arith::XOrIOp>(
                   loc, normalized->wholeBlock,
@@ -930,11 +930,17 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
             totalElements = AC->create<arith::MulIOp>(loc, totalElements, sz);
           }
           byteSize = AC->create<arith::MulIOp>(loc, totalElements, scalarSize);
-          Value zeroIdx = AC->createIndexConstant(0, loc);
-          byteOffset = AC->create<arith::SelectOp>(loc, useSliceTransport,
-                                                   byteOffset, zeroIdx);
-          byteSize = AC->create<arith::SelectOp>(loc, useSliceTransport,
-                                                 byteSize, zeroIdx);
+          if (ValueAnalysis::isConstantBool(useSliceTransport, false)) {
+            Value zeroIdx = AC->createIndexConstant(0, loc);
+            byteOffset = zeroIdx;
+            byteSize = zeroIdx;
+          } else if (!ValueAnalysis::isTrueConstant(useSliceTransport)) {
+            Value zeroIdx = AC->createIndexConstant(0, loc);
+            byteOffset = AC->create<arith::SelectOp>(loc, useSliceTransport,
+                                                     byteOffset, zeroIdx);
+            byteSize = AC->create<arith::SelectOp>(loc, useSliceTransport,
+                                                   byteSize, zeroIdx);
+          }
           hasEsdDeps = true;
         } else {
           /// Fallback: no allocation info available
@@ -947,9 +953,6 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
       byteOffset = AC->createIndexConstant(0, loc);
       byteSize = AC->createIndexConstant(0, loc);
     }
-    byteOffsets.push_back(byteOffset);
-    byteSizes.push_back(byteSize);
-
     DbAllocOp allocForHint =
         dyn_cast_or_null<DbAllocOp>(RtDbUtils::getUnderlyingDbAlloc(dep));
     if (dbAcquireOp && !allocForHint) {
@@ -1009,9 +1012,10 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
         depFlagBits |= kArtsDepFlagPreferDuplicate;
       }
     }
-    bool hasExplicitSlice = byteOffset && byteSize &&
-                            !ValueAnalysis::isZeroConstant(
-                                ValueAnalysis::stripNumericCasts(byteSize));
+    bool hasExplicitSlice =
+        byteOffset && byteSize &&
+        ValueAnalysis::isProvablyNonZero(
+            ValueAnalysis::stripNumericCasts(byteSize));
     if (depDbAcquireOp && hasExplicitSlice) {
       /// Depv-carried slices are still unstable for continuation-style
       /// generated EDTs. Fall back to whole-block dependencies for depv
@@ -1022,14 +1026,20 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
       byteSize = zeroIdx;
       hasExplicitSlice = false;
     }
+    if (dbAcquireOp && edtOp.getPerBlockHaloExchangeAttr() &&
+        dbMode == DbMode::read) {
+      if (!hasExplicitSlice)
+        return dbAcquireOp.emitOpError()
+               << "per-block halo read dependency requires an explicit "
+                  "provably nonzero byte window; ARTS-RT must not infer or "
+                  "fall back to a whole DB";
+      depFlagBits |= kArtsDepFlagHaloView;
+    }
+    byteOffsets.push_back(byteOffset);
+    byteSizes.push_back(byteSize);
+
     /// Explicit element slices already encode the producer/consumer contract.
-    /// When upstream rewrites localize the consumer to a compact halo view,
-    /// forcing "preserve shape" here would discard the byte slice later in
-    /// ConvertArtsRtToLLVM and hand the task a whole DB block instead.
-    ///
-    /// Keep preserve-shape as a late-lowering inference only, for cases where
-    /// ConvertArtsRtToLLVM derives a face slice after consumer indexing has
-    /// already been fixed to full-block coordinates.
+    /// ARTS-RT must lower those byte windows mechanically.
     if (depFlagBits != 0)
       hasDepFlags = true;
     depFlags.push_back(depFlagBits);

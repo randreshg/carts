@@ -1,6 +1,7 @@
 """Test and lit commands for CARTS CLI."""
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -102,7 +103,7 @@ def _resolve_lit_targets(config: CartsConfig, suite: str) -> List[Path]:
         test_paths = [p for p in pass_test_dirs + e2e_test_dirs if p.is_dir()]
     else:
         print_error(f"Unknown test suite '{suite}'")
-        print_info("Available suites: pass, e2e, all, contracts, benchmarks")
+        print_info("Available suites: pass, e2e, all, contracts, benchmarks, arts")
         raise Exit(1)
 
     if not test_paths:
@@ -191,14 +192,76 @@ def _run_lit(
     raise Exit(result.returncode)
 
 
+def _resolve_ctest_tool(config: CartsConfig) -> Optional[Path]:
+    """Resolve CTest from the managed env or PATH."""
+    managed = config.carts_dir / ".dekk" / "env" / "bin" / "ctest"
+    if managed.is_file():
+        return managed
+    path_ctest = shutil.which("ctest")
+    return Path(path_ctest) if path_ctest else None
+
+
+def _run_arts_ctest(
+    config: CartsConfig,
+    verbose_tests: bool,
+    filter_pattern: Optional[str],
+) -> None:
+    """Run ARTS runtime tests from the dekk-managed ARTS build tree."""
+    ctest = _resolve_ctest_tool(config)
+    if ctest is None:
+        print_error("CTest not found in the managed environment or PATH.")
+        raise Exit(1)
+
+    arts_tests_dir = config.arts_build_dir / "tests"
+    if not (arts_tests_dir / "CTestTestfile.cmake").is_file():
+        print_error("ARTS runtime tests are not built in the current ARTS tree.")
+        print_info("Run `dekk carts build --arts --arts-tests` first.")
+        raise Exit(1)
+
+    print_info("Running ARTS runtime test suite...")
+    console.print(f"Test suite: [{Colors.INFO}]arts[/{Colors.INFO}]")
+    console.print(f"Test path: [{Colors.DEBUG}]{arts_tests_dir}[/{Colors.DEBUG}]")
+    if filter_pattern:
+        console.print(f"CTest filter: [{Colors.DEBUG}]{filter_pattern}[/{Colors.DEBUG}]")
+    console.print()
+
+    cmd = [
+        str(ctest),
+        "--test-dir",
+        str(arts_tests_dir),
+        "--output-on-failure",
+    ]
+    if verbose_tests:
+        cmd.append("-V")
+    if filter_pattern:
+        cmd.extend(["-R", filter_pattern])
+
+    result = run_subprocess(cmd, check=False)
+    console.print()
+    if result.returncode == 0:
+        print_success("ARTS runtime test suite completed successfully!")
+    else:
+        print_error(f"ARTS runtime test suite failed with exit code {result.returncode}")
+    raise Exit(result.returncode)
+
+
 def test(
     suite: str = Option("pass", "--suite", "-s",
-                              help="Test suite: pass (default), e2e, all, benchmarks"),
+                              help="Test suite: pass (default), e2e, all, benchmarks, arts"),
     verbose_tests: bool = Option(
         False, "-v", help="Verbose test output"),
+    filter_pattern: Optional[str] = Option(
+        None, "--filter", help="Filter ARTS runtime tests by CTest regex (--suite arts)"),
 ):
     """Run CARTS test suite using llvm-lit."""
     config = get_config()
+    if suite in ("arts", "arts-runtime"):
+        _run_arts_ctest(config, verbose_tests, filter_pattern)
+        return
+    if filter_pattern:
+        print_error("--filter is only supported with --suite arts.")
+        raise Exit(1)
+
     test_paths = _resolve_lit_targets(config, suite)
     if suite in ("benchmarks", "benchmark"):
         _run_benchmark_pytests(test_paths, verbose_tests)

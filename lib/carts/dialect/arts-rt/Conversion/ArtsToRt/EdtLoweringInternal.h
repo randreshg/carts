@@ -36,6 +36,7 @@ using namespace ::mlir::carts::arts;
 
 static constexpr int32_t kArtsDepFlagPreferDuplicate = 1 << 0;
 static constexpr int32_t kArtsDepFlagPreserveShape = 1 << 1;
+static constexpr int32_t kArtsDepFlagHaloView = 1 << 2;
 
 ///===----------------------------------------------------------------------===//
 /// Structs

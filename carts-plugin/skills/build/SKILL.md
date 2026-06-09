@@ -29,6 +29,7 @@ Common workflows:
   RDMA data plane
 - `dekk carts build --arts --debug 3` — rebuild ARTS runtime with full debug logging
 - `dekk carts build --arts --counters 2` — rebuild ARTS with workload counters
+- `dekk carts build --arts --arts-tests` — rebuild ARTS with runtime test binaries enabled
 
 The build respects `CARTS_HOME` first, then the local untracked `carts.config`
 file, then the checkout root. Do not hardcode machine-local install paths in

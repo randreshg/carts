@@ -226,7 +226,57 @@ static bool isReadAccess(Operation *op) {
   return isa<memref::LoadOp, affine::AffineLoadOp, polygeist::DynLoadOp>(op);
 }
 
+static std::optional<int64_t>
+getOwnerDimOffset(ArrayAttr attr, unsigned ownerDim, unsigned ownerSlot) {
+  std::optional<SmallVector<int64_t, 4>> values = readI64ArrayAttr(attr);
+  if (!values || values->empty())
+    return std::nullopt;
+  if (ownerDim < values->size())
+    return (*values)[ownerDim];
+  if (ownerSlot < values->size())
+    return (*values)[ownerSlot];
+  if (values->size() == 1)
+    return values->front();
+  return std::nullopt;
+}
+
+static bool depHasCommittedShiftedOwnerDimRead(CodeletOp codelet,
+                                               unsigned depIndex) {
+  if (!codelet || depIndex >= codelet.getDeps().size())
+    return false;
+  std::optional<CodirAccessMode> mode = getDepAccessMode(codelet, depIndex);
+  if (!mode || !codirAccessMayRead(*mode))
+    return false;
+  if (!codirAccessMayWrite(*mode) && codelet.getDeps().size() != 1)
+    return false;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
+      getTileOwnerDims(codelet);
+  if (!ownerDims || ownerDims->empty() || !tileOwnerDims)
+    return false;
+
+  for (unsigned ownerDim : *ownerDims) {
+    auto slotIt = llvm::find(*tileOwnerDims, ownerDim);
+    if (slotIt == tileOwnerDims->end())
+      continue;
+    unsigned ownerSlot =
+        static_cast<unsigned>(std::distance(tileOwnerDims->begin(), slotIt));
+    std::optional<int64_t> minOffset = getOwnerDimOffset(
+        codelet.getAccessMinOffsetsAttr(), ownerDim, ownerSlot);
+    std::optional<int64_t> maxOffset = getOwnerDimOffset(
+        codelet.getAccessMaxOffsetsAttr(), ownerDim, ownerSlot);
+    if ((minOffset && *minOffset < 0) || (maxOffset && *maxOffset > 0))
+      return true;
+  }
+  return false;
+}
+
 static bool depHasShiftedOwnerDimRead(CodeletOp codelet, unsigned depIndex) {
+  if (depHasCommittedShiftedOwnerDimRead(codelet, depIndex))
+    return true;
+
   if (!codelet || codelet.getBody().empty() ||
       depIndex >= codelet.getDeps().size())
     return false;

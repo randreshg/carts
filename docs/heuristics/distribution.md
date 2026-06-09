@@ -70,7 +70,7 @@ annotation level.
 | DB owner node fixed by GUID | Yes | owner-computes is natural for writes |
 | Single writer per generation | Yes | no concurrent multi-writer update of one DB |
 | Read sharing | Yes | multiple readers can acquire concurrently |
-| Partial read dependency (`artsRecordDepAt`) | Yes | stencil/halo exchanges are efficient |
+| Halo-view dependency (`arts_add_halo_dependence`) | Yes | stencil/halo exchanges transfer only requested RO windows |
 | Partial point-to-point put (`artsPutInDb`) | Yes | targeted transfer works |
 | Partial write-back of modified DB | No (disabled) | write release remains full DB cost |
 

@@ -374,11 +374,8 @@ bool DbUtils::acquiresPartialHaloWindow(DbAcquireOp acquire) {
 }
 
 bool DbUtils::hasCommittedDbSpaceWindow(DbAcquireOp acquire) {
-  /// A committed halo_slice is the authoritative per-slot window.
-  if (acquire.getHaloSliceAttr())
-    return true;
-  /// An ESD partial chunk acquire carries its DB-space window as explicit
-  /// element offset/size operands that ARTS-RT copies, not infers.
+  /// A halo_slice records stencil reach for verification/diagnostics only. The
+  /// dependency window consumed by ARTS-RT must be explicit element offsets/sizes.
   auto offsets = acquire.getElementOffsets();
   auto sizes = acquire.getElementSizes();
   return !offsets.empty() && !sizes.empty() && offsets.size() == sizes.size();

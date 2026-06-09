@@ -5,18 +5,12 @@
 // RUN:     --implicit-check-not=wavefront_2d \
 // RUN:     --implicit-check-not=arrayLayout \
 // RUN:     --implicit-check-not=commVolumeBytes \
-// RUN:     --implicit-check-not=physicalBlockShape \
-// RUN:     --implicit-check-not=physicalOwnerDims \
-// RUN:     --implicit-check-not=logicalWorkerSlice \
-// RUN:     --implicit-check-not=physicalHaloShape \
 // RUN:     --implicit-check-not=inPlaceSharedState
 
-// SDE currently has a real wavefront schedule but no truthful multi-owner
-// storage carrier for the row/column-tile DB grain. CODIR must fail closed
-// instead of falling back to host_whole/coarse storage.
-// RUN: not %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-to-codir 2>&1 \
-// RUN:   | %FileCheck %s --check-prefix=CODIR-FAIL
+// The same plan reaches CODIR as a block-native owner-strip halo dependency.
+// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
+// RUN:   --start-from sde-planning --pipeline sde-to-codir \
+// RUN:   | %FileCheck %s --check-prefix=CODIR
 
 // Single-worker lowering remains serial and undistributed.
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_1t.cfg \
@@ -31,14 +25,27 @@
 // MULTI: scf.if
 // MULTI: accessMaxOffsets = [1, 1]
 // MULTI-SAME: accessMinOffsets = [-1, -1]
+// MULTI-SAME: iterationTopology = #sde.iteration_topology<owner_strip>
+// MULTI-SAME: logicalWorkerSlice = [1, 4096]
 // MULTI-SAME: ownerDims = [0, 1]
 // MULTI-SAME: pattern = #sde.pattern<stencil_tiling_nd>
+// MULTI-SAME: physicalBlockShape = [1, 4096]
+// MULTI-SAME: physicalHaloShape = [1]
+// MULTI-SAME: physicalOwnerDims = [0]
 // MULTI-SAME: spatialDims = [0, 1]
 // MULTI-SAME: writeFootprint = [1, 1]
 
-// CODIR-FAIL: owner-compute stencil has no realized tile storage plan
-// CODIR-FAIL-SAME: tile_owner_dims and tile_shape
-// CODIR-FAIL-SAME: refusing host_whole/coarse storage fallback
+// CODIR-LABEL: func.func @seidel_in_place
+// CODIR: codir.codelet
+// CODIR-SAME: dep_collectives = [#codir.collective<halo>]
+// CODIR-SAME: dep_modes = [#codir.access_mode<readwrite>]
+// CODIR-SAME: dep_owner_dims = [{{\[}}0{{\]}}]
+// CODIR-SAME: dep_storage_views = [#codir.storage_view<compute_block>]
+// CODIR-SAME: halo_shape = [1]
+// CODIR-SAME: iteration_topology = #codir.iteration_topology<owner_strip>
+// CODIR-SAME: logical_worker_slice = [1, 4096]
+// CODIR-SAME: tile_owner_dims = [0]
+// CODIR-SAME: tile_shape = [1, 4096]
 
 // SERIAL-LABEL: func.func @seidel_in_place
 // SERIAL: inPlaceSharedState

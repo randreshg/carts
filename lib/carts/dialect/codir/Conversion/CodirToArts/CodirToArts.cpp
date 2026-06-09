@@ -164,9 +164,15 @@ struct PlannedBlockDepAccessPlan {
   SmallVector<int64_t, 4> blockSizes;
   SmallVector<Value, 4> ownerParams;
   SmallVector<Value, 4> ownerDomainBases;
+  SmallVector<Value, 4> acquiredElementBases;
   SmallVector<int64_t, 4> groupBlockCounts;
+  SmallVector<int64_t, 4> lowerHaloBlockCounts;
+  SmallVector<int64_t, 4> upperHaloBlockCounts;
   bool grouped = false;
   bool allowFullWindowAccess = false;
+  bool directHaloWindowAccess = false;
+  bool hasDirectOwnedWindow = false;
+  unsigned directOwnedWindowTaskDepIndex = 0;
 
   bool empty() const { return ownerDims.empty(); }
 };
@@ -194,8 +200,13 @@ getCodirLogicalOwnerBlockCounts(codir::CodeletOp codelet, unsigned depIndex,
       if (ownerDim >= logicalSlice->size())
         return std::nullopt;
       logicalExtent = (*logicalSlice)[ownerDim];
+    } else if (logicalSlice && ownerDim < logicalSlice->size()) {
+      logicalExtent = (*logicalSlice)[ownerDim];
     } else if (logicalSlice && logicalSlice->size() == ownerDims->size()) {
       logicalExtent = (*logicalSlice)[slot];
+    } else if (logicalSlice && logicalSlice->size() == 1 &&
+               ownerDims->size() == 1) {
+      logicalExtent = logicalSlice->front();
     }
     if (logicalExtent <= 0)
       return std::nullopt;
@@ -239,7 +250,11 @@ planReplicatedReadFullBlockAccess(codir::CodeletOp codelet, unsigned depIndex,
   plannedAccess.ownerParams.assign(ownerDims->size(), Value{});
   plannedAccess.ownerDomainBases.assign(ownerDims->size(),
                                         createZeroIndex(builder, loc));
+  plannedAccess.acquiredElementBases.assign(ownerDims->size(),
+                                            createZeroIndex(builder, loc));
   plannedAccess.groupBlockCounts.assign(blockCounts.begin(), blockCounts.end());
+  plannedAccess.lowerHaloBlockCounts.assign(ownerDims->size(), 0);
+  plannedAccess.upperHaloBlockCounts.assign(ownerDims->size(), 0);
   plannedAccess.grouped = true;
   plannedAccess.allowFullWindowAccess = true;
   return true;
@@ -579,11 +594,13 @@ struct ConvertCodirToArtsPass
 
     SmallVector<Value> taskDeps;
     SmallVector<Type> blockArgTypes;
+    SmallVector<unsigned, 4> depTaskArgIndices;
     SmallVector<CodirDepSlice, 4> depSlices;
     SmallVector<PlannedBlockDepAccessPlan, 4> plannedBlockAccessPlans;
     SmallVector<Operation *, 4> depViewCleanup;
     taskDeps.reserve(codelet.getDeps().size());
     blockArgTypes.reserve(codelet.getDeps().size());
+    depTaskArgIndices.reserve(codelet.getDeps().size());
     depSlices.reserve(codelet.getDeps().size());
     plannedBlockAccessPlans.reserve(codelet.getDeps().size());
 
@@ -617,6 +634,8 @@ struct ConvertCodirToArtsPass
         dbOffsets.push_back(zero);
         dbSizes.push_back(createOneIndex(builder, loc));
       }
+      SmallVector<Value> ownedDbOffsets;
+      SmallVector<Value> ownedDbSizes;
       PlannedBlockDepAccessPlan plannedAccess;
       if (codirDepAllowsComputeBlockStorage(codelet, depIdx) &&
           canUseCodirOwnerSliceForAlloc(codelet, depIdx, alloc) &&
@@ -654,10 +673,19 @@ struct ConvertCodirToArtsPass
           }
           bool grouped = llvm::any_of(*groupBlockCounts,
                                       [](int64_t count) { return count > 1; });
+          bool directHaloWindow =
+              grouped && hasHaloWindow &&
+              codirDepUsesGroupedOwnerComputeHaloAccess(codelet, depIdx);
+          if (directHaloWindow)
+            return codelet.emitOpError()
+                   << "grouped owner-compute halo dependency #" << depIdx
+                   << " requires explicit per-face element_offsets/"
+                      "element_sizes; widened whole-block halo acquires are "
+                      "forbidden";
           // Grouped halo-backed deps are only allowed when the body remains
           // owner-slice rooted. Concrete index bounds are still proven by the
           // block-local rewrite before any db_ref is materialized.
-          if (grouped && hasHaloWindow &&
+          if (grouped && hasHaloWindow && !directHaloWindow &&
               !codirDepAccessesStayWithinSingleOwnerSlice(codelet, depIdx))
             return codelet.emitOpError()
                    << "grouped compute over halo block dependency #" << depIdx
@@ -665,6 +693,11 @@ struct ConvertCodirToArtsPass
 
           dbOffsets.clear();
           dbSizes.clear();
+          if (directHaloWindow) {
+            ownedDbOffsets.clear();
+            ownedDbSizes.clear();
+          }
+          plannedAccess.directHaloWindowAccess = directHaloWindow;
           for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
             Value blockSizeValue =
                 createConstantIndex(builder, loc, (*blockSizes)[slot]);
@@ -678,23 +711,79 @@ struct ConvertCodirToArtsPass
                           .getResult();
             Value blockIndex = arith::DivUIOp::create(
                 builder, loc, relativeBase, blockSizeValue);
-            dbOffsets.push_back(blockIndex);
             int64_t groupBlockCount = (*groupBlockCounts)[slot];
+            Value ownedBlockCount;
             if (groupBlockCount <= 1) {
-              dbSizes.push_back(createOneIndex(builder, loc));
+              ownedBlockCount = createOneIndex(builder, loc);
             } else {
               Value requestedBlocks =
                   createConstantIndex(builder, loc, groupBlockCount);
               Value remainingBlocks = arith::SubIOp::create(
                   builder, loc, alloc.getSizes()[slot], blockIndex);
-              dbSizes.push_back(arith::MinUIOp::create(
-                  builder, loc, remainingBlocks, requestedBlocks));
+              ownedBlockCount = arith::MinUIOp::create(
+                  builder, loc, remainingBlocks, requestedBlocks);
+            }
+            Value acquireBlockIndex = blockIndex;
+            Value acquireBlockCount = ownedBlockCount;
+            Value acquiredElementBase = base;
+            CodirOwnerHaloWindow ownerHalo =
+                getCodirBlockStorageHaloWindowForDim(
+                    codelet, depIdx, ownerDim,
+                    static_cast<unsigned>(alloc.getElementSizes().size()));
+            int64_t lowerHaloBlocks = 0;
+            int64_t upperHaloBlocks = 0;
+            if (directHaloWindow && !ownerHalo.empty()) {
+              lowerHaloBlocks =
+                  llvm::divideCeil(std::max<int64_t>(0, ownerHalo.lower),
+                                   (*blockSizes)[slot]);
+              upperHaloBlocks =
+                  llvm::divideCeil(std::max<int64_t>(0, ownerHalo.upper),
+                                   (*blockSizes)[slot]);
+              Value actualLowerBlocks = zero;
+              if (lowerHaloBlocks > 0) {
+                Value requestedLower =
+                    createConstantIndex(builder, loc, lowerHaloBlocks);
+                actualLowerBlocks = arith::MinUIOp::create(
+                    builder, loc, blockIndex, requestedLower);
+                acquireBlockIndex = arith::SubIOp::create(
+                    builder, loc, blockIndex, actualLowerBlocks);
+              }
+              Value actualUpperBlocks = zero;
+              if (upperHaloBlocks > 0) {
+                Value ownedEnd = arith::AddIOp::create(
+                    builder, loc, blockIndex, ownedBlockCount);
+                Value remainingAfterOwned = arith::SubIOp::create(
+                    builder, loc, alloc.getSizes()[slot], ownedEnd);
+                Value requestedUpper =
+                    createConstantIndex(builder, loc, upperHaloBlocks);
+                actualUpperBlocks = arith::MinUIOp::create(
+                    builder, loc, remainingAfterOwned, requestedUpper);
+              }
+              Value withLower = arith::AddIOp::create(
+                  builder, loc, ownedBlockCount, actualLowerBlocks);
+              acquireBlockCount =
+                  arith::AddIOp::create(builder, loc, withLower,
+                                        actualUpperBlocks);
+              Value acquiredBlockOffset = arith::MulIOp::create(
+                  builder, loc, acquireBlockIndex, blockSizeValue);
+              acquiredElementBase =
+                  arith::AddIOp::create(builder, loc, domainBase,
+                                        acquiredBlockOffset);
+            }
+            dbOffsets.push_back(acquireBlockIndex);
+            dbSizes.push_back(acquireBlockCount);
+            if (directHaloWindow) {
+              ownedDbOffsets.push_back(blockIndex);
+              ownedDbSizes.push_back(ownedBlockCount);
             }
             plannedAccess.ownerDims.push_back(ownerDim);
             plannedAccess.blockSizes.push_back((*blockSizes)[slot]);
             plannedAccess.ownerParams.push_back(ownerParams[slot]);
             plannedAccess.ownerDomainBases.push_back(domainBase);
+            plannedAccess.acquiredElementBases.push_back(acquiredElementBase);
             plannedAccess.groupBlockCounts.push_back(groupBlockCount);
+            plannedAccess.lowerHaloBlockCounts.push_back(lowerHaloBlocks);
+            plannedAccess.upperHaloBlockCounts.push_back(upperHaloBlocks);
           }
           plannedAccess.grouped = grouped;
         }
@@ -702,9 +791,14 @@ struct ConvertCodirToArtsPass
       if (plannedAccess.empty() && isReplicatedReadDep(codelet, depIdx))
         planReplicatedReadFullBlockAccess(codelet, depIdx, alloc, builder, loc,
                                           plannedAccess);
+      unsigned primaryTaskDepIndex = static_cast<unsigned>(taskDeps.size());
+      arts::ArtsMode acquireMode =
+          plannedAccess.directHaloWindowAccess
+              ? arts::ArtsMode::in
+              : convertAccessMode(modeAttr.getValue());
       auto acquire = arts::DbAcquireOp::create(
-          builder, loc, convertAccessMode(modeAttr.getValue()), alloc.getGuid(),
-          alloc.getPtr(), partitionMode,
+          builder, loc, acquireMode, alloc.getGuid(), alloc.getPtr(),
+          partitionMode,
           /*indices=*/SmallVector<Value>{}, std::move(dbOffsets),
           std::move(dbSizes),
           /*partitionIndices=*/SmallVector<Value>{},
@@ -717,6 +811,32 @@ struct ConvertCodirToArtsPass
         acquire.setReplicatedReadAttr(UnitAttr::get(codelet.getContext()));
       taskDeps.push_back(acquire.getPtr());
       blockArgTypes.push_back(acquire.getPtr().getType());
+      if (plannedAccess.directHaloWindowAccess) {
+        if (ownedDbOffsets.size() != alloc.getSizes().size() ||
+            ownedDbSizes.size() != alloc.getSizes().size())
+          return codelet.emitOpError()
+                 << "failed to materialize owned write window for grouped "
+                    "halo dependency #"
+                 << depIdx;
+        plannedAccess.hasDirectOwnedWindow = true;
+        plannedAccess.directOwnedWindowTaskDepIndex =
+            static_cast<unsigned>(taskDeps.size());
+        auto ownedAcquire = arts::DbAcquireOp::create(
+            builder, loc, convertAccessMode(modeAttr.getValue()),
+            alloc.getGuid(), alloc.getPtr(), partitionMode,
+            /*indices=*/SmallVector<Value>{}, std::move(ownedDbOffsets),
+            std::move(ownedDbSizes),
+            /*partitionIndices=*/SmallVector<Value>{},
+            /*partitionOffsets=*/SmallVector<Value>{},
+            /*partitionSizes=*/SmallVector<Value>{},
+            /*boundsValid=*/Value{},
+            /*elementOffsets=*/SmallVector<Value>{},
+            /*elementSizes=*/SmallVector<Value>{});
+        ownedAcquire.setPreserveAccessMode();
+        taskDeps.push_back(ownedAcquire.getPtr());
+        blockArgTypes.push_back(ownedAcquire.getPtr().getType());
+      }
+      depTaskArgIndices.push_back(primaryTaskDepIndex);
       depSlices.push_back(std::move(slice));
       plannedBlockAccessPlans.push_back(std::move(plannedAccess));
     }
@@ -747,6 +867,13 @@ struct ConvertCodirToArtsPass
           continue;
         taskParams.push_back(domainBase);
       }
+      for (Value acquiredBase : accessPlan.acquiredElementBases) {
+        if (!acquiredBase || !isCodirScalarParamType(acquiredBase.getType()) ||
+            ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(acquiredBase) ||
+            containsValue(taskParams, acquiredBase))
+          continue;
+        taskParams.push_back(acquiredBase);
+      }
     }
     // CODIR carries only generic worker-plan facts. The ARTS boundary is the
     // first place where runtime topology can turn that plan into inter-node
@@ -771,6 +898,7 @@ struct ConvertCodirToArtsPass
     Block &taskBlock = task.getBody().front();
     for (Type type : blockArgTypes)
       taskBlock.addArgument(type, loc);
+    unsigned firstParamArg = blockArgTypes.size();
     DenseMap<Value, Value> paramBlockArgs;
     DenseMap<Value, Value> sourceByBlockArgument;
     for (auto [idx, param] : llvm::enumerate(taskParams)) {
@@ -787,8 +915,15 @@ struct ConvertCodirToArtsPass
     unsigned numDeps = codelet.getDeps().size();
     SmallVector<PlannedBlockLocalAccessRewrite, 4> localAccessRewrites;
     for (unsigned idx = 0; idx < numDeps; ++idx) {
+      if (idx >= depTaskArgIndices.size() ||
+          depTaskArgIndices[idx] >= taskBlock.getNumArguments())
+        return codelet.emitOpError()
+               << "failed to materialize task dependency argument for "
+                  "codelet dependency #"
+               << idx;
       Value payload =
-          materializeInnerPayload(builder, loc, taskBlock.getArgument(idx));
+          materializeInnerPayload(builder, loc,
+                                  taskBlock.getArgument(depTaskArgIndices[idx]));
       const CodirDepSlice &slice = depSlices[idx];
       if (slice.sliced) {
         auto depType = cast<MemRefType>(codelet.getDeps()[idx].getType());
@@ -825,11 +960,29 @@ struct ConvertCodirToArtsPass
         if (accessPlan.ownerParams.size() != accessPlan.ownerDims.size() ||
             accessPlan.blockSizes.size() != accessPlan.ownerDims.size() ||
             accessPlan.ownerDomainBases.size() != accessPlan.ownerDims.size() ||
-            accessPlan.groupBlockCounts.size() != accessPlan.ownerDims.size())
+            accessPlan.acquiredElementBases.size() !=
+                accessPlan.ownerDims.size() ||
+            accessPlan.groupBlockCounts.size() != accessPlan.ownerDims.size() ||
+            accessPlan.lowerHaloBlockCounts.size() !=
+                accessPlan.ownerDims.size() ||
+            accessPlan.upperHaloBlockCounts.size() !=
+                accessPlan.ownerDims.size())
           return codelet.emitOpError()
                  << "failed to materialize owner-base parameters for planned "
                     "block-local access rewrite";
         arts::DbAllocOp blockAlloc = findBackingDbAlloc(codelet.getDeps()[idx]);
+        Value groupedReadSource = taskBlock.getArgument(depTaskArgIndices[idx]);
+        Value groupedWriteSource = groupedReadSource;
+        if (accessPlan.hasDirectOwnedWindow) {
+          if (accessPlan.directOwnedWindowTaskDepIndex >=
+              taskBlock.getNumArguments())
+            return codelet.emitOpError()
+                   << "failed to materialize owned write-window dependency "
+                      "argument for codelet dependency #"
+                   << idx;
+          groupedWriteSource =
+              taskBlock.getArgument(accessPlan.directOwnedWindowTaskDepIndex);
+        }
         for (auto [slot, ownerDim] : llvm::enumerate(accessPlan.ownerDims)) {
           Value ownerBase;
           if (Value ownerParam = accessPlan.ownerParams[slot])
@@ -856,6 +1009,19 @@ struct ConvertCodirToArtsPass
           Value localOrigin = materializeBlockLocalOrigin(
               builder, loc, ownerBase, ownerDomainBase,
               accessPlan.blockSizes[slot]);
+          Value acquiredElementBase = accessPlan.acquiredElementBases[slot];
+          if (std::optional<int64_t> folded =
+                  ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
+                      acquiredElementBase)) {
+            acquiredElementBase = createConstantIndex(builder, loc, *folded);
+          } else if (Value mappedBase =
+                         paramBlockArgs.lookup(acquiredElementBase)) {
+            acquiredElementBase = mappedBase;
+          } else {
+            return codelet.emitOpError()
+                   << "failed to materialize acquired block-window base for "
+                      "planned block-local access rewrite";
+          }
           CodirOwnerHaloWindow ownerHalo = getCodirBlockStorageHaloWindowForDim(
               codelet, idx, ownerDim,
               static_cast<unsigned>(payloadType.getRank()));
@@ -868,9 +1034,13 @@ struct ConvertCodirToArtsPass
           }
           localAccessRewrites.push_back(
               {payload, ownerDim, ownerBase, localOrigin, ownerHalo.lower,
-               taskBlock.getArgument(idx), static_cast<unsigned>(slot),
+               ownerHalo.upper, acquiredElementBase, groupedReadSource,
+               groupedWriteSource, static_cast<unsigned>(slot),
                accessPlan.blockSizes[slot], accessPlan.groupBlockCounts[slot],
-               accessPlan.grouped, accessPlan.allowFullWindowAccess});
+               accessPlan.lowerHaloBlockCounts[slot],
+               accessPlan.upperHaloBlockCounts[slot], accessPlan.grouped,
+               accessPlan.allowFullWindowAccess,
+               accessPlan.directHaloWindowAccess});
         }
       }
       mapper.map(codeletBlock.getArgument(idx), payload);
@@ -878,7 +1048,7 @@ struct ConvertCodirToArtsPass
 
     for (auto [idx, param] : llvm::enumerate(codelet.getParams()))
       mapper.map(codeletBlock.getArgument(numDeps + idx),
-                 taskBlock.getArgument(numDeps + idx));
+                 taskBlock.getArgument(firstParamArg + idx));
     for (Operation &nested : codeletBlock.without_terminator())
       builder.insert(nested.clone(mapper));
 

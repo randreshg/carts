@@ -1,10 +1,9 @@
 ///==========================================================================///
 /// File: DbCommitDistributedDeps.cpp
 ///
-/// Commits the runtime DB mode and per-slot halo window on distributed DB
-/// acquires so ARTS-RT lowering reads committed facts with no fallback
-/// inference. Mechanical: it only fills missing committed facts and never
-/// recomputes an existing mode verdict.
+/// Commits runtime DB mode and stencil halo diagnostics on distributed DB
+/// acquires. ARTS-RT still requires explicit element/byte windows for halo
+/// transport; halo_slice alone is not a lowering contract.
 ///==========================================================================///
 
 #define GEN_PASS_DEF_DBCOMMITDISTRIBUTEDDEPS
@@ -23,11 +22,9 @@ using namespace mlir::carts::arts;
 
 namespace {
 
-/// Project the committed stencil access window into a per-slot halo_slice so
-/// downstream consumers read a committed halo fact instead of re-deriving it.
-/// Covers every distributed partial halo acquire ARTS-RT would otherwise
-/// reconstruct (stencil partition mode or block-halo signal), not just acquires
-/// whose partition mode is literally `stencil`.
+/// Project the committed stencil access window into a per-slot halo_slice for
+/// verification and diagnostics. It must not be used by ARTS-RT to synthesize
+/// byte windows.
 static void commitHaloSlice(DbAcquireOp acquire) {
   if (acquire.getHaloSliceAttr() ||
       !DbUtils::acquiresPartialHaloWindow(acquire))

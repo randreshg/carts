@@ -1,13 +1,10 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(db-commit-distributed-deps,verify-arts-cdag)' | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(db-commit-distributed-deps,verify-arts-cdag)' 2>&1 \
+// RUN:   | %FileCheck %s
 
-// Every distributed partial halo acquire must carry a committed DB-space window.
-// The commit pass projects the committed stencil access window into a per-slot
-// halo_slice, and verify-arts-cdag accepts the acquire because that committed
-// window now exists. ARTS-RT will copy it instead of inferring the halo face.
+// A halo_slice is only stencil reach metadata. A distributed partial halo acquire
+// must carry explicit element_offsets/element_sizes before ARTS-RT.
 
-// CHECK-LABEL: func.func @distributed_partial_acquire_gets_committed_window
-// CHECK: arts.db_acquire
-// CHECK-SAME: halo_slice = #arts.halo_slice<lower = [-1], upper = [1]>
+// CHECK: acquires a partial halo window of a distributed DB without explicit element_offsets/element_sizes
 
 module {
   func.func @distributed_partial_acquire_gets_committed_window() {

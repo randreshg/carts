@@ -189,10 +189,9 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: stencil_supported_block_halo
 
 // CHECK: scf.for
-// CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>)
-// CHECK: %[[LOWER_OK:.*]] = arith.cmpi ugt
-// CHECK: %[[UPPER_OK:.*]] = arith.cmpi ult
+// CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[LOWER_OK:.*]]) element_offsets[%[[ZERO]], %[[ZERO]]] element_sizes[%[[ONE]], %[[FOUR]]]
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[LOWER_OK]]) element_offsets[%[[EIGHT]], %[[ZERO]]] element_sizes[%[[ONE]], %[[FOUR]]]
+// CHECK: arts.db_acquire[<out>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[UPPER_OK:.*]]) element_offsets[%[[NINE]], %[[ZERO]]] element_sizes[%[[ONE]], %[[FOUR]]]
 // CHECK: arts.db_acquire[<in>] {{.*}} partitioning(<block>){{.*}}bounds_valid(%[[UPPER_OK]]) element_offsets[%[[ONE]], %[[ZERO]]] element_sizes[%[[ONE]], %[[FOUR]]]
 // CHECK: %[[TOTAL_NODES:.*]] = arts.runtime_query <total_nodes> -> i32
 // CHECK: %[[NODES_IDX:.*]] = arith.index_cast %[[TOTAL_NODES]] : i32 to index
@@ -207,7 +206,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: memref.store %{{.*}}, %{{.*}}[%[[ZERO]], %{{.*}}]
 // CHECK: scf.if
 // CHECK: memref.load %{{.*}}[%[[ZERO]], %{{.*}}]
-// CHECK: memref.store %{{.*}}, %{{.*}}[%[[NINE]], %{{.*}}]
+// CHECK: memref.store %{{.*}}, %{{.*}}[%[[ZERO]], %{{.*}}]
 // CHECK: arts.barrier
 
 // CHECK: arts.edt <task> <internode> route{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>
@@ -228,14 +227,20 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: scf.for %{{.*}} = %[[ZERO_G]] to %[[SIXTEEN_G]] step %[[TWO_G]]
 // CHECK: attributes {storageBridgeCopy}
 // CHECK: scf.for %[[BLOCK_BASE:.*]] = %[[ZERO_G]] to %[[SIXTEEN_G]] step %[[TWO_G]]
-// CHECK: arts.db_acquire[<out>]
-// CHECK-SAME: partitioning(<block>)
-// CHECK: %[[LANE1:.*]] = arith.addi %[[BLOCK_BASE]], %[[ONE_G]] : index
-// CHECK-NOT: arts.db_acquire[<in>]
+// CHECK: %[[LANE1_RAW:.*]] = arith.addi %[[BLOCK_BASE]], %[[ONE_G]] : index
+// CHECK: %[[LANE1:.*]] = arith.remui %[[LANE1_RAW]], %[[SIXTEEN_G]] : index
 // CHECK: arts.db_acquire[<out>]
 // CHECK-SAME: partitioning(<block>)
 // CHECK: arts.db_acquire[<in>]
 // CHECK-SAME: bounds_valid
+// CHECK: arts.db_acquire[<out>]
+// CHECK-SAME: partitioning(<block>)
+// CHECK: arts.db_acquire[<in>]
+// CHECK-SAME: bounds_valid
+// CHECK: arts.db_acquire[<out>] {{.*}}offsets[%[[LANE1]]]
+// CHECK: arts.db_acquire[<in>]
+// CHECK-SAME: bounds_valid
+// CHECK: arts.db_acquire[<out>] {{.*}}offsets[%[[LANE1]]]
 // CHECK: arts.db_acquire[<in>]
 // CHECK-SAME: bounds_valid
 // CHECK: %[[SCALED_G:.*]] = arith.muli %[[BLOCK_BASE]], %[[EIGHT_G]] : index
