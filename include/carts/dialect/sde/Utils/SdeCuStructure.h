@@ -3,15 +3,13 @@
 ///
 /// Shared structural predicates over the target SDE MU/CU/SU shape.
 ///
-/// These are the SINGLE SOURCE OF TRUTH for "what is a CU / an SU / source
-/// executable work / schedule plumbing" so that the SDE CU-normalization
-/// transform (`sde-cu-normalization`) and the SDE boundary verifier
-/// (`verify-sde`) agree EXACTLY: the transform wraps precisely the work the
-/// verifier requires inside a CU, and leaves outside a CU precisely the
-/// schedule plumbing the verifier permits there. Any divergence between the two
-/// would yield IR the verifier rejects (or wrapping the verifier never asked
-/// for), so both consumers must read these predicates rather than re-deriving
-/// them.
+/// These are the shared predicates for "what is a CU / an SU / source
+/// executable work / schedule plumbing" used by SDE normalization, analysis,
+/// and verification. `verify-sde` applies one stricter boundary rule on top:
+/// an `sde.su_iterate` body directly contains CUs, barriers, and its terminator
+/// only; an `sde.su_distribute` body directly contains nested SUs,
+/// `sde.redist`, or barriers only. Scalar/index plumbing that belongs to
+/// scheduled work must be inside a CU even when it is memory-effect-free.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_SDE_UTILS_SDECUSTRUCTURE_H

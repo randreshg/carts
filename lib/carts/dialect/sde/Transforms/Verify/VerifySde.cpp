@@ -10,10 +10,13 @@
 ///   No consumed dependency graph. SDE carries no generic token/dataflow
 ///     dependency graph; ordering edges are derived in CODIR after codelet
 ///     isolation.
-///   All source executable work lives in a CU. Raw scf / source
-///     compute may not sit directly inside an SU body, and (within SDE-bearing
-///     functions) source work may not sit outside every CU. scf is legal under
-///     SDE only inside a CU.
+///   SU bodies are scheduling-only. `sde.su_iterate` directly contains only
+///     CUs, `sde.su_barrier`, and its terminator; `sde.su_distribute` directly
+///     contains nested SUs, `sde.redist`, or barriers. Executable work,
+///     tile-local loops, and scalar plumbing for that work live in CUs.
+///   All source executable work lives in a CU. Within SDE-bearing functions,
+///     source work may not sit outside every CU. scf is legal under SDE only
+///     inside a CU.
 ///   CUs are async/schedulable by default. Sibling CUs with a
 ///   provable
 ///     MU access conflict must be ordered explicitly, not by textual order.
@@ -45,11 +48,9 @@ using namespace mlir::carts::sde;
 
 namespace {
 
-// The structural predicates this verifier branches on — isSdeDialectOp, isCuOp,
-// isSuOp, isSchedulePlumbing, isSourceComputeOp — are the same predicates the
-// `sde-cu-normalization` transform wraps against. They live in
-// `carts/dialect/sde/Utils/SdeCuStructure.h` as the single source of truth so
-// the verifier's accept set and the transform's wrap set never drift.
+// The source-compute predicates this verifier branches on are shared with
+// `sde-cu-normalization`. SU direct-child legality is stricter: even pure
+// scalar/index plumbing must be inside a CU when it belongs to scheduled work.
 
 static bool hasCuAncestor(Operation *op) {
   for (Operation *parent = op->getParentOp(); parent;
@@ -112,6 +113,15 @@ static bool barrierBetween(Operation *earlier, Operation *later) {
   return false;
 }
 
+static bool isAllowedSuIterateChild(Operation *op) {
+  return op->hasTrait<OpTrait::IsTerminator>() || isCuOp(op) ||
+         isa<sde::SdeSuBarrierOp>(op);
+}
+
+static bool isAllowedSuDistributeChild(Operation *op) {
+  return isSuOp(op) || isa<sde::SdeRedistOp, sde::SdeSuBarrierOp>(op);
+}
+
 struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -136,6 +146,28 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
 
     // Dependency graph rejection plus CU containment.
     module.walk([&](Operation *op) {
+      if (auto suIter = dyn_cast<sde::SdeSuIterateOp>(op)) {
+        for (Operation &child : suIter.getBody().front()) {
+          if (isAllowedSuIterateChild(&child))
+            continue;
+          child.emitOpError()
+              << "is directly inside an sde.su_iterate body; SU bodies are "
+                 "scheduling-only and may contain only CUs, sde.su_barrier, "
+                 "and the sde.yield terminator";
+          failed = true;
+        }
+      } else if (auto suDist = dyn_cast<sde::SdeSuDistributeOp>(op)) {
+        for (Operation &child : suDist.getBody().front()) {
+          if (isAllowedSuDistributeChild(&child))
+            continue;
+          child.emitOpError()
+              << "is directly inside an sde.su_distribute body; distribution "
+                 "wrappers may contain only nested SUs, sde.redist, or "
+                 "sde.su_barrier";
+          failed = true;
+        }
+      }
+
       // Reject mu_dep when consumed as a generic edge.
       if (auto dep = dyn_cast<sde::SdeMuDepOp>(op)) {
         if (!dep.getDep().use_empty()) {

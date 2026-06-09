@@ -71,20 +71,29 @@ struct ParallelNest {
   sde::SdeCuRegionOp enclosingSingleCu;
 };
 
+static bool isPureScalarOp(Operation *op);
+
 static bool collectPerfectForChain(scf::ForOp outer,
                                    SmallVectorImpl<scf::ForOp> &loops) {
   scf::ForOp cur = outer;
   while (true) {
     loops.push_back(cur);
     Block &body = cur.getRegion().front();
-    SmallVector<Operation *, 4> ops;
-    for (Operation &op : body.without_terminator())
-      ops.push_back(&op);
-    if (ops.size() == 1)
-      if (auto next = dyn_cast<scf::ForOp>(ops.front())) {
-        cur = next;
+    scf::ForOp next;
+    for (Operation &op : body.without_terminator()) {
+      if (auto nested = dyn_cast<scf::ForOp>(op)) {
+        if (next)
+          return true;
+        next = nested;
         continue;
       }
+      if (!isPureScalarOp(&op))
+        return true;
+    }
+    if (next) {
+      cur = next;
+      continue;
+    }
     return true; // innermost reached
   }
 }
@@ -431,11 +440,20 @@ static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
 
   OpBuilder::InsertionGuard ig(builder);
   builder.setInsertionPointToStart(&dst);
+  auto cuRegion = sde::SdeCuRegionOp::create(
+      builder, loc, /*resultTypes=*/TypeRange{},
+      sde::SdeCuKindAttr::get(builder.getContext(), sde::SdeCuKind::single),
+      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  Block &cuBody = sde::ensureBlock(cuRegion.getBody());
+  builder.setInsertionPointToStart(&cuBody);
   IRMapping mapper;
   mapper.map(outer.getInductionVar(), outerIv);
   Block &outerBody = outer.getRegion().front();
   for (Operation &op : outerBody.without_terminator())
     builder.clone(op, mapper);
+  sde::SdeYieldOp::create(builder, loc, ValueRange{});
+
+  builder.setInsertionPointToEnd(&dst);
   sde::SdeYieldOp::create(builder, loc, ValueRange{});
 
   return suIter;
@@ -450,7 +468,7 @@ static void substituteCounters(ParallelNest &nest, sde::SdeSuIterateOp suIter,
   SmallVector<Value, 4> dimIv;
   dimIv.push_back(suIter.getBody().front().getArgument(0));
   {
-    Block *cur = &suIter.getBody().front();
+    Block *cur = sde::getSuIterateComputeBlock(suIter);
     while (dimIv.size() < n) {
       scf::ForOp innerLoop;
       for (Operation &op : *cur)

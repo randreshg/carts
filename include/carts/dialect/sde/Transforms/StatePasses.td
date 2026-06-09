@@ -119,9 +119,11 @@ def SdeCuNormalization
     invariant "all source executable work lives in a CU" (verify-sde) holds for
     non-OpenMP work too.
 
-    SU bodies become scheduling-only: raw scf / source compute directly under an
-    SU is moved into a CU, leaving only schedule/window/barrier plumbing. Existing
-    valid CUs are left unchanged.
+    `sde.su_iterate` bodies become scheduling-only: direct raw scf/source
+    compute and scalar/index plumbing are moved into a CU, leaving only CUs,
+    barriers, and the terminator. `sde.su_distribute` direct-child legality is
+    verifier-owned because the wrapper can only contain nested SUs,
+    `sde.redist`, or barriers. Existing valid CUs are left unchanged.
 
     The pass is structural only: it adds no CU isolation, MU token, slice, or
     consumed dependency edge, and introduces no CODIR concept. It makes no

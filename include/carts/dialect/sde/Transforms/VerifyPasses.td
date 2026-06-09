@@ -151,9 +151,11 @@ def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
     Structural verifier for the SDE boundary. It enforces that:
 
     - all source executable work lives inside a CU (sde.cu_work / cu_region /
-      cu_task / cu_reduce / cu_atomic), and raw scf / source compute never sits
-      directly inside an SU body (sde.su_iterate / su_distribute) — scf is legal
-      under SDE only inside a CU;
+      cu_task / cu_reduce / cu_atomic); an `sde.su_iterate` body directly
+      contains only CUs, `sde.su_barrier`, and `sde.yield`, while an
+      `sde.su_distribute` body directly contains only nested SUs, `sde.redist`,
+      or `sde.su_barrier`; raw scf/source compute is legal under SDE only inside
+      a CU;
     - SDE carries no target dependency graph: no consumed sde.mu_dep dependency
       graph and no generic token/dataflow
       dependency graph (token-carrying sde.su_barrier / consumed

@@ -8,9 +8,12 @@
 /// invariant "all source executable work lives in a CU" (enforced by
 /// `verify-sde`) holds for non-OpenMP host code too: init loops, scalar
 /// check/verification code, sequential reductions, and scalar-effect work that
-/// `ConvertOpenMPToSde` / `Parallelize` did not already place in a CU. After
-/// this pass an SU body is scheduling-only: it may hold schedule/window/barrier
-/// plumbing, but raw scf / source compute is moved under a CU.
+/// `ConvertOpenMPToSde` / `Parallelize` did not already place in a CU. The
+/// `sde.su_iterate` bodies are normalized strictly: tile-local loops and scalar
+/// plumbing are moved into the CU they schedule, leaving the SU to contain CUs,
+/// barriers, and its terminator. `sde.su_distribute` direct-child legality is
+/// verifier-owned because that wrapper can only contain nested SUs,
+/// `sde.redist`, or barriers.
 ///
 /// This is a STRUCTURAL transformation only. It:
 ///   * reads current IR and moves existing ops into a CU container — it stamps
@@ -142,7 +145,7 @@ static void wrapSpanInCuRegion(Operation *first, Operation *last,
 /// Wrap every source-compute span in `block` that is not already inside a CU.
 /// Returns false (after emitting a diagnostic) when a span cannot be safely
 /// wrapped; the block's other spans are still normalized for maximal evidence.
-static bool normalizeBlock(Block *block) {
+static bool normalizeBlock(Block *block, bool strictSuBody = false) {
   // Snapshot the direct children (excluding the terminator) up front: wrapping
   // splices ops out of `block`, so we must not be walking a live block
   // iterator.
@@ -163,14 +166,16 @@ static bool normalizeBlock(Block *block) {
     size_t runEnd = i;
     while (runEnd < n && !isSdeDialectOp(ops[runEnd]))
       ++runEnd;
-    // Trim to the source-compute span; edge schedule/index plumbing the
-    // verifier permits outside a CU stays at block scope rather than being
-    // pulled in.
     size_t lo = i, hi = runEnd;
-    while (lo < hi && !isSourceComputeOp(ops[lo]))
-      ++lo;
-    while (hi > lo && !isSourceComputeOp(ops[hi - 1]))
-      --hi;
+    if (!strictSuBody) {
+      // Trim to the source-compute span; edge schedule/index plumbing the
+      // verifier permits outside a CU stays at block scope rather than being
+      // pulled in.
+      while (lo < hi && !isSourceComputeOp(ops[lo]))
+        ++lo;
+      while (hi > lo && !isSourceComputeOp(ops[hi - 1]))
+        --hi;
+    }
     if (lo < hi) {
       ArrayRef<Operation *> span(ops.data() + lo, hi - lo);
       SmallVector<Value> escaping;
@@ -188,18 +193,19 @@ struct SdeCuNormalizationPass
     ModuleOp module = getOperation();
 
     // Collect target blocks before mutating. Two kinds, disjoint:
-    //   * the body block of every SU (raw compute directly in an SU body is
-    //     illegal — the SU must be scheduling-only), and
+    //   * the body block of every su_iterate (raw compute directly in an
+    //     iterate SU body is illegal — the SU must be scheduling-only), and
     //   * every block of every SDE-bearing func (source work outside any CU is
     //     illegal there).
     // The cu_regions this pass inserts never move an SU/CU boundary op, so
     // these collected block pointers stay valid across all wrapping.
     SmallVector<Block *> targets;
-    module.walk([&](Operation *op) {
-      if (isSuOp(op)) {
-        Region &body = op->getRegion(0);
-        if (!body.empty())
-          targets.push_back(&body.front());
+    llvm::DenseSet<Block *> suTargets;
+    module.walk([&](sde::SdeSuIterateOp op) {
+      Region &body = op.getBody();
+      if (!body.empty()) {
+        targets.push_back(&body.front());
+        suTargets.insert(&body.front());
       }
     });
     module.walk([&](func::FuncOp fn) {
@@ -211,7 +217,7 @@ struct SdeCuNormalizationPass
 
     bool ok = true;
     for (Block *block : targets)
-      ok &= normalizeBlock(block);
+      ok &= normalizeBlock(block, suTargets.contains(block));
 
     if (!ok)
       signalPassFailure();

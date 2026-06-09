@@ -42,6 +42,25 @@ module {
     return
   }
 
+  func.func @init_2d_scalar_prefix() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %c6 = arith.constant 6 : index
+    %A = sde.mu_alloc : memref<4x6xf32>
+    scf.for %i = %c0 to %c4 step %c1 {
+      %ii = arith.index_cast %i : index to i32
+      %fi = arith.sitofp %ii : i32 to f32
+      scf.for %j = %c0 to %c6 step %c1 {
+        %jj = arith.index_cast %j : index to i32
+        %fj = arith.sitofp %jj : i32 to f32
+        %v = arith.addf %fi, %fj : f32
+        memref.store %v, %A[%i, %j] : memref<4x6xf32>
+      }
+    }
+    return
+  }
+
   func.func @multi_store_readonly(%input: memref<16xf32>) {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
@@ -64,23 +83,34 @@ module {
 // RAISE:           memref.alloca
 // RAISE:           memref.store
 // RAISE:           sde.su_iterate
-// RAISE:             arith.index_cast
-// RAISE:             memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<8xf32>
+// RAISE:             sde.cu_region <single> {
+// RAISE:               arith.index_cast
+// RAISE:               memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<8xf32>
 // RAISE-NOT:       memref.load %{{.*}}[] : memref<i32>
 
 // RAISE-LABEL: func.func @init_3d
 // RAISE:         sde.cu_region <parallel> {
 // RAISE:           sde.su_iterate
-// RAISE:             scf.for
+// RAISE:             sde.cu_region <single> {
 // RAISE:               scf.for
-// RAISE:                 memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] : memref<4x5x6xf32>
+// RAISE:                 scf.for
+// RAISE:                   memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] : memref<4x5x6xf32>
+
+// RAISE-LABEL: func.func @init_2d_scalar_prefix
+// RAISE:         sde.cu_region <parallel> {
+// RAISE:           sde.su_iterate
+// RAISE:             sde.cu_region <single> {
+// RAISE:               arith.sitofp
+// RAISE:               scf.for
+// RAISE:                 memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<4x6xf32>
 
 // RAISE-LABEL: func.func @multi_store_readonly
 // RAISE:         sde.cu_region <parallel> {
 // RAISE:           sde.su_iterate
-// RAISE:             memref.load %{{.*}}[%{{.*}}] : memref<16xf32>
-// RAISE:             memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<16xf32>
-// RAISE:             memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<16xf32>
+// RAISE:             sde.cu_region <single> {
+// RAISE:               memref.load %{{.*}}[%{{.*}}] : memref<16xf32>
+// RAISE:               memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<16xf32>
+// RAISE:               memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<16xf32>
 
 // PLAN-LABEL: // -----// IR Dump After PatternAnalysis
 // PLAN-LABEL: func.func @init_3d

@@ -1432,6 +1432,16 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       if (badStep || !anyTiled)
         continue;
 
+      Block &srcBody = op.getBody().front();
+      Block *computeBody = sde::getSuIterateComputeBlock(op);
+      auto oldCuRegion =
+          computeBody
+              ? dyn_cast_or_null<sde::SdeCuRegionOp>(computeBody->getParentOp())
+              : sde::SdeCuRegionOp();
+      if (oldCuRegion && (!oldCuRegion.getIterArgs().empty() ||
+                          oldCuRegion.getNumResults() != 0))
+        continue;
+
       if (!physicalTilePlan && !directMatmul &&
           op.getStructuredClassification() ==
               sde::SdeStructuredClassification::stencil) {
@@ -1474,12 +1484,15 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(&newBody);
 
-      Block &srcBody = op.getBody().front();
-      Block *computeBody = sde::getSuIterateComputeBlock(op);
-      Block *cloneBody = computeBody;
-      if (computeBody &&
-          isa_and_nonnull<sde::SdeCuRegionOp>(computeBody->getParentOp()))
-        cloneBody = &srcBody;
+      auto newCuRegion = sde::SdeCuRegionOp::create(
+          rewriter, loc, /*resultTypes=*/TypeRange{},
+          oldCuRegion ? oldCuRegion.getKindAttr()
+                      : sde::SdeCuKindAttr::get(rewriter.getContext(),
+                                                sde::SdeCuKind::single),
+          oldCuRegion ? oldCuRegion.getNowaitAttr() : nullptr,
+          /*iterArgs=*/ValueRange{});
+      Block &newCuBody = sde::ensureBlock(newCuRegion.getBody());
+      rewriter.setInsertionPointToStart(&newCuBody);
 
       IRMapping mapper;
       SmallVector<scf::ForOp, 4> tileLoops;
@@ -1501,7 +1514,7 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
         rewriter.setInsertionPointToStart(tileLoop.getBody());
       }
 
-      cloneBodyIntoTileLoop(*cloneBody, mapper, rewriter);
+      cloneBodyIntoTileLoop(*computeBody, mapper, rewriter);
 
       if (directMatmul && !tileLoops.empty()) {
         Value outputRoot =
@@ -1517,7 +1530,9 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
         stampDirectMatmulTilePlan(newOp, *directMatmulPlan);
       }
 
-      // Yield at the end of the su_iterate body (not inside nested loops).
+      rewriter.setInsertionPointToEnd(&newCuBody);
+      sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
+
       rewriter.setInsertionPointToEnd(&newBody);
       sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
 
