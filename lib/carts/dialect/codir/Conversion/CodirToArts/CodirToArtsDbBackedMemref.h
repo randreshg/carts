@@ -8,6 +8,7 @@
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_DBBACKEDMEMREF_H
 
 #include "carts/dialect/arts/Utils/DbLayoutPlanUtils.h"
+#include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/dialect/codir/Utils/CodirConversionUtils.h"
@@ -42,11 +43,6 @@ buildElementSizes(OpBuilder &builder, Location loc, MemRefType memrefType,
   if (dynamicIdx != dynamicSizes.size())
     return failure();
   return elementSizes;
-}
-
-static inline MemRefType getElementMemRefType(Type elementType, unsigned rank) {
-  SmallVector<int64_t> elementShape(rank, ShapedType::kDynamic);
-  return MemRefType::get(elementShape, elementType);
 }
 
 static inline Value materializeInnerPayload(OpBuilder &builder, Location loc,
@@ -102,8 +98,8 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
     if (auto haloShape = planSource.getPhysicalHaloShapeAttr())
       arts::setPlanHaloShapeAttr(dbAlloc.getOperation(), haloShape);
   } else {
-    Type pointerElementType =
-        getElementMemRefType(memrefType.getElementType(), memrefType.getRank());
+    Type pointerElementType = arts::getElementMemRefType(
+        memrefType.getElementType(), memrefType.getRank());
     Type pointerType =
         MemRefType::get({ShapedType::kDynamic}, pointerElementType);
     dbAlloc = arts::DbAllocOp::create(

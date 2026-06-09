@@ -6,8 +6,8 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_CODIRDBBACKEDMEMREF_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_CODIRDBBACKEDMEMREF_H
 
-#include "CodirToArtsHaloStorage.h"
 #include "CodirToArtsDbBackedMemref.h"
+#include "CodirToArtsHaloStorage.h"
 
 namespace {
 

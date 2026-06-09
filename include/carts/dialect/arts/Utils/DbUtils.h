@@ -28,6 +28,7 @@ namespace carts::arts {
 uint64_t getElementTypeByteSize(Type elementType);
 
 /// Build the uniform memref type used for an ARTS DB element payload.
+MemRefType getElementMemRefType(Type elementType, unsigned rank);
 MemRefType getElementMemRefType(Type elementType, ArrayRef<Value> elementSizes);
 
 /// Combine two ARTS access modes and return the least restrictive mode.

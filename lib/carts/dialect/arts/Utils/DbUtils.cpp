@@ -172,11 +172,15 @@ uint64_t getElementTypeByteSize(Type elemTy) {
   return 0;
 }
 
+MemRefType getElementMemRefType(Type elementType, unsigned rank) {
+  SmallVector<int64_t> elementShape(rank, ShapedType::kDynamic);
+  return MemRefType::get(elementShape, elementType);
+}
+
 MemRefType getElementMemRefType(Type elementType,
                                 ArrayRef<Value> elementSizes) {
   const size_t rank = elementSizes.empty() ? 1 : elementSizes.size();
-  SmallVector<int64_t> elementShape(rank, ShapedType::kDynamic);
-  return MemRefType::get(elementShape, elementType);
+  return getElementMemRefType(elementType, static_cast<unsigned>(rank));
 }
 
 ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2) {

@@ -60,7 +60,8 @@ struct BlockWindowProof {
     return ::mlir::carts::ValueAnalysis::isZeroConstant(ownerBase);
   }
 
-  bool absoluteRangeStaysInWindow(Value candidate, bool allowEnd = false) const {
+  bool absoluteRangeStaysInWindow(Value candidate,
+                                  bool allowEnd = false) const {
     if (!hasZeroOwnerBase())
       return false;
     std::optional<ConstantRange> range = getUnsignedRange(candidate);

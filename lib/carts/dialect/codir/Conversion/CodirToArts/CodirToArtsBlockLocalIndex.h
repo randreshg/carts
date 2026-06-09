@@ -6,9 +6,9 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BLOCKLOCALINDEX_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BLOCKLOCALINDEX_H
 
+#include "CodirToArtsBlockWindowProof.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/codir/Utils/CodirConversionUtils.h"
-#include "CodirToArtsBlockWindowProof.h"
 #include "carts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
