@@ -126,7 +126,9 @@ static bool canMaterializePlannedOwnerSlices(sde::SdeSuIterateOp op) {
     return true;
   case sde::SdeStructuredClassification::reduction:
     return op.getReductionAccumulators().empty() &&
-           sde::findLoopIndexedOutputPlan(op).has_value();
+           (sde::findLoopIndexedOutputPlan(op).has_value() ||
+            sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op)
+                .has_value());
   }
   return false;
 }

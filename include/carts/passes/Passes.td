@@ -70,10 +70,11 @@ def DbCommitDistributedDeps
   let summary = "Commit DB-mode and halo facts on every distributed acquire";
   let description = [{
     Commits the runtime DB mode (ro/ew/rw) on every `arts.db_acquire` whose
-    source DB is distributed, and the per-slot `halo_slice` window on
-    distributed stencil acquires, so ARTS-RT lowering consumes committed facts
-    with no fallback inference. It only fills committed facts; acquires already
-    carrying a mode verdict keep it.
+    source DB is distributed. For distributed stencil halo acquires, ARTS
+    commits explicit `element_offsets`/`element_sizes` windows for ARTS-RT to
+    lower mechanically; `halo_slice` remains stencil-reach metadata for
+    verification and diagnostics. It only fills committed facts; acquires
+    already carrying a mode verdict keep it.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];

@@ -1,8 +1,8 @@
-// RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline codir-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline sde-planning --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
 // Verify that a 2D 5-point Jacobi stencil stays memref-native and is classified
-// with nested-IV stencil metadata. After ConvertCodirToArts, the stencil contract
-// attributes (min/max offsets) are stamped.
+// with nested-IV stencil metadata. SDE owns the layout and access-window facts;
+// later stages consume or reject those facts without repairing them.
 
 // CHECK-LABEL: // -----// IR Dump After PatternAnalysis (sde-pattern-analysis) //----- //
 // CHECK: func.func @main
@@ -23,14 +23,14 @@
 // CHECK: arith.addf
 // CHECK: arith.addf
 
-// After ConvertCodirToArts: stencil contract with spatial metadata.
-// CHECK: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
-// CHECK: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>
-// CHECK-SAME: planIterationTopology = #arts.plan_iteration_topology<owner_tile>
-// CHECK-SAME: planLogicalWorkerSlice = [16, 32]
-// CHECK-SAME: stencil_max_offsets = [1, 1]
-// CHECK-SAME: stencil_min_offsets = [-1, -1]
-// CHECK-SAME: stencil_owner_dims = [0, 1]
+// SDE commits the owner-tile storage/access facts by DistributionPlanning.
+// CHECK-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
+// CHECK: sde.su_iterate
+// CHECK: iterationTopology = #sde.iteration_topology<owner_tile>
+// CHECK-SAME: logicalWorkerSlice = [16, 32]
+// CHECK-SAME: physicalBlockShape = [16, 32]
+// CHECK-SAME: physicalHaloShape = [1, 1]
+// CHECK-SAME: physicalOwnerDims = [0, 1]
 
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>, llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", llvm.target_triple = "aarch64-unknown-linux-gnu"} {
   func.func @main(%A: memref<64x64xf64>, %B: memref<64x64xf64>) {

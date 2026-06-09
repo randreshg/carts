@@ -850,17 +850,37 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
     /// for linearization.
     Value byteOffset, byteSize;
     if (dbAcquireOp) {
+      auto rawElementOffsets = dbAcquireOp.getElementOffsets();
+      auto rawElementSizes = dbAcquireOp.getElementSizes();
+      if (rawElementOffsets.empty() != rawElementSizes.empty())
+        return dbAcquireOp.emitOpError()
+               << "element_offsets and element_sizes must be provided together "
+                  "for halo byte-window lowering";
+      if (rawElementOffsets.size() != rawElementSizes.size())
+        return dbAcquireOp.emitOpError()
+               << "element_offsets count (" << rawElementOffsets.size()
+               << ") must match element_sizes count (" << rawElementSizes.size()
+               << ") for halo byte-window lowering";
+
+      auto allocForWindow = dyn_cast_or_null<DbAllocOp>(
+          RtDbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
+      if (allocForWindow && !rawElementOffsets.empty() &&
+          rawElementOffsets.size() != allocForWindow.getElementSizes().size())
+        return dbAcquireOp.emitOpError()
+               << "element window rank (" << rawElementOffsets.size()
+               << ") must match source element rank ("
+               << allocForWindow.getElementSizes().size()
+               << ") for halo byte-window lowering";
+
       SmallVector<Value, 4> elemOffsets;
       SmallVector<Value, 4> elemSizes;
       /// Only the explicit element window (element_offsets/element_sizes) is
       /// lowered. ARTS-RT does not synthesize a partial window from partition
       /// hints; an acquire with no committed element window uses the whole-DB
       /// dependency path below.
-      if (!dbAcquireOp.getElementOffsets().empty()) {
-        elemOffsets.assign(dbAcquireOp.getElementOffsets().begin(),
-                           dbAcquireOp.getElementOffsets().end());
-        elemSizes.assign(dbAcquireOp.getElementSizes().begin(),
-                         dbAcquireOp.getElementSizes().end());
+      if (!rawElementOffsets.empty()) {
+        elemOffsets.assign(rawElementOffsets.begin(), rawElementOffsets.end());
+        elemSizes.assign(rawElementSizes.begin(), rawElementSizes.end());
       }
 
       if (elemOffsets.empty()) {

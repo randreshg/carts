@@ -959,12 +959,36 @@ LogicalResult DbAcquireOp::verify() {
   size_t numSizes = getSizes().size();
   size_t numOffsets = getOffsets().size();
   size_t numIndices = getIndices().size();
+  size_t numElementOffsets = getElementOffsets().size();
+  size_t numElementSizes = getElementSizes().size();
 
   /// Validate offsets/sizes consistency
   if (numSizes != 0 && numOffsets != 0 && numOffsets != numSizes) {
     return emitOpError("Number of DB-space offsets (")
            << numOffsets << ") must match Number of DB-space sizes ("
            << numSizes << ")";
+  }
+
+  if (numElementOffsets == 0 && numElementSizes != 0)
+    return emitOpError("element_sizes requires matching element_offsets");
+
+  if (numElementOffsets != 0 && numElementSizes == 0)
+    return emitOpError("element_offsets requires matching element_sizes");
+
+  if (numElementOffsets != numElementSizes)
+    return emitOpError("Number of element_offsets (")
+           << numElementOffsets << ") must match Number of element_sizes ("
+           << numElementSizes << ")";
+
+  if (numElementOffsets != 0) {
+    Operation *sourceAlloc = DbUtils::getUnderlyingDbAlloc(getSourcePtr());
+    if (auto alloc = dyn_cast_or_null<DbAllocOp>(sourceAlloc)) {
+      size_t elementRank = alloc.getElementSizes().size();
+      if (elementRank != 0 && numElementOffsets != elementRank)
+        return emitOpError("element window rank (")
+               << numElementOffsets << ") must match source element rank ("
+               << elementRank << ")";
+    }
   }
 
   size_t numPartitionEntries = getNumPartitionEntries();

@@ -2556,6 +2556,18 @@ static inline bool isSuDispatchStepKnownFiner(Value dispatchStep,
          *sourceConst > 0 && *dispatchConst < *sourceConst;
 }
 
+static inline bool isSuDispatchStepKnownNoCoarser(Value dispatchStep,
+                                                  Value sourceStep) {
+  if (::mlir::carts::ValueAnalysis::sameValue(dispatchStep, sourceStep))
+    return true;
+  std::optional<int64_t> dispatchConst =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(dispatchStep);
+  std::optional<int64_t> sourceConst =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(sourceStep);
+  return dispatchConst && sourceConst && *dispatchConst > 0 &&
+         *sourceConst > 0 && *dispatchConst <= *sourceConst;
+}
+
 static inline bool isSuIvPlusStep(Value value, Value ownerIv,
                                   Value sourceStep) {
   auto add = value.getDefiningOp<arith::AddIOp>();
@@ -2573,12 +2585,14 @@ mapSuCoarseTileBoundsToDispatchWindow(sde::SdeSuIterateOp source, unsigned dim,
                                       Value localEnd, IRMapping &mapper) {
   if (dim >= source.getSteps().size() ||
       dim >= source.getUpperBounds().size() ||
-      !isSuDispatchStepKnownFiner(dispatchStep, source.getSteps()[dim]))
+      !isSuDispatchStepKnownNoCoarser(dispatchStep, source.getSteps()[dim]))
     return success();
   if (source.getBody().empty() ||
       source.getBody().front().getNumArguments() <= dim)
     return failure();
 
+  bool requiresRetiledWindow =
+      isSuDispatchStepKnownFiner(dispatchStep, source.getSteps()[dim]);
   Value ownerIv = source.getBody().front().getArgument(dim);
   Value sourceStep = source.getSteps()[dim];
   Value sourceUpper = source.getUpperBounds()[dim];
@@ -2618,7 +2632,7 @@ mapSuCoarseTileBoundsToDispatchWindow(sde::SdeSuIterateOp source, unsigned dim,
     }
   });
 
-  return success(mappedTileEnd);
+  return success(mappedTileEnd || !requiresRetiledWindow);
 }
 
 static inline bool areAllResultsMapped(Operation &op, IRMapping &mapper) {
