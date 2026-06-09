@@ -187,7 +187,7 @@ Mem2Reg
 
 ```text
 DbModeTightening
-DbOwnerMapRealization (conditional)
+DbOwnerMapRealization
 EdtDeadDepElimination
 DbConsolidateStencilHalos
 DbShortenLifetimes

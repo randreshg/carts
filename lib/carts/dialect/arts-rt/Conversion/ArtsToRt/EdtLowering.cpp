@@ -908,11 +908,23 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
                                  normalized->offsets.end());
               elemSizes.assign(normalized->sizes.begin(),
                                normalized->sizes.end());
+              bool compactHaloPayload =
+                  alloc.getCompactHaloPayload().value_or(false) &&
+                  edtOp.getPerBlockHaloExchangeAttr();
               /// If the normalized slice still covers the entire local DB
-              /// block, the normal whole-DB dependence path is cheaper.
-              Value sliceNarrowerThanBlock = AC->create<arith::XOrIOp>(
-                  loc, normalized->wholeBlock,
-                  AC->create<arith::ConstantIntOp>(loc, 1, 1));
+              /// block, the normal whole-DB dependence path is cheaper unless
+              /// this DB is already a compact halo payload. In that case the
+              /// full compact DB is the halo face and must still use the halo
+              /// byte-window runtime path.
+              Value sliceNarrowerThanBlock;
+              if (compactHaloPayload) {
+                sliceNarrowerThanBlock =
+                    AC->create<arith::ConstantIntOp>(loc, 1, 1);
+              } else {
+                sliceNarrowerThanBlock = AC->create<arith::XOrIOp>(
+                    loc, normalized->wholeBlock,
+                    AC->create<arith::ConstantIntOp>(loc, 1, 1));
+              }
               Value sliceRepresentable = AC->create<arith::AndIOp>(
                   loc, normalized->representable, normalized->contiguous);
               useSliceTransport = AC->create<arith::AndIOp>(

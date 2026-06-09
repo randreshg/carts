@@ -1,12 +1,20 @@
-// RUN: not %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg 2>&1 \
+// RUN: %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg \
 // RUN:   | %FileCheck %s
 
 // This 3D owner-strip fixture halos along the innermost physical dimension.
-// Those faces are strided in row-major storage, so CODIR must fail closed
-// instead of widening to full DB blocks. Contiguous multi-input halo
-// materialization is covered by codir-to-arts-owner-strip-ro-halo-multi-input.
+// Those faces are strided in row-major storage, so CODIR materializes compact
+// payload DBs rather than widening to full DB blocks.
 
-// CHECK: cannot materialize non-contiguous lower halo destination slice
+// CHECK-LABEL: func.func @owner_strip_ro_halo_materializes_all_inputs
+// CHECK-COUNT-2: compact_halo_payload
+// CHECK-COUNT-2: attributes {compactHaloPack, storageBridgeCopy}
+// CHECK: attributes {perBlockHaloExchange, storageBridgeCopy}
+// CHECK-COUNT-2: compact_halo_payload
+// CHECK-COUNT-2: attributes {compactHaloPack, storageBridgeCopy}
+// CHECK: attributes {perBlockHaloExchange, storageBridgeCopy}
+// CHECK-COUNT-2: compact_halo_payload
+// CHECK-COUNT-2: attributes {compactHaloPack, storageBridgeCopy}
+// CHECK: attributes {perBlockHaloExchange, storageBridgeCopy}
 
 module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_workers = 512 : i64} {
   func.func @owner_strip_ro_halo_materializes_all_inputs(%vx: memref<8x8x16xf64>,

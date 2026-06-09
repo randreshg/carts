@@ -122,6 +122,30 @@ static inline bool canHoistHostBridgeAcrossLoop(scf::ForOp loop,
     });
     if (hasCoarseWriteToHost)
       return false;
+
+    std::optional<codir::CodirAccessMode> seedMode =
+        getCodirDepAccessMode(codelet, seedDepIndex);
+    bool seedMayWrite = !seedMode || codirAccessMayWrite(*seedMode);
+    bool hasMaterializedCoarseReadFromHost = false;
+    if (seedMayWrite) {
+      loop.walk([&](arts::DbAcquireOp acquire) {
+        if (hasMaterializedCoarseReadFromHost)
+          return WalkResult::interrupt();
+        if (acquire.getMode() != arts::ArtsMode::in)
+          return WalkResult::advance();
+        if (acquire.getSourcePtr() != hostAlloc.getPtr())
+          return WalkResult::advance();
+        if (Value sourceGuid = acquire.getSourceGuid();
+            sourceGuid && sourceGuid != hostAlloc.getGuid())
+          return WalkResult::advance();
+        if (acquire.getPartitionModeOr() != arts::PartitionMode::coarse)
+          return WalkResult::advance();
+        hasMaterializedCoarseReadFromHost = true;
+        return WalkResult::interrupt();
+      });
+    }
+    if (hasMaterializedCoarseReadFromHost)
+      return false;
   }
 
   Value hostBridgeRoot =

@@ -323,7 +323,7 @@ static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
     "DbModeTightening", "PolygeistCanonicalize", "CSE(arts.edt)", "Mem2Reg"};
 static const std::array<llvm::StringLiteral, 12> kPostDbRefinementPasses = {
     "DbModeTightening",
-    "DbOwnerMapRealization (conditional)",
+    "DbOwnerMapRealization",
     "EdtDeadDepElimination",
     "DbConsolidateStencilHalos",
     "DbShortenLifetimes",
@@ -1236,14 +1236,13 @@ void buildDbOptPipeline(PassManager &pm) {
 }
 
 /// Tighten DB modes and persist post-partition refinement facts.
-void buildPostDbRefinementPipeline(PassManager &pm, bool enableDistributedDb) {
+void buildPostDbRefinementPipeline(PassManager &pm) {
   /// DbModeTighteningPass performs local DB cleanup after mode adjustment,
   /// which can expose new zero-dependency or degenerate EDTs before epoch
   /// shaping. Mode tightening must run before EDT transforms so affinity and
   /// reduction analysis see accurate writer/reader modes.
   pm.addPass(arts::createDbModeTighteningPass());
-  if (enableDistributedDb)
-    pm.addPass(arts::createDbOwnerMapRealizationPass());
+  pm.addPass(arts::createDbOwnerMapRealizationPass());
   pm.addPass(arts::createEdtDeadDepEliminationPass());
   /// Re-run DB-local refinement after EDT dep pruning so cleanup-only acquires
   /// and now-unreachable DB roots are removed in the DB layer.
@@ -1466,8 +1465,8 @@ static ArrayRef<StageDescriptor> getStageRegistry() {
       {StageId::PostDbRefinement, "post-db-refinement", StageKind::Core, true,
        true, false, "Error when refining post-partition DB facts",
        kPostDbRefinementPasses,
-       [](PassManager &pm, const StageExecutionContext &ctx) {
-         buildPostDbRefinementPipeline(pm, ctx.enableDistributedDb);
+       [](PassManager &pm, const StageExecutionContext &) {
+         buildPostDbRefinementPipeline(pm);
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepCreateDbs},

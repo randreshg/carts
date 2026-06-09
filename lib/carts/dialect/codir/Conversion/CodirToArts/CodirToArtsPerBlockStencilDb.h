@@ -7,6 +7,7 @@
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_PERBLOCKSTENCILDB_H
 
 #include "CodirToArtsPerBlockSummingSettle.h"
+#include "llvm/ADT/DenseMap.h"
 
 namespace {
 
@@ -78,9 +79,17 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
     unsigned dstArg = 0;
   };
   struct HaloSlicePlan {
+    SmallVector<int64_t, 4> staticOffsets;
+    SmallVector<int64_t, 4> staticSizes;
     SmallVector<Value, 4> elementOffsets;
     SmallVector<Value, 4> elementSizes;
-    bool compact = false;
+    bool contiguous = false;
+  };
+  struct CompactHaloFace {
+    arts::DbAllocOp alloc;
+    SmallVector<int64_t, 4> staticSizes;
+    SmallVector<Value, 4> elementOffsets;
+    SmallVector<Value, 4> elementSizes;
   };
   SmallVector<HaloCopyAction, 8> copyActions;
   SmallVector<Value, 8> actionConditions;
@@ -152,12 +161,10 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
         staticOffsets[ownerDim] = halo.lower;
       }
     }
-    if (!isStaticContiguousElementSlice(staticOffsets, staticSizes,
-                                        *staticElementSizes))
-      return codelet.emitOpError()
-             << "cannot materialize non-contiguous "
-             << (lower ? "lower" : "upper") << " halo destination slice";
-    slice.compact = true;
+    slice.staticOffsets.assign(staticOffsets.begin(), staticOffsets.end());
+    slice.staticSizes.assign(staticSizes.begin(), staticSizes.end());
+    slice.contiguous = isStaticContiguousElementSlice(
+        staticOffsets, staticSizes, *staticElementSizes);
     slice.elementOffsets.reserve(staticOffsets.size());
     slice.elementSizes.reserve(staticSizes.size());
     for (int64_t offset : staticOffsets)
@@ -166,6 +173,73 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
       slice.elementSizes.push_back(createConstantIndex(builder, loc, size));
     return slice;
   };
+
+  DenseMap<unsigned, CompactHaloFace> compactFaces;
+  auto compactFaceKey = [](unsigned ownerSlot, bool sourceLowerFace) {
+    return ownerSlot * 2 + (sourceLowerFace ? 0 : 1);
+  };
+  auto getOrCreateCompactFace =
+      [&](unsigned ownerSlot, bool sourceLowerFace,
+          ArrayRef<int64_t> staticSizes) -> FailureOr<CompactHaloFace *> {
+    unsigned key = compactFaceKey(ownerSlot, sourceLowerFace);
+    auto existing = compactFaces.find(key);
+    if (existing != compactFaces.end())
+      return &existing->second;
+    if (staticSizes.empty() ||
+        llvm::any_of(staticSizes, [](int64_t size) { return size <= 0; }))
+      return failure();
+
+    OpBuilder::InsertionGuard allocGuard(builder);
+    builder.setInsertionPoint(blockLoop);
+    SmallVector<Value, 4> faceElementSizes;
+    faceElementSizes.reserve(staticSizes.size());
+    for (int64_t size : staticSizes)
+      faceElementSizes.push_back(createConstantIndex(builder, loc, size));
+
+    Value route = arts::createCurrentNodeRoute(builder, loc);
+    auto compactAlloc = arts::DbAllocOp::create(
+        builder, loc, arts::ArtsMode::inout, route, arts::DbAllocType::heap,
+        arts::DbMode::write, blockAlloc.getElementType(),
+        SmallVector<Value>(blockAlloc.getSizes().begin(),
+                           blockAlloc.getSizes().end()),
+        SmallVector<Value>(faceElementSizes.begin(), faceElementSizes.end()),
+        arts::PartitionMode::block);
+    if (auto ownerDims = arts::getPlanOwnerDimsAttr(blockAlloc.getOperation()))
+      arts::setPlanOwnerDimsAttr(compactAlloc.getOperation(), ownerDims);
+    arts::setPlanPhysicalBlockShapeAttr(
+        compactAlloc.getOperation(),
+        buildI64ArrayAttr(compactAlloc.getContext(), staticSizes));
+    if (auto haloShape = arts::getPlanHaloShapeAttr(blockAlloc.getOperation()))
+      arts::setPlanHaloShapeAttr(compactAlloc.getOperation(), haloShape);
+    compactAlloc.setStorageBridgeAttr(arts::StorageBridgeAttr::get(
+        builder.getContext(),
+        arts::StorageBridge::host_whole_to_compute_block));
+    compactAlloc.setPerBlockSingleWriterStencilAttr(
+        UnitAttr::get(compactAlloc.getContext()));
+    compactAlloc.setCompactHaloPayloadAttr(
+        UnitAttr::get(compactAlloc.getContext()));
+
+    CompactHaloFace face;
+    face.alloc = compactAlloc;
+    face.staticSizes.assign(staticSizes.begin(), staticSizes.end());
+    face.elementOffsets.assign(staticSizes.size(),
+                               createZeroIndex(builder, loc));
+    face.elementSizes.assign(faceElementSizes.begin(), faceElementSizes.end());
+    auto inserted = compactFaces.try_emplace(key, std::move(face));
+    return &inserted.first->second;
+  };
+
+  struct PendingCompactPack {
+    arts::DbAllocOp compactAlloc;
+    Value sourceOrdinal;
+    Value dstDep;
+    Value sourceDep;
+    unsigned conditionParam = 0;
+    SmallVector<Value, 4> copySizes;
+    SmallVector<Value, 4> sourceOffsets;
+    SmallVector<Value, 4> compactOffsets;
+  };
+  SmallVector<PendingCompactPack, 8> pendingCompactPacks;
 
   for (auto [lane, lanePlan] : llvm::enumerate(lanes)) {
     for (auto [slot, coord] : llvm::enumerate(lanePlan.blockCoords)) {
@@ -198,14 +272,62 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
               static_cast<unsigned>(slot), true, halo.lower);
           if (failed(sourceSlice))
             return failure();
-          auto lowerAcquire = materializeBridgeAcquire(
-              builder, loc, blockAlloc, arts::ArtsMode::in,
-              arts::PartitionMode::block, lowerCoords,
-              lanePlan.blockWindowSizes, hasLower, sourceSlice->elementOffsets,
-              sourceSlice->elementSizes);
-          compactSource = sourceSlice->compact;
-          sourceArg = static_cast<unsigned>(deps.size());
-          deps.push_back(lowerAcquire.getPtr());
+          if (sourceSlice->contiguous) {
+            auto lowerAcquire = materializeBridgeAcquire(
+                builder, loc, blockAlloc, arts::ArtsMode::in,
+                arts::PartitionMode::block, lowerCoords,
+                lanePlan.blockWindowSizes, hasLower,
+                sourceSlice->elementOffsets, sourceSlice->elementSizes);
+            compactSource = true;
+            sourceArg = static_cast<unsigned>(deps.size());
+            deps.push_back(lowerAcquire.getPtr());
+          } else {
+            FailureOr<CompactHaloFace *> compactFace = getOrCreateCompactFace(
+                static_cast<unsigned>(slot),
+                /*sourceLowerFace=*/false, sourceSlice->staticSizes);
+            if (failed(compactFace))
+              return failure();
+            auto compactAcquire = materializeBridgeAcquire(
+                builder, loc, (*compactFace)->alloc, arts::ArtsMode::in,
+                arts::PartitionMode::block, lowerCoords,
+                lanePlan.blockWindowSizes, hasLower,
+                (*compactFace)->elementOffsets, (*compactFace)->elementSizes);
+            compactSource = true;
+            sourceArg = static_cast<unsigned>(deps.size());
+            deps.push_back(compactAcquire.getPtr());
+
+            auto sourceAcquire = materializeBridgeAcquire(
+                builder, loc, blockAlloc, arts::ArtsMode::in,
+                arts::PartitionMode::block, lowerCoords,
+                lanePlan.blockWindowSizes, hasLower);
+            auto compactOut = materializeBridgeAcquire(
+                builder, loc, (*compactFace)->alloc, arts::ArtsMode::out,
+                arts::PartitionMode::block, lowerCoords,
+                lanePlan.blockWindowSizes, hasLower);
+            compactOut.setPreserveAccessMode();
+            unsigned packConditionParam = actionConditions.size();
+            actionConditions.push_back(hasLower);
+            SmallVector<Value, 4> copySizes;
+            SmallVector<Value, 4> sourceOffsets;
+            SmallVector<Value, 4> compactOffsets;
+            for (int64_t size : sourceSlice->staticSizes)
+              copySizes.push_back(createConstantIndex(builder, loc, size));
+            for (int64_t offset : sourceSlice->staticOffsets)
+              sourceOffsets.push_back(
+                  createConstantIndex(builder, loc, offset));
+            compactOffsets.assign(sourceSlice->staticSizes.size(),
+                                  createZeroIndex(builder, loc));
+            Value sourceOrdinal = arts::createOwnerMapLinearIndex(
+                builder, loc,
+                SmallVector<Value>(blockAlloc.getSizes().begin(),
+                                   blockAlloc.getSizes().end()),
+                lowerCoords);
+            pendingCompactPacks.push_back(
+                {(*compactFace)->alloc, sourceOrdinal, compactOut.getPtr(),
+                 sourceAcquire.getPtr(), packConditionParam,
+                 std::move(copySizes), std::move(sourceOffsets),
+                 std::move(compactOffsets)});
+          }
         }
         unsigned conditionParam = actionConditions.size();
         actionConditions.push_back(hasLower);
@@ -222,14 +344,62 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
               static_cast<unsigned>(slot), false, halo.upper);
           if (failed(sourceSlice))
             return failure();
-          auto upperAcquire = materializeBridgeAcquire(
-              builder, loc, blockAlloc, arts::ArtsMode::in,
-              arts::PartitionMode::block, upperCoords,
-              lanePlan.blockWindowSizes, hasUpper, sourceSlice->elementOffsets,
-              sourceSlice->elementSizes);
-          compactSource = sourceSlice->compact;
-          sourceArg = static_cast<unsigned>(deps.size());
-          deps.push_back(upperAcquire.getPtr());
+          if (sourceSlice->contiguous) {
+            auto upperAcquire = materializeBridgeAcquire(
+                builder, loc, blockAlloc, arts::ArtsMode::in,
+                arts::PartitionMode::block, upperCoords,
+                lanePlan.blockWindowSizes, hasUpper,
+                sourceSlice->elementOffsets, sourceSlice->elementSizes);
+            compactSource = true;
+            sourceArg = static_cast<unsigned>(deps.size());
+            deps.push_back(upperAcquire.getPtr());
+          } else {
+            FailureOr<CompactHaloFace *> compactFace = getOrCreateCompactFace(
+                static_cast<unsigned>(slot),
+                /*sourceLowerFace=*/true, sourceSlice->staticSizes);
+            if (failed(compactFace))
+              return failure();
+            auto compactAcquire = materializeBridgeAcquire(
+                builder, loc, (*compactFace)->alloc, arts::ArtsMode::in,
+                arts::PartitionMode::block, upperCoords,
+                lanePlan.blockWindowSizes, hasUpper,
+                (*compactFace)->elementOffsets, (*compactFace)->elementSizes);
+            compactSource = true;
+            sourceArg = static_cast<unsigned>(deps.size());
+            deps.push_back(compactAcquire.getPtr());
+
+            auto sourceAcquire = materializeBridgeAcquire(
+                builder, loc, blockAlloc, arts::ArtsMode::in,
+                arts::PartitionMode::block, upperCoords,
+                lanePlan.blockWindowSizes, hasUpper);
+            auto compactOut = materializeBridgeAcquire(
+                builder, loc, (*compactFace)->alloc, arts::ArtsMode::out,
+                arts::PartitionMode::block, upperCoords,
+                lanePlan.blockWindowSizes, hasUpper);
+            compactOut.setPreserveAccessMode();
+            unsigned packConditionParam = actionConditions.size();
+            actionConditions.push_back(hasUpper);
+            SmallVector<Value, 4> copySizes;
+            SmallVector<Value, 4> sourceOffsets;
+            SmallVector<Value, 4> compactOffsets;
+            for (int64_t size : sourceSlice->staticSizes)
+              copySizes.push_back(createConstantIndex(builder, loc, size));
+            for (int64_t offset : sourceSlice->staticOffsets)
+              sourceOffsets.push_back(
+                  createConstantIndex(builder, loc, offset));
+            compactOffsets.assign(sourceSlice->staticSizes.size(),
+                                  createZeroIndex(builder, loc));
+            Value sourceOrdinal = arts::createOwnerMapLinearIndex(
+                builder, loc,
+                SmallVector<Value>(blockAlloc.getSizes().begin(),
+                                   blockAlloc.getSizes().end()),
+                upperCoords);
+            pendingCompactPacks.push_back(
+                {(*compactFace)->alloc, sourceOrdinal, compactOut.getPtr(),
+                 sourceAcquire.getPtr(), packConditionParam,
+                 std::move(copySizes), std::move(sourceOffsets),
+                 std::move(compactOffsets)});
+          }
         }
         unsigned conditionParam = actionConditions.size();
         actionConditions.push_back(hasUpper);
@@ -247,6 +417,42 @@ static inline FailureOr<Value> emitPerBlockSingleWriterStencilDb(
       module, bridgePlan, blockAlloc, blockBase, builder, loc);
   Value taskRoute =
       launch.route ? launch.route : arts::createCurrentNodeRoute(builder, loc);
+  for (const PendingCompactPack &pack : pendingCompactPacks) {
+    SmallVector<Value> packDeps{pack.sourceDep, pack.dstDep};
+    SmallVector<Value> packParams{actionConditions[pack.conditionParam]};
+    arts::ArtsLaunchPolicy packLaunch = resolveBridgeBlockOrdinalLaunchPolicy(
+        module, bridgePlan, blockAlloc, pack.sourceOrdinal, builder, loc);
+    Value packRoute = packLaunch.route
+                          ? packLaunch.route
+                          : arts::createCurrentNodeRoute(builder, loc);
+    auto packTask = arts::EdtOp::create(builder, loc, arts::EdtType::task,
+                                        packLaunch.concurrency, packRoute,
+                                        packDeps, packParams);
+    packTask.setStorageBridgeCopyAttr(UnitAttr::get(packTask.getContext()));
+    packTask.setCompactHaloPackAttr(UnitAttr::get(packTask.getContext()));
+    Block &packBody = packTask.getBody().front();
+    for (Value dep : packDeps)
+      packBody.addArgument(dep.getType(), loc);
+    for (Value param : packParams)
+      packBody.addArgument(param.getType(), loc);
+
+    OpBuilder::InsertionGuard packGuard(builder);
+    builder.setInsertionPointToStart(&packBody);
+    auto copyIf = scf::IfOp::create(builder, loc, TypeRange{},
+                                    packBody.getArgument(packDeps.size()),
+                                    /*withElseRegion=*/false);
+    builder.setInsertionPointToStart(&copyIf.getThenRegion().front());
+    Value sourcePayload =
+        materializeInnerPayload(builder, loc, packBody.getArgument(0));
+    Value compactPayload =
+        materializeInnerPayload(builder, loc, packBody.getArgument(1));
+    SmallVector<Value> indices;
+    materializePerBlockOffsetCopyNest(
+        builder, loc, sourcePayload, compactPayload, pack.copySizes,
+        pack.sourceOffsets, pack.compactOffsets, indices);
+    builder.setInsertionPointAfter(copyIf);
+    arts::YieldOp::create(builder, loc);
+  }
   auto haloTask =
       arts::EdtOp::create(builder, loc, arts::EdtType::task, launch.concurrency,
                           taskRoute, deps, params);

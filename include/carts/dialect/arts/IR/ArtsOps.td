@@ -156,6 +156,9 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<UnitAttr>:$perBlockReplicated,
     // Per-block stencil DB: block-scattered, one writer per block GUID.
     OptionalAttr<UnitAttr>:$perBlockSingleWriterStencil,
+    // Compact face DB used to move non-contiguous stencil halo slices without
+    // widening the halo to the source block.
+    OptionalAttr<UnitAttr>:$compact_halo_payload,
     OptionalAttr<StrAttr>:$distributed_reject_reason
   );
   let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
@@ -604,6 +607,8 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<UnitAttr>:$perBlockSummingSettle,
     // Per-block nearest-neighbor halo exchange EDT.
     OptionalAttr<UnitAttr>:$perBlockHaloExchange,
+    // Pack a non-contiguous source halo face into a compact payload DB.
+    OptionalAttr<UnitAttr>:$compactHaloPack,
     UnitAttr:$inPlaceSafe,
     UnitAttr:$inPlaceSharedState,
     OptionalAttr<I64Attr>:$vectorizeWidth,

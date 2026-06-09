@@ -1,14 +1,17 @@
-// RUN: not %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg 2>&1 \
+// RUN: %carts-compile %s --pipeline post-db-refinement --arts-config %inputs_dir/arts_multinode_8x64.cfg \
 // RUN:   | %FileCheck %s
 
-// A per-block halo bridge must send compact contiguous halo windows. If the
-// committed owner dimension selects a strided face, CODIR must fail closed
-// instead of emitting a full-block acquire.
+// A per-block halo bridge sends compact payload DBs for strided source faces
+// instead of widening the dependency to a whole block.
 
-// CHECK: cannot materialize non-contiguous lower halo destination slice
+// CHECK-LABEL: func.func @noncontiguous_halo_slice_uses_compact_payload
+// CHECK-DAG: compact_halo_payload
+// CHECK-DAG: planPhysicalBlockShape = [4, 1]
+// CHECK: attributes {compactHaloPack, storageBridgeCopy}
+// CHECK: attributes {perBlockHaloExchange, storageBridgeCopy}
 
 module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_workers = 512 : i64} {
-  func.func @reject_noncontiguous_halo_slice() {
+  func.func @noncontiguous_halo_slice_uses_compact_payload() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
