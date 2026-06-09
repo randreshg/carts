@@ -167,7 +167,7 @@ Match verification to the change:
 | Skill | Description | Path |
 | --- | --- | --- |
 | `debug` | Use when starting an unclassified CARTS debug session for crashes, wrong results, hangs, logs, counters, or pipeline artifacts. | `carts-plugin/skills/debug/SKILL.md` |
-| `analysis-triage` | Use when behavior depends on pass order, graphs look stale, metadata is inconsistent, or a pass likely needs AnalysisDependencies or narrower invalidation. | `carts-plugin/skills/analysis-triage/SKILL.md` |
+| `analysis-triage` | Use when behavior depends on pass order, stale facts, or metadata inconsistency across staged CARTS pipelines. | `carts-plugin/skills/analysis-triage/SKILL.md` |
 | `miscompile-triage` | Use when a program compiles but produces wrong output, checksum mismatches, phase-equivalence failures, or suspicious partitioning/distribution decisions. | `carts-plugin/skills/miscompile-triage/SKILL.md` |
 | `runtime-triage` | Use when compilation succeeds but the generated ARTS executable hangs, deadlocks, crashes, stalls, or reports anomalous runtime counters. | `carts-plugin/skills/runtime-triage/SKILL.md` |
 | `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/CODIR/ARTS distributed work materialization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |

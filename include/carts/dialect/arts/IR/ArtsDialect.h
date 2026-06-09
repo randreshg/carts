@@ -36,7 +36,7 @@
 namespace mlir {
 namespace carts::arts {
 
-struct LoweringContractInfo;
+struct LoweringFactInfo;
 
 /// Information about a single partition entry.
 struct PartitionInfo {

@@ -5,6 +5,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 #include "carts/utils/Utils.h"
@@ -66,8 +67,6 @@ static bool isCleanupTerminalOp(Operation *op, Value current) {
     return release.getSource() == current;
   if (auto free = dyn_cast<DbFreeOp>(op))
     return free.getSource() == current;
-  if (auto contract = dyn_cast<LoweringContractOp>(op))
-    return contract.getTarget() == current;
   return false;
 }
 
@@ -173,11 +172,15 @@ uint64_t getElementTypeByteSize(Type elemTy) {
   return 0;
 }
 
+MemRefType getElementMemRefType(Type elementType, unsigned rank) {
+  SmallVector<int64_t> elementShape(rank, ShapedType::kDynamic);
+  return MemRefType::get(elementShape, elementType);
+}
+
 MemRefType getElementMemRefType(Type elementType,
                                 ArrayRef<Value> elementSizes) {
   const size_t rank = elementSizes.empty() ? 1 : elementSizes.size();
-  SmallVector<int64_t> elementShape(rank, ShapedType::kDynamic);
-  return MemRefType::get(elementShape, elementType);
+  return getElementMemRefType(elementType, static_cast<unsigned>(rank));
 }
 
 ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2) {
@@ -200,6 +203,102 @@ ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2) {
 }
 
 } // namespace mlir::carts::arts
+
+ArtsMode DbUtils::classifyMemrefUserAccessMode(Operation *op,
+                                               Operation *underlyingOp) {
+  if (!op || !underlyingOp)
+    return ArtsMode::uninitialized;
+
+  bool hasRead = false;
+  bool hasWrite = false;
+
+  auto safeGetMemrefUnderlying = [&](Value v) -> Operation * {
+    if (!v || !isa<BaseMemRefType>(v.getType()))
+      return nullptr;
+    return arts::getUnderlyingOperation(v);
+  };
+
+  if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    hasRead = safeGetMemrefUnderlying(load->getOperand(0)) == underlyingOp;
+  } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+    hasWrite = safeGetMemrefUnderlying(store->getOperand(1)) == underlyingOp;
+  } else if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
+    hasRead = safeGetMemrefUnderlying(load->getOperand(0)) == underlyingOp;
+  } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
+    hasWrite = safeGetMemrefUnderlying(store->getOperand(1)) == underlyingOp;
+  } else if (auto copy = dyn_cast<memref::CopyOp>(op)) {
+    hasRead = safeGetMemrefUnderlying(copy.getSource()) == underlyingOp;
+    hasWrite = safeGetMemrefUnderlying(copy.getTarget()) == underlyingOp;
+  }
+
+  if (hasRead && hasWrite)
+    return ArtsMode::inout;
+  if (hasWrite)
+    return ArtsMode::out;
+  if (hasRead)
+    return ArtsMode::in;
+  return ArtsMode::uninitialized;
+}
+
+ArtsMode DbUtils::inferEdtAccessMode(Operation *underlyingOp, EdtOp edt) {
+  if (!underlyingOp || !edt)
+    return ArtsMode::uninitialized;
+
+  ArtsMode combined = ArtsMode::uninitialized;
+  edt.walk([&](Operation *op) {
+    if (op->getParentOfType<EdtOp>() != edt)
+      return;
+    combined = combineAccessModes(
+        combined, classifyMemrefUserAccessMode(op, underlyingOp));
+  });
+  return combined;
+}
+
+bool DbUtils::opMatchesAccessMode(Operation *op, Operation *underlyingOp,
+                                  ArtsMode requestedMode) {
+  ArtsMode actualMode = classifyMemrefUserAccessMode(op, underlyingOp);
+  if (actualMode == ArtsMode::uninitialized)
+    return false;
+  if (requestedMode == ArtsMode::inout)
+    return true;
+  return actualMode == requestedMode;
+}
+
+bool DbUtils::accessModeCanSeedNestedAcquire(ArtsMode availableMode,
+                                             ArtsMode requestedMode) {
+  if (requestedMode == ArtsMode::uninitialized)
+    return true;
+  if (availableMode == ArtsMode::inout)
+    return true;
+  return availableMode == requestedMode;
+}
+
+bool DbUtils::isCoarseGrained(DbAllocOp alloc) {
+  if (auto mode = getPartitionMode(alloc.getOperation()))
+    return *mode == PartitionMode::coarse;
+
+  return llvm::all_of(alloc.getSizes(), [](Value v) {
+    int64_t val;
+    return ValueAnalysis::getConstantIndex(v, val) && val == 1;
+  });
+}
+
+bool DbUtils::isSameMemoryObject(Value lhsMemref, Value rhsMemref) {
+  lhsMemref = ValueAnalysis::stripNumericCasts(lhsMemref);
+  rhsMemref = ValueAnalysis::stripNumericCasts(rhsMemref);
+
+  Operation *lhsRoot = DbUtils::getUnderlyingDbAlloc(lhsMemref);
+  Operation *rhsRoot = DbUtils::getUnderlyingDbAlloc(rhsMemref);
+  if (lhsRoot && rhsRoot)
+    return lhsRoot == rhsRoot;
+
+  lhsRoot = arts::getUnderlyingOperation(lhsMemref);
+  rhsRoot = arts::getUnderlyingOperation(rhsMemref);
+  if (lhsRoot && rhsRoot)
+    return lhsRoot == rhsRoot;
+
+  return lhsMemref == rhsMemref;
+}
 
 Value DbUtils::getAccessedMemref(Operation *memOp) {
   if (!memOp)
@@ -361,21 +460,32 @@ SmallVector<Value> DbUtils::getDepOffsetsFromDb(Value dbPtr) {
 }
 
 bool DbUtils::acquiresPartialHaloWindow(DbAcquireOp acquire) {
-  /// The halo face reconstruction in ARTS-RT fires for stencil / block-halo
-  /// acquires. The realized access is a strict halo sub-window only when a
-  /// concrete stencil access extent is committed; absent that extent the
-  /// acquire reads the whole block and ARTS-RT needs no window.
+  /// A strict halo sub-window exists only when a concrete stencil access extent
+  /// is committed; absent that extent the acquire reads the whole block and
+  /// ARTS-RT needs no byte window.
   if (!acquire.isStencil() && !acquire.getStencilSupportedBlockHaloAttr())
     return false;
   ArrayAttr lower = acquire.getStencilMinOffsetsAttr();
   ArrayAttr upper = acquire.getStencilMaxOffsetsAttr();
-  return lower && upper && !lower.empty() && !upper.empty() &&
-         lower.size() == upper.size();
+  if (!lower || !upper || lower.empty() || upper.empty() ||
+      lower.size() != upper.size())
+    return false;
+
+  for (auto [loAttr, hiAttr] : llvm::zip_equal(lower, upper)) {
+    auto lo = dyn_cast<IntegerAttr>(loAttr);
+    auto hi = dyn_cast<IntegerAttr>(hiAttr);
+    if (!lo || !hi)
+      return true;
+    if (lo.getInt() < 0 || hi.getInt() > 0)
+      return true;
+  }
+  return false;
 }
 
 bool DbUtils::hasCommittedDbSpaceWindow(DbAcquireOp acquire) {
   /// A halo_slice records stencil reach for verification/diagnostics only. The
-  /// dependency window consumed by ARTS-RT must be explicit element offsets/sizes.
+  /// dependency window consumed by ARTS-RT must be explicit element
+  /// offsets/sizes.
   auto offsets = acquire.getElementOffsets();
   auto sizes = acquire.getElementSizes();
   return !offsets.empty() && !sizes.empty() && offsets.size() == sizes.size();

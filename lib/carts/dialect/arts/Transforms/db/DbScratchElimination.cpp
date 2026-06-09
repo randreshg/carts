@@ -6,7 +6,6 @@
 /// established stable acquire and dependency structure.
 ///==========================================================================///
 
-#include "carts/dialect/arts/Analysis/db/DbAnalysis.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/utils/ValueAnalysis.h"
 #define GEN_PASS_DEF_DBSCRATCHELIMINATION
@@ -114,7 +113,7 @@ static bool loadsAreInitializedByTask(DbRefOp dbRef, EdtOp edt,
   DbUtils::forEachReachableMemoryAccess(
       dbRef.getResult(),
       [&](const DbUtils::MemoryAccessInfo &access) {
-        if (!DbAnalysis::isSameMemoryObject(access.memref, dbRef.getResult()))
+        if (!DbUtils::isSameMemoryObject(access.memref, dbRef.getResult()))
           return WalkResult::interrupt();
         if (access.isWrite())
           stores.push_back(access.op);
@@ -142,7 +141,7 @@ static std::optional<ScratchCandidate>
 matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
   if (!alloc || alloc.getAllocType() != DbAllocType::stack)
     return std::nullopt;
-  if (!DbAnalysis::isCoarseGrained(alloc) || alloc.getSizes().size() != 1 ||
+  if (!DbUtils::isCoarseGrained(alloc) || alloc.getSizes().size() != 1 ||
       !ValueAnalysis::isOneConstant(alloc.getSizes().front()))
     return std::nullopt;
 

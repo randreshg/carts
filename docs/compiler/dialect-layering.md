@@ -1,6 +1,6 @@
 # CARTS Dialect Layering
 
-This document records the intended CARTS dialect contract. The live pipeline in
+This document records the intended CARTS dialect layering. The live pipeline in
 `tools/compile/Compile.cpp` and `dekk carts pipeline --json` remains the source
 of truth for the current implementation.
 
@@ -14,10 +14,10 @@ are not part of the durable docs tree.
 
 ## One-Line Rule
 
-SDE proves source semantics and authors the MU/CU/SU plan. CODIR freezes that
-plan into isolated codelets with explicit deps and params. `arts` binds those
-codelets to the abstract ARTS DB/EDT/epoch machine. `arts-rt` lowers the
-abstract machine shape to runtime-facing calls.
+SDE proves source semantics and transforms MU/CU/SU shape. CODIR isolates that
+shape into codelets with explicit deps and params. `arts` binds those codelets
+to the abstract ARTS DB/EDT/epoch machine. `arts-rt` lowers the abstract
+machine shape to runtime-facing calls.
 
 ## Target Stack
 
@@ -27,7 +27,7 @@ The target compiler stack is:
 Polygeist -> sde -> codir -> arts -> arts-rt -> LLVM
 ```
 
-The names are part of the contract:
+The names are part of the layering rule:
 
 - `sde` is a CARTS semantic-decomposition dialect. It is not an ARTS dialect.
 - `codir` is a CARTS codelet dialect. It is not an ARTS dialect.
@@ -47,12 +47,12 @@ own: it is the place where isolated task bodies, token-local memory views,
 scalar params, and explicit dependency lists are verified before any ARTS EDT
 object exists. The IEEE codelet/CODIR paper referenced by issue discussion is
 useful prior art, but CARTS should keep the dialect minimal and shaped around
-the contracts below.
+the boundaries below.
 
 ## SDE
 
 SDE owns OpenMP semantics, structured program analysis, memref access facts,
-scheduling-unit intent, approved `sde.pattern` facts, reductions, barrier
+scheduling-unit structure, approved `sde.pattern` facts, reductions, barrier
 legality, and the memory-unit plan that makes compute units address the
 right data slices.
 
@@ -63,7 +63,7 @@ SDE may contain:
   tokens.
 - `cu_region`: compute-unit regions before final codelet formation.
 - `su_iterate` and `su_barrier`: scheduling-unit iteration spaces, task-shape
-  plans, and source-level synchronization intent.
+  shape facts, and source-level synchronization intent.
 - `resource_query <logical_workers>`: target-neutral logical execution
   capacity for symbolic grain arithmetic.
 - Logical work-plan attrs for pattern classification, chunks, access windows,
@@ -75,8 +75,8 @@ pointer layout, concrete EDT placement, or runtime API decisions.
 
 SDE also should not own the final codelet ABI. The current `sde.cu_codelet`
 operation is a migration surface and proof vehicle. In the target stack, SDE
-authors the MU/CU/SU plan, then SDE-to-CODIR materialization creates isolated
-`codir` codelets from that plan.
+authors the MU/CU/SU shape, then SDE-to-CODIR materialization creates isolated
+`codir` codelets from that shape.
 
 The names are intentional:
 
@@ -92,7 +92,7 @@ The names are intentional:
 
 ## CODIR
 
-CODIR is the codelet dialect. It is the bridge between SDE semantic planning
+CODIR is the codelet dialect. It is the bridge between SDE semantic shape
 and ARTS object materialization.
 
 CODIR owns:
@@ -101,7 +101,7 @@ CODIR owns:
 - the complete codelet boundary: memory deps, control deps, scalar params,
   yielded values, and local-only values;
 - token-local memref views and body rewrites derived from the SDE MU/CU/SU
-  plan;
+  shape;
 - verification that codelets do not close over values from enclosing regions;
 - codelet-local canonicalization that is independent of the ARTS runtime.
 
@@ -116,7 +116,7 @@ CODIR may contain operations such as:
 - `codir.param`: scalar, immutable, firstprivate-style values.
 - `codir.yield`: explicit result or completion values.
 
-The exact op names are design points. The contract is not: every value used by
+The exact op names are design points. The invariant is not: every value used by
 a codelet must be local, a dep, a param, or a result of a dep/param-local op.
 Memrefs and mutable shared state are deps, not params. Scalars and small
 immutable captures are params. Values that can be reconstructed inside the
@@ -138,18 +138,18 @@ ARTS may contain:
 - `arts.db_*`: DB allocation, acquire, release, ref, mode, layout, and access
   windows.
 - `arts.epoch_*`: abstract epoch grouping, waits, continuation, and CPS shape.
-- typed contract metadata on EDTs, DBs, and epochs while those contracts are
-  being materialized or validated.
+- typed ARTS facts on EDTs, DBs, and epochs while those facts are being
+  materialized or checked.
 - ARTS topology and placement queries selected after SDE/CODIR have provided a
   logical work plan.
 - local `scf.for` control flow used to implement dispatch or task-local loops.
 
 ARTS must not contain source-level OpenMP carriers, semantic loop-family
 rediscovery, loop fusion policy, SDE-style distribution planning, or
-pass-local hardcoded string contracts.
+pass-local hardcoded string conventions.
 
 The ARTS dialect binds logical worker lanes to the ARTS abstract machine after
-SDE and CODIR have produced a logical work/codelet plan. If an ARTS pass needs
+SDE and CODIR have produced logical work/codelet shape. If an ARTS pass needs
 to infer owner dims, tile legality, task dependence legality, or codelet
 captures from raw source-shaped regions, the missing fact belongs earlier.
 
@@ -171,7 +171,7 @@ ARTS-RT must not choose task grain, stencil layout, loop distribution, DB
 layout, or epoch topology from semantic facts. Those decisions must already be
 fixed by SDE, CODIR, and ARTS.
 
-## EDT Isolation Contract
+## EDT Isolation Rule
 
 Every EDT must be isolated from enclosing SSA values before `EdtLowering`.
 EDT creation must enumerate the complete dependency list and the complete
@@ -197,8 +197,8 @@ boundaries. CODIR is the verifier-enforced staging point that makes this true.
 
 The live implementation now routes codelets through the target SDE/CODIR/ARTS
 split. The canonical `sde-planning` stage performs OpenMP-to-SDE conversion
-and SDE planning, then `sde-to-codir` and `codir-to-arts` handle the codelet
-boundary:
+and SDE-owned transforms, then `sde-to-codir`, `codir-graph-transforms`, and
+`codir-to-arts` keep conversion separate from CODIR graph/storage work:
 
 ```text
 ConvertOpenMPToSde
@@ -206,8 +206,13 @@ PatternAnalysis
 SDE transforms
 MemoryUnitMaterialization
 ConvertSdeToCodir
+CodirCodeletDCE
+ReductionDepMapping
+ReductionAtomicMaterialization
+DepStorageAssignment
 VerifyCodir
 ConvertCodirToArts
+RealizeEdtDistributionPlan
 VerifySdeLowered
 VerifyArtsObjectsOnly
 ```
@@ -290,7 +295,7 @@ window, and keeps the task body on full MU payload coordinates. That is a
 correctness bridge, not the final performance architecture. The final path is
 token-local CODIR codelet form, then direct ARTS DB/acquire/EDT lowering.
 
-## Work-Plan Contract
+## Work Shape Rule
 
 The SDE plan on a work unit should include:
 

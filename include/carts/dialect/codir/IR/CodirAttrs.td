@@ -33,7 +33,7 @@ def AccessModeAttr : CartsCodir_I32EnumAttr<"access_mode", CodirAccessMode>;
 
 def CodirStorageViewKind
     : CartsCodir_I32Enum<"CodirStorageViewKind",
-                         "CODIR dependency storage view contract", [
+                         "CODIR dependency storage view fact", [
       I32EnumAttrCase<"host_whole", 0, "host_whole">,
       I32EnumAttrCase<"compute_block", 1, "compute_block">,
       I32EnumAttrCase<"replicated_read", 2, "replicated_read">,

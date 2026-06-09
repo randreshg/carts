@@ -16,11 +16,11 @@
 #include <algorithm>
 #include <cassert>
 
-#include "carts/dialect/arts/Analysis/db/DbAnalysis.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -653,7 +653,7 @@ void DbAcquireOp::setPreserveDepEdge(bool preserve) {
   (*this)->removeAttr(getPreserveDepEdgeAttrName());
 }
 
-void DbAcquireOp::setExplicitDepContract(bool preserve) {
+void DbAcquireOp::setExplicitDepPreservation(bool preserve) {
   setPreserveAccessMode(preserve);
   setPreserveDepEdge(preserve);
 }
@@ -955,244 +955,6 @@ void DbAcquireOp::build(
                                elementOffsets, elementSizes);
 }
 
-void LoweringContractOp::build(OpBuilder &builder, OperationState &state,
-                               Value target, const LoweringContractInfo &info) {
-  std::optional<int64_t> contractKind;
-  if (info.pattern.kind != ContractKind::Unknown)
-    contractKind = static_cast<int64_t>(info.pattern.kind);
-  build(builder, state, target, info.pattern.depPattern,
-        info.pattern.distributionKind, info.pattern.distributionPattern,
-        info.pattern.distributionVersion,
-        SmallVector<int64_t>(info.spatial.ownerDims.begin(),
-                             info.spatial.ownerDims.end()),
-        SmallVector<Value>(info.spatial.blockShape.begin(),
-                           info.spatial.blockShape.end()),
-        SmallVector<Value>(info.spatial.minOffsets.begin(),
-                           info.spatial.minOffsets.end()),
-        SmallVector<Value>(info.spatial.maxOffsets.begin(),
-                           info.spatial.maxOffsets.end()),
-        SmallVector<Value>(info.spatial.writeFootprint.begin(),
-                           info.spatial.writeFootprint.end()),
-        info.spatial.centerOffset, info.spatial.supportedBlockHalo,
-        SmallVector<int64_t>(info.spatial.spatialDims.begin(),
-                             info.spatial.spatialDims.end()),
-        SmallVector<int64_t>(info.spatial.stencilIndependentDims.begin(),
-                             info.spatial.stencilIndependentDims.end()),
-        info.analysis.narrowableDep, info.analysis.postDbRefined, contractKind);
-}
-
-LoweringContractOp
-LoweringContractOp::create(OpBuilder &builder, Location location, Value target,
-                           const LoweringContractInfo &info) {
-  OperationState state(location, getOperationName());
-  build(builder, state, target, info);
-  auto result = llvm::dyn_cast<LoweringContractOp>(builder.create(state));
-  assert(result && "builder didn't return the right type");
-  return result;
-}
-
-namespace {
-static PatternAttr
-buildPatternAttr(OpBuilder &builder, std::optional<ArtsDepPattern> depPattern,
-                 std::optional<EdtDistributionKind> distributionKind,
-                 std::optional<EdtDistributionPattern> distributionPattern,
-                 std::optional<int64_t> distributionVersion) {
-  auto *ctx = builder.getContext();
-  auto i64Type = IntegerType::get(ctx, 64);
-  ArtsDepPatternAttr depAttr = depPattern
-                                   ? ArtsDepPatternAttr::get(ctx, *depPattern)
-                                   : ArtsDepPatternAttr();
-  EdtDistributionKindAttr kindAttr =
-      distributionKind ? EdtDistributionKindAttr::get(ctx, *distributionKind)
-                       : EdtDistributionKindAttr();
-  EdtDistributionPatternAttr patternAttr =
-      distributionPattern
-          ? EdtDistributionPatternAttr::get(ctx, *distributionPattern)
-          : EdtDistributionPatternAttr();
-  IntegerAttr versionAttr =
-      distributionVersion ? IntegerAttr::get(i64Type, *distributionVersion)
-                          : IntegerAttr();
-
-  if (!depAttr && !kindAttr && !patternAttr && !versionAttr)
-    return PatternAttr();
-  return PatternAttr::get(ctx, depAttr, kindAttr, patternAttr, versionAttr);
-}
-
-static ContractAttr buildContractAttr(OpBuilder &builder,
-                                      ArrayRef<int64_t> ownerDims,
-                                      std::optional<int64_t> centerOffset,
-                                      ArrayRef<int64_t> spatialDims,
-                                      ArrayRef<int64_t> stencilIndependentDims,
-                                      bool supportedBlockHalo,
-                                      bool narrowableDep, bool postDbRefined,
-                                      std::optional<int64_t> contractKind) {
-  auto *ctx = builder.getContext();
-  auto i64Type = IntegerType::get(ctx, 64);
-
-  DenseI64ArrayAttr ownerDimsAttr =
-      ownerDims.empty() ? DenseI64ArrayAttr()
-                        : builder.getDenseI64ArrayAttr(ownerDims);
-  IntegerAttr centerOffsetAttr =
-      centerOffset ? IntegerAttr::get(i64Type, *centerOffset) : IntegerAttr();
-  DenseI64ArrayAttr spatialDimsAttr =
-      spatialDims.empty() ? DenseI64ArrayAttr()
-                          : builder.getDenseI64ArrayAttr(spatialDims);
-  DenseI64ArrayAttr stencilIndependentDimsAttr =
-      stencilIndependentDims.empty()
-          ? DenseI64ArrayAttr()
-          : builder.getDenseI64ArrayAttr(stencilIndependentDims);
-  BoolAttr supportedBlockHaloAttr =
-      supportedBlockHalo ? builder.getBoolAttr(true) : BoolAttr();
-  BoolAttr narrowableDepAttr =
-      narrowableDep ? builder.getBoolAttr(true) : BoolAttr();
-  BoolAttr postDbRefinedAttr =
-      postDbRefined ? builder.getBoolAttr(true) : BoolAttr();
-  IntegerAttr contractKindAttr =
-      contractKind ? IntegerAttr::get(i64Type, *contractKind) : IntegerAttr();
-
-  if (!ownerDimsAttr && !centerOffsetAttr && !spatialDimsAttr &&
-      !stencilIndependentDimsAttr && !supportedBlockHaloAttr &&
-      !narrowableDepAttr && !postDbRefinedAttr && !contractKindAttr) {
-    return ContractAttr();
-  }
-
-  return ContractAttr::get(ctx, ownerDimsAttr, centerOffsetAttr,
-                           spatialDimsAttr, stencilIndependentDimsAttr,
-                           supportedBlockHaloAttr, narrowableDepAttr,
-                           postDbRefinedAttr, contractKindAttr);
-}
-
-static std::optional<int64_t> getOptionalI64(IntegerAttr attr) {
-  if (!attr)
-    return std::nullopt;
-  return attr.getInt();
-}
-} // namespace
-
-void LoweringContractOp::build(
-    OpBuilder &builder, OperationState &state, Value target,
-    std::optional<ArtsDepPattern> depPattern,
-    std::optional<EdtDistributionKind> distributionKind,
-    std::optional<EdtDistributionPattern> distributionPattern,
-    std::optional<int64_t> distributionVersion, SmallVector<int64_t> ownerDims,
-    SmallVector<Value> blockShape, SmallVector<Value> minOffsets,
-    SmallVector<Value> maxOffsets, SmallVector<Value> writeFootprint,
-    std::optional<int64_t> centerOffset, bool supportedBlockHalo,
-    SmallVector<int64_t> spatialDims,
-    SmallVector<int64_t> stencilIndependentDims, bool narrowableDep,
-    bool postDbRefined, std::optional<int64_t> contractKind) {
-  state.addOperands(target);
-  state.addOperands(blockShape);
-  state.addOperands(minOffsets);
-  state.addOperands(maxOffsets);
-  state.addOperands(writeFootprint);
-  state.addAttribute(
-      LoweringContractOp::getOperandSegmentSizesAttrName(state.name),
-      builder.getDenseI32ArrayAttr(
-          {1, static_cast<int32_t>(blockShape.size()),
-           static_cast<int32_t>(minOffsets.size()),
-           static_cast<int32_t>(maxOffsets.size()),
-           static_cast<int32_t>(writeFootprint.size())}));
-
-  if (PatternAttr patternAttr =
-          buildPatternAttr(builder, depPattern, distributionKind,
-                           distributionPattern, distributionVersion)) {
-    state.addAttribute(LoweringContractOp::getPatternAttrName(state.name),
-                       patternAttr);
-  }
-  if (ContractAttr contractAttr = buildContractAttr(
-          builder, ownerDims, centerOffset, spatialDims, stencilIndependentDims,
-          supportedBlockHalo, narrowableDep, postDbRefined, contractKind)) {
-    state.addAttribute(LoweringContractOp::getContractAttrName(state.name),
-                       contractAttr);
-  }
-}
-
-std::optional<ArtsDepPattern> LoweringContractOp::getDepPattern() {
-  if (auto pattern = getPattern())
-    if (ArtsDepPatternAttr depPattern = pattern->getDepPattern())
-      return depPattern.getValue();
-  return std::nullopt;
-}
-
-std::optional<EdtDistributionKind> LoweringContractOp::getDistributionKind() {
-  if (auto pattern = getPattern())
-    if (EdtDistributionKindAttr kind = pattern->getDistributionKind())
-      return kind.getValue();
-  return std::nullopt;
-}
-
-std::optional<EdtDistributionPattern>
-LoweringContractOp::getDistributionPattern() {
-  if (auto pattern = getPattern())
-    if (EdtDistributionPatternAttr distributionPattern =
-            pattern->getDistributionPattern()) {
-      return distributionPattern.getValue();
-    }
-  return std::nullopt;
-}
-
-std::optional<int64_t> LoweringContractOp::getDistributionVersion() {
-  if (auto pattern = getPattern())
-    return getOptionalI64(pattern->getDistributionVersion());
-  return std::nullopt;
-}
-
-std::optional<SmallVector<int64_t, 4>> LoweringContractOp::getOwnerDims() {
-  if (auto contract = getContract())
-    if (DenseI64ArrayAttr ownerDims = contract->getOwnerDims())
-      return SmallVector<int64_t, 4>(ownerDims.asArrayRef());
-  return std::nullopt;
-}
-
-std::optional<int64_t> LoweringContractOp::getCenterOffset() {
-  if (auto contract = getContract())
-    return getOptionalI64(contract->getCenterOffset());
-  return std::nullopt;
-}
-
-std::optional<SmallVector<int64_t, 4>> LoweringContractOp::getSpatialDims() {
-  if (auto contract = getContract())
-    if (DenseI64ArrayAttr spatialDims = contract->getSpatialDims())
-      return SmallVector<int64_t, 4>(spatialDims.asArrayRef());
-  return std::nullopt;
-}
-
-std::optional<SmallVector<int64_t, 4>>
-LoweringContractOp::getStencilIndependentDims() {
-  if (auto contract = getContract())
-    if (DenseI64ArrayAttr dims = contract->getStencilIndependentDims())
-      return SmallVector<int64_t, 4>(dims.asArrayRef());
-  return std::nullopt;
-}
-
-std::optional<bool> LoweringContractOp::getSupportedBlockHalo() {
-  if (auto contract = getContract())
-    if (BoolAttr supported = contract->getSupportedBlockHalo())
-      return supported.getValue();
-  return std::nullopt;
-}
-
-std::optional<bool> LoweringContractOp::getNarrowableDep() {
-  if (auto contract = getContract())
-    if (BoolAttr narrowable = contract->getNarrowableDep())
-      return narrowable.getValue();
-  return std::nullopt;
-}
-
-std::optional<bool> LoweringContractOp::getPostDbRefined() {
-  if (auto contract = getContract())
-    if (BoolAttr postDbRefined = contract->getPostDbRefined())
-      return postDbRefined.getValue();
-  return std::nullopt;
-}
-
-std::optional<int64_t> LoweringContractOp::getContractKind() {
-  if (auto contract = getContract())
-    return getOptionalI64(contract->getContractKind());
-  return std::nullopt;
-}
-
 LogicalResult DbAcquireOp::verify() {
   size_t numSizes = getSizes().size();
   size_t numOffsets = getOffsets().size();
@@ -1282,7 +1044,11 @@ LogicalResult DbAcquireOp::verify() {
   /// Validate indices are not used on single-element datablocks
   if (numIndices > 0) {
     Operation *sourceDb = DbUtils::getUnderlyingDb(getSourcePtr());
-    if (DbAnalysis::hasSingleSize(sourceDb)) {
+    auto sizes = DbUtils::getSizesFromDb(sourceDb);
+    bool hasSingleSize = sizes.empty() || llvm::all_of(sizes, [](Value size) {
+                           return ValueAnalysis::isOneLikeValue(size);
+                         });
+    if (hasSingleSize) {
       auto partMode = getPartitionMode();
       bool awaitingPartitioning =
           partMode && (*partMode == PartitionMode::fine_grained ||
@@ -1293,55 +1059,6 @@ LogicalResult DbAcquireOp::verify() {
                << *getOperation();
       }
     }
-  }
-
-  return success();
-}
-
-LogicalResult LoweringContractOp::verify() {
-  auto ownerDims = getOwnerDims();
-  size_t expectedRank = ownerDims ? ownerDims->size() : 0;
-  bool hasOffsetOrFootprintPayload = !getMinOffsets().empty() ||
-                                     !getMaxOffsets().empty() ||
-                                     !getWriteFootprint().empty();
-
-  if (expectedRank == 0 && hasOffsetOrFootprintPayload)
-    return emitOpError(
-        "min_offsets/max_offsets/write_footprint require owner_dims");
-
-  if (ownerDims) {
-    llvm::DenseSet<int64_t> seenOwnerDims;
-    for (int64_t dim : *ownerDims) {
-      if (dim < 0)
-        return emitOpError("owner_dims must be non-negative");
-      if (!seenOwnerDims.insert(dim).second)
-        return emitOpError("owner_dims contains duplicate value: ") << dim;
-    }
-  }
-
-  auto verifyRankedOperands = [&](OperandRange values,
-                                  StringRef name) -> LogicalResult {
-    if (expectedRank != 0 && !values.empty() && values.size() != expectedRank)
-      return emitOpError() << name << " rank (" << values.size()
-                           << ") must match owner_dims rank (" << expectedRank
-                           << ")";
-    return success();
-  };
-
-  if (failed(verifyRankedOperands(getBlockShape(), "block_shape")) ||
-      failed(verifyRankedOperands(getMinOffsets(), "min_offsets")) ||
-      failed(verifyRankedOperands(getMaxOffsets(), "max_offsets")) ||
-      failed(verifyRankedOperands(getWriteFootprint(), "write_footprint")))
-    return failure();
-
-  if (getMinOffsets().size() != getMaxOffsets().size())
-    return emitOpError("min_offsets and max_offsets must have the same rank");
-
-  if (getSupportedBlockHalo().value_or(false)) {
-    auto depPattern = getDepPattern();
-    if (!depPattern || !isStencilFamilyDepPattern(*depPattern))
-      return emitOpError(
-          "supported_block_halo requires a stencil-family dep_pattern");
   }
 
   return success();

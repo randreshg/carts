@@ -129,7 +129,7 @@ inline bool hasSupportedBlockHalo(Operation *op) {
   return name && op->hasAttr(name);
 }
 
-inline void copyStencilContractAttrs(Operation *source, Operation *dest) {
+inline void copyStencilFactAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;
 

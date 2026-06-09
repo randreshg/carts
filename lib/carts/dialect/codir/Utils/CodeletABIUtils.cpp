@@ -50,6 +50,51 @@ static bool isPositiveI64Array(ArrayAttr attr) {
   return llvm::all_of(*values, [](int64_t value) { return value > 0; });
 }
 
+static std::optional<CodirCollectiveKind>
+getDepCollectiveKind(CodeletOp codelet, unsigned depIndex) {
+  ArrayAttr collectives =
+      codelet ? codelet.getDepCollectivesAttr() : ArrayAttr{};
+  if (!collectives || depIndex >= collectives.size())
+    return std::nullopt;
+  auto kind = dyn_cast<CodirCollectiveKindAttr>(collectives[depIndex]);
+  if (!kind)
+    return std::nullopt;
+  return kind.getValue();
+}
+
+static bool blockShapeAlignsWithTile(ArrayAttr blockShape,
+                                     ArrayAttr tileShape) {
+  std::optional<SmallVector<int64_t, 4>> blocks = readI64ArrayAttr(blockShape);
+  std::optional<SmallVector<int64_t, 4>> tiles = readI64ArrayAttr(tileShape);
+  if (!blocks || !tiles || blocks->empty() || blocks->size() != tiles->size())
+    return false;
+  for (auto [block, tile] : llvm::zip_equal(*blocks, *tiles))
+    if (block <= 0 || tile <= 0 || block % tile != 0)
+      return false;
+  return true;
+}
+
+static ArrayAttr getComputeBlockReadShapeOr(CodeletOp codelet,
+                                            unsigned depIndex,
+                                            CodirAccessMode mode,
+                                            ArrayAttr fallback) {
+  if (!fallback || !codirAccessMayRead(mode) || codirAccessMayWrite(mode))
+    return fallback;
+  std::optional<CodirStorageViewKind> view =
+      getDepStorageViewKind(codelet, depIndex);
+  if (!view || *view != CodirStorageViewKind::compute_block)
+    return fallback;
+  std::optional<CodirCollectiveKind> collective =
+      getDepCollectiveKind(codelet, depIndex);
+  if (!collective || *collective != CodirCollectiveKind::halo)
+    return fallback;
+  ArrayAttr tileShape = codelet ? codelet.getTileShapeAttr() : ArrayAttr{};
+  if (!isPositiveI64Array(tileShape) ||
+      blockShapeAlignsWithTile(fallback, tileShape))
+    return fallback;
+  return tileShape;
+}
+
 static bool hasStringValue(DictionaryAttr dict, StringRef key,
                            StringRef expected) {
   auto value = dyn_cast_or_null<StringAttr>(dict ? dict.get(key) : Attribute{});
@@ -481,18 +526,23 @@ ArrayAttr getDepPhysicalBlockShapeAttr(CodeletOp codelet, unsigned depIndex) {
       if (codirAccessMayWrite(*mode) && ownerBlockShape)
         return ownerBlockShape;
       if (codirAccessMayRead(*mode) && readBlockShape)
-        return readBlockShape;
+        return getComputeBlockReadShapeOr(codelet, depIndex, *mode,
+                                          readBlockShape);
     }
     if (firstMatchingShape)
-      return firstMatchingShape;
+      return getComputeBlockReadShapeOr(codelet, depIndex, *mode,
+                                        firstMatchingShape);
   }
 
   DictionaryAttr layoutEntry = getArrayLayoutEntryForDep(codelet, depIndex);
   auto layoutShape = dyn_cast_or_null<ArrayAttr>(
       layoutEntry ? layoutEntry.get(AttrNames::LayoutGraphKeys::BlockShape)
                   : Attribute{});
-  if (isPositiveI64Array(layoutShape))
+  if (isPositiveI64Array(layoutShape)) {
+    if (mode)
+      return getComputeBlockReadShapeOr(codelet, depIndex, *mode, layoutShape);
     return layoutShape;
+  }
   return codelet ? codelet.getTileShapeAttr() : ArrayAttr{};
 }
 

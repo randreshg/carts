@@ -13,9 +13,7 @@ module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_worker
     %c4 = arith.constant 4 : index
     %c7 = arith.constant 7 : index
     %c8 = arith.constant 8 : index
-    %zero = arith.constant 0.000000e+00 : f64
     %A = memref.alloc() : memref<8x1x8xf64>
-    memref.store %zero, %A[%c0, %c0, %c0] : memref<8x1x8xf64>
 
     scf.for %wave = %c1 to %c8 step %c1 {
       scf.for %row = %c1 to %c7 step %c4 {
@@ -64,13 +62,8 @@ module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_worker
       }
     }
 
-    %out = memref.load %A[%c0, %c0, %c0] : memref<8x1x8xf64>
-    func.call @use(%out) : (f64) -> ()
-    memref.dealloc %A : memref<8x1x8xf64>
     return
   }
-
-  func.func private @use(f64)
 }
 
 // CHECK: grouped owner-compute halo dependency #0 requires explicit per-face element_offsets/element_sizes

@@ -18,10 +18,8 @@
 ///==========================================================================///
 
 #define GEN_PASS_DEF_DBOWNERMAPREALIZATION
-#include "carts/dialect/arts/Analysis/AnalysisManager.h"
-#include "carts/dialect/arts/Analysis/db/DbAnalysis.h"
-#include "carts/dialect/arts/Analysis/db/DbDistributedEligibility.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/DbDistributedEligibility.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/passes/Passes.h"
@@ -40,32 +38,20 @@ namespace {
 
 struct DbOwnerMapRealizationPass
     : public impl::DbOwnerMapRealizationBase<DbOwnerMapRealizationPass> {
-  explicit DbOwnerMapRealizationPass(mlir::carts::arts::AnalysisManager *AM)
-      : AM(AM) {}
+  DbOwnerMapRealizationPass() = default;
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    if (!AM) {
-      module.emitError()
-          << "db-owner-map-realization requires the staged compiler pipeline; "
-             "textual --pass-pipeline use cannot provide the ARTS "
-             "AnalysisManager, runtime configuration, or distributed "
-             "ownership wiring";
+
+    auto totalNodes = arts::getRuntimeTotalNodes(module);
+    auto totalWorkers = arts::getRuntimeTotalWorkers(module);
+    if (!totalNodes || !totalWorkers || *totalNodes <= 0 ||
+        *totalWorkers <= 0) {
+      module.emitError("missing runtime worker/node configuration for "
+                       "distributed DB ownership");
       signalPassFailure();
       return;
     }
-
-    auto *machine = &AM->getRuntimeConfig();
-    if (!machine->hasConfigFile() || !machine->hasValidNodeCount() ||
-        !machine->hasValidThreads()) {
-      module.emitError(
-          "invalid ARTS machine configuration for distributed DB ownership");
-      signalPassFailure();
-      return;
-    }
-
-    auto &dbAnalysis = AM->getDbAnalysis();
-    dbAnalysis.invalidate();
 
     unsigned totalAllocs = 0;
     unsigned markedDistributed = 0;
@@ -74,7 +60,7 @@ struct DbOwnerMapRealizationPass
       if (failed)
         return;
       ++totalAllocs;
-      auto eligibility = evaluateDistributedDbEligibility(alloc, dbAnalysis);
+      auto eligibility = evaluateDistributedDbEligibility(alloc);
       setDistributedDbAllocation(alloc.getOperation(), eligibility.eligible);
       if (eligibility.eligible) {
         ++markedDistributed;
@@ -112,18 +98,14 @@ struct DbOwnerMapRealizationPass
                                                 << totalAllocs
                                                 << " DbAlloc operations");
   }
-
-private:
-  mlir::carts::arts::AnalysisManager *AM = nullptr;
 };
 
 } // namespace
 
 namespace mlir {
 namespace carts::arts {
-std::unique_ptr<Pass>
-createDbOwnerMapRealizationPass(mlir::carts::arts::AnalysisManager *AM) {
-  return std::make_unique<DbOwnerMapRealizationPass>(AM);
+std::unique_ptr<Pass> createDbOwnerMapRealizationPass() {
+  return std::make_unique<DbOwnerMapRealizationPass>();
 }
 } // namespace carts::arts
 } // namespace mlir

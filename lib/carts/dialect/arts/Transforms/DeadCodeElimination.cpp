@@ -11,7 +11,7 @@
 /// - Generic helper cleanup delegated to carts::runDeadIrCleanup
 ///
 /// DB lifetime cleanup that depends on forwarding/cleanup use graphs stays in
-/// DbTransformsPass and EdtTransformsPass; this pass only removes raw-dead IR.
+/// DB/EDT cleanup passes; this pass only removes raw-dead IR.
 ///
 /// Example:
 ///   Before:
@@ -48,20 +48,20 @@ namespace {
 struct DeadCodeEliminationPass
     : public impl::DeadCodeEliminationBase<DeadCodeEliminationPass> {
 
-  static bool isContractUse(Operation *user) {
-    return isa<LoweringContractOp, DbFreeOp, DbReleaseOp>(user);
+  static bool isCleanupUse(Operation *user) {
+    return isa<DbFreeOp, DbReleaseOp>(user);
   }
 
-  static bool hasNonContractUse(Value value) {
+  static bool hasNonCleanupUse(Value value) {
     return llvm::any_of(value.getUsers(),
-                        [](Operation *user) { return !isContractUse(user); });
+                        [](Operation *user) { return !isCleanupUse(user); });
   }
 
-  static bool hasSingleExpectedNonContractUse(Value value,
-                                              Operation *expectedUser) {
+  static bool hasSingleExpectedNonCleanupUse(Value value,
+                                             Operation *expectedUser) {
     unsigned count = 0;
     for (Operation *user : value.getUsers()) {
-      if (isContractUse(user))
+      if (isCleanupUse(user))
         continue;
       if (user != expectedUser)
         return false;
@@ -70,11 +70,11 @@ struct DeadCodeEliminationPass
     return count == 1;
   }
 
-  static void collectContractUsers(Value value,
-                                   SmallVectorImpl<Operation *> &contracts) {
+  static void collectCleanupUsers(Value value,
+                                  SmallVectorImpl<Operation *> &cleanupUsers) {
     for (Operation *user : value.getUsers()) {
-      if (isContractUse(user))
-        contracts.push_back(user);
+      if (isCleanupUse(user))
+        cleanupUsers.push_back(user);
     }
   }
 
@@ -182,13 +182,13 @@ struct DeadCodeEliminationPass
         if (auto acq = dep.getDefiningOp<arts::DbAcquireOp>()) {
           bool ptrOnlyUsedHere =
               acq.getPtr() == dep &&
-              hasSingleExpectedNonContractUse(acq.getPtr(), edt.getOperation());
+              hasSingleExpectedNonCleanupUse(acq.getPtr(), edt.getOperation());
           bool guidUnused = acq.getGuid().use_empty();
           if (ptrOnlyUsedHere && guidUnused) {
-            SmallVector<Operation *> contracts;
-            collectContractUsers(acq.getPtr(), contracts);
-            for (Operation *contract : contracts)
-              removalMgr.markForRemoval(contract);
+            SmallVector<Operation *> cleanupUsers;
+            collectCleanupUsers(acq.getPtr(), cleanupUsers);
+            for (Operation *cleanup : cleanupUsers)
+              removalMgr.markForRemoval(cleanup);
             removalMgr.markForRemoval(acq);
           }
         }
@@ -206,12 +206,12 @@ struct DeadCodeEliminationPass
     RemovalUtils removalMgr;
 
     module.walk([&](DbAllocOp dbAlloc) {
-      if (!hasNonContractUse(dbAlloc.getGuid()) &&
-          !hasNonContractUse(dbAlloc.getPtr())) {
-        SmallVector<Operation *> contracts;
-        collectContractUsers(dbAlloc.getPtr(), contracts);
-        for (Operation *contract : contracts)
-          removalMgr.markForRemoval(contract);
+      if (!hasNonCleanupUse(dbAlloc.getGuid()) &&
+          !hasNonCleanupUse(dbAlloc.getPtr())) {
+        SmallVector<Operation *> cleanupUsers;
+        collectCleanupUsers(dbAlloc.getPtr(), cleanupUsers);
+        for (Operation *cleanup : cleanupUsers)
+          removalMgr.markForRemoval(cleanup);
 
         /// Also remove associated db_free operations
         for (Operation *user : dbAlloc.getGuid().getUsers()) {
@@ -244,8 +244,8 @@ struct DeadCodeEliminationPass
     RemovalUtils removalMgr;
 
     module.walk([&](DbAcquireOp acquire) {
-      if (!hasNonContractUse(acquire.getPtr()) &&
-          !hasNonContractUse(acquire.getGuid())) {
+      if (!hasNonCleanupUse(acquire.getPtr()) &&
+          !hasNonCleanupUse(acquire.getGuid())) {
         /// Also remove associated db_release operations
         for (Operation *user : acquire.getPtr().getUsers()) {
           if (auto releaseOp = dyn_cast<DbReleaseOp>(user)) {
@@ -255,10 +255,10 @@ struct DeadCodeEliminationPass
         }
 
         ARTS_DEBUG("Removing unused acquire: " << acquire);
-        SmallVector<Operation *> contracts;
-        collectContractUsers(acquire.getPtr(), contracts);
-        for (Operation *contract : contracts)
-          removalMgr.markForRemoval(contract);
+        SmallVector<Operation *> cleanupUsers;
+        collectCleanupUsers(acquire.getPtr(), cleanupUsers);
+        for (Operation *cleanup : cleanupUsers)
+          removalMgr.markForRemoval(cleanup);
         removalMgr.markForRemoval(acquire);
       }
     });

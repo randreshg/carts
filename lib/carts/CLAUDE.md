@@ -22,7 +22,7 @@ dialect/                     MLIR dialects (one subdirectory per CARTS dialect)
   codir/                     CODIR dialect — codelet isolation
     IR/                      CodirDialect, CodirOps
     Conversion/              SdeToCodir, CodirToArts
-    Transforms/              CodirCodeletOpt, VerifyCodir
+    Transforms/              CodirCodeletDCE, VerifyCodir
     Utils/                   CodeletABIUtils
   arts/                      ARTS dialect — abstract orchestration (DB, EDT, epoch)
     Analysis/                All analysis (db, edt, graphs, heuristics, loop,
@@ -30,7 +30,7 @@ dialect/                     MLIR dialects (one subdirectory per CARTS dialect)
     IR/                      ARTS dialect definition
     Transforms/              All ARTS passes (db/, edt/, loop/, epoch/, verify/)
     Utils/                   ARTS-specific utilities (DbUtils, EdtUtils,
-                             LoweringContractUtils, PartitionPredicates,
+                             LoweringFactUtils, PartitionPredicates,
                              BlockedAccessUtils, MetadataEnums,
                              StencilAttributes, RuntimeConfig,
                              LocationMetadata)

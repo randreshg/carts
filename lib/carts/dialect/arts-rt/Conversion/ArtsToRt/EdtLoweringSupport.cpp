@@ -10,7 +10,7 @@
 
 #include "../ArtsRtToLLVM/CodegenInternal.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -30,14 +30,14 @@ using namespace ::mlir::carts::arts;
 ///===----------------------------------------------------------------------===///
 
 void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
-                           const LoweringContractInfo &contract) {
+                           const LoweringFactInfo &facts) {
   if (!AC || !acquire)
     return;
 
   auto mode = acquire.getPartitionMode();
   if (!mode || !usesBlockLayout(*mode))
     return;
-  /// For contract-backed block/stencil acquires, partition_* is the
+  /// For facts-backed block/stencil acquires, partition_* is the
   /// authoritative task-local dependency window in element space. Lowering
   /// must convert that window into DB-space consistently for both read and
   /// write-capable acquires; falling back to offsets/sizes risks
@@ -53,17 +53,17 @@ void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
     return;
 
   /// Read-only acquires that intentionally preserved the parent DB-space
-  /// range must keep that full-range contract through pre-lowering. Their
+  /// range must keep that full-range facts through pre-lowering. Their
   /// partition_* hints still describe the worker-local element slice, but
   /// reinterpreting those hints as the authoritative DB window narrows
   /// correctness-preserving full-range fallbacks back to one block.
-  if (shouldPreserveParentDepRange(contract, acquire) &&
+  if (shouldPreserveParentDepRange(facts, acquire) &&
       !acquire.getOffsets().empty() && !acquire.getSizes().empty())
     return;
 
   /// This converts the committed partition_* element window into the DB-space
   /// block window mechanically. It does not reconstruct the stencil halo from
-  /// the contract: block-layout acquires past the guard above always need this
+  /// the facts: block-layout acquires past the guard above always need this
   /// structural element-to-block normalization.
   auto alloc = dyn_cast_or_null<DbAllocOp>(
       RtDbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
@@ -72,7 +72,7 @@ void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
 
   auto outerSizes = alloc.getSizes();
   auto elementSizes = alloc.getElementSizes();
-  SmallVector<unsigned, 4> dims = resolveContractOwnerDims(contract, rank);
+  SmallVector<unsigned, 4> dims = resolveFactOwnerDims(facts, rank);
 
   if (dims.size() > outerSizes.size() || dims.size() > elementSizes.size())
     return;
@@ -137,14 +137,12 @@ normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   Value one = AC->createIndexConstant(1, loc);
   Value trueI1 = AC->create<arith::ConstantIntOp>(loc, 1, 1);
 
-  auto contract = resolveAcquireContract(acquire);
-  if (!contract)
+  auto facts = resolveAcquireFacts(acquire);
+  if (!facts)
     return std::nullopt;
-  if (!contract->spatial.ownerDims.empty())
-    ownerRank =
-        std::min<unsigned>(ownerRank, contract->spatial.ownerDims.size());
-  SmallVector<unsigned, 4> ownerDims =
-      resolveContractOwnerDims(*contract, ownerRank);
+  if (!facts->spatial.ownerDims.empty())
+    ownerRank = std::min<unsigned>(ownerRank, facts->spatial.ownerDims.size());
+  SmallVector<unsigned, 4> ownerDims = resolveFactOwnerDims(*facts, ownerRank);
   if (ownerDims.size() != ownerRank)
     return std::nullopt;
 

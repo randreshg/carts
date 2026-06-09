@@ -10,6 +10,7 @@
 #define CARTS_UTILS_DBUTILS_H
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Value.h"
@@ -27,6 +28,7 @@ namespace carts::arts {
 uint64_t getElementTypeByteSize(Type elementType);
 
 /// Build the uniform memref type used for an ARTS DB element payload.
+MemRefType getElementMemRefType(Type elementType, unsigned rank);
 MemRefType getElementMemRefType(Type elementType, ArrayRef<Value> elementSizes);
 
 /// Combine two ARTS access modes and return the least restrictive mode.
@@ -85,7 +87,7 @@ public:
 
   /// Extract the dependency iteration sizes used for EDT dependency counting
   /// and record_dep lowering.
-  /// For block/stencil acquires, this prefers a contract-cached DB-space
+  /// For block/stencil acquires, this prefers a cached DB-space
   /// window when available; otherwise it falls back to the acquire's explicit
   /// DB-space sizes.
   static SmallVector<Value> getDepSizesFromDb(Operation *dbOp);
@@ -94,7 +96,7 @@ public:
   static SmallVector<Value> getDepSizesFromDb(Value dbPtr);
 
   /// Extract the dependency iteration offsets used for EDT dependency lowering.
-  /// For block/stencil acquires, this prefers a contract-cached DB-space
+  /// For block/stencil acquires, this prefers a cached DB-space
   /// window when available; otherwise it falls back to the acquire's explicit
   /// DB-space offsets.
   static SmallVector<Value> getDepOffsetsFromDb(Operation *dbOp);
@@ -106,21 +108,18 @@ public:
   /// DB-space Window Facts
   ///===----------------------------------------------------------------------===////
   /// A partial acquire reads a strict sub-window of its DB block. ARTS commits
-  /// that window as an authoritative fact (halo_slice) so ARTS-RT consumes it
-  /// at lowering instead of reconstructing the halo face window. These
-  /// predicates name the set that requires the committed window and whether it
-  /// is present.
+  /// halo_slice only as stencil reach metadata; ARTS-RT requires explicit
+  /// element offsets/sizes for byte-window lowering. These predicates name the
+  /// set that requires such a window and whether it is present.
 
-  /// Return true when this acquire realizes a halo sub-window whose extent
-  /// ARTS-RT would otherwise reconstruct: a stencil / block-halo acquire that
-  /// carries a concrete stencil access extent (matching lower/upper offsets).
+  /// Return true when this acquire realizes a halo sub-window: a stencil /
+  /// block-halo acquire that carries a concrete stencil access extent (matching
+  /// lower/upper offsets).
   /// Without that extent the acquire reads the whole block and needs no window.
   static bool acquiresPartialHaloWindow(DbAcquireOp acquire);
 
-  /// Return true when this acquire already carries an authoritative committed
-  /// DB-space window: a per-slot halo_slice fact, or explicit element-space
-  /// offsets/sizes operands (an ESD partial chunk) that ARTS-RT copies
-  /// verbatim.
+  /// Return true when this acquire already carries explicit element-space
+  /// offsets/sizes operands that ARTS-RT can lower mechanically.
   static bool hasCommittedDbSpaceWindow(DbAcquireOp acquire);
 
   ///===----------------------------------------------------------------------===///
@@ -156,7 +155,7 @@ public:
   static bool isAllowedSmallReadOnlyCoarseDep(Value dep, DbAllocOp alloc);
 
   /// Return true when a read-only coarse DB dependency has an explicit
-  /// transport contract that allows internode tasks to consume it.
+  /// transport facts that allow internode tasks to consume it.
   static bool isAllowedReadOnlyCoarseDep(Value dep, DbAllocOp alloc);
 
   /// Return true for generated bridge EDTs that move data between a local
@@ -234,6 +233,16 @@ public:
       Value source,
       llvm::function_ref<WalkResult(const MemoryAccessInfo &)> visitor,
       Region *scope = nullptr);
+
+  static ArtsMode inferEdtAccessMode(Operation *underlyingOp, EdtOp edt);
+  static ArtsMode classifyMemrefUserAccessMode(Operation *op,
+                                               Operation *underlyingOp);
+  static bool opMatchesAccessMode(Operation *op, Operation *underlyingOp,
+                                  ArtsMode requestedMode);
+  static bool accessModeCanSeedNestedAcquire(ArtsMode availableMode,
+                                             ArtsMode requestedMode);
+  static bool isCoarseGrained(DbAllocOp alloc);
+  static bool isSameMemoryObject(Value lhsMemref, Value rhsMemref);
 
   /// Return true when every reachable use of source is forwarding or cleanup
   /// plumbing. Collected operations can be erased to remove the dead DB chain.

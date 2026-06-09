@@ -13,7 +13,7 @@
 /// 5. Replace EDT with edt_create call returning GUID
 /// 6. Add dependency management (record_in_dep)
 ///
-/// Dep contract (before/after):
+/// Dep facts (before/after):
 ///   BEFORE:
 ///     %t = arts.edt ... (%dep0, %dep1)
 ///
@@ -37,7 +37,7 @@ namespace mlir::carts::arts_rt {
 #include "carts/dialect/arts-rt/Utils/OperationAttributes.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
@@ -246,8 +246,8 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   }
 
   /// Recompute the live capture environment from the current EDT body.
-  /// EpochOpt and other structural passes can rewrite continuation captures
-  /// late in the pipeline; lowering must follow the final IR contract, not a
+  /// ARTS epoch/continuation passes can rewrite continuation captures late in
+  /// the pipeline; lowering must follow the final IR facts, not a
   /// potentially stale cached summary.
   EdtEnvManager envManager(edtOp);
   for (Value captured : envManager.getCapturedValues()) {
@@ -274,11 +274,11 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
 
   /// Normalize dependency slices before outlining so the packed parameters,
   /// outlined dep_gep math, depCount, and rec_dep lowering all observe the
-  /// same DB-space contract.
+  /// same DB-space facts.
   for (Value dep : edtDeps)
     if (auto acquire = dep.getDefiningOp<DbAcquireOp>())
-      if (auto contract = resolveAcquireContract(acquire))
-        normalizeTaskDepSlice(AC, acquire, *contract);
+      if (auto facts = resolveAcquireFacts(acquire))
+        normalizeTaskDepSlice(AC, acquire, *facts);
 
   SmallVector<Type> packTypes;
   SmallVector<Value> packedValues;
@@ -804,12 +804,12 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
     }
   }
 
-  /// Extract GUIDs, acquire modes, bounds validity, and ESD byte offsets.
+  /// Extract GUIDs, acquire modes, bounds validity, and halo byte windows.
   SmallVector<Value> depGuids, boundsValids;
   SmallVector<Value> byteOffsets, byteSizes;
   SmallVector<int32_t> acquireModes;
   SmallVector<int32_t> depFlags;
-  bool hasEsdDeps = false;
+  bool hasHaloWindowDeps = false;
   bool hasDepFlags = false;
   DenseSet<Operation *> seenSources;
 
@@ -844,14 +844,15 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
       boundsValid = AC->create<arith::ConstantIntOp>(loc, 1, 1);
     boundsValids.push_back(boundsValid);
 
-    /// ESD: Check for partial acquisition (element_offsets/element_sizes)
-    /// When element_offsets is non-empty, compute byte_offset and byte_size
-    /// using the allocation's elementSizes for linearization.
+    /// Halo window: check for partial acquisition
+    /// (element_offsets/element_sizes) When element_offsets is non-empty,
+    /// compute byte_offset and byte_size using the allocation's elementSizes
+    /// for linearization.
     Value byteOffset, byteSize;
     if (dbAcquireOp) {
       SmallVector<Value, 4> elemOffsets;
       SmallVector<Value, 4> elemSizes;
-      /// Only the committed ESD window (element_offsets/element_sizes) is
+      /// Only the explicit element window (element_offsets/element_sizes) is
       /// lowered. ARTS-RT does not synthesize a partial window from partition
       /// hints; an acquire with no committed element window uses the whole-DB
       /// dependency path below.
@@ -871,10 +872,10 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
         auto alloc = dyn_cast_or_null<DbAllocOp>(
             RtDbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
 
-        /// ESD slice transport delivers a compacted copy of the requested
-        /// byte range. When the allocation is coarse (single partition),
-        /// the EDT body uses global indices to access the full array, so
-        /// a compacted sub-copy would cause incorrect addressing.
+        /// Halo transport delivers a compacted copy of the requested byte
+        /// range. When the allocation is coarse, the EDT body uses global
+        /// indices to access the full array, so a compacted sub-copy would
+        /// cause incorrect addressing.
         bool isCoarseAlloc =
             alloc && alloc.getPartitionMode() == PartitionMode::coarse;
         if (alloc && !alloc.getElementSizes().empty() && !isCoarseAlloc) {
@@ -887,10 +888,8 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
                                  normalized->offsets.end());
               elemSizes.assign(normalized->sizes.begin(),
                                normalized->sizes.end());
-              /// ARTS ESD is copy-based RO transport. If the normalized slice
-              /// still covers the entire local DB block, using
-              /// the halo runtime API would only copy the whole block instead
-              /// of reusing the normal whole-DB dependence path.
+              /// If the normalized slice still covers the entire local DB
+              /// block, the normal whole-DB dependence path is cheaper.
               Value sliceNarrowerThanBlock = AC->create<arith::XOrIOp>(
                   loc, normalized->wholeBlock,
                   AC->create<arith::ConstantIntOp>(loc, 1, 1));
@@ -941,7 +940,7 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
             byteSize = AC->create<arith::SelectOp>(loc, useSliceTransport,
                                                    byteSize, zeroIdx);
           }
-          hasEsdDeps = true;
+          hasHaloWindowDeps = true;
         } else {
           /// Fallback: no allocation info available
           byteOffset = AC->createIndexConstant(0, loc);
@@ -1012,10 +1011,9 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
         depFlagBits |= kArtsDepFlagPreferDuplicate;
       }
     }
-    bool hasExplicitSlice =
-        byteOffset && byteSize &&
-        ValueAnalysis::isProvablyNonZero(
-            ValueAnalysis::stripNumericCasts(byteSize));
+    bool hasExplicitSlice = byteOffset && byteSize &&
+                            ValueAnalysis::isProvablyNonZero(
+                                ValueAnalysis::stripNumericCasts(byteSize));
     if (depDbAcquireOp && hasExplicitSlice) {
       /// Depv-carried slices are still unstable for continuation-style
       /// generated EDTs. Fall back to whole-block dependencies for depv
@@ -1037,9 +1035,6 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
     }
     byteOffsets.push_back(byteOffset);
     byteSizes.push_back(byteSize);
-
-    /// Explicit element slices already encode the producer/consumer contract.
-    /// ARTS-RT must lower those byte windows mechanically.
     if (depFlagBits != 0)
       hasDepFlags = true;
     depFlags.push_back(depFlagBits);
@@ -1059,9 +1054,9 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
     depFlagsAttr =
         DenseI32ArrayAttr::get(AC->getBuilder().getContext(), depFlags);
 
-  /// Only include byte offsets if we have ESD dependencies
+  /// Only include byte offsets if we have halo-window dependencies.
   SmallVector<Value> finalByteOffsets, finalByteSizes;
-  if (hasEsdDeps) {
+  if (hasHaloWindowDeps) {
     finalByteOffsets = byteOffsets;
     finalByteSizes = byteSizes;
   }

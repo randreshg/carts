@@ -4,7 +4,7 @@
 /// Physical DB layout data projected from SDE/CODIR plans.
 ///
 /// SDE owns the tensor/linalg analysis and chooses the physical owner
-/// dimensions, block shape, and task slice contracts. ARTS may use this small
+/// dimensions, block shape, and task slice facts. ARTS may use this small
 /// value type for object materialization and diagnostics, but block-local
 /// access rewriting belongs to SDE/CODIR token-local memref lowering.
 ///==========================================================================///

@@ -79,10 +79,9 @@ bool isNoOpSelfStore(memref::StoreOp store) {
   auto load = store.getValueToStore().getDefiningOp<memref::LoadOp>();
   if (!load)
     return false;
-  if (load.getMemref() != store.getMemref())
-    return false;
-  if (!ValueAnalysis::areValueRangesEquivalent(load.getIndices(),
-                                               store.getIndices()))
+  if (!ValueAnalysis::sameDirectMemrefAccess(
+          load.getMemref(), load.getIndices(), store.getMemref(),
+          store.getIndices()))
     return false;
   return onlyMemoryEffectFreeOpsBetween(load.getOperation(),
                                         store.getOperation());

@@ -21,8 +21,8 @@ disagree.
 | SDE Polygeist input normalization helpers | `lib/carts/dialect/sde/Conversion/PolygeistToSde/PolygeistToSdeUtils.h` | `materializeDependView`, `clampDepIndices`, `isInsideOmpRegion`, `containsOmpOp` |
 | ARTS DB mechanics | `include/carts/dialect/arts/Utils/DbUtils.h` | `traceToDbAlloc`, `getUnderlyingDb`, `getMemoryAccessInfo`, `isWriterMode` |
 | ARTS EDT mechanics | `include/carts/dialect/arts/Utils/EdtUtils.h` | `EdtEnvManager`, `isInsideEpoch`, `classifyEdtArgAccesses` |
-| ARTS loop structure, partition/block predicates, runtime topology, and source-location IDs | `include/carts/dialect/arts/Utils` | `LoopStructureUtils`, `BlockedAccessUtils`, `PartitionPredicates`, `LoweringContractUtils`, `RuntimeConfig`, `LocationMetadata` |
-| ARTS graph/ownership analysis | `include/carts/dialect/arts/Analysis` | `DbGraph`, `EdtGraph`, `LoopNode`, `DbDistributedEligibility` |
+| ARTS loop structure, partition/block predicates, runtime topology, and source-location IDs | `include/carts/dialect/arts/Utils` | `LoopStructureUtils`, `BlockedAccessUtils`, `PartitionPredicates`, `RuntimeConfig`, `LocationMetadata` |
+| ARTS DB/ownership queries | `include/carts/dialect/arts/Utils` | `DbUtils`, `DbDistributedEligibility`, `DbLayoutPlanUtils`, `LoweringFactUtils` |
 | ARTS-RT runtime ABI | `include/carts/dialect/arts-rt/Utils` | `IdRegistry`, `RuntimeCallUtils`, `RtDbUtils` |
 
 Do not create new files such as `LoopIVUtils`, `DbHelperUtils`, or
@@ -74,7 +74,7 @@ not loop-specific utilities.
 | Check block layout | `usesBlockLayout()` | `PartitionPredicates.h` |
 | Supports halo? | `supportsHaloExtension()` | `PartitionPredicates.h` |
 | Is stencil family? | `isStencilFamilyDepPattern()` | `OperationAttributes.h` |
-| Get lowering contract | `getLoweringContract()` | `LoweringContractUtils.h` |
+| Get lowering facts | focused fact helpers | `LoweringFactUtils.h` |
 | Mark op for deferred removal | `RemovalUtils::markForRemoval()` | `RemovalUtils.h` |
 | Clamp SDE Polygeist dep indices | `sde::clampDepIndices()` | `PolygeistToSdeUtils.h` |
 | Check OMP nesting during SDE input preparation | `sde::{isInsideOmpRegion,containsOmpOp}` | `PolygeistToSdeUtils.h` |
@@ -85,14 +85,14 @@ not loop-specific utilities.
   innermost-loop queries in `LoopUtils.h`.
 - Single-owner loop IV and nearest-loop helpers stay near their SDE consumers
   unless a second real owner appears.
-- ARTS loop-depth and while-bound helpers used by DB/EDT analysis live in
+- ARTS loop-depth and while-bound helpers used by DB/EDT transforms live in
   `include/carts/dialect/arts/Utils/LoopStructureUtils.h`.
 - ARTS/ARTS-RT loop-invariant and hoisting-safety helpers live in
   `include/carts/dialect/arts/Utils/LoopInvarianceUtils.h`.
 - SDE structured-access interpretation, such as row-major scalarized access
   decomposition, lives in SDE Analysis/Utils.
-- ARTS loop graph state, DB-relative loop windows, and ownership proofs live
-  in ARTS Analysis, not in generic loop helpers.
+- ARTS DB-relative loop windows and ownership proofs belong in the pass that
+  transforms them unless a second real owner justifies a focused ARTS utility.
 - ARTS-RT LLVM CFG loop hints and pointer-lowering decisions live in ARTS-RT.
 
 ## Attribute Names
@@ -131,7 +131,7 @@ include/carts/dialect/arts/Utils/DbUtils.h
 include/carts/dialect/arts/Utils/EdtUtils.h
 include/carts/dialect/arts/Utils/BlockedAccessUtils.h
 include/carts/dialect/arts/Utils/LocationMetadata.h
-include/carts/dialect/arts/Utils/LoweringContractUtils.h
+include/carts/dialect/arts/Utils/LoweringFactUtils.h
 include/carts/dialect/arts/Utils/LoopInvarianceUtils.h
 include/carts/dialect/arts/Utils/LoopStructureUtils.h
 include/carts/dialect/arts/Utils/PartitionPredicates.h

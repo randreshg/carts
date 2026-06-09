@@ -24,7 +24,8 @@ Value createZeroI32(OpBuilder &builder, Location loc) {
 }
 
 bool isProvablyNonZero(Value value) {
-  return ValueAnalysis::isProvablyNonZero(ValueAnalysis::stripNumericCasts(value));
+  return ValueAnalysis::isProvablyNonZero(
+      ValueAnalysis::stripNumericCasts(value));
 }
 
 static LogicalResult verifyParamvScalarTypes(Operation *op, TypeRange types,

@@ -44,6 +44,19 @@ def UndefOp : Arts_Op<"undef", [Pure]> {
 }
 
 ///===----------------------------------------------------------------------===///
+/// arts.shutdown
+///===----------------------------------------------------------------------===///
+def ShutdownOp : Arts_Op<"shutdown", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Terminate the ARTS runtime from an authored continuation";
+  let description = [{
+    Terminates the ARTS runtime when execution reaches this point. ARTS uses
+    this op to make final continuation EDTs own process shutdown explicitly;
+    ARTS-RT lowers it mechanically to the runtime shutdown call.
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
+///===----------------------------------------------------------------------===///
 /// arts.alloc
 ///===----------------------------------------------------------------------===///
 def AllocOp : Arts_Op<"alloc", []> {
@@ -242,13 +255,12 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     When source_guid is absent (nullptr), it means this acquire is chaining from
     a parent EDT's acquire where only the ptr was passed through block arguments.
 
-    ESD partial acquisition (optional, for stencil halo fetching):
+    Halo byte-window acquisition (optional, for stencil halo fetching):
     - element_offsets: Offset within the chunk (element-level, not byte-level)
     - element_sizes: Size within the chunk (element-level)
     When these are set, EdtLowering computes byte_offset/byte_size using the
     allocation's elementSizes and emits the runtime dependency-recording op
-    with byte_offsets for ESD (Ephemeral Slice Dependencies) partial chunk
-    acquisition.
+    with byte_offsets for halo partial-block acquisition.
 
     Returns (guid, ptr) tuple for the acquired datablock.
   }];
@@ -269,7 +281,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     OptionalAttr<PreserveAccessModeAttr>:$preserve_access_mode,
     OptionalAttr<RuntimeDbModeAttr>:$runtime_db_mode,
     OptionalAttr<PreserveDepEdgeAttr>:$preserve_dep_edge,
-    // Committed per-slot halo window for a distributed stencil acquire.
+    // Stencil-reach metadata for a halo acquire; element_* operands carry the
+    // runtime byte-window authority.
     OptionalAttr<HaloSliceAttr>:$halo_slice,
     OptionalAttr<UnitAttr>:$replicatedRead,
     OptionalAttr<ArtsDepPatternAttr>:$depPattern,
@@ -344,7 +357,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$element_sizes)>
   ];
   let extraClassDeclaration = [{
-    /// Check if this acquire has element-level offset/size info (ESD partial
+    /// Check if this acquire has element-level offset/size info (halo partial
     /// acquisition)
     bool hasElementOffsets() { return !getElementOffsets().empty(); }
 
@@ -375,18 +388,14 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     /// indices/offsets/sizes)
     bool hasPartitionHints() { return hasExplicitPartitionHints(); }
 
-    /// Mark or clear the authoritative dependency-mode contract carried by
-    /// this acquire.
+    /// Mark or clear the authoritative dependency mode carried by this acquire.
     void setPreserveAccessMode(bool preserve = true);
 
-    /// Mark or clear the explicit dependency-edge contract carried by
-    /// this acquire.
+    /// Mark or clear the explicit dependency edge carried by this acquire.
     void setPreserveDepEdge(bool preserve = true);
 
-    /// Mark or clear the full explicit dependency contract carried by this
-    /// acquire. This preserves both the authoritative mode and the edge
-    /// itself.
-    void setExplicitDepContract(bool preserve = true);
+    /// Mark or clear both explicit dependency-preservation bits on this acquire.
+    void setExplicitDepPreservation(bool preserve = true);
 
     /// Attach or clear the semantic dep family for this acquire.
     void setDepPattern(ArtsDepPattern pattern);
@@ -440,87 +449,6 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     /// patterns.
     bool hasAllFineGrainedEntries();
   }];
-}
-
-def LoweringContractOp : Arts_Op<"lowering_contract",
-                                 [AttrSizedOperandSegments]> {
-  let summary = "First-class lowering contract associated with a DB value";
-  let description = [{
-    `arts.lowering_contract` carries the high-level partitioning, stencil, and
-    distribution contract selected by upstream pattern detection and contract
-    emission passes. The contract is attached to a datablock pointer-like
-    memref value and is the single downstream source of truth for specialized
-    lowering behavior.
-
-    Graph analyses may cache or refine derived facts while the pipeline
-    evolves, but those facts are implementation detail. Any semantic decision
-    that downstream passes depend on must be expressible in this contract
-    vocabulary rather than in graph-only side channels.
-
-    Static fields remain attributes when they are genuinely compile-time
-    constants (for example `owner_dims` or the dep/distribution family).
-    Potentially dynamic quantities are represented as SSA operands so the
-    contract survives through structural rewrites without being recomputed or
-    forced into attrs.
-  }];
-  let arguments = (ins
-    AnyMemRef:$target,
-    Variadic<Index>:$block_shape,
-    Variadic<Index>:$min_offsets,
-    Variadic<Index>:$max_offsets,
-    Variadic<Index>:$write_footprint,
-    OptionalAttr<PatternAttr>:$pattern,
-    OptionalAttr<ContractAttr>:$contract
-  );
-  let assemblyFormat = [{
-    `(` $target `:` type($target) `)`
-    (`pattern` `(` $pattern^ `)` )?
-    (`block_shape` `[` $block_shape^ `]` )?
-    (`min_offsets` `[` $min_offsets^ `]` )?
-    (`max_offsets` `[` $max_offsets^ `]` )?
-    (`write_footprint` `[` $write_footprint^ `]` )?
-    (`contract` `(` $contract^ `)` )?
-    attr-dict
-  }];
-  let hasVerifier = 1;
-  let extraClassDeclaration = [{
-    static void build(OpBuilder &builder, OperationState &state, Value target,
-                      const LoweringContractInfo &info);
-    static LoweringContractOp create(OpBuilder &builder, Location location,
-                                     Value target,
-                                     const LoweringContractInfo &info);
-    std::optional<ArtsDepPattern> getDepPattern();
-    std::optional<EdtDistributionKind> getDistributionKind();
-    std::optional<EdtDistributionPattern> getDistributionPattern();
-    std::optional<int64_t> getDistributionVersion();
-    std::optional<SmallVector<int64_t, 4>> getOwnerDims();
-    std::optional<int64_t> getCenterOffset();
-    std::optional<SmallVector<int64_t, 4>> getSpatialDims();
-    std::optional<SmallVector<int64_t, 4>> getStencilIndependentDims();
-    std::optional<bool> getSupportedBlockHalo();
-    std::optional<bool> getNarrowableDep();
-    std::optional<bool> getPostDbRefined();
-    std::optional<int64_t> getContractKind();
-  }];
-  let builders = [
-    OpBuilder<(ins "Value":$target,
-                   CArg<"std::optional<ArtsDepPattern>", "std::nullopt">:$depPattern,
-                   CArg<"std::optional<EdtDistributionKind>", "std::nullopt">:$distributionKind,
-                   CArg<"std::optional<EdtDistributionPattern>", "std::nullopt">:$distributionPattern,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$distributionVersion,
-                   CArg<"SmallVector<int64_t>", "{}">:$ownerDims,
-                   CArg<"SmallVector<Value>", "{}">:$blockShape,
-                   CArg<"SmallVector<Value>", "{}">:$minOffsets,
-                   CArg<"SmallVector<Value>", "{}">:$maxOffsets,
-                   CArg<"SmallVector<Value>", "{}">:$writeFootprint,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$centerOffset,
-                   CArg<"bool", "false">:$supportedBlockHalo,
-                   CArg<"SmallVector<int64_t>", "{}">:$spatialDims,
-                   CArg<"SmallVector<int64_t>", "{}">:$stencilIndependentDims,
-                   CArg<"bool", "false">:$narrowableDep,
-                   CArg<"bool", "false">:$postDbRefined,
-                   CArg<"std::optional<int64_t>", "std::nullopt">:$contractKind)>
-  ];
 }
 
 def DbRefOp : Arts_Op<"db_ref", [Pure]> {

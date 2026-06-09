@@ -9,11 +9,13 @@
 
 // Verifies production CODIR wiring: SDE planning no longer runs direct
 // codelet lowering to ARTS, and executable `sde-planning` / `sde-to-codir` /
-// `codir-to-arts` stages sit between frontend cleanup and ARTS refinement.
+// `codir-graph-transforms` / `codir-to-arts` stages sit between frontend
+// cleanup and ARTS refinement.
 
 module {}
 
 // MANIFEST: "sde-to-codir"
+// MANIFEST: "codir-graph-transforms"
 // MANIFEST: "codir-to-arts"
 // MANIFEST: "name": "sde-planning"
 // MANIFEST-NOT: "aliases"
@@ -21,20 +23,28 @@ module {}
 // MANIFEST-NOT: "ConvertSdeToArts"
 // MANIFEST: "name": "sde-to-codir"
 // MANIFEST: "ConvertSdeToCodir"
-// MANIFEST: "CodirCodeletOpt"
-// MANIFEST: "ReductionPlanning"
-// MANIFEST: "StoragePlanning"
-// MANIFEST: "VerifyCodir"
+// MANIFEST-NOT: "CodirCodeletDCE"
 // MANIFEST-SAME: "dependsOn": ["sde-planning"]
+// MANIFEST: "name": "codir-graph-transforms"
+// MANIFEST: "CodirCodeletDCE"
+// MANIFEST: "ReductionDepMapping"
+// MANIFEST: "ReductionAtomicMaterialization"
+// MANIFEST: "DepStorageAssignment"
+// MANIFEST: "VerifyCodir"
+// MANIFEST-SAME: "dependsOn": ["sde-to-codir"]
 // MANIFEST: "name": "codir-to-arts"
-// MANIFEST-NOT: "ReductionPlanning"
-// MANIFEST-NOT: "StoragePlanning"
+// MANIFEST-NOT: "ReductionDepMapping"
+// MANIFEST-NOT: "ReductionAtomicMaterialization"
+// MANIFEST-NOT: "DepStorageAssignment"
 // MANIFEST: "MaterializeSdeBoundaryToArts"
 // MANIFEST: "ConvertCodirToArts"
 // MANIFEST-NOT: "ConvertSdeToArts"
+// MANIFEST-SAME: "dependsOn": ["codir-graph-transforms"]
+// MANIFEST: "name": "edt-dep-realization"
+// MANIFEST: "RealizeEdtDistributionPlan"
 // MANIFEST: "VerifySdeLowered"
 // MANIFEST: "VerifyArtsObjectsOnly"
-// MANIFEST-SAME: "dependsOn": ["sde-to-codir"]
+// MANIFEST-SAME: "dependsOn": ["codir-to-arts"]
 // MANIFEST: "name": "post-db-refinement"
 // MANIFEST: "PartialReductionSplitMaterialization"
 // MANIFEST: "DbScratchElimination"
@@ -43,8 +53,8 @@ module {}
 // MANIFEST-SAME: "dependsOn": ["create-dbs"]
 
 // DISTCANON: "pipeline"
-// DISTCANON: "post-db-refinement"
-// DISTCANON: "VerifyDistributedDbPlacement"
+// DISTCANON: "epochs"
+// DISTCANON: "VerifyArtsCdag"
 
 // NO-GROUP-ALIAS: Unknown pipeline step: 'arts-object-refinement'
 

@@ -91,7 +91,8 @@ dekk carts build --arts --counters 3
 - `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
 - `lib/carts/dialect/arts-rt/Conversion/ArtsToRt/EdtLowering.cpp`
 - `lib/carts/dialect/arts-rt/Conversion/ArtsToRt/EpochLowering.cpp`
-- `lib/carts/dialect/arts/Analysis/edt/`
+- `lib/carts/dialect/arts/Transforms/edt/`
+- `include/carts/dialect/arts/Utils/EdtUtils.h`
 
 ## Validation
 

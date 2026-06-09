@@ -484,7 +484,6 @@ def SdeSuBarrierOp
 
   let arguments = (ins
     Variadic<SdeCompletionType>:$tokens,
-    UnitAttr:$barrierEliminated,
     OptionalAttr<SdeBarrierReasonAttr>:$barrierReason
   );
 

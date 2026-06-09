@@ -21,7 +21,7 @@ Use after [[carts-check-utils]] has chosen the canonical owner. Use
 1. Record the [[carts-check-utils]] decision: use existing, extract, or keep local.
 2. Read `references/known-duplicates.md` only when the task touches the backlog.
 3. Choose the narrowest correct home: pass-local, dialect `Utils/`, shared
-   `include/carts/utils`, or owning `Analysis/`.
+   `include/carts/utils`, or owning SDE analysis utility.
 4. If a `lib/` Utils header is included by more than one `.cpp`, promote it as
    part of the same extraction patch.
 5. Add or move declarations and implementations.

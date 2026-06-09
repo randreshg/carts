@@ -212,6 +212,21 @@ static bool valueDependsOnAny(Value value, ArrayRef<Value> candidates) {
   return false;
 }
 
+static Block *unwrapSingleCuRegionBody(Block *block) {
+  if (!block)
+    return nullptr;
+  Operation *onlyOp = nullptr;
+  for (Operation &op : block->without_terminator()) {
+    if (onlyOp)
+      return block;
+    onlyOp = &op;
+  }
+  auto cuRegion = dyn_cast_or_null<sde::SdeCuRegionOp>(onlyOp);
+  if (cuRegion && !cuRegion.getBody().empty())
+    return &cuRegion.getBody().front();
+  return block;
+}
+
 static scf::ForOp findOnlyNestedForWithClosedPrefix(Block *block) {
   if (!block)
     return {};
@@ -255,6 +270,7 @@ static bool collectNestedRectangularLoops(sde::SdeSuIterateOp op,
                                           RectangularWavefrontLoopNest &shape) {
   Block *current = startBlock;
   while (current) {
+    current = unwrapSingleCuRegionBody(current);
     scf::ForOp nestedFor = findOnlyNestedForWithClosedPrefix(current);
     if (!nestedFor)
       break;
@@ -321,8 +337,8 @@ collectRectangularWavefrontLoopNest(sde::SdeSuIterateOp op,
     shape.upperBounds.push_back(op.getUpperBounds().front());
     shape.steps.push_back(elementLoop.getStep());
     shape.sourceIvs.push_back(elementLoop.getInductionVar());
-    shape.sourceComputeBlock = elementLoop.getBody();
-    if (!collectNestedRectangularLoops(op, elementLoop.getBody(), shape))
+    shape.sourceComputeBlock = unwrapSingleCuRegionBody(elementLoop.getBody());
+    if (!collectNestedRectangularLoops(op, shape.sourceComputeBlock, shape))
       return false;
   }
 
@@ -467,8 +483,8 @@ buildWavefrontOwnerStoragePlan(const WavefrontSkewPlan &plan) {
 
   storage.logicalWorkerSlice.assign(storage.physicalBlockShape.begin(),
                                     storage.physicalBlockShape.end());
-  bool hasHalo = llvm::any_of(storage.haloShape,
-                              [](int64_t halo) { return halo > 0; });
+  bool hasHalo =
+      llvm::any_of(storage.haloShape, [](int64_t halo) { return halo > 0; });
   if (!hasHalo && storage.ownerPhysicalDims.size() == 1)
     (void)sde::buildBlockAlignedLogicalWorkerSlice(
         plan.outputStorage.shape, storage.ownerPhysicalDims,

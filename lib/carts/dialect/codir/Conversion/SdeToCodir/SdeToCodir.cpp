@@ -10,6 +10,21 @@ namespace mlir::carts::codir {
 #include "carts/dialect/codir/Conversion/Passes.h.inc"
 } // namespace mlir::carts::codir
 namespace {
+static LogicalResult materializeSdeAtomicsToCodir(ModuleOp module) {
+  SmallVector<sde::SdeCuAtomicOp> atomics;
+  module.walk([&](sde::SdeCuAtomicOp op) { atomics.push_back(op); });
+  for (sde::SdeCuAtomicOp atomic : atomics) {
+    if (atomic.getReductionKind() != sde::SdeReductionKind::add)
+      return atomic.emitOpError()
+             << "cannot materialize non-add SDE atomic at the CODIR boundary";
+    OpBuilder builder(atomic);
+    codir::AtomicAddOp::create(builder, atomic.getLoc(), atomic.getAddr(),
+                               atomic.getValue());
+    atomic.erase();
+  }
+  return success();
+}
+
 struct ConvertSdeToCodirPass
     : public codir::impl::ConvertSdeToCodirBase<ConvertSdeToCodirPass> {
   void runOnOperation() override {
@@ -58,9 +73,6 @@ struct ConvertSdeToCodirPass
       }
     }
 
-    SuBarrierTokenDepPlan barrierTokenDepPlan;
-    collectSuBarrierTokenDepPlans(getOperation(), barrierTokenDepPlan);
-
     SuDepArrayIdPlan depArrayIdPlan;
     if (failed(buildSuDepArrayIdPlan(getOperation(), depArrayIdPlan))) {
       signalPassFailure();
@@ -71,8 +83,7 @@ struct ConvertSdeToCodirPass
     getOperation().walk(
         [&](sde::SdeSuIterateOp iterate) { iterates.push_back(iterate); });
     for (sde::SdeSuIterateOp iterate : iterates) {
-      if (failed(convertSuIterateToCodir(iterate, &barrierTokenDepPlan,
-                                         &depArrayIdPlan))) {
+      if (failed(convertSuIterateToCodir(iterate, &depArrayIdPlan))) {
         signalPassFailure();
         return;
       }
@@ -93,6 +104,11 @@ struct ConvertSdeToCodirPass
     // codelet graph before the cu_region wrappers (where the carriers live) are
     // inlined away.
     if (failed(consumeCommittedSdeStructure(getOperation()))) {
+      signalPassFailure();
+      return;
+    }
+
+    if (failed(materializeSdeAtomicsToCodir(getOperation()))) {
       signalPassFailure();
       return;
     }

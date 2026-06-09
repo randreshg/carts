@@ -1,9 +1,12 @@
 // RUN: %carts-compile %s --arts-config %inputs_dir/arts_multinode.cfg --start-from arts-rt-to-llvm --pipeline arts-rt-to-llvm \
 // RUN:   | %FileCheck %s
+// RUN: %carts-compile %s --arts-config %inputs_dir/arts_1t.cfg --start-from arts-rt-to-llvm --pipeline arts-rt-to-llvm \
+// RUN:   | %FileCheck %s
 
 // rec_dep slots marked HALO_VIEW plus explicit byte windows lower to the
-// halo-view runtime API. Extra non-halo flags select the _ex variant. Neither
-// path may use the legacy DB_MODE_PTR slice API.
+// halo-view runtime API in both multinode and single-node configs. Extra
+// non-halo flags select the _ex variant. Neither path may use the legacy
+// DB_MODE_PTR slice API.
 
 // CHECK-LABEL: func.func @record_dep_halo_view_runtime_call
 // CHECK: {{func[.]call|call}} @arts_add_halo_dependence(

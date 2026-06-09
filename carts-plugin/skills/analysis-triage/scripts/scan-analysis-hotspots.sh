@@ -4,12 +4,10 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 git grep -n \
-  -e 'AnalysisDependencies' \
-  -e 'AM->invalidate' \
-  -e 'invalidateAndRebuildGraphs' \
-  -e 'invalidateFunction' \
-  -e 'getDbAnalysis' \
-  -e 'getEdtAnalysis' \
-  -e 'getLoopAnalysis' \
+  -e 'LoweringFactUtils' \
+  -e 'DbUtils' \
+  -e 'EdtUtils' \
+  -e 'VerifySdeLowered' \
+  -e 'VerifyArtsObjectsOnly' \
   -e 'phase-ordering' \
   -- include lib docs .agents

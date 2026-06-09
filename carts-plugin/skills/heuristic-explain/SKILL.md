@@ -19,9 +19,10 @@ parameters:
 
 Trace and explain why the compiler chose a specific partitioning mode or
 distribution strategy. The live compiler no longer has a monolithic
-partitioning-heuristic pass; `DbHeuristics` records decisions while
-`DbAnalysis`, `DbLayoutPlanUtils`, and the DB refinement passes own the
-evidence and rewrites.
+partitioning-heuristic pass or cached ARTS graph-analysis stack. Decisions live
+in the owning transformation: SDE distribution/grain passes, CODIR dependency
+storage and reduction passes, and narrowly-scoped ARTS DB/EDT realization
+passes.
 
 Use [[carts-vision]] for placement questions. Heuristics explain structural
 evidence; they must not become benchmark-name policy or downstream
@@ -30,14 +31,11 @@ recomputation of SDE/CODIR facts.
 ## Quick Diagnostic Commands
 
 ```bash
-# Dump IR at partitioning stage to see partition modes
+# Dump IR at DB stages to see realized DB modes
 dekk carts compile <file> --pipeline=post-db-refinement 2>/dev/null | grep 'partition_mode'
 
 # Dump IR after SDE planning/materialization to see distribution strategy
 dekk carts compile <file> --pipeline=sde-planning 2>/dev/null | grep 'distribution_kind'
-
-# Enable debug output for partitioning decisions
-dekk carts compile <file> --pipeline=post-db-refinement --arts-debug=db_transforms 2>&1
 
 # Enable debug output for DB mode/refinement decisions
 dekk carts compile <file> --pipeline=db-opt --arts-debug=db_mode_tightening 2>&1
@@ -80,7 +78,7 @@ points:
 ## Vision Guardrails
 
 - Heuristic triggers must be code-agnostic: affine structure, typed attrs,
-  graph facts, contracts, layout mismatch, and runtime topology.
+  committed layout/movement facts, layout mismatch, and runtime topology.
 - SDE owns owner dims and block layout facts; CODIR owns collective/bridge
   family selection from SDE facts; ARTS consumes those facts to realize DBs,
   EDTs, owner maps, and grouped execution.
@@ -92,12 +90,11 @@ points:
 ## Key Source Files
 
 ```
-include/carts/dialect/arts/Analysis/heuristics/DbHeuristics.h — DB decision records
-lib/carts/dialect/arts/Analysis/heuristics/DbHeuristics.cpp — diagnostic recording
-include/carts/dialect/arts/Analysis/db/DbAnalysis.h — canonical DB/acquire facts
-lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp — acquire summaries and refinement facts
-include/carts/dialect/arts/Transforms/db/DbLayoutPlanUtils.h — layout plan helpers
-lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp — DB refinement controller
+include/carts/dialect/arts/Utils/DbLayoutPlanUtils.h — layout plan helpers
+include/carts/dialect/arts/Utils/DbUtils.h — DB/acquire query helpers
+lib/carts/dialect/arts/Transforms/db/DbModeTightening.cpp — DB mode and acquire-window refinement
+lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp — distributed owner-map realization
+lib/carts/dialect/arts/Transforms/db/CreateDbs.cpp — raw bridge and DB creation
 lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp — SDE-to-CODIR materialization
 lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp — CODIR-to-ARTS materialization
 ```

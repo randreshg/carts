@@ -43,8 +43,8 @@
 #include "polygeist/Passes/Passes.h"
 
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
-#include "carts/dialect/arts/Analysis/AnalysisManager.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/ARTSCostModel.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/codir/Conversion/PassRegistration.h"
 #include "carts/dialect/codir/IR/CodirDialect.h"
@@ -182,8 +182,10 @@ enum class StageId {
   InitialCleanup,
   SdePlanning,
   SdeToCodir,
+  CodirGraphTransforms,
   CodirToArts,
-  EdtTransforms,
+  EdtDepRealization,
+  EdtLocalCleanup,
   CreateDbs,
   DbOpt,
   PostDbRefinement,
@@ -200,7 +202,7 @@ enum class StageKind { Core, Epilogue };
 struct StageExecutionContext {
   ModuleOp module;
   MLIRContext &context;
-  arts::AnalysisManager *analysisManager = nullptr;
+  sde::SDECostModel *costModel = nullptr;
   const arts::RuntimeConfig *machine = nullptr;
   bool stopAfterStage = false;
   bool runAdditionalOpt = false;
@@ -278,7 +280,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 29> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "SdeCuNormalization",
     "Parallelize",
@@ -294,35 +296,26 @@ static const std::array<llvm::StringLiteral, 29> kSdePlanningPasses = {
     "StorageGrainReconciliation",
     "IterationSpaceDecomposition",
     "BarrierElimination",
-    "VerifySdePartitionPlan",
     "MemoryUnitMaterialization",
     "SdeCuNormalization",
     "SdeRankExpandMu",
-    "VerifySdeMuLayout",
     "RaiseToMuAccessWindow",
-    "VerifySdeMuAccessWindow",
     "MuAccessWindowSyncOpt",
-    "VerifySdeMuAccessWindowSync",
     "SdeRedistribute",
-    "VerifySdeRedistribute",
     "SdeCoarseAvoidance",
-    "VerifySdeCoarseAvoidance",
     "VerifySde"};
-static const std::array<llvm::StringLiteral, 5> kSdeToCodirPasses = {
-    "ConvertSdeToCodir", "CodirCodeletOpt", "ReductionPlanning",
-    "StoragePlanning", "VerifyCodir"};
-static const std::array<llvm::StringLiteral, 8> kCodirToArtsPasses = {
-    "MaterializeSdeBoundaryToArts",
-    "ConvertCodirToArts",
-    "RealizeEdtDistributionPlan",
-    "VerifySdeLowered",
-    "VerifyArtsObjectsOnly",
-    "ArtsDeadCodeElimination",
-    "CSE(arts.edt)",
-    "VerifyEdtCreated"};
-static const std::array<llvm::StringLiteral, 5> kEdtTransformsPasses = {
-    "EdtStructuralOpt(runAnalysis=false)", "ArtsDeadCodeElimination",
-    "SymbolDCE", "CSE(arts.edt)", "EdtPtrRematerialization"};
+static const std::array<llvm::StringLiteral, 1> kSdeToCodirPasses = {
+    "ConvertSdeToCodir"};
+static const std::array<llvm::StringLiteral, 5> kCodirGraphTransformsPasses = {
+    "CodirCodeletDCE", "ReductionDepMapping", "ReductionAtomicMaterialization",
+    "DepStorageAssignment", "VerifyCodir"};
+static const std::array<llvm::StringLiteral, 2> kCodirToArtsPasses = {
+    "MaterializeSdeBoundaryToArts", "ConvertCodirToArts"};
+static const std::array<llvm::StringLiteral, 3> kEdtDepRealizationPasses = {
+    "RealizeEdtDistributionPlan", "VerifySdeLowered", "VerifyArtsObjectsOnly"};
+static const std::array<llvm::StringLiteral, 6> kEdtLocalCleanupPasses = {
+    "EdtAllocaSinking", "EdtInlineNoDepTasks", "ArtsDeadCodeElimination",
+    "SymbolDCE",        "CSE(arts.edt)",       "EdtPtrRematerialization"};
 static const std::array<llvm::StringLiteral, 6> kCreateDbsPasses = {
     "CreateDbs", "PolygeistCanonicalize", "CSE(arts.edt)", "SymbolDCE",
     "Mem2Reg",   "PolygeistCanonicalize"};
@@ -331,29 +324,27 @@ static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
 static const std::array<llvm::StringLiteral, 12> kPostDbRefinementPasses = {
     "DbModeTightening",
     "DbOwnerMapRealization (conditional)",
-    "EdtTransforms",
-    "DbTransforms",
+    "EdtDeadDepElimination",
+    "DbConsolidateStencilHalos",
+    "DbShortenLifetimes",
+    "DbDeadRootElimination",
     "PartialReductionSplitMaterialization",
     "MatmulContractionMaterialization",
     "DbScratchElimination",
     "PolygeistCanonicalize",
     "CSE(arts.edt)",
-    "DistributedLaunchConsistency",
-    "VerifyDistributedDbPlacement",
-    "ContractValidation"};
-static const std::array<llvm::StringLiteral, 7> kLateConcurrencyCleanupPasses =
-    {"BlockLoopStripMining(func)",
-     "Hoisting",
-     "PolygeistCanonicalize",
-     "CSE(arts.edt)",
-     "EdtAllocaSinking",
-     "ArtsDeadCodeElimination",
-     "Mem2Reg"};
+    "DistributedLaunchConsistency"};
+static const std::array<llvm::StringLiteral, 6> kLateConcurrencyCleanupPasses =
+    {"Hoisting",         "PolygeistCanonicalize",   "CSE(arts.edt)",
+     "EdtAllocaSinking", "ArtsDeadCodeElimination", "Mem2Reg"};
 static const std::array<llvm::StringLiteral, 7> kEpochsPasses = {
-    "PolygeistCanonicalize",       "CreateEpochs",
-    "VerifyEpochCreated",          "EpochOpt[amortization]",
-    "PolygeistCanonicalize",       "DbCommitDistributedDeps (conditional)",
-    "VerifyArtsCdag (conditional)"};
+    "PolygeistCanonicalize",
+    "CreateEpochs",
+    "EpochAmortizeRepeatedLoop",
+    "EpochTailContinuation",
+    "PolygeistCanonicalize",
+    "DbCommitDistributedDeps (conditional)",
+    "VerifyArtsCdag"};
 static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
     "EdtAllocaSinking",
     "PolygeistCanonicalize",
@@ -377,10 +368,9 @@ static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
     "CSE",
     "VerifyEpochLowered",
     "VerifyPreLowered"};
-static const std::array<llvm::StringLiteral, 14> kArtsRtToLLVMPasses = {
+static const std::array<llvm::StringLiteral, 13> kArtsRtToLLVMPasses = {
     "LowerAffine(func)",
     "ConvertArtsRtToLLVM",
-    "LoweringContractCleanup",
     "GuidRangeCallOpt",
     "RuntimeCallOpt",
     "DataPtrHoisting",
@@ -431,34 +421,35 @@ static constexpr llvm::StringLiteral kFrontendStages[] = {
     "sde-input-normalization", "initial-cleanup"};
 static constexpr llvm::StringLiteral kSdePlanningStages[] = {"sde-planning"};
 static constexpr llvm::StringLiteral kSdeToCodirStages[] = {"sde-to-codir"};
+static constexpr llvm::StringLiteral kCodirStages[] = {
+    "codir-graph-transforms"};
 static constexpr llvm::StringLiteral kCodirToArtsStages[] = {"codir-to-arts"};
 static constexpr llvm::StringLiteral kArtsStages[] = {
-    "edt-transforms",           "create-dbs", "db-opt", "post-db-refinement",
-    "late-concurrency-cleanup", "epochs"};
+    "edt-dep-realization", "edt-local-cleanup",        "create-dbs", "db-opt",
+    "post-db-refinement",  "late-concurrency-cleanup", "epochs"};
 static constexpr llvm::StringLiteral kArtsRtStages[] = {"pre-lowering",
                                                         "arts-rt-to-llvm"};
-static constexpr llvm::StringLiteral kCodirStages[] = {
-    "verify-codir", "codelet-opt", "storage-planning"};
 
 static const std::array<DialectGroupDescriptor, 7> kDialectGroups = {{
     {"frontend-normalization", "canonical",
      "Normalize frontend IR before entering the CARTS dialect stack.",
      kFrontendLayers, kFrontendStages},
     {"sde", "canonical",
-     "SDE proves source semantics and authors MU/CU/SU planning facts.",
+     "SDE proves source semantics and authors MU/CU/SU shape facts.",
      kSdeLayers, kSdePlanningStages},
     {"sde-to-codir", "canonical",
-     "Materialize SDE plans into isolated CODIR codelets and token-local "
-     "views.",
+     "Mechanically lower SDE CU/MU/SU structure into isolated CODIR codelets "
+     "and token-local views.",
      kSdeToCodirLayers, kSdeToCodirStages},
     {"codir", "canonical",
-     "Verify explicit deps, params, yielded values, and no implicit captures.",
+     "Run isolated-codelet graph, reduction, storage, and boundary checks.",
      kCodirLayers, kCodirStages},
     {"codir-to-arts", "canonical",
-     "Lower explicit CODIR deps and codelets to ARTS DB/EDT objects.",
+     "Mechanically lower explicit CODIR deps and codelets to ARTS DB/EDT "
+     "objects.",
      kCodirToArtsLayers, kCodirToArtsStages},
     {"arts", "canonical",
-     "Refine abstract ARTS DB, EDT, epoch, dependency, and placement objects.",
+     "Refine abstract ARTS DB, EDT, epoch, dep, and placement objects.",
      kArtsLayers, kArtsStages},
     {"arts-rt", "canonical",
      "Lower the chosen ARTS object graph to runtime ABI and LLVM.",
@@ -666,15 +657,6 @@ static void configureArtsDebugChannels(llvm::StringRef channels) {
   llvm::setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
 }
 
-static bool shouldExportDetailedDiagnose(std::optional<StageId> stopAt) {
-  if (!stopAt)
-    return true;
-  int stopIndex = stageIndex(*stopAt, StageKind::Core);
-  int preLoweringIndex = stageIndex(StageId::PreLowering, StageKind::Core);
-  return stopIndex >= 0 && preLoweringIndex >= 0 &&
-         stopIndex >= preLoweringIndex;
-}
-
 static LogicalResult
 configurePassManager(PassManager &pm, PassTimingData *timingData = nullptr) {
   pm.enableVerifier(true);
@@ -696,15 +678,14 @@ void registerDialects(DialectRegistry &registry) {
                   arts_rt::ArtsRtDialect, sde::CartsSdeDialect,
                   codir::CartsCodirDialect>();
   registerAllPasses();
-  /// ARTS pass registration is intentionally selective: several ARTS passes
-  /// require the staged pipeline's AnalysisManager and cannot be constructed
-  /// through textual pass registration with default arguments.
+  /// ARTS pass registration is intentionally selective: lowering-only helpers
+  /// are registered here, while staged compiler pipelines wire pass ordering.
   registerDeadCodeElimination();
   registerPartialReductionSplitMaterialization();
   registerMatmulContractionMaterialization();
   registerDistributedLaunchConsistency();
   registerRealizeEdtDistributionPlan();
-  registerVerifyDistributedDbPlacement();
+  registerEpochTailContinuation();
   registerVerifyArtsCdag();
   registerDbCommitDistributedDeps();
   registerVerifyArtsObjectsOnly();
@@ -1139,8 +1120,8 @@ void buildSdeInputNormalizationPipeline(PassManager &pm) {
   /// upstream conversion passes drop the polygeist-prefixed originals.
   pm.addPass(sde::createPromoteTargetAttrs());
   OpPassManager &optPM = pm.nest<func::FuncOp>();
-  /// Stage contract: normalize affine memory/control ops before the module pass
-  /// runs so SdeInputNormalization only needs to reason about the
+  /// Stage invariant: normalize affine memory/control ops before the module
+  /// pass runs so SdeInputNormalization only needs to reason about the
   /// memref+SCF form produced by the frontend/inliner pipeline.
   optPM.addPass(createLowerAffinePass());
   pm.addPass(createCSEPass());
@@ -1164,8 +1145,7 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
 /// OpenMP to SDE planning. Codelets are intentionally not lowered
 /// here; SDE plans feed `sde-to-codir`, and CODIR then materializes ARTS.
 void buildSdePlanningPipeline(PassManager &pm,
-                              arts::AnalysisManager *AM = nullptr) {
-  sde::SDECostModel *costModel = AM ? &AM->getCostModel() : nullptr;
+                              sde::SDECostModel *costModel = nullptr) {
   pm.addPass(sde::createConvertOpenMPToSdePass());
   // Normalize non-OpenMP source work into CUs before proving host/init/check
   // loop independence. Parallelize then raises legal single-CU loop nests into
@@ -1189,56 +1169,50 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createStorageGrainReconciliationPass());
   pm.addPass(sde::createIterationSpaceDecompositionPass());
   pm.addPass(sde::createBarrierEliminationPass(costModel));
-  pm.addPass(sde::createVerifySdePartitionPlanPass());
   pm.addPass(sde::createMemoryUnitMaterializationPass());
   pm.addPass(sde::createSdeCuNormalizationPass());
   pm.addPass(sde::createSdeRankExpandMuPass());
-  pm.addPass(sde::createVerifySdeMuLayoutPass());
   pm.addPass(sde::createRaiseToMuAccessWindowPass());
-  pm.addPass(sde::createVerifySdeMuAccessWindowPass());
   pm.addPass(sde::createMuAccessWindowSyncOptPass());
-  pm.addPass(sde::createVerifySdeMuAccessWindowSyncPass());
   pm.addPass(sde::createSdeRedistributePass());
-  pm.addPass(sde::createVerifySdeRedistributePass());
   pm.addPass(sde::createSdeCoarseAvoidancePass());
-  pm.addPass(sde::createVerifySdeCoarseAvoidancePass());
   pm.addPass(sde::createVerifySdePass());
 }
 
-/// SDE-to-CODIR materialization. This is the production codelet conversion:
-/// SDE owns planning facts; CODIR owns isolated deps, params, and token-local
-/// memref views.
+/// SDE-to-CODIR materialization. This is the mechanical codelet conversion:
+/// SDE owns transformed facts; CODIR owns isolated deps, params, and
+/// token-local memref views.
 void buildSdeToCodirPipeline(PassManager &pm) {
   pm.addPass(codir::createConvertSdeToCodirPass());
-  pm.addPass(codir::createCodirCodeletOptPass());
-  pm.addPass(codir::createReductionPlanningPass());
-  pm.addPass(codir::createStoragePlanningPass());
+}
+
+/// CODIR graph transforms over already isolated codelets.
+void buildCodirGraphTransformsPipeline(PassManager &pm) {
+  pm.addPass(codir::createCodirCodeletDCEPass());
+  pm.addPass(codir::createReductionDepMappingPass());
+  pm.addPass(codir::createReductionAtomicMaterializationPass());
+  pm.addPass(codir::createDepStorageAssignmentPass());
   pm.addPass(codir::createVerifyCodirPass());
 }
 
 /// CODIR-to-ARTS materialization. Every ARTS EDT must come from a CODIR
-/// codelet; any remaining SDE op is a boundary error.
+/// codelet.
 void buildCodirToArtsPipeline(PassManager &pm) {
-  // VerifyCodir is intentionally NOT re-run here: the immediately preceding
-  // `sde-to-codir` stage ends with createVerifyCodirPass() over this exact
-  // module, and the stage loop threads the same IR between consecutive stages
-  // with no mutating pass in between. Re-verifying byte-identical CODIR is pure
-  // duplication.
   pm.addPass(codir::createMaterializeSdeBoundaryToArtsPass());
   pm.addPass(codir::createConvertCodirToArtsPass());
-  // ARTS authors the EDT distribution plan from the facts the conversion
-  // restated onto each task; the conversion no longer derives it.
+}
+
+/// EDT dependency realization from facts produced by CODIR-to-ARTS.
+void buildEdtDepRealizationPipeline(PassManager &pm) {
   pm.addPass(arts::createRealizeEdtDistributionPlanPass());
   pm.addPass(sde::createVerifySdeLoweredPass());
   pm.addPass(arts::createVerifyArtsObjectsOnlyPass());
-  pm.addPass(arts::createDCEPass());
-  addEdtLocalCSE(pm);
-  pm.addPass(arts::createVerifyEdtCreatedPass());
 }
 
-/// EDT transformation passes.
-void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
-  pm.addPass(arts::createEdtStructuralOptPass(AM, false));
+/// EDT-local cleanup passes.
+void buildEdtLocalCleanupPipeline(PassManager &pm) {
+  pm.addPass(arts::createEdtAllocaSinkingPass());
+  pm.addPass(arts::createEdtInlineNoDepTasksPass());
   pm.addPass(arts::createDCEPass());
   pm.addPass(createSymbolDCEPass());
   addEdtLocalCSE(pm);
@@ -1246,8 +1220,8 @@ void buildEdtTransformsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 }
 
 /// DB creation pass.
-void buildCreateDbsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
-  pm.addPass(arts::createCreateDbsPass(AM));
+void buildCreateDbsPipeline(PassManager &pm) {
+  pm.addPass(arts::createCreateDbsPass());
   addCanonicalizeAndEdtLocalCSE(pm);
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createMem2Reg());
@@ -1255,39 +1229,36 @@ void buildCreateDbsPipeline(PassManager &pm, arts::AnalysisManager *AM) {
 }
 
 /// DB creation and optimization passes.
-void buildDbOptPipeline(PassManager &pm, arts::AnalysisManager *AM) {
-  pm.addPass(arts::createDbModeTighteningPass(AM));
+void buildDbOptPipeline(PassManager &pm) {
+  pm.addPass(arts::createDbModeTighteningPass());
   addCanonicalizeAndEdtLocalCSE(pm);
   pm.addPass(createMem2Reg());
 }
 
-/// Tighten DB modes and persist post-partition refinement contracts.
-void buildPostDbRefinementPipeline(PassManager &pm, arts::AnalysisManager *AM,
-                                   bool enableDistributedDb) {
+/// Tighten DB modes and persist post-partition refinement facts.
+void buildPostDbRefinementPipeline(PassManager &pm, bool enableDistributedDb) {
   /// DbModeTighteningPass performs local DB cleanup after mode adjustment,
   /// which can expose new zero-dependency or degenerate EDTs before epoch
   /// shaping. Mode tightening must run before EDT transforms so affinity and
   /// reduction analysis see accurate writer/reader modes.
-  pm.addPass(arts::createDbModeTighteningPass(AM));
+  pm.addPass(arts::createDbModeTighteningPass());
   if (enableDistributedDb)
-    pm.addPass(arts::createDbOwnerMapRealizationPass(AM));
-  pm.addPass(arts::createEdtTransformsPass(AM));
-  /// Re-run DB transforms after EDT dependency pruning so cleanup-only
-  /// acquires and now-unreachable DB roots are removed in the DB layer.
-  pm.addPass(arts::createDbTransformsPass(AM));
+    pm.addPass(arts::createDbOwnerMapRealizationPass());
+  pm.addPass(arts::createEdtDeadDepEliminationPass());
+  /// Re-run DB-local refinement after EDT dep pruning so cleanup-only acquires
+  /// and now-unreachable DB roots are removed in the DB layer.
+  pm.addPass(arts::createDbConsolidateStencilHalosPass());
+  pm.addPass(arts::createDbShortenLifetimesPass());
+  pm.addPass(arts::createDbDeadRootEliminationPass());
   pm.addPass(arts::createPartialReductionSplitMaterializationPass());
   pm.addPass(arts::createMatmulContractionMaterializationPass());
   pm.addPass(arts::createDbScratchEliminationPass());
   addCanonicalizeAndEdtLocalCSE(pm);
   pm.addPass(arts::createDistributedLaunchConsistencyPass());
-  if (enableDistributedDb)
-    pm.addPass(arts::createVerifyDistributedDbPlacementPass());
-  pm.addPass(arts::createContractValidationPass());
 }
 
 /// Apply late DB-aware loop cleanup and final stack/SSA simplification.
 void buildLateConcurrencyCleanupPipeline(PassManager &pm) {
-  pm.addNestedPass<func::FuncOp>(arts::createBlockLoopStripMiningPass());
   pm.addPass(arts::createHoistingPass());
   addCanonicalizeAndEdtLocalCSE(pm);
   /// TODO(PERF): EdtAllocaSinkingPass runs twice (here and pre-lowering).
@@ -1300,17 +1271,16 @@ void buildLateConcurrencyCleanupPipeline(PassManager &pm) {
 void buildEpochsPipeline(PassManager &pm, bool enableDistributedDb) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
-  pm.addPass(arts::createVerifyEpochCreatedPass());
-  /// Realize the committed repeated-timestep epoch shape on newly created
-  /// epochs.
-  pm.addPass(arts::createEpochOptPass(/*amortization=*/true));
+  /// Realize committed repeated-timestep epoch loops on newly created epochs.
+  pm.addPass(arts::createEpochAmortizeRepeatedLoopPass());
+  pm.addPass(arts::createEpochTailContinuationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   /// Commit distributed acquire DB modes / halo after epoch shaping, then
   /// verify the canonical-owner DAG fails closed before pre-lowering.
   if (enableDistributedDb) {
     pm.addPass(arts::createDbCommitDistributedDepsPass());
-    pm.addPass(arts::createVerifyArtsCdagPass());
   }
+  pm.addPass(arts::createVerifyArtsCdagPass());
 }
 
 /// Pre-lowering passes.
@@ -1345,10 +1315,6 @@ void buildArtsRtToLLVMPipeline(PassManager &pm, bool debug,
   pm.addNestedPass<func::FuncOp>(createLowerAffinePass());
   pm.addPass(arts_rt::createConvertArtsRtToLLVMPass(
       debug, distributedInitPerWorker, machine));
-  /// ConvertArtsRtToLLVM still consults lowering contracts for late dependency
-  /// decisions (for example N-D stencil halo slices). Clean them up only after
-  /// that conversion has consumed them.
-  pm.addPass(arts_rt::createLoweringContractCleanupPass());
   pm.addPass(arts_rt::createGuidRangeCallOptPass());
   pm.addPass(arts_rt::createRuntimeCallOptPass());
   /// Hoist loop-invariant loads after ARTS-RT-to-LLVM lowering for
@@ -1409,7 +1375,11 @@ static constexpr llvm::StringLiteral kDepSdeInputNormalization[] = {
 static constexpr llvm::StringLiteral kDepInitialCleanup[] = {"initial-cleanup"};
 static constexpr llvm::StringLiteral kDepSdePlanning[] = {"sde-planning"};
 static constexpr llvm::StringLiteral kDepSdeToCodir[] = {"sde-to-codir"};
+static constexpr llvm::StringLiteral kDepCodirGraphTransforms[] = {
+    "codir-graph-transforms"};
 static constexpr llvm::StringLiteral kDepCodirToArts[] = {"codir-to-arts"};
+static constexpr llvm::StringLiteral kDepEdtDepRealization[] = {
+    "edt-dep-realization"};
 static constexpr llvm::StringLiteral kDepCreateDbs[] = {"create-dbs"};
 static constexpr llvm::StringLiteral kDepPostDbRefinement[] = {
     "post-db-refinement"};
@@ -1417,7 +1387,7 @@ static constexpr llvm::StringLiteral kDepPreLowering[] = {
     "epochs", "late-concurrency-cleanup"};
 static constexpr llvm::StringLiteral kDepArtsRtToLLVM[] = {"pre-lowering"};
 static ArrayRef<StageDescriptor> getStageRegistry() {
-  static const std::array<StageDescriptor, 15> kStageRegistry = {{
+  static const std::array<StageDescriptor, 17> kStageRegistry = {{
       {StageId::SdeInputNormalization, "sde-input-normalization",
        StageKind::Core, true, true, false, "Error when normalizing SDE input",
        kSdeInputNormalizationPasses,
@@ -1437,53 +1407,67 @@ static ArrayRef<StageDescriptor> getStageRegistry() {
       {StageId::SdePlanning, "sde-planning", StageKind::Core, true, true, false,
        "Error when converting OpenMP to SDE planning IR", kSdePlanningPasses,
        [](PassManager &pm, const StageExecutionContext &ctx) {
-         buildSdePlanningPipeline(pm, ctx.analysisManager);
+         buildSdePlanningPipeline(pm, ctx.costModel);
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepInitialCleanup},
       {StageId::SdeToCodir, "sde-to-codir", StageKind::Core, true, true, false,
-       "Error when materializing SDE plans into CODIR codelets",
-       kSdeToCodirPasses,
+       "Error when converting SDE to CODIR", kSdeToCodirPasses,
        [](PassManager &pm, const StageExecutionContext &) {
          buildSdeToCodirPipeline(pm);
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepSdePlanning},
+      {StageId::CodirGraphTransforms, "codir-graph-transforms", StageKind::Core,
+       true, true, false, "Error when transforming CODIR codelet graph",
+       kCodirGraphTransformsPasses,
+       [](PassManager &pm, const StageExecutionContext &) {
+         buildCodirGraphTransformsPipeline(pm);
+       },
+       isStageEnabledAlways,
+       /*dependsOn=*/kDepSdeToCodir},
       {StageId::CodirToArts, "codir-to-arts", StageKind::Core, true, true,
-       false, "Error when materializing CODIR codelets into ARTS objects",
-       kCodirToArtsPasses,
+       false, "Error when converting CODIR to ARTS", kCodirToArtsPasses,
        [](PassManager &pm, const StageExecutionContext &) {
          buildCodirToArtsPipeline(pm);
        },
        isStageEnabledAlways,
-       /*dependsOn=*/kDepSdeToCodir},
-      {StageId::EdtTransforms, "edt-transforms", StageKind::Core, true, true,
-       false, "Error when running EDT transformations", kEdtTransformsPasses,
-       [](PassManager &pm, const StageExecutionContext &ctx) {
-         buildEdtTransformsPipeline(pm, ctx.analysisManager);
+       /*dependsOn=*/kDepCodirGraphTransforms},
+      {StageId::EdtDepRealization, "edt-dep-realization", StageKind::Core, true,
+       true, false, "Error when realizing EDT dependencies",
+       kEdtDepRealizationPasses,
+       [](PassManager &pm, const StageExecutionContext &) {
+         buildEdtDepRealizationPipeline(pm);
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepCodirToArts},
+      {StageId::EdtLocalCleanup, "edt-local-cleanup", StageKind::Core, true,
+       true, false, "Error when running EDT-local cleanup",
+       kEdtLocalCleanupPasses,
+       [](PassManager &pm, const StageExecutionContext &) {
+         buildEdtLocalCleanupPipeline(pm);
+       },
+       isStageEnabledAlways,
+       /*dependsOn=*/kDepEdtDepRealization},
       {StageId::CreateDbs, "create-dbs", StageKind::Core, true, true, false,
        "Error when creating DBs", kCreateDbsPasses,
-       [](PassManager &pm, const StageExecutionContext &ctx) {
-         buildCreateDbsPipeline(pm, ctx.analysisManager);
+       [](PassManager &pm, const StageExecutionContext &) {
+         buildCreateDbsPipeline(pm);
        },
        isStageEnabledAlways,
-       /*dependsOn=*/kDepCodirToArts},
+       /*dependsOn=*/kDepEdtDepRealization},
       {StageId::DbOpt, "db-opt", StageKind::Core, true, true, false,
        "Error when optimizing DBs", kDbOptPasses,
-       [](PassManager &pm, const StageExecutionContext &ctx) {
-         buildDbOptPipeline(pm, ctx.analysisManager);
+       [](PassManager &pm, const StageExecutionContext &) {
+         buildDbOptPipeline(pm);
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepCreateDbs},
       {StageId::PostDbRefinement, "post-db-refinement", StageKind::Core, true,
-       true, false, "Error when refining post-partition DB contracts",
+       true, false, "Error when refining post-partition DB facts",
        kPostDbRefinementPasses,
        [](PassManager &pm, const StageExecutionContext &ctx) {
-         buildPostDbRefinementPipeline(pm, ctx.analysisManager,
-                                       ctx.enableDistributedDb);
+         buildPostDbRefinementPipeline(pm, ctx.enableDistributedDb);
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepCreateDbs},
@@ -1616,7 +1600,6 @@ LogicalResult
 buildPassManager(ModuleOp module, MLIRContext &context,
                  std::optional<StageId> stopAt,
                  StageId startFrom = StageId::SdeInputNormalization,
-                 std::unique_ptr<arts::AnalysisManager> *outAM = nullptr,
                  PipelineHooks *hooks = nullptr) {
   assert(validatePipelineDAG(getStageRegistry()) &&
          "Pipeline dependency DAG is invalid");
@@ -1639,11 +1622,7 @@ buildPassManager(ModuleOp module, MLIRContext &context,
     return failure();
   }
 
-  /// Create module-level analysis manager for caching across functions
-  std::unique_ptr<arts::AnalysisManager> AM =
-      std::make_unique<arts::AnalysisManager>(module, ArtsConfig);
-
-  auto &machine = AM->getRuntimeConfig();
+  arts::RuntimeConfig machine(ArtsConfig);
   if (!machine.hasConfigFile() || !machine.isValid()) {
     ARTS_ERROR("Invalid ARTS configuration. Provide a valid --arts-config path "
                "or place a valid arts.cfg in the working directory.");
@@ -1652,6 +1631,8 @@ buildPassManager(ModuleOp module, MLIRContext &context,
 
   if (MinDistributedTileBytes.getNumOccurrences() > 0)
     machine.setMinDistributedTileBytes(MinDistributedTileBytes);
+
+  arts::ARTSCostModel costModel(machine);
 
   /// Embed config file contents into the module so generated binaries are
   /// self-contained — no external config file needed at runtime.
@@ -1680,9 +1661,6 @@ buildPassManager(ModuleOp module, MLIRContext &context,
     if (hooks && hooks->beforeStep)
       hooks->beforeStep(stage.id);
 
-    if (stage.captureDiagnosticsBefore && outAM)
-      AM->captureDiagnostics();
-
     PassManager pm(&context);
     if (failed(configurePassManager(pm, timingDataPtr))) {
       ARTS_ERROR("Error configuring pass manager for pipeline step "
@@ -1690,8 +1668,8 @@ buildPassManager(ModuleOp module, MLIRContext &context,
       return failure();
     }
     StageExecutionContext stageContext{
-        module,         context, AM.get(), &machine,
-        stopAfterStage, Opt,     EmitLLVM, enableDistributedDb};
+        module,         context, &costModel, &machine,
+        stopAfterStage, Opt,     EmitLLVM,   enableDistributedDb};
     stage.build(pm, stageContext);
     auto result = pm.run(module);
 
@@ -1706,18 +1684,13 @@ buildPassManager(ModuleOp module, MLIRContext &context,
     return success();
   };
 
-  auto releaseAnalysisManager = [&]() {
-    if (outAM)
-      *outAM = std::move(AM);
-  };
-
   for (const auto &stage : getStageRegistry()) {
     if (stage.kind != StageKind::Core)
       continue;
     int currentIndex = stageIndex(stage.id, StageKind::Core);
     if (currentIndex < startIndex)
       continue;
-    if (!stage.enabled(StageExecutionContext{module, context, AM.get(),
+    if (!stage.enabled(StageExecutionContext{module, context, &costModel,
                                              &machine, false, Opt, EmitLLVM,
                                              enableDistributedDb}))
       continue;
@@ -1727,7 +1700,6 @@ buildPassManager(ModuleOp module, MLIRContext &context,
     if (stopHere) {
       if (PassTiming)
         timingData.printTimingReport(llvm::errs());
-      releaseAnalysisManager();
       return success();
     }
   }
@@ -1736,8 +1708,8 @@ buildPassManager(ModuleOp module, MLIRContext &context,
     if (stage.kind != StageKind::Epilogue)
       continue;
     StageExecutionContext stageContext{
-        module, context, AM.get(), &machine,
-        false,  Opt,     EmitLLVM, enableDistributedDb};
+        module, context, &costModel, &machine,
+        false,  Opt,     EmitLLVM,   enableDistributedDb};
     if (!stage.enabled(stageContext))
       continue;
     if (failed(runStage(stage, /*stopAfterStage=*/false)))
@@ -1757,9 +1729,6 @@ buildPassManager(ModuleOp module, MLIRContext &context,
       ARTS_WARN("Could not open pass timing output file: " << PassTimingOutput);
     }
   }
-
-  /// Return analysis manager if requested
-  releaseAnalysisManager();
 
   return success();
 }
@@ -1878,20 +1847,15 @@ int main(int argc, char **argv) {
     hooksPtr = &hooks;
   }
 
-  /// Run the pass pipeline once.
-  std::unique_ptr<arts::AnalysisManager> AM;
   if (failed(buildPassManager(module.get(), context, *resolvedStopAt,
-                              *resolvedStartFrom, Diagnose ? &AM : nullptr,
-                              hooksPtr))) {
+                              *resolvedStartFrom, hooksPtr))) {
     return 1;
   }
 
-  /// Export diagnostics if requested
-  if (Diagnose && AM) {
-    bool includeAnalysis = shouldExportDetailedDiagnose(*resolvedStopAt) &&
-                           AM->hasCapturedDiagnostics();
+  /// Export lightweight pipeline diagnostics if requested. The old DB graph
+  /// diagnostic dump was removed with the ARTS analysis manager.
+  if (Diagnose) {
     if (!DiagnoseOutput.empty()) {
-      /// Export to file
       std::error_code EC;
       llvm::raw_fd_ostream outputFile(DiagnoseOutput, EC);
       if (EC) {
@@ -1899,11 +1863,10 @@ int main(int argc, char **argv) {
             "Could not open diagnostics output file: " << DiagnoseOutput);
         return 1;
       }
-      AM->exportToJson(outputFile, includeAnalysis);
+      outputFile << "{ \"diagnostics\": \"pipeline-only\" }\n";
       outputFile.close();
     } else {
-      /// Export to stdout
-      AM->exportToJson(llvm::outs(), includeAnalysis);
+      llvm::outs() << "{ \"diagnostics\": \"pipeline-only\" }\n";
     }
   }
 

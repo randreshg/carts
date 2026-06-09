@@ -17,8 +17,8 @@ Current utility groups:
 - `Db*`, `PartitionPredicates`, and `BlockedAccessUtils` describe abstract DB
   layout, access, partitioning, and ownership decisions before runtime ABI
   lowering.
-- `EdtUtils`, `ArtsOpUtils`, and `LoweringContractUtils` describe ARTS object
-  structure and lowering contracts while the IR is still in the ARTS dialect.
+- `EdtUtils`, `ArtsOpUtils`, and `LoweringFactUtils` describe ARTS object
+  structure and lowering facts while the IR is still in the ARTS dialect.
 - `LoopStructureUtils` and `ValueAnalysisUtils` provide ARTS-aware analysis
   extensions over the shared `carts/utils` layer.
 - `RuntimeConfig`, `RuntimeOpUtils`, `LocationMetadata`, and `MetadataEnums`

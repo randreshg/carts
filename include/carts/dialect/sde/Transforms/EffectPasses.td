@@ -93,16 +93,15 @@ def StorageGrainReconciliation
 
 def BarrierElimination
     : Pass<"barrier-elimination", "mlir::ModuleOp"> {
-  let summary = "Plan SDE barriers and stamp timestep stage boundaries";
+  let summary = "Remove redundant SDE barriers and stamp timestep stages";
   let description = [{
     Analyzes read and write sets of consecutive sde.su_iterate operations
     separated by sde.su_barrier ops. When the write-set of the predecessor
-    loop is provably disjoint from the read-set of the successor loop, the
-    barrier is marked for elimination. The target boundary consumes that mark
-    and omits the corresponding downstream synchronization object. Required
-    timestep barriers remain in SDE as explicit stage boundaries and the
-    recognized timestep pair is stamped with its repeated/alternating
-    repetition structure and `advance_stage` async strategy.
+    loop is provably disjoint from the read/write set of the successor loop,
+    the pass erases the barrier in SDE. Required timestep barriers remain in
+    SDE as explicit stage boundaries and the recognized timestep pair is
+    stamped with its repeated/alternating repetition structure and
+    `advance_stage` async strategy.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect",

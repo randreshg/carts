@@ -1,9 +1,9 @@
 ///==========================================================================///
 /// File: BarrierElimination.cpp
 ///
-/// Plan SDE barriers between scheduling units. Independent barriers are marked
-/// for elimination. Required timestep barriers are annotated as stage
-/// boundaries so boundary lowering can consume the plan.
+/// Remove independent SDE barriers between scheduling units. Required
+/// timestep barriers are annotated as stage boundaries so boundary lowering
+/// can consume the already-proven SDE plan.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -587,6 +587,7 @@ struct BarrierEliminationPass
   void runOnOperation() override {
     int eliminated = 0;
     unsigned timestepPairsStamped = 0;
+    SmallVector<sde::SdeSuBarrierOp, 8> redundantBarriers;
 
     getOperation().walk([&](sde::SdeSuBarrierOp barrier) {
       setBarrierReason(barrier, sde::SdeBarrierReason::unknown_required);
@@ -646,8 +647,7 @@ struct BarrierEliminationPass
 
       if (!predEffects.hasWriteConflictWith(succEffects)) {
         double syncCost = costModel ? costModel->getTaskSyncCost() : 0.0;
-        barrier.setBarrierEliminatedAttr(UnitAttr::get(barrier.getContext()));
-        setBarrierReason(barrier, sde::SdeBarrierReason::redundant);
+        redundantBarriers.push_back(barrier);
         eliminated++;
         ARTS_DEBUG("Eliminated barrier (sync cost: " << syncCost << ")");
         return;
@@ -661,11 +661,10 @@ struct BarrierEliminationPass
 
       if (canPipelineThroughTokenLocalMemoryDeps(predecessor, successor,
                                                  predEffects, succEffects)) {
-        barrier.setBarrierEliminatedAttr(UnitAttr::get(barrier.getContext()));
         setBarrierReason(barrier, sde::SdeBarrierReason::required_memory);
-        eliminated++;
-        ARTS_DEBUG("Eliminated required-memory barrier: token-local storage "
-                   "dependencies preserve the inter-phase order");
+        ARTS_DEBUG("Preserved required-memory barrier: token-local storage "
+                   "dependencies need an explicit SDE rewrite before the "
+                   "global ordering can be removed");
         return;
       }
 
@@ -685,6 +684,9 @@ struct BarrierEliminationPass
     getOperation().walk([&](scf::ForOp loop) {
       timestepPairsStamped += stampAdjacentTimestepPairsInLoop(loop);
     });
+
+    for (sde::SdeSuBarrierOp barrier : redundantBarriers)
+      barrier.erase();
 
     ARTS_INFO("BarrierElimination: eliminated " << eliminated << " barrier(s)");
     ARTS_INFO("BarrierElimination: stamped " << timestepPairsStamped

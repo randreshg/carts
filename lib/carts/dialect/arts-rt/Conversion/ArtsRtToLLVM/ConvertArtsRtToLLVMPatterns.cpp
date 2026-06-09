@@ -12,7 +12,7 @@
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/RuntimeConfig.h"
@@ -278,6 +278,22 @@ struct BarrierPattern : public ArtsRtToLLVMPattern<BarrierOp> {
   }
 };
 
+/// Pattern to convert an authored ARTS runtime shutdown to the runtime call.
+struct ShutdownPattern : public ArtsRtToLLVMPattern<ShutdownOp> {
+  using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
+
+  LogicalResult matchAndRewrite(ShutdownOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering Shutdown Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
+    RCB.callVoid(types::ARTSRTL_arts_shutdown, {});
+    rewriter.eraseOp(op);
+    ++numMiscOpsConverted;
+    return success();
+  }
+};
+
 /// Pattern to convert arts.get_edt_epoch_guid operations
 struct GetEdtEpochGuidPattern : public ArtsRtToLLVMPattern<GetEdtEpochGuidOp> {
   using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
@@ -487,12 +503,11 @@ private:
   enum class DbInterleavePlacement { Default, Interleaved };
 
   std::optional<DbOwnerMapPlan> requireOwnerMapPlan(DbAllocOp op) const {
-    DbOwnerMapContractFailure contractFailure =
-        getDistributedDbOwnerMapContractFailure(op);
-    if (contractFailure != DbOwnerMapContractFailure::None) {
+    DbOwnerMapPlanFailure planFailure = getDistributedDbOwnerMapPlanFailure(op);
+    if (planFailure != DbOwnerMapPlanFailure::None) {
       op.emitOpError()
           << "distributed DB lowering requires a verified owner-map plan: "
-          << toString(contractFailure);
+          << toString(planFailure);
       return std::nullopt;
     }
 
@@ -1151,11 +1166,11 @@ private:
     auto depPattern = getDepPattern(op.getOperation());
     bool hasBlockPlan =
         static_cast<bool>(getPlanPhysicalBlockShapeAttr(op.getOperation()));
-    if (auto contract = getLoweringContract(op.getPtr())) {
-      if (!depPattern && contract->pattern.depPattern)
-        depPattern = contract->pattern.depPattern;
-      hasBlockPlan = hasBlockPlan || !contract->spatial.blockShape.empty() ||
-                     !contract->spatial.staticBlockShape.empty();
+    if (auto facts = getLoweringFacts(op.getPtr())) {
+      if (!depPattern && facts->pattern.depPattern)
+        depPattern = facts->pattern.depPattern;
+      hasBlockPlan = hasBlockPlan || !facts->spatial.blockShape.empty() ||
+                     !facts->spatial.staticBlockShape.empty();
     }
 
     if (depPattern && isUniformFamilyDepPattern(*depPattern) &&
@@ -1663,7 +1678,7 @@ void populateRuntimePatterns(RewritePatternSet &patterns, ArtsCodegen *AC) {
   patterns.add<RuntimeQueryPattern>(context, AC);
 
   /// Synchronization patterns
-  patterns.add<BarrierPattern, AtomicAddPattern>(context, AC);
+  patterns.add<BarrierPattern, ShutdownPattern, AtomicAddPattern>(context, AC);
 
   /// Builtin patterns (Polygeist emits these as calls, not intrinsics)
   patterns.add<BuiltinObjectSizePattern>(context);

@@ -9,8 +9,14 @@
 
 // The same plan reaches CODIR as a block-native owner-strip halo dependency.
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-to-codir \
+// RUN:   --start-from sde-planning --pipeline codir-graph-transforms \
 // RUN:   | %FileCheck %s --check-prefix=CODIR
+
+// Single-node ARTS lowering still realizes explicit per-block halo exchange
+// instead of suppressing the halo path.
+// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
+// RUN:   --start-from sde-planning --pipeline post-db-refinement \
+// RUN:   | %FileCheck %s --check-prefix=ARTS64
 
 // Single-worker lowering remains serial and undistributed.
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_1t.cfg \
@@ -46,6 +52,14 @@
 // CODIR-SAME: logical_worker_slice = [1, 4096]
 // CODIR-SAME: tile_owner_dims = [0]
 // CODIR-SAME: tile_shape = [1, 4096]
+
+// ARTS64: arts.runtime_total_nodes = 1 : i64
+// ARTS64-LABEL: func.func @seidel_in_place
+// ARTS64: arts.db_acquire[<in>] {{.*}} element_offsets
+// ARTS64-SAME: element_sizes
+// ARTS64: arts.edt <task> <intranode> route
+// ARTS64-SAME: perBlockHaloExchange
+// ARTS64-SAME: storageBridgeCopy
 
 // SERIAL-LABEL: func.func @seidel_in_place
 // SERIAL: inPlaceSharedState

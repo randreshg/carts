@@ -21,7 +21,7 @@ Emitted facts:
 
 - ARTS DB/EDT/epoch attrs and operands;
 - dependency slot layouts;
-- validated DB/acquire/window contracts;
+- validated DB/acquire/window facts;
 - placement/resource binding attrs;
 - diagnostics when SDE/CODIR did not provide enough plan information.
 

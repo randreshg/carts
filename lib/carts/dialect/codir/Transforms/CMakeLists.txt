@@ -1,7 +1,8 @@
 add_mlir_dialect_library(MLIRCartsCodirTransforms
-  CodirCodeletOpt.cpp
-  ReductionPlanning.cpp
-  StoragePlanning.cpp
+  CodirCodeletDCE.cpp
+  DepStorageAssignment.cpp
+  ReductionAtomicMaterialization.cpp
+  ReductionDepMapping.cpp
   Verify/VerifyCodir.cpp
 
   ADDITIONAL_HEADER_DIRS

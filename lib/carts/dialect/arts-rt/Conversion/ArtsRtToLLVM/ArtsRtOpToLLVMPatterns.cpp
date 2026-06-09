@@ -11,7 +11,7 @@
 #include "CodegenInternal.h"
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
@@ -113,8 +113,8 @@ static Value getDepEntryFieldPtr(ArtsCodegen *AC, Value depEntryPtr,
                                  unsigned field, Location loc) {
   auto c0 = AC->createIntConstant(0, AC->Int64, loc);
   auto fieldIdx = AC->createIntConstant(field, AC->Int64, loc);
-  return AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
-                                 depEntryPtr, ValueRange{c0, fieldIdx});
+  return AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep, depEntryPtr,
+                                 ValueRange{c0, fieldIdx});
 }
 
 static Value buildDepReadablePayloadPtr(ArtsCodegen *AC, Value depEntryPtr,
@@ -124,8 +124,7 @@ static Value buildDepReadablePayloadPtr(ArtsCodegen *AC, Value depEntryPtr,
   Value flags = AC->create<LLVM::LoadOp>(loc, AC->Int32, flagsPtr);
   Value sliceOffset = AC->create<LLVM::LoadOp>(loc, AC->Int64, offsetPtr);
 
-  Value haloMask =
-      AC->createIntConstant(kArtsDepFlagHaloView, AC->Int32, loc);
+  Value haloMask = AC->createIntConstant(kArtsDepFlagHaloView, AC->Int32, loc);
   Value compactMask =
       AC->createIntConstant(kArtsDepFlagHaloCompact, AC->Int32, loc);
   Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
@@ -133,17 +132,16 @@ static Value buildDepReadablePayloadPtr(ArtsCodegen *AC, Value depEntryPtr,
   Value compactBits = AC->create<arith::AndIOp>(loc, flags, compactMask);
   Value isHalo = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
                                            haloBits, zeroI32);
-  Value isCompact = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::ne, compactBits, zeroI32);
+  Value isCompact = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+                                              compactBits, zeroI32);
   Value notCompact = AC->create<arith::XOrIOp>(
       loc, isCompact, AC->create<arith::ConstantIntOp>(loc, 1, 1));
-  Value needsOffset =
-      AC->create<arith::AndIOp>(loc, isHalo, notCompact);
+  Value needsOffset = AC->create<arith::AndIOp>(loc, isHalo, notCompact);
 
   Value shifted = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->Int8,
                                           payloadPtr, ValueRange{sliceOffset});
-  return LLVM::SelectOp::create(AC->getBuilder(), loc, AC->llvmPtr,
-                                needsOffset, shifted, payloadPtr);
+  return LLVM::SelectOp::create(AC->getBuilder(), loc, AC->llvmPtr, needsOffset,
+                                shifted, payloadPtr);
 }
 
 static Value buildDepReadablePayloadSlotPtr(ArtsCodegen *AC, Value depEntryPtr,
@@ -154,8 +152,7 @@ static Value buildDepReadablePayloadSlotPtr(ArtsCodegen *AC, Value depEntryPtr,
 
   Value flagsPtr = getDepEntryFieldPtr(AC, depEntryPtr, /*field=*/3, loc);
   Value flags = AC->create<LLVM::LoadOp>(loc, AC->Int32, flagsPtr);
-  Value haloMask =
-      AC->createIntConstant(kArtsDepFlagHaloView, AC->Int32, loc);
+  Value haloMask = AC->createIntConstant(kArtsDepFlagHaloView, AC->Int32, loc);
   Value compactMask =
       AC->createIntConstant(kArtsDepFlagHaloCompact, AC->Int32, loc);
   Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
@@ -163,12 +160,11 @@ static Value buildDepReadablePayloadSlotPtr(ArtsCodegen *AC, Value depEntryPtr,
   Value compactBits = AC->create<arith::AndIOp>(loc, flags, compactMask);
   Value isHalo = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
                                            haloBits, zeroI32);
-  Value isCompact = AC->create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::ne, compactBits, zeroI32);
+  Value isCompact = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+                                              compactBits, zeroI32);
   Value notCompact = AC->create<arith::XOrIOp>(
       loc, isCompact, AC->create<arith::ConstantIntOp>(loc, 1, 1));
-  Value needsOffset =
-      AC->create<arith::AndIOp>(loc, isHalo, notCompact);
+  Value needsOffset = AC->create<arith::AndIOp>(loc, isHalo, notCompact);
 
   auto slotType = MemRefType::get({1}, AC->llvmPtr);
   Value adjustedSlot = AC->create<memref::AllocaOp>(loc, slotType);
@@ -176,8 +172,8 @@ static Value buildDepReadablePayloadSlotPtr(ArtsCodegen *AC, Value depEntryPtr,
   AC->create<memref::StoreOp>(loc, adjustedPayload, adjustedSlot,
                               ValueRange{zeroIdx});
   Value adjustedSlotPtr = AC->castToLLVMPtr(adjustedSlot, loc);
-  return LLVM::SelectOp::create(AC->getBuilder(), loc, AC->llvmPtr,
-                                needsOffset, adjustedSlotPtr, dataPtrAddr);
+  return LLVM::SelectOp::create(AC->getBuilder(), loc, AC->llvmPtr, needsOffset,
+                                adjustedSlotPtr, dataPtrAddr);
 }
 
 /// Pattern to convert arts.record_dep operations
@@ -235,28 +231,28 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
 
 private:
   SmallVector<Value, 4>
-  inferStencilCenterCoordsFromContract(DbAcquireOp dbAcquireOp,
-                                       const DbLoweringInfo &dbInfo,
-                                       Location loc) const {
+  inferStencilCenterCoordsFromFacts(DbAcquireOp dbAcquireOp,
+                                    const DbLoweringInfo &dbInfo,
+                                    Location loc) const {
     SmallVector<Value, 4> globalCoords;
     if (!dbAcquireOp || dbInfo.sizes.empty())
       return globalCoords;
 
-    auto contract = getAcquireStencilContract(dbAcquireOp, loc);
-    if (!contract ||
-        !(contract->isStencilFamily() || contract->usesStencilDistribution()))
+    auto facts = getAcquireStencilFacts(dbAcquireOp, loc);
+    if (!facts ||
+        !(facts->isStencilFamily() || facts->usesStencilDistribution()))
       return globalCoords;
-    if (contract->spatial.minOffsets.empty()) {
-      if (contract->spatial.centerOffset)
-        return inferSymmetricStencilCenterCoords(
-            *contract->spatial.centerOffset, dbInfo, loc);
+    if (facts->spatial.minOffsets.empty()) {
+      if (facts->spatial.centerOffset)
+        return inferSymmetricStencilCenterCoords(*facts->spatial.centerOffset,
+                                                 dbInfo, loc);
       return globalCoords;
     }
 
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
-                                       contract->spatial.minOffsets.size());
-    if (!contract->spatial.writeFootprint.empty())
-      rank = std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
+                                       facts->spatial.minOffsets.size());
+    if (!facts->spatial.writeFootprint.empty())
+      rank = std::min<unsigned>(rank, facts->spatial.writeFootprint.size());
     if (rank == 0)
       return globalCoords;
 
@@ -265,10 +261,10 @@ private:
 
     globalCoords.reserve(rank);
     for (unsigned i = 0; i < rank; ++i) {
-      Value writeCoord = contract->spatial.writeFootprint.empty()
+      Value writeCoord = facts->spatial.writeFootprint.empty()
                              ? zero
-                             : contract->spatial.writeFootprint[i];
-      Value minOffset = contract->spatial.minOffsets[i];
+                             : facts->spatial.writeFootprint[i];
+      Value minOffset = facts->spatial.minOffsets[i];
       Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
 
       Value rawCoord =
@@ -415,9 +411,8 @@ private:
     Value baseOffset = nullptr;
     Value stencilCenterLinear;
     SmallVector<Value, 4> stencilCenterCoords;
-    std::optional<LoweringContractInfo> stencilContract;
+    std::optional<LoweringFactInfo> stencilFacts;
   };
-
   Value localLinearToGlobalLinear(Value localLinear,
                                   const DbLoweringInfo &dbInfo,
                                   ArrayRef<Value> allocSizes,
@@ -452,39 +447,38 @@ private:
                                   globalCoordValues, loc);
   }
 
-  std::optional<LoweringContractInfo>
-  getAcquireStencilContract(DbAcquireOp dbAcquireOp, Location loc) const {
+  std::optional<LoweringFactInfo>
+  getAcquireStencilFacts(DbAcquireOp dbAcquireOp, Location loc) const {
     if (!dbAcquireOp)
       return std::nullopt;
 
-    if (auto info = getLoweringContract(dbAcquireOp.getPtr()))
+    if (auto info = getLoweringFacts(dbAcquireOp.getPtr()))
       return info;
-    return getLoweringContract(dbAcquireOp.getOperation(), AC->getBuilder(),
-                               loc);
+    return getLoweringFacts(dbAcquireOp.getOperation(), AC->getBuilder(), loc);
   }
 
-  Value inferStencilCenterLinearFromContract(DbAcquireOp dbAcquireOp,
-                                             const DbLoweringInfo &dbInfo,
-                                             ArrayRef<Value> allocSizes,
-                                             Location loc) const {
+  Value inferStencilCenterLinearFromFacts(DbAcquireOp dbAcquireOp,
+                                          const DbLoweringInfo &dbInfo,
+                                          ArrayRef<Value> allocSizes,
+                                          Location loc) const {
     if (!dbAcquireOp || dbInfo.sizes.empty())
       return nullptr;
 
-    auto contract = getAcquireStencilContract(dbAcquireOp, loc);
-    if (!contract ||
-        !(contract->isStencilFamily() || contract->usesStencilDistribution()))
+    auto facts = getAcquireStencilFacts(dbAcquireOp, loc);
+    if (!facts ||
+        !(facts->isStencilFamily() || facts->usesStencilDistribution()))
       return nullptr;
-    if (contract->spatial.minOffsets.empty()) {
-      if (contract->spatial.centerOffset)
-        return inferSymmetricStencilCenterLinear(
-            *contract->spatial.centerOffset, dbInfo, allocSizes, loc);
+    if (facts->spatial.minOffsets.empty()) {
+      if (facts->spatial.centerOffset)
+        return inferSymmetricStencilCenterLinear(*facts->spatial.centerOffset,
+                                                 dbInfo, allocSizes, loc);
       return nullptr;
     }
 
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
-                                       contract->spatial.minOffsets.size());
-    if (!contract->spatial.writeFootprint.empty())
-      rank = std::min<unsigned>(rank, contract->spatial.writeFootprint.size());
+                                       facts->spatial.minOffsets.size());
+    if (!facts->spatial.writeFootprint.empty())
+      rank = std::min<unsigned>(rank, facts->spatial.writeFootprint.size());
     if (rank == 0)
       return nullptr;
 
@@ -494,10 +488,10 @@ private:
     SmallVector<Value, 4> localCoords;
     localCoords.reserve(rank);
     for (unsigned i = 0; i < rank; ++i) {
-      Value writeCoord = contract->spatial.writeFootprint.empty()
+      Value writeCoord = facts->spatial.writeFootprint.empty()
                              ? zero
-                             : contract->spatial.writeFootprint[i];
-      Value minOffset = contract->spatial.minOffsets[i];
+                             : facts->spatial.writeFootprint[i];
+      Value minOffset = facts->spatial.minOffsets[i];
       Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
 
       Value rawCoord =
@@ -583,21 +577,21 @@ private:
       result.allocSizes = resolveOuterSizesForGuid(dbGuid);
       /// Stencil writer acquires frequently cover [halo..., center, halo...]
       /// DB entries. Recording every entry as WRITE over-serializes adjacent
-      /// blocks. Use the acquire's stencil contract to identify the owned
+      /// blocks. Use the acquire's stencil facts to identify the owned
       /// center block and downgrade only the non-center entries to read-only.
       ///
-      /// Prefer the full lowering contract so boundary-clamped windows keep
+      /// Prefer the full lowering facts so boundary-clamped windows keep
       /// the correct owned-center block. stencil_center_offset is only a
-      /// symmetric-radius fallback when richer contract data is unavailable.
+      /// symmetric-radius fallback when richer facts data is unavailable.
       int32_t writeMode = static_cast<int32_t>(DbMode::write);
       bool writerMode = !acquireMode || *acquireMode == writeMode;
       auto partitionMode = dbAcquireOp.getPartitionMode();
       if (writerMode && partitionMode && usesBlockLayout(*partitionMode)) {
-        result.stencilContract = getAcquireStencilContract(dbAcquireOp, loc);
-        result.stencilCenterLinear = inferStencilCenterLinearFromContract(
+        result.stencilFacts = getAcquireStencilFacts(dbAcquireOp, loc);
+        result.stencilCenterLinear = inferStencilCenterLinearFromFacts(
             dbAcquireOp, result.dbInfo, result.allocSizes, loc);
-        result.stencilCenterCoords = inferStencilCenterCoordsFromContract(
-            dbAcquireOp, result.dbInfo, loc);
+        result.stencilCenterCoords =
+            inferStencilCenterCoordsFromFacts(dbAcquireOp, result.dbInfo, loc);
       }
     } else if (depDbAcquireOp) {
       result.dbInfo = RtDbUtils::extractDbLoweringInfo(depDbAcquireOp);
@@ -679,12 +673,12 @@ private:
                                                            globalCoords, loc);
 
           result = recordSingleDb(
-              dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc, linearIndex,
-              ArrayRef<Value>(globalCoords), bounds.allocSizes, accessMode,
-              acquireMode, depFlags, boundsValid, depInfo.depStruct,
+              dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
+              linearIndex, ArrayRef<Value>(globalCoords), bounds.allocSizes,
+              accessMode, acquireMode, depFlags, boundsValid, depInfo.depStruct,
               depInfo.baseOffset, bounds.totalDBs, byteOffset, byteSize,
-              depInfo.stencilCenterLinear, depInfo.stencilCenterCoords, &depInfo,
-              loc);
+              depInfo.stencilCenterLinear, depInfo.stencilCenterCoords,
+              &depInfo, loc);
           return;
         }
 
@@ -707,13 +701,12 @@ private:
     if (!bounds.useDepv && depInfo.dbInfo.isSingleElement &&
         !depInfo.dbInfo.indices.empty()) {
       Value zero = AC->createIndexConstant(0, loc);
-      return recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid,
-                            sharedSlotAlloc, zero, depInfo.dbInfo.indices,
-                            bounds.allocSizes, accessMode, acquireMode,
-                            depFlags, boundsValid, depInfo.depStruct,
-                            depInfo.baseOffset, bounds.totalDBs, byteOffset,
-                            byteSize, depInfo.stencilCenterLinear,
-                            depInfo.stencilCenterCoords, &depInfo, loc);
+      return recordSingleDb(
+          dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc, zero,
+          depInfo.dbInfo.indices, bounds.allocSizes, accessMode, acquireMode,
+          depFlags, boundsValid, depInfo.depStruct, depInfo.baseOffset,
+          bounds.totalDBs, byteOffset, byteSize, depInfo.stencilCenterLinear,
+          depInfo.stencilCenterCoords, &depInfo, loc);
     }
 
     LogicalResult result = success();
@@ -723,13 +716,13 @@ private:
         [&](Value linearIndex) {
           if (failed(result))
             return;
-          result = recordSingleDb(dbGuid, depInfo.guidStorage, edtGuid,
-                                  sharedSlotAlloc, linearIndex, ArrayRef<Value>(),
-                                  bounds.allocSizes, accessMode, acquireMode,
-                                  depFlags, boundsValid, depInfo.depStruct,
-                                  depInfo.baseOffset, bounds.totalDBs, byteOffset,
-                                  byteSize, depInfo.stencilCenterLinear,
-                                  depInfo.stencilCenterCoords, &depInfo, loc);
+          result = recordSingleDb(
+              dbGuid, depInfo.guidStorage, edtGuid, sharedSlotAlloc,
+              linearIndex, ArrayRef<Value>(), bounds.allocSizes, accessMode,
+              acquireMode, depFlags, boundsValid, depInfo.depStruct,
+              depInfo.baseOffset, bounds.totalDBs, byteOffset, byteSize,
+              depInfo.stencilCenterLinear, depInfo.stencilCenterCoords,
+              &depInfo, loc);
         },
         bounds.allocSizes);
     return result;
@@ -754,8 +747,8 @@ private:
     return flags && ((*flags & mask) != 0);
   }
 
-  static std::optional<int32_t>
-  clearDepFlags(std::optional<int32_t> flags, int32_t mask) {
+  static std::optional<int32_t> clearDepFlags(std::optional<int32_t> flags,
+                                              int32_t mask) {
     if (!flags)
       return std::nullopt;
     int32_t bits = *flags & ~mask;
@@ -774,11 +767,9 @@ private:
                                   Location loc) const {
     const bool haloView = hasDepFlag(depFlags, kArtsDepFlagHaloView);
     std::optional<int32_t> wholeDbFlags =
-        clearDepFlags(depFlags,
-                      kArtsDepFlagHaloView | kArtsDepFlagHaloCompact);
+        clearDepFlags(depFlags, kArtsDepFlagHaloView | kArtsDepFlagHaloCompact);
     std::optional<int32_t> haloFlags =
-        clearDepFlags(depFlags,
-                      kArtsDepFlagHaloView | kArtsDepFlagHaloCompact);
+        clearDepFlags(depFlags, kArtsDepFlagHaloView | kArtsDepFlagHaloCompact);
 
     auto emitWholeDbDep = [&]() {
       ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
@@ -908,10 +899,9 @@ private:
     std::optional<int32_t> effectiveDepFlags = depFlags;
     bool preserveShape =
         depFlags && ((*depFlags & kArtsDepFlagPreserveShape) != 0);
-    bool hasExplicitSlice =
-        byteOffset && byteSize &&
-        ValueAnalysis::isProvablyNonZero(
-            ValueAnalysis::stripNumericCasts(byteSize));
+    bool hasExplicitSlice = byteOffset && byteSize &&
+                            ValueAnalysis::isProvablyNonZero(
+                                ValueAnalysis::stripNumericCasts(byteSize));
     DbAcquireOp sourceAcquire = depInfo ? depInfo->dbAcquireOp : DbAcquireOp();
     if (!hasExplicitSlice && sourceAcquire && sourceAcquire.getHaloSliceAttr())
       return sourceAcquire.emitOpError()
@@ -919,7 +909,7 @@ private:
                 "window; ARTS-RT must not infer halo face slices";
     if (preserveShape) {
       /// Explicit preserve-shape markings currently act as an analysis-time
-      /// "do not compact this acquire" contract. Keep those on the whole-DB
+      /// "do not compact this acquire" facts. Keep those on the whole-DB
       /// path until the upstream acquire rewrite carries a compact index space.
       effectiveByteOffset = nullptr;
       effectiveByteSize = nullptr;

@@ -563,6 +563,86 @@ std::optional<int64_t> ValueAnalysis::getConstantIndexStripped(Value v) {
   return tryFoldConstantIndex(stripNumericCasts(v));
 }
 
+ValueAnalysis::IndexExpr ValueAnalysis::analyzeIndexExpr(Value value, Value iv,
+                                                         unsigned depth) {
+  auto noExtra = [](Value, unsigned) -> std::optional<int64_t> {
+    return std::nullopt;
+  };
+  return analyzeIndexExprWith(value, iv, noExtra, depth);
+}
+
+ValueAnalysis::IndexExpr ValueAnalysis::analyzeIndexExprWith(
+    Value value, Value iv,
+    llvm::function_ref<std::optional<int64_t>(Value, unsigned)> extraFolder,
+    unsigned depth) {
+  IndexExpr unknown;
+  if (!value || !iv || depth > 8)
+    return unknown;
+
+  value = stripNumericCasts(value);
+  iv = stripNumericCasts(iv);
+  if (value == iv)
+    return {/*dependsOnIV=*/true, /*offset=*/0, /*multiplier=*/1};
+
+  if (auto constant = tryFoldConstantIndexWith(value, extraFolder))
+    return {/*dependsOnIV=*/false, /*offset=*/*constant, /*multiplier=*/0};
+
+  Operation *def = value.getDefiningOp();
+  if (!def)
+    return unknown;
+
+  if (auto add = dyn_cast<arith::AddIOp>(def)) {
+    IndexExpr lhs =
+        analyzeIndexExprWith(add.getLhs(), iv, extraFolder, depth + 1);
+    IndexExpr rhs =
+        analyzeIndexExprWith(add.getRhs(), iv, extraFolder, depth + 1);
+    IndexExpr out;
+    out.dependsOnIV = lhs.dependsOnIV || rhs.dependsOnIV;
+    if (lhs.offset && rhs.offset)
+      out.offset = *lhs.offset + *rhs.offset;
+    if (lhs.multiplier && rhs.multiplier)
+      out.multiplier = *lhs.multiplier + *rhs.multiplier;
+    return out;
+  }
+
+  if (auto sub = dyn_cast<arith::SubIOp>(def)) {
+    IndexExpr lhs =
+        analyzeIndexExprWith(sub.getLhs(), iv, extraFolder, depth + 1);
+    IndexExpr rhs =
+        analyzeIndexExprWith(sub.getRhs(), iv, extraFolder, depth + 1);
+    IndexExpr out;
+    out.dependsOnIV = lhs.dependsOnIV || rhs.dependsOnIV;
+    if (lhs.offset && rhs.offset)
+      out.offset = *lhs.offset - *rhs.offset;
+    if (lhs.multiplier && rhs.multiplier)
+      out.multiplier = *lhs.multiplier - *rhs.multiplier;
+    return out;
+  }
+
+  if (auto mul = dyn_cast<arith::MulIOp>(def)) {
+    IndexExpr lhs =
+        analyzeIndexExprWith(mul.getLhs(), iv, extraFolder, depth + 1);
+    IndexExpr rhs =
+        analyzeIndexExprWith(mul.getRhs(), iv, extraFolder, depth + 1);
+    if (lhs.dependsOnIV && !rhs.dependsOnIV && rhs.offset) {
+      if (lhs.multiplier)
+        lhs.multiplier = *lhs.multiplier * *rhs.offset;
+      if (lhs.offset)
+        lhs.offset = *lhs.offset * *rhs.offset;
+      return lhs;
+    }
+    if (rhs.dependsOnIV && !lhs.dependsOnIV && lhs.offset) {
+      if (rhs.multiplier)
+        rhs.multiplier = *rhs.multiplier * *lhs.offset;
+      if (rhs.offset)
+        rhs.offset = *rhs.offset * *lhs.offset;
+      return rhs;
+    }
+  }
+
+  return unknown;
+}
+
 static std::optional<double> getConstantFloat(Value v) {
   if (!v)
     return std::nullopt;
@@ -630,6 +710,14 @@ bool ValueAnalysis::areValueRangesEquivalent(ValueRange lhs, ValueRange rhs) {
     if (!sameValue(left, right))
       return false;
   return true;
+}
+
+bool ValueAnalysis::sameDirectMemrefAccess(Value lhsMemref,
+                                           ValueRange lhsIndices,
+                                           Value rhsMemref,
+                                           ValueRange rhsIndices) {
+  return sameValue(lhsMemref, rhsMemref) &&
+         areValueRangesEquivalent(lhsIndices, rhsIndices);
 }
 
 Value ValueAnalysis::stripClampOne(Value v) {

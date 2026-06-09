@@ -30,7 +30,7 @@ a helper and choosing its canonical home.
    memref/root/slice, DB/EDT/epoch/dependency, runtime ABI/packing/pointer.
 3. Check sibling dialect TableGen files before adding a new enum or attribute.
 4. Inspect `include/carts/utils`, `lib/carts/utils`,
-   `include/carts/dialect/*/Utils`, and owning `Analysis/` APIs.
+   `include/carts/dialect/*/Utils`, and owning SDE analysis utilities.
 5. Check pass-area support files such as `*Support.cpp`, `*Internal.h`, and
    boundary conversion helpers.
 6. Choose one home from the placement matrix and remove duplicate local copies.
@@ -78,7 +78,7 @@ attributes.
 | undef-like op detection | ARTS `RuntimeOpUtils.h` |
 | DB provenance/access info | `DbUtils.h` |
 | EDT environment/captures | `EdtUtils.h` |
-| lowering contracts | `LoweringContractUtils.h` |
+| lowering facts | `LoweringFactUtils.h` |
 | runtime IDs/calls/DB ABI | ARTS-RT `Utils/` |
 
 ## Required Answer

@@ -4,10 +4,10 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 git grep -n \
-  -e 'AM->invalidate()' \
-  -e 'invalidateAndRebuildGraphs' \
-  -e 'invalidateFunction' \
-  -e 'dbAnalysis.invalidate' \
-  -e 'edtAnalysis.invalidate' \
-  -e '->invalidate()' \
+  -e 'replaceAllUses' \
+  -e 'erase()' \
+  -e 'removeAttr' \
+  -e 'setAttr' \
+  -e 'VerifySdeLowered' \
+  -e 'VerifyArtsObjectsOnly' \
   -- include lib docs

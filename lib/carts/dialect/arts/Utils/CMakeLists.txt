@@ -1,11 +1,13 @@
 add_mlir_dialect_library(MLIRCartsArtsUtils
   DbLayoutPlanUtils.cpp
+  DbDistributedEligibility.cpp
   DbUtils.cpp
   EdtUtils.cpp
   LocationMetadata.cpp
   LoopStructureUtils.cpp
-  LoweringContractUtils.cpp
+  LoweringFactUtils.cpp
   RuntimeConfig.cpp
+  StringUtils.cpp
   ValueAnalysisUtils.cpp
 
   ADDITIONAL_HEADER_DIRS

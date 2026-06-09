@@ -48,7 +48,7 @@ Important areas:
 
 - `IR/` - CodirDialect, CodirOps (codelet, dep slice).
 - `Conversion/SdeToCodir/`, `Conversion/CodirToArts/`.
-- `Transforms/` - CodirCodeletOpt, VerifyCodir.
+- `Transforms/` - CodirCodeletDCE, VerifyCodir.
 - `Utils/` - CodeletABIUtils.
 
 ## ARTS Dialect: `arts`
@@ -62,24 +62,23 @@ Paths:
 Purpose: high-level ARTS orchestration IR: EDTs, DBs, epochs, implementation
 `scf.for` loops inside tasks/dispatch, barriers, atomics, runtime queries,
 lowering contracts, per-block single-writer DB realization, owner maps,
-DB modes, DB/EDT graph analysis, and grouped compute/bridge/communication CU
+DB modes, focused DB/EDT queries, and grouped compute/bridge/communication CU
 realization.
 
 Limits: ARTS should not become a runtime ABI shim or a place to patch
 frontend semantic loss. It should own orchestration invariants and
-analysis-backed decisions over committed SDE/CODIR facts. It may verify,
+IR-backed decisions over committed SDE/CODIR facts. It may verify,
 consume, realize, or reject upstream plans; it must not silently recompute
 owner dims, block shape, movement family, storage grain, or runtime mode.
 
 Important areas:
 
-- `Analysis/db`, `Analysis/edt`, `Analysis/loop`, `Analysis/heuristics`.
 - `Transforms/db`, `Transforms/edt`, `Transforms/epoch`, `Transforms/verify`.
-- `Utils/` - DbUtils, EdtUtils, LoweringContractUtils,
+- `Utils/` - DbUtils, EdtUtils, LoweringFactUtils,
   PartitionPredicates, BlockedAccessUtils, ARTSCostModel.
 
-Use `AnalysisManager` accessors for DB/EDT/loop analyses. Do not reach into
-graphs directly from passes.
+Use focused utilities or pass-local queries for DB/EDT/loop facts. Do not
+recreate cached graph/node managers in ARTS passes.
 
 ## ARTS-RT Dialect: `arts_rt`
 

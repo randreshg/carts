@@ -28,8 +28,9 @@ file stays limited to the live compiler pipeline.
 The JSON manifest includes both executable pipeline steps and dialect grouping
 metadata. `dialect_groups.current` names the groups implemented by the live
 stages. The codelet path now runs through `sde -> codir -> arts`: SDE performs
-planning, CODIR isolates codelets and token-local views, and ARTS materializes
-DB/EDT objects. These group records are descriptive; only `pipeline`,
+source/layout transformations, `sde-to-codir` mechanically isolates codelets,
+CODIR transforms the isolated graph, and `codir-to-arts` mechanically creates
+ARTS objects. These group records are descriptive; only `pipeline`,
 `start_from`, and `pipeline_sequence` list canonical stage tokens.
 
 ## Pipeline Order
@@ -40,15 +41,17 @@ Driver stages:
 2. `initial-cleanup`
 3. `sde-planning`
 4. `sde-to-codir`
-5. `codir-to-arts`
-6. `edt-transforms`
-7. `create-dbs`
-8. `db-opt`
-9. `post-db-refinement`
-10. `late-concurrency-cleanup`
-11. `epochs`
-12. `pre-lowering`
-13. `arts-rt-to-llvm`
+5. `codir-graph-transforms`
+6. `codir-to-arts`
+7. `edt-dep-realization`
+8. `edt-local-cleanup`
+9. `create-dbs`
+10. `db-opt`
+11. `post-db-refinement`
+12. `late-concurrency-cleanup`
+13. `epochs`
+14. `pre-lowering`
+15. `arts-rt-to-llvm`
 
 `--pipeline` also accepts the sentinel `complete`. `--start-from` accepts core
 stages only.
@@ -85,9 +88,10 @@ PolygeistCanonicalizeFor(func)
 
 ### `sde-planning`
 
-This stage covers OpenMP-to-SDE conversion and SDE planning only. It
+This stage covers OpenMP-to-SDE conversion and SDE-owned rewrites. It
 intentionally stops before codelet materialization; `sde-to-codir` owns the
-codelet boundary and `codir-to-arts` owns ARTS object materialization.
+mechanical codelet boundary and `codir-to-arts` owns mechanical ARTS object
+materialization.
 
 ```text
 ConvertOpenMPToSde
@@ -101,36 +105,58 @@ ReductionStrategy
 DistributionPlanning
 IterationSpaceDecomposition
 BarrierElimination
-VerifySdePartitionPlan
 MemoryUnitMaterialization
+SdeCuNormalization
+SdeRankExpandMu
+RaiseToMuAccessWindow
+MuAccessWindowSyncOpt
+SdeRedistribute
+SdeCoarseAvoidance
+VerifySde
 ```
 
 ### `sde-to-codir`
 
+This stage only performs the mechanical SDE-to-CODIR conversion. CODIR graph,
+reduction, and storage transforms run in `codir-graph-transforms`.
+
 ```text
 ConvertSdeToCodir
-CodirCodeletOpt
+```
+
+### `codir-graph-transforms`
+
+```text
+CodirCodeletDCE
+ReductionDepMapping
+ReductionAtomicMaterialization
+DepStorageAssignment
 VerifyCodir
 ```
 
 ### `codir-to-arts`
 
-This stage materializes CODIR codelets as ARTS objects and then verifies that
-no SDE operations survived the boundary.
+This stage only performs the mechanical CODIR-to-ARTS conversion. ARTS EDT dep
+realization and boundary checks run in `edt-dep-realization`.
 
 ```text
+MaterializeSdeBoundaryToArts
 ConvertCodirToArts
-VerifySdeLowered
-VerifyArtsObjectsOnly
-ArtsDeadCodeElimination
-CSE(arts.edt)
-VerifyEdtCreated
 ```
 
-### `edt-transforms`
+### `edt-dep-realization`
 
 ```text
-EdtStructuralOpt(runAnalysis=false)
+RealizeEdtDistributionPlan
+VerifySdeLowered
+VerifyArtsObjectsOnly
+```
+
+### `edt-local-cleanup`
+
+```text
+EdtAllocaSinking
+EdtInlineNoDepTasks
 ArtsDeadCodeElimination
 SymbolDCE
 CSE(arts.edt)
@@ -162,18 +188,21 @@ Mem2Reg
 ```text
 DbModeTightening
 DbOwnerMapRealization (conditional)
-EdtTransforms
-DbTransforms
-ContractValidation
+EdtDeadDepElimination
+DbConsolidateStencilHalos
+DbShortenLifetimes
+DbDeadRootElimination
+PartialReductionSplitMaterialization
+MatmulContractionMaterialization
 DbScratchElimination
 PolygeistCanonicalize
 CSE(arts.edt)
+DistributedLaunchConsistency
 ```
 
 ### `late-concurrency-cleanup`
 
 ```text
-BlockLoopStripMining(func)
 Hoisting
 PolygeistCanonicalize
 CSE(arts.edt)
@@ -187,9 +216,11 @@ Mem2Reg
 ```text
 PolygeistCanonicalize
 CreateEpochs
-VerifyEpochCreated
-EpochOpt[amortization]
+EpochAmortizeRepeatedLoop
+EpochTailContinuation
 PolygeistCanonicalize
+DbCommitDistributedDeps (conditional)
+VerifyArtsCdag
 ```
 
 ### `pre-lowering`
@@ -231,7 +262,6 @@ accepted.
 ```text
 LowerAffine(func)
 ConvertArtsRtToLLVM
-LoweringContractCleanup
 GuidRangeCallOpt
 RuntimeCallOpt
 DataPtrHoisting
@@ -250,9 +280,11 @@ VerifyLowered
 - `initial-cleanup` depends on `sde-input-normalization`.
 - `sde-planning` depends on `initial-cleanup`.
 - `sde-to-codir` depends on `sde-planning`.
-- `codir-to-arts` depends on `sde-to-codir`.
-- `edt-transforms` depends on `codir-to-arts`.
-- `create-dbs` depends on `codir-to-arts`.
+- `codir-graph-transforms` depends on `sde-to-codir`.
+- `codir-to-arts` depends on `codir-graph-transforms`.
+- `edt-dep-realization` depends on `codir-to-arts`.
+- `edt-local-cleanup` depends on `edt-dep-realization`.
+- `create-dbs` depends on `edt-dep-realization`.
 - `db-opt` depends on `create-dbs`.
 - `post-db-refinement` depends on `create-dbs`.
 - `late-concurrency-cleanup` depends on `post-db-refinement`.
@@ -263,14 +295,16 @@ VerifyLowered
 ## Ownership Notes
 
 - SDE inside `sde-planning` owns semantic decomposition, `PatternAnalysis`,
-  state planning, dependency/effect proofs, and physical DB layout policy.
+  state rewrites, dependency/effect proofs, sync rewrites, and physical DB
+  layout policy.
 - CODIR is the active isolated-codelet layer. It owns explicit deps, params,
-  token-local views, and codelet capture verification before ARTS EDT creation.
+  token-local views, graph/reduction/storage transforms, and codelet capture
+  verification before ARTS EDT creation.
 - `CreateDbs` is now only a coarse raw-memref bridge. It rejects blocked/tiled
   raw memrefs because SDE/CODIR must perform MU/token storage and access
   rewrites before ARTS.
-- `arts` owns DB/EDT/epoch orchestration and analysis-backed refinement
-  (source: `lib/carts/dialect/arts/`).
+- `arts` owns DB/EDT/epoch orchestration and focused realization/refinement
+  passes over already emitted ARTS facts (source: `lib/carts/dialect/arts/`).
 - `arts-rt` lowering belongs in `pre-lowering` and `arts-rt-to-llvm`, after the
   compiler has already chosen the DB and task shape (source:
   `lib/carts/dialect/arts-rt/`).

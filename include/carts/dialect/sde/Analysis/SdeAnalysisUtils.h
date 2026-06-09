@@ -8,6 +8,7 @@
 #define CARTS_DIALECT_SDE_ANALYSIS_SDEANALYSISUTILS_H
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
+#include "carts/dialect/sde/Utils/SdeCuStructure.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -24,15 +25,19 @@ namespace mlir::carts::sde {
 /// cu_region wrapper inserted by OpenMP conversion or CU normalization.
 inline Block *getSuIterateComputeBlock(SdeSuIterateOp op) {
   Block &body = op.getBody().front();
-  Operation *onlyChild = nullptr;
+  SdeCuRegionOp onlyCuRegion;
   for (Operation &inner : body.without_terminator()) {
-    if (onlyChild)
+    if (auto cuRegion = dyn_cast<SdeCuRegionOp>(&inner)) {
+      if (onlyCuRegion)
+        return &body;
+      onlyCuRegion = cuRegion;
+      continue;
+    }
+    if (!isSchedulePlumbing(&inner))
       return &body;
-    onlyChild = &inner;
   }
-  if (auto cuRegion = dyn_cast_or_null<SdeCuRegionOp>(onlyChild))
-    if (!cuRegion.getBody().empty())
-      return &cuRegion.getBody().front();
+  if (onlyCuRegion && !onlyCuRegion.getBody().empty())
+    return &onlyCuRegion.getBody().front();
   return &body;
 }
 

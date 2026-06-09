@@ -37,7 +37,7 @@ class DbAcquireOp;
 /// EdtUtils
 ///===----------------------------------------------------------------------===//
 
-/// Static utilities for EDT-local structure, capture contracts, and dependency
+/// Static utilities for EDT-local structure, capture facts, and dependency
 /// argument inspection. Keep helpers here when they interpret EdtOp regions but
 /// are not fundamental MLIR op accessors.
 class EdtUtils {
@@ -93,7 +93,7 @@ public:
   static Value traceCapturedDbHandle(Value value);
 
   /// Classify an explicit ordered list of EDT user values using the same
-  /// scalar parameter, constant, and pointer-bearing handle contract as EDT
+  /// scalar parameter, constant, and pointer-bearing handle facts as EDT
   /// lowering.
   static void classifyUserValues(ArrayRef<Value> userValues,
                                  llvm::SetVector<Value> &parameters,
@@ -101,7 +101,7 @@ public:
                                  llvm::SetVector<Value> &dbHandles);
 
   /// Analyze the values an EDT captures from above its region using the same
-  /// classification contract as EDT lowering.
+  /// classification facts as EDT lowering.
   static void analyzeCapturedValues(EdtOp edt,
                                     llvm::SetVector<Value> &capturedValues,
                                     llvm::SetVector<Value> &parameters,

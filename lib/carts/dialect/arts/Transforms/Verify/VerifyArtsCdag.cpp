@@ -11,6 +11,7 @@
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
+#include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #define GEN_PASS_DEF_VERIFYARTSCDAG
 #include "carts/passes/Passes.h"
@@ -19,6 +20,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 #include <functional>
 #include <map>
@@ -41,6 +43,40 @@ static bool isWriterAcquire(DbAcquireOp acquire) {
     return *verdict != RuntimeDbMode::ro;
   ArtsMode mode = acquire.getMode();
   return mode == ArtsMode::out || mode == ArtsMode::inout;
+}
+
+/// No internode ARTS task may depend on a coarse single-block aggregate user
+/// DB: distributed execution requires block DB storage, a per-node-localized
+/// host bridge, or a small replicated read.
+static void verifyCdagDistributedDbDeps(EdtOp edt, bool &failed) {
+  if (!edt || edt.getConcurrency() != EdtConcurrency::internode)
+    return;
+
+  llvm::SmallPtrSet<Operation *, 4> reported;
+  for (Value dep : edt.getDependencies()) {
+    auto alloc =
+        dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
+    if (!DbUtils::isCoarseUserDataDb(alloc))
+      continue;
+    if (DbUtils::isAllowedReadOnlyCoarseDep(dep, alloc))
+      continue;
+    if (DbUtils::isHostWholeToComputeBlockBridgeMovement(edt))
+      continue;
+    if (!reported.insert(alloc.getOperation()).second)
+      continue;
+
+    InFlightDiagnostic diag =
+        edt.emitError()
+        << "internode ARTS task depends on a coarse single-block aggregate "
+           "user DB";
+    diag.attachNote(alloc.getLoc())
+        << "coarse DB allocation feeding the distributed task";
+    diag.attachNote(edt.getLoc())
+        << "SDE/CODIR must materialize block DB storage before ARTS "
+           "distributed execution; CreateDbs is only a coarse raw-memref "
+           "fallback";
+    failed = true;
+  }
 }
 
 /// DB-space block identity for an acquire. Returns "whole" for a whole-block
@@ -87,14 +123,13 @@ static LogicalResult verifyCdagAlloc(DbAllocOp alloc) {
 
   /// (A) A distributed DB must carry a self-consistent owner map and scattered
   /// home. Surface the not-yet-realizable kinds with their precise reason.
-  DbOwnerMapContractFailure failure =
-      getDistributedDbOwnerMapContractFailure(alloc);
-  if (failure == DbOwnerMapContractFailure::UnsupportedOwnerMapKind) {
+  DbOwnerMapPlanFailure failure = getDistributedDbOwnerMapPlanFailure(alloc);
+  if (failure == DbOwnerMapPlanFailure::UnsupportedOwnerMapKind) {
     auto plan = getDbOwnerMapPlan(alloc);
     return alloc.emitOpError() << ownerMapKindUnrealizableReason(
                plan ? plan->kind : DbOwnerMapKind::owner_dim_grid);
   }
-  if (failure != DbOwnerMapContractFailure::None)
+  if (failure != DbOwnerMapPlanFailure::None)
     return alloc.emitOpError()
            << "has inconsistent distributed owner-map/placement facts: "
            << toString(failure);
@@ -126,8 +161,9 @@ static LogicalResult verifyCdagAcquireWindow(DbAcquireOp acquire) {
   if (DbUtils::hasCommittedDbSpaceWindow(acquire))
     return success();
   return acquire.emitOpError()
-       << "acquires a partial halo window of a distributed DB without explicit "
-          "element_offsets/element_sizes; ARTS-RT must not infer it";
+         << "acquires a partial halo window of a distributed DB without "
+            "explicit "
+            "element_offsets/element_sizes; ARTS-RT must not infer it";
 }
 
 /// (C) Single-writer per distributed DB block grain. The writer is the EDT that
@@ -216,6 +252,8 @@ struct VerifyArtsCdagPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
     bool failed = false;
+    if (mlir::failed(EdtUtils::verifyNoMixedRootDependencies(module)))
+      failed = true;
     module.walk([&](DbAllocOp alloc) {
       if (mlir::failed(verifyCdagAlloc(alloc)))
         failed = true;
@@ -226,6 +264,7 @@ struct VerifyArtsCdagPass
       if (mlir::failed(verifyCdagAcquireWindow(acquire)))
         failed = true;
     });
+    module.walk([&](EdtOp edt) { verifyCdagDistributedDbDeps(edt, failed); });
     verifyCdagSwmr(module, failed);
     verifyCdagHappensBefore(module, failed);
     if (failed)

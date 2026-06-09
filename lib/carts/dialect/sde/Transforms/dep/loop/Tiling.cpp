@@ -1476,6 +1476,10 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
 
       Block &srcBody = op.getBody().front();
       Block *computeBody = sde::getSuIterateComputeBlock(op);
+      Block *cloneBody = computeBody;
+      if (computeBody &&
+          isa_and_nonnull<sde::SdeCuRegionOp>(computeBody->getParentOp()))
+        cloneBody = &srcBody;
 
       IRMapping mapper;
       SmallVector<scf::ForOp, 4> tileLoops;
@@ -1497,7 +1501,7 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
         rewriter.setInsertionPointToStart(tileLoop.getBody());
       }
 
-      cloneBodyIntoTileLoop(*computeBody, mapper, rewriter);
+      cloneBodyIntoTileLoop(*cloneBody, mapper, rewriter);
 
       if (directMatmul && !tileLoops.empty()) {
         Value outputRoot =

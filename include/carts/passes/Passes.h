@@ -24,22 +24,20 @@ class RewritePatternSet;
 class DominanceInfo;
 
 namespace carts::arts {
-class AnalysisManager;
 class RuntimeConfig;
 
 /// Eliminate dead ARTS operations and shared dead helper IR.
 std::unique_ptr<Pass> createDCEPass();
 
 /// EDT and loop-structure transformation passes.
-std::unique_ptr<Pass> createEdtStructuralOptPass(AnalysisManager *AM,
-                                                 bool runAnalysis);
-std::unique_ptr<Pass> createCreateDbsPass(AnalysisManager *AM);
-std::unique_ptr<Pass> createDbModeTighteningPass(AnalysisManager *AM,
-                                                 bool forceInout = false);
+std::unique_ptr<Pass> createCreateDbsPass();
+std::unique_ptr<Pass> createDbModeTighteningPass(bool forceInout = false);
 std::unique_ptr<Pass> createDbScratchEliminationPass();
-std::unique_ptr<Pass> createDbOwnerMapRealizationPass(AnalysisManager *AM);
+std::unique_ptr<Pass> createDbOwnerMapRealizationPass();
 std::unique_ptr<Pass> createDbCommitDistributedDepsPass();
-std::unique_ptr<Pass> createDbTransformsPass(AnalysisManager *AM);
+std::unique_ptr<Pass> createDbConsolidateStencilHalosPass();
+std::unique_ptr<Pass> createDbShortenLifetimesPass();
+std::unique_ptr<Pass> createDbDeadRootEliminationPass();
 std::unique_ptr<Pass> createPartialReductionSplitMaterializationPass();
 std::unique_ptr<Pass> createMatmulContractionMaterializationPass();
 std::unique_ptr<Pass> createDistributedLaunchConsistencyPass();
@@ -50,24 +48,17 @@ std::unique_ptr<Pass> createCreateEpochsPass();
 
 /// EDT-local cleanup and ARTS object refinement passes.
 std::unique_ptr<Pass> createEdtAllocaSinkingPass();
+std::unique_ptr<Pass> createEdtDeadDepEliminationPass();
+std::unique_ptr<Pass> createEdtInlineNoDepTasksPass();
 std::unique_ptr<Pass> createEdtPtrRematerializationPass();
 
-/// Realize the committed repeated-timestep epoch shape.
-std::unique_ptr<Pass> createEpochOptPass();
-std::unique_ptr<Pass> createEpochOptPass(bool enableAmortization);
+/// Amortize committed repeated-timestep epoch loops.
+std::unique_ptr<Pass> createEpochAmortizeRepeatedLoopPass();
+std::unique_ptr<Pass> createEpochTailContinuationPass();
 std::unique_ptr<Pass> createHoistingPass();
-std::unique_ptr<Pass> createBlockLoopStripMiningPass();
-
-std::unique_ptr<Pass> createEdtTransformsPass(AnalysisManager *AM);
-
-/// Validation passes for lowering contracts.
-std::unique_ptr<Pass> createContractValidationPass(bool failOnError = false);
 
 /// Verification passes at lowering boundaries.
-std::unique_ptr<Pass> createVerifyEdtCreatedPass();
-std::unique_ptr<Pass> createVerifyEpochCreatedPass();
 std::unique_ptr<Pass> createVerifyArtsObjectsOnlyPass();
-std::unique_ptr<Pass> createVerifyDistributedDbPlacementPass();
 std::unique_ptr<Pass> createVerifyArtsCdagPass();
 } // namespace carts::arts
 } // namespace mlir

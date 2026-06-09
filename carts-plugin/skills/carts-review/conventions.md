@@ -20,16 +20,16 @@ Quick scan:
 rg -n '"arts\.' lib/carts include/carts --glob '*.cpp' --glob '*.h' | rg -v 'AttrNames|DEBUG|ARTS_DEBUG|arts_debug'
 ```
 
-## Analysis Access
+## Query Helpers
 
-Use `AnalysisManager` interfaces for DB, EDT, loop, metadata, and cache state.
-Do not bypass them by directly reaching into graph internals unless you are
-inside the analysis implementation itself.
+Prefer focused utilities or pass-local queries for DB, EDT, loop, metadata, and
+lowering facts. Do not recreate cached ARTS graph-analysis state or broad
+manager interfaces for facts that a pass can read directly.
 
-Quick scan:
+Quick scan for retired abstractions:
 
 ```bash
-rg -n 'getDbGraph|getEdtGraph|\.getGraph\(\)|\.invalidate\(' lib/carts include/carts --glob '*.cpp' --glob '*.h'
+rg -n 'get.*Graph|.*Manager|.*Analysis' lib/carts include/carts --glob '*.cpp' --glob '*.h'
 ```
 
 ## Utility Duplication

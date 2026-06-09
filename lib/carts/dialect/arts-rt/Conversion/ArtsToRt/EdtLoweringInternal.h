@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: EdtLoweringInternal.h
 ///
-/// Local implementation contract for EdtLowering. This header is
+/// Local implementation facts for EdtLowering. This header is
 /// intentionally private to the edt-lowering implementation split and
 /// should not be used as shared compiler infrastructure.
 ///==========================================================================///
@@ -14,7 +14,7 @@
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
-#include "carts/dialect/arts/Utils/LoweringContractUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -60,7 +60,7 @@ struct DepSourceInfo {
 ///===----------------------------------------------------------------------===//
 
 void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
-                           const LoweringContractInfo &contract);
+                           const LoweringFactInfo &facts);
 
 std::optional<NormalizedElementSlice>
 normalizeCommonElementSlice(ArtsCodegen *AC, DbAcquireOp acquire,

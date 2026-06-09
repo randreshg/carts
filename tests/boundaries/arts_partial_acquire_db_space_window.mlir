@@ -1,23 +1,24 @@
 // RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-arts-cdag)' \
 // RUN:   2>&1 | %FileCheck %s --check-prefix=BEFORE
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(db-commit-distributed-deps,verify-arts-cdag)' \
-// RUN:   | %FileCheck %s --check-prefix=AFTER
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(db-commit-distributed-deps,verify-arts-cdag)' \
+// RUN:   2>&1 | %FileCheck %s --check-prefix=AFTER
 
-// ARTS -> ARTS-RT handoff contract for partial acquires: a distributed partial
-// halo acquire may only reach ARTS-RT once ARTS has committed an authoritative
-// DB-space window for it. ARTS-RT must copy that window, never reconstruct the
-// halo face slice.
+// ARTS -> ARTS-RT boundary rule for partial acquires: a distributed partial
+// halo acquire may only reach ARTS-RT with explicit element_offsets and
+// element_sizes. ARTS-RT must copy that byte window, never reconstruct the halo
+// face slice from metadata.
 //
-// Without the committed window the acquire carries only the stencil access
-// extent. verify-arts-cdag then fails closed, so the acquire cannot cross the
-// boundary in that state (the first RUN line).
+// Without explicit element windows the acquire carries only the stencil access
+// extent. verify-arts-cdag fails closed, so the acquire cannot cross the
+// boundary in that state.
 //
 // db-commit-distributed-deps authors the per-slot halo_slice from the committed
-// stencil access window. verify-arts-cdag then accepts the acquire and the
-// committed window crosses the boundary as a fact ARTS-RT consumes (second RUN).
+// stencil access window, but halo_slice is only diagnostic stencil-reach
+// metadata. It is still rejected without element_offsets/element_sizes.
 
-// BEFORE: acquires a partial halo window of a distributed DB without a committed DB-space window
+// BEFORE: acquires a partial halo window of a distributed DB without explicit element_offsets/element_sizes
 
+// AFTER: acquires a partial halo window of a distributed DB without explicit element_offsets/element_sizes
 // AFTER-LABEL: func.func @partial_acquire_commits_db_space_window
 // AFTER: arts.db_acquire
 // AFTER-SAME: halo_slice = #arts.halo_slice<lower = [-1], upper = [1]>

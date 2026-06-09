@@ -35,6 +35,7 @@ namespace mlir::carts::sde {
 } // namespace mlir::carts::sde
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
+#include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
@@ -42,6 +43,7 @@ namespace mlir::carts::sde {
 #include "carts/utils/Debug.h"
 #include "carts/utils/ValueAnalysis.h"
 
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -95,6 +97,78 @@ singleWriteFact(sde::SdeSuIterateOp op) {
     selected = fact;
   }
   return selected;
+}
+
+// Every external store the SU performs indexes its owner dims through the loop
+// IV (a full-coverage affine-disjoint write, not a scatter or partial write).
+// Mirrors the owner-coverage gate the DistributionPlanning/Tiling budget
+// stampers apply before committing a block grain.
+static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
+                                            ArrayRef<int64_t> ownerDims) {
+  if (!op || ownerDims.empty() || op.getBody().empty())
+    return false;
+  auto loopIvs = op.getLoopInductionVars();
+  if (!loopIvs || loopIvs->empty() || ownerDims.size() > loopIvs->size())
+    return false;
+
+  bool sawExternalStore = false;
+  bool rejected = false;
+  op.getBody().walk([&](memref::StoreOp storeOp) {
+    if (rejected)
+      return;
+    Value root =
+        ::mlir::carts::ValueAnalysis::stripMemrefViewOps(storeOp.getMemref());
+    if (!root || sde::isDefinedInside(op.getOperation(), root))
+      return;
+    auto memrefType = dyn_cast<MemRefType>(root.getType());
+    if (!memrefType || memrefType.getRank() == 0) {
+      rejected = true;
+      return;
+    }
+    sawExternalStore = true;
+    OperandRange indices = storeOp.getIndices();
+    for (auto [ownerSlot, ownerDim] : llvm::enumerate(ownerDims)) {
+      if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= indices.size() ||
+          !sde::isOwnerDependentIndex(indices[ownerDim],
+                                      (*loopIvs)[ownerSlot])) {
+        rejected = true;
+        return;
+      }
+    }
+  });
+  return sawExternalStore && !rejected;
+}
+
+// A multi-store data-parallel writer is reconcilable only when every write fact
+// names a distinct distributable array and all writes agree on owner dims and
+// budget grain. The representative fact carries the shared grain; any aliasing,
+// non-block layout, or grain disagreement fails closed.
+static std::optional<sde::LayoutGraphFact>
+affineDisjointMultiStoreBudgetFact(sde::SdeSuIterateOp op) {
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return std::nullopt;
+  std::optional<sde::LayoutGraphFact> rep;
+  llvm::SmallDenseSet<int64_t, 4> writtenIds;
+  for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
+    if (fact.role != sde::LayoutGraphRole::write)
+      continue;
+    if (fact.id < 0 || fact.layoutKind != sde::ArrayLayoutKind::blockParallel ||
+        fact.ownerDims.empty() || fact.budgetBlockShape.empty())
+      return std::nullopt;
+    if (!writtenIds.insert(fact.id).second)
+      return std::nullopt; // same id written twice => true multi-writer
+    if (!rep) {
+      rep = fact;
+      continue;
+    }
+    if (rep->ownerDims != fact.ownerDims ||
+        rep->budgetBlockShape != fact.budgetBlockShape)
+      return std::nullopt; // arrays disagree on grain/owner => no shared block
+  }
+  if (!rep || writtenIds.size() < 2)
+    return std::nullopt;
+  return rep;
 }
 
 static bool hasPhysicalPlan(sde::SdeSuIterateOp op) {
@@ -232,6 +306,91 @@ struct StorageGrainReconciliationPass
         return;
       ARTS_DEBUG("Authoring storage plan for array id " << wf->id);
       authorPlan(op, wf->ownerDims, block, ctx);
+    });
+
+    // Phase A2: unify affine-disjoint multi-store data-parallel writers.
+    // Re-author a uniform multi-store writer to its shared budget grain so
+    // all co-written arrays expose the same DB block grain to downstream
+    // bridges.
+    module.walk([&](sde::SdeSuIterateOp op) {
+      if (isHardExcludedFamily(op) || !isDataParallel(op) ||
+          op.getInPlaceSafeAttr() || op.getReductionAccumulators().size() != 0)
+        return;
+      if (singleWriteFact(op))
+        return; // single-write: Phase A / DistributionPlanning own it
+      std::optional<sde::LayoutGraphFact> wf =
+          affineDisjointMultiStoreBudgetFact(op);
+      if (!wf || wf->ownerDims.size() > op.getSteps().size())
+        return;
+      // A multi-store SU is atomic: decline if ANY co-written array is
+      // protected (touched by a stencil/matmul SU, or mixed-orientation).
+      bool anyProtected = false;
+      for (const sde::LayoutGraphFact &fact :
+           sde::parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+        if (fact.role == sde::LayoutGraphRole::write &&
+            protectedArrayIds.count(fact.id)) {
+          anyProtected = true;
+          break;
+        }
+      }
+      if (anyProtected)
+        return;
+      if (!allExternalStoresCoverOwnerDims(op, wf->ownerDims))
+        return;
+      // Block = budget grain clamped per owner dim to the realized loop step,
+      // so block <= step and no loop retile is needed: the SDE->CODIR dispatch
+      // retiles the cloned body to the finer block window (the same path the
+      // single-write budget kernels already take).
+      SmallVector<int64_t, 4> block(wf->budgetBlockShape.begin(),
+                                    wf->budgetBlockShape.end());
+      bool ok = true;
+      for (auto [slot, ownerDim] : llvm::enumerate(wf->ownerDims)) {
+        int64_t step = 0;
+        if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= block.size() ||
+            !::mlir::carts::ValueAnalysis::getConstantIndex(op.getSteps()[slot],
+                                                            step) ||
+            step <= 0) {
+          ok = false;
+          break;
+        }
+        if (block[ownerDim] > step)
+          block[ownerDim] = step;
+        if (block[ownerDim] <= 0) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok)
+        return;
+      // Re-author only when there is no plan yet or the committed plan is
+      // strictly coarser on some owner dim; never coarsen a finer committed
+      // plan.
+      if (std::optional<SmallVector<int64_t, 4>> existing =
+              readI64ArrayAttr(op.getPhysicalBlockShapeAttr())) {
+        if (existing->size() != block.size())
+          return;
+        bool coarser = false, finer = false;
+        for (int64_t ownerDim : wf->ownerDims) {
+          if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= existing->size())
+            return;
+          if ((*existing)[ownerDim] > block[ownerDim])
+            coarser = true;
+          else if ((*existing)[ownerDim] < block[ownerDim])
+            finer = true;
+        }
+        if (finer || !coarser)
+          return;
+      }
+      ARTS_DEBUG("Unifying multi-store writer to budget grain (rep id "
+                 << wf->id << ")");
+      authorPlan(op, wf->ownerDims, block, ctx);
+      // The re-authored grain invalidates any committed partition evidence: it
+      // was sized from the coarse worker grain and the rescale ratio need not
+      // be integral. Drop it; CODIR/ARTS distribute from physicalOwnerDims +
+      // physicalBlockShape, and the partition verifier only checks evidence
+      // when present.
+      op->removeAttr(sde::AttrNames::PartitionGraph);
+      op->removeAttr(sde::AttrNames::PartitionScore);
     });
 
     // ---- Phase B: reconcile divergent multi-writer grains ----
