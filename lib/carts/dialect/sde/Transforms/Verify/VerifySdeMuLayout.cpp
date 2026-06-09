@@ -92,43 +92,51 @@ struct VerifySdeMuLayoutPass
         }
       }
 
-      // R2: ownerDims == recover(structure) for converted MUs.
+      // R2: ownerDims == recover(structure) for converted MUs (ND).
       if (!expanded)
         return;
+      const unsigned numOwner = expanded->ownerDims.size();
       ArrayRef<int64_t> eshape = muType.getShape();
-      int64_t gridExtent = eshape.front();           // single grid axis
-      ArrayRef<int64_t> tiles = eshape.drop_front(); // originalRank tiles
-      if (tiles[expanded->ownerDim] != expanded->blockExtent) {
-        mu.emitOpError() << "expanded MU tile extent does not match committed "
-                            "block shape on the owner dim";
-        failed = true;
-        return;
+      // Expanded layout: K grid dims (owner order, ascending) then L logical
+      // tile dims.
+      ArrayRef<int64_t> tiles = eshape.drop_front(numOwner);
+      // Per-owner tile extent == committed block extent.
+      for (unsigned i = 0; i < numOwner; ++i) {
+        if (tiles[expanded->ownerDims[i]] != expanded->blockExtents[i]) {
+          mu.emitOpError()
+              << "expanded MU tile extent does not match committed block shape "
+                 "on owner dim "
+              << expanded->ownerDims[i];
+          failed = true;
+          return;
+        }
       }
-      // Validate the grid count against the writer's iteration domain — an
-      // INDEPENDENT fact — so recover() is given the real owner extent rather
-      // than one reconstructed from the expanded type (which would make the
+      // Validate the grid counts against the writer's iteration domain — an
+      // INDEPENDENT fact — so recover() is given the real owner extents rather
+      // than ones reconstructed from the expanded type (which would make the
       // proof tautological).
-      std::optional<int64_t> ownerExtent =
-          sde::findOwnerIterationExtent(si, expanded->blockExtent, gridExtent);
-      if (!ownerExtent) {
+      std::optional<SmallVector<int64_t, 4>> ownerExtents =
+          sde::findOwnerIterationExtents(si, expanded->blockExtents,
+                                         expanded->gridCounts);
+      if (!ownerExtents) {
         mu.emitOpError()
-            << "rank-expanded block grid count " << gridExtent
-            << " is not ceilDiv(extent, " << expanded->blockExtent
-            << ") of any committed iteration extent; structure does not encode "
-               "the committed grain";
+            << "rank-expanded block grid counts are not ceilDiv(extent, block) "
+               "of distinct committed iteration extents; structure does not "
+               "encode the committed grain";
         failed = true;
         return;
       }
       SmallVector<int64_t, 4> logicalShape(tiles.begin(), tiles.end());
-      logicalShape[expanded->ownerDim] = *ownerExtent;
+      for (unsigned i = 0; i < numOwner; ++i)
+        logicalShape[expanded->ownerDims[i]] = (*ownerExtents)[i];
 
       std::optional<SmallVector<unsigned, 2>> recovered =
           sde::recoverOwnerDims(muType, logicalShape);
-      SmallVector<unsigned, 2> committed{expanded->ownerDim};
-      if (!recovered || *recovered != committed) {
+      if (!recovered ||
+          ArrayRef<unsigned>(*recovered) != ArrayRef<unsigned>(expanded->ownerDims)) {
         mu.emitOpError()
             << "rank-expanded structure does not recover the committed owner "
-               "dim (ownerDims != recover(structure))";
+               "dims (ownerDims != recover(structure))";
         failed = true;
       }
     });

@@ -37,12 +37,14 @@
 
 namespace mlir::carts::sde {
 
-/// Committed physical block-grid layout for one MU root. Static int64 only —
-/// rank expansion converts only fully-static, single-contiguous-owner plans.
+/// Committed physical block-grid layout for one MU root. Static int64 only.
+/// Supports any number of owner dims (ND multi-owner owner-tile). Owner dims
+/// are CANONICALIZED ASCENDING by resolveMuPhysicalLayout; blockExtents and
+/// blockCounts are kept parallel to ownerDims in that ascending order.
 struct MuPhysicalLayout {
   /// Original (logical) array shape, all static.
   llvm::SmallVector<int64_t, 4> logicalShape;
-  /// Owner (distributed) dims, in committed order.
+  /// Owner (distributed) dims, CANONICALIZED ASCENDING (C0).
   llvm::SmallVector<unsigned, 2> ownerDims;
   /// Per-owner-dim block extent (= physicalBlockShape[ownerDim]).
   llvm::SmallVector<int64_t, 2> blockExtents;
@@ -52,7 +54,6 @@ struct MuPhysicalLayout {
   unsigned logicalRank() const { return logicalShape.size(); }
   unsigned numOwnerDims() const { return ownerDims.size(); }
   unsigned expandedRank() const { return logicalRank() + numOwnerDims(); }
-  bool isSingleContiguousOwner() const { return ownerDims.size() == 1; }
 };
 
 /// Resolve the committed layout from a logical memref type plus the committed
@@ -82,10 +83,14 @@ mlir::MemRefType buildExpandedMuType(mlir::MemRefType logicalType,
 /// Recover owner dims PURELY from the expanded memref type plus the logical
 /// shape — the structural proof obligation `ownerDims == recover(structure)`.
 ///
-/// Single-contiguous-owner case only. Returns nullopt when the type is not a
-/// recognizable expansion of `logicalShape` (e.g. multi-owner interleaving,
-/// rank mismatch, or an ambiguous split) — callers treat nullopt as
-/// "out of scope / conservative", never as an error.
+/// ND-general: recovers any number of owner dims. The returned owner dims are
+/// ASCENDING by construction (the tiled trailing dims are scanned in ascending
+/// logical-dim order and paired with the grid prefix in slot order), which
+/// matches the ascending canonicalization in resolveMuPhysicalLayout. Returns
+/// nullopt when the type is not a recognizable expansion of `logicalShape`
+/// (rank mismatch, an ambiguous split, or grid dims without a matching tiled
+/// dim) — callers treat nullopt as "out of scope / conservative", never as an
+/// error.
 std::optional<llvm::SmallVector<unsigned, 2>>
 recoverOwnerDims(mlir::MemRefType expandedType,
                  llvm::ArrayRef<int64_t> logicalShape);

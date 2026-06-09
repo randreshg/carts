@@ -129,18 +129,22 @@ struct VerifySdeMuAccessWindowPass
           readI64ArrayAttr(si.getPhysicalBlockShapeAttr());
       std::optional<SmallVector<int64_t, 4>> blockHi =
           readI64ArrayAttr(win.getBlockHi());
-      if (!ownerVals || !blockVals || !blockHi || ownerVals->size() != 1 ||
-          blockHi->size() != 1)
+      if (!ownerVals || !blockVals || !blockHi || ownerVals->empty() ||
+          blockHi->size() != ownerVals->size())
         return;
-      int64_t ownerDim = (*ownerVals)[0];
-      if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= blockVals->size())
-        return;
-      int64_t blockExtent = (*blockVals)[ownerDim];
-      if (!sde::findOwnerIterationExtent(si, blockExtent, (*blockHi)[0])) {
+      // The window's blockHi carries the per-owner grid counts (owner order, ND);
+      // cross-check each against a DISTINCT committed iteration extent.
+      SmallVector<int64_t, 4> blockExtents;
+      blockExtents.reserve(ownerVals->size());
+      for (int64_t ownerDim : *ownerVals) {
+        if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= blockVals->size())
+          return;
+        blockExtents.push_back((*blockVals)[ownerDim]);
+      }
+      if (!sde::findOwnerIterationExtents(si, blockExtents, *blockHi)) {
         win.emitOpError()
-            << "blockHi=" << (*blockHi)[0]
-            << " is not ceilDiv(iterationExtent, " << blockExtent
-            << ") of any committed iteration extent on the writer su_iterate; "
+            << "blockHi grid counts are not ceilDiv(iterationExtent, block) of "
+               "distinct committed iteration extents on the writer su_iterate; "
                "access-window verification must not recompute the grain";
         failed = true;
       }

@@ -41,28 +41,48 @@ llvm::SmallVector<RaisedWindowPlan, 4> planAccessWindows(SdeMuAllocOp mu) {
     return plans; // matmul / reduction -> conservative
   }
 
-  // Recognize the single-owner rank-expanded block-grid form and prove that it
-  // encodes the committed grain without deriving facts from the window itself.
+  // Recognize the ND rank-expanded block-grid form and prove that it encodes
+  // the committed grain without deriving facts from the window itself. The
+  // recognized struct carries K owner dims (ascending, parallel blockExtents)
+  // and the K leading grid counts in owner order.
   std::optional<ExpandedBlockGridMu> exp =
       recognizeExpandedBlockGridMu(si, muType);
   if (!exp)
     return plans;
 
-  ArrayRef<int64_t> tiles = muType.getShape().drop_front(); // single grid dim
-  if (tiles[exp->ownerDim] != exp->blockExtent)
+  const unsigned ownerDimCount = exp->ownerDims.size();
+  if (ownerDimCount == 0)
+    return plans; // no owner grid -> conservative
+
+  // The L trailing tile dims (one per logical dim); the K leading dims are the
+  // owner grid.
+  ArrayRef<int64_t> tiles = muType.getShape().drop_front(ownerDimCount);
+  if (tiles.size() != exp->logicalRank)
+    return plans; // shape disagreement -> conservative, never partial-raise
+
+  // Each owner tile dim must equal its committed block extent verbatim.
+  for (unsigned i = 0; i < ownerDimCount; ++i) {
+    unsigned od = exp->ownerDims[i];
+    if (od >= tiles.size() || tiles[od] != exp->blockExtents[i])
+      return plans;
+  }
+
+  // Each owner grid count must be ceilDiv(extent, block) of a distinct
+  // committed iteration extent (with the existing halo-widening allowance).
+  std::optional<SmallVector<int64_t, 4>> ownerExtents =
+      findOwnerIterationExtents(si, exp->blockExtents, exp->gridCounts);
+  if (!ownerExtents || ownerExtents->size() != ownerDimCount)
     return plans;
 
-  std::optional<int64_t> ownerExtent =
-      findOwnerIterationExtent(si, exp->blockExtent, exp->gridCount);
-  if (!ownerExtent)
-    return plans;
-
+  // Reconstruct the logical shape from the proven owner extents and require it
+  // to recover EXACTLY the committed (ascending) owner dims.
   SmallVector<int64_t, 4> logicalShape(tiles.begin(), tiles.end());
-  logicalShape[exp->ownerDim] = *ownerExtent;
+  for (unsigned i = 0; i < ownerDimCount; ++i)
+    logicalShape[exp->ownerDims[i]] = (*ownerExtents)[i];
   std::optional<SmallVector<unsigned, 2>> recovered =
       recoverOwnerDims(muType, logicalShape);
-  SmallVector<unsigned, 2> committed{exp->ownerDim};
-  if (!recovered || *recovered != committed)
+  if (!recovered ||
+      ArrayRef<unsigned>(*recovered) != ArrayRef<unsigned>(exp->ownerDims))
     return plans;
 
   // Pre-scan uses: only direct load/store/dealloc on the MU root, plus any
@@ -115,9 +135,9 @@ llvm::SmallVector<RaisedWindowPlan, 4> planAccessWindows(SdeMuAllocOp mu) {
     plan.cu = access.cu;
     plan.mu = mu.getMemref();
     plan.mode = access.hasWrite ? SdeAccessMode::write : SdeAccessMode::read;
-    plan.ownerDimCount = 1;
-    plan.blockLo.assign(1, /*value=*/0);
-    plan.blockHi.assign(1, exp->gridCount);
+    plan.ownerDimCount = static_cast<int64_t>(ownerDimCount);
+    plan.blockLo.assign(ownerDimCount, /*value=*/0);
+    plan.blockHi.assign(exp->gridCounts.begin(), exp->gridCounts.end());
     plan.validExtents.assign(tiles.begin(), tiles.end());
     plans.push_back(std::move(plan));
   }

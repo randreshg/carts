@@ -8,15 +8,15 @@
 ///
 ///   * if it is already rank-expanded (the block grid is in the memref type),
 ///     the maximum legal independent MU blocks are already exposed — skip;
-///   * else if it carries a committed, single-contiguous-owner, fully-static
-///     elementwise/stencil BLOCK plan that proves a real grid, realize that
+///   * else if it carries a committed, fully-static elementwise/stencil BLOCK
+///     plan over any number of owner dims that proves a real grid, realize that
 ///     finest grain as structure (the same gate + rewriter rank expansion uses,
 ///     consuming the committed plan verbatim);
 ///   * else leave it flat. Whether a flat MU is an avoidable bug or a
 ///   legitimate
-///     last resort (dynamic / in-place / reduction / matmul / multi-owner /
-///     aliasing) is diagnosed by `verify-sde-coarse-avoidance`, which fails
-///     closed with a reason rather than letting coarse pass silently.
+///     last resort (dynamic / in-place / reduction / matmul / aliasing) is
+///     diagnosed by `verify-sde-coarse-avoidance`, which fails closed with a
+///     reason rather than letting coarse pass silently.
 ///
 /// The only hard failure here is a committed plan that cannot be realized
 /// end to end: rather than leave a partial owner-dim promise, the pass fails
@@ -74,7 +74,7 @@ struct SdeCoarseAvoidancePass
       // Out-of-scope (coarse) MUs are left flat for verify-sde-coarse-avoidance
       // to diagnose.
       carts::sde::MuPhysicalLayout plan;
-      if (!carts::sde::isSingleOwnerBlockGridRealizable(si, logicalType, plan))
+      if (!carts::sde::isBlockGridRealizable(si, logicalType, plan))
         continue;
 
       std::unique_ptr<carts::sde::MuAccessIndexer> indexer =

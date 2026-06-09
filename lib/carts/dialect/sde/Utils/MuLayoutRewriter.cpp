@@ -38,8 +38,8 @@ makeMuAccessIndexer(SdeStructuredClassification cls,
   }
 }
 
-bool isSingleOwnerBlockGridRealizable(SdeSuIterateOp si, MemRefType logicalType,
-                                      MuPhysicalLayout &out) {
+bool isBlockGridRealizable(SdeSuIterateOp si, MemRefType logicalType,
+                           MuPhysicalLayout &out) {
   if (!si)
     return false;
   std::optional<SdeStructuredClassification> cls =
@@ -58,7 +58,7 @@ bool isSingleOwnerBlockGridRealizable(SdeSuIterateOp si, MemRefType logicalType,
   std::optional<MuPhysicalLayout> plan =
       resolveMuPhysicalLayout(logicalType, si.getPhysicalOwnerDimsAttr(),
                               si.getPhysicalBlockShapeAttr());
-  if (!plan || !plan->isSingleContiguousOwner())
+  if (!plan)
     return false;
   out = *plan;
   return true;
@@ -155,54 +155,103 @@ recognizeExpandedBlockGridMu(SdeSuIterateOp si, MemRefType muType) {
       readI64ArrayAttr(si.getPhysicalOwnerDimsAttr());
   std::optional<llvm::SmallVector<int64_t, 4>> blockVals =
       readI64ArrayAttr(si.getPhysicalBlockShapeAttr());
-  if (!ownerVals || !blockVals || ownerVals->size() != 1)
+  if (!ownerVals || blockVals == std::nullopt || ownerVals->empty())
     return std::nullopt;
 
-  // Single-owner expanded form: muRank == originalRank + 1, with the
-  // rank-length block-shape carrying the original rank.
+  // Expanded form: K leading grid dims + L tile dims, with the rank-length
+  // block-shape carrying the logical rank L.
+  const unsigned numOwner = ownerVals->size();
+  const unsigned logicalRank = blockVals->size();
   const unsigned muRank = muType.getRank();
-  if (blockVals->size() + 1 != muRank)
-    return std::nullopt; // flat / owner-length / multi-owner -> out of scope
-  int64_t ownerDim = (*ownerVals)[0];
-  if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= blockVals->size())
-    return std::nullopt;
+  if (logicalRank + numOwner != muRank)
+    return std::nullopt; // flat / owner-length / rank mismatch -> out of scope
+
+  // Owner dims: unique, in [0, L), sorted ascending (the canonical order the
+  // ND geometry emits its grid prefix in).
+  llvm::SmallVector<unsigned, 4> ownerDims;
+  ownerDims.reserve(numOwner);
+  for (unsigned i = 0; i < numOwner; ++i) {
+    int64_t od = (*ownerVals)[i];
+    if (od < 0 || static_cast<unsigned>(od) >= logicalRank)
+      return std::nullopt;
+    if (i > 0 && static_cast<unsigned>(od) <= ownerDims.back())
+      return std::nullopt; // not strictly ascending (catches dups + disorder)
+    ownerDims.push_back(static_cast<unsigned>(od));
+  }
 
   ExpandedBlockGridMu out;
-  out.ownerDim = static_cast<unsigned>(ownerDim);
-  out.logicalRank = blockVals->size();
-  out.blockExtent = (*blockVals)[ownerDim];
-  out.gridCount = muType.getShape().front();
+  out.ownerDims = std::move(ownerDims);
+  out.logicalRank = logicalRank;
+  out.blockExtents.reserve(numOwner);
+  out.gridCounts.reserve(numOwner);
+  ArrayRef<int64_t> shape = muType.getShape();
+  for (unsigned i = 0; i < numOwner; ++i) {
+    out.blockExtents.push_back((*blockVals)[out.ownerDims[i]]);
+    out.gridCounts.push_back(shape[i]); // leading K grid dims, owner order
+  }
   return out;
 }
 
-std::optional<int64_t> findOwnerIterationExtent(SdeSuIterateOp si,
-                                                int64_t blockExtent,
-                                                int64_t gridExtent) {
-  if (!si || blockExtent <= 0)
+std::optional<llvm::SmallVector<int64_t, 4>>
+findOwnerIterationExtents(SdeSuIterateOp si, llvm::ArrayRef<int64_t> blockExtents,
+                          llvm::ArrayRef<int64_t> gridCounts) {
+  if (!si || blockExtents.size() != gridCounts.size() || blockExtents.empty())
     return std::nullopt;
   std::optional<llvm::SmallVector<int64_t, 4>> halo =
       readI64ArrayAttr(si.getPhysicalHaloShapeAttr());
+
+  // Fold the committed iteration extents once (independent of the expanded
+  // type) so each per-owner-dim proof is non-tautological.
+  llvm::SmallVector<std::optional<int64_t>, 6> rawExtents;
   for (auto it :
        llvm::enumerate(llvm::zip(si.getLowerBounds(), si.getUpperBounds()))) {
-    unsigned dim = it.index();
     auto [lb, ub] = it.value();
     std::optional<int64_t> lbc = ValueAnalysis::tryFoldConstantIndex(lb);
     std::optional<int64_t> ubc = ValueAnalysis::tryFoldConstantIndex(ub);
-    if (!lbc || !ubc)
-      continue;
-    int64_t extent = *ubc - *lbc;
-    if (extent <= 0)
-      continue;
-    if ((extent + blockExtent - 1) / blockExtent == gridExtent)
-      return extent;
-    if (halo && dim < halo->size()) {
-      int64_t widened = extent + 2 * (*halo)[dim];
-      if (widened > 0 &&
-          (widened + blockExtent - 1) / blockExtent == gridExtent)
-        return widened;
-    }
+    if (lbc && ubc)
+      rawExtents.push_back(*ubc - *lbc);
+    else
+      rawExtents.push_back(std::nullopt);
   }
-  return std::nullopt;
+
+  // Match each owner dim's (block, grid) to a DISTINCT committed loop dim whose
+  // extent (optionally halo-widened) ceilDivs to the grid count.
+  const unsigned numOwner = blockExtents.size();
+  llvm::SmallVector<int64_t, 4> result(numOwner, 0);
+  llvm::SmallVector<bool, 6> used(rawExtents.size(), false);
+  for (unsigned i = 0; i < numOwner; ++i) {
+    int64_t blockExtent = blockExtents[i];
+    int64_t gridExtent = gridCounts[i];
+    if (blockExtent <= 0)
+      return std::nullopt;
+    bool matched = false;
+    for (unsigned dim = 0; dim < rawExtents.size(); ++dim) {
+      if (used[dim] || !rawExtents[dim])
+        continue;
+      int64_t extent = *rawExtents[dim];
+      if (extent <= 0)
+        continue;
+      if ((extent + blockExtent - 1) / blockExtent == gridExtent) {
+        result[i] = extent;
+        used[dim] = true;
+        matched = true;
+        break;
+      }
+      if (halo && dim < halo->size()) {
+        int64_t widened = extent + 2 * (*halo)[dim];
+        if (widened > 0 &&
+            (widened + blockExtent - 1) / blockExtent == gridExtent) {
+          result[i] = widened;
+          used[dim] = true;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched)
+      return std::nullopt; // no distinct committed extent yields this grid count
+  }
+  return result;
 }
 
 LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {

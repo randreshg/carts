@@ -6,6 +6,7 @@
 
 #include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
 
@@ -81,6 +82,33 @@ resolveMuPhysicalLayout(MemRefType logicalType, ArrayAttr physicalOwnerDims,
       return std::nullopt; // no real grid; nothing to expand
     plan.blockExtents.push_back(*be);
     plan.blockCounts.push_back(count);
+  }
+
+  // CANONICAL ORDER (C0): owner dims are normalized ASCENDING here so the grid
+  // prefix emitted by buildExpandedMuType (one block-count per owner dim, in
+  // vector order) agrees with the ascending tiled-dim scan in recoverOwnerDims.
+  // ownerDims/blockExtents/blockCounts are permuted together in lockstep.
+  {
+    llvm::SmallVector<unsigned, 4> order(plan.ownerDims.size());
+    for (unsigned i = 0; i < order.size(); ++i)
+      order[i] = i;
+    llvm::sort(order, [&](unsigned a, unsigned b) {
+      return plan.ownerDims[a] < plan.ownerDims[b];
+    });
+    llvm::SmallVector<unsigned, 2> sortedOwnerDims;
+    llvm::SmallVector<int64_t, 2> sortedBlockExtents;
+    llvm::SmallVector<int64_t, 2> sortedBlockCounts;
+    sortedOwnerDims.reserve(order.size());
+    sortedBlockExtents.reserve(order.size());
+    sortedBlockCounts.reserve(order.size());
+    for (unsigned idx : order) {
+      sortedOwnerDims.push_back(plan.ownerDims[idx]);
+      sortedBlockExtents.push_back(plan.blockExtents[idx]);
+      sortedBlockCounts.push_back(plan.blockCounts[idx]);
+    }
+    plan.ownerDims = std::move(sortedOwnerDims);
+    plan.blockExtents = std::move(sortedBlockExtents);
+    plan.blockCounts = std::move(sortedBlockCounts);
   }
 
   return plan;

@@ -4,18 +4,21 @@
 /// SDE structural owner-dim/grain carrier.
 ///
 /// Replaces the attribute-only block/owner grain with readable IR structure:
-/// for every `sde.mu_alloc` governed by a committed, single-contiguous-owner
-/// elementwise/stencil BLOCK plan, this pass rank-expands the result memref so
+/// for every `sde.mu_alloc` governed by a committed elementwise/stencil BLOCK
+/// plan with any number of owner dims, this pass rank-expands the result memref
+/// so
 /// the block grid is part of the type, and rewrites every CU `memref.load`/
 /// `memref.store` into the physical `[block, intra-block, ...]` coordinate
 /// system via the `MuLayoutRewriter`/`MuAccessIndexer` library.
 ///
 /// This is a REAL transformation, not a metadata promise:
 ///   * a converted MU carries its grain structurally (no owner-dim attr on the
-///     mu_alloc; owner dims are `recover(structure)`),
-///   * matmul / reduction / in-place / dynamic / multi-owner plans are left in
-///     conservative flat form (or fail closed) — never papered over with an
-///     op-attribute promise or a compatibility attr.
+///     mu_alloc; owner dims are `recover(structure)`); multi-owner owner-tile
+///     plans expand to a `[grid..., tile...]` form, with grid dims in canonical
+///     ascending owner order,
+///   * matmul / reduction / in-place / dynamic plans are left in conservative
+///     flat form (or fail closed) — never papered over with an op-attribute
+///     promise or a compatibility attr.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -58,7 +61,7 @@ struct SdeRankExpandMuPass
       carts::sde::SdeSuIterateOp si =
           carts::sde::findCommittedBlockPlanWriter(mu);
       carts::sde::MuPhysicalLayout plan;
-      if (!carts::sde::isSingleOwnerBlockGridRealizable(si, logicalType, plan))
+      if (!carts::sde::isBlockGridRealizable(si, logicalType, plan))
         continue; // out of scope -> leave flat, add NO attrs
 
       std::unique_ptr<carts::sde::MuAccessIndexer> indexer =

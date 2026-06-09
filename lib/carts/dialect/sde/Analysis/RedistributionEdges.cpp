@@ -156,11 +156,15 @@ static std::optional<int64_t> getOwnerHaloRadius(ArrayRef<int64_t> haloShape,
                                                  unsigned logicalOwnerDim) {
   if (haloShape.empty())
     return std::nullopt;
+  // Committed halo shapes arrive in one of three forms: logical-rank-length
+  // (index by the logical owner dim), owner-dim-length (index by the owner
+  // slot), or scalar single-owner (the lone radius). All three are ND-general
+  // once indexed by the (slot, logical dim) of the owner being projected.
   if (haloShape.size() == logicalRank && logicalOwnerDim < haloShape.size())
     return haloShape[logicalOwnerDim];
   if (haloShape.size() == ownerDims.size() && ownerSlot < haloShape.size())
     return haloShape[ownerSlot];
-  if (haloShape.size() == 1 && ownerDims.size() == 1)
+  if (haloShape.size() == 1 && ownerSlot == 0)
     return haloShape.front();
   return std::nullopt;
 }
@@ -195,38 +199,75 @@ expandHaloShapeToRootRank(ArrayRef<int64_t> haloShape,
 static bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
                                         SdeSuIterateOp reader,
                                         MemRefType rootType,
-                                        ArrayRef<int64_t> committedHaloShape) {
+                                        ArrayRef<int64_t> committedHaloShape,
+                                        std::string &failReason) {
   std::optional<ExpandedBlockGridMu> expanded =
       recognizeExpandedBlockGridMu(reader, rootType);
-  if (!expanded)
+  if (!expanded) {
+    failReason = "rank-expanded halo redistribution is not a recognized "
+                 "block-grid MU shape";
     return false;
-  if (edge.sourceOwnerDims.size() != 1 || edge.targetOwnerDims.size() != 1)
-    return false;
-  if (edge.sourceOwnerDims.front() !=
-          static_cast<int64_t>(expanded->ownerDim) ||
-      edge.targetOwnerDims.front() != static_cast<int64_t>(expanded->ownerDim))
-    return false;
+  }
 
-  std::optional<int64_t> radius = getOwnerHaloRadius(
-      committedHaloShape, expanded->logicalRank, edge.sourceOwnerDims,
-      /*ownerSlot=*/0, expanded->ownerDim);
-  if (!radius || *radius <= 0)
+  // Expanded coordinate system: K leading grid dims (one per committed owner
+  // dim, in canonical ascending owner order) then L logical tile dims. Under
+  // C0/C1 the committed source/target owner dims equal `expanded->ownerDims`,
+  // and each owner dim's structural coordinate is its grid slot i in [0,K).
+  const unsigned numGrid = expanded->ownerDims.size();
+  SmallVector<int64_t, 4> committedOwner;
+  committedOwner.reserve(numGrid);
+  for (unsigned od : expanded->ownerDims)
+    committedOwner.push_back(static_cast<int64_t>(od));
+  auto ownerMatches = [&](ArrayRef<int64_t> edgeOwner) {
+    if (edgeOwner.size() != numGrid)
+      return false;
+    for (unsigned i = 0; i < numGrid; ++i)
+      if (edgeOwner[i] != committedOwner[i])
+        return false;
+    return true;
+  };
+  if (!ownerMatches(edge.sourceOwnerDims) ||
+      !ownerMatches(edge.targetOwnerDims)) {
+    failReason = "rank-expanded halo edge owner dims do not match the "
+                 "committed expanded owner grid";
     return false;
+  }
 
-  // Rank expansion makes the leading grid dimension the structural owner
-  // coordinate. A halo along the logical owner strip is therefore represented
-  // as reach on grid dim 0, while the trailing tile dimensions keep their full
-  // in-block extents.
+  // The home block over the EXPANDED root is a single block per grid step:
+  // block extent 1 on each of the K grid dims, full tile extent on every tile
+  // dim (the trailing in-block extents are preserved verbatim).
   ArrayRef<int64_t> shape = rootType.getShape();
   SmallVector<int64_t, 4> blockShape(shape.begin(), shape.end());
-  blockShape.front() = 1;
+  for (unsigned i = 0; i < numGrid; ++i)
+    blockShape[i] = 1;
 
-  edge.sourceOwnerDims.assign(1, 0);
-  edge.targetOwnerDims.assign(1, 0);
+  // The halo is a per-owner-dim neighbor-block face/slab: a reach of the
+  // committed radius on that owner's grid dim, zero on every tile dim. A
+  // committed owner dim with no recoverable radius has no face to place ->
+  // precise fail-closed (not a blanket multi-owner reject).
+  SmallVector<int64_t, 4> halo(rootType.getRank(), 0);
+  for (unsigned i = 0; i < numGrid; ++i) {
+    std::optional<int64_t> radius = getOwnerHaloRadius(
+        committedHaloShape, expanded->logicalRank, committedOwner,
+        /*ownerSlot=*/i, /*logicalOwnerDim=*/expanded->ownerDims[i]);
+    if (!radius || *radius <= 0) {
+      failReason = "rank-expanded halo redistribution has no recoverable ghost "
+                   "width for a committed owner grid dim";
+      return false;
+    }
+    halo[i] = *radius;
+  }
+
+  SmallVector<int64_t, 4> ownerGrid;
+  ownerGrid.reserve(numGrid);
+  for (unsigned i = 0; i < numGrid; ++i)
+    ownerGrid.push_back(static_cast<int64_t>(i));
+
+  edge.sourceOwnerDims = ownerGrid;
+  edge.targetOwnerDims = ownerGrid;
   edge.sourceBlockShape.assign(blockShape.begin(), blockShape.end());
   edge.targetBlockShape.assign(blockShape.begin(), blockShape.end());
-  edge.haloShape.assign(rootType.getRank(), 0);
-  edge.haloShape.front() = *radius;
+  edge.haloShape = std::move(halo);
   return true;
 }
 
@@ -247,20 +288,33 @@ static bool logicalEndpointFitsRoot(const HomeLayout &home, MemRefType muType) {
 
 static std::optional<RedistEndpoint>
 getRankExpandedReductionEndpoint(const HomeLayout &home, MemRefType muType) {
-  if (!muType || home.ownerDims.size() != 1)
+  if (!muType || home.ownerDims.empty())
     return std::nullopt;
   std::optional<ExpandedBlockGridMu> expanded =
       recognizeExpandedBlockGridMu(home.writer, muType);
-  if (!expanded || home.ownerDims.front() != expanded->ownerDim)
+  if (!expanded || home.ownerDims.size() != expanded->ownerDims.size())
     return std::nullopt;
+  // Under C0/C1 the committed owner dims are canonical ascending and must equal
+  // the recognized expanded owner dims slot-for-slot.
+  for (auto [committed, recognized] :
+       llvm::zip_equal(home.ownerDims, expanded->ownerDims))
+    if (committed != static_cast<int64_t>(recognized))
+      return std::nullopt;
 
+  // Expanded reduction endpoint: the K leading grid dims are the structural
+  // owners (block extent 1 each), the L trailing tile dims keep their in-block
+  // extents. This is the ND form of the single-owner [0]-grid endpoint.
+  const unsigned numGrid = expanded->ownerDims.size();
   RedistEndpoint endpoint;
-  endpoint.ownerDims.push_back(0);
+  endpoint.ownerDims.reserve(numGrid);
   endpoint.blockShape.reserve(muType.getRank());
-  endpoint.blockShape.push_back(1);
+  for (unsigned i = 0; i < numGrid; ++i) {
+    endpoint.ownerDims.push_back(static_cast<int64_t>(i));
+    endpoint.blockShape.push_back(1);
+  }
   ArrayRef<int64_t> shape = muType.getShape();
   for (unsigned d = 0; d < expanded->logicalRank; ++d)
-    endpoint.blockShape.push_back(shape[1 + d]);
+    endpoint.blockShape.push_back(shape[numGrid + d]);
   return endpoint;
 }
 
@@ -433,9 +487,10 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       edge.targetBlockShape = edge.sourceBlockShape;
       if (edge.family == SdeMovementFamily::halo_like) {
         if (recognizeExpandedBlockGridMu(reader, muType)) {
-          if (!projectRankExpandedHaloEdge(edge, reader, muType, *haloShape)) {
-            fail("rank-expanded halo redistribution cannot be projected into "
-                 "the expanded owner-grid coordinate system");
+          std::string haloFail;
+          if (!projectRankExpandedHaloEdge(edge, reader, muType, *haloShape,
+                                           haloFail)) {
+            fail(haloFail);
             continue;
           }
         } else {

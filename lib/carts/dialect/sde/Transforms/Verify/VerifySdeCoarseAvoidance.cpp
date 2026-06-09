@@ -4,12 +4,13 @@
 /// Coarse MU shape is rejected when SDE can realize the committed block grid.
 ///
 /// For every `sde.mu_alloc` that is not block-partitioned, this verifier fails
-/// only when the MU is in the single-owner block-grid realize scope and was
-/// left flat. Unsupported shapes remain outside this verifier until SDE can
-/// materialize them without inventing layout. The verifier reads the committed
-/// plan verbatim and shares the realize gate
-/// (`isSingleOwnerBlockGridRealizable`) with rank expansion and the pass; it
-/// never recomputes owner dims or block shape.
+/// only when the MU is in the block-grid realize scope and was left flat.
+/// Unsupported shapes remain outside this verifier until SDE can materialize
+/// them without inventing layout. The verifier reads the committed plan verbatim
+/// and shares the realize gate (`isBlockGridRealizable`) with rank expansion and
+/// the pass; it never recomputes owner dims or block shape. The gate and the
+/// `recognizeExpandedBlockGridMu` predicate are ND (any number of owner dims);
+/// this verifier consumes them as opaque presence tests.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -65,7 +66,7 @@ struct VerifySdeCoarseAvoidancePass
 
           // Avoidable coarse: in the realize scope but left flat.
           sde::MuPhysicalLayout plan;
-          if (sde::isSingleOwnerBlockGridRealizable(si, muType, plan)) {
+          if (sde::isBlockGridRealizable(si, muType, plan)) {
             mu.emitOpError()
                 << "MU is in the block-grid realize scope but left coarse; "
                    "sde-coarse-avoidance must rank-expand the committed finest "
