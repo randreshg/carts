@@ -8,49 +8,26 @@
 // RUN:   --mlir-print-ir-after-all 2>&1 \
 // RUN:   | %FileCheck %s --check-prefix=COARSE
 
-// Direct-row matmul exposes both affine-disjoint output dimensions before
-// distribution planning. The byte floor may coarsen only the CU wave grain
-// (cuGroupSize), not the MU/DB owner block shape or owner dims.
+// Direct-row matmul owns output rows. The byte floor may coarsen CU grouping,
+// not rewrite the SDE owner dims or MU/DB block shape.
 
 // BASE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // BASE: func.func @direct_row_matmul
-// BASE: iterationTopology = #sde.iteration_topology<owner_tile_2d>
-// BASE-SAME: logicalWorkerSlice = [128, 256]
-// BASE-SAME: partitionGraph = [
-// BASE-SAME: blockShape = [128, 256]
-// BASE-SAME: cuGroupCount = 32 : i64
-// BASE-SAME: cuGroupSize = 1 : i64
-// BASE-SAME: muBlockCount = 32 : i64
-// BASE-SAME: ownerDims = [0, 1]
-// BASE-SAME: partitionScore = {
-// BASE-SAME: chosenCuCount = 32 : i64
-// BASE-SAME: chosenTileBytes = 262144 : i64
-// BASE-SAME: cuGroupCount = 32 : i64
-// BASE-SAME: cuGroupSize = 1 : i64
-// BASE-SAME: minTileBytes = 0 : i64
-// BASE-SAME: muBlockCount = 32 : i64
-// BASE-SAME: physicalBlockShape = [128, 256]
-// BASE-SAME: physicalOwnerDims = [0, 1]
+// BASE: iterationTopology = #sde.iteration_topology<owner_strip>
+// BASE-SAME: logicalWorkerSlice = [32, 1024]
+// BASE-SAME: physicalBlockShape = [32, 1024]
+// BASE-SAME: physicalOwnerDims = [0]
 
 // COARSE-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // COARSE: func.func @direct_row_matmul
-// COARSE: iterationTopology = #sde.iteration_topology<owner_tile_2d>
-// COARSE-SAME: logicalWorkerSlice = [128, 256]
-// COARSE-SAME: partitionGraph = [
-// COARSE-SAME: blockShape = [128, 256]
-// COARSE-SAME: cuGroupCount = 16 : i64
-// COARSE-SAME: cuGroupSize = 2 : i64
-// COARSE-SAME: muBlockCount = 32 : i64
-// COARSE-SAME: ownerDims = [0, 1]
-// COARSE-SAME: partitionScore = {
-// COARSE-SAME: chosenCuCount = 32 : i64
-// COARSE-SAME: chosenTileBytes = 262144 : i64
+// COARSE: iterationTopology = #sde.iteration_topology<owner_strip>
+// COARSE-SAME: logicalWorkerSlice = [32, 1024]
 // COARSE-SAME: cuGroupCount = 16 : i64
 // COARSE-SAME: cuGroupSize = 2 : i64
 // COARSE-SAME: minTileBytes = 4194304 : i64
 // COARSE-SAME: muBlockCount = 32 : i64
-// COARSE-SAME: physicalBlockShape = [128, 256]
-// COARSE-SAME: physicalOwnerDims = [0, 1]
+// COARSE-SAME: physicalBlockShape = [32, 1024]
+// COARSE-SAME: physicalOwnerDims = [0]
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,

@@ -1056,6 +1056,11 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
       summary.iterTypes.size() <= loopRank ||
       summary.nest.ivs.size() <= loopRank)
     return op;
+  // Matmul has a specialized physical plan. Generic prefix promotion would
+  // split output columns across owners without a matching panel-reuse
+  // transform.
+  if (summary.classification == sde::SdeStructuredClassification::matmul)
+    return op;
   if (op.getBody().front().getNumArguments() < loopRank)
     return op;
 

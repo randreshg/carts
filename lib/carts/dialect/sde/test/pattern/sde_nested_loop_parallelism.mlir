@@ -2,8 +2,8 @@
 // RUN:   --start-from sde-planning --pipeline sde-planning \
 // RUN:   --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// SDE should promote leading nested affine-disjoint output dimensions into
-// real scheduling dimensions while preserving trailing local reduction loops.
+// SDE promotes generic affine-disjoint output dimensions, but leaves matmul to
+// its specialized physical plan.
 
 // CHECK-LABEL: // -----// IR Dump After PatternAnalysis
 // CHECK-LABEL: func.func @nested_elementwise_3d
@@ -14,14 +14,14 @@
 // CHECK: scf.for
 
 // CHECK-LABEL: func.func @matmul_column_split
-// CHECK: sde.su_iterate (%c0, %c0) to (%c8, %c16) step (%c1, %c1) classification(<matmul>)
+// CHECK: sde.su_iterate (%c0) to (%c8) step (%c1) classification(<matmul>)
 // CHECK: scf.for
 
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning
 // CHECK-LABEL: func.func @matmul_column_split
 // CHECK: sde.su_iterate
-// CHECK: iterationTopology = #sde.iteration_topology<owner_tile_2d>
-// CHECK-SAME: physicalOwnerDims = [0, 1]
+// CHECK: iterationTopology = #sde.iteration_topology<owner_strip>
+// CHECK-SAME: physicalOwnerDims = [0]
 
 module {
   func.func @nested_elementwise_3d(%A: memref<8x16x32xf64>,
