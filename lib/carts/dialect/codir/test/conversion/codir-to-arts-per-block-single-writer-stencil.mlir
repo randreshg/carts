@@ -302,7 +302,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
         scf.for %j = %c0 to %c16 step %c4 {
           codir.codelet deps(%UN, %U : memref<16x16xf32>, memref<16x16xf32>)
               params(%c16, %i, %j : index, index, index)
-              attributes {array_layout = [{arrayId = 0 : i64, blockShape = [8, 8], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"},
+              attributes {array_layout = [{arrayId = 0 : i64, blockShape = [7, 8], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"},
                                           {arrayId = 1 : i64, blockShape = [2, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 32 : i64, ownerDims = [0, 1], role = "write"}],
                           dep_array_ids = [0, 1],
                           dep_collectives = [#codir.collective<none>, #codir.collective<none>],
@@ -312,7 +312,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
                           distribution_kind = #codir.distribution_kind<blocked>,
                           iteration_topology = #codir.iteration_topology<owner_tile>,
                           logical_worker_slice = [8, 4],
-                          partition_graph = [{blockShape = [8, 8], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "read", tilePayloadBytes = 256 : i64},
+                          partition_graph = [{blockShape = [7, 8], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "read", tilePayloadBytes = 224 : i64},
                                              {blockShape = [2, 4], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "owner_block", muBlockCount = 32 : i64, muId = 1 : i64, ownerDims = [0, 1], role = "write", tilePayloadBytes = 32 : i64}],
                           pattern = #codir.pattern<uniform>,
                           repetition_structure = #codir.repetition_structure<full_timestep>,
@@ -328,7 +328,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
               attributes {access_max_offsets = [1, 1],
                           access_min_offsets = [-1, -1],
                           array_layout = [{arrayId = 0 : i64, blockShape = [2, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 32 : i64, ownerDims = [0, 1], role = "write"},
-                                          {arrayId = 1 : i64, blockShape = [8, 8], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"}],
+                                          {arrayId = 1 : i64, blockShape = [7, 8], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"}],
                           dep_array_ids = [0, 1],
                           dep_collectives = [#codir.collective<none>, #codir.collective<halo>],
                           dep_modes = [#codir.access_mode<write>, #codir.access_mode<read>],
@@ -339,7 +339,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
                           iteration_topology = #codir.iteration_topology<owner_tile>,
                           logical_worker_slice = [2, 4],
                           partition_graph = [{blockShape = [2, 4], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "owner_block", muBlockCount = 32 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "write", tilePayloadBytes = 32 : i64},
-                                             {blockShape = [8, 8], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 1 : i64, ownerDims = [0, 1], role = "read", tilePayloadBytes = 256 : i64}],
+                                             {blockShape = [7, 8], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 1 : i64, ownerDims = [0, 1], role = "read", tilePayloadBytes = 224 : i64}],
                           pattern = #codir.pattern<alternating_buffer_stencil>,
                           plan_owner_dims = [0, 1],
                           repetition_structure = #codir.repetition_structure<full_timestep>,
@@ -505,13 +505,13 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: planPhysicalBlockShape = [2, 4]
 
 // CHECK-LABEL: func.func @full_timestep_pair_reuses_sibling_writer_block_shape
-// CHECK-NOT: planPhysicalBlockShape = [8, 8]
+// CHECK-NOT: planPhysicalBlockShape = [7, 8]
 // CHECK: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<uniform>
 // CHECK-SAME: planPhysicalBlockShape = [2, 4]
-// CHECK-NOT: planPhysicalBlockShape = [8, 8]
+// CHECK-NOT: planPhysicalBlockShape = [7, 8]
 // CHECK: arts.edt <task>{{.*}}depPattern = #arts.dep_pattern<alternating_buffer_stencil>
 // CHECK-SAME: planPhysicalBlockShape = [2, 4]
-// CHECK-NOT: planPhysicalBlockShape = [8, 8]
+// CHECK-NOT: planPhysicalBlockShape = [7, 8]
 // CHECK: func.func private @use
 
 // func.func private @use

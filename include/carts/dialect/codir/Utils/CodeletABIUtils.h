@@ -41,6 +41,10 @@ DictionaryAttr getArrayLayoutEntryForDep(CodeletOp codelet, unsigned depIndex);
 /// is an integer multiple of the other.
 bool areCommensurateBlockShapes(ArrayAttr lhs, ArrayAttr rhs);
 
+/// True when `candidate` has the same rank as `fallback`, is no larger in every
+/// dimension, and is smaller in at least one dimension.
+bool isStrictlyFinerBlockShape(ArrayAttr candidate, ArrayAttr fallback);
+
 /// Return the physical DB block shape CODIR should realize for the dependency.
 /// Partition graph entries are preferred because they describe the actual
 /// MU/DB home shape for the edge; read-only full-timestep uniform/stencil pairs

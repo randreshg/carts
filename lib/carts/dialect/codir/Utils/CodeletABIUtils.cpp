@@ -605,7 +605,7 @@ bool areCommensurateBlockShapes(ArrayAttr lhs, ArrayAttr rhs) {
   return true;
 }
 
-static bool isStrictlyFinerBlockShape(ArrayAttr candidate, ArrayAttr fallback) {
+bool isStrictlyFinerBlockShape(ArrayAttr candidate, ArrayAttr fallback) {
   std::optional<SmallVector<int64_t, 4>> candidateShape =
       readI64ArrayAttr(candidate);
   std::optional<SmallVector<int64_t, 4>> fallbackShape =
@@ -677,7 +677,6 @@ static ArrayAttr getSiblingWriterBlockShapeOr(CodeletOp codelet,
       ArrayAttr candidateShape =
           getDepBasePhysicalBlockShapeAttr(candidate, candidateDepIndex);
       if (!isPositiveI64Array(candidateShape) ||
-          !areCommensurateBlockShapes(candidateShape, fallback) ||
           !isStrictlyFinerBlockShape(candidateShape, fallback))
         continue;
       if (selected && selected != candidateShape) {

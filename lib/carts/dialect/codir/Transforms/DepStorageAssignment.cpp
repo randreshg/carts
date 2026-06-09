@@ -450,10 +450,44 @@ static bool hasCompatibleBlockStoragePlan(codir::CodeletOp lhs,
       getDepOwnerDims(lhs, lhsDepIndex);
   std::optional<SmallVector<unsigned, 4>> rhsOwnerDims =
       getDepOwnerDims(rhs, rhsDepIndex);
-  return lhsOwnerDims && rhsOwnerDims && *lhsOwnerDims == *rhsOwnerDims &&
-         codir::areCommensurateBlockShapes(
-             codir::getDepPhysicalBlockShapeAttr(lhs, lhsDepIndex),
-             codir::getDepPhysicalBlockShapeAttr(rhs, rhsDepIndex));
+  if (!lhsOwnerDims || !rhsOwnerDims || *lhsOwnerDims != *rhsOwnerDims)
+    return false;
+
+  ArrayAttr lhsShape = codir::getDepPhysicalBlockShapeAttr(lhs, lhsDepIndex);
+  ArrayAttr rhsShape = codir::getDepPhysicalBlockShapeAttr(rhs, rhsDepIndex);
+  if (codir::areCommensurateBlockShapes(lhsShape, rhsShape))
+    return true;
+
+  std::optional<codir::CodirAccessMode> lhsMode =
+      getDepAccessMode(lhs, lhsDepIndex);
+  std::optional<codir::CodirAccessMode> rhsMode =
+      getDepAccessMode(rhs, rhsDepIndex);
+  if (isFullTimestepUniformCodelet(lhs) && lhsMode &&
+      *lhsMode == codir::CodirAccessMode::read && rhsMode &&
+      accessModeMayWrite(*rhsMode) &&
+      depAccessesStayWithinSingleOwnerSlice(lhs, lhsDepIndex) &&
+      codir::isStrictlyFinerBlockShape(rhsShape, lhsShape))
+    return true;
+  if (isFullTimestepUniformCodelet(lhs) && lhsMode &&
+      accessModeMayWrite(*lhsMode) && rhsMode &&
+      *rhsMode == codir::CodirAccessMode::read &&
+      depAccessesStayWithinSingleOwnerSlice(lhs, lhsDepIndex) &&
+      codir::isStrictlyFinerBlockShape(lhsShape, rhsShape))
+    return true;
+  if (isFullTimestepUniformCodelet(rhs) && rhsMode &&
+      *rhsMode == codir::CodirAccessMode::read && lhsMode &&
+      accessModeMayWrite(*lhsMode) &&
+      depAccessesStayWithinSingleOwnerSlice(rhs, rhsDepIndex) &&
+      codir::isStrictlyFinerBlockShape(lhsShape, rhsShape))
+    return true;
+  if (isFullTimestepUniformCodelet(rhs) && rhsMode &&
+      accessModeMayWrite(*rhsMode) && lhsMode &&
+      *lhsMode == codir::CodirAccessMode::read &&
+      depAccessesStayWithinSingleOwnerSlice(rhs, rhsDepIndex) &&
+      codir::isStrictlyFinerBlockShape(rhsShape, lhsShape))
+    return true;
+
+  return false;
 }
 
 static bool rootHasCompatibleStencilBlockParticipant(codir::CodeletOp seed,
@@ -513,10 +547,8 @@ static bool rootHasIncompatibleStencilBlockParticipant(codir::CodeletOp seed,
           getDepOwnerDims(candidate, candidateDepIndex);
       if (!candidateOwnerDims || *candidateOwnerDims != *seedOwnerDims)
         continue;
-      if (codir::areCommensurateBlockShapes(
-              codir::getDepPhysicalBlockShapeAttr(seed, seedDepIndex),
-              codir::getDepPhysicalBlockShapeAttr(candidate,
-                                                  candidateDepIndex)))
+      if (hasCompatibleBlockStoragePlan(seed, seedDepIndex, candidate,
+                                        candidateDepIndex))
         continue;
       found = true;
       return;
@@ -549,6 +581,10 @@ rejectFullTimestepUniformWithIncompatibleStencilBlockParticipant(
 
   for (unsigned depIndex = 0, depCount = codelet.getDeps().size();
        depIndex < depCount; ++depIndex) {
+    std::optional<codir::CodirAccessMode> mode =
+        getDepAccessMode(codelet, depIndex);
+    if (!mode || *mode != codir::CodirAccessMode::read)
+      continue;
     if (!depAccessesStayWithinSingleOwnerSlice(codelet, depIndex))
       continue;
     if (!rootHasIncompatibleStencilBlockParticipant(
