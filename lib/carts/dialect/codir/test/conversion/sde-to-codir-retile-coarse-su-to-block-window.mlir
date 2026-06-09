@@ -78,3 +78,41 @@ func.func @grouped_owner_tile_clones_su_local_bounds(
      pattern = #sde.pattern<uniform>}
   return
 }
+
+// CHECK-LABEL: func.func @owner_strip_keeps_integer_induction_cast
+// CHECK: codir.codelet
+// CHECK: arith.index_cast {{.*}} : index to i32
+// CHECK: arith.addi {{.*}} : i32
+// CHECK: arith.index_cast {{.*}} : i32 to index
+func.func @owner_strip_keeps_integer_induction_cast(
+    %input: memref<16x16xf64>, %output: memref<16x16xf64>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c16 = arith.constant 16 : index
+  %cst = arith.constant 0.000000e+00 : f64
+  %c1_i32 = arith.constant 1 : i32
+  sde.su_iterate (%c0) to (%c16) step (%c1) schedule(<static>)
+      classification(<matmul>) {
+  ^bb0(%i: index):
+    sde.cu_region <parallel> {
+      %i_i32 = arith.index_cast %i : index to i32
+      %next_i32 = arith.addi %i_i32, %c1_i32 : i32
+      %j_lb = arith.index_cast %next_i32 : i32 to index
+      scf.for %j = %j_lb to %c16 step %c1 {
+        %sum = scf.for %k = %c0 to %c16 step %c1 iter_args(%acc = %cst) -> (f64) {
+          %lhs = memref.load %input[%i, %k] : memref<16x16xf64>
+          %rhs = memref.load %input[%j, %k] : memref<16x16xf64>
+          %prod = arith.mulf %lhs, %rhs : f64
+          %next = arith.addf %acc, %prod : f64
+          scf.yield %next : f64
+        }
+        memref.store %sum, %output[%i, %j] : memref<16x16xf64>
+      }
+    }
+    sde.yield
+  } {physicalOwnerDims = [0], physicalBlockShape = [1, 16],
+     logicalWorkerSlice = [1, 16],
+     iterationTopology = #sde.iteration_topology<owner_strip>,
+     pattern = #sde.pattern<matmul>}
+  return
+}

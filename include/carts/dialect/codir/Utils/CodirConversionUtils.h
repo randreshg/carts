@@ -2570,8 +2570,12 @@ static inline bool isSuDispatchStepKnownNoCoarser(Value dispatchStep,
 
 static inline bool isSuIvPlusStep(Value value, Value ownerIv,
                                   Value sourceStep) {
+  if (!value.getType().isIndex())
+    return false;
   auto add = value.getDefiningOp<arith::AddIOp>();
   if (!add)
+    return false;
+  if (!add.getLhs().getType().isIndex() || !add.getRhs().getType().isIndex())
     return false;
   return (::mlir::carts::ValueAnalysis::sameValue(add.getLhs(), ownerIv) &&
           ::mlir::carts::ValueAnalysis::sameValue(add.getRhs(), sourceStep)) ||
