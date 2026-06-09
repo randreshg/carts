@@ -8,6 +8,7 @@
 // CHECK-LABEL: func.func @consume_redist
 // CHECK: codir.codelet deps(%{{.*}}, %{{.*}} : memref<256xf32>, memref<256x256xf32>)
 // CHECK-SAME: dep_collectives = [#codir.collective<none>, #codir.collective<reduce_scatter>]
+// CHECK-SAME: dep_modes = [#codir.access_mode<readwrite>, #codir.access_mode<read>]
 
 func.func @consume_redist(%A: memref<256x256xf32>, %R: memref<256xf32>) {
   %c0 = arith.constant 0 : index

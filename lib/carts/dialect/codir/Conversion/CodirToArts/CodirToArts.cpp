@@ -153,7 +153,7 @@ static LogicalResult rejectResidualSdeOps(ModuleOp module) {
     if (!op->getDialect() || op->getDialect()->getNamespace() != "sde")
       return;
     op->emitError() << "SDE operation reached CODIR-to-ARTS; run "
-                       "`materialize-sde-boundary-to-arts` before "
+                       "`convert-sde-boundary-to-arts` before "
                        "`convert-codir-to-arts`";
     found = true;
   });
@@ -246,6 +246,7 @@ struct PlannedBlockDepAccessPlan {
   SmallVector<Value, 4> acquiredElementBases;
   SmallVector<int64_t, 4> groupBlockCounts;
   SmallVector<int64_t, 4> ownerWindowExtents;
+  SmallVector<int64_t, 4> rankExpandedTileExtents;
   SmallVector<int64_t, 4> lowerHaloBlockCounts;
   SmallVector<int64_t, 4> upperHaloBlockCounts;
   SmallVector<bool, 4> allowFullWindowAccesses;
@@ -258,6 +259,9 @@ struct PlannedBlockDepAccessPlan {
 static std::optional<SmallVector<int64_t, 4>>
 getBackingAllocOwnerBlockSizes(ArrayRef<unsigned> ownerDims,
                                arts::DbAllocOp alloc);
+
+static MemRefType getCodeletDepSourceType(codir::CodeletOp codelet,
+                                          unsigned depIndex);
 
 static std::optional<SmallVector<int64_t, 4>>
 getCodirLogicalOwnerBlockCounts(codir::CodeletOp codelet, unsigned depIndex,
@@ -437,6 +441,53 @@ getLogicalWorkerExtentForOwnerDim(codir::CodeletOp codelet, unsigned ownerDim,
   return std::nullopt;
 }
 
+static std::optional<SmallVector<int64_t, 4>>
+getRankExpandedPrefixTileExtents(codir::CodeletOp codelet, unsigned depIndex,
+                                 arts::DbAllocOp alloc) {
+  if (!codelet || depIndex >= codelet.getDeps().size() || !alloc ||
+      !codirDepAllowsComputeBlockStorage(codelet, depIndex) ||
+      !canUseCodirOwnerSliceForAlloc(codelet, depIndex, alloc))
+    return std::nullopt;
+
+  MemRefType depType = getCodeletDepSourceType(codelet, depIndex);
+  if (!depType || depType.getRank() == 0)
+    return std::nullopt;
+  unsigned memrefRank = static_cast<unsigned>(depType.getRank());
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<int64_t, 4>> tileShape =
+      readI64ArrayAttr(codelet.getTileShapeAttr());
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      readI64ArrayAttr(codir::getDepPhysicalBlockShapeAttr(codelet, depIndex));
+  if (!ownerDims || ownerDims->empty() || !tileShape || tileShape->empty() ||
+      !blockShape || blockShape->size() != memrefRank ||
+      ownerDims->size() + tileShape->size() != memrefRank)
+    return std::nullopt;
+
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    if (ownerDim != slot || (*blockShape)[slot] != 1)
+      return std::nullopt;
+  }
+
+  for (auto [slot, tileExtent] : llvm::enumerate(*tileShape)) {
+    if (tileExtent <= 0)
+      return std::nullopt;
+    unsigned physicalDim = static_cast<unsigned>(ownerDims->size() + slot);
+    if ((*blockShape)[physicalDim] != tileExtent)
+      return std::nullopt;
+    int64_t physicalExtent = depType.getDimSize(physicalDim);
+    if (physicalExtent != ShapedType::kDynamic && physicalExtent != tileExtent)
+      return std::nullopt;
+  }
+
+  SmallVector<int64_t, 4> ownerTileExtents;
+  ownerTileExtents.reserve(ownerDims->size());
+  for (unsigned slot = 0, end = ownerDims->size(); slot < end; ++slot)
+    ownerTileExtents.push_back((*tileShape)[slot]);
+  return ownerTileExtents;
+}
+
 static std::optional<unsigned> findOwnerDimSlot(ArrayRef<unsigned> ownerDims,
                                                 unsigned ownerDim) {
   auto it = llvm::find(ownerDims, ownerDim);
@@ -554,6 +605,71 @@ getGuaranteedOwnerWindowExtent(int64_t blockSize, int64_t groupBlockCount,
   if (windowExtent <= worstCasePrefix)
     return std::nullopt;
   return windowExtent - worstCasePrefix;
+}
+
+static bool planRankExpandedPrefixBlockAccess(
+    codir::CodeletOp codelet, unsigned depIndex, arts::DbAllocOp alloc,
+    OpBuilder &builder, Location loc, SmallVectorImpl<Value> &dbOffsets,
+    SmallVectorImpl<Value> &dbSizes, PlannedBlockDepAccessPlan &plannedAccess) {
+  if (!codirDepAllowsComputeBlockStorage(codelet, depIndex) ||
+      !hasCodirTileOwnerSlicePlan(codelet) ||
+      !codirDepCanUseBlockStorageAccess(codelet, depIndex))
+    return false;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<int64_t, 4>> tileExtents =
+      getRankExpandedPrefixTileExtents(codelet, depIndex, alloc);
+  SmallVector<Value, 4> ownerParams =
+      getCodirDepOwnerParamValues(codelet, depIndex);
+  if (!ownerDims || !tileExtents || ownerDims->empty() ||
+      ownerDims->size() != tileExtents->size() ||
+      ownerParams.size() != ownerDims->size() ||
+      alloc.getSizes().size() != ownerDims->size())
+    return false;
+
+  dbOffsets.clear();
+  dbSizes.clear();
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    int64_t tileExtent = (*tileExtents)[slot];
+    if (tileExtent <= 0)
+      return false;
+    Value tileExtentValue = createConstantIndex(builder, loc, tileExtent);
+    Value ownerParam = ownerParams[slot];
+    Value domainBase =
+        materializeCodirOwnerDomainBase(builder, loc, codelet, ownerParam);
+    Value relativeBase =
+        ::mlir::carts::ValueAnalysis::sameValue(ownerParam, domainBase)
+            ? createZeroIndex(builder, loc)
+            : arith::SubIOp::create(builder, loc, ownerParam, domainBase)
+                  .getResult();
+    bool ownerParamIsLogicalBase =
+        isKnownMultipleOfBlock(relativeBase, tileExtent);
+    Value blockIndex = ownerParamIsLogicalBase
+                           ? arith::DivUIOp::create(builder, loc, relativeBase,
+                                                    tileExtentValue)
+                                 .getResult()
+                           : relativeBase;
+    dbOffsets.push_back(blockIndex);
+    dbSizes.push_back(createOneIndex(builder, loc));
+
+    plannedAccess.ownerDims.push_back(ownerDim);
+    plannedAccess.blockSizes.push_back(1);
+    plannedAccess.ownerParams.push_back(ownerParam);
+    plannedAccess.ownerDomainBases.push_back(domainBase);
+    plannedAccess.acquiredElementBases.push_back(ownerParam);
+    plannedAccess.groupBlockCounts.push_back(1);
+    plannedAccess.ownerWindowExtents.push_back(
+        ownerParamIsLogicalBase ? tileExtent : 1);
+    plannedAccess.rankExpandedTileExtents.push_back(
+        ownerParamIsLogicalBase ? tileExtent : 0);
+    plannedAccess.lowerHaloBlockCounts.push_back(0);
+    plannedAccess.upperHaloBlockCounts.push_back(0);
+    plannedAccess.allowFullWindowAccesses.push_back(false);
+    plannedAccess.requireOwnerWindowProofs.push_back(false);
+  }
+  plannedAccess.grouped = false;
+  return true;
 }
 
 static bool canUseBackingAllocBlockWindowForDep(codir::CodeletOp codelet,
@@ -872,7 +988,7 @@ struct ConvertCodirToArtsPass
       return success();
     return codelet.emitOpError()
            << "requires one " << attrName
-           << " entry per dependency before CODIR-to-ARTS materialization";
+           << " entry per dependency before CODIR-to-ARTS conversion";
   }
 
   LogicalResult requireDepModes(codir::CodeletOp codelet) {
@@ -1048,7 +1164,7 @@ struct ConvertCodirToArtsPass
         return codelet.emitOpError()
                << "dependency #" << depIdx
                << " commits a rank-expanded owner-strip read-only halo; "
-                  "CODIR/ARTS owner-strip RO halo materialization is not yet "
+                  "CODIR/ARTS owner-strip RO halo conversion is not yet "
                   "implemented, so this path fails closed instead of "
                   "materializing a partial halo";
       if (isGroupedOwnerStripReadWriteHaloDep(codelet, depIdx))
@@ -1212,7 +1328,7 @@ struct ConvertCodirToArtsPass
         if (failed(materializeRawCodirDependency(dep, codelet, depIdx))) {
           codelet.emitOpError()
               << "dependency is not backed by SDE/CODIR DB materialization "
-                 "and cannot be materialized from a local memref allocation";
+                 "and cannot be converted from a local memref allocation";
           signalPassFailure();
           return;
         }
@@ -1256,7 +1372,7 @@ struct ConvertCodirToArtsPass
       if (!alloc)
         return codelet.emitOpError()
                << "dependency #" << idx
-               << " is not backed by SDE/CODIR DB materialization";
+               << " is not backed by SDE/CODIR DB conversion";
       unsigned depIdx = static_cast<unsigned>(idx);
 
       CodirDepSlice slice = getCodirDepSlice(dep, builder, loc);
@@ -1280,6 +1396,9 @@ struct ConvertCodirToArtsPass
       PlannedBlockDepAccessPlan plannedAccess;
       planReadOnlyHostWholeBlockAccess(codelet, depIdx, alloc, builder, loc,
                                        plannedAccess);
+      if (plannedAccess.empty())
+        planRankExpandedPrefixBlockAccess(codelet, depIdx, alloc, builder, loc,
+                                          dbOffsets, dbSizes, plannedAccess);
       if (plannedAccess.empty())
         planReadOnlyBlockStorageAccessFromBackingAlloc(codelet, depIdx, alloc,
                                                        builder, loc, dbOffsets,
@@ -1385,6 +1504,11 @@ struct ConvertCodirToArtsPass
       if (plannedAccess.empty() && isReplicatedReadDep(codelet, depIdx))
         planReplicatedReadFullBlockAccess(codelet, depIdx, alloc, builder, loc,
                                           plannedAccess);
+      if (!plannedAccess.empty() && slice.sliced) {
+        partitionMode = arts::PartitionMode::block;
+        partitionOffsets.clear();
+        partitionSizes.clear();
+      }
       unsigned primaryTaskDepIndex = static_cast<unsigned>(taskDeps.size());
       auto acquire = arts::DbAcquireOp::create(
           builder, loc, convertAccessMode(modeAttr.getValue()), alloc.getGuid(),
@@ -1482,7 +1606,7 @@ struct ConvertCodirToArtsPass
       Value payload = materializeInnerPayload(
           builder, loc, taskBlock.getArgument(depTaskArgIndices[idx]));
       const CodirDepSlice &slice = depSlices[idx];
-      if (slice.sliced) {
+      if (slice.sliced && plannedBlockAccessPlans[idx].empty()) {
         auto depType = cast<MemRefType>(codelet.getDeps()[idx].getType());
         if (slice.subindex) {
           Value subindex = slice.subindexIndex;
@@ -1520,6 +1644,9 @@ struct ConvertCodirToArtsPass
             accessPlan.groupBlockCounts.size() != accessPlan.ownerDims.size() ||
             accessPlan.ownerWindowExtents.size() !=
                 accessPlan.ownerDims.size() ||
+            (!accessPlan.rankExpandedTileExtents.empty() &&
+             accessPlan.rankExpandedTileExtents.size() !=
+                 accessPlan.ownerDims.size()) ||
             accessPlan.allowFullWindowAccesses.size() !=
                 accessPlan.ownerDims.size() ||
             accessPlan.requireOwnerWindowProofs.size() !=
@@ -1581,13 +1708,20 @@ struct ConvertCodirToArtsPass
           if (MemRefType depType = getCodeletDepSourceType(codelet, idx))
             if (ownerDim < static_cast<unsigned>(depType.getRank()))
               sourceDimExtent = depType.getDimSize(ownerDim);
+          int64_t rankExpandedTileExtent =
+              accessPlan.rankExpandedTileExtents.empty()
+                  ? 0
+                  : accessPlan.rankExpandedTileExtents[slot];
           localAccessRewrites.push_back(
-              {payload, ownerDim, ownerBase, localOrigin, ownerHalo.lower,
-               ownerHalo.upper, groupedReadSource, static_cast<unsigned>(slot),
-               accessPlan.blockSizes[slot], accessPlan.groupBlockCounts[slot],
+              {payload, ownerDim, ownerBase, ownerDomainBase, localOrigin,
+               ownerHalo.lower, ownerHalo.upper, groupedReadSource,
+               static_cast<unsigned>(slot), accessPlan.blockSizes[slot],
+               accessPlan.groupBlockCounts[slot],
                accessPlan.ownerWindowExtents[slot], sourceDimExtent,
-               accessPlan.grouped, accessPlan.allowFullWindowAccesses[slot],
-               accessPlan.requireOwnerWindowProofs[slot]});
+               rankExpandedTileExtent, accessPlan.grouped,
+               accessPlan.allowFullWindowAccesses[slot],
+               accessPlan.requireOwnerWindowProofs[slot],
+               rankExpandedTileExtent > 0});
         }
       }
       mapper.map(codeletBlock.getArgument(idx), payload);

@@ -9,10 +9,11 @@
 // SDE: sde.mu_access_window write %{{.*}} : memref<4x256xf32> owner_dims(1) block_lo [0] block_hi [4] valid [256]
 
 // CODIR-LABEL: func.func @sde_to_codir_production_carrier
+// CODIR: memref.subview
 // CODIR: codir.codelet
 // CODIR-SAME: dep_array_ids = [0]
 // CODIR-SAME: dep_owner_dims = {{\[\[}}0]]
-// CODIR-SAME: dep_storage_views = [#codir.storage_view<host_whole>]
+// CODIR-SAME: dep_storage_views = [#codir.storage_view<compute_block>]
 
 func.func @sde_to_codir_production_carrier() {
   %c0 = arith.constant 0 : index

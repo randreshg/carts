@@ -2,7 +2,7 @@
 // RUN:   | %FileCheck %s
 
 // CHECK: SDE operation reached CODIR-to-ARTS
-// CHECK-SAME: materialize-sde-boundary-to-arts
+// CHECK-SAME: convert-sde-boundary-to-arts
 
 module {
   func.func @residual_sde_is_rejected(%out: memref<1xindex>) {

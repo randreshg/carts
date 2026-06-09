@@ -9,10 +9,10 @@
 include "mlir/Pass/PassBase.td"
 
 def ConvertSdeToCodir : Pass<"convert-sde-to-codir", "mlir::ModuleOp"> {
-  let summary = "Materialize SDE planning intent as CODIR codelet IR";
+  let summary = "Convert SDE work into isolated CODIR codelets";
   let description = [{
-    Boundary pass for the SDE-to-CODIR split. It consumes SDE codelet plans and
-    materializes isolated CODIR codelets with explicit dependencies, scalar
+    Boundary pass for the SDE-to-CODIR split. It consumes transformed SDE
+    work and emits isolated CODIR codelets with explicit dependencies, scalar
     parameters, access modes, and token-local memref views.
   }];
   let dependentDialects = [
@@ -25,7 +25,7 @@ def ConvertSdeToCodir : Pass<"convert-sde-to-codir", "mlir::ModuleOp"> {
 }
 
 def ConvertCodirToArts : Pass<"convert-codir-to-arts", "mlir::ModuleOp"> {
-  let summary = "Materialize CODIR codelets as abstract ARTS objects";
+  let summary = "Convert CODIR codelets to abstract ARTS objects";
   let description = [{
     Boundary pass for the CODIR-to-ARTS split. It lowers CODIR codelet deps,
     params, and bodies to abstract ARTS DB acquire and EDT objects.
@@ -39,15 +39,15 @@ def ConvertCodirToArts : Pass<"convert-codir-to-arts", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::codir::createConvertCodirToArtsPass()";
 }
 
-def MaterializeSdeBoundaryToArts
-    : Pass<"materialize-sde-boundary-to-arts", "mlir::ModuleOp"> {
-  let summary = "Materialize residual SDE storage/control boundary artifacts";
+def ConvertSdeBoundaryToArts
+    : Pass<"convert-sde-boundary-to-arts", "mlir::ModuleOp"> {
+  let summary = "Convert remaining SDE boundary ops to ARTS";
   let description = [{
-    Explicit boundary pass for SDE artifacts that intentionally survive
-    SDE-to-CODIR codelet isolation, such as SDE memory-unit allocations,
-    memory-unit data handles, resource queries, and consumed completion tokens.
-    This pass is kept separate from CODIR-to-ARTS so CODIR-to-ARTS consumes
-    CODIR only and fails closed on any residual SDE operation.
+    Explicit boundary pass for SDE ops that intentionally survive SDE-to-CODIR
+    codelet isolation, such as memory-unit allocations, memory-unit data
+    handles, resource queries, and consumed completion tokens. This pass is
+    kept separate from CODIR-to-ARTS so CODIR-to-ARTS consumes CODIR only and
+    fails closed on any residual SDE operation.
   }];
   let dependentDialects = [
     "::mlir::carts::sde::CartsSdeDialect",
@@ -55,7 +55,7 @@ def MaterializeSdeBoundaryToArts
     "::mlir::memref::MemRefDialect",
     "::mlir::arith::ArithDialect"
   ];
-  let constructor = "mlir::carts::codir::createMaterializeSdeBoundaryToArtsPass()";
+  let constructor = "mlir::carts::codir::createConvertSdeBoundaryToArtsPass()";
 }
 
 #endif // CARTS_DIALECT_CODIR_CONVERSION_PASSES

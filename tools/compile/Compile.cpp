@@ -310,7 +310,7 @@ static const std::array<llvm::StringLiteral, 5> kCodirGraphTransformsPasses = {
     "CodirCodeletDCE", "ReductionDepMapping", "ReductionAtomicMaterialization",
     "DepStorageAssignment", "VerifyCodir"};
 static const std::array<llvm::StringLiteral, 2> kCodirToArtsPasses = {
-    "MaterializeSdeBoundaryToArts", "ConvertCodirToArts"};
+    "ConvertSdeBoundaryToArts", "ConvertCodirToArts"};
 static const std::array<llvm::StringLiteral, 3> kEdtDepRealizationPasses = {
     "RealizeEdtDistributionPlan", "VerifySdeLowered", "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 6> kEdtLocalCleanupPasses = {
@@ -1195,10 +1195,10 @@ void buildCodirGraphTransformsPipeline(PassManager &pm) {
   pm.addPass(codir::createVerifyCodirPass());
 }
 
-/// CODIR-to-ARTS materialization. Every ARTS EDT must come from a CODIR
-/// codelet.
+/// SDE/CODIR boundary conversion to ARTS. Every ARTS EDT must come from a
+/// CODIR codelet.
 void buildCodirToArtsPipeline(PassManager &pm) {
-  pm.addPass(codir::createMaterializeSdeBoundaryToArtsPass());
+  pm.addPass(codir::createConvertSdeBoundaryToArtsPass());
   pm.addPass(codir::createConvertCodirToArtsPass());
 }
 

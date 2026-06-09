@@ -1,6 +1,6 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,dep-storage-assignment,verify-codir)' \
 // RUN:   | %FileCheck %s --check-prefix=CODIR
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,dep-storage-assignment,verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,dep-storage-assignment,verify-codir,convert-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s --check-prefix=ARTS --implicit-check-not=codir.codelet
 
 module {
@@ -45,7 +45,7 @@ module {
       codir.codelet deps(%y, %a, %tmp : memref<16xf64>, memref<16x16xf64>, memref<16xf64>)
           params(%j : index)
           attributes {completion_barrier,
-                      dep_collectives = [#codir.collective<reduce_scatter>, #codir.collective<none>, #codir.collective<reduce_scatter>],
+                      dep_collectives = [#codir.collective<reduce_scatter>, #codir.collective<none>, #codir.collective<none>],
                       dep_modes = [#codir.access_mode<readwrite>, #codir.access_mode<read>, #codir.access_mode<read>],
                       dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<compute_block>, #codir.storage_view<compute_block>],
                       distribution_kind = #codir.distribution_kind<blocked>,
@@ -93,7 +93,7 @@ module {
 // CODIR: codir.codelet deps(%{{[A-Za-z0-9_]+}}, %{{[A-Za-z0-9_]+}}, %{{[A-Za-z0-9_]+}} : memref<16xf64>, memref<16x16xf64>, memref<16xf64>)
 // CODIR-SAME: dep_collectives = [#codir.collective<reduce_scatter>, #codir.collective<none>, #codir.collective<none>]
 // CODIR-SAME: dep_owner_dims = [{{\[}}0], [1], [0]]
-// CODIR-SAME: dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<host_whole>, #codir.storage_view<replicated_read>]
+// CODIR-SAME: dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<compute_block>, #codir.storage_view<replicated_read>]
 
 // ARTS-LABEL: func.func @replicated_read_block_window
 // ARTS: arts.db_acquire[<in>]{{.*}}replicatedRead

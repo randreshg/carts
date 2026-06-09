@@ -11,6 +11,25 @@
 
 namespace {
 
+static inline bool rankExpandedPartialReductionNeedsFullBlockShape(
+    codir::CodeletOp codelet, MemRefType memrefType, ArrayAttr ownerDims,
+    ArrayAttr tileShape, ArrayAttr blockShape) {
+  if (!codelet || !codelet.getPartialReductionAttr())
+    return false;
+  std::optional<SmallVector<int64_t, 4>> owners = readI64ArrayAttr(ownerDims);
+  std::optional<SmallVector<int64_t, 4>> tiles = readI64ArrayAttr(tileShape);
+  if (!owners || owners->empty() || !tiles || tiles->empty())
+    return false;
+  if (owners->size() + tiles->size() !=
+      static_cast<size_t>(memrefType.getRank()))
+    return false;
+  for (auto [slot, ownerDim] : llvm::enumerate(*owners))
+    if (ownerDim < 0 || ownerDim != static_cast<int64_t>(slot))
+      return false;
+  std::optional<SmallVector<int64_t, 4>> blocks = readI64ArrayAttr(blockShape);
+  return !blocks || blocks->size() != static_cast<size_t>(memrefType.getRank());
+}
+
 static inline LogicalResult
 createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
                      ValueRange dynamicSizes, Value &memref,
@@ -34,6 +53,15 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
                : planSource.getTileShapeAttr();
   if (!ownerDims)
     return failure();
+  if (depIndex && rankExpandedPartialReductionNeedsFullBlockShape(
+                      planSource, memrefType, ownerDims,
+                      planSource.getTileShapeAttr(), blockShape)) {
+    planSource.emitOpError()
+        << "rank-expanded partial-reduction dependency #" << *depIndex
+        << " requires a full-rank physical block shape before ARTS DB "
+           "materialization";
+    return failure();
+  }
   FailureOr<arts::DbPhysicalLayoutPlan> physicalPlan =
       arts::resolvePhysicalDbLayoutPlan(ownerDims, blockShape, dbElementSizes,
                                         builder, loc);

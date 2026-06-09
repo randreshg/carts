@@ -36,7 +36,7 @@ module {}
 // MANIFEST-NOT: "ReductionDepMapping"
 // MANIFEST-NOT: "ReductionAtomicMaterialization"
 // MANIFEST-NOT: "DepStorageAssignment"
-// MANIFEST: "MaterializeSdeBoundaryToArts"
+// MANIFEST: "ConvertSdeBoundaryToArts"
 // MANIFEST: "ConvertCodirToArts"
 // MANIFEST-NOT: "ConvertSdeToArts"
 // MANIFEST-SAME: "dependsOn": ["codir-graph-transforms"]

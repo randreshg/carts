@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(materialize-sde-boundary-to-arts,convert-codir-to-arts)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(convert-sde-boundary-to-arts,convert-codir-to-arts)' 2>&1 | %FileCheck %s
 
 // The SDE owner-strip RO halo carrier is projected onto the rank-expanded grid
 // dimension before CODIR. Until the dedicated CODIR/ARTS materialization lands,

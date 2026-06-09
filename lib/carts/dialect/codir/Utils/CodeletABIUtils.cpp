@@ -691,8 +691,49 @@ static ArrayAttr getSiblingWriterBlockShapeOr(CodeletOp codelet,
   return selected && !ambiguous ? selected : fallback;
 }
 
+static ArrayAttr getRankExpandedBlockShapeOr(CodeletOp codelet,
+                                             unsigned depIndex,
+                                             ArrayAttr fallback) {
+  if (!codelet || depIndex >= codelet.getDeps().size() ||
+      !depHasBlockStoragePlan(codelet, depIndex))
+    return fallback;
+  auto depType = dyn_cast<MemRefType>(codelet.getDeps()[depIndex].getType());
+  if (!depType || depType.getRank() == 0)
+    return fallback;
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<int64_t, 4>> tileShape =
+      readI64ArrayAttr(codelet.getTileShapeAttr());
+  if (!ownerDims || ownerDims->empty() || !tileShape || tileShape->empty())
+    return fallback;
+
+  unsigned ownerRank = static_cast<unsigned>(ownerDims->size());
+  unsigned tileRank = static_cast<unsigned>(tileShape->size());
+  if (ownerRank + tileRank != static_cast<unsigned>(depType.getRank()))
+    return fallback;
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims))
+    if (ownerDim != slot)
+      return fallback;
+
+  ArrayRef<int64_t> shape = depType.getShape();
+  for (auto [slot, tile] : llvm::enumerate(*tileShape)) {
+    if (tile <= 0)
+      return fallback;
+    int64_t physicalExtent = shape[ownerRank + slot];
+    if (physicalExtent != ShapedType::kDynamic && physicalExtent != tile)
+      return fallback;
+  }
+
+  SmallVector<int64_t, 4> fullBlockShape;
+  fullBlockShape.reserve(ownerRank + tileRank);
+  fullBlockShape.append(ownerRank, 1);
+  fullBlockShape.append(tileShape->begin(), tileShape->end());
+  return buildI64ArrayAttr(codelet.getContext(), fullBlockShape);
+}
+
 ArrayAttr getDepPhysicalBlockShapeAttr(CodeletOp codelet, unsigned depIndex) {
   ArrayAttr fallback = getDepBasePhysicalBlockShapeAttr(codelet, depIndex);
+  fallback = getRankExpandedBlockShapeOr(codelet, depIndex, fallback);
   return getSiblingWriterBlockShapeOr(codelet, depIndex, fallback);
 }
 

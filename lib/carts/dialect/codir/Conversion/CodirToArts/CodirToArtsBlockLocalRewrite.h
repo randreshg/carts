@@ -73,8 +73,8 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
             rewrite->allowFullWindowAccess, rewrite->requireOwnerWindowProof,
             sourceByBlockArgument);
         if (failed(localIndex)) {
-          op->emitError("grouped planned block-local access does not stay "
-                        "within the block window");
+          op->emitError("grouped planned block-local access for owner dim ")
+              << rewrite->ownerDim << " does not stay within the block window";
           return WalkResult::interrupt();
         }
         dbRefIndices[rewrite->ownerSlot] = relativeBlock;
@@ -94,9 +94,16 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
       }
 
       OpBuilder builder(op);
-      FailureOr<Value> localIndex = materializeBlockLocalIndex(
-          builder, op->getLoc(), indices[rewrite->ownerDim].get(),
-          rewrite->ownerBase, rewrite->localOrigin, rewrite->lowerHalo);
+      FailureOr<Value> localIndex =
+          rewrite->rankExpandedGridAccess
+              ? materializeRankExpandedGridLocalIndex(
+                    builder, op->getLoc(), indices[rewrite->ownerDim].get(),
+                    rewrite->ownerBase, rewrite->ownerDomainBase,
+                    rewrite->rankExpandedTileExtent, sourceByBlockArgument)
+              : materializeBlockLocalIndex(
+                    builder, op->getLoc(), indices[rewrite->ownerDim].get(),
+                    rewrite->ownerBase, rewrite->localOrigin,
+                    rewrite->lowerHalo);
       if (failed(localIndex)) {
         op->emitError("planned block-local access does not stay within the "
                       "owner slice");

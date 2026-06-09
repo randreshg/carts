@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,materialize-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s --implicit-check-not=codir.codelet
 
 module {
@@ -154,6 +154,49 @@ module {
     return
   }
 
+  func.func @phase_redistributed_owner_relative_read_uses_block_origin() {
+    %c0 = arith.constant 0 : index
+    %c4 = arith.constant 4 : index
+    %c16 = arith.constant 16 : index
+    %out = memref.alloc() : memref<16xf64>
+    %tmp = memref.alloc() : memref<16xf64>
+
+    scf.for %i = %c0 to %c16 step %c4 {
+      codir.codelet deps(%out, %tmp : memref<16xf64>, memref<16xf64>)
+          params(%i : index)
+          attributes {array_layout = [{arrayId = 2 : i64, blockShape = [4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0], role = "write"},
+                                      {arrayId = 1 : i64, blockShape = [8], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}],
+                      dep_array_ids = [2, 1],
+                      dep_collectives = [#codir.collective<none>, #codir.collective<none>],
+                      dep_modes = [#codir.access_mode<write>, #codir.access_mode<read>],
+                      dep_owner_dims = [[0], [0]],
+                      dep_storage_views = [#codir.storage_view<phase_redistributed>, #codir.storage_view<phase_redistributed>],
+                      distribution_kind = #codir.distribution_kind<blocked>,
+                      iteration_topology = #codir.iteration_topology<owner_strip>,
+                      logical_worker_slice = [4],
+                      pattern = #codir.pattern<elementwise_pipeline>,
+                      tile_owner_dims = [0],
+                      tile_shape = [4]} {
+      ^bb0(%out_arg: memref<16xf64>, %tmp_arg: memref<16xf64>, %base_i: index):
+        %inner_c1 = arith.constant 1 : index
+        %inner_c4 = arith.constant 4 : index
+        %inner_c16 = arith.constant 16 : index
+        %end_raw = arith.addi %base_i, %inner_c4 : index
+        %end = arith.minui %end_raw, %inner_c16 : index
+        scf.for %ii = %base_i to %end step %inner_c1 {
+          %local = arith.subi %ii, %base_i : index
+          %v = memref.load %tmp_arg[%local] : memref<16xf64>
+          memref.store %v, %out_arg[%local] : memref<16xf64>
+        }
+        codir.yield
+      }
+    }
+
+    memref.dealloc %tmp : memref<16xf64>
+    memref.dealloc %out : memref<16xf64>
+    return
+  }
+
   func.func @phase_redistributed_uniform_copy_uses_block_deps_for_nested_shapes() {
     %c0 = arith.constant 0 : index
     %c4 = arith.constant 4 : index
@@ -280,6 +323,14 @@ module {
 // CHECK: scf.for %[[IV:arg[0-9]+]] =
 // CHECK: [[LOCAL_INDEX:%[A-Za-z0-9_]+]] = arith.subi %[[IV]], %{{[A-Za-z0-9_]+}} : index
 // CHECK: memref.load [[READ_REF]]{{\[}}[[LOCAL_INDEX]]{{\]}} : memref<?xf64>
+
+// CHECK-LABEL: func.func @phase_redistributed_owner_relative_read_uses_block_origin
+// CHECK: arts.edt <task>
+// CHECK: ^bb0(%{{.*}}, %{{.*}}, %[[BASE:arg[0-9]+]]: index):
+// CHECK: scf.for %[[IV:arg[0-9]+]] =
+// CHECK: %[[OWNER_REL:[A-Za-z0-9_]+]] = arith.subi %[[IV]], %[[BASE]] : index
+// CHECK: %[[BLOCK_REL:[A-Za-z0-9_]+]] = arith.subi %[[IV]], %{{[A-Za-z0-9_]+}} : index
+// CHECK: memref.load %{{.*}}[%[[BLOCK_REL]]] : memref<?xf64>
 
 // CHECK-LABEL: func.func @phase_redistributed_uniform_copy_uses_block_deps_for_nested_shapes
 // CHECK: arts.db_alloc{{.*}}<block>{{.*}}planOwnerDims = [0, 1]{{.*}}planPhysicalBlockShape = [8, 8]

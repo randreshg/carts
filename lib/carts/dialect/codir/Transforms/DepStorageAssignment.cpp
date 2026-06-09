@@ -411,6 +411,18 @@ static bool accessModeMayWrite(codir::CodirAccessMode mode) {
          mode == codir::CodirAccessMode::readwrite;
 }
 
+static bool hasCommittedCollective(codir::CodeletOp codelet,
+                                   unsigned depIndex) {
+  ArrayAttr collectives =
+      codelet ? codelet.getDepCollectivesAttr() : ArrayAttr{};
+  if (!collectives || depIndex >= collectives.size())
+    return false;
+  auto collective =
+      dyn_cast<codir::CodirCollectiveKindAttr>(collectives[depIndex]);
+  return collective &&
+         collective.getValue() != codir::CodirCollectiveKind::none;
+}
+
 static bool stencilDepRequiresComputeBlock(codir::CodeletOp codelet,
                                            unsigned depIndex);
 
@@ -598,10 +610,86 @@ rejectFullTimestepUniformWithIncompatibleStencilBlockParticipant(
   return success();
 }
 
+static bool partitionedWriteRequiresComputeBlock(codir::CodeletOp codelet,
+                                                 unsigned depIndex) {
+  if (!codelet || depIndex >= codelet.getDeps().size() ||
+      !hasTileOwnerSlicePlan(codelet) || codelet.getInPlaceSharedStateAttr())
+    return false;
+
+  std::optional<codir::CodirAccessMode> mode =
+      getDepAccessMode(codelet, depIndex);
+  if (!mode || !accessModeMayWrite(*mode))
+    return false;
+
+  std::optional<int64_t> depArrayId = codir::getDepArrayId(codelet, depIndex);
+  if (!depArrayId)
+    return false;
+
+  ArrayAttr graph = dyn_cast_or_null<ArrayAttr>(
+      codelet->getAttr(codir::AttrNames::PartitionGraph));
+  if (!graph)
+    return false;
+
+  for (Attribute attr : graph) {
+    auto entry = dyn_cast<DictionaryAttr>(attr);
+    if (!entry)
+      continue;
+    auto muId = dyn_cast_or_null<IntegerAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::MuId));
+    if (!muId || muId.getInt() != *depArrayId)
+      continue;
+    auto role = dyn_cast_or_null<StringAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::Role));
+    if (role &&
+        role.getValue() != codir::AttrNames::LayoutGraphValues::RoleWrite)
+      continue;
+    auto kind = dyn_cast_or_null<StringAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::LayoutKind));
+    if (!kind ||
+        kind.getValue() != codir::AttrNames::PartitionGraphValues::OwnerBlock)
+      continue;
+    auto blockShape = dyn_cast_or_null<ArrayAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::BlockShape));
+    auto ownerDims = dyn_cast_or_null<ArrayAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::OwnerDims));
+    std::optional<SmallVector<int64_t, 4>> blockValues =
+        readI64ArrayAttr(blockShape);
+    std::optional<SmallVector<int64_t, 4>> ownerValues =
+        readI64ArrayAttr(ownerDims);
+    std::optional<SmallVector<int64_t, 4>> logicalValues =
+        readI64ArrayAttr(codelet.getLogicalWorkerSliceAttr());
+    if (!blockValues || blockValues->empty() || !ownerValues ||
+        ownerValues->empty() || !logicalValues || logicalValues->empty())
+      continue;
+    if (blockValues->size() != ownerValues->size())
+      continue;
+
+    bool fitsOneBlock = true;
+    for (auto [slot, ownerDim] : llvm::enumerate(*ownerValues)) {
+      if (ownerDim < 0 || (*blockValues)[slot] <= 0) {
+        fitsOneBlock = false;
+        break;
+      }
+      size_t logicalIndex = static_cast<size_t>(ownerDim);
+      if (logicalIndex >= logicalValues->size())
+        logicalIndex = slot;
+      if (logicalIndex >= logicalValues->size() ||
+          (*logicalValues)[logicalIndex] > (*blockValues)[slot]) {
+        fitsOneBlock = false;
+        break;
+      }
+    }
+    if (fitsOneBlock)
+      return true;
+  }
+  return false;
+}
+
 static bool depSemanticallyRequiresComputeBlock(codir::CodeletOp codelet,
                                                 unsigned depIndex) {
   return stencilDepRequiresComputeBlock(codelet, depIndex) ||
-         shouldDemoteFullTimestepUniformDepToComputeBlock(codelet, depIndex);
+         shouldDemoteFullTimestepUniformDepToComputeBlock(codelet, depIndex) ||
+         partitionedWriteRequiresComputeBlock(codelet, depIndex);
 }
 
 static bool isCompatibleBlockStorageParticipant(codir::CodeletOp seed,
@@ -893,6 +981,62 @@ static bool shouldDemoteMatmulDepToComputeBlock(codir::CodeletOp codelet,
          depAccessesStayWithinSingleOwnerSlice(codelet, depIndex);
 }
 
+static bool partialReductionResultRequiresComputeBlock(codir::CodeletOp codelet,
+                                                       unsigned depIndex) {
+  if (!codelet || !codelet.getPartialReductionAttr() ||
+      depIndex >= codelet.getDeps().size())
+    return false;
+  auto depType = dyn_cast<MemRefType>(codelet.getDeps()[depIndex].getType());
+  if (!depType || depType.getRank() == 0)
+    return false;
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<int64_t, 4>> tileShape =
+      readI64ArrayAttr(codelet.getTileShapeAttr());
+  if (!ownerDims || ownerDims->empty() || !tileShape || tileShape->empty() ||
+      ownerDims->size() + tileShape->size() !=
+          static_cast<size_t>(depType.getRank()))
+    return false;
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims))
+    if (ownerDim != slot)
+      return false;
+  std::optional<codir::CodirAccessMode> mode =
+      getDepAccessMode(codelet, depIndex);
+  if (!mode || !accessModeMayWrite(*mode))
+    return false;
+  std::optional<int64_t> depArrayId = codir::getDepArrayId(codelet, depIndex);
+  if (!depArrayId)
+    return false;
+  ArrayAttr graph = dyn_cast_or_null<ArrayAttr>(
+      codelet->getAttr(codir::AttrNames::PartitionGraph));
+  if (!graph)
+    return false;
+  for (Attribute attr : graph) {
+    auto entry = dyn_cast<DictionaryAttr>(attr);
+    if (!entry)
+      continue;
+    auto muId = dyn_cast_or_null<IntegerAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::MuId));
+    if (!muId || muId.getInt() != *depArrayId)
+      continue;
+    auto role = dyn_cast_or_null<StringAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::Role));
+    if (role &&
+        role.getValue() != codir::AttrNames::LayoutGraphValues::RoleWrite)
+      continue;
+    auto kind = dyn_cast_or_null<StringAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::LayoutKind));
+    if (!kind ||
+        kind.getValue() != codir::AttrNames::PartitionGraphValues::OwnerBlock)
+      continue;
+    auto blockShape = dyn_cast_or_null<ArrayAttr>(
+        entry.get(codir::AttrNames::PartitionGraphKeys::BlockShape));
+    if (blockShape && !blockShape.empty())
+      return true;
+  }
+  return false;
+}
+
 static ArrayAttr
 buildOwnerDimsAttr(MLIRContext *ctx,
                    std::optional<SmallVector<unsigned, 4>> ownerDims) {
@@ -947,9 +1091,14 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
       shouldDemoteFullTimestepUniformDepToComputeBlock(codelet, depIndex);
   bool matmulRequiresComputeBlock =
       shouldDemoteMatmulDepToComputeBlock(codelet, depIndex);
-  bool semanticComputeBlock = stencilRequiresComputeBlock ||
-                              uniformRequiresComputeBlock ||
-                              matmulRequiresComputeBlock;
+  bool partialReductionRequiresComputeBlock =
+      partialReductionResultRequiresComputeBlock(codelet, depIndex);
+  bool partitionedWriteComputeBlock =
+      partitionedWriteRequiresComputeBlock(codelet, depIndex);
+  bool semanticComputeBlock =
+      stencilRequiresComputeBlock || uniformRequiresComputeBlock ||
+      matmulRequiresComputeBlock || partialReductionRequiresComputeBlock ||
+      partitionedWriteComputeBlock;
   /// Replicated-read eligibility is a semantic property of the dep (matmul
   /// inner operand, or stencil read with halo crossing). The initial view the
   /// SDE→CODIR materializer stamps (host_whole for whole-storage tokens,
@@ -957,8 +1106,14 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
   /// promotion fires for either starting view.
   if ((requested == codir::CodirStorageViewKind::host_whole ||
        requested == codir::CodirStorageViewKind::compute_block) &&
+      !hasCommittedCollective(codelet, depIndex) &&
       shouldUseReplicatedReadDep(codelet, depIndex))
     return codir::CodirStorageViewKind::replicated_read;
+  if (requested == codir::CodirStorageViewKind::compute_block &&
+      getDepStorageViewKind(codelet, depIndex) ==
+          codir::CodirStorageViewKind::compute_block &&
+      hasTileOwnerSlicePlan(codelet) && getDepOwnerDims(codelet, depIndex))
+    return codir::CodirStorageViewKind::compute_block;
   if (requested == codir::CodirStorageViewKind::host_whole &&
       uniformRequiresComputeBlock)
     requested = codir::CodirStorageViewKind::compute_block;
@@ -967,6 +1122,12 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
     requested = codir::CodirStorageViewKind::compute_block;
   if (requested == codir::CodirStorageViewKind::host_whole &&
       matmulRequiresComputeBlock)
+    requested = codir::CodirStorageViewKind::compute_block;
+  if (requested == codir::CodirStorageViewKind::host_whole &&
+      partialReductionRequiresComputeBlock)
+    requested = codir::CodirStorageViewKind::compute_block;
+  if (requested == codir::CodirStorageViewKind::host_whole &&
+      partitionedWriteComputeBlock)
     requested = codir::CodirStorageViewKind::compute_block;
   if (requested != codir::CodirStorageViewKind::compute_block)
     return requested;
@@ -1121,11 +1282,8 @@ struct DepStorageAssignmentPass
       // consumed sde.redist structure at the SDE->CODIR boundary) is
       // authoritative: CODIR preserves it instead of reclassifying. Absent or
       // `none` entries are planned normally, so -O3 (no committed collectives)
-      // is unaffected. Finalized codelets keep the recompute-vs-existing
-      // integrity check below, so this deference applies to first-time
-      // planning.
-      ArrayAttr committedCollectives =
-          finalized ? ArrayAttr{} : codelet.getDepCollectivesAttr();
+      // is unaffected.
+      ArrayAttr committedCollectives = codelet.getDepCollectivesAttr();
       SmallVector<Attribute> collectives;
       collectives.reserve(depCount);
       for (unsigned index = 0; index < depCount; ++index) {

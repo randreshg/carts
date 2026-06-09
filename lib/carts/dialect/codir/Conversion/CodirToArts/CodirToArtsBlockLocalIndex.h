@@ -37,10 +37,19 @@ static inline Value subtractStorageHalo(OpBuilder &builder, Location loc,
                                createConstantIndex(builder, loc, amount));
 }
 
+static inline Value recoverOwnerAbsoluteIndex(Value index, Value ownerBase) {
+  Value strippedIndex = ::mlir::carts::ValueAnalysis::stripNumericCasts(index);
+  if (auto sub = strippedIndex.getDefiningOp<arith::SubIOp>())
+    if (::mlir::carts::ValueAnalysis::sameValue(sub.getRhs(), ownerBase))
+      return sub.getLhs();
+  return index;
+}
+
 struct PlannedBlockLocalAccessRewrite {
   Value localMemref;
   unsigned ownerDim = 0;
   Value ownerBase;
+  Value ownerDomainBase;
   Value localOrigin;
   int64_t lowerHalo = 0;
   int64_t upperHalo = 0;
@@ -50,9 +59,11 @@ struct PlannedBlockLocalAccessRewrite {
   int64_t groupBlockCount = 1;
   int64_t ownerWindowExtent = 1;
   int64_t sourceDimExtent = ShapedType::kDynamic;
+  int64_t rankExpandedTileExtent = 0;
   bool grouped = false;
   bool allowFullWindowAccess = false;
   bool requireOwnerWindowProof = false;
+  bool rankExpandedGridAccess = false;
 };
 
 static inline Value materializeBlockLocalOrigin(OpBuilder &builder,
@@ -93,9 +104,60 @@ materializeBlockLocalIndex(OpBuilder &builder, Location loc, Value index,
   if (auto sub = index.getDefiningOp<arith::SubIOp>())
     if (::mlir::carts::ValueAnalysis::sameValue(sub.getRhs(), localOrigin))
       return index;
+  index = recoverOwnerAbsoluteIndex(index, ownerBase);
+  if (::mlir::carts::ValueAnalysis::sameValue(index, localOrigin))
+    return createZeroIndex(builder, loc);
   if (!indexSelectsOwnerSlice(index, ownerBase))
     return failure();
   return arith::SubIOp::create(builder, loc, index, localOrigin).getResult();
+}
+
+static inline Value getDividedLogicalIndex(Value index, int64_t divisor) {
+  if (!index || divisor <= 0)
+    return {};
+  index = ::mlir::carts::ValueAnalysis::stripNumericCasts(index);
+  auto matchesDivisor = [&](Value candidate) {
+    std::optional<int64_t> folded =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(candidate);
+    return folded && *folded == divisor;
+  };
+  if (auto div = index.getDefiningOp<arith::DivUIOp>())
+    if (matchesDivisor(div.getRhs()))
+      return div.getLhs();
+  if (auto div = index.getDefiningOp<arith::DivSIOp>())
+    if (matchesDivisor(div.getRhs()))
+      return div.getLhs();
+  return {};
+}
+
+static inline FailureOr<Value> materializeRankExpandedGridLocalIndex(
+    OpBuilder &builder, Location loc, Value index, Value ownerBase,
+    Value ownerDomainBase, int64_t tileExtent,
+    const DenseMap<Value, Value> *sourceByBlockArgument = nullptr) {
+  if (!index || !ownerBase || tileExtent <= 0)
+    return failure();
+  if (!ownerDomainBase)
+    ownerDomainBase = createZeroIndex(builder, loc);
+
+  Value logicalIndex = getDividedLogicalIndex(index, tileExtent);
+  if (!logicalIndex)
+    return failure();
+
+  BlockWindowProof ownerWindow{ownerBase, tileExtent, sourceByBlockArgument};
+  if (!ownerWindow.pointStaysInWindow(logicalIndex))
+    return failure();
+
+  Value relativeBase =
+      ::mlir::carts::ValueAnalysis::sameValue(ownerBase, ownerDomainBase)
+          ? createZeroIndex(builder, loc)
+          : arith::SubIOp::create(builder, loc, ownerBase, ownerDomainBase)
+                .getResult();
+  Value tileExtentValue = createConstantIndex(builder, loc, tileExtent);
+  Value baseGrid =
+      arith::DivUIOp::create(builder, loc, relativeBase, tileExtentValue);
+  if (::mlir::carts::ValueAnalysis::sameValue(index, baseGrid))
+    return createZeroIndex(builder, loc);
+  return arith::SubIOp::create(builder, loc, index, baseGrid).getResult();
 }
 
 static inline std::optional<std::pair<Value, int64_t>>
@@ -131,6 +193,7 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
     return failure();
   if (!allowFullWindowAccess && !indexSelectsOwnerSlice(index, ownerBase))
     return failure();
+  index = recoverOwnerAbsoluteIndex(index, ownerBase);
 
   int64_t windowExtent = blockSize * groupBlockCount;
   BlockWindowProof proof{windowBase, windowExtent, sourceByBlockArgument};

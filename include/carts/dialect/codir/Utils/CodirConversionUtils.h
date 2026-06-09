@@ -104,6 +104,19 @@ sdeMovementFamilyToCollective(sde::SdeMovementFamily family) {
   return std::nullopt;
 }
 
+static inline codir::CodirAccessMode
+sdeAccessModeToCodirAccessMode(sde::SdeAccessMode mode) {
+  switch (mode) {
+  case sde::SdeAccessMode::read:
+    return codir::CodirAccessMode::read;
+  case sde::SdeAccessMode::write:
+    return codir::CodirAccessMode::write;
+  case sde::SdeAccessMode::readwrite:
+    return codir::CodirAccessMode::readwrite;
+  }
+  return codir::CodirAccessMode::readwrite;
+}
+
 /// Return a per-dependency attribute list of length `count`, reusing the
 /// existing entries and filling the rest with `fill`. CODIR's verifier requires
 /// these lists to cover every dependency, so consumption never writes a sparse
@@ -117,45 +130,86 @@ completeDepAttrs(ArrayAttr existing, unsigned count, Attribute fill) {
   return out;
 }
 
-/// Set dependency `depIndex` to an owner-local compute block whose owner dims
-/// are the leading grid dims the committed access window declares. The window's
-/// `mu` is the rank-expanded (block-shaped) memref the dependency already
-/// carries, so its owner dims are the leading `ownerDimCount` grid dims.
-static inline void recordWindowComputeBlock(codir::CodeletOp codelet,
-                                            unsigned depIndex,
-                                            unsigned ownerDimCount) {
+/// Consume an access-window fact onto dependency `depIndex`. Existing
+/// compatible facts are preserved; incompatible facts fail closed.
+static inline LogicalResult recordWindowComputeBlock(codir::CodeletOp codelet,
+                                                     unsigned depIndex,
+                                                     unsigned ownerDimCount) {
   MLIRContext *ctx = codelet.getContext();
   unsigned count = codelet.getDeps().size();
+  if (depIndex >= count)
+    return codelet.emitOpError() << "access-window dependency index is out of "
+                                    "range for CODIR fact consumption";
+
+  auto computeBlockAttr = codir::CodirStorageViewKindAttr::get(
+      ctx, codir::CodirStorageViewKind::compute_block);
+  auto hostWholeAttr = codir::CodirStorageViewKindAttr::get(
+      ctx, codir::CodirStorageViewKind::host_whole);
+  ArrayAttr existingViews = codelet.getDepStorageViewsAttr();
+  if (existingViews && depIndex < existingViews.size()) {
+    auto existing =
+        dyn_cast<codir::CodirStorageViewKindAttr>(existingViews[depIndex]);
+    if (existing && existing != hostWholeAttr && existing != computeBlockAttr)
+      return codelet.emitOpError()
+             << "dependency #" << depIndex
+             << " already carries a storage view that conflicts with the "
+                "committed SDE access window";
+  }
 
   SmallVector<Attribute> views =
-      completeDepAttrs(codelet.getDepStorageViewsAttr(), count,
-                       codir::CodirStorageViewKindAttr::get(
-                           ctx, codir::CodirStorageViewKind::host_whole));
-  views[depIndex] = codir::CodirStorageViewKindAttr::get(
-      ctx, codir::CodirStorageViewKind::compute_block);
+      completeDepAttrs(existingViews, count, hostWholeAttr);
+  views[depIndex] = computeBlockAttr;
   codelet.setDepStorageViewsAttr(ArrayAttr::get(ctx, views));
 
   Builder builder(ctx);
   SmallVector<int64_t> gridDims;
   for (unsigned k = 0; k < ownerDimCount; ++k)
     gridDims.push_back(k);
-  SmallVector<Attribute> owners = completeDepAttrs(
-      codelet.getDepOwnerDimsAttr(), count, builder.getI64ArrayAttr({}));
-  owners[depIndex] = builder.getI64ArrayAttr(gridDims);
+  auto expectedOwnerDims = builder.getI64ArrayAttr(gridDims);
+  ArrayAttr existingOwnerDims = codelet.getDepOwnerDimsAttr();
+  if (existingOwnerDims && depIndex < existingOwnerDims.size()) {
+    auto existing = dyn_cast<ArrayAttr>(existingOwnerDims[depIndex]);
+    if (existing && !existing.empty() && existing != expectedOwnerDims)
+      return codelet.emitOpError()
+             << "dependency #" << depIndex
+             << " already carries owner dims that conflict with the committed "
+                "SDE access window";
+  }
+  SmallVector<Attribute> owners =
+      completeDepAttrs(existingOwnerDims, count, builder.getI64ArrayAttr({}));
+  owners[depIndex] = expectedOwnerDims;
   codelet.setDepOwnerDimsAttr(ArrayAttr::get(ctx, owners));
+  return success();
 }
 
 /// Set dependency `depIndex`'s movement family from a committed redistribution.
-static inline void recordMovement(codir::CodeletOp codelet, unsigned depIndex,
-                                  codir::CodirCollectiveKind movement) {
+static inline LogicalResult
+recordMovement(codir::CodeletOp codelet, unsigned depIndex,
+               codir::CodirCollectiveKind movement) {
   MLIRContext *ctx = codelet.getContext();
   unsigned count = codelet.getDeps().size();
+  if (depIndex >= count)
+    return codelet.emitOpError()
+           << "redistribution dependency index is out of range for CODIR fact "
+              "consumption";
+  auto noneAttr = codir::CodirCollectiveKindAttr::get(
+      ctx, codir::CodirCollectiveKind::none);
+  auto movementAttr = codir::CodirCollectiveKindAttr::get(ctx, movement);
+  ArrayAttr existingCollectives = codelet.getDepCollectivesAttr();
+  if (existingCollectives && depIndex < existingCollectives.size()) {
+    auto existing =
+        dyn_cast<codir::CodirCollectiveKindAttr>(existingCollectives[depIndex]);
+    if (existing && existing != noneAttr && existing != movementAttr)
+      return codelet.emitOpError()
+             << "dependency #" << depIndex
+             << " already carries a movement family that conflicts with the "
+                "committed SDE redistribution";
+  }
   SmallVector<Attribute> collectives =
-      completeDepAttrs(codelet.getDepCollectivesAttr(), count,
-                       codir::CodirCollectiveKindAttr::get(
-                           ctx, codir::CodirCollectiveKind::none));
-  collectives[depIndex] = codir::CodirCollectiveKindAttr::get(ctx, movement);
+      completeDepAttrs(existingCollectives, count, noneAttr);
+  collectives[depIndex] = movementAttr;
   codelet.setDepCollectivesAttr(ArrayAttr::get(ctx, collectives));
+  return success();
 }
 
 /// Fail closed when SDE recorded a layout disagreement for one of the codelet's
@@ -264,8 +318,10 @@ static inline LogicalResult consumeCommittedSdeStructure(Operation *root) {
     for (const codir::CodeletDataflowGraph::DepRef &dep : *deps) {
       bool depWrites = dep.mode == codir::CodirAccessMode::write ||
                        dep.mode == codir::CodirAccessMode::readwrite;
-      if (depWrites == windowWrites)
-        recordWindowComputeBlock(dep.codelet, dep.depIndex, ownerDimCount);
+      if (depWrites == windowWrites &&
+          failed(recordWindowComputeBlock(dep.codelet, dep.depIndex,
+                                          ownerDimCount)))
+        return failure();
     }
   }
 
@@ -284,7 +340,8 @@ static inline LogicalResult consumeCommittedSdeStructure(Operation *root) {
                   "no "
                   "CODIR collective representation; CODIR will not drop or "
                   "invent the movement";
-      recordMovement(consumer, edge.consumer.depIndex, *movement);
+      if (failed(recordMovement(consumer, edge.consumer.depIndex, *movement)))
+        return failure();
       break;
     }
   }
@@ -419,27 +476,6 @@ static inline bool hasSdePhysicalOwnerSlicePlan(sde::SdeSuIterateOp op) {
   return op && op.getPhysicalBlockShapeAttr() && op.getPhysicalOwnerDimsAttr();
 }
 
-static inline bool canUseOwnerSliceBoundaryPlan(sde::SdeSuIterateOp source) {
-  if (!source || source.getLowerBounds().size() != 1 ||
-      source.getUpperBounds().size() != 1 || source.getSteps().size() != 1)
-    return false;
-
-  auto classification = getSdeClassification(source);
-  if (!classification)
-    return false;
-
-  switch (*classification) {
-  case sde::SdeStructuredClassification::matmul:
-  case sde::SdeStructuredClassification::elementwise:
-  case sde::SdeStructuredClassification::elementwise_pipeline:
-    return true;
-  case sde::SdeStructuredClassification::stencil:
-  case sde::SdeStructuredClassification::reduction:
-    return false;
-  }
-  return false;
-}
-
 static inline std::optional<unsigned>
 inferSingleOwnerAccessDim(sde::SdeSuIterateOp source, Value root) {
   if (!source || !root || source.getBody().empty())
@@ -505,44 +541,6 @@ inferSingleOwnerAccessDim(sde::SdeSuIterateOp source, Value root) {
   return selectedDim;
 }
 
-static inline bool allRootAccessesUseOwnerFirstDim(sde::SdeSuIterateOp source,
-                                                   Value root) {
-  std::optional<unsigned> ownerDim = inferSingleOwnerAccessDim(source, root);
-  return ownerDim && *ownerDim == 0;
-}
-
-static inline bool hasSamePhysicalLayoutPlan(sde::SdeSuIterateOp lhs,
-                                             sde::SdeSuIterateOp rhs) {
-  if (!lhs || !rhs)
-    return false;
-  // Physical DB/MU layout identity is storage grain. The logical worker slice
-  // is CU grouping evidence and may differ across users of the same physical
-  // block plan.
-  return lhs.getPhysicalOwnerDimsAttr() == rhs.getPhysicalOwnerDimsAttr() &&
-         lhs.getPhysicalBlockShapeAttr() == rhs.getPhysicalBlockShapeAttr() &&
-         lhs.getPhysicalHaloShapeAttr() == rhs.getPhysicalHaloShapeAttr() &&
-         lhs.getIterationTopologyAttr() == rhs.getIterationTopologyAttr();
-}
-
-static inline bool canAccessRootWithPlan(sde::SdeSuIterateOp source, Value root,
-                                         sde::SdeSuIterateOp selected) {
-  if (!source || !root || !selected)
-    return false;
-  if (!hasSdePhysicalOwnerSlicePlan(source) ||
-      !canUseOwnerSliceBoundaryPlan(source) ||
-      !hasSamePhysicalLayoutPlan(selected, source))
-    return false;
-  return allRootAccessesUseOwnerFirstDim(source, root);
-}
-
-static inline sde::SdeSuIterateOp getEnclosingSuIterate(Operation *op) {
-  for (Operation *cur = op ? op->getParentOp() : nullptr; cur;
-       cur = cur->getParentOp())
-    if (auto iterate = dyn_cast<sde::SdeSuIterateOp>(cur))
-      return iterate;
-  return {};
-}
-
 static inline bool hasHostMemrefAccessOutsideSchedulingUnit(Value root) {
   if (!root)
     return false;
@@ -570,103 +568,6 @@ static inline bool hasHostMemrefAccessOutsideSchedulingUnit(Value root) {
   }
 
   return false;
-}
-
-static inline FailureOr<sde::SdeSuIterateOp>
-selectMuAllocWritePlan(sde::SdeMuAllocOp op) {
-  if (!op)
-    return sde::SdeSuIterateOp{};
-
-  Value root = op.getMemref();
-  if (hasHostMemrefAccessOutsideSchedulingUnit(root))
-    return sde::SdeSuIterateOp{};
-
-  ModuleOp module = op->getParentOfType<ModuleOp>();
-  if (!module)
-    return sde::SdeSuIterateOp{};
-
-  sde::SdeSuIterateOp selected;
-  WalkResult result = module.walk([&](memref::StoreOp store) {
-    if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(store.getMemref()) !=
-        root)
-      return WalkResult::advance();
-
-    sde::SdeSuIterateOp source = getEnclosingSuIterate(store);
-    if (!source || !hasSdePhysicalOwnerSlicePlan(source) ||
-        !canUseOwnerSliceBoundaryPlan(source) ||
-        !allRootAccessesUseOwnerFirstDim(source, root))
-      return WalkResult::advance();
-
-    if (!selected) {
-      selected = source;
-      return WalkResult::advance();
-    }
-
-    if (!hasSamePhysicalLayoutPlan(selected, source)) {
-      store.emitError("cannot choose a physical DB layout for SDE MU "
-                      "allocation with conflicting write-owner plans");
-      return WalkResult::interrupt();
-    }
-
-    return WalkResult::advance();
-  });
-
-  if (result.wasInterrupted())
-    return failure();
-  if (!selected)
-    return selected;
-
-  result = module.walk([&](Operation *nested) {
-    auto access = getCodirMemoryAccessInfo(nested);
-    if (!access)
-      return WalkResult::advance();
-    if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(access->memref) !=
-        root)
-      return WalkResult::advance();
-
-    sde::SdeSuIterateOp source = getEnclosingSuIterate(nested);
-    if (!source)
-      return WalkResult::advance();
-
-    // Cross-phase intermediates need an explicit token-local phase plan before
-    // they can be block-backed safely. Keep row-strip DB
-    // layout only when every access stays inside the selected scheduling unit.
-    if (source != selected || !canAccessRootWithPlan(source, root, selected)) {
-      selected = {};
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
-
-  return selected;
-}
-
-static inline bool
-isSdeMuAllocMaterializedWithPlan(Value dep, sde::SdeSuIterateOp source) {
-  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep);
-  auto muAlloc = root ? root.getDefiningOp<sde::SdeMuAllocOp>() : nullptr;
-  if (!muAlloc)
-    return true;
-
-  FailureOr<sde::SdeSuIterateOp> selected = selectMuAllocWritePlan(muAlloc);
-  if (failed(selected) || !*selected)
-    return false;
-
-  return *selected == source && hasSamePhysicalLayoutPlan(*selected, source);
-}
-
-static inline bool
-canBridgeSdeMuAllocHostWholeToComputeBlock(Value dep,
-                                           sde::SdeSuIterateOp source) {
-  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep);
-  auto muAlloc = root ? root.getDefiningOp<sde::SdeMuAllocOp>() : nullptr;
-  if (!muAlloc || !source)
-    return false;
-  if (!hasHostMemrefAccessOutsideSchedulingUnit(root))
-    return false;
-  return hasSdePhysicalOwnerSlicePlan(source) &&
-         canUseOwnerSliceBoundaryPlan(source) &&
-         allRootAccessesUseOwnerFirstDim(source, root);
 }
 
 static inline void buildCodirSubviewMixedOperands(
@@ -808,6 +709,40 @@ materializeCodeletOffset(codir::CodeletOp codelet, Value sourceOffset) {
   return failure();
 }
 
+static inline bool valueDependsOnCodeletParam(Value value, Value param,
+                                              unsigned depth = 0) {
+  if (!value || !param || depth > 8)
+    return false;
+  value = ::mlir::carts::ValueAnalysis::stripNumericCasts(value);
+  param = ::mlir::carts::ValueAnalysis::stripNumericCasts(param);
+  if (value == param)
+    return true;
+
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    auto loop =
+        dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+    if (!loop || loop.getInductionVar() != value)
+      return false;
+    return valueDependsOnCodeletParam(loop.getLowerBound(), param, depth + 1) ||
+           valueDependsOnCodeletParam(loop.getUpperBound(), param, depth + 1) ||
+           valueDependsOnCodeletParam(loop.getStep(), param, depth + 1);
+  }
+
+  Operation *def = value.getDefiningOp();
+  if (!isa_and_nonnull<
+          arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
+          arith::DivUIOp, arith::RemSIOp, arith::RemUIOp, arith::IndexCastOp,
+          arith::IndexCastUIOp, arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
+          arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp,
+          arith::SelectOp, arith::CmpIOp, arith::CmpFOp>(def))
+    return false;
+
+  for (Value operand : def->getOperands())
+    if (valueDependsOnCodeletParam(operand, param, depth + 1))
+      return true;
+  return false;
+}
+
 static inline bool isCodeletParamDerivedIndex(Value index,
                                               codir::CodeletOp codelet,
                                               ValueRange ignoredParams) {
@@ -823,8 +758,7 @@ static inline bool isCodeletParamDerivedIndex(Value index,
         containsValue(ignoredParams, codelet.getParams()[paramIdx]))
       continue;
     BlockArgument arg = body.getArgument(argIdx);
-    if (isa<IndexType>(arg.getType()) &&
-        ::mlir::carts::ValueAnalysis::dependsOn(index, arg))
+    if (isa<IndexType>(arg.getType()) && valueDependsOnCodeletParam(index, arg))
       return true;
 
     auto indexArg = dyn_cast<BlockArgument>(index);
@@ -1987,6 +1921,7 @@ struct SuCodeletPlan {
   SmallVector<SlicedTokenLocalIndexRewrite> localIndexRewrites;
   DenseMap<Value, unsigned> depIndex;
   DenseMap<Value, unsigned> paramIndex;
+  DenseMap<unsigned, SmallVector<int64_t, 4>> depOwnerDims;
 };
 
 struct SuDepArrayIdPlan {
@@ -2299,6 +2234,249 @@ static inline LogicalResult addSuParam(Value param, SuCodeletPlan &plan,
   return success();
 }
 
+static inline std::optional<codir::CodirAccessMode>
+getWindowCodirAccessMode(sde::SdeMuAccessWindowOp window) {
+  if (!window)
+    return std::nullopt;
+  switch (window.getMode()) {
+  case sde::SdeAccessMode::read:
+    return codir::CodirAccessMode::read;
+  case sde::SdeAccessMode::write:
+    return codir::CodirAccessMode::write;
+  case sde::SdeAccessMode::readwrite:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+static inline LogicalResult
+observeCandidateSuAccessWindow(sde::SdeMuAccessWindowOp window, Value root,
+                               codir::CodirAccessMode mode,
+                               sde::SdeMuAccessWindowOp &selected) {
+  if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(window.getMu()) != root)
+    return success();
+  std::optional<codir::CodirAccessMode> windowMode =
+      getWindowCodirAccessMode(window);
+  if (!windowMode || *windowMode != mode)
+    return success();
+  if (selected)
+    return window.emitOpError()
+           << "duplicates an SDE MU access-window fact for one CODIR "
+              "scheduling-unit dependency";
+  selected = window;
+  return success();
+}
+
+static inline FailureOr<std::optional<sde::SdeMuAccessWindowOp>>
+findSuAccessWindow(sde::SdeSuIterateOp source, Value root,
+                   codir::CodirAccessMode mode) {
+  if (!source || !root)
+    return std::optional<sde::SdeMuAccessWindowOp>{};
+
+  sde::SdeMuAccessWindowOp selected;
+  WalkResult walkResult =
+      source.getBody().walk([&](sde::SdeMuAccessWindowOp window) {
+        return failed(
+                   observeCandidateSuAccessWindow(window, root, mode, selected))
+                   ? WalkResult::interrupt()
+                   : WalkResult::advance();
+      });
+  if (walkResult.wasInterrupted())
+    return failure();
+
+  if (auto cu = source->getParentOfType<sde::SdeCuRegionOp>()) {
+    for (sde::SdeMuAccessWindowOp window :
+         cu.getBody().front().getOps<sde::SdeMuAccessWindowOp>())
+      if (failed(observeCandidateSuAccessWindow(window, root, mode, selected)))
+        return failure();
+  }
+
+  if (!selected)
+    return std::optional<sde::SdeMuAccessWindowOp>{};
+  return std::optional<sde::SdeMuAccessWindowOp>{selected};
+}
+
+static inline LogicalResult recordSuDepOwnerDims(SuCodeletPlan &plan,
+                                                 unsigned depIndex,
+                                                 unsigned ownerDimCount,
+                                                 Operation *diagnosticAnchor) {
+  SmallVector<int64_t, 4> expected;
+  expected.reserve(ownerDimCount);
+  for (unsigned dim = 0; dim < ownerDimCount; ++dim)
+    expected.push_back(dim);
+
+  auto it = plan.depOwnerDims.find(depIndex);
+  if (it != plan.depOwnerDims.end()) {
+    if (it->second != expected)
+      return diagnosticAnchor->emitError()
+             << "committed SDE access-window owner dims conflict with an "
+                "existing CODIR dependency owner-dim fact";
+    return success();
+  }
+  plan.depOwnerDims.try_emplace(depIndex, std::move(expected));
+  return success();
+}
+
+static inline void applySuDepOwnerDims(codir::CodeletOp codelet,
+                                       const SuCodeletPlan &plan) {
+  if (plan.depOwnerDims.empty())
+    return;
+  Builder builder(codelet.getContext());
+  unsigned count = codelet.getDeps().size();
+  SmallVector<Attribute> owners = completeDepAttrs(
+      codelet.getDepOwnerDimsAttr(), count, builder.getI64ArrayAttr({}));
+  for (const auto &entry : plan.depOwnerDims)
+    if (entry.first < count)
+      owners[entry.first] = builder.getI64ArrayAttr(entry.second);
+  codelet.setDepOwnerDimsAttr(ArrayAttr::get(codelet.getContext(), owners));
+}
+
+static inline bool
+suDispatchBaseIsBlockGridCoordinate(sde::SdeSuIterateOp source,
+                                    unsigned ownerDimCount, unsigned rank,
+                                    ArrayRef<int64_t> validExtents) {
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      ::mlir::carts::readI64ArrayAttr(source.getPhysicalBlockShapeAttr());
+  if (!blockShape || blockShape->size() != rank ||
+      ownerDimCount > validExtents.size())
+    return false;
+  for (unsigned dim = 0; dim < ownerDimCount; ++dim)
+    if ((*blockShape)[dim] != 1)
+      return false;
+  for (unsigned dim = ownerDimCount; dim < rank; ++dim) {
+    unsigned logicalDim = dim - ownerDimCount;
+    if ((*blockShape)[dim] != validExtents[logicalDim])
+      return false;
+  }
+  return true;
+}
+
+static inline LogicalResult
+materializeSuAccessWindowDeps(sde::SdeSuIterateOp source,
+                              ArrayRef<Value> dispatchBases, OpBuilder &builder,
+                              SuCodeletPlan &plan) {
+  if (plan.deps.empty() || dispatchBases.empty())
+    return success();
+
+  Location loc = source.getLoc();
+  for (unsigned depIndex = 0, depCount = plan.deps.size(); depIndex < depCount;
+       ++depIndex) {
+    Value dep = plan.deps[depIndex];
+    if (isCodirViewDep(dep))
+      continue;
+    auto depType = dyn_cast<MemRefType>(dep.getType());
+    if (!depType || depType.getRank() == 0)
+      continue;
+
+    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep);
+    FailureOr<std::optional<sde::SdeMuAccessWindowOp>> maybeWindow =
+        findSuAccessWindow(source, root, plan.depModes[depIndex]);
+    if (failed(maybeWindow))
+      return failure();
+    if (!*maybeWindow)
+      continue;
+    sde::SdeMuAccessWindowOp window = **maybeWindow;
+
+    unsigned ownerDimCount = static_cast<unsigned>(window.getOwnerDimCount());
+    unsigned rank = static_cast<unsigned>(depType.getRank());
+    if (ownerDimCount == 0 || ownerDimCount > rank ||
+        ownerDimCount > dispatchBases.size())
+      return window.emitOpError()
+             << "cannot materialize CODIR MU subview dependency: owner "
+                "dimension count does not match the scheduling-unit dispatch";
+
+    std::optional<SmallVector<int64_t, 4>> validExtents =
+        ::mlir::carts::readI64ArrayAttr(window.getValidExtents());
+    if (!validExtents || validExtents->size() + ownerDimCount != rank)
+      return window.emitOpError()
+             << "cannot materialize CODIR MU subview dependency: valid "
+                "extent rank does not match the rank-expanded MU";
+    if (ownerDimCount > validExtents->size())
+      return window.emitOpError()
+             << "cannot materialize CODIR MU subview dependency: missing tile "
+                "extent for an owner dimension";
+    if (depIndex < plan.depStorageViews.size()) {
+      codir::CodirStorageViewKind existing = plan.depStorageViews[depIndex];
+      if (existing != codir::CodirStorageViewKind::host_whole &&
+          existing != codir::CodirStorageViewKind::compute_block)
+        return window.emitOpError()
+               << "cannot materialize CODIR MU subview dependency: existing "
+                  "dependency storage view conflicts with the committed access "
+                  "window";
+    }
+    if (failed(recordSuDepOwnerDims(plan, depIndex, ownerDimCount,
+                                    window.getOperation())))
+      return failure();
+
+    bool dispatchBaseIsGrid = suDispatchBaseIsBlockGridCoordinate(
+        source, ownerDimCount, rank, *validExtents);
+
+    SmallVector<OpFoldResult> offsets;
+    SmallVector<OpFoldResult> sizes;
+    SmallVector<OpFoldResult> strides;
+    SmallVector<Value> sourceOffsets;
+    offsets.reserve(rank);
+    sizes.reserve(rank);
+    strides.reserve(rank);
+    sourceOffsets.reserve(rank);
+
+    Value zero = createZeroIndex(builder, loc);
+    for (unsigned dim = 0; dim < rank; ++dim) {
+      strides.push_back(builder.getIndexAttr(1));
+      if (dim < ownerDimCount) {
+        int64_t tileExtent = (*validExtents)[dim];
+        if (tileExtent <= 0)
+          return window.emitOpError()
+                 << "cannot materialize CODIR MU subview dependency: owner "
+                    "tile extent must be positive";
+        Value blockIndex = dispatchBases[dim];
+        if (!dispatchBaseIsGrid && tileExtent != 1) {
+          Value extent = createConstantIndex(builder, loc, tileExtent);
+          blockIndex = arith::DivUIOp::create(builder, loc, blockIndex, extent);
+        }
+        offsets.push_back(blockIndex);
+        sizes.push_back(builder.getIndexAttr(1));
+        sourceOffsets.push_back(blockIndex);
+        continue;
+      }
+
+      unsigned logicalDim = dim - ownerDimCount;
+      int64_t staticExtent = depType.getDimSize(dim);
+      offsets.push_back(builder.getIndexAttr(0));
+      sourceOffsets.push_back(zero);
+      if (staticExtent == ShapedType::kDynamic) {
+        Value size = memref::DimOp::create(builder, loc, dep, dim);
+        sizes.push_back(size);
+      } else {
+        sizes.push_back(builder.getIndexAttr(staticExtent));
+        if (logicalDim < validExtents->size() &&
+            (*validExtents)[logicalDim] > staticExtent)
+          return window.emitOpError()
+                 << "cannot materialize CODIR MU subview dependency: valid "
+                    "extent exceeds the MU tile dimension";
+      }
+    }
+
+    auto resultType =
+        memref::SubViewOp::inferResultType(depType, offsets, sizes, strides);
+    Value subview = memref::SubViewOp::create(builder, loc, resultType, dep,
+                                              offsets, sizes, strides)
+                        .getResult();
+
+    plan.depIndex.erase(dep);
+    plan.deps[depIndex] = subview;
+    if (!plan.depIndex.try_emplace(subview, depIndex).second)
+      return source.emitOpError()
+             << "materialized duplicate CODIR MU subview dependency";
+    if (depIndex < plan.depStorageViews.size())
+      plan.depStorageViews[depIndex] =
+          codir::CodirStorageViewKind::compute_block;
+    plan.localIndexRewrites.push_back({depIndex, std::move(sourceOffsets), {}});
+  }
+
+  return success();
+}
+
 static inline LogicalResult cloneSuCaptures(sde::SdeSuIterateOp source,
                                             SuCodeletPlan &plan,
                                             IRMapping &mapper,
@@ -2377,6 +2555,12 @@ static inline LogicalResult collectSuOperand(Value operand, Operation *owner,
 
   if (isCodirDependencyType(operand.getType())) {
     codir::CodirAccessMode mode = codir::CodirAccessMode::readwrite;
+    if (auto redist = dyn_cast<sde::SdeRedistOp>(owner);
+        redist && redist.getMu() == operand)
+      return success();
+    if (auto window = dyn_cast<sde::SdeMuAccessWindowOp>(owner);
+        window && window.getMu() == operand)
+      mode = sdeAccessModeToCodirAccessMode(window.getMode());
     if (auto load = dyn_cast<memref::LoadOp>(owner);
         load && load.getMemref() == operand)
       mode = codir::CodirAccessMode::read;
@@ -2470,31 +2654,9 @@ static inline void appendSuOwnerSliceLocalRewrites(sde::SdeSuIterateOp source,
     if (!accessOwnerDim || *accessOwnerDim >= depType.getRank())
       continue;
 
-    bool needsHostWholeBridge =
-        isa_and_nonnull<BlockArgument>(root) ||
-        canBridgeSdeMuAllocHostWholeToComputeBlock(dep, source);
     bool matchesMaterializedPlan = *accessOwnerDim == plannedOwnerDim;
 
-    if (!needsHostWholeBridge && matchesMaterializedPlan &&
-        isSdeMuAllocMaterializedWithPlan(dep, source)) {
-      SmallVector<Value> offsets;
-      offsets.reserve(depType.getRank());
-      for (int64_t dim = 0, rank = depType.getRank(); dim < rank; ++dim) {
-        if (static_cast<unsigned>(dim) == *accessOwnerDim)
-          offsets.push_back(dispatchBase);
-        else
-          offsets.push_back(createZeroIndex(builder, source.getLoc()));
-      }
-
-      plan.localIndexRewrites.push_back(
-          {static_cast<unsigned>(depIndex), std::move(offsets), {}});
-      if (depIndex < plan.depStorageViews.size())
-        plan.depStorageViews[depIndex] =
-            codir::CodirStorageViewKind::compute_block;
-      continue;
-    }
-
-    if (depIndex < plan.depStorageViews.size())
+    if (matchesMaterializedPlan && depIndex < plan.depStorageViews.size())
       plan.depStorageViews[depIndex] =
           codir::CodirStorageViewKind::compute_block;
   }
@@ -2835,6 +2997,10 @@ convertSuOwnerTileNdToCodir(sde::SdeSuIterateOp source,
       return source.emitOpError()
              << "failed to materialize owner-tile scheduling-unit base params";
   }
+  if (failed(
+          materializeSuAccessWindowDeps(source, dispatchBases, builder, plan)))
+    return failure();
+  appendDynamicCodirDepSliceParams(plan.deps, plan.params);
   SmallVector<Attribute> depModeAttrs =
       buildCodirAccessModeAttrs(source.getContext(), plan.depModes);
   SmallVector<Attribute> depStorageViewAttrs =
@@ -2847,6 +3013,7 @@ convertSuOwnerTileNdToCodir(sde::SdeSuIterateOp source,
       createCodirCodelet(builder, loc, builder.getArrayAttr(depModeAttrs),
                          builder.getArrayAttr(depStorageViewAttrs), plan.deps,
                          plan.params, metadata);
+  applySuDepOwnerDims(codelet, plan);
   if (requiresSuCompletionBarrier(source))
     codelet.setCompletionBarrierAttr(builder.getUnitAttr());
 
@@ -2858,8 +3025,12 @@ convertSuOwnerTileNdToCodir(sde::SdeSuIterateOp source,
     body->addArgument(param.getType(), loc);
 
   IRMapping mapper;
-  for (auto [idx, dep] : llvm::enumerate(plan.deps))
+  for (auto [idx, dep] : llvm::enumerate(plan.deps)) {
     mapper.map(dep, body->getArgument(idx));
+    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep);
+    if (root && root != dep && !mapper.contains(root))
+      mapper.map(root, body->getArgument(idx));
+  }
   unsigned paramOffset = plan.deps.size();
   for (auto [idx, param] : llvm::enumerate(plan.params))
     mapper.map(param, body->getArgument(paramOffset + idx));
@@ -2939,8 +3110,11 @@ convertSuIterateToCodir(sde::SdeSuIterateOp source,
   if (failed(addSuParam(dispatchLoop.getInductionVar(), plan)))
     return source.emitOpError()
            << "failed to materialize scheduling-unit base param";
-  appendSuOwnerSliceLocalRewrites(source, dispatchLoop.getInductionVar(),
-                                  builder, plan);
+  SmallVector<Value, 1> dispatchBases{dispatchLoop.getInductionVar()};
+  if (failed(
+          materializeSuAccessWindowDeps(source, dispatchBases, builder, plan)))
+    return failure();
+  appendDynamicCodirDepSliceParams(plan.deps, plan.params);
 
   SmallVector<Attribute> depModeAttrs =
       buildCodirAccessModeAttrs(source.getContext(), plan.depModes);
@@ -2954,6 +3128,7 @@ convertSuIterateToCodir(sde::SdeSuIterateOp source,
       createCodirCodelet(builder, loc, builder.getArrayAttr(depModeAttrs),
                          builder.getArrayAttr(depStorageViewAttrs), plan.deps,
                          plan.params, metadata);
+  applySuDepOwnerDims(codelet, plan);
   if (requiresSuCompletionBarrier(source))
     codelet.setCompletionBarrierAttr(builder.getUnitAttr());
 
@@ -2965,8 +3140,12 @@ convertSuIterateToCodir(sde::SdeSuIterateOp source,
     body->addArgument(param.getType(), loc);
 
   IRMapping mapper;
-  for (auto [idx, dep] : llvm::enumerate(plan.deps))
+  for (auto [idx, dep] : llvm::enumerate(plan.deps)) {
     mapper.map(dep, body->getArgument(idx));
+    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep);
+    if (root && root != dep && !mapper.contains(root))
+      mapper.map(root, body->getArgument(idx));
+  }
   unsigned paramOffset = plan.deps.size();
   for (auto [idx, param] : llvm::enumerate(plan.params))
     mapper.map(param, body->getArgument(paramOffset + idx));

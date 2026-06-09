@@ -140,7 +140,7 @@ This stage only performs the mechanical CODIR-to-ARTS conversion. ARTS EDT dep
 realization and boundary checks run in `edt-dep-realization`.
 
 ```text
-MaterializeSdeBoundaryToArts
+ConvertSdeBoundaryToArts
 ConvertCodirToArts
 ```
 

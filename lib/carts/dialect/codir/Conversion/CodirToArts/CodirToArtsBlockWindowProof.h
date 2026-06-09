@@ -295,6 +295,45 @@ struct BlockWindowProof {
            upperStaysInWindow(loop.getUpperBound(), depth + 1);
   }
 
+  bool pointPlusValueStaysInWindow(Value base, Value offset,
+                                   unsigned depth) const {
+    if (!base || !offset || depth > 8)
+      return false;
+    std::optional<ConstantRange> offsetRange = getUnsignedRange(offset);
+    Value strippedBase = ::mlir::carts::ValueAnalysis::stripNumericCasts(base);
+    if (auto blockArg = dyn_cast<BlockArgument>(strippedBase)) {
+      auto loop =
+          dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+      if (loop && loop.getInductionVar() == strippedBase &&
+          ::mlir::carts::ValueAnalysis::sameValue(offset, loop.getStep()))
+        return upperStaysInWindow(loop.getUpperBound(), depth + 1);
+    }
+
+    if (!offsetRange || offsetRange->lower < 0 || offsetRange->upper < 0)
+      return false;
+
+    if (hasZeroOwnerBase()) {
+      std::optional<ConstantRange> baseRange = getUnsignedRange(base);
+      return baseRange && baseRange->lower >= 0 &&
+             offsetRange->upper <= windowExtent &&
+             baseRange->upper <= windowExtent - offsetRange->upper;
+    }
+    if (std::optional<int64_t> baseOffset = getOwnerRelativeConstant(base))
+      return *baseOffset >= 0 && offsetRange->upper <= windowExtent &&
+             *baseOffset <= windowExtent - offsetRange->upper;
+
+    base = ::mlir::carts::ValueAnalysis::stripNumericCasts(base);
+    auto blockArg = dyn_cast<BlockArgument>(base);
+    if (!blockArg)
+      return false;
+    auto loop =
+        dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp());
+    if (!loop || loop.getInductionVar() != base)
+      return false;
+    return offsetRange->upper <= windowExtent &&
+           upperStaysInWindow(loop.getUpperBound(), depth + 1);
+  }
+
   bool upperStaysInWindow(Value candidate, unsigned depth = 0) const {
     if (!candidate || depth > 8)
       return false;
@@ -304,6 +343,11 @@ struct BlockWindowProof {
       if (pointPlusOffsetStaysInWindow(add->first, add->second, depth + 1))
         return true;
     candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+    if (auto add = candidate.getDefiningOp<arith::AddIOp>()) {
+      if (pointPlusValueStaysInWindow(add.getLhs(), add.getRhs(), depth + 1) ||
+          pointPlusValueStaysInWindow(add.getRhs(), add.getLhs(), depth + 1))
+        return true;
+    }
     if (auto min = candidate.getDefiningOp<arith::MinUIOp>())
       return upperStaysInWindow(min.getLhs(), depth + 1) ||
              upperStaysInWindow(min.getRhs(), depth + 1);
