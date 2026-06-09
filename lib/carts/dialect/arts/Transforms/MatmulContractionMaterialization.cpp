@@ -89,10 +89,6 @@ static DbAcquireOp getDepAcquire(EdtOp edt, unsigned depIndex) {
   return edt.getDependencies()[depIndex].getDefiningOp<DbAcquireOp>();
 }
 
-static std::optional<int64_t> foldConst(Value v) {
-  return ValueAnalysis::tryFoldConstantIndex(v);
-}
-
 /// Block-mode <in>/<out> acquire of `alloc` at outer index `offset` (size 1),
 /// emitted OUTSIDE any EDT so the resulting ptr can be a block-arg dep. ARTS-RT
 /// ABI requires every DB an EDT touches to arrive this way.
@@ -165,7 +161,7 @@ static DbAllocOp findMatchingReplica(ModuleOp module, DbAllocOp coarseFAlloc) {
     return {};
   SmallVector<int64_t> coarseElems;
   for (Value sz : coarseFAlloc.getElementSizes()) {
-    std::optional<int64_t> c = foldConst(sz);
+    std::optional<int64_t> c = ValueAnalysis::tryFoldConstantIndex(sz);
     if (!c)
       return {};
     coarseElems.push_back(*c);
@@ -184,12 +180,13 @@ static DbAllocOp findMatchingReplica(ModuleOp module, DbAllocOp coarseFAlloc) {
       return;
     int64_t blockProd = 1;
     for (Value sz : alloc.getElementSizes()) {
-      std::optional<int64_t> c = foldConst(sz);
+      std::optional<int64_t> c = ValueAnalysis::tryFoldConstantIndex(sz);
       if (!c)
         return;
       blockProd *= *c;
     }
-    std::optional<int64_t> blockCount = foldConst(alloc.getSizes().front());
+    std::optional<int64_t> blockCount =
+        ValueAnalysis::tryFoldConstantIndex(alloc.getSizes().front());
     if (!blockCount || *blockCount <= 0)
       return;
     if (blockProd * *blockCount != wholeProd)
@@ -257,9 +254,12 @@ static LogicalResult findContractionLoads(EdtOp gEdt, unsigned coarseFDep,
     return failure();
 
   // The k-loop must be a unit-step 0..K loop, K = numTiles * blockRows.
-  std::optional<int64_t> lb = foldConst(kLoop.getLowerBound());
-  std::optional<int64_t> ub = foldConst(kLoop.getUpperBound());
-  std::optional<int64_t> step = foldConst(kLoop.getStep());
+  std::optional<int64_t> lb =
+      ValueAnalysis::tryFoldConstantIndex(kLoop.getLowerBound());
+  std::optional<int64_t> ub =
+      ValueAnalysis::tryFoldConstantIndex(kLoop.getUpperBound());
+  std::optional<int64_t> step =
+      ValueAnalysis::tryFoldConstantIndex(kLoop.getStep());
   if (!lb || !ub || !step || *lb != 0 || *step != 1)
     return failure();
   if (*ub != t.numTiles * t.blockRows)
@@ -343,13 +343,14 @@ static std::optional<MatmulContractionTarget> matchTarget(EdtOp edt) {
       if (auto od = dyn_cast<IntegerAttr>(ownerDims[0])) {
         unsigned dim = static_cast<unsigned>(od.getInt());
         if (dim < replicaAlloc.getElementSizes().size())
-          if (std::optional<int64_t> c =
-                  foldConst(replicaAlloc.getElementSizes()[dim]))
+          if (std::optional<int64_t> c = ValueAnalysis::tryFoldConstantIndex(
+                  replicaAlloc.getElementSizes()[dim]))
             blockRows = *c;
       }
   if (blockRows <= 0)
     return std::nullopt;
-  std::optional<int64_t> numTiles = foldConst(replicaAlloc.getSizes().front());
+  std::optional<int64_t> numTiles =
+      ValueAnalysis::tryFoldConstantIndex(replicaAlloc.getSizes().front());
   if (!numTiles || *numTiles <= 0)
     return std::nullopt;
   std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);

@@ -93,12 +93,6 @@ struct LoopInfo {
   int depth = 0;
 };
 
-struct IVExpr {
-  bool dependsOnIV = false;
-  std::optional<int64_t> offset;
-  std::optional<int64_t> multiplier;
-};
-
 using AcquireAccessOperationMap = DenseMap<DbRefOp, SetVector<Operation *>>;
 
 static DbAllocOp getRootAlloc(DbAcquireOp acquire) {
@@ -340,76 +334,6 @@ static bool isProvablyZeroLoopLowerBound(Value lb) {
          matchesZeroClamp(falseVal, trueVal);
 }
 
-static std::optional<int64_t> foldConstIndex(Value value) {
-  return arts::tryFoldConstantIndex(ValueAnalysis::stripNumericCasts(value));
-}
-
-static IVExpr analyzeIndexExpr(Value value, Value iv, unsigned depth = 0) {
-  IVExpr unknown;
-  if (!value || !iv || depth > 8)
-    return unknown;
-
-  value = ValueAnalysis::stripNumericCasts(value);
-  if (value == iv)
-    return {/*dependsOnIV=*/true, /*offset=*/0, /*multiplier=*/1};
-
-  if (auto c = foldConstIndex(value))
-    return {/*dependsOnIV=*/false, /*offset=*/*c, /*multiplier=*/0};
-
-  Operation *def = value.getDefiningOp();
-  if (!def)
-    return unknown;
-
-  if (auto add = dyn_cast<arith::AddIOp>(def)) {
-    IVExpr lhs = analyzeIndexExpr(add.getLhs(), iv, depth + 1);
-    IVExpr rhs = analyzeIndexExpr(add.getRhs(), iv, depth + 1);
-    IVExpr out;
-    out.dependsOnIV = lhs.dependsOnIV || rhs.dependsOnIV;
-    if (lhs.offset && rhs.offset)
-      out.offset = *lhs.offset + *rhs.offset;
-    if (lhs.multiplier && rhs.multiplier)
-      out.multiplier = *lhs.multiplier + *rhs.multiplier;
-    return out;
-  }
-
-  if (auto sub = dyn_cast<arith::SubIOp>(def)) {
-    IVExpr lhs = analyzeIndexExpr(sub.getLhs(), iv, depth + 1);
-    IVExpr rhs = analyzeIndexExpr(sub.getRhs(), iv, depth + 1);
-    IVExpr out;
-    out.dependsOnIV = lhs.dependsOnIV || rhs.dependsOnIV;
-    if (lhs.offset && rhs.offset)
-      out.offset = *lhs.offset - *rhs.offset;
-    if (lhs.multiplier && rhs.multiplier)
-      out.multiplier = *lhs.multiplier - *rhs.multiplier;
-    return out;
-  }
-
-  if (auto mul = dyn_cast<arith::MulIOp>(def)) {
-    IVExpr lhs = analyzeIndexExpr(mul.getLhs(), iv, depth + 1);
-    IVExpr rhs = analyzeIndexExpr(mul.getRhs(), iv, depth + 1);
-    if (lhs.dependsOnIV && !rhs.dependsOnIV && rhs.offset) {
-      if (lhs.multiplier)
-        lhs.multiplier = *lhs.multiplier * *rhs.offset;
-      if (lhs.offset)
-        lhs.offset = *lhs.offset * *rhs.offset;
-      return lhs;
-    }
-    if (rhs.dependsOnIV && !lhs.dependsOnIV && lhs.offset) {
-      if (rhs.multiplier)
-        rhs.multiplier = *rhs.multiplier * *lhs.offset;
-      if (rhs.offset)
-        rhs.offset = *rhs.offset * *lhs.offset;
-      return rhs;
-    }
-  }
-
-  return unknown;
-}
-
-static bool dependsOnIV(Value value, Value iv) {
-  return analyzeIndexExpr(value, iv).dependsOnIV;
-}
-
 static bool isLoopFullRange(const LoopInfo &loop, Value dimSize) {
   if (!loop.loop || !dimSize)
     return false;
@@ -445,14 +369,21 @@ static bool isIndexFullCoverage(Value idx, Value dimSize,
     /// A constant index alone cannot cover a non-unit dimension.
     return false;
 
+  auto foldArtsConstantIndex = [](Value value,
+                                  unsigned depth) -> std::optional<int64_t> {
+    return arts::tryFoldConstantIndex(ValueAnalysis::stripNumericCasts(value),
+                                      depth);
+  };
+
   const LoopInfo *best = nullptr;
-  IVExpr bestExpr;
+  ValueAnalysis::IndexExpr bestExpr;
   int bestDepth = -1;
 
   for (const LoopInfo &loop : loops) {
-    if (!loop.loop || !dependsOnIV(idx, loop.iv))
+    if (!loop.loop)
       continue;
-    auto expr = analyzeIndexExpr(idx, loop.iv);
+    auto expr = ValueAnalysis::analyzeIndexExprWith(idx, loop.iv,
+                                                    foldArtsConstantIndex);
     if (!expr.dependsOnIV)
       continue;
     int depth = loop.depth;

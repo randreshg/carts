@@ -566,7 +566,6 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
   return result.wasInterrupted() ? failure() : success();
 }
 
-
 } // namespace
 
 #endif // CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BLOCKLOCALACCESS_H

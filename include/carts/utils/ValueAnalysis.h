@@ -24,6 +24,12 @@ namespace carts {
 /// Static analysis utilities for MLIR Values, constants, and casts.
 class ValueAnalysis {
 public:
+  struct IndexExpr {
+    bool dependsOnIV = false;
+    std::optional<int64_t> offset;
+    std::optional<int64_t> multiplier;
+  };
+
   ///===----------------------------------------------------------------------===////
   /// Constant Value Analysis
   ///===----------------------------------------------------------------------===////
@@ -57,6 +63,16 @@ public:
       unsigned depth = 0);
 
   static std::optional<int64_t> getConstantIndexStripped(Value v);
+
+  /// Analyze a simple affine-like expression in one induction variable.
+  static IndexExpr analyzeIndexExpr(Value value, Value iv, unsigned depth = 0);
+
+  /// Like analyzeIndexExpr, but with a dialect-owned constant-folding hook for
+  /// values this shared utility must not interpret directly.
+  static IndexExpr analyzeIndexExprWith(
+      Value value, Value iv,
+      llvm::function_ref<std::optional<int64_t>(Value, unsigned)> extraFolder,
+      unsigned depth = 0);
 
   static bool isConstantEqual(Value v, int64_t val);
   static bool isZeroConstant(Value v);
