@@ -21,8 +21,7 @@ using namespace mlir;
 using namespace mlir::carts;
 
 static llvm::Statistic numAtomicReductionsMaterialized{
-    "codir_reduction_atomic_materialization",
-    "NumAtomicReductionsMaterialized",
+    "codir_reduction_atomic_materialization", "NumAtomicReductionsMaterialized",
     "Number of explicit CODIR atomic reductions materialized"};
 
 namespace {
@@ -67,9 +66,8 @@ static bool shouldMaterializeAtomic(codir::CodeletOp codelet) {
 
 static unsigned materializeAtomicUpdates(codir::CodeletOp codelet) {
   SmallVector<memref::StoreOp, 8> stores;
-  codelet.getBody().walk([&](memref::StoreOp store) {
-    stores.push_back(store);
-  });
+  codelet.getBody().walk(
+      [&](memref::StoreOp store) { stores.push_back(store); });
 
   unsigned lowered = 0;
   for (memref::StoreOp store : stores) {

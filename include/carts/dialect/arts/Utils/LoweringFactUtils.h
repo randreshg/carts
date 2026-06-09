@@ -74,9 +74,7 @@ struct LoweringFactInfo {
   SpatialLayout spatial;
   AnalysisRefinement analysis;
 
-  bool hasDistributionFacts() const {
-    return pattern.hasDistributionFacts();
-  }
+  bool hasDistributionFacts() const { return pattern.hasDistributionFacts(); }
 
   bool hasSemanticFacts() const {
     return hasDistributionFacts() || analysis.narrowableDep;
@@ -118,10 +116,10 @@ std::optional<LoweringFactInfo> getSemanticFacts(Operation *op);
 std::optional<LoweringFactInfo>
 getLoweringFacts(Operation *op, OpBuilder &builder, Location loc);
 FactMergeChange mergeLoweringFactInfo(LoweringFactInfo &dest,
-                                         const LoweringFactInfo &src);
+                                      const LoweringFactInfo &src);
 void normalizeLoweringFactInfo(LoweringFactInfo &info);
-SmallVector<unsigned, 4>
-resolveFactOwnerDims(const LoweringFactInfo &info, unsigned rank);
+SmallVector<unsigned, 4> resolveFactOwnerDims(const LoweringFactInfo &info,
+                                              unsigned rank);
 
 /// Extract the halo window (min/max offsets) from concrete lowering facts.
 /// Returns nullopt if there is no offset information.
@@ -136,8 +134,7 @@ std::optional<LoweringFactInfo> resolveAcquireFacts(DbAcquireOp acquire);
 /// read slices. Returns true when mode=in and facts supports block halo.
 bool shouldApplyStencilHalo(const LoweringFactInfo &facts,
                             ArtsMode effectiveMode);
-bool shouldApplyStencilHalo(const LoweringFactInfo &facts,
-                            DbAcquireOp acquire);
+bool shouldApplyStencilHalo(const LoweringFactInfo &facts, DbAcquireOp acquire);
 
 /// Check if an acquire should use partition_offsets/partition_sizes as the
 /// dependency window instead of offsets/sizes. Returns true for stencil-mode

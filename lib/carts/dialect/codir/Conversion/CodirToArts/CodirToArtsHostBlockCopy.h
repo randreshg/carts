@@ -603,7 +603,6 @@ static inline void materializePerBlockSumNest(OpBuilder &builder, Location loc,
   indices.pop_back();
 }
 
-
 } // namespace
 
 #endif // CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTBLOCKCOPY_H

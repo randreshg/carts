@@ -45,22 +45,19 @@ static unsigned consolidateStencilHalos(ModuleOp module) {
         rank = std::max(rank, static_cast<unsigned>(rawMaxOffsets->size()));
 
       auto facts = resolveAcquireFacts(acquire);
-      bool usesStencilSemantics =
-          (facts && facts->isStencilFamily()) ||
-          static_cast<bool>(rawMinOffsets) || static_cast<bool>(rawMaxOffsets);
+      bool usesStencilSemantics = (facts && facts->isStencilFamily()) ||
+                                  static_cast<bool>(rawMinOffsets) ||
+                                  static_cast<bool>(rawMaxOffsets);
       if (!usesStencilSemantics)
         continue;
 
-      std::optional<
-          std::pair<SmallVector<int64_t, 4>, SmallVector<int64_t, 4>>>
+      std::optional<std::pair<SmallVector<int64_t, 4>, SmallVector<int64_t, 4>>>
           factsHalo;
       if (facts)
         factsHalo = projectHaloWindow(*facts);
       if (factsHalo) {
-        rank =
-            std::max(rank, static_cast<unsigned>(factsHalo->first.size()));
-        rank =
-            std::max(rank, static_cast<unsigned>(factsHalo->second.size()));
+        rank = std::max(rank, static_cast<unsigned>(factsHalo->first.size()));
+        rank = std::max(rank, static_cast<unsigned>(factsHalo->second.size()));
       }
 
       if (rank == 0)
@@ -97,8 +94,8 @@ static unsigned consolidateStencilHalos(ModuleOp module) {
       OpBuilder builder(acquire.getContext());
       builder.setInsertionPointAfter(acquire.getOperation());
       Operation *acquireOp = acquire.getOperation();
-      acquire.setDepPatternAttr(
-          ArtsDepPatternAttr::get(acquire.getContext(), ArtsDepPattern::stencil));
+      acquire.setDepPatternAttr(ArtsDepPatternAttr::get(
+          acquire.getContext(), ArtsDepPattern::stencil));
       acquire.setDistributionPatternAttr(EdtDistributionPatternAttr::get(
           acquire.getContext(), EdtDistributionPattern::stencil));
       acquireOp->setAttr(acquire.getStencilMinOffsetsAttrName(),
@@ -130,7 +127,6 @@ struct DbConsolidateStencilHalosPass
 };
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::carts::arts::createDbConsolidateStencilHalosPass() {
+std::unique_ptr<Pass> mlir::carts::arts::createDbConsolidateStencilHalosPass() {
   return std::make_unique<DbConsolidateStencilHalosPass>();
 }

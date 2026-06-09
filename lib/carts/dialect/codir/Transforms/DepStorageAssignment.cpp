@@ -812,9 +812,10 @@ static bool hasFinalizedStorageFacts(codir::CodeletOp codelet) {
   return true;
 }
 
-static LogicalResult
-verifyFinalizedStorageAttr(codir::CodeletOp codelet, ArrayAttr existing,
-                           ArrayAttr desired, StringRef attrName) {
+static LogicalResult verifyFinalizedStorageAttr(codir::CodeletOp codelet,
+                                                ArrayAttr existing,
+                                                ArrayAttr desired,
+                                                StringRef attrName) {
   if (existing == desired)
     return success();
   return codelet.emitOpError()

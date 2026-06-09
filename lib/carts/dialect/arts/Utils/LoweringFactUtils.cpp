@@ -262,12 +262,11 @@ mlir::carts::arts::getSemanticFacts(Operation *op) {
 
 std::optional<LoweringFactInfo>
 mlir::carts::arts::getLoweringFacts(Operation *op, OpBuilder &builder,
-                                       Location loc) {
+                                    Location loc) {
   if (!op)
     return std::nullopt;
 
-  LoweringFactInfo info =
-      getSemanticFacts(op).value_or(LoweringFactInfo{});
+  LoweringFactInfo info = getSemanticFacts(op).value_or(LoweringFactInfo{});
   if (auto minOffsets = getStencilMinOffsets(op))
     info.spatial.minOffsets = materializeIndexValues(builder, loc, *minOffsets);
   if (auto maxOffsets = getStencilMaxOffsets(op))
@@ -283,7 +282,7 @@ mlir::carts::arts::getLoweringFacts(Operation *op, OpBuilder &builder,
 
 FactMergeChange
 mlir::carts::arts::mergeLoweringFactInfo(LoweringFactInfo &dest,
-                                             const LoweringFactInfo &src) {
+                                         const LoweringFactInfo &src) {
   bool changed = false;
 
   if (dest.pattern.kind == FactKind::Unknown &&
@@ -405,8 +404,7 @@ mlir::carts::arts::mergeLoweringFactInfo(LoweringFactInfo &dest,
   return changed ? FactMergeChange::Changed : FactMergeChange::Unchanged;
 }
 
-void mlir::carts::arts::normalizeLoweringFactInfo(
-    LoweringFactInfo &info) {
+void mlir::carts::arts::normalizeLoweringFactInfo(LoweringFactInfo &info) {
   const size_t expectedRank = info.spatial.ownerDims.size();
   if (expectedRank == 0)
     return;
@@ -432,7 +430,7 @@ void mlir::carts::arts::normalizeLoweringFactInfo(
 
 SmallVector<unsigned, 4>
 mlir::carts::arts::resolveFactOwnerDims(const LoweringFactInfo &info,
-                                            unsigned rank) {
+                                        unsigned rank) {
   SmallVector<unsigned, 4> dims;
   dims.reserve(rank);
   for (int64_t dim : info.spatial.ownerDims) {
@@ -479,15 +477,15 @@ mlir::carts::arts::resolveAcquireFacts(DbAcquireOp acquire) {
   return info;
 }
 
-bool mlir::carts::arts::shouldApplyStencilHalo(
-    const LoweringFactInfo &facts, ArtsMode effectiveMode) {
+bool mlir::carts::arts::shouldApplyStencilHalo(const LoweringFactInfo &facts,
+                                               ArtsMode effectiveMode) {
   if (effectiveMode != ArtsMode::in)
     return false;
   return facts.supportsBlockHalo();
 }
 
-bool mlir::carts::arts::shouldApplyStencilHalo(
-    const LoweringFactInfo &facts, DbAcquireOp acquire) {
+bool mlir::carts::arts::shouldApplyStencilHalo(const LoweringFactInfo &facts,
+                                               DbAcquireOp acquire) {
   if (!acquire)
     return false;
   return shouldApplyStencilHalo(facts, acquire.getMode());
@@ -539,7 +537,7 @@ bool mlir::carts::arts::shouldPreserveParentDepRange(
 }
 
 void mlir::carts::arts::transferOperationFacts(Operation *source,
-                                                  Operation *target) {
+                                               Operation *target) {
   if (!source || !target)
     return;
   copySemanticFactAttrs(source, target);

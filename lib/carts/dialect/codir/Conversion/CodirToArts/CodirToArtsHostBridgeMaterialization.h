@@ -466,7 +466,6 @@ materializeRawCodirDependency(Value dep, codir::CodeletOp planSource,
   return success();
 }
 
-
 } // namespace
 
 #endif // CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTBRIDGEMATERIALIZATION_H

@@ -1,7 +1,8 @@
 ///==========================================================================///
 /// File: CodirToArtsHostBridgePlanning.h
 ///
-/// Host bridge participant collection, anchor selection, and bridge plan records.
+/// Host bridge participant collection, anchor selection, and bridge plan
+/// records.
 ///==========================================================================///
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTBRIDGEPLANNING_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTBRIDGEPLANNING_H
