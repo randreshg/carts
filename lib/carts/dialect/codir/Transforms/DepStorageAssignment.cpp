@@ -18,7 +18,6 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
-#include <algorithm>
 #include <limits>
 
 namespace mlir::carts::codir {
@@ -441,24 +440,6 @@ static bool hasSameBlockStoragePlan(codir::CodeletOp lhs, unsigned lhsDepIndex,
              codir::getDepPhysicalBlockShapeAttr(rhs, rhsDepIndex);
 }
 
-static bool areCommensurateBlockShapes(ArrayAttr lhs, ArrayAttr rhs) {
-  std::optional<SmallVector<int64_t, 4>> lhsShape = readI64ArrayAttr(lhs);
-  std::optional<SmallVector<int64_t, 4>> rhsShape = readI64ArrayAttr(rhs);
-  if (!lhsShape || !rhsShape || lhsShape->empty() ||
-      lhsShape->size() != rhsShape->size())
-    return false;
-
-  for (auto [lhsDim, rhsDim] : llvm::zip_equal(*lhsShape, *rhsShape)) {
-    if (lhsDim <= 0 || rhsDim <= 0)
-      return false;
-    int64_t larger = std::max(lhsDim, rhsDim);
-    int64_t smaller = std::min(lhsDim, rhsDim);
-    if (larger % smaller != 0)
-      return false;
-  }
-  return true;
-}
-
 static bool hasCompatibleBlockStoragePlan(codir::CodeletOp lhs,
                                           unsigned lhsDepIndex,
                                           codir::CodeletOp rhs,
@@ -470,7 +451,7 @@ static bool hasCompatibleBlockStoragePlan(codir::CodeletOp lhs,
   std::optional<SmallVector<unsigned, 4>> rhsOwnerDims =
       getDepOwnerDims(rhs, rhsDepIndex);
   return lhsOwnerDims && rhsOwnerDims && *lhsOwnerDims == *rhsOwnerDims &&
-         areCommensurateBlockShapes(
+         codir::areCommensurateBlockShapes(
              codir::getDepPhysicalBlockShapeAttr(lhs, lhsDepIndex),
              codir::getDepPhysicalBlockShapeAttr(rhs, rhsDepIndex));
 }
@@ -532,7 +513,7 @@ static bool rootHasIncompatibleStencilBlockParticipant(codir::CodeletOp seed,
           getDepOwnerDims(candidate, candidateDepIndex);
       if (!candidateOwnerDims || *candidateOwnerDims != *seedOwnerDims)
         continue;
-      if (areCommensurateBlockShapes(
+      if (codir::areCommensurateBlockShapes(
               codir::getDepPhysicalBlockShapeAttr(seed, seedDepIndex),
               codir::getDepPhysicalBlockShapeAttr(candidate,
                                                   candidateDepIndex)))

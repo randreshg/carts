@@ -7,6 +7,8 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 
+#include <algorithm>
+
 namespace mlir::carts::codir {
 
 bool stencilWriteFitsInTile(CodeletOp codelet) {
@@ -72,6 +74,39 @@ static bool blockShapeAlignsWithTile(ArrayAttr blockShape,
     if (block <= 0 || tile <= 0 || block % tile != 0)
       return false;
   return true;
+}
+
+static bool isFullTimestep(CodeletOp codelet) {
+  auto repetition = codelet ? codelet.getRepetitionStructureAttr() : nullptr;
+  return repetition &&
+         repetition.getValue() == CodirRepetitionStructure::full_timestep;
+}
+
+static bool isUniformCodelet(CodeletOp codelet) {
+  auto pattern = codelet ? codelet.getPatternAttr() : nullptr;
+  return pattern && pattern.getValue() == CodirPattern::uniform;
+}
+
+static bool isStencilCodelet(CodeletOp codelet) {
+  auto pattern = codelet ? codelet.getPatternAttr() : nullptr;
+  if (!pattern)
+    return false;
+  switch (pattern.getValue()) {
+  case CodirPattern::stencil_tiling_nd:
+  case CodirPattern::cross_dim_stencil_3d:
+  case CodirPattern::higher_order_stencil:
+  case CodirPattern::wavefront_2d:
+  case CodirPattern::alternating_buffer_stencil:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool isFullTimestepUniformStencilPair(CodeletOp lhs, CodeletOp rhs) {
+  return isFullTimestep(lhs) && isFullTimestep(rhs) &&
+         ((isUniformCodelet(lhs) && isStencilCodelet(rhs)) ||
+          (isStencilCodelet(lhs) && isUniformCodelet(rhs)));
 }
 
 static ArrayAttr getComputeBlockReadShapeOr(CodeletOp codelet,
@@ -487,7 +522,8 @@ DictionaryAttr getArrayLayoutEntryForDep(CodeletOp codelet, unsigned depIndex) {
   return {};
 }
 
-ArrayAttr getDepPhysicalBlockShapeAttr(CodeletOp codelet, unsigned depIndex) {
+static ArrayAttr getDepBasePhysicalBlockShapeAttr(CodeletOp codelet,
+                                                  unsigned depIndex) {
   std::optional<int64_t> depArrayId = getDepArrayId(codelet, depIndex);
   std::optional<CodirAccessMode> mode = getDepAccessMode(codelet, depIndex);
   if (depArrayId && mode) {
@@ -544,6 +580,121 @@ ArrayAttr getDepPhysicalBlockShapeAttr(CodeletOp codelet, unsigned depIndex) {
     return layoutShape;
   }
   return codelet ? codelet.getTileShapeAttr() : ArrayAttr{};
+}
+
+static bool sameOwnerDims(std::optional<SmallVector<unsigned, 4>> lhs,
+                          std::optional<SmallVector<unsigned, 4>> rhs) {
+  return lhs && rhs && *lhs == *rhs;
+}
+
+bool areCommensurateBlockShapes(ArrayAttr lhs, ArrayAttr rhs) {
+  std::optional<SmallVector<int64_t, 4>> lhsShape = readI64ArrayAttr(lhs);
+  std::optional<SmallVector<int64_t, 4>> rhsShape = readI64ArrayAttr(rhs);
+  if (!lhsShape || !rhsShape || lhsShape->empty() ||
+      lhsShape->size() != rhsShape->size())
+    return false;
+
+  for (auto [lhsDim, rhsDim] : llvm::zip_equal(*lhsShape, *rhsShape)) {
+    if (lhsDim <= 0 || rhsDim <= 0)
+      return false;
+    int64_t larger = std::max(lhsDim, rhsDim);
+    int64_t smaller = std::min(lhsDim, rhsDim);
+    if (larger % smaller != 0)
+      return false;
+  }
+  return true;
+}
+
+static bool isStrictlyFinerBlockShape(ArrayAttr candidate, ArrayAttr fallback) {
+  std::optional<SmallVector<int64_t, 4>> candidateShape =
+      readI64ArrayAttr(candidate);
+  std::optional<SmallVector<int64_t, 4>> fallbackShape =
+      readI64ArrayAttr(fallback);
+  if (!candidateShape || !fallbackShape || candidateShape->empty() ||
+      candidateShape->size() != fallbackShape->size())
+    return false;
+
+  bool strictlyFiner = false;
+  for (auto [candidateDim, fallbackDim] :
+       llvm::zip_equal(*candidateShape, *fallbackShape)) {
+    if (candidateDim <= 0 || fallbackDim <= 0 || candidateDim > fallbackDim)
+      return false;
+    if (candidateDim < fallbackDim)
+      strictlyFiner = true;
+  }
+  return strictlyFiner;
+}
+
+static ArrayAttr getSiblingWriterBlockShapeOr(CodeletOp codelet,
+                                              unsigned depIndex,
+                                              ArrayAttr fallback) {
+  if (!codelet || depIndex >= codelet.getDeps().size() || !fallback)
+    return fallback;
+
+  std::optional<CodirAccessMode> mode = getDepAccessMode(codelet, depIndex);
+  if (!mode || !codirAccessMayRead(*mode) || codirAccessMayWrite(*mode))
+    return fallback;
+
+  std::optional<CodirStorageViewKind> view =
+      getDepStorageViewKind(codelet, depIndex);
+  if (!view || !storageViewUsesComputeBlock(*view))
+    return fallback;
+
+  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
+      codelet.getDeps()[depIndex]);
+  Operation *scope = codelet->getParentOfType<ModuleOp>();
+  if (!root || !scope)
+    return fallback;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getDepOwnerDims(codelet, depIndex);
+  if (!ownerDims || ownerDims->empty())
+    return fallback;
+
+  ArrayAttr selected;
+  bool ambiguous = false;
+  scope->walk([&](CodeletOp candidate) {
+    if (ambiguous)
+      return;
+    if (candidate == codelet ||
+        !isFullTimestepUniformStencilPair(codelet, candidate))
+      return;
+    for (auto [idx, dep] : llvm::enumerate(candidate.getDeps())) {
+      unsigned candidateDepIndex = static_cast<unsigned>(idx);
+      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != root)
+        continue;
+      std::optional<CodirAccessMode> candidateMode =
+          getDepAccessMode(candidate, candidateDepIndex);
+      if (!candidateMode || !codirAccessMayWrite(*candidateMode))
+        continue;
+      std::optional<CodirStorageViewKind> candidateView =
+          getDepStorageViewKind(candidate, candidateDepIndex);
+      if (!candidateView || !storageViewUsesComputeBlock(*candidateView))
+        continue;
+      if (!sameOwnerDims(ownerDims,
+                         getDepOwnerDims(candidate, candidateDepIndex)))
+        continue;
+      ArrayAttr candidateShape =
+          getDepBasePhysicalBlockShapeAttr(candidate, candidateDepIndex);
+      if (!isPositiveI64Array(candidateShape) ||
+          !areCommensurateBlockShapes(candidateShape, fallback) ||
+          !isStrictlyFinerBlockShape(candidateShape, fallback))
+        continue;
+      if (selected && selected != candidateShape) {
+        ambiguous = true;
+        return;
+      }
+      selected = candidateShape;
+      return;
+    }
+  });
+
+  return selected && !ambiguous ? selected : fallback;
+}
+
+ArrayAttr getDepPhysicalBlockShapeAttr(CodeletOp codelet, unsigned depIndex) {
+  ArrayAttr fallback = getDepBasePhysicalBlockShapeAttr(codelet, depIndex);
+  return getSiblingWriterBlockShapeOr(codelet, depIndex, fallback);
 }
 
 std::optional<CodirAccessMode> getDepAccessMode(CodeletOp codelet,

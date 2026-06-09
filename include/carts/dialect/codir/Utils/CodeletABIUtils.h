@@ -37,10 +37,15 @@ std::optional<int64_t> getDepArrayId(CodeletOp codelet, unsigned depIndex);
 /// use this helper instead of indexing per-array layout facts by dep slot.
 DictionaryAttr getArrayLayoutEntryForDep(CodeletOp codelet, unsigned depIndex);
 
-/// Return the committed physical block shape for the dependency. Partition
-/// graph entries are preferred because they describe the actual MU/DB home
-/// shape for the edge; array_layout is the fallback global layout fact, and
-/// tile_shape is the legacy owner-tile fallback.
+/// True when both positive block shapes have the same rank and each dimension
+/// is an integer multiple of the other.
+bool areCommensurateBlockShapes(ArrayAttr lhs, ArrayAttr rhs);
+
+/// Return the physical DB block shape CODIR should realize for the dependency.
+/// Partition graph entries are preferred because they describe the actual
+/// MU/DB home shape for the edge; read-only full-timestep uniform/stencil pairs
+/// may reuse an unambiguous finer sibling writer shape when CODIR already
+/// committed compute-block storage for the same root and owner dims.
 ArrayAttr getDepPhysicalBlockShapeAttr(CodeletOp codelet, unsigned depIndex);
 
 /// True when a stencil codelet's per-iteration write footprint fits inside its
