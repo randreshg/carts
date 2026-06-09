@@ -1109,6 +1109,44 @@ struct ConvertCodirToArtsPass
     return false;
   }
 
+  // A rank-expanded owner_tile compute-block halo read addresses neighbor grid
+  // blocks: the SDE rank-expand split the spatial owner extent into a
+  // (grid, tile) index pair, so a stencil neighbor read `u[i-1]` becomes
+  // `u[divui(i-1, T)][remui(i-1, T)]`. At a tile boundary the grid coord is
+  // `baseGrid - 1` -- a *different* block, not the owner slice. The per-dep
+  // block-local rewrite materializes one block-local index per owner dim
+  // against the owner block's payload; it cannot express a select among the
+  // owner tile and its neighbor grid blocks. Realizing this needs per-neighbor
+  // grid-block acquires plus a body select keyed on the grid offset, which is
+  // not yet implemented. Fail closed here instead of materializing the
+  // grid-dim-padded neighborhood storage (which is never populated) and
+  // miscompiling.
+  bool isRankExpandedOwnerTileNeighborHaloDep(codir::CodeletOp codelet,
+                                              unsigned depIdx) {
+    auto topology = codelet.getIterationTopologyAttr();
+    if (!topology ||
+        topology.getValue() != codir::CodirIterationTopology::owner_tile)
+      return false;
+    if (!codirDepRequiresComputeBlockStorage(codelet, depIdx))
+      return false;
+    if (getFinalizedCodirDepCollectiveKind(codelet, depIdx) !=
+        codir::CodirCollectiveKind::halo)
+      return false;
+    // Owner-local stencils whose access window never leaves the owner slice are
+    // realizable without neighbor acquires; only real cross-tile reach is
+    // unrealizable here.
+    if (codirDepHasNoStencilReachAlongOwnerDims(codelet, depIdx))
+      return false;
+    auto memrefType = dyn_cast<MemRefType>(codelet.getDeps()[depIdx].getType());
+    std::optional<SmallVector<unsigned, 4>> ownerDims =
+        getCodirDepOwnerDims(codelet, depIdx);
+    if (!memrefType || !ownerDims || ownerDims->empty())
+      return false;
+    // Rank-expanded: the dep memref carries more dims than owner (grid) dims,
+    // so each owner dim was split into a (grid, tile) index pair.
+    return static_cast<unsigned>(memrefType.getRank()) > ownerDims->size();
+  }
+
   bool isGroupedOwnerStripReadWriteHaloDep(codir::CodeletOp codelet,
                                            unsigned depIdx) {
     auto topology = codelet.getIterationTopologyAttr();
@@ -1167,6 +1205,15 @@ struct ConvertCodirToArtsPass
                   "CODIR/ARTS owner-strip RO halo conversion is not yet "
                   "implemented, so this path fails closed instead of "
                   "materializing a partial halo";
+      if (isRankExpandedOwnerTileNeighborHaloDep(codelet, depIdx))
+        return codelet.emitOpError()
+               << "dependency #" << depIdx
+               << " commits a rank-expanded owner-tile compute-block halo whose "
+                  "stencil neighbor reads address neighbor grid blocks "
+                  "(divui/remui of i+/-1 over the tile extent); per-neighbor "
+                  "grid-block halo acquisition with an in-body grid-offset "
+                  "select is not yet implemented, so this path fails closed "
+                  "instead of materializing unpopulated grid-dim halo storage";
       if (isGroupedOwnerStripReadWriteHaloDep(codelet, depIdx))
         return codelet.emitOpError()
                << "grouped owner-compute halo dependency #" << depIdx
