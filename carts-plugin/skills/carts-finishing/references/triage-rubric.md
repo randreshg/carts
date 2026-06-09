@@ -26,13 +26,13 @@ When an error surfaces at stage N, check the listed prior stages first.
 | `codir-to-arts` | `SDE operation ... survived past SDE lowering` | `ConvertOpenMPToSde`, `sde-planning`, `ConvertSdeToCodir` | Which SDE op did not become a CODIR codelet or explicit CODIR boundary object? |
 | `sde-input-normalization` / `create-dbs` | `cannot trace memref operand to its underlying allocation` | `SdeMemrefNormalization`, `SdeHandleDeps`, `CreateDbs` | Memref-of-memref reaching CreateDbs from a heap allocation. |
 | `create-dbs` | `un-normalizable nested memref pattern (element type is memref)` | `SdeMemrefNormalization`, `ConvertOpenMPToSde` | Polygeist producing `memref<?xmemref<?xT>>` from `int *A = malloc(N)`. Fix upstream. |
-| `create-dbs` / `post-db-refinement` | Metadata-copy recursion or DB-mode churn | Live `copyArtsMetadataAttrs` call sites, `DbAnalysis`, DB refinement rewrites | Fix the producer or rewrite that invalidates the contract. Do not recreate the retired monolithic partitioning layer. |
+| `create-dbs` / `post-db-refinement` | Metadata-copy recursion or DB-mode churn | Live metadata copy sites and focused DB refinement rewrites | Fix the producer or rewrite that invalidates the fact. Do not recreate the retired monolithic partitioning layer. |
 | `create-dbs` / `post-db-refinement` | Wrong answer; a raw memref bridge silently becomes one coarse wrapper DB, indices dropped | SDE/CODIR shape normalization or direct CODIR-to-ARTS materialization | Single-element wrapper DB instead of N-element data. The fix is upstream in shape/token-local materialization; `CreateDbs` is only a guarded coarse raw bridge. |
 | `post-db-refinement` | Stencil halo bounds wrong | SDE access-window plan, DB refinement contract rewrite | Confirm SDE stamped the right halo/window, then check whether DB refinement rewrote it. |
 | `pre-lowering` / `arts-rt-to-llvm` | `arts.db_alloc` / `arts.edt` / `arts.epoch` survived to LLVM | DbLowering, EdtLowering, EpochLowering | A lowering was skipped. Check the owning lowering and any contract-validity gate that excluded this op. |
 | `pre-lowering` | `arts.db_acquire` references GUID that does not exist | DB refinement (GUID lost), CODIR-to-ARTS materialization for codelet deps, EpochLowering (CPS carry corruption) | Trace the GUID source. Did an intermediate pass erase it? |
-| `pre-lowering` | CPS chain: wrong iteration counter or outer epoch GUID | `EpochOpt` CPS-8 carry re-analysis, `EpochLowering` propagation | Check `CPSParamPerm` and `CPSIterCounterParamIdx` post-EpochOpt. |
-| `pre-lowering` | `CPS advance: rebuilt continuation pack with N schema holes` | `EpochOpt` carry analysis, intermediate EDT fusion, `EdtLowering` pack ordering | Carry arity changed between EpochOpt and EpochLowering. Zero-filled slots carry garbage. |
+| `pre-lowering` | CPS chain: wrong iteration counter or outer epoch GUID | Epoch continuation construction, `EpochLowering` propagation | Check carry attrs before and after epoch-tail/continuation passes. |
+| `pre-lowering` | `CPS advance: rebuilt continuation pack with N schema holes` | Epoch continuation construction, intermediate EDT rewrites, `EdtLowering` pack ordering | Carry arity changed before `EpochLowering`. Zero-filled slots carry garbage. |
 | `post-db-refinement` (distributed) | Stencil halo not applied, internode acquire uses full range | SDE window/layout mismatch, CODIR movement representation missing, ARTS owner-map fact missing | Did SDE commit a real layout/window, did CODIR preserve movement structure, and did ARTS realize distributed owner maps after consuming those facts? |
 | `post-db-refinement` (distributed) | Task hangs on remote data acquire | Dependency-window narrowing, DB refinement scope-aware bounds | A dep window may have narrowed to local-only; distributed task cannot reach halo. |
 | `pre-lowering` | `arts_rt.edt_create` argument count mismatch | `EdtLowering` pack construction, prior DB/EDT rewrites invalidating pack operand | `EdtParamPackOp` was rewritten; `EdtCreateOp` references old pack. |
@@ -61,7 +61,7 @@ Use to locate where to grep when triaging.
 - `sde-to-codir`: `lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp`
 - `codir-to-arts`: `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
 - `create-dbs`: `lib/carts/dialect/arts/Transforms/db/CreateDbs.cpp`
-- `db-opt` / `post-db-refinement`: `lib/carts/dialect/arts/Transforms/db/`, `lib/carts/dialect/arts/Analysis/db/`, `lib/carts/dialect/arts/Analysis/heuristics/DbHeuristics.cpp`
+- `db-opt` / `post-db-refinement`: `lib/carts/dialect/arts/Transforms/db/`, `include/carts/dialect/arts/Utils/DbUtils.h`, `include/carts/dialect/arts/Utils/DbLayoutPlanUtils.h`
 - CODIR-to-ARTS materialization: `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
 - SDE distribution/reduction planning: `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/sde/Transforms/effect/scheduling/ReductionStrategy.cpp`
 - ARTS-RT ABI conversion: `pre-lowering` implementation in `lib/carts/dialect/arts-rt/Conversion/ArtsToRt/` and LLVM lowering in `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/`
@@ -82,11 +82,11 @@ These are real cases where fixes landed in the wrong layer and caused regression
 
 ### Anti-pattern 2 — fixing CPS attr at relaunch instead of at carry construction
 
-`EpochOpt` CPS-8 carry re-analysis changed carry arity between EpochOpt and EpochLowering. A fix landed in `rebuildCpsPackToTargetSchema` (EpochLowering) by zero-filling missing slots. But `EpochOpt` never updated `CPSDepRouting` to match.
+An epoch continuation rewrite changed carry arity before EpochLowering. A fix landed in `rebuildCpsPackToTargetSchema` (EpochLowering) by zero-filling missing slots. But the continuation rewrite never updated `CPSDepRouting` to match.
 
 **Result:** outer epoch received wrong dep slot count; downstream dep forwarding used stale indices. Deadlock or race.
 
-**Lesson:** layer accountability. EpochOpt owns carry construction + arity. EpochLowering only consumes contracts. If EpochOpt changes the contract post-CPS-8, it must update all downstream attributes BEFORE passing to EpochLowering. Fixing at relaunch time is too late.
+**Lesson:** layer accountability. The epoch continuation pass owns carry construction + arity. EpochLowering only consumes the authored structure. If a continuation rewrite changes the carry schema, it must update all downstream attributes before passing to EpochLowering. Fixing at relaunch time is too late.
 
 ### Anti-pattern 3 — gating a pass on IR structure instead of contract validity
 

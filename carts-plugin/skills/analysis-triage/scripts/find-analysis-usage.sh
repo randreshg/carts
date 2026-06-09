@@ -12,9 +12,9 @@ cd "$(git rev-parse --show-toplevel)"
 git grep -n "$query" -- include lib docs .agents
 echo
 git grep -n \
-  -e 'AnalysisManager' \
-  -e 'getDbAnalysis' \
-  -e 'getEdtAnalysis' \
-  -e 'getLoopAnalysis' \
-  -e 'AnalysisDependencies' \
+  -e 'LoweringFactUtils' \
+  -e 'DbUtils' \
+  -e 'EdtUtils' \
+  -e 'Verify.*Lowered' \
+  -e 'Verify.*ObjectsOnly' \
   -- include lib docs .agents | grep -F "$query" || true

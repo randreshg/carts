@@ -70,7 +70,7 @@ When invoked (default action `next`):
 |---|---|---|
 | 0 (task #1) | decision | Use `AskUserQuestion` for the 5 open charter questions in `references/dialect-charter.md` "Open questions". Save answers under `.carts/sessions/<topic>/charter-decisions.md`. |
 | 1 (#2) | baseline | Run `dekk carts test`, `dekk carts test --suite e2e`, `dekk carts benchmarks run --size small`. Snapshot to `.results/baseline-YYYY-MM-DD.json`. Add multinode lit rule per `references/phase-plan.md` Phase 1. |
-| 2 (#3) | retired diagnostic | The monolithic partitioning heuristic pass is gone. If metadata-copy recursion or DB-mode churn reappears, inspect the live `copyArtsMetadataAttrs` call sites, `DbAnalysis`, and `DbTransformsPass`; do not recreate the retired partitioning layer. |
+| 2 (#3) | retired diagnostic | The monolithic partitioning heuristic pass and cached ARTS graph-analysis stack are gone. If metadata-copy recursion or DB-mode churn reappears, inspect live metadata copy sites and focused DB passes; do not recreate the retired partitioning layer. |
 | 3 (#4) | targeted-fix | Edit `lib/carts/dialect/sde/Conversion/PolygeistToSde/MemrefNormalization.cpp` first; `CreateDbs.cpp` is only the ARTS coarse raw bridge and boundary guard. The fix is in shape normalization, NOT in DB partitioning. See `references/triage-rubric.md` anti-pattern #1. |
 | 4 (#5) | per-item iteration | One sample at a time. Use the per-item workflow below. |
 | 5 (#6) | targeted-fix | Keep SDE layout facts target-neutral and real. Add or adjust ARTS realization only when SDE/CODIR have already committed valid layout and movement structure; ARTS consumes that structure plus abstract-machine topology without redetecting source patterns or pushing owner policy into ARTS-RT. |

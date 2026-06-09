@@ -55,7 +55,7 @@ benchmark-name fixes, hypergraph-as-owner-dims, or merged DB/CU grain.
 
 **Stop condition:** no live skill or doc points agents at the deleted monolithic partitioning layer. Regression-guard passes if code changes are needed.
 
-**Action:** do not recreate the retired partitioning pass. If metadata-copy recursion or DB-mode churn reappears, inspect live `copyArtsMetadataAttrs` call sites, `DbAnalysis`, and `DbTransformsPass` contract persistence.
+**Action:** do not recreate the retired partitioning pass or cached ARTS graph-analysis stack. If metadata-copy recursion or DB-mode churn reappears, inspect live metadata copy sites and focused DB refinement passes.
 
 **Why now:** prevents future agents from patching a dead surface instead of the live producer/rewrite contract.
 

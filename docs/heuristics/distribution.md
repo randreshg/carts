@@ -21,7 +21,7 @@ Transitional note:
 - Architecturally, semantic distribution family, wavefront classification, and
   cost-model-driven wavefront tile policy belong to SDE.
 - Any ARTS-side classification or attr stamping described below should be read
-  as current implementation debt, fallback behavior, or contract
+  as current implementation debt, fallback behavior, or realized-fact
   materialization after the CODIR-to-ARTS boundary.
 
 ## 0. Motivation: Bridging AMT, OpenMP, and MPI
@@ -141,55 +141,67 @@ Operational note:
 - For small/medium problems where communication dominates, matmul distribution
   remains a performance-tuning axis, not a correctness requirement.
 
-## 4. Current ARTS-Side Analysis Inputs (Transitional)
+## 4. Current ARTS-Side Inputs
 
-Current ARTS-side pattern inputs are centralized in analysis APIs, not in
-lowering passes. After the SDE boundary, these analyses should consume or
-validate SDE contracts rather than redefine semantic pattern family.
+ARTS-side passes consume committed SDE/CODIR facts and direct ARTS IR shape.
+The old cached ARTS `Analysis/` graph stack has been removed; passes use narrow
+query utilities or pass-local walks instead of graph nodes.
 
 ### 4.1 SDE-backed source of truth
 
 - SDE `PatternAnalysis` classifies work families, access windows, reductions,
   and distribution intent while source semantics are still visible.
-- `DistributionPlanning` consumes those SDE facts and stamps the contract that
-  ARTS materialization uses.
-- ARTS DB analysis validates concrete DB/EDT/epoch shape and should not recover
-  semantic loop families from implementation loops.
+- `DistributionPlanning` consumes those SDE facts and stamps the concrete
+  SDE/ARTS facts that materialization uses.
+- ARTS boundary verification validates concrete DB/EDT/epoch shape and should
+  not recover semantic loop families from implementation loops.
 
 ### 4.2 EDT-facing view
 
-- `EdtAnalysis` consumes DB-derived loop summaries for EDT-level reporting.
+- EDT reporting is a direct diagnostic walk over `arts.edt` operations.
 - Passes do not need to rescan memops directly to classify loop patterns.
 
 ### 4.3 Access-pattern unification
 
-- Shared utility: `AccessPatternAnalysis` (`include/carts/dialect/arts/Analysis/AccessPatternAnalysis.h`, `lib/carts/dialect/arts/Analysis/AccessPatternAnalysis.cpp`)
-- DB graph nodes and DB analysis both use the same bounds logic.
+Access and ownership queries are direct IR utilities:
+
+- `DbUtils` handles DB tracing, access modes, sizes, and cleanup-only chains.
+- `EdtUtils` maps acquires to EDT block arguments.
+- `DbDistributedEligibility` evaluates owner-map eligibility without a DB graph.
 
 ## 5. Pipeline Architecture
 
-Distribution is planned inside `sde-planning`. `sde-to-codir` isolates the
-planned codelets, and `codir-to-arts` realizes the MU/CU/SU plan as ARTS DB/EDT
-objects. The remaining `create-dbs` stage is a compatibility bridge for raw
-memref work that has not yet become canonical MU token/codelet form.
+Distribution is transformed inside `sde-planning`. `sde-to-codir` mechanically
+isolates the transformed codelets, `codir-graph-transforms` runs CODIR graph,
+reduction, and storage transforms, and `codir-to-arts` mechanically creates
+ARTS DB/EDT objects. The remaining `create-dbs` stage is a compatibility
+bridge for raw memref work that has not yet become canonical MU token/codelet
+form.
 
 - `sde-planning`: SDE pattern/distribution/reduction planning.
 - `sde-to-codir`: SDE codelet plans become explicit CODIR deps, params, and
   token-local views.
+- `codir-graph-transforms`: CODIR codelet graph, reduction, storage, and
+  boundary checks over isolated codelets.
 - `codir-to-arts`: CODIR deps and codelets become ARTS DB/acquire/EDT objects,
-  followed by residual non-codelet SDE compatibility lowering and verification.
+- `edt-dep-realization`: ARTS realizes EDT dependency distribution facts and
+  runs SDE/ARTS boundary checks before DB creation.
 - `create-dbs`: guarded coarse raw-memref bridge. It creates whole-storage
   `arts.db_alloc`/`arts.db_acquire` for residual raw EDT captures only.
   SDE/CODIR must handle token-local tiled/block rewrites before ARTS.
 - `db-opt`: tightens DB access modes from real uses.
-- `post-db-refinement`: validates and refines DB/EDT contracts.
-- `late-concurrency-cleanup`: strip-mining, hoisting, and late cleanup
+- `post-db-refinement`: refines DB/EDT facts already present in the IR.
+- `late-concurrency-cleanup`: hoisting and late cleanup. Loop/data-shape
+  rewrites belong in SDE unless ARTS is only realizing already-authored
+  DB/EDT structure.
 
 Key files:
 - `tools/compile/Compile.cpp`
 - `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`
 - `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
-- `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp`
+- `lib/carts/dialect/arts/Transforms/db/DbConsolidateStencilHalos.cpp`
+- `lib/carts/dialect/arts/Transforms/db/DbShortenLifetimes.cpp`
+- `lib/carts/dialect/arts/Transforms/db/DbDeadRootElimination.cpp`
 
 Useful stop points:
 
@@ -213,7 +225,7 @@ Current implementation:
 - Pipeline placement: ARTS DB refinement after SDE distribution planning
   (default-on for multinode in `carts-compile`).
 - Default distribution relies on SDE-authored work units and ARTS DB ownership
-  marking; late ARTS loop-carrier producers are not part of the contract.
+  marking; late ARTS loop-carrier producers are not part of that shape.
 - Lowering support: `ConvertArtsRtToLLVM` uses round-robin route selection for
   marked multi-DB allocations:
   - route = `linearIndex % artsGetTotalNodes()`
@@ -270,7 +282,7 @@ Future work:
     duplicate/frontier machinery intentionally instead of relying only on
     demand-driven reads
 
-## 7. IR Contract
+## 7. IR Facts
 
 SDE distribution planning and direct ARTS materialization may stamp concrete
 ARTS object attrs:
@@ -279,8 +291,8 @@ ARTS object attrs:
 - `distribution_pattern` (`#arts.distribution_pattern<...>`)
 - `distribution_version = 1`
 
-These attributes represent SDE-forwarded contracts and ARTS machine-binding
-facts. They are not a fallback semantic classifier.
+These attributes represent SDE-forwarded facts and ARTS machine-binding facts.
+They are not a fallback semantic classifier.
 
 ## 8. Loop Transform Compatibility (R8)
 
@@ -292,7 +304,7 @@ Reason:
 - The semantic work inside `sde-planning` mostly targets inner serial
   `scf.for` structure.
 - `sde-to-codir`, `codir-to-arts`, and later ARTS stages consume the
-  SDE-authored materialization contract and preserve concrete DB/EDT/epoch
+  SDE-authored materialization facts and preserve concrete DB/EDT/epoch
   distribution facts.
 
 Pass-level summary (current behavior):
@@ -314,7 +326,7 @@ explicit plan data rather than a late ARTS semantic loop carrier.
 
 - DB acquire-window planning uses SDE-authored access windows and ARTS DB
   refinement validation.
-- Stencil and block windows should be explicit contract facts before ARTS
+- Stencil and block windows should be explicit IR facts before ARTS
   lowering consumes them.
 
 ### 9.2 Task loop lowering helpers
@@ -337,7 +349,7 @@ Distribution selection now lives in SDE:
 - `DistributionPlanning` reads SDE pattern/effect facts and the SDE cost model.
 - It stamps `sde.su_distribute` or distribution attributes on eligible
   `sde.su_iterate` operations.
-- CODIR carries the explicit codelet contract.
+- CODIR carries the explicit codelet facts.
 - ARTS DB/EDT/epoch passes consume concrete distribution attrs and ownership
   metadata; they should validate and refine the object graph, not reselect
   source-level policy.
@@ -345,8 +357,8 @@ Distribution selection now lives in SDE:
 Wavefront note:
 
 - Wavefront tile shape, frontier budget, and per-task work thresholds are
-  semantic planning choices and should migrate behind the SDE contract
-  boundary. ARTS-side heuristics should eventually only consume them.
+  semantic transformation choices and should move into SDE. ARTS-side
+  heuristics should eventually only consume the resulting facts.
 
 ## 11. Validation Checklist
 

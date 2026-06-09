@@ -10,7 +10,7 @@ Owned optimizations:
 - EDT pointer rematerialization;
 - dependency-slot localization;
 - epoch creation and epoch cleanup;
-- contract validation;
+- boundary fact validation;
 - distributed ownership refinement.
 
 Rules:

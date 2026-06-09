@@ -14,9 +14,10 @@ High-value files by failure class.
 - `lib/carts/dialect/sde/Transforms/CollectMetadata.cpp`
 - `lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp`
 - `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
-- `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp`
+- `lib/carts/dialect/arts/Transforms/db/DbModeTightening.cpp`
+- `lib/carts/dialect/arts/Transforms/db/CreateDbs.cpp`
 - `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`
-- `lib/carts/dialect/arts/Utils/LoweringContractUtils.cpp`
+- `lib/carts/dialect/arts/Utils/LoweringFactUtils.cpp`
 - `include/carts/dialect/arts/IR/Ops.td`
 - `include/carts/dialect/arts/IR/Attributes.td`
 - `include/carts/utils/StencilAttributes.h`
@@ -34,11 +35,8 @@ High-value files by failure class.
 - `lib/carts/codegen/Codegen.cpp`
 - `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/ConvertArtsRtToLLVM.cpp`
 
-## Analysis / Invalidation / Ordering
+## Pass Ordering / Fact Flow
 
-- `include/carts/dialect/arts/Analysis/AnalysisDependencies.h`
-- `include/carts/dialect/arts/Analysis/AnalysisManager.h`
-- `lib/carts/dialect/arts/Analysis/AnalysisManager.cpp`
 - `docs/compiler/phase-ordering-semantics.md`
 - `tools/compile/Compile.cpp`
 - `docs/compiler/pipeline.md`

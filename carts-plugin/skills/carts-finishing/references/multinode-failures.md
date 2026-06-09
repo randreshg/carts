@@ -20,10 +20,10 @@ If the rubric here does not match, escalate to `carts-distributed-triage` with t
 
 **Symptom:** `(null reference)` at runtime. Worker hangs on `arts_db_acquire`. Or segfault.
 
-**Root cause:** `DbOwnerMapRealization` in ARTS DB refinement did not mark the DB, or the eligibility check is too conservative.
+**Root cause:** `DbOwnerMapRealization` in ARTS DB refinement did not mark the DB, or the focused eligibility helper is too conservative.
 
 **Fix usually belongs in:**
-- `lib/carts/dialect/arts/Analysis/db/DbDistributedEligibility.cpp` (eligibility rules — too restrictive)
+- `lib/carts/dialect/arts/Utils/DbDistributedEligibility.cpp` (eligibility rules — too restrictive)
 - `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp` (owner-map realization — never reached)
 
 ### 2. Distributed window mismatch
@@ -49,7 +49,7 @@ halo/window contract is wrong; otherwise ARTS DB refinement should validate the
 
 **Root cause:** ARTS DB refinement computed a halo for local-only operation and did not widen for distributed neighbors.
 
-**Fix usually belongs in:** `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` or the DB refinement helper that stamps the window. When marking a DB distributed, validate that halo bounds cover all transitive neighbors and cross-check `DbOwnerMapRealization.cpp`, `DbDistributedEligibility.cpp`, and `DbAnalysis.cpp`.
+**Fix usually belongs in:** the focused DB refinement pass or helper that stamps the window. When marking a DB distributed, validate that halo bounds cover all transitive neighbors and cross-check `DbOwnerMapRealization.cpp`, `DbDistributedEligibility.cpp`, and DB/acquire query helpers.
 
 ### 4. GUID coherence (same data, different handles on nodes)
 
@@ -87,7 +87,7 @@ halo/window contract is wrong; otherwise ARTS DB refinement should validate the
 
 **Symptom:** worker hangs, or receives wrong dep signal from wrong partition.
 
-**Root cause:** `EpochOpt` CPS-8 carry re-analysis, or `EpochLowering` propagation, did not account for mixed local/distributed deps.
+**Root cause:** an epoch continuation rewrite or `EpochLowering` propagation did not account for mixed local/distributed deps.
 
 **Fix usually belongs in:** `lib/carts/dialect/arts-rt/Conversion/ArtsToRt/EpochLowering.cpp` — validate `CPSDepRouting` layout against actual carry arity; cross-check the `distributed` attr on each referenced DB.
 
@@ -118,9 +118,9 @@ If a sample passes single-node but fails multinode:
 ## Reference docs
 
 - `docs/compiler/dialects/arts-rt/README.md` — ARTS-RT lowering contract
-- `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` — DB/window refinement
-- `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp` and `lib/carts/dialect/arts/Analysis/db/DbDistributedEligibility.cpp` — owner-map realization gates
-- `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp` — DB/acquire facts
+- `lib/carts/dialect/arts/Transforms/db/DbModeTightening.cpp` — DB/window refinement
+- `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp` and `lib/carts/dialect/arts/Utils/DbDistributedEligibility.cpp` — owner-map realization gates
+- `include/carts/dialect/arts/Utils/DbUtils.h` — DB/acquire queries
 - `tools/compile/Compile.cpp` — canonical pipeline tokens and stage ordering
 - `carts-plugin/skills/distributed-triage/SKILL.md` — sister triage skill
 - `carts-plugin/skills/distributed-triage/references/distributed-checklist.md`

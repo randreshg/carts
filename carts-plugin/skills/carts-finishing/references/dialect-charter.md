@@ -141,9 +141,9 @@ These do not block correctness but should be cleaned up in Phase 9. Cite when de
 
 | # | Violation | Files | Fix |
 |---|---|---|---|
-| 1 | Wavefront family detection in ARTS, should be SDE (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp`, `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` | Move family + tile geometry into `PatternAnalysis` or a later SDE wavefront-planning pass; refactor ARTS realizers to consume the contract. |
-| 2 | ARTS re-detects elementwise/stencil/matmul facts that SDE already proved (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp`, `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` | Refactor ARTS refinement to consume SDE/CODIR facts instead of reclassifying source semantics. |
-| 3 | ARTS creates epoch/EDT structure from re-detected wavefront/Jacobi patterns (Invariants 1 & 5) | `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Analysis/db/DbAnalysis.cpp`, `lib/carts/dialect/arts/Transforms/db/DbTransformsPass.cpp` | Enhance `PatternAnalysis` and SDE dependency planning; refactor ARTS materialization/refinement to consume lowered SDE contracts. |
+| 1 | Wavefront family detection belongs in SDE, not ARTS (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Transforms/epoch/`, `lib/carts/dialect/arts/Transforms/db/` | Keep family + tile geometry in SDE; ARTS realizers consume already-authored structure. |
+| 2 | ARTS must not re-detect elementwise/stencil/matmul facts that SDE already proved (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/codir/Transforms/DepStorageAssignment.cpp`, `lib/carts/dialect/arts/Transforms/db/` | Consume SDE/CODIR facts instead of reclassifying source semantics. |
+| 3 | ARTS epoch/EDT structure must follow authored SDE/CODIR deps, not source-pattern rediscovery (Invariants 1 & 5) | `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Transforms/epoch/`, `lib/carts/dialect/arts/Transforms/edt/` | Enhance SDE dependency planning when source semantics are missing; keep ARTS structure realization mechanical. |
 | 4 | Historical docs disagreed about `arts.lowering_contract` ownership. | Archived planning notes under `.carts/sessions/...` | The live contract is in `docs/compiler/dialect-layering.md`: ARTS may carry abstract lowering contracts, but SDE/CODIR must materialize source facts before ARTS. |
 
 ## Open questions (Phase 0 / task #1)
@@ -155,7 +155,7 @@ session note under `.carts/sessions/<topic>/charter-decisions.md`.
 
 2. **Scope of `PatternAnalysis`.** Does it own ALL semantic pattern approval (incl. wavefront/Jacobi), or split later execution planning into a separate SDE wavefront pass? Recommendation: keep pattern approval centralized; otherwise ARTS keeps re-deriving and Invariant 5 stays broken.
 
-3. **Plug `ARTSCostModel` into live decision owners.** Do not resurrect retired monolithic partition/distribution heuristic passes; remaining thresholds belong in `DbHeuristics`, SDE planning, or ARTS ownership/refinement according to the contract they decide. Effort 12–16h. Recommendation: defer until phase 8 is green; cost model only matters once structural plumbing is correct.
+3. **Plug `ARTSCostModel` into live decision owners.** Do not resurrect retired monolithic partition/distribution heuristic passes; remaining thresholds belong in SDE planning or focused ARTS ownership/refinement according to the fact they decide. Effort 12–16h. Recommendation: defer until phase 8 is green; cost model only matters once structural plumbing is correct.
 
 4. **Backend-neutral SDE narrative.** Docs aspire to multi-backend (Legion / StarPU / GPU) but namespace, schedule kinds, and conversion target are all ARTS-tied. Keep aspiration or reframe as ARTS-optimized? Recommendation: reframe; pretending otherwise misleads contributors.
 

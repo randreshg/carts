@@ -1,6 +1,6 @@
 ---
 name: carts-analysis-triage
-description: Use when behavior depends on pass order, graphs look stale, metadata is inconsistent, or a pass likely needs AnalysisDependencies or narrower invalidation.
+description: Use when behavior depends on pass order, stale facts, or metadata inconsistency across staged CARTS pipelines.
 user-invocable: true
 allowed-tools: Bash, Read, Write, Grep, Glob, Agent
 argument-hint: [<pass-name | file>]
@@ -12,16 +12,16 @@ parameters:
 
 # CARTS Analysis Triage
 
-Goal: determine whether the bug is caused by stale cached analysis, incorrect dependency declarations, or an invalid phase-ordering assumption.
+Goal: determine whether the bug is caused by stale facts, a pass-ordering
+assumption, or a transformation reading facts after it has invalidated them.
 
-Analyses cache and expose committed facts; they must not let downstream passes
-recompute upstream semantic decisions. Use [[carts-vision]] when stale facts
-cross SDE/CODIR/ARTS/ARTS-RT boundaries.
+Use [[carts-vision]] when stale facts cross SDE/CODIR/ARTS/ARTS-RT boundaries.
+Do not recreate the retired ARTS cached graph stack; prefer stage diffs,
+pass-local queries, and focused utilities.
 
 Use bundled helpers when they fit:
-- `scripts/find-analysis-usage.sh` — grep AnalysisManager queries for a pass or token
+- `scripts/find-analysis-usage.sh` — grep order-sensitive queries for a pass or token
 - `scripts/find-invalidation-sites.sh` — grep invalidation APIs and direct invalidate calls
-- `scripts/find-pass-dependencies.sh` — locate `AnalysisDependencies` arrays and declarations
 - `scripts/scan-analysis-hotspots.sh` — broad scan of order-sensitive analysis sites
 
 Read these before editing invalidation behavior:
@@ -36,13 +36,11 @@ Read these before editing invalidation behavior:
    - Does `--start-from` differ from a full pipeline run?
    - Does inserting a rebuild/invalidation make the bug disappear?
 2. Identify what the pass reads and mutates.
-   - Look for `AM->getDbAnalysis()`, `AM->getEdtAnalysis()`, `AM->getLoopAnalysis()`, `AM->getMetadataManager()`
-   - Check the pass-local `AnalysisDependencies` arrays
+   - Look for broad scans, cached maps, and queries after mutation.
+   - Check whether the pass should keep a helper local or move it to a focused utility.
 3. Check invalidation boundaries.
-   - `AM->invalidate()`
-   - `AM->invalidateAndRebuildGraphs(module)`
-   - `AM->invalidateFunction(func)`
-   - direct `dbAnalysis.invalidate()` / `edtAnalysis.invalidate()`
+   - IR rewrites that erase or replace facts before all users consume them.
+   - pipeline boundaries where a verifier should reject residual source-layer ops.
 4. Prefer the narrowest correct fix.
    - add or correct `reads`
    - add or correct `invalidates`
@@ -52,9 +50,6 @@ Read these before editing invalidation behavior:
 
 ## Key Files
 
-- `include/carts/dialect/arts/Analysis/AnalysisDependencies.h`
-- `include/carts/dialect/arts/Analysis/AnalysisManager.h`
-- `lib/carts/dialect/arts/Analysis/AnalysisManager.cpp`
 - `docs/compiler/phase-ordering-semantics.md`
 - `tools/compile/Compile.cpp`
 - `docs/compiler/pipeline.md`
@@ -62,9 +57,8 @@ Read these before editing invalidation behavior:
 
 ## Guardrails
 
-- Never bypass analysis APIs to “fix” a stale-analysis symptom
-- Do not widen invalidation without checking downstream compile-time cost
-- If a pass mutates DB/EDT structure, assume cached facts may be stale until proven otherwise
+- Do not add a broad manager or graph cache to “fix” a stale-fact symptom.
+- If a pass mutates DB/EDT structure, prove later queries are reading the new IR.
 - Invalidation fixes must preserve committed-fact flow: SDE layout and movement
   facts, CODIR graph facts, ARTS owner maps/DB/EDT facts, and ARTS-RT
   mechanical lowering facts stay in their owning layers.

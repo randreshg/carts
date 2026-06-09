@@ -36,13 +36,10 @@ target shape is fine enough per-block single-writer DBs plus grouped
 compute/bridge/communication CUs. Hypergraph decisions are grouping evidence
 over committed MU facts, not benchmark-name shortcuts.
 
-**Analysis interface** — always use analysis classes, NEVER access graphs directly:
-```cpp
-AM->getDbAnalysis().getOrCreateGraph(func)     // DB analysis
-AM->getEdtAnalysis().getOrCreateEdtGraph(func) // EDT analysis
-AM->getEdtAnalysis().getEdtNode(edt)           // Node lookup
-AM->getDbAnalysis().getDbAcquireNode(acquire)  // Node lookup
-```
+**Query helpers** — prefer pass-local queries or focused utilities over cached
+analysis managers. Do not add broad graph/node abstractions for facts that are
+already explicit in ARTS IR; transform the owning structure directly or fail
+closed.
 
 **Attribute names** — NEVER hardcode strings. For CARTS IR attrs, add/use the
 owning op or attr in TableGen and consume generated ODS accessors such as
@@ -54,10 +51,10 @@ helper logic; it is not the source of manual attr names.
 
 **Utility reuse** — before adding ANY new static helper function, use
 `carts-check-utils <function-name>` to verify the behavior does not already
-exist in `include/carts/utils`, `include/carts/dialect/*/Utils`,
-`include/carts/dialect/*/Analysis`, or a pass-area support file such as
-`*Support.cpp`, `*Internal.h`, or a boundary-specific conversion helper. Use
-`carts-refactor-utils` for larger utility moves.
+exist in `include/carts/utils`, `include/carts/dialect/*/Utils`, an owning SDE
+analysis utility, or a boundary-specific conversion helper. Keep pass-local
+helpers in the pass unless a second real owner appears. Use `carts-refactor-utils`
+for larger utility moves.
 
 ## Key Source Locations
 
@@ -65,7 +62,8 @@ exist in `include/carts/utils`, `include/carts/dialect/*/Utils`,
 - ARTS-RT pre-lowering (`pre-lowering` stage): `lib/carts/dialect/arts-rt/Conversion/ArtsToRt/`
 - SDE transforms: `lib/carts/dialect/sde/Transforms/`
 - LLVM conversion: `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/`
-- Analysis: `lib/carts/dialect/arts/Analysis/`
+- ARTS utilities: `include/carts/dialect/arts/Utils/` and
+  `lib/carts/dialect/arts/Utils/`
 - Shared transforms: `lib/carts/dialect/arts/Transforms/` (db/, dep/, edt/, loop/, kernel/)
 - Pipeline setup: `tools/compile/Compile.cpp`
 - Pass declarations: `include/carts/passes/Passes.h` and `Passes.td`
@@ -81,7 +79,7 @@ exist in `include/carts/utils`, `include/carts/dialect/*/Utils`,
 
 ## Thread Safety
 
-All passes must be thread-safe — no global/static mutable state. Use function-scoped graph access.
+All passes must be thread-safe: no global/static mutable state.
 
 ## Instructions
 

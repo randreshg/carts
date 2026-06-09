@@ -1,12 +1,14 @@
 # Analysis Hotspots
 
-Start here when the symptom depends on pass order, graph freshness, or stale metadata.
+Start here when the symptom depends on pass order, stale facts, or metadata
+consistency across stage boundaries.
 
 ## ARTS APIs
 
-- `include/carts/dialect/arts/Analysis/AnalysisDependencies.h`
-- `include/carts/dialect/arts/Analysis/AnalysisManager.h`
-- `lib/carts/dialect/arts/Analysis/AnalysisManager.cpp`
+- `include/carts/dialect/arts/Utils/DbUtils.h`
+- `include/carts/dialect/arts/Utils/EdtUtils.h`
+- `include/carts/dialect/arts/Utils/LoweringFactUtils.h`
+- `lib/carts/dialect/arts/Transforms/`
 
 ## High-Risk Docs
 
@@ -18,9 +20,7 @@ Start here when the symptom depends on pass order, graph freshness, or stale met
 
 ## High-Risk Patterns
 
-- `AM->invalidate()`
-- `invalidateAndRebuildGraphs`
-- direct `dbAnalysis.invalidate()` or `edtAnalysis.invalidate()`
-- missing or stale `k<Pass>_reads`
-- queries after mutation without rebuild
+- queries after mutation without rereading the rewritten IR
+- stale stage names or pass manifests
+- source-layer facts surviving past a dialect boundary
 - `--start-from` behavior that differs from a full pipeline run
