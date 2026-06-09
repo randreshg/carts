@@ -169,8 +169,8 @@ detectReductionPattern(scf::ForOp forOp) {
       /// to avoid dangling references when erasing the old loop.
       /// Additionally, the memref must be defined OUTSIDE the loop so that
       /// we can create new loads/stores outside the loop that use it.
-      if (loadMemref == storeMemref &&
-          ValueAnalysis::areValueRangesIdentical(loadIndices, storeIndices) &&
+      if (ValueAnalysis::sameDirectMemrefAccess(loadMemref, loadIndices,
+                                                storeMemref, storeIndices) &&
           loadOp->hasOneUse() && isLoopInvariant(forOp, storeMemref)) {
         pattern.loadOp = loadOp;
         pattern.storeOp = storeOp;

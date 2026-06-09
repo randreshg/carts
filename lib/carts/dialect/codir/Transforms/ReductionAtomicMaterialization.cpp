@@ -26,12 +26,6 @@ static llvm::Statistic numAtomicReductionsMaterialized{
 
 namespace {
 
-static bool sameMemrefAccess(Value lhsMemref, ValueRange lhsIndices,
-                             Value rhsMemref, ValueRange rhsIndices) {
-  return lhsMemref == rhsMemref &&
-         ValueAnalysis::areValueRangesIdentical(lhsIndices, rhsIndices);
-}
-
 static bool isKnownZeroIndex(Value value) {
   if (std::optional<int64_t> constant =
           ValueAnalysis::tryFoldConstantIndex(value))
@@ -81,8 +75,9 @@ static unsigned materializeAtomicUpdates(codir::CodeletOp codelet) {
       auto candidate = operand.getDefiningOp<memref::LoadOp>();
       if (!candidate)
         continue;
-      if (!sameMemrefAccess(candidate.getMemref(), candidate.getIndices(),
-                            store.getMemref(), store.getIndices()))
+      if (!ValueAnalysis::sameDirectMemrefAccess(
+              candidate.getMemref(), candidate.getIndices(), store.getMemref(),
+              store.getIndices()))
         continue;
       load = candidate;
       increment = add.getLhs() == operand ? add.getRhs() : add.getLhs();

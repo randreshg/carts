@@ -94,6 +94,13 @@ public:
   /// ValueAnalysis::sameValue comparison for two value ranges.
   static bool areValueRangesEquivalent(ValueRange lhs, ValueRange rhs);
 
+  /// True when two accesses use the same direct memref value and equivalent
+  /// indices. This intentionally does not strip memref view ops: indices are
+  /// local to their view and require view-offset reasoning before root-level
+  /// comparison is safe.
+  static bool sameDirectMemrefAccess(Value lhsMemref, ValueRange lhsIndices,
+                                     Value rhsMemref, ValueRange rhsIndices);
+
   ///===----------------------------------------------------------------------===////
   /// Value Range and Scale Comparison
   ///===----------------------------------------------------------------------===////

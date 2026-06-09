@@ -712,6 +712,14 @@ bool ValueAnalysis::areValueRangesEquivalent(ValueRange lhs, ValueRange rhs) {
   return true;
 }
 
+bool ValueAnalysis::sameDirectMemrefAccess(Value lhsMemref,
+                                           ValueRange lhsIndices,
+                                           Value rhsMemref,
+                                           ValueRange rhsIndices) {
+  return sameValue(lhsMemref, rhsMemref) &&
+         areValueRangesEquivalent(lhsIndices, rhsIndices);
+}
+
 Value ValueAnalysis::stripClampOne(Value v) {
   Value cur = stripNumericCasts(v);
   while (auto maxOp = cur.getDefiningOp<arith::MaxUIOp>()) {
