@@ -2642,11 +2642,73 @@ static inline bool areAllResultsMapped(Operation &op, IRMapping &mapper) {
                       [&](Value result) { return mapper.contains(result); });
 }
 
+static inline bool isDefinedInsideComputeBlock(Value value,
+                                               Block *computeBlock) {
+  if (!value || !computeBlock)
+    return false;
+  Region *computeRegion = computeBlock->getParent();
+  Region *valueRegion = value.getParentRegion();
+  return computeRegion && valueRegion && computeRegion->isAncestor(valueRegion);
+}
+
+static inline LogicalResult cloneSuBodyLocalCapture(Value value,
+                                                    sde::SdeSuIterateOp source,
+                                                    Block *computeBlock,
+                                                    IRMapping &mapper,
+                                                    OpBuilder &builder) {
+  if (!value || mapper.contains(value) ||
+      isDefinedInsideComputeBlock(value, computeBlock) ||
+      !isDefinedInside(value, source.getBody()))
+    return success();
+
+  Operation *def = value.getDefiningOp();
+  if (!def)
+    return source.emitOpError()
+           << "has an unmapped scheduling-unit local block argument captured "
+              "by its compute block";
+  if (def->getNumRegions() != 0 || !sde::isSchedulePlumbing(def))
+    return def->emitOpError()
+           << "cannot be rematerialized inside a CODIR scheduling-unit "
+              "codelet; expected region-free SDE schedule plumbing";
+
+  for (Value operand : def->getOperands())
+    if (failed(cloneSuBodyLocalCapture(operand, source, computeBlock, mapper,
+                                       builder)))
+      return failure();
+
+  Operation *cloned = builder.clone(*def, mapper);
+  for (auto [oldResult, newResult] :
+       llvm::zip(def->getResults(), cloned->getResults()))
+    mapper.map(oldResult, newResult);
+  return success();
+}
+
+static inline LogicalResult cloneSuBodyLocalCaptures(sde::SdeSuIterateOp source,
+                                                     Block *computeBlock,
+                                                     IRMapping &mapper,
+                                                     OpBuilder &builder) {
+  WalkResult result = WalkResult::advance();
+  for (Operation &op : computeBlock->without_terminator()) {
+    result = op.walk([&](Operation *nested) {
+      for (Value operand : nested->getOperands())
+        if (failed(cloneSuBodyLocalCapture(operand, source, computeBlock,
+                                           mapper, builder)))
+          return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    if (result.wasInterrupted())
+      break;
+  }
+  return result.wasInterrupted() ? failure() : success();
+}
+
 static inline LogicalResult cloneSuBodyFromDim(sde::SdeSuIterateOp source,
                                                unsigned dim, IRMapping &mapper,
                                                OpBuilder &builder,
                                                Block *computeBlock) {
   if (dim >= source.getLowerBounds().size()) {
+    if (failed(cloneSuBodyLocalCaptures(source, computeBlock, mapper, builder)))
+      return failure();
     for (Operation &nested : computeBlock->without_terminator()) {
       if (areAllResultsMapped(nested, mapper))
         continue;
