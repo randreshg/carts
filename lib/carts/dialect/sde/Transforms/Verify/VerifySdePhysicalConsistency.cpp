@@ -19,6 +19,13 @@
 ///       array's own owner dims. The physical owner-tile dims (a CU compute-grain
 ///       decision) need not equal an array's storage owner dims, so only the
 ///       budget-coarsening relation is enforced.
+///   (d) flat-path schedule mirror (R2 on the flat MU): the physical block is
+///       not coarser than the realized SU iteration extent on an owner dim.
+///       `verify-sde-mu-layout` R2 enforces the equivalent mirror against
+///       independent iteration extents once the MU is rank-expanded; (d) closes
+///       the same gap on the flat path so the plan is a verifier-checked mirror
+///       of the realized schedule, never an unchecked promise. DB/MU grain stays
+///       separate from CU grain: this checks the SU's OWN schedule, not arrays.
 ///
 /// Residual global-index access against an already rank-expanded MU (the body
 /// non-locality the vision warns about) is the companion `verify-sde-mu-layout`
@@ -35,6 +42,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_VERIFYSDEPHYSICALCONSISTENCY
@@ -115,6 +123,48 @@ static void verifyBudgetNotCoarsened(sde::SdeSuIterateOp op,
   }
 }
 
+// (R2, flat path): on the flat (pre-rank-expand) MU path the committed physical
+// plan is the only carrier of the realized grain, so it must not name a physical
+// block COARSER than the realized SU iteration extent on an owner dim. The SU
+// step on an owner dim is the realized compute-tile stride; a physical block
+// finer-or-equal to that stride is structurally realizable, a physical block
+// coarser than the iteration extent (the jacobi-for row strip whose body still
+// iterates the coarse logical tile) is the stale shape the boundary forbids.
+// `verify-sde-mu-layout` R2 enforces the equivalent mirror against independent
+// iteration extents once the MU is rank-expanded; this closes the gap on the
+// flat path so the plan is a verifier-checked mirror, never an unchecked promise
+// that SdeRankExpandMu silently bails on. DB/MU grain stays separate from CU
+// grain: this checks the physical block against the SU's OWN realized schedule,
+// not against any array's storage block.
+static void verifyPhysicalFitsIterationExtent(sde::SdeSuIterateOp op,
+                                              ArrayRef<int64_t> ownerDims,
+                                              ArrayRef<int64_t> block,
+                                              bool &hasFailure) {
+  OperandRange lowers = op.getLowerBounds();
+  OperandRange uppers = op.getUpperBounds();
+  for (auto [slot, ownerDim] : llvm::enumerate(ownerDims)) {
+    if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= block.size() ||
+        static_cast<size_t>(ownerDim) >= lowers.size() ||
+        static_cast<size_t>(ownerDim) >= uppers.size())
+      continue;
+    std::optional<int64_t> lo =
+        ValueAnalysis::tryFoldConstantIndex(lowers[ownerDim]);
+    std::optional<int64_t> hi =
+        ValueAnalysis::tryFoldConstantIndex(uppers[ownerDim]);
+    if (!lo || !hi || *hi <= *lo)
+      continue;
+    int64_t extent = *hi - *lo;
+    if (block[ownerDim] > extent) {
+      op.emitOpError()
+          << "physicalBlockShape is coarser than the realized SU iteration "
+             "extent on an owner dimension; the committed physical block must "
+             "be a refinement of the realized schedule, not a stale coarse tile";
+      hasFailure = true;
+      return;
+    }
+  }
+}
+
 static void verifyPhysicalConsistency(sde::SdeSuIterateOp op, bool &hasFailure) {
   std::optional<SmallVector<int64_t, 4>> ownerDims =
       readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
@@ -133,6 +183,7 @@ static void verifyPhysicalConsistency(sde::SdeSuIterateOp op, bool &hasFailure) 
 
   verifyPlanWellFormed(op, *ownerDims, *block, hasFailure);
   verifyBudgetNotCoarsened(op, *block, hasFailure);
+  verifyPhysicalFitsIterationExtent(op, *ownerDims, *block, hasFailure);
 }
 
 struct VerifySdePhysicalConsistencyPass

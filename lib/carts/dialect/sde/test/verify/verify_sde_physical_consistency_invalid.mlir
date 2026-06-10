@@ -99,3 +99,26 @@ func.func @more_owner_dims_than_loops(%A: memref<512x512xf64>) {
      physicalOwnerDims = [0, 1]}
   return
 }
+
+// -----
+
+// (d) flat-path schedule mirror: the physical block coarsens the realized SU
+// iteration extent on owner dim 0 (block 1024 > extent 512). No budget grain is
+// present, so this is caught only by the schedule-mirror rule, not (c).
+// CHECK: physicalBlockShape is coarser than the realized SU iteration extent
+func.func @physical_block_coarser_than_iteration(%A: memref<512xf64>) {
+  %c0 = arith.constant 0 : index
+  %c512 = arith.constant 512 : index
+  %c1 = arith.constant 1 : index
+  %cst = arith.constant 0.000000e+00 : f64
+  sde.su_iterate (%c0) to (%c512) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
+      memref.store %cst, %A[%i] : memref<512xf64>
+      sde.yield
+    }
+    sde.yield
+  } {physicalBlockShape = [1024],
+     physicalOwnerDims = [0]}
+  return
+}
