@@ -132,8 +132,8 @@ struct VerifySdeMuLayoutPass
 
       std::optional<SmallVector<unsigned, 2>> recovered =
           sde::recoverOwnerDims(muType, logicalShape);
-      if (!recovered ||
-          ArrayRef<unsigned>(*recovered) != ArrayRef<unsigned>(expanded->ownerDims)) {
+      if (!recovered || ArrayRef<unsigned>(*recovered) !=
+                            ArrayRef<unsigned>(expanded->ownerDims)) {
         mu.emitOpError()
             << "rank-expanded structure does not recover the committed owner "
                "dims (ownerDims != recover(structure))";

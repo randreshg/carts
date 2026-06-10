@@ -29,7 +29,7 @@ namespace mlir::carts::sde {
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
-#include "carts/dialect/sde/Utils/SdePlanUtils.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Debug.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -1040,7 +1040,7 @@ struct LoopInterchangePass
     for (sde::SdeSuIterateOp op : iterateOps) {
       if (!op || op->getParentRegion() == nullptr)
         continue;
-      if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
+      if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
         continue;
 
       Block *body = sde::getSuIterateComputeBlock(op);

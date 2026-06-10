@@ -60,8 +60,8 @@ static bool sameCodirStorageFact(const MuAllocCodirStorageFact &lhs,
 static LogicalResult
 requireMaterializableCodirStorageFact(codir::CodeletOp codelet,
                                       unsigned depIndex) {
-  if (failed(
-          requireFinalizedCodirDepOwnerDimsForMaterialization(codelet, depIndex)))
+  if (failed(requireFinalizedCodirDepOwnerDimsForMaterialization(codelet,
+                                                                 depIndex)))
     return failure();
   if (!hasCodirTileOwnerSlicePlan(codelet))
     return codelet.emitOpError()
@@ -88,9 +88,9 @@ static bool codirDepCommitsPartitionedMuFact(codir::CodeletOp codelet,
   return getCodirDepOwnerDims(codelet, depIndex).has_value();
 }
 
-static LogicalResult
-processMuAllocCodirDep(MuAllocCodirStorageScan &scan,
-                       codir::CodeletOp codelet, unsigned depIndex) {
+static LogicalResult processMuAllocCodirDep(MuAllocCodirStorageScan &scan,
+                                            codir::CodeletOp codelet,
+                                            unsigned depIndex) {
   if (!codirDepRequiresComputeBlockStorage(codelet, depIndex)) {
     if (!scan.partitionedWithoutBlockStorage &&
         codirDepCommitsPartitionedMuFact(codelet, depIndex))
@@ -226,10 +226,9 @@ static LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op) {
   OpBuilder builder(op);
   Value replacement;
   if (selectedStorage) {
-    if (failed(createDbBackedMemref(builder, op.getLoc(), memrefType,
-                                    op.getDynamicSizes(), replacement,
-                                    selectedStorage->codelet,
-                                    selectedStorage->depIndex)))
+    if (failed(createDbBackedMemref(
+            builder, op.getLoc(), memrefType, op.getDynamicSizes(), replacement,
+            selectedStorage->codelet, selectedStorage->depIndex)))
       return failure();
   } else {
     if (failed(createDbBackedMemref(builder, op.getLoc(), memrefType,
@@ -357,7 +356,6 @@ struct ConvertSdeBoundaryToArtsPass
 
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::carts::codir::createConvertSdeBoundaryToArtsPass() {
+std::unique_ptr<Pass> mlir::carts::codir::createConvertSdeBoundaryToArtsPass() {
   return std::make_unique<ConvertSdeBoundaryToArtsPass>();
 }

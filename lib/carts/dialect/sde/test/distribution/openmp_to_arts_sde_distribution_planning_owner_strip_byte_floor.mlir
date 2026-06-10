@@ -22,10 +22,6 @@
 // COARSE: func.func @direct_row_matmul
 // COARSE: iterationTopology = #sde.iteration_topology<owner_strip>
 // COARSE-SAME: logicalWorkerSlice = [32, 1024]
-// COARSE-SAME: cuGroupCount = 16 : i64
-// COARSE-SAME: cuGroupSize = 2 : i64
-// COARSE-SAME: minTileBytes = 4194304 : i64
-// COARSE-SAME: muBlockCount = 32 : i64
 // COARSE-SAME: physicalBlockShape = [32, 1024]
 // COARSE-SAME: physicalOwnerDims = [0]
 

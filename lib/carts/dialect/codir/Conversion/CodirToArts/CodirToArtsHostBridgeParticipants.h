@@ -111,61 +111,12 @@ getCodeletDepOperandIndex(codir::CodeletOp codelet, OpOperand &use) {
   return operandIndex;
 }
 
-// The committed partition-graph block shape for a dep's array, taken from the
-// codelet's `partition_graph` entry whose `muId` matches the dep's array id.
-// This is the per-array storage grain (owner_block tile vs block_parallel whole
-// array) that drives convert-codir-to-arts' block-local access rewrite, which a
-// single canonical block DB must satisfy.
-static inline ArrayAttr
-codirDepPartitionBlockShape(codir::CodeletOp codelet, unsigned depIndex) {
-  if (!codelet)
-    return ArrayAttr{};
-  std::optional<int64_t> depArrayId = codir::getDepArrayId(codelet, depIndex);
-  if (!depArrayId)
-    return ArrayAttr{};
-  auto graph = dyn_cast_or_null<ArrayAttr>(
-      codelet->getAttr(codir::AttrNames::PartitionGraph));
-  if (!graph)
-    return ArrayAttr{};
-  for (Attribute attr : graph) {
-    auto entry = dyn_cast<DictionaryAttr>(attr);
-    if (!entry)
-      continue;
-    auto muId = dyn_cast_or_null<IntegerAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::MuId));
-    if (!muId || muId.getInt() != *depArrayId)
-      continue;
-    return dyn_cast_or_null<ArrayAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::BlockShape));
-  }
-  return ArrayAttr{};
-}
-
-// Two compute_block deps share a canonical block DB only when their committed
-// partition-graph block shapes agree. A host-read array consumed both as an
-// owner_block tile (seed) and as a block_parallel whole array (sibling anchor)
-// has incompatible grains; one block DB cannot serve both.
-static inline bool hasSameHostBridgeBlockGrain(codir::CodeletOp seed,
-                                               unsigned seedDepIndex,
-                                               codir::CodeletOp codelet,
-                                               unsigned depIndex) {
-  ArrayAttr seedShape = codirDepPartitionBlockShape(seed, seedDepIndex);
-  ArrayAttr depShape = codirDepPartitionBlockShape(codelet, depIndex);
-  // When the grain evidence is absent on either side, defer to the existing
-  // physical-block-shape compatibility rather than fabricate a mismatch.
-  if (!seedShape || !depShape)
-    return true;
-  return seedShape == depShape;
-}
-
 static inline bool isCompatibleHostBridgeParticipant(codir::CodeletOp seed,
                                                      unsigned seedDepIndex,
                                                      codir::CodeletOp codelet,
                                                      unsigned depIndex) {
   if (!seed || !codelet ||
       !hasSameHostBridgePlan(seed, seedDepIndex, codelet, depIndex))
-    return false;
-  if (!hasSameHostBridgeBlockGrain(seed, seedDepIndex, codelet, depIndex))
     return false;
   if (!codirDepRequiresComputeBlockStorage(codelet, depIndex))
     return false;
@@ -241,9 +192,8 @@ collectHostBridgeParticipants(Operation *anchor, codir::CodeletOp seed,
     if (!isUseInsideAnchor(anchor, containmentOp))
       continue;
     if (!codeletUse ||
-        !isCompatibleHostBridgeParticipant(seed, seedDepIndex,
-                                           codeletUse->codelet,
-                                           codeletUse->depIndex)) {
+        !isCompatibleHostBridgeParticipant(
+            seed, seedDepIndex, codeletUse->codelet, codeletUse->depIndex)) {
       if (!hostBridgeUseMayWrite(anchor, use)) {
         appendUniqueHostBridgeReadObservation(
             findHostBridgeReadObservationAnchor(use),

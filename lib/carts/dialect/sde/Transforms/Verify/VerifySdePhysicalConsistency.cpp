@@ -1,12 +1,12 @@
 ///==========================================================================///
 /// File: VerifySdePhysicalConsistency.cpp
 ///
-/// The pre-window physical-plan consistency gate. It runs before the rank-expand
-/// and access-window transforms so it fails closed on the stale-grain shape the
-/// SDE boundary forbids -- one `sde.su_iterate` carrying several incompatible
-/// truths at once (the jacobi-for class) -- before SdeRankExpandMu consumes the
-/// committed physical plan, instead of letting a stale plan disagree with its
-/// arrayLayout or schedule and reach CODIR.
+/// The pre-window physical-plan consistency gate. It runs before the
+/// rank-expand and access-window transforms so it fails closed on the
+/// stale-grain shape the SDE boundary forbids -- one `sde.su_iterate` carrying
+/// several incompatible truths at once (the jacobi-for class) -- before
+/// SdeRankExpandMu consumes the committed physical plan, instead of letting a
+/// stale plan disagree with its arrayLayout or schedule and reach CODIR.
 ///
 /// For every `sde.su_iterate` carrying a committed physical plan
 /// (`physicalOwnerDims` + `physicalBlockShape`) it checks:
@@ -16,16 +16,17 @@
 ///   (b) schedule consistency: no more owner dims than realized loop dims;
 ///   (c) budget agreement (jacobi-for catcher): the physical block is not
 ///       coarser than any written array's node-agnostic budget grain on that
-///       array's own owner dims. The physical owner-tile dims (a CU compute-grain
-///       decision) need not equal an array's storage owner dims, so only the
-///       budget-coarsening relation is enforced.
+///       array's own owner dims. The physical owner-tile dims (a CU
+///       compute-grain decision) need not equal an array's storage owner dims,
+///       so only the budget-coarsening relation is enforced.
 ///   (d) flat-path schedule mirror (R2 on the flat MU): the physical block is
 ///       not coarser than the realized SU iteration extent on an owner dim.
 ///       `verify-sde-mu-layout` R2 enforces the equivalent mirror against
 ///       independent iteration extents once the MU is rank-expanded; (d) closes
 ///       the same gap on the flat path so the plan is a verifier-checked mirror
-///       of the realized schedule, never an unchecked promise. DB/MU grain stays
-///       separate from CU grain: this checks the SU's OWN schedule, not arrays.
+///       of the realized schedule, never an unchecked promise. DB/MU grain
+///       stays separate from CU grain: this checks the SU's OWN schedule, not
+///       arrays.
 ///
 /// Residual global-index access against an already rank-expanded MU (the body
 /// non-locality the vision warns about) is the companion `verify-sde-mu-layout`
@@ -91,13 +92,14 @@ static void verifyPlanWellFormed(sde::SdeSuIterateOp op,
 // (`physicalBlockShape` `[1280, 10240]`) over a 2-D `[512, 512]` owner-tile
 // budget; both owner-dim extents exceed the budget and fail here.
 //
-// The physical owner-tile dims (a CU compute-grain decision) are NOT required to
-// equal an array's storage owner dims: a 2-D compute tile legitimately writes a
-// 1-D owner-distributed array (matmul output, row/col vectors). DB/MU grain is
-// kept separate from CU grain, so only the budget-coarsening relation on each
-// array's OWN owner dims is enforced.
+// The physical owner-tile dims (a CU compute-grain decision) are NOT required
+// to equal an array's storage owner dims: a 2-D compute tile legitimately
+// writes a 1-D owner-distributed array (matmul output, row/col vectors). DB/MU
+// grain is kept separate from CU grain, so only the budget-coarsening relation
+// on each array's OWN owner dims is enforced.
 static void verifyBudgetNotCoarsened(sde::SdeSuIterateOp op,
-                                     ArrayRef<int64_t> block, bool &hasFailure) {
+                                     ArrayRef<int64_t> block,
+                                     bool &hasFailure) {
   ArrayAttr layout = op.getArrayLayoutAttr();
   if (!layout)
     return;
@@ -124,18 +126,18 @@ static void verifyBudgetNotCoarsened(sde::SdeSuIterateOp op,
 }
 
 // (R2, flat path): on the flat (pre-rank-expand) MU path the committed physical
-// plan is the only carrier of the realized grain, so it must not name a physical
-// block COARSER than the realized SU iteration extent on an owner dim. The SU
-// step on an owner dim is the realized compute-tile stride; a physical block
-// finer-or-equal to that stride is structurally realizable, a physical block
-// coarser than the iteration extent (the jacobi-for row strip whose body still
-// iterates the coarse logical tile) is the stale shape the boundary forbids.
-// `verify-sde-mu-layout` R2 enforces the equivalent mirror against independent
-// iteration extents once the MU is rank-expanded; this closes the gap on the
-// flat path so the plan is a verifier-checked mirror, never an unchecked promise
-// that SdeRankExpandMu silently bails on. DB/MU grain stays separate from CU
-// grain: this checks the physical block against the SU's OWN realized schedule,
-// not against any array's storage block.
+// plan is the only carrier of the realized grain, so it must not name a
+// physical block COARSER than the realized SU iteration extent on an owner dim.
+// The SU step on an owner dim is the realized compute-tile stride; a physical
+// block finer-or-equal to that stride is structurally realizable, a physical
+// block coarser than the iteration extent (the jacobi-for row strip whose body
+// still iterates the coarse logical tile) is the stale shape the boundary
+// forbids. `verify-sde-mu-layout` R2 enforces the equivalent mirror against
+// independent iteration extents once the MU is rank-expanded; this closes the
+// gap on the flat path so the plan is a verifier-checked mirror, never an
+// unchecked promise that SdeRankExpandMu silently bails on. DB/MU grain stays
+// separate from CU grain: this checks the physical block against the SU's OWN
+// realized schedule, not against any array's storage block.
 static void verifyPhysicalFitsIterationExtent(sde::SdeSuIterateOp op,
                                               ArrayRef<int64_t> ownerDims,
                                               ArrayRef<int64_t> block,
@@ -158,14 +160,16 @@ static void verifyPhysicalFitsIterationExtent(sde::SdeSuIterateOp op,
       op.emitOpError()
           << "physicalBlockShape is coarser than the realized SU iteration "
              "extent on an owner dimension; the committed physical block must "
-             "be a refinement of the realized schedule, not a stale coarse tile";
+             "be a refinement of the realized schedule, not a stale coarse "
+             "tile";
       hasFailure = true;
       return;
     }
   }
 }
 
-static void verifyPhysicalConsistency(sde::SdeSuIterateOp op, bool &hasFailure) {
+static void verifyPhysicalConsistency(sde::SdeSuIterateOp op,
+                                      bool &hasFailure) {
   std::optional<SmallVector<int64_t, 4>> ownerDims =
       readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
   std::optional<SmallVector<int64_t, 4>> block =
@@ -175,8 +179,9 @@ static void verifyPhysicalConsistency(sde::SdeSuIterateOp op, bool &hasFailure) 
   if (!op.getPhysicalOwnerDimsAttr() && !op.getPhysicalBlockShapeAttr())
     return;
   if (!ownerDims || !block || ownerDims->empty() || block->empty()) {
-    op.emitOpError() << "physical plan requires non-empty physicalOwnerDims and "
-                        "physicalBlockShape together";
+    op.emitOpError()
+        << "physical plan requires non-empty physicalOwnerDims and "
+           "physicalBlockShape together";
     hasFailure = true;
     return;
   }

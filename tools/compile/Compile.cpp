@@ -280,7 +280,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 29> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "SdeCuNormalization",
     "Parallelize",
@@ -298,7 +298,6 @@ static const std::array<llvm::StringLiteral, 29> kSdePlanningPasses = {
     "MemoryUnitMaterialization",
     "SdeCuNormalization",
     "VerifySdePhysicalConsistency",
-    "VerifySdePartitionPlan",
     "SdeRankExpandMu",
     "VerifySdeMuLayout",
     "RaiseToMuAccessWindow",
@@ -1148,8 +1147,8 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
   optPM.addPass(polygeist::createCanonicalizeForPass());
 }
 
-/// OpenMP to SDE planning. Codelets are intentionally not lowered
-/// here; SDE plans feed `sde-to-codir`, and CODIR then materializes ARTS.
+/// OpenMP to SDE fact materialization. Codelets are intentionally not lowered
+/// here; SDE facts feed `sde-to-codir`, and CODIR then materializes ARTS.
 void buildSdePlanningPipeline(PassManager &pm,
                               sde::SDECostModel *costModel = nullptr) {
   pm.addPass(sde::createConvertOpenMPToSdePass());
@@ -1176,18 +1175,12 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createMemoryUnitMaterializationPass());
   pm.addPass(sde::createSdeCuNormalizationPass());
-  // Pre-window physical-plan consistency gate: the committed physical plan must
-  // agree with its arrayLayout and SU schedule BEFORE the rank-expand transform
-  // consumes it. A stale grain (the jacobi-for row-strip-over-owner-tile class)
-  // fails closed here instead of being realized into a coarse grid or silently
-  // bailed to flat by SdeRankExpandMu.
+  // Pre-window physical consistency gate: committed physical facts must agree
+  // with arrayLayout and SU schedule BEFORE the rank-expand transform consumes
+  // them. A stale grain (the jacobi-for row-strip-over-owner-tile class) fails
+  // closed here instead of being realized into a coarse grid or silently bailed
+  // to flat by SdeRankExpandMu.
   pm.addPass(sde::createVerifySdePhysicalConsistencyPass());
-  // Pre-window CU/MU partition-plan gate: the committed partition_graph /
-  // partition_score evidence must stay runtime-neutral and its primary-MU grain
-  // must mirror the committed physical plan (which verify-sde-mu-layout in turn
-  // proves against the rank-expanded MU structure). Stale or recomputed
-  // partition evidence fails closed before the window chain consumes it.
-  pm.addPass(sde::createVerifySdePartitionPlanPass());
   // Each real SDE grain transform is immediately gated by its companion
   // verifier in the production order, so a stale or mismatched physical grain
   // fails closed at the SDE boundary instead of being repaired downstream.
@@ -1429,7 +1422,7 @@ static ArrayRef<StageDescriptor> getStageRegistry() {
        isStageEnabledAlways,
        /*dependsOn=*/kDepSdeInputNormalization},
       {StageId::SdePlanning, "sde-planning", StageKind::Core, true, true, false,
-       "Error when converting OpenMP to SDE planning IR", kSdePlanningPasses,
+       "Error when converting OpenMP to SDE fact IR", kSdePlanningPasses,
        [](PassManager &pm, const StageExecutionContext &ctx) {
          buildSdePlanningPipeline(pm, ctx.costModel);
        },

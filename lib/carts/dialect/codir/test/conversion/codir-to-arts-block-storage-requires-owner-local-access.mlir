@@ -1,9 +1,9 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,dep-storage-assignment,verify-codir,convert-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s --implicit-check-not="arts.edt <task> <internode>"
 
-// Planned block storage is only legal when the codelet accesses the dependency
-// through a physical dimension selected by the dispatch chunk. Storage planning
-// keeps a dependency that never uses the owner index on a coarse local view.
+// Block storage is only legal when the codelet accesses the dependency through
+// a physical dimension selected by the dispatch chunk. Storage assignment keeps
+// a dependency that never uses the owner index on a coarse local view.
 
 module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_workers = 256 : i64} {
   func.func @non_owner_arg_stays_local(%A: memref<?x?xf32>, %n: index) {

@@ -135,44 +135,8 @@ static void appendSubscriptsFromMap(AffineMap map,
   }
 }
 
-static LayoutGraphFact parseLayoutCommon(DictionaryAttr dict,
-                                         bool partitionGraphShape) {
+static LayoutGraphFact parseLayoutCommon(DictionaryAttr dict) {
   LayoutGraphFact fact;
-  if (partitionGraphShape) {
-    if (std::optional<int64_t> id =
-            getI64(dict, AttrNames::PartitionGraphKeys::MuId))
-      fact.id = *id;
-    if (std::optional<StringRef> role =
-            getString(dict, AttrNames::PartitionGraphKeys::Role))
-      fact.role = parseLayoutGraphRole(*role);
-    if (std::optional<StringRef> kind =
-            getString(dict, AttrNames::PartitionGraphKeys::LayoutKind))
-      fact.layoutKind = parseLayoutKind(*kind);
-    fact.ownerDims =
-        getI64Array(dict, AttrNames::PartitionGraphKeys::OwnerDims);
-    fact.blockShape =
-        getI64Array(dict, AttrNames::PartitionGraphKeys::BlockShape);
-    if (std::optional<int64_t> value =
-            getI64(dict, AttrNames::PartitionGraphKeys::TilePayloadBytes))
-      fact.tilePayloadBytes = *value;
-    if (std::optional<int64_t> value =
-            getI64(dict, AttrNames::PartitionGraphKeys::MuBlockCount))
-      fact.muBlockCount = std::max<int64_t>(1, *value);
-    if (std::optional<int64_t> value =
-            getI64(dict, AttrNames::PartitionGraphKeys::CuGroupSize))
-      fact.cuGroupSize = std::max<int64_t>(1, *value);
-    if (std::optional<int64_t> value =
-            getI64(dict, AttrNames::PartitionGraphKeys::CuGroupCount))
-      fact.cuGroupCount = std::max<int64_t>(1, *value);
-    if (std::optional<int64_t> value =
-            getI64(dict, AttrNames::PartitionGraphKeys::EdgeCommBytes))
-      fact.edgeCommBytes = *value;
-    if (std::optional<StringRef> value =
-            getString(dict, AttrNames::PartitionGraphKeys::EdgeClass))
-      fact.edgeClass = value->str();
-    return fact;
-  }
-
   if (std::optional<int64_t> id = getI64(dict, AttrNames::LayoutGraph::ArrayId))
     fact.id = *id;
   if (std::optional<StringRef> role =
@@ -281,8 +245,7 @@ StringRef stringifyLayoutKind(ArrayLayoutKind kind) {
 }
 
 ArrayLayoutKind parseLayoutKind(StringRef value) {
-  if (value == AttrNames::LayoutGraph::BlockParallel ||
-      value == AttrNames::PartitionGraphValues::OwnerBlock)
+  if (value == AttrNames::LayoutGraph::BlockParallel)
     return ArrayLayoutKind::blockParallel;
   if (value == AttrNames::LayoutGraph::BlockContraction)
     return ArrayLayoutKind::blockContraction;
@@ -312,13 +275,7 @@ LayoutGraphRole parseLayoutGraphRole(StringRef value) {
 std::optional<LayoutGraphFact> parseArrayLayoutFact(DictionaryAttr dict) {
   if (!dict || !dict.get(AttrNames::LayoutGraph::ArrayId))
     return std::nullopt;
-  return parseLayoutCommon(dict, /*partitionGraphShape=*/false);
-}
-
-std::optional<LayoutGraphFact> parsePartitionGraphFact(DictionaryAttr dict) {
-  if (!dict || !dict.get(AttrNames::PartitionGraphKeys::MuId))
-    return std::nullopt;
-  return parseLayoutCommon(dict, /*partitionGraphShape=*/true);
+  return parseLayoutCommon(dict);
 }
 
 SmallVector<LayoutGraphFact, 4> parseArrayLayoutFacts(ArrayAttr attr) {
@@ -345,68 +302,11 @@ assignStableArrayIds(const ModuleAccessRelations &relations) {
   return ids;
 }
 
-SmallVector<LayoutGraphFact, 4> parsePartitionGraphFacts(ArrayAttr attr) {
-  SmallVector<LayoutGraphFact, 4> facts;
-  if (!attr)
-    return facts;
-  for (Attribute entry : attr)
-    if (auto dict = dyn_cast<DictionaryAttr>(entry))
-      if (std::optional<LayoutGraphFact> fact = parsePartitionGraphFact(dict))
-        facts.push_back(std::move(*fact));
-  return facts;
-}
-
-std::optional<LayoutGraphScoreFact>
-parsePartitionScoreFact(DictionaryAttr dict) {
-  if (!dict)
-    return std::nullopt;
-
-  LayoutGraphScoreFact fact;
-  if (std::optional<StringRef> value =
-          getString(dict, AttrNames::PartitionScoreKeys::Objective))
-    fact.objective = value->str();
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::TargetLogicalWorkers))
-    fact.targetLogicalWorkers = *value;
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::ExposedCuCount))
-    fact.exposedCuCount = *value;
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::RequestedCuCount))
-    fact.requestedCuCount = *value;
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::ChosenCuCount))
-    fact.chosenCuCount = *value;
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::MuBlockCount))
-    fact.muBlockCount = std::max<int64_t>(1, *value);
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::CuGroupSize))
-    fact.cuGroupSize = std::max<int64_t>(1, *value);
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::CuGroupCount))
-    fact.cuGroupCount = std::max<int64_t>(1, *value);
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::MinTileBytes))
-    fact.minTileBytes = *value;
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::ChosenTileBytes))
-    fact.chosenTileBytes = *value;
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::PartitionScoreKeys::CommVolumeBytes))
-    fact.commVolumeBytes = *value;
-  fact.ownerDims = getI64Array(dict, AttrNames::PartitionScoreKeys::OwnerDims);
-  fact.blockShape =
-      getI64Array(dict, AttrNames::PartitionScoreKeys::BlockShape);
-  return fact;
-}
-
 SmallVector<CuMuHyperedgePressure, 4>
 collectCuMuHyperedgePressures(ArrayRef<LayoutGraphFact> facts) {
   SmallVector<CuMuHyperedgePressure, 4> pressures;
   for (const LayoutGraphFact &fact : facts) {
-    int64_t trafficBytes =
-        fact.edgeCommBytes > 0 ? fact.edgeCommBytes : fact.commVolumeBytes;
+    int64_t trafficBytes = fact.commVolumeBytes;
     if (trafficBytes <= 0)
       continue;
     int64_t remoteFanout = std::max<int64_t>(0, fact.muBlockCount - 1);

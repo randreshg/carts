@@ -124,7 +124,7 @@ def SdeScheduleKind
 def SdeScheduleKindAttr : CartsSde_I32EnumAttr<"schedule", SdeScheduleKind>;
 
 def SdeDistributionKind
-    : CartsSde_I32Enum<"SdeDistributionKind", "Distribution advisory hint", [
+    : CartsSde_I32Enum<"SdeDistributionKind", "Distribution kind", [
       I32EnumAttrCase<"owner_compute", 0, "owner_compute">,
       I32EnumAttrCase<"blocked", 1, "blocked">,
       I32EnumAttrCase<"cyclic", 2, "cyclic">
@@ -429,10 +429,9 @@ def SdeSuIterateOp
     //                         (full extent on non-owner positions).
     //   - `muBlockCount` (I64): number of memory-unit blocks implied by the
     //                         owner dims and block shape.
-    // Element-space only: encodes NO target nodes, routes, concrete worker
-    // placement, communication primitive, or split factor. Downstream consumers use the
-    // facts through boundary planning carriers; storage-view,
-    // communication-family, and target-object realization remain outside SDE.
+    // Element-space only: encodes no target nodes, routes, concrete worker
+    // placement, communication primitive, or split factor. CODIR consumes these
+    // facts on explicit codelet deps; ARTS realizes target objects later.
     OptionalAttr<ArrayAttr>:$arrayLayout,
     // Per-edge geometric layouts-disagree marker. An ArrayAttr of the
     // `arrayId`s (I64) whose chosen layout on this scheduling unit is a pure
@@ -459,11 +458,10 @@ def SdeSuDistributeOp
       SingleBlock, NoTerminator,
       RecursiveMemoryEffects
     ]> {
-  let summary = "Distribution advisory wrapper for SDE work";
+  let summary = "Distribution fact wrapper for SDE work";
   let description = [{
-    Wraps a scheduling-unit region with a runtime-neutral distribution hint.
-    This is an SDE-level advisory carrier only; it does not encode concrete
-    worker, route, or node identifiers.
+    Wraps a scheduling-unit region with a runtime-neutral distribution kind.
+    It does not encode concrete worker, route, or node identifiers.
   }];
 
   let arguments = (ins SdeDistributionKindAttr:$kind);
@@ -703,7 +701,7 @@ def SdeRedistOp : CartsSde_Op<"redist", [
                               Empty `targetOwnerDims` means a replicated target.
       - `haloShape` (opt)   : per-logical-dim ghost width; present only for
                               `halo_like`.
-      - `commVolumeBytes` (opt) : the committed abstract edge cost, advisory.
+      - `commVolumeBytes` (opt) : the committed abstract edge cost.
 
     A reduction family (`reduce_scatter_like`/`allreduce_like`) may keep an
     identical source/target layout (the movement is the reduction over the owned

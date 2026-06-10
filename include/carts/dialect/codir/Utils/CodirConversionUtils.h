@@ -380,10 +380,6 @@ createCodirCodelet(OpBuilder &builder, Location loc, ArrayAttr depModes,
       metadata.spatialDims, metadata.writeFootprint, metadata.inPlaceSafe,
       metadata.inPlaceSharedState, metadata.arrayLayout,
       metadata.layoutsDisagree, deps, params);
-  if (metadata.partitionGraph)
-    codelet->setAttr(codir::AttrNames::PartitionGraph, metadata.partitionGraph);
-  if (metadata.partitionScore)
-    codelet->setAttr(codir::AttrNames::PartitionScore, metadata.partitionScore);
   return codelet;
 }
 
@@ -2727,12 +2723,10 @@ static inline bool isSuDispatchStepKnownFiner(Value dispatchStep,
 //
 // When the dispatch step is no finer than the source step, no retile window is
 // needed and the existing body bounds are already correct; this is a no-op.
-static inline LogicalResult
-mapSuCoarseTileBoundsToDispatchWindow(sde::SdeSuIterateOp source, unsigned dim,
-                                      Value dispatchStep, Value /*rawEnd*/,
-                                      Value /*localEnd*/, IRMapping & /*mapper*/) {
-  if (dim >= source.getSteps().size() ||
-      dim >= source.getUpperBounds().size())
+static inline LogicalResult mapSuCoarseTileBoundsToDispatchWindow(
+    sde::SdeSuIterateOp source, unsigned dim, Value dispatchStep,
+    Value /*rawEnd*/, Value /*localEnd*/, IRMapping & /*mapper*/) {
+  if (dim >= source.getSteps().size() || dim >= source.getUpperBounds().size())
     return success();
   if (isSuDispatchStepKnownFiner(dispatchStep, source.getSteps()[dim]))
     return failure();

@@ -17,7 +17,7 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
-#include "carts/dialect/sde/Utils/SdePlanUtils.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/LoopUtils.h"
 #include "carts/utils/Utils.h"
@@ -685,7 +685,7 @@ buildStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
   // to DistributionPlanning, which consumes the PatternAnalysis facts.
   if (op.getLowerBounds().size() != 1)
     return std::nullopt;
-  if (sde::hasNestedStencilOwnerContract(op))
+  if (sde::requiresNestedStencilOwnerPromotion(op))
     return std::nullopt;
   auto effects = sde::collectStructuredMemoryEffects(op.getBody());
   bool ownerLocalPipeline =
@@ -906,12 +906,13 @@ static bool isBudgetReconciledTileCandidate(sde::SdeSuIterateOp op) {
 // their one fact. An affine-disjoint MULTI-store writer (e.g. a jacobi-style
 // init that writes f/u/unew in one nest) returns a representative fact only
 // when every written array names a distinct id and all writes agree on
-// ownerDims + budgetBlockShape + block_parallel kind, so one shared budget grain
-// is correct for all of them. A true multi-writer (same id stored twice), any
-// owner/grain/kind disagreement, or a non-block layout fails closed -- the SU
-// then keeps the generic tiler, never an unverifiable shared grain. Tiling owns
-// this multi-store budget grain as a real loop retile while the loop is still
-// step-1, so the grain is structurally true rather than an attr-only promise.
+// ownerDims + budgetBlockShape + block_parallel kind, so one shared budget
+// grain is correct for all of them. A true multi-writer (same id stored twice),
+// any owner/grain/kind disagreement, or a non-block layout fails closed -- the
+// SU then keeps the generic tiler, never an unverifiable shared grain. Tiling
+// owns this multi-store budget grain as a real loop retile while the loop is
+// still step-1, so the grain is structurally true rather than an attr-only
+// promise.
 static std::optional<sde::LayoutGraphFact>
 selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
                                   bool allowSingleOwnerDim) {
@@ -1292,7 +1293,7 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
 
     SmallVector<sde::SdeSuIterateOp> rewrites;
     getOperation().walk([&](sde::SdeSuIterateOp op) {
-      if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
+      if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
         return;
       Block *body = sde::getSuIterateComputeBlock(op);
       if (!isTilingCandidate(op, *body))

@@ -21,7 +21,7 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
-#include "carts/dialect/sde/Utils/SdePlanUtils.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/LoopUtils.h"
 #include "carts/utils/Utils.h"
@@ -845,24 +845,6 @@ static int64_t chooseNeutralCuGroupSize(int64_t cuCount, int64_t tileBytes,
   return 1;
 }
 
-static int64_t
-inferCuGroupSizeFromLogicalSlice(ArrayRef<int64_t> shape,
-                                 ArrayRef<int64_t> ownerPhysicalDims,
-                                 ArrayRef<int64_t> physicalBlockShape,
-                                 ArrayRef<int64_t> logicalWorkerSlice) {
-  if (logicalWorkerSlice.empty() ||
-      logicalWorkerSlice.size() != physicalBlockShape.size())
-    return 1;
-  int64_t physicalCuCount = sde::inferCuCountFromMuPartition(
-      shape, ownerPhysicalDims, physicalBlockShape);
-  int64_t logicalCuCount = sde::inferCuCountFromMuPartition(
-      shape, ownerPhysicalDims, logicalWorkerSlice);
-  if (physicalCuCount <= 1 || logicalCuCount <= 0 ||
-      logicalCuCount >= physicalCuCount)
-    return 1;
-  return sde::ceilDivPositive(physicalCuCount, logicalCuCount);
-}
-
 static int64_t chooseLogicalTargetForTileFloor(
     ArrayRef<int64_t> shape, ArrayRef<int64_t> ownerPhysicalDims,
     ArrayRef<int64_t> physicalBlockShape, int64_t elemBytes,
@@ -978,285 +960,6 @@ static std::optional<sde::CuMuPartitionPlan> chooseCuMuTileFloorPlan(
       objective, physicalBlockShape, rebuild);
 }
 
-static void stampCuMuPartitionGraphAttrs(sde::SdeSuIterateOp op,
-                                         sde::SDECostModel &costModel) {
-  if (sde::hasCommittedCuMuPartitionEvidence(op.getOperation()))
-    return;
-
-  auto blockShape = readI64ArrayAttr(op.getPhysicalBlockShapeAttr());
-  auto ownerDims = readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
-  if (!blockShape || blockShape->empty() || !ownerDims || ownerDims->empty())
-    return;
-  if (!physicalPlanMatchesRealizedLoopSteps(op, *ownerDims, *blockShape))
-    return;
-
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op);
-  if (!outputPlan)
-    outputPlan = sde::findLoopIndexedOutputPlan(op);
-  Value outputRoot;
-  SmallVector<int64_t, 4> outputShape;
-  if (outputPlan) {
-    outputRoot = outputPlan->root;
-    outputShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
-  } else if (std::optional<sde::StructuredOutputLayoutPlan> structuredPlan =
-                 sde::findCompatibleOutputLayoutPlan(op)) {
-    outputRoot = structuredPlan->root;
-    outputShape.assign(structuredPlan->shape.begin(),
-                       structuredPlan->shape.end());
-  } else if (std::optional<StaticOutputStoragePlan> storePlan =
-                 findSingleExternalStoreShape(op)) {
-    outputRoot = storePlan->root;
-    outputShape.assign(storePlan->shape.begin(), storePlan->shape.end());
-  }
-  if (!outputRoot || outputShape.empty() ||
-      outputShape.size() != blockShape->size())
-    return;
-
-  int64_t elemBytes = outputElementBytes(outputRoot);
-  if (elemBytes <= 0)
-    return;
-
-  MLIRContext *ctx = op.getContext();
-  Builder builder(ctx);
-  auto i64Ty = builder.getIntegerType(64);
-  auto i64Attr = [&](int64_t value) { return IntegerAttr::get(i64Ty, value); };
-  auto readI64Array =
-      [](ArrayAttr attr) -> std::optional<SmallVector<int64_t, 4>> {
-    return readI64ArrayAttr(attr);
-  };
-
-  int64_t tileBytes = sde::tilePayloadBytes(*blockShape, elemBytes);
-  int64_t cuCount =
-      sde::inferCuCountFromMuPartition(outputShape, *ownerDims, *blockShape);
-  int64_t targetWorkers =
-      std::max<int64_t>(1, costModel.getLogicalWorkerCapacity());
-  int64_t exposedCuCount =
-      std::min<int64_t>(std::max<int64_t>(1, cuCount), targetWorkers);
-  int64_t commBytes = readAbstractCommVolumeBytes(op);
-  int64_t logicalSliceGroupSize = 1;
-  if (auto logicalSlice = readI64ArrayAttr(op.getLogicalWorkerSliceAttr()))
-    logicalSliceGroupSize = inferCuGroupSizeFromLogicalSlice(
-        outputShape, *ownerDims, *blockShape, *logicalSlice);
-  int64_t cuGroupSize = std::max<int64_t>(
-      logicalSliceGroupSize,
-      chooseNeutralCuGroupSize(std::max<int64_t>(1, cuCount), tileBytes,
-                               costModel.getMinDistributedTileBytes(),
-                               targetWorkers));
-  int64_t cuGroupCount =
-      sde::ceilDivPositive(std::max<int64_t>(1, cuCount), cuGroupSize);
-  int64_t outputMuBlockCount = std::max<int64_t>(1, cuCount);
-  int64_t scoreMuBlockCount = outputMuBlockCount;
-  if (ArrayAttr layout = op.getArrayLayoutAttr()) {
-    for (Attribute attr : layout) {
-      auto dict = dyn_cast<DictionaryAttr>(attr);
-      if (!dict)
-        continue;
-      auto blocks = dyn_cast_or_null<IntegerAttr>(
-          dict.get(sde::AttrNames::LayoutGraph::MuBlockCount));
-      if (blocks && blocks.getInt() > 0)
-        scoreMuBlockCount =
-            std::max<int64_t>(scoreMuBlockCount, blocks.getInt());
-    }
-  }
-
-  SmallVector<NamedAttribute, 8> scoreAttrs;
-  scoreAttrs.push_back(builder.getNamedAttr(
-      sde::AttrNames::PartitionScoreKeys::Objective,
-      builder.getStringAttr(sde::AttrNames::PartitionGraphValues::
-                                ObjectiveMaxConcurrencyCommAware)));
-  scoreAttrs.push_back(builder.getNamedAttr(
-      sde::AttrNames::PartitionScoreKeys::TargetLogicalWorkers,
-      i64Attr(targetWorkers)));
-  scoreAttrs.push_back(
-      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::ExposedCuCount,
-                           i64Attr(exposedCuCount)));
-  scoreAttrs.push_back(builder.getNamedAttr(
-      sde::AttrNames::PartitionScoreKeys::RequestedCuCount,
-      i64Attr(std::max<int64_t>(1, getInterLocalityTargetWorkers(costModel)))));
-  scoreAttrs.push_back(
-      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::ChosenCuCount,
-                           i64Attr(std::max<int64_t>(1, cuCount))));
-  scoreAttrs.push_back(
-      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::MuBlockCount,
-                           i64Attr(scoreMuBlockCount)));
-  scoreAttrs.push_back(builder.getNamedAttr(
-      sde::AttrNames::PartitionScoreKeys::CuGroupSize, i64Attr(cuGroupSize)));
-  scoreAttrs.push_back(builder.getNamedAttr(
-      sde::AttrNames::PartitionScoreKeys::CuGroupCount, i64Attr(cuGroupCount)));
-  scoreAttrs.push_back(
-      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::MinTileBytes,
-                           i64Attr(costModel.getMinDistributedTileBytes())));
-  scoreAttrs.push_back(builder.getNamedAttr(
-      sde::AttrNames::PartitionScoreKeys::ChosenTileBytes, i64Attr(tileBytes)));
-  scoreAttrs.push_back(builder.getNamedAttr(
-      sde::AttrNames::PartitionScoreKeys::CommVolumeBytes, i64Attr(commBytes)));
-  scoreAttrs.push_back(
-      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::OwnerDims,
-                           buildI64ArrayAttr(ctx, *ownerDims)));
-  scoreAttrs.push_back(
-      builder.getNamedAttr(sde::AttrNames::PartitionScoreKeys::BlockShape,
-                           buildI64ArrayAttr(ctx, *blockShape)));
-  op->setAttr(sde::AttrNames::PartitionScore,
-              DictionaryAttr::get(ctx, scoreAttrs));
-
-  SmallVector<Attribute, 4> graphEntries;
-  auto appendGraphEntry = [&](int64_t muId, StringRef role,
-                              StringRef layoutKind, ArrayAttr entryOwnerDims,
-                              ArrayAttr entryBlockShape, int64_t muBlockCount,
-                              int64_t entryCuGroupSize, int64_t edgeCommBytes,
-                              StringRef edgeClass) {
-    int64_t entryTileBytes = tileBytes;
-    if (auto entryShape = readI64Array(entryBlockShape))
-      entryTileBytes = sde::tilePayloadBytes(*entryShape, elemBytes);
-    int64_t normalizedGroup = std::clamp<int64_t>(
-        entryCuGroupSize, int64_t{1}, std::max<int64_t>(1, muBlockCount));
-    int64_t entryCuGroupCount = sde::ceilDivPositive(
-        std::max<int64_t>(1, muBlockCount), normalizedGroup);
-    SmallVector<NamedAttribute, 10> attrs;
-    attrs.push_back(builder.getNamedAttr(
-        sde::AttrNames::PartitionGraphKeys::MuId, i64Attr(muId)));
-    attrs.push_back(builder.getNamedAttr(
-        sde::AttrNames::PartitionGraphKeys::Role, builder.getStringAttr(role)));
-    attrs.push_back(
-        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::LayoutKind,
-                             builder.getStringAttr(layoutKind)));
-    attrs.push_back(builder.getNamedAttr(
-        sde::AttrNames::PartitionGraphKeys::OwnerDims, entryOwnerDims));
-    attrs.push_back(builder.getNamedAttr(
-        sde::AttrNames::PartitionGraphKeys::BlockShape, entryBlockShape));
-    attrs.push_back(builder.getNamedAttr(
-        sde::AttrNames::PartitionGraphKeys::TilePayloadBytes,
-        i64Attr(entryTileBytes)));
-    attrs.push_back(
-        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::MuBlockCount,
-                             i64Attr(std::max<int64_t>(1, muBlockCount))));
-    attrs.push_back(
-        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::CuGroupSize,
-                             i64Attr(normalizedGroup)));
-    attrs.push_back(
-        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::CuGroupCount,
-                             i64Attr(entryCuGroupCount)));
-    attrs.push_back(
-        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::EdgeCommBytes,
-                             i64Attr(edgeCommBytes)));
-    attrs.push_back(
-        builder.getNamedAttr(sde::AttrNames::PartitionGraphKeys::EdgeClass,
-                             builder.getStringAttr(edgeClass)));
-    graphEntries.push_back(DictionaryAttr::get(ctx, attrs));
-  };
-
-  bool addedPrimaryOwnerBlock = false;
-  if (ArrayAttr layout = op.getArrayLayoutAttr()) {
-    for (auto [idx, attr] : llvm::enumerate(layout)) {
-      auto dict = dyn_cast<DictionaryAttr>(attr);
-      if (!dict)
-        continue;
-      int64_t muId = static_cast<int64_t>(idx);
-      if (auto arrayId = dyn_cast_or_null<IntegerAttr>(
-              dict.get(sde::AttrNames::LayoutGraph::ArrayId)))
-        muId = arrayId.getInt();
-      auto kind = dyn_cast_or_null<StringAttr>(
-          dict.get(sde::AttrNames::LayoutGraph::Kind));
-      auto layoutOwnerDims = dyn_cast_or_null<ArrayAttr>(
-          dict.get(sde::AttrNames::LayoutGraph::OwnerDims));
-      auto layoutBlockShape = dyn_cast_or_null<ArrayAttr>(
-          dict.get(sde::AttrNames::LayoutGraph::BlockShape));
-      if (!layoutOwnerDims || !layoutBlockShape)
-        continue;
-      auto roleAttr = dyn_cast_or_null<StringAttr>(
-          dict.get(sde::AttrNames::LayoutGraph::Role));
-      StringRef role =
-          roleAttr ? roleAttr.getValue()
-                   : StringRef(sde::AttrNames::LayoutGraphValues::RoleUnknown);
-      StringRef layoutKind =
-          kind ? kind.getValue()
-               : StringRef(sde::AttrNames::PartitionGraphValues::UnknownLayout);
-      int64_t edgeCommBytes = 0;
-      if (auto edgeBytes = dyn_cast_or_null<IntegerAttr>(
-              dict.get(sde::AttrNames::LayoutGraph::CommVolumeBytes)))
-        edgeCommBytes = std::max<int64_t>(0, edgeBytes.getInt());
-      int64_t entryMuBlockCount = 1;
-      if (auto blocks = dyn_cast_or_null<IntegerAttr>(
-              dict.get(sde::AttrNames::LayoutGraph::MuBlockCount)))
-        entryMuBlockCount = std::max<int64_t>(1, blocks.getInt());
-      StringRef edgeClass =
-          edgeCommBytes > 0
-              ? StringRef(
-                    sde::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
-              : StringRef(sde::AttrNames::PartitionGraphValues::EdgeAligned);
-
-      // Prefer the committed budget grain (the authority) over the abstract
-      // pre-distribution blockShape so read edges (and non-primary writes) carry
-      // the writer's owner_block grain instead of a coarse fallback. The primary
-      // write below still overrides with the realized physical block.
-      SmallVector<int64_t, 4> entryBudgetShape;
-      if (auto budgetBlock = dyn_cast_or_null<ArrayAttr>(
-              dict.get(sde::AttrNames::LayoutGraph::BudgetBlockShape))) {
-        if (!budgetBlock.empty()) {
-          layoutBlockShape = budgetBlock;
-          if (auto budgetVec = readI64ArrayAttr(budgetBlock))
-            entryBudgetShape = std::move(*budgetVec);
-          if (auto budgetBlocks = dyn_cast_or_null<IntegerAttr>(
-                  dict.get(sde::AttrNames::LayoutGraph::BudgetMuBlockCount)))
-            entryMuBlockCount = std::max<int64_t>(1, budgetBlocks.getInt());
-        }
-      }
-
-      // A multi-store data-parallel codelet writes several arrays at the same
-      // budget grain (e.g. jacobi-for init writes f/u/unew, all owner-tiled at
-      // [512,512] over dims [0,1]). The realized physical plan owns every such
-      // write, not only the first one, so the conversion subviews each write to
-      // its compute_block. Promote any write entry whose committed budget grain
-      // and owner dims match the primary physical plan to owner_block; leave
-      // heterogeneous-grain writes on their own grain rather than forcing them
-      // onto the primary block (that would misdescribe their storage).
-      auto entryOwnerVec = readI64ArrayAttr(layoutOwnerDims);
-      bool writeMatchesPrimary =
-          role == sde::AttrNames::LayoutGraphValues::RoleWrite &&
-          entryOwnerVec && *entryOwnerVec == *ownerDims &&
-          !entryBudgetShape.empty() && entryBudgetShape == *blockShape;
-
-      if (role == sde::AttrNames::LayoutGraphValues::RoleWrite &&
-          (!addedPrimaryOwnerBlock || writeMatchesPrimary)) {
-        layoutKind = sde::AttrNames::PartitionGraphValues::OwnerBlock;
-        layoutOwnerDims = buildI64ArrayAttr(ctx, *ownerDims);
-        layoutBlockShape = buildI64ArrayAttr(ctx, *blockShape);
-        entryMuBlockCount = std::max<int64_t>(1, cuCount);
-        edgeCommBytes = commBytes;
-        edgeClass =
-            edgeCommBytes > 0
-                ? StringRef(
-                      sde::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
-                : StringRef(sde::AttrNames::PartitionGraphValues::EdgeAligned);
-        addedPrimaryOwnerBlock = true;
-      }
-
-      int64_t entryCuGroupSize = cuGroupSize;
-      appendGraphEntry(muId, role, layoutKind, layoutOwnerDims,
-                       layoutBlockShape, entryMuBlockCount, entryCuGroupSize,
-                       edgeCommBytes, edgeClass);
-    }
-  }
-
-  if (!addedPrimaryOwnerBlock) {
-    StringRef edgeClass =
-        commBytes > 0
-            ? StringRef(
-                  sde::AttrNames::PartitionGraphValues::EdgeLayoutMismatch)
-            : StringRef(sde::AttrNames::PartitionGraphValues::EdgeAligned);
-    appendGraphEntry(
-        /*muId=*/0, sde::AttrNames::LayoutGraphValues::RoleWrite,
-        sde::AttrNames::PartitionGraphValues::OwnerBlock,
-        buildI64ArrayAttr(ctx, *ownerDims), buildI64ArrayAttr(ctx, *blockShape),
-        std::max<int64_t>(1, cuCount), cuGroupSize, commBytes, edgeClass);
-  }
-
-  if (!graphEntries.empty())
-    op->setAttr(sde::AttrNames::PartitionGraph,
-                ArrayAttr::get(ctx, graphEntries));
-}
-
 static int64_t coarsenLoopIndexedOwnerPlanToTileFloor(
     const sde::LoopIndexedOutputPlan &outputPlan, sde::SDECostModel &costModel,
     int64_t workers, int64_t abstractCommVolumeBytes,
@@ -1298,7 +1001,7 @@ static int64_t coarsenLoopIndexedOwnerPlanToTileFloor(
 static void
 coarsenExistingLoopIndexedOwnerPlanToTileFloor(sde::SdeSuIterateOp op,
                                                sde::SDECostModel &costModel) {
-  if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()) ||
+  if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()) ||
       op.getDistributionKindAttr() ||
       op->getParentOfType<sde::SdeSuDistributeOp>())
     return;
@@ -1653,8 +1356,7 @@ orderPhysicalOwnerDimsByLoop(const sde::StructuredOutputLayoutPlan &outputPlan,
 
 static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
                                                 sde::SDECostModel &costModel) {
-  if (!op || hasPhysicalLayoutPlan(op) ||
-      sde::hasCommittedCuMuPartitionEvidence(op.getOperation()))
+  if (!op || hasPhysicalLayoutPlan(op))
     return false;
 
   auto classification = op.getStructuredClassification();
@@ -1726,8 +1428,7 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
 // authority and the iteration-space decomposition re-tiles to the block.
 static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
                                       sde::SDECostModel &costModel) {
-  if (!op || hasPhysicalLayoutPlan(op) ||
-      sde::hasCommittedCuMuPartitionEvidence(op.getOperation()))
+  if (!op || hasPhysicalLayoutPlan(op))
     return false;
   // Matmul/contraction keeps its dedicated contraction-tiling plan: its CU-task
   // grain is the reduction-aware worker grain, not the data-parallel block
@@ -1800,7 +1501,7 @@ static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
 }
 
 static bool mayRefineExistingPhysicalLayoutPlan(sde::SdeSuIterateOp op) {
-  if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
+  if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
     return false;
   if (op.getDistributionKindAttr() ||
       op->getParentOfType<sde::SdeSuDistributeOp>())
@@ -1882,7 +1583,7 @@ physicalPlanMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
       op.getSteps().empty())
     return false;
 
-  // Once SDE has committed an owner-tile/strip physical plan, the SU loop step
+  // Once SDE has committed owner-tile/strip physical facts, the SU loop step
   // operands are the realized owner-block schedule. Later structured analysis
   // may see the inner element loops introduced by tiling, so validate the
   // committed owner step order before consulting access-derived maps.
@@ -1944,7 +1645,7 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
     return;
   if (classification && !isStencil)
     return;
-  if (isStencil && sde::hasNestedStencilOwnerContract(op) &&
+  if (isStencil && sde::requiresNestedStencilOwnerPromotion(op) &&
       !sde::hasRealizableOwnerStripPlan(op))
     return;
 
@@ -2474,7 +2175,7 @@ chooseDistributionKind(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
   case sde::SdeStructuredClassification::elementwise_pipeline:
     return sde::SdeDistributionKind::blocked;
   case sde::SdeStructuredClassification::stencil:
-    if (sde::hasNestedStencilOwnerContract(op) &&
+    if (sde::requiresNestedStencilOwnerPromotion(op) &&
         !sde::hasRealizableOwnerStripPlan(op))
       return std::nullopt;
     if (isInPlaceSelfReadStencil(op) && !op.getInPlaceSafeAttr())
@@ -2566,9 +2267,7 @@ struct DistributionPlanningPass
         continue;
       }
 
-      if (sde::hasCommittedCuMuPartitionEvidence(op.getOperation()) ||
-          op.getDistributionKindAttr()) {
-        stampCuMuPartitionGraphAttrs(op, *costModel);
+      if (op.getDistributionKindAttr()) {
         planOrFailClosed(op);
         continue;
       }
@@ -2577,7 +2276,6 @@ struct DistributionPlanningPass
         if (mayRefineExistingPhysicalLayoutPlan(op)) {
           coarsenExistingLoopIndexedOwnerPlanToTileFloor(op, *costModel);
         }
-        stampCuMuPartitionGraphAttrs(op, *costModel);
         planOrFailClosed(op);
         continue;
       }
@@ -2595,7 +2293,6 @@ struct DistributionPlanningPass
       stampReductionTaskShapePlan(op, *costModel);
       stampInPlaceSharedStencilSerialSlice(op, *costModel);
       stampPhysicalPlanFromAssignedLayout(op, *costModel);
-      stampCuMuPartitionGraphAttrs(op, *costModel);
       planOrFailClosed(op);
     }
 
@@ -2608,8 +2305,8 @@ struct DistributionPlanningPass
       if (rewrite.op.getNumResults() > 0) {
         // su_iterate with iter_arg results: can't wrap in su_distribute
         // (NoTerminator op can't forward results). Stamp distribution kind
-        // directly on the su_iterate; boundary lowering carries it forward and
-        // consumes the plan fact.
+        // directly on the su_iterate; boundary lowering carries the committed
+        // fact forward.
         rewrite.op.setDistributionKindAttr(
             sde::SdeDistributionKindAttr::get(&getContext(), rewrite.kind));
         continue;

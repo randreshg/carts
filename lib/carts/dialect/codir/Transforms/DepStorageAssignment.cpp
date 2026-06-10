@@ -8,7 +8,6 @@
 
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
 #include "carts/dialect/codir/Utils/CodirAccessTraceUtils.h"
-#include "carts/dialect/codir/Utils/CodirAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -620,69 +619,32 @@ static bool partitionedWriteRequiresComputeBlock(codir::CodeletOp codelet,
       getDepAccessMode(codelet, depIndex);
   if (!mode || !accessModeMayWrite(*mode))
     return false;
-
-  std::optional<int64_t> depArrayId = codir::getDepArrayId(codelet, depIndex);
-  if (!depArrayId)
+  if (!depAccessesStayWithinSingleOwnerSlice(codelet, depIndex))
     return false;
 
-  ArrayAttr graph = dyn_cast_or_null<ArrayAttr>(
-      codelet->getAttr(codir::AttrNames::PartitionGraph));
-  if (!graph)
+  std::optional<SmallVector<unsigned, 4>> ownerValues =
+      getTileOwnerDims(codelet);
+  std::optional<SmallVector<int64_t, 4>> blockValues =
+      readI64ArrayAttr(codelet.getTileShapeAttr());
+  std::optional<SmallVector<int64_t, 4>> logicalValues =
+      readI64ArrayAttr(codelet.getLogicalWorkerSliceAttr());
+  if (!ownerValues || ownerValues->empty() || !blockValues ||
+      blockValues->empty() || !logicalValues || logicalValues->empty())
     return false;
 
-  for (Attribute attr : graph) {
-    auto entry = dyn_cast<DictionaryAttr>(attr);
-    if (!entry)
-      continue;
-    auto muId = dyn_cast_or_null<IntegerAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::MuId));
-    if (!muId || muId.getInt() != *depArrayId)
-      continue;
-    auto role = dyn_cast_or_null<StringAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::Role));
-    if (role &&
-        role.getValue() != codir::AttrNames::LayoutGraphValues::RoleWrite)
-      continue;
-    auto kind = dyn_cast_or_null<StringAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::LayoutKind));
-    if (!kind ||
-        kind.getValue() != codir::AttrNames::PartitionGraphValues::OwnerBlock)
-      continue;
-    auto blockShape = dyn_cast_or_null<ArrayAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::BlockShape));
-    auto ownerDims = dyn_cast_or_null<ArrayAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::OwnerDims));
-    std::optional<SmallVector<int64_t, 4>> blockValues =
-        readI64ArrayAttr(blockShape);
-    std::optional<SmallVector<int64_t, 4>> ownerValues =
-        readI64ArrayAttr(ownerDims);
-    std::optional<SmallVector<int64_t, 4>> logicalValues =
-        readI64ArrayAttr(codelet.getLogicalWorkerSliceAttr());
-    if (!blockValues || blockValues->empty() || !ownerValues ||
-        ownerValues->empty() || !logicalValues || logicalValues->empty())
-      continue;
-    if (blockValues->size() != ownerValues->size())
-      continue;
-
-    bool fitsOneBlock = true;
-    for (auto [slot, ownerDim] : llvm::enumerate(*ownerValues)) {
-      if (ownerDim < 0 || (*blockValues)[slot] <= 0) {
-        fitsOneBlock = false;
-        break;
-      }
-      size_t logicalIndex = static_cast<size_t>(ownerDim);
-      if (logicalIndex >= logicalValues->size())
-        logicalIndex = slot;
-      if (logicalIndex >= logicalValues->size() ||
-          (*logicalValues)[logicalIndex] > (*blockValues)[slot]) {
-        fitsOneBlock = false;
-        break;
-      }
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerValues)) {
+    size_t ownerIndex = static_cast<size_t>(ownerDim);
+    size_t blockIndex = ownerIndex < blockValues->size() ? ownerIndex : slot;
+    size_t logicalIndex =
+        ownerIndex < logicalValues->size() ? ownerIndex : slot;
+    if (blockIndex >= blockValues->size() ||
+        logicalIndex >= logicalValues->size() ||
+        (*blockValues)[blockIndex] <= 0 ||
+        (*logicalValues)[logicalIndex] > (*blockValues)[blockIndex]) {
+      return false;
     }
-    if (fitsOneBlock)
-      return true;
   }
-  return false;
+  return true;
 }
 
 static bool depSemanticallyRequiresComputeBlock(codir::CodeletOp codelet,
@@ -1004,37 +966,7 @@ static bool partialReductionResultRequiresComputeBlock(codir::CodeletOp codelet,
       getDepAccessMode(codelet, depIndex);
   if (!mode || !accessModeMayWrite(*mode))
     return false;
-  std::optional<int64_t> depArrayId = codir::getDepArrayId(codelet, depIndex);
-  if (!depArrayId)
-    return false;
-  ArrayAttr graph = dyn_cast_or_null<ArrayAttr>(
-      codelet->getAttr(codir::AttrNames::PartitionGraph));
-  if (!graph)
-    return false;
-  for (Attribute attr : graph) {
-    auto entry = dyn_cast<DictionaryAttr>(attr);
-    if (!entry)
-      continue;
-    auto muId = dyn_cast_or_null<IntegerAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::MuId));
-    if (!muId || muId.getInt() != *depArrayId)
-      continue;
-    auto role = dyn_cast_or_null<StringAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::Role));
-    if (role &&
-        role.getValue() != codir::AttrNames::LayoutGraphValues::RoleWrite)
-      continue;
-    auto kind = dyn_cast_or_null<StringAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::LayoutKind));
-    if (!kind ||
-        kind.getValue() != codir::AttrNames::PartitionGraphValues::OwnerBlock)
-      continue;
-    auto blockShape = dyn_cast_or_null<ArrayAttr>(
-        entry.get(codir::AttrNames::PartitionGraphKeys::BlockShape));
-    if (blockShape && !blockShape.empty())
-      return true;
-  }
-  return false;
+  return true;
 }
 
 static ArrayAttr

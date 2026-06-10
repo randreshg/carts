@@ -6,11 +6,11 @@
 /// For every `sde.mu_alloc` that is not block-partitioned, this verifier fails
 /// only when the MU is in the block-grid realize scope and was left flat.
 /// Unsupported shapes remain outside this verifier until SDE can materialize
-/// them without inventing layout. The verifier reads the committed plan verbatim
-/// and shares the realize gate (`isBlockGridRealizable`) with rank expansion and
-/// the pass; it never recomputes owner dims or block shape. The gate and the
-/// `recognizeExpandedBlockGridMu` predicate are ND (any number of owner dims);
-/// this verifier consumes them as opaque presence tests.
+/// them without inventing layout. The verifier reads the committed plan
+/// verbatim and shares the realize gate (`isBlockGridRealizable`) with rank
+/// expansion and the pass; it never recomputes owner dims or block shape. The
+/// gate and the `recognizeExpandedBlockGridMu` predicate are ND (any number of
+/// owner dims); this verifier consumes them as opaque presence tests.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"

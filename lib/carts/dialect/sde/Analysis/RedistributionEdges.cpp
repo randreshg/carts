@@ -515,7 +515,7 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         }
       }
 
-      // Advisory committed edge cost, if the reader stamped one.
+      // Committed abstract edge cost, if the reader stamped one.
       if (ArrayAttr readerLayout = reader.getArrayLayoutAttr())
         for (const LayoutGraphFact &f : parseArrayLayoutFacts(readerLayout))
           if (f.id == arrayId && f.role == LayoutGraphRole::read &&

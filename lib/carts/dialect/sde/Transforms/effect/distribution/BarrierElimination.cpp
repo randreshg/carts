@@ -3,7 +3,7 @@
 ///
 /// Remove independent SDE barriers between scheduling units. Required
 /// timestep barriers are annotated as stage boundaries so boundary lowering
-/// can consume the already-proven SDE plan.
+/// can consume the already-proven SDE facts.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -15,7 +15,7 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
-#include "carts/dialect/sde/Utils/SdePlanUtils.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 

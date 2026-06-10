@@ -25,7 +25,6 @@ module {
                       partial_reduction,
                       partial_reduction_dims = [1],
                       partial_reduction_owner_dims = [0],
-                      partition_graph = [{blockShape = [255], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "owner_block", muBlockCount = 64 : i64, muId = 0 : i64, ownerDims = [0], role = "write", tilePayloadBytes = 2040 : i64}],
                       pattern = #codir.pattern<elementwise_pipeline>,
                       reduction_strategy = #codir.reduction_strategy<local_accumulate>,
                       tile_owner_dims = [0],

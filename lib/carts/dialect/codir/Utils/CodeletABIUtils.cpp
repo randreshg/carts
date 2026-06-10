@@ -130,18 +130,9 @@ static ArrayAttr getComputeBlockReadShapeOr(CodeletOp codelet,
   return tileShape;
 }
 
-static bool hasStringValue(DictionaryAttr dict, StringRef key,
-                           StringRef expected) {
-  auto value = dyn_cast_or_null<StringAttr>(dict ? dict.get(key) : Attribute{});
-  return value && value.getValue() == expected;
-}
-
 static bool isRoleCompatible(DictionaryAttr dict, CodirAccessMode mode) {
   auto role = dyn_cast_or_null<StringAttr>(
       dict ? dict.get(AttrNames::LayoutGraphKeys::Role) : Attribute{});
-  if (!role)
-    role = dyn_cast_or_null<StringAttr>(
-        dict ? dict.get(AttrNames::PartitionGraphKeys::Role) : Attribute{});
   if (!role)
     return true;
   if (codirAccessMayWrite(mode) &&
@@ -182,44 +173,9 @@ static bool depArrayLayoutHasMismatch(CodeletOp codelet, unsigned depIndex,
          arrayLayoutEntryHasMismatch(codelet, entry);
 }
 
-static bool partitionGraphHasMismatch(CodeletOp codelet, unsigned depIndex,
-                                      CodirAccessMode mode) {
-  std::optional<int64_t> depArrayId = getDepArrayId(codelet, depIndex);
-  if (!depArrayId)
-    return false;
-  ArrayAttr graph = codelet ? dyn_cast_or_null<ArrayAttr>(
-                                  codelet->getAttr(AttrNames::PartitionGraph))
-                            : ArrayAttr{};
-  if (!graph)
-    return false;
-  for (Attribute attr : graph) {
-    auto entry = dyn_cast<DictionaryAttr>(attr);
-    if (!entry)
-      continue;
-    if (!hasStringValue(entry, AttrNames::PartitionGraphKeys::EdgeClass,
-                        AttrNames::PartitionGraphValues::EdgeLayoutMismatch))
-      continue;
-    if (!isRoleCompatible(entry, mode))
-      continue;
-    auto muId = dyn_cast_or_null<IntegerAttr>(
-        entry.get(AttrNames::PartitionGraphKeys::MuId));
-    if (!muId || muId.getInt() != *depArrayId)
-      continue;
-    // Owner-block entries describe the compute DB home shape. They may carry
-    // aggregate communication pressure for the codelet, but they are not by
-    // themselves a per-dependency redistribution edge.
-    if (hasStringValue(entry, AttrNames::PartitionGraphKeys::LayoutKind,
-                       AttrNames::PartitionGraphValues::OwnerBlock))
-      continue;
-    return true;
-  }
-  return false;
-}
-
 static bool depHasLayoutMismatchEvidence(CodeletOp codelet, unsigned depIndex,
                                          CodirAccessMode mode) {
-  return depArrayLayoutHasMismatch(codelet, depIndex, mode) ||
-         partitionGraphHasMismatch(codelet, depIndex, mode);
+  return depArrayLayoutHasMismatch(codelet, depIndex, mode);
 }
 
 static bool isReductionLike(CodeletOp codelet) {
@@ -524,50 +480,12 @@ DictionaryAttr getArrayLayoutEntryForDep(CodeletOp codelet, unsigned depIndex) {
 
 static ArrayAttr getDepBasePhysicalBlockShapeAttr(CodeletOp codelet,
                                                   unsigned depIndex) {
-  std::optional<int64_t> depArrayId = getDepArrayId(codelet, depIndex);
   std::optional<CodirAccessMode> mode = getDepAccessMode(codelet, depIndex);
-  if (depArrayId && mode) {
-    ArrayAttr graph = codelet ? dyn_cast_or_null<ArrayAttr>(
-                                    codelet->getAttr(AttrNames::PartitionGraph))
-                              : ArrayAttr{};
-    ArrayAttr firstMatchingShape;
-    if (graph) {
-      ArrayAttr ownerBlockShape;
-      ArrayAttr readBlockShape;
-      for (Attribute attr : graph) {
-        auto entry = dyn_cast<DictionaryAttr>(attr);
-        if (!entry)
-          continue;
-        auto muId = dyn_cast_or_null<IntegerAttr>(
-            entry.get(AttrNames::PartitionGraphKeys::MuId));
-        if (!muId || muId.getInt() != *depArrayId)
-          continue;
-        if (!isRoleCompatible(entry, *mode))
-          continue;
-        auto blockShape = dyn_cast_or_null<ArrayAttr>(
-            entry.get(AttrNames::PartitionGraphKeys::BlockShape));
-        if (!isPositiveI64Array(blockShape))
-          continue;
-        if (!firstMatchingShape)
-          firstMatchingShape = blockShape;
-        if (hasStringValue(entry, AttrNames::PartitionGraphKeys::LayoutKind,
-                           AttrNames::PartitionGraphValues::OwnerBlock)) {
-          if (!ownerBlockShape)
-            ownerBlockShape = blockShape;
-          continue;
-        }
-        if (!readBlockShape)
-          readBlockShape = blockShape;
-      }
-      if (codirAccessMayWrite(*mode) && ownerBlockShape)
-        return ownerBlockShape;
-      if (codirAccessMayRead(*mode) && readBlockShape)
-        return getComputeBlockReadShapeOr(codelet, depIndex, *mode,
-                                          readBlockShape);
-    }
-    if (firstMatchingShape)
-      return getComputeBlockReadShapeOr(codelet, depIndex, *mode,
-                                        firstMatchingShape);
+  if (mode && codirAccessMayWrite(*mode) &&
+      depHasBlockStoragePlan(codelet, depIndex)) {
+    ArrayAttr tileShape = codelet ? codelet.getTileShapeAttr() : ArrayAttr{};
+    if (isPositiveI64Array(tileShape))
+      return tileShape;
   }
 
   DictionaryAttr layoutEntry = getArrayLayoutEntryForDep(codelet, depIndex);

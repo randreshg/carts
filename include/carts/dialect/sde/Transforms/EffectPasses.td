@@ -52,17 +52,13 @@ def ReductionStrategy : Pass<"reduction-strategy", "mlir::ModuleOp"> {
 
 def DistributionPlanning
     : Pass<"distribution-planning", "mlir::ModuleOp"> {
-  let summary = "Derive SDE-owned distribution intent from structured SDE loops";
+  let summary = "Commit SDE distribution facts on structured SDE loops";
   let description = [{
     Uses SDE-owned structured classification and generic logical-capacity
     heuristics to wrap eligible `sde.su_iterate` operations in
-    `sde.su_distribute`. The current implementation is deliberately
-    narrow: it authors blocked advisories for structured independent loops and
-    owner-compute advisories for stencil loops with enough work to amortize
-    coordination.
-
-    The target boundary is responsible for materializing this advisory into
-    downstream distribution metadata.
+    `sde.su_distribute`, commits physical owner/block facts that are already
+    realized by SDE loop shape, and fails closed for unimplemented wavefront
+    stencil cases.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::arith::ArithDialect",

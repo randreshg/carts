@@ -7,7 +7,7 @@
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
-#include "carts/dialect/sde/Utils/SdePlanUtils.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_MEMORYUNITMATERIALIZATION
@@ -139,7 +139,7 @@ demoteUnsupportedPhysicalStoragePlan(sde::SdeSuIterateOp op) {
       canMaterializePlannedOwnerSlices(op))
     return success();
 
-  if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
+  if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
     return op.emitOpError()
            << "has a committed CU/MU physical storage plan that this pass "
               "cannot materialize; refusing to demote or strip upstream "

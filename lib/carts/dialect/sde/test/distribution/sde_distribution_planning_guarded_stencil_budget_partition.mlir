@@ -5,10 +5,9 @@
 // RUN:   | awk '/IR Dump After DistributionPlanning/,/IR Dump After IterationSpaceDecomposition/' \
 // RUN:   | %FileCheck %s
 
-// DistributionPlanning must add CU/MU partition evidence to an already
-// realized guarded stencil owner tile. The nested element loops are the shape
-// Tiling creates for out-of-place boundary-guarded stencils; the committed
-// outer SU step and physical block facts remain the authority.
+// DistributionPlanning must preserve the physical facts for an already realized
+// guarded stencil owner tile. The nested element loops are the shape Tiling
+// creates for out-of-place boundary-guarded stencils.
 
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // CHECK: func.func @realized_guarded_budget_stencil
@@ -17,14 +16,6 @@
 // CHECK: scf.if
 // CHECK: } {
 // CHECK-SAME: logicalWorkerSlice = [8, 16]
-// CHECK-SAME: partitionGraph = [
-// CHECK-SAME: blockShape = [8, 16]
-// CHECK-SAME: layoutKind = "owner_block"
-// CHECK-SAME: muBlockCount = 32 : i64
-// CHECK-SAME: partitionScore = {
-// CHECK-SAME: blockShape = [8, 16]
-// CHECK-SAME: chosenCuCount = 32 : i64
-// CHECK-SAME: muBlockCount = 32 : i64
 // CHECK-SAME: physicalBlockShape = [8, 16]
 // CHECK-SAME: physicalHaloShape = [1, 1]
 // CHECK-SAME: physicalOwnerDims = [0, 1]

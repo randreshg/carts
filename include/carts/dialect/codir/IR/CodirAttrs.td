@@ -85,7 +85,7 @@ def PatternAttr : CartsCodir_I32EnumAttr<"pattern", CodirPattern>;
 
 def CodirDistributionKind
     : CartsCodir_I32Enum<"CodirDistributionKind",
-                         "CODIR codelet distribution advisory", [
+                         "CODIR codelet distribution kind", [
       I32EnumAttrCase<"owner_compute", 0, "owner_compute">,
       I32EnumAttrCase<"blocked", 1, "blocked">,
       I32EnumAttrCase<"cyclic", 2, "cyclic">

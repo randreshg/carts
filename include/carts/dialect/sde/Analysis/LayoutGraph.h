@@ -128,29 +128,8 @@ struct LayoutGraphFact {
   // predate the N-node migration or carry no budget grain.
   SmallVector<int64_t, 4> budgetBlockShape;
   int64_t budgetMuBlockCount = 1;
-  int64_t tilePayloadBytes = 0;
   int64_t muBlockCount = 1;
-  int64_t cuGroupSize = 1;
-  int64_t cuGroupCount = 1;
   int64_t commVolumeBytes = 0;
-  int64_t edgeCommBytes = 0;
-  std::string edgeClass;
-};
-
-struct LayoutGraphScoreFact {
-  int64_t targetLogicalWorkers = 0;
-  int64_t exposedCuCount = 0;
-  int64_t requestedCuCount = 0;
-  int64_t chosenCuCount = 0;
-  int64_t muBlockCount = 1;
-  int64_t cuGroupSize = 1;
-  int64_t cuGroupCount = 1;
-  int64_t minTileBytes = 0;
-  int64_t chosenTileBytes = 0;
-  int64_t commVolumeBytes = 0;
-  SmallVector<int64_t, 4> ownerDims;
-  SmallVector<int64_t, 4> blockShape;
-  std::string objective;
 };
 
 /// Runtime-neutral graph balance summary. The score fields are abstract
@@ -184,9 +163,7 @@ StringRef stringifyLayoutGraphRole(LayoutGraphRole role);
 LayoutGraphRole parseLayoutGraphRole(StringRef value);
 
 std::optional<LayoutGraphFact> parseArrayLayoutFact(DictionaryAttr dict);
-std::optional<LayoutGraphFact> parsePartitionGraphFact(DictionaryAttr dict);
 SmallVector<LayoutGraphFact, 4> parseArrayLayoutFacts(ArrayAttr attr);
-SmallVector<LayoutGraphFact, 4> parsePartitionGraphFacts(ArrayAttr attr);
 
 /// Reproduce the module-stable `arrayId` numbering that `sde-layout-assignment`
 /// stamps into the per-array layout facts: every array root in
@@ -197,9 +174,6 @@ SmallVector<LayoutGraphFact, 4> parsePartitionGraphFacts(ArrayAttr attr);
 /// drift.
 llvm::MapVector<Value, int64_t>
 assignStableArrayIds(const ModuleAccessRelations &relations);
-std::optional<LayoutGraphScoreFact>
-parsePartitionScoreFact(DictionaryAttr dict);
-
 SmallVector<CuMuHyperedgePressure, 4>
 collectCuMuHyperedgePressures(ArrayRef<LayoutGraphFact> facts);
 SmallVector<CuMuHyperedgePressure, 4>

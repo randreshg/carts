@@ -29,8 +29,7 @@ def CartsCodir_CodeletOp
     OptionalAttr<ArrayAttr>:$dep_modes,
     OptionalAttr<ArrayAttr>:$dep_storage_views,
     // One SDE arrayId per dependency. Non-negative entries join a dependency
-    // to `array_layout` / `partition_graph`; -1 means no SDE layout fact was
-    // available for that dependency.
+    // to `array_layout`; -1 means no SDE layout fact was available.
     OptionalAttr<ArrayAttr>:$dep_array_ids,
     // One CODIR collective family per dependency, parallel to
     // `dep_storage_views`.
@@ -64,9 +63,8 @@ def CartsCodir_CodeletOp
     OptionalAttr<ArrayAttr>:$write_footprint,
     UnitAttr:$in_place_safe,
     UnitAttr:$in_place_shared_state,
-    // SDE layout evidence forwarded as element-space facts. CODIR may use them
-    // for storage and collective planning; ARTS may use partition scores to
-    // batch bridge EDTs without collapsing SDE-exposed concurrency.
+    // SDE layout facts forwarded in element space for CODIR storage and
+    // movement assignment.
     OptionalAttr<ArrayAttr>:$array_layout,
     OptionalAttr<ArrayAttr>:$layouts_disagree,
     Variadic<AnyType>:$deps,

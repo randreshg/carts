@@ -12,64 +12,13 @@ def VerifySdeLowered : Pass<"verify-sde-lowered", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createVerifySdeLoweredPass()";
 }
 
-def VerifySdePartitionPlan : Pass<"verify-sde-partition-plan", "mlir::ModuleOp"> {
-  let summary = "Verify committed SDE CU/MU partition plans before boundary conversion";
-  let description = [{
-    Pre-window gate for the committed CU/MU partition plan
-    (`partition_graph` + `partition_score`). It runs after the physical-plan
-    consistency gate and before the rank-expand/window chain consumes the plan.
-    For every `sde.su_iterate` that carries committed partition evidence it
-    checks that the evidence stays runtime-neutral (only SDE CU/MU geometry,
-    abstract cost, and concurrency keys/values -- no collectives, DBs, routes,
-    or runtime policy), that a committed physical plan is present and realizable
-    by the current SDE loop rank, and that each primary-MU (owner_block) edge's
-    `ownerDims`/`blockShape` still mirrors the committed `physicalOwnerDims`/
-    `physicalBlockShape`. The physical plan it mirrors is in turn proved against
-    the rank-expanded MU structure by `verify-sde-mu-layout`, so the partition
-    graph is a verifier-checked mirror of real structure, not a free attr.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
-  let constructor = "mlir::carts::sde::createVerifySdePartitionPlanPass()";
-}
-
 def VerifySdePhysicalConsistency
     : Pass<"verify-sde-physical-consistency", "mlir::ModuleOp"> {
-  let summary = "Fail closed on a committed SDE physical plan that disagrees "
-                "with its arrayLayout, SU schedule, or CU body";
+  let summary = "Verify committed SDE physical facts before MU expansion";
   let description = [{
-    The pre-window physical-plan/body consistency gate. Before the rank-expand
-    and access-window transforms turn a committed physical plan into real MU/CU/SU
-    structure, this verifier rejects the stale-grain shape the boundary forbids:
-    one `sde.su_iterate` carrying several incompatible truths at once (the
-    jacobi-for class). For every `sde.su_iterate` that carries a committed
-    physical plan (`physicalOwnerDims` + `physicalBlockShape`) it checks:
-
-      (a) PLAN WELL-FORMEDNESS: every `physicalOwnerDims` entry indexes a
-          `physicalBlockShape` dimension and every block extent is positive.
-
-      (b) SCHEDULE CONSISTENCY: the plan names no more owner dimensions than the
-          SU has realized loop dimensions.
-
-      (c) BUDGET AGREEMENT (the jacobi-for-class catcher): for every written
-          block-parallel array carrying a node-agnostic `budgetBlockShape`, no
-          `physicalBlockShape` extent on that array's own owner dimensions is
-          COARSER than the budget grain. The cost-model physical tile may refine
-          the budget (finer or equal) but may never coarsen past it. A row strip
-          (`physicalBlockShape` `[1280, 10240]`) stamped over a 2-D `[512, 512]`
-          owner-tile budget fails here. The physical owner-tile dims (a CU
-          compute-grain decision) need NOT equal an array's storage owner dims --
-          DB/MU grain is kept separate from CU grain -- so only the budget
-          relation is enforced.
-
-    Residual global-index access against an already rank-expanded MU is the
-    companion `verify-sde-mu-layout` gate's job; flat owner-tile bodies CODIR
-    still localizes from committed SU-local bounds are contract-correct, so this
-    gate does not re-derive body locality.
-
-    It reads the committed facts and current IR only through generated ODS
-    accessors and the shared `parseArrayLayoutFacts` view; it stamps nothing and
-    recomputes no owner dims or block shape. Out-of-scope SUs (no physical plan)
-    are skipped.
+    Checks that `physicalOwnerDims` and `physicalBlockShape` are well formed,
+    match the realized SU rank, and do not coarsen past SDE's array-layout
+    budget grain. It stamps nothing.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];
@@ -160,7 +109,7 @@ def VerifySdeCoarseAvoidance
     diagnosed last resort, never silent. For every `sde.mu_alloc` not already
     block-partitioned (no block grid in its type), it fails closed with a reason:
 
-      * in the single-contiguous-owner block-grid realize scope (a committed plan
+      * in the single-contiguous-owner block-grid realize scope (committed facts
         proving a real grid) yet left flat — an AVOIDABLE coarse MU
         `sde-coarse-avoidance` should have rank-expanded; leaving it coarse would
         force a coarse single-writer DB the ARTS CDAG cannot split into parallel
@@ -169,9 +118,9 @@ def VerifySdeCoarseAvoidance
         matmul, multi-owner, aliasing use) that cannot be block-partitioned in the
         current IR — surfaced with evidence instead of silently.
 
-    An MU with no committed plan and no coarse-relevant structure (e.g. private
+    An MU with no committed facts and no coarse-relevant structure (e.g. private
     scratch) is legitimately non-distributed and accepted. The verifier shares the
-    realize gate with rank expansion and the pass and reads the committed plan
+    realize gate with rank expansion and the pass and reads the committed facts
     verbatim; it never recomputes owner dims or block shape.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",

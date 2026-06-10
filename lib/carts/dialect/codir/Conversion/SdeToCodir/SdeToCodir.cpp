@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: SdeToCodir.cpp
 ///
-/// Materializes SDE planning intent as isolated CODIR codelets.
+/// Converts SDE facts into isolated CODIR codelets.
 ///==========================================================================///
 #include "carts/dialect/codir/Conversion/Passes.h"
 #include "carts/dialect/codir/Utils/CodirConversionUtils.h"

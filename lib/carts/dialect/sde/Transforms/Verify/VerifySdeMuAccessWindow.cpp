@@ -132,8 +132,8 @@ struct VerifySdeMuAccessWindowPass
       if (!ownerVals || !blockVals || !blockHi || ownerVals->empty() ||
           blockHi->size() != ownerVals->size())
         return;
-      // The window's blockHi carries the per-owner grid counts (owner order, ND);
-      // cross-check each against a DISTINCT committed iteration extent.
+      // The window's blockHi carries the per-owner grid counts (owner order,
+      // ND); cross-check each against a DISTINCT committed iteration extent.
       SmallVector<int64_t, 4> blockExtents;
       blockExtents.reserve(ownerVals->size());
       for (int64_t ownerDim : *ownerVals) {

@@ -10,12 +10,6 @@ namespace mlir::carts::sde::AttrNames {
 /// marker to allow the region to survive past the SDE objects-only check.
 inline constexpr llvm::StringLiteral KeepHostOpenMP = "sde.keep_host_openmp";
 
-/// Runtime-neutral CU/MU graph partition evidence stamped by SDE distribution
-/// planning. These attrs carry only geometry, abstract cost, and concurrency
-/// facts.
-inline constexpr llvm::StringLiteral PartitionGraph = "partitionGraph";
-inline constexpr llvm::StringLiteral PartitionScore = "partitionScore";
-
 namespace LayoutGraph {
 inline constexpr llvm::StringLiteral ArrayId = "arrayId";
 inline constexpr llvm::StringLiteral Role = "role";
@@ -43,46 +37,6 @@ inline constexpr llvm::StringLiteral RoleWrite = "write";
 inline constexpr llvm::StringLiteral RoleRead = "read";
 inline constexpr llvm::StringLiteral RoleUnknown = "unknown";
 } // namespace LayoutGraphValues
-
-namespace PartitionGraphKeys {
-inline constexpr llvm::StringLiteral MuId = "muId";
-inline constexpr llvm::StringLiteral Role = "role";
-inline constexpr llvm::StringLiteral LayoutKind = "layoutKind";
-inline constexpr llvm::StringLiteral OwnerDims = "ownerDims";
-inline constexpr llvm::StringLiteral BlockShape = "blockShape";
-inline constexpr llvm::StringLiteral TilePayloadBytes = "tilePayloadBytes";
-inline constexpr llvm::StringLiteral MuBlockCount = "muBlockCount";
-inline constexpr llvm::StringLiteral CuGroupSize = "cuGroupSize";
-inline constexpr llvm::StringLiteral CuGroupCount = "cuGroupCount";
-inline constexpr llvm::StringLiteral EdgeCommBytes = "edgeCommBytes";
-inline constexpr llvm::StringLiteral EdgeClass = "edgeClass";
-} // namespace PartitionGraphKeys
-
-namespace PartitionScoreKeys {
-inline constexpr llvm::StringLiteral Objective = "objective";
-inline constexpr llvm::StringLiteral TargetLogicalWorkers =
-    "targetLogicalWorkers";
-inline constexpr llvm::StringLiteral ExposedCuCount = "exposedCuCount";
-inline constexpr llvm::StringLiteral RequestedCuCount = "requestedCuCount";
-inline constexpr llvm::StringLiteral ChosenCuCount = "chosenCuCount";
-inline constexpr llvm::StringLiteral MuBlockCount = "muBlockCount";
-inline constexpr llvm::StringLiteral CuGroupSize = "cuGroupSize";
-inline constexpr llvm::StringLiteral CuGroupCount = "cuGroupCount";
-inline constexpr llvm::StringLiteral MinTileBytes = "minTileBytes";
-inline constexpr llvm::StringLiteral ChosenTileBytes = "chosenTileBytes";
-inline constexpr llvm::StringLiteral CommVolumeBytes = "commVolumeBytes";
-inline constexpr llvm::StringLiteral OwnerDims = "ownerDims";
-inline constexpr llvm::StringLiteral BlockShape = "blockShape";
-} // namespace PartitionScoreKeys
-
-namespace PartitionGraphValues {
-inline constexpr llvm::StringLiteral ObjectiveMaxConcurrencyCommAware =
-    "max_concurrency_comm_aware";
-inline constexpr llvm::StringLiteral EdgeAligned = "aligned";
-inline constexpr llvm::StringLiteral EdgeLayoutMismatch = "layout_mismatch";
-inline constexpr llvm::StringLiteral OwnerBlock = "owner_block";
-inline constexpr llvm::StringLiteral UnknownLayout = "unknown_layout";
-} // namespace PartitionGraphValues
 
 } // namespace mlir::carts::sde::AttrNames
 

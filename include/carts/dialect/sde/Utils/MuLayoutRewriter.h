@@ -109,37 +109,39 @@ bool muRootHasUnsupportedUse(mlir::Value root);
 
 /// A rank-expanded block-grid MU candidate (any number of owner dims),
 /// recognized purely from the committed writer `su_iterate` plus the expanded
-/// memref type. This is shape RECOGNITION only (the `verify-sde-mu-layout` shape
-/// gate); it does NOT prove tile/grain consistency — callers decide whether a
-/// mismatch is a skip (a raiser) or an error (a verifier).
+/// memref type. This is shape RECOGNITION only (the `verify-sde-mu-layout`
+/// shape gate); it does NOT prove tile/grain consistency — callers decide
+/// whether a mismatch is a skip (a raiser) or an error (a verifier).
 ///
 /// The expanded form is K leading grid dims (in owner order) followed by L tile
 /// dims, so `muType.getRank() == logicalRank + ownerDims.size()`. All
 /// owner-parallel vectors are indexed in the same (ascending) owner order.
 struct ExpandedBlockGridMu {
-  llvm::SmallVector<unsigned, 4> ownerDims;   ///< committed owner dims, ASCENDING
-  unsigned logicalRank = 0;                   ///< == expandedRank - ownerDims.size()
-  llvm::SmallVector<int64_t, 4> blockExtents; ///< per owner dim, parallel to ownerDims
-  llvm::SmallVector<int64_t, 4> gridCounts;   ///< leading grid dims, owner order
+  llvm::SmallVector<unsigned, 4> ownerDims; ///< committed owner dims, ASCENDING
+  unsigned logicalRank = 0; ///< == expandedRank - ownerDims.size()
+  llvm::SmallVector<int64_t, 4>
+      blockExtents; ///< per owner dim, parallel to ownerDims
+  llvm::SmallVector<int64_t, 4> gridCounts; ///< leading grid dims, owner order
 };
 
 /// Recognize the expanded form (any number of owner dims): `physicalOwnerDims`
 /// has K entries, `muType.getRank() == physicalBlockShape.size() + K`, owner
 /// dims are unique, in `[0, logicalRank)`, and sorted ascending. Fills
-/// `blockExtents[i] = physicalBlockShape[ownerDims[i]]` and `gridCounts[i]` from
-/// the leading K dims of `muType`. Returns nullopt for flat / owner-length /
-/// rank-mismatch / missing-attr MUs (out of scope — conservative, not an error).
+/// `blockExtents[i] = physicalBlockShape[ownerDims[i]]` and `gridCounts[i]`
+/// from the leading K dims of `muType`. Returns nullopt for flat / owner-length
+/// / rank-mismatch / missing-attr MUs (out of scope — conservative, not an
+/// error).
 std::optional<ExpandedBlockGridMu>
 recognizeExpandedBlockGridMu(SdeSuIterateOp si, mlir::MemRefType muType);
 
-/// Each grid count of a rank-expanded MU must be `ceilDiv(extent, block)` for an
-/// ACTUAL committed iteration extent on the writer `su_iterate`, read from the
-/// iteration domain (independent of the expanded type) so a recover proof is
-/// not tautological. `blockExtents` and `gridCounts` are parallel, one entry per
-/// owner dim (owner order). Returns one matching original owner-dim extent per
-/// owner dim — each from a DISTINCT committed loop iteration dim — or nullopt
-/// when any owner dim has no committed iteration extent yielding its grid count
-/// (or when the inputs are inconsistent).
+/// Each grid count of a rank-expanded MU must be `ceilDiv(extent, block)` for
+/// an ACTUAL committed iteration extent on the writer `su_iterate`, read from
+/// the iteration domain (independent of the expanded type) so a recover proof
+/// is not tautological. `blockExtents` and `gridCounts` are parallel, one entry
+/// per owner dim (owner order). Returns one matching original owner-dim extent
+/// per owner dim — each from a DISTINCT committed loop iteration dim — or
+/// nullopt when any owner dim has no committed iteration extent yielding its
+/// grid count (or when the inputs are inconsistent).
 std::optional<llvm::SmallVector<int64_t, 4>>
 findOwnerIterationExtents(SdeSuIterateOp si,
                           llvm::ArrayRef<int64_t> blockExtents,

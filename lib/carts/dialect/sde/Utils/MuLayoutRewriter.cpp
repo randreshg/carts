@@ -214,7 +214,8 @@ recognizeExpandedBlockGridMu(SdeSuIterateOp si, MemRefType muType) {
 }
 
 std::optional<llvm::SmallVector<int64_t, 4>>
-findOwnerIterationExtents(SdeSuIterateOp si, llvm::ArrayRef<int64_t> blockExtents,
+findOwnerIterationExtents(SdeSuIterateOp si,
+                          llvm::ArrayRef<int64_t> blockExtents,
                           llvm::ArrayRef<int64_t> gridCounts) {
   if (!si || blockExtents.size() != gridCounts.size() || blockExtents.empty())
     return std::nullopt;
@@ -270,7 +271,8 @@ findOwnerIterationExtents(SdeSuIterateOp si, llvm::ArrayRef<int64_t> blockExtent
       }
     }
     if (!matched)
-      return std::nullopt; // no distinct committed extent yields this grid count
+      return std::nullopt; // no distinct committed extent yields this grid
+                           // count
   }
   return result;
 }

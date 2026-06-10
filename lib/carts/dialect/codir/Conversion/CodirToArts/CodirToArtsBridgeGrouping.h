@@ -6,7 +6,6 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BRIDGEGROUPING_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BRIDGEGROUPING_H
 
-#include "CodirToArtsBridgePartitionEvidence.h"
 #include "CodirToArtsBridgePlan.h"
 
 namespace {
@@ -156,29 +155,8 @@ chooseBridgeGroupSize(const BridgePlan &plan,
   desired = std::clamp<int64_t>(desired, 1, kMaxBridgeGroupBlocks);
   desired = std::min<int64_t>(desired, *blockCount);
 
-  codir::CodeletOp codelet = plan.seedCodelet;
-  BridgePartitionGraphEvidence graphEvidence =
-      readBridgePartitionGraphEvidence(plan);
-  int64_t muBlocks = graphEvidence.muBlockCount;
-  if (muBlocks > 0)
-    muBlocks = std::min<int64_t>(*blockCount, muBlocks);
-
-  // Keep MU block granularity independent from copy EDT granularity: the DBs
-  // stay per block, while bridge EDTs may cover block ranges when enough CU
-  // parallelism remains exposed.
-  int64_t concurrencyFloor = readPartitionScoreConcurrencyFloor(codelet);
-  if (concurrencyFloor <= 0 && muBlocks > 0)
-    concurrencyFloor = muBlocks;
-  if (concurrencyFloor > 0) {
-    int64_t desiredTasks = std::min<int64_t>(*blockCount, concurrencyFloor);
-    int64_t maxGroupForConcurrency =
-        *blockCount / std::max<int64_t>(1, desiredTasks);
-    desired = std::min(desired, std::max<int64_t>(1, maxGroupForConcurrency));
-  }
-
-  int64_t authoredGroupSize = graphEvidence.cuGroupSize;
-  if (authoredGroupSize > 0)
-    desired = std::min<int64_t>(desired, authoredGroupSize);
+  // Bridge grouping is a launch-shaping choice over already-realized per-block
+  // DBs; it never changes DB/MU storage grain.
 
   for (int64_t group = desired; group > 1; --group)
     if (*blockCount % group == 0 &&

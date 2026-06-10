@@ -7,8 +7,48 @@
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTBLOCKCOPYMATERIALIZATION_H
 
 #include "CodirToArtsBridgeAcquireUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 
 namespace {
+
+static inline FailureOr<Value>
+materializeBridgeCopyOwnerDomainBase(OpBuilder &builder, Location loc,
+                                     codir::CodeletOp codelet,
+                                     Value ownerParam) {
+  Value base =
+      ownerParam
+          ? materializeCodirOwnerDomainBase(builder, loc, codelet, ownerParam)
+          : materializeCodirOwnerDomainBase(builder, loc, codelet);
+  if (!base)
+    return createZeroIndex(builder, loc);
+
+  Block *insertionBlock = builder.getInsertionBlock();
+  if (!insertionBlock)
+    return failure();
+  auto insertionPoint = builder.getInsertionPoint();
+  if (insertionPoint == insertionBlock->end()) {
+    if (std::optional<int64_t> constant =
+            ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(base))
+      return createConstantIndex(builder, loc, *constant);
+    return failure();
+  }
+
+  Operation *insertBefore = &*insertionPoint;
+  Operation *domRoot = nullptr;
+  if (auto module = insertBefore->getParentOfType<ModuleOp>())
+    domRoot = module.getOperation();
+  if (!domRoot)
+    domRoot = insertBefore->getParentOp();
+  if (!domRoot)
+    return failure();
+
+  DominanceInfo domInfo(domRoot);
+  Value available = ::mlir::carts::ValueAnalysis::traceValueToDominating(
+      base, insertBefore, builder, domInfo, loc);
+  if (!available)
+    return failure();
+  return available;
+}
 
 static inline LogicalResult
 materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
@@ -117,15 +157,17 @@ materializeHostBlockCopyLoop(OpBuilder &builder, Location loc, Value hostView,
           plannedBlockSizes && slot < plannedBlockSizes->size()
               ? createConstantIndex(builder, loc, (*plannedBlockSizes)[slot])
               : blockAlloc.getElementSizes()[ownerDim];
-      Value domainBase =
-          slot < ownerParams.size()
-              ? materializeCodirOwnerDomainBase(builder, loc, codelet,
-                                                ownerParams[slot])
-              : materializeCodirOwnerDomainBase(builder, loc, codelet);
+      FailureOr<Value> domainBase = materializeBridgeCopyOwnerDomainBase(
+          builder, loc, codelet,
+          slot < ownerParams.size() ? ownerParams[slot] : Value{});
+      if (failed(domainBase))
+        return codelet.emitOpError()
+               << "host bridge copy cannot materialize an owner-domain base "
+                  "that dominates the bridge copy loop";
       Value ownerBlockOffset = arith::MulIOp::create(
           builder, loc, lanePlan.blockCoords[slot], ownerBlockSize);
       Value ownerOffset =
-          arith::AddIOp::create(builder, loc, domainBase, ownerBlockOffset);
+          arith::AddIOp::create(builder, loc, *domainBase, ownerBlockOffset);
       CodirOwnerHaloWindow ownerHalo;
       for (CodirOwnerHaloWindow candidate : ownerHalos) {
         if (candidate.ownerDim == ownerDim) {

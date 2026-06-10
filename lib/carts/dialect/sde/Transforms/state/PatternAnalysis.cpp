@@ -8,7 +8,7 @@
 #include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
-#include "carts/dialect/sde/Utils/SdePlanUtils.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -517,8 +517,6 @@ static void removeStaleShapePlanAttrs(sde::SdeSuIterateOp op) {
   op.removePhysicalHaloShapeAttr();
   op.removeIterationTopologyAttr();
   op.removeDistributionKindAttr();
-  op->removeAttr(sde::AttrNames::PartitionGraph);
-  op->removeAttr(sde::AttrNames::PartitionScore);
 }
 
 static void clonePromotedPreludeControlStores(
@@ -1047,7 +1045,7 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
   if (!op || op.getChunkSize() || op.getNumResults() != 0 ||
       !op.getReductionAccumulators().empty() || op.getReductionKindsAttr())
     return op;
-  if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
+  if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
     return op;
 
   unsigned loopRank = op.getLowerBounds().size();
@@ -1056,9 +1054,9 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
       summary.iterTypes.size() <= loopRank ||
       summary.nest.ivs.size() <= loopRank)
     return op;
-  // Matmul has a specialized physical plan. Generic prefix promotion would
-  // split output columns across owners without a matching panel-reuse
-  // transform.
+  // Matmul has specialized physical fact materialization. Generic prefix
+  // promotion would split output columns across owners without a matching
+  // panel-reuse transform.
   if (summary.classification == sde::SdeStructuredClassification::matmul)
     return op;
   if (op.getBody().front().getNumArguments() < loopRank)
@@ -1299,10 +1297,9 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
 /// su_iterate `reductionKinds` carrier is tied to `reductionAccumulators`
 /// (wrong vehicle for a matmul contraction without an accumulator carrier).
 ///
-/// SDE never names the communication operation, never emits the combine, and
-/// never encodes nodes/routes/the concrete split factor T. The concrete
-/// partial-reduction trigger is deliberately NOT set here, so the facts stay
-/// inert until boundary planning owns the materialization.
+/// SDE never names the communication operation, emits no combine, and encodes
+/// no nodes/routes/concrete split factor. Later SDE/CODIR structure must make
+/// the reduction explicit before ARTS realization.
 ///
 /// The gate is tight: it fires only for a canonical matmul whose contraction
 /// input is a sibling distributed intermediate. Single contractions that read
@@ -1339,7 +1336,7 @@ struct PatternAnalysisPass
 
   void runOnOperation() override {
     getOperation().walk([&](sde::SdeSuIterateOp op) {
-      if (sde::hasCommittedCuMuPartitionPlan(op.getOperation()))
+      if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
         return;
 
       std::optional<sde::StructuredLoopSummary> summary =

@@ -45,7 +45,7 @@ static inline Value recoverOwnerAbsoluteIndex(Value index, Value ownerBase) {
   return index;
 }
 
-struct PlannedBlockLocalAccessRewrite {
+struct BlockLocalAccessRewrite {
   Value localMemref;
   unsigned ownerDim = 0;
   Value ownerBase;
@@ -139,6 +139,11 @@ static inline FailureOr<Value> materializeRankExpandedGridLocalIndex(
   if (!ownerDomainBase)
     ownerDomainBase = createZeroIndex(builder, loc);
 
+  Value strippedIndex = ::mlir::carts::ValueAnalysis::stripNumericCasts(index);
+  if (auto sub = strippedIndex.getDefiningOp<arith::SubIOp>())
+    if (::mlir::carts::ValueAnalysis::sameValue(sub.getRhs(), ownerBase))
+      return createZeroIndex(builder, loc);
+
   Value logicalIndex = getDividedLogicalIndex(index, tileExtent);
   if (!logicalIndex)
     return failure();
@@ -158,6 +163,30 @@ static inline FailureOr<Value> materializeRankExpandedGridLocalIndex(
   if (::mlir::carts::ValueAnalysis::sameValue(index, baseGrid))
     return createZeroIndex(builder, loc);
   return arith::SubIOp::create(builder, loc, index, baseGrid).getResult();
+}
+
+static inline FailureOr<Value> materializeRankExpandedGridWindowIndex(
+    OpBuilder &builder, Location loc, Value index, Value ownerGridBase,
+    Value acquiredGridBase, Value &relativeBlock) {
+  if (!index || !ownerGridBase || !acquiredGridBase)
+    return failure();
+
+  Value gridCoord = ::mlir::carts::ValueAnalysis::stripNumericCasts(index);
+  if (auto sub = gridCoord.getDefiningOp<arith::SubIOp>()) {
+    if (::mlir::carts::ValueAnalysis::sameValue(sub.getRhs(), ownerGridBase))
+      gridCoord = sub.getLhs();
+    else
+      return failure();
+  } else if (!indexSelectsOwnerSlice(gridCoord, ownerGridBase)) {
+    return failure();
+  }
+
+  relativeBlock =
+      ::mlir::carts::ValueAnalysis::sameValue(gridCoord, acquiredGridBase)
+          ? createZeroIndex(builder, loc)
+          : arith::SubIOp::create(builder, loc, gridCoord, acquiredGridBase)
+                .getResult();
+  return createZeroIndex(builder, loc);
 }
 
 static inline std::optional<std::pair<Value, int64_t>>

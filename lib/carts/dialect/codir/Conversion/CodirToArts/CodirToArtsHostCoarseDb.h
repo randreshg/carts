@@ -90,9 +90,10 @@ static inline bool hostBridgeValueFeedsCodeletDep(Value value) {
   return false;
 }
 
-// True when the forward cone of `value` reaches a genuine host memref load/store
-// outside any scheduling unit (mirrors hasHostMemrefAccessOutsideSchedulingUnit
-// in CodirConversionUtils.h, but rooted at an arbitrary intermediate value).
+// True when the forward cone of `value` reaches a genuine host memref
+// load/store outside any scheduling unit (mirrors
+// hasHostMemrefAccessOutsideSchedulingUnit in CodirConversionUtils.h, but
+// rooted at an arbitrary intermediate value).
 static inline bool hostBridgeValueFeedsHostAccess(Value value) {
   if (!value)
     return false;

@@ -93,7 +93,6 @@ std::unique_ptr<Pass> createMuAccessWindowSyncOptPass();
 std::unique_ptr<Pass> createConvertOpenMPToSdePass();
 
 // --- Verification ---
-std::unique_ptr<Pass> createVerifySdePartitionPlanPass();
 std::unique_ptr<Pass> createVerifySdePhysicalConsistencyPass();
 std::unique_ptr<Pass> createVerifySdeLoweredPass();
 std::unique_ptr<Pass> createVerifySdeMuLayoutPass();

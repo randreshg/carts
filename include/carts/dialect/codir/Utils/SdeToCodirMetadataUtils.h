@@ -1,8 +1,8 @@
 ///==========================================================================///
 /// File: SdeToCodirMetadataUtils.h
 ///
-/// SDE-owned planning metadata translation for the SDE -> CODIR boundary.
-/// These helpers carry source scheduling intent into CODIR without creating
+/// SDE -> CODIR fact translation. These helpers carry transformed SDE layout,
+/// storage, and movement facts into isolated CODIR codelets without creating
 /// ARTS runtime/orchestration objects.
 ///
 /// The SDE and CODIR enum classes for AccessMode, Pattern, DistributionKind,
@@ -14,9 +14,7 @@
 #define CARTS_DIALECT_CODIR_UTILS_SDETOCODIRMETADATAUTILS_H
 
 #include "carts/dialect/codir/IR/CodirDialect.h"
-#include "carts/dialect/codir/Utils/CodirAttrNames.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
-#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "llvm/ADT/SmallVector.h"
@@ -62,27 +60,7 @@ struct CodirCodeletMetadata {
   // SDE module-scoped layout-assignment carriers, threaded verbatim.
   ArrayAttr arrayLayout;
   ArrayAttr layoutsDisagree;
-  Attribute partitionGraph;
-  Attribute partitionScore;
 };
-
-inline Attribute translatePartitionScoreToCodirFact(Attribute attr) {
-  auto score = dyn_cast_or_null<DictionaryAttr>(attr);
-  if (!score)
-    return attr;
-
-  SmallVector<NamedAttribute, 2> fields;
-  auto copyField = [&](StringRef sdeKey, StringRef codirKey) {
-    if (Attribute value = score.get(sdeKey))
-      fields.push_back(
-          NamedAttribute(StringAttr::get(attr.getContext(), codirKey), value));
-  };
-  copyField(sde::AttrNames::PartitionScoreKeys::TargetLogicalWorkers,
-            codir::AttrNames::PartitionScoreKeys::TargetLogicalWorkers);
-  copyField(sde::AttrNames::PartitionScoreKeys::ExposedCuCount,
-            codir::AttrNames::PartitionScoreKeys::ExposedCuCount);
-  return DictionaryAttr::get(attr.getContext(), fields);
-}
 
 inline CodirCodeletMetadata getCodirMetadataFromTask(sde::SdeCuTaskOp task) {
   CodirCodeletMetadata metadata;
@@ -143,9 +121,6 @@ getCodirMetadataFromSchedulingUnit(sde::SdeSuIterateOp source) {
   // is needed beyond copying the attribute handle.
   metadata.arrayLayout = source.getArrayLayoutAttr();
   metadata.layoutsDisagree = source.getLayoutsDisagreeAttr();
-  metadata.partitionGraph = source->getAttr(sde::AttrNames::PartitionGraph);
-  metadata.partitionScore = translatePartitionScoreToCodirFact(
-      source->getAttr(sde::AttrNames::PartitionScore));
   return metadata;
 }
 

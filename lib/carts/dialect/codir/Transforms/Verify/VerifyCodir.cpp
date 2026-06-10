@@ -28,8 +28,8 @@ namespace {
 // `halo_shape` is the symmetric ghost width. Recompute the ghost width from the
 // signed reach and reject a `halo_shape` that does not mirror it, so the two
 // carriers cannot drift. The signed reach is itself SDE-authored from the real
-// body access summary, so this grounds `halo_shape` as a verifier-checked mirror
-// of structure rather than an independent promise.
+// body access summary, so this grounds `halo_shape` as a verifier-checked
+// mirror of structure rather than an independent promise.
 //
 // `access_*_offsets` index spatial dims; `halo_shape` may be projected onto a
 // different axis set (owner dims) for owner-strip shapes, so the per-position
@@ -277,57 +277,6 @@ struct VerifyCodirPass : public codir::impl::VerifyCodirBase<VerifyCodirPass> {
       verifyPositiveI64Attr(
           codelet.getPartialReductionSplitTargetWorkerCountAttr(),
           "partial_reduction_split_target_worker_count");
-
-      if (Attribute scoreAttr =
-              codelet->getAttr(codir::AttrNames::PartitionScore)) {
-        auto score = dyn_cast<DictionaryAttr>(scoreAttr);
-        if (!score) {
-          codelet.emitOpError() << codir::AttrNames::PartitionScore
-                                << " must be a dictionary attribute";
-          failed = true;
-        } else {
-          auto isConsumedScoreField = [](StringRef key) {
-            return key == codir::AttrNames::PartitionScoreKeys::
-                              TargetLogicalWorkers ||
-                   key == codir::AttrNames::PartitionScoreKeys::ExposedCuCount;
-          };
-          for (NamedAttribute entry : score) {
-            StringRef key = entry.getName().getValue();
-            if (isConsumedScoreField(key))
-              continue;
-            codelet.emitOpError()
-                << codir::AttrNames::PartitionScore << "." << key
-                << " is not consumed by the CODIR-to-ARTS boundary";
-            failed = true;
-          }
-          auto verifyPositiveScoreField = [&](StringRef key) -> bool {
-            Attribute value = score.get(key);
-            if (!value)
-              return false;
-            auto intAttr = dyn_cast<IntegerAttr>(value);
-            if (intAttr && intAttr.getInt() > 0)
-              return true;
-            codelet.emitOpError()
-                << codir::AttrNames::PartitionScore << "." << key
-                << " must be a positive integer attribute";
-            failed = true;
-            return true;
-          };
-          bool hasConcurrencyField = false;
-          hasConcurrencyField |= verifyPositiveScoreField(
-              codir::AttrNames::PartitionScoreKeys::TargetLogicalWorkers);
-          hasConcurrencyField |= verifyPositiveScoreField(
-              codir::AttrNames::PartitionScoreKeys::ExposedCuCount);
-          if (!hasConcurrencyField) {
-            codelet.emitOpError()
-                << codir::AttrNames::PartitionScore << " must contain "
-                << codir::AttrNames::PartitionScoreKeys::TargetLogicalWorkers
-                << " or "
-                << codir::AttrNames::PartitionScoreKeys::ExposedCuCount;
-            failed = true;
-          }
-        }
-      }
 
       if (codelet.getPartialReductionSplitRequiredAttr() &&
           !codelet.getPartialReductionAttr()) {

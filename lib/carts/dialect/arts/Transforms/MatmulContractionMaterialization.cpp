@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: MatmulContractionMaterialization.cpp
 ///
-/// Materializes a planned block-matmul contraction reduction into
+/// Materializes a committed block-matmul contraction reduction into
 /// per-(owner-block, k-tile) partial-product producer EDTs plus a per-block
 /// summing settle, so the cross-node contraction over F avoids a single coarse
 /// <inout> replica.

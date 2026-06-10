@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: CodirToArtsBlockLocalRewrite.h
 ///
-/// Application of planned block-local access rewrites to EDT bodies.
+/// Application of block-local access rewrites to EDT bodies.
 ///==========================================================================///
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BLOCKLOCALREWRITE_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BLOCKLOCALREWRITE_H
@@ -10,8 +10,8 @@
 
 namespace {
 
-static inline LogicalResult rewritePlannedBlockLocalAccesses(
-    arts::EdtOp task, ArrayRef<PlannedBlockLocalAccessRewrite> rewrites,
+static inline LogicalResult rewriteBlockLocalAccesses(
+    arts::EdtOp task, ArrayRef<BlockLocalAccessRewrite> rewrites,
     const DenseMap<Value, Value> *sourceByBlockArgument = nullptr) {
   if (rewrites.empty())
     return success();
@@ -19,31 +19,31 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
   auto rewriteIndices = [&](Operation *op, MutableOperandRange memrefOperand,
                             MutableOperandRange indices) -> WalkResult {
     Value memref = memrefOperand[0].get();
-    SmallVector<const PlannedBlockLocalAccessRewrite *, 4> matching;
-    for (const PlannedBlockLocalAccessRewrite &rewrite : rewrites)
+    SmallVector<const BlockLocalAccessRewrite *, 4> matching;
+    for (const BlockLocalAccessRewrite &rewrite : rewrites)
       if (memref == rewrite.localMemref)
         matching.push_back(&rewrite);
     if (matching.empty())
       return WalkResult::advance();
 
-    bool hasGrouped = llvm::any_of(
-        matching, [](const PlannedBlockLocalAccessRewrite *rewrite) {
+    bool hasGrouped =
+        llvm::any_of(matching, [](const BlockLocalAccessRewrite *rewrite) {
           return rewrite->grouped;
         });
     if (hasGrouped) {
       Value sourcePtr;
       unsigned sourceRank = 0;
-      for (const PlannedBlockLocalAccessRewrite *rewrite : matching) {
+      for (const BlockLocalAccessRewrite *rewrite : matching) {
         if (!rewrite->grouped || !rewrite->groupedSourcePtr ||
             rewrite->blockSize <= 0 || rewrite->groupBlockCount <= 0) {
-          op->emitError("grouped planned block-local access requires "
+          op->emitError("grouped block-local access requires "
                         "block-window facts for every owner dimension");
           return WalkResult::interrupt();
         }
         if (!sourcePtr)
           sourcePtr = rewrite->groupedSourcePtr;
         if (sourcePtr != rewrite->groupedSourcePtr) {
-          op->emitError("grouped planned block-local access mixes dependency "
+          op->emitError("grouped block-local access mixes dependency "
                         "sources");
           return WalkResult::interrupt();
         }
@@ -57,23 +57,29 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
       OpBuilder builder(op);
       SmallVector<Value, 4> dbRefIndices(
           sourceRank, createZeroIndex(builder, op->getLoc()));
-      for (const PlannedBlockLocalAccessRewrite *rewrite : matching) {
+      for (const BlockLocalAccessRewrite *rewrite : matching) {
         if (indices.size() <= rewrite->ownerDim ||
             rewrite->ownerSlot >= dbRefIndices.size()) {
-          op->emitError("grouped planned block-local access has malformed "
+          op->emitError("grouped block-local access has malformed "
                         "owner-dimension facts");
           return WalkResult::interrupt();
         }
         Value relativeBlock;
-        FailureOr<Value> localIndex = materializeGroupedBlockLocalIndex(
-            builder, op->getLoc(), indices[rewrite->ownerDim].get(),
-            rewrite->ownerBase, rewrite->localOrigin, rewrite->lowerHalo,
-            rewrite->upperHalo, rewrite->blockSize, rewrite->groupBlockCount,
-            rewrite->ownerWindowExtent, rewrite->sourceDimExtent, relativeBlock,
-            rewrite->allowFullWindowAccess, rewrite->requireOwnerWindowProof,
-            sourceByBlockArgument);
+        FailureOr<Value> localIndex =
+            rewrite->rankExpandedGridAccess
+                ? materializeRankExpandedGridWindowIndex(
+                      builder, op->getLoc(), indices[rewrite->ownerDim].get(),
+                      rewrite->ownerBase, rewrite->localOrigin, relativeBlock)
+                : materializeGroupedBlockLocalIndex(
+                      builder, op->getLoc(), indices[rewrite->ownerDim].get(),
+                      rewrite->ownerBase, rewrite->localOrigin,
+                      rewrite->lowerHalo, rewrite->upperHalo,
+                      rewrite->blockSize, rewrite->groupBlockCount,
+                      rewrite->ownerWindowExtent, rewrite->sourceDimExtent,
+                      relativeBlock, rewrite->allowFullWindowAccess,
+                      rewrite->requireOwnerWindowProof, sourceByBlockArgument);
         if (failed(localIndex)) {
-          op->emitError("grouped planned block-local access for owner dim ")
+          op->emitError("grouped block-local access for owner dim ")
               << rewrite->ownerDim << " does not stay within the block window";
           return WalkResult::interrupt();
         }
@@ -86,9 +92,9 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
       return WalkResult::advance();
     }
 
-    for (const PlannedBlockLocalAccessRewrite *rewrite : matching) {
+    for (const BlockLocalAccessRewrite *rewrite : matching) {
       if (indices.size() <= rewrite->ownerDim) {
-        op->emitError("planned block-local access is missing the owner "
+        op->emitError("block-local access is missing the owner "
                       "dimension index");
         return WalkResult::interrupt();
       }
@@ -105,7 +111,7 @@ static inline LogicalResult rewritePlannedBlockLocalAccesses(
                     rewrite->ownerBase, rewrite->localOrigin,
                     rewrite->lowerHalo);
       if (failed(localIndex)) {
-        op->emitError("planned block-local access does not stay within the "
+        op->emitError("block-local access does not stay within the "
                       "owner slice");
         return WalkResult::interrupt();
       }

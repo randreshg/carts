@@ -25,10 +25,6 @@ module {
                         in_place_safe,
                         iteration_topology = #codir.iteration_topology<owner_tile_2d>,
                         logical_worker_slice = [16, 16],
-                        partition_graph = [{blockShape = [64, 64], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "block_parallel", muBlockCount = 4 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "read", tilePayloadBytes = 32768 : i64},
-                                           {blockShape = [64, 128], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "block_parallel", muBlockCount = 2 : i64, muId = 1 : i64, ownerDims = [0], role = "read", tilePayloadBytes = 65536 : i64},
-                                           {blockShape = [128, 64], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "block_parallel", muBlockCount = 2 : i64, muId = 2 : i64, ownerDims = [1], role = "read", tilePayloadBytes = 65536 : i64},
-                                           {blockShape = [16, 16], edgeClass = "aligned", edgeCommBytes = 0 : i64, layoutKind = "owner_block", muBlockCount = 64 : i64, muId = 0 : i64, ownerDims = [0, 1], role = "write", tilePayloadBytes = 2048 : i64}],
                         pattern = #codir.pattern<matmul>,
                         tile_owner_dims = [0, 1],
                         tile_shape = [16, 16]} {

@@ -13,10 +13,6 @@
 // CHECK: func.func @mismatched_uniform_adjacent
 // CHECK: iterationTopology = #sde.iteration_topology<owner_tile>
 // CHECK-SAME: logicalWorkerSlice = [6, 3]
-// CHECK-SAME: partitionGraph = [
-// CHECK-SAME: blockShape = [3, 3]
-// CHECK-SAME: muBlockCount = 9 : i64
-// CHECK-SAME: ownerDims = [0, 1]
 // CHECK-SAME: physicalBlockShape = [3, 3]
 // CHECK-SAME: physicalOwnerDims = [0, 1]
 // CHECK: iterationTopology = #sde.iteration_topology<owner_strip>
