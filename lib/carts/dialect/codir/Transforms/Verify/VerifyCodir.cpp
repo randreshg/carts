@@ -8,6 +8,7 @@
 #include "carts/dialect/codir/Transforms/Passes.h"
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
 #include "carts/dialect/codir/Utils/CodirAttrNames.h"
+#include "carts/utils/ArrayAttrUtils.h"
 
 #include "llvm/ADT/STLExtras.h"
 
@@ -21,10 +22,71 @@ using namespace mlir::carts;
 
 namespace {
 
+// AC-2: the codelet's halo-reach attrs are redundant projections of one fact --
+// the per-spatial-dim stencil reach. `access_min_offsets`/`access_max_offsets`
+// are the (possibly asymmetric) signed reach the body actually touches;
+// `halo_shape` is the symmetric ghost width. Recompute the ghost width from the
+// signed reach and reject a `halo_shape` that does not mirror it, so the two
+// carriers cannot drift. The signed reach is itself SDE-authored from the real
+// body access summary, so this grounds `halo_shape` as a verifier-checked mirror
+// of structure rather than an independent promise.
+//
+// `access_*_offsets` index spatial dims; `halo_shape` may be projected onto a
+// different axis set (owner dims) for owner-strip shapes, so the per-position
+// mirror is applied only when the three carriers share one length (the
+// owner_tile / spatial-aligned case). When the lengths diverge the owner-dim
+// projection is out of scope here and skipped, not rejected. Codelets carrying
+// fewer than all three carriers are likewise skipped.
+static void verifyHaloShapeMirrorsAccessReach(codir::CodeletOp codelet,
+                                              bool &failed) {
+  ArrayAttr halo = codelet.getHaloShapeAttr();
+  ArrayAttr minOff = codelet.getAccessMinOffsetsAttr();
+  ArrayAttr maxOff = codelet.getAccessMaxOffsetsAttr();
+  if (!halo || !minOff || !maxOff)
+    return;
+
+  std::optional<SmallVector<int64_t, 4>> haloVals = readI64ArrayAttr(halo);
+  std::optional<SmallVector<int64_t, 4>> minVals = readI64ArrayAttr(minOff);
+  std::optional<SmallVector<int64_t, 4>> maxVals = readI64ArrayAttr(maxOff);
+  if (!haloVals || !minVals || !maxVals)
+    return;
+  // The signed-reach carriers index the same spatial positions; a length
+  // disagreement between them is a malformed reach projection.
+  if (minVals->size() != maxVals->size()) {
+    codelet.emitOpError()
+        << "access_min_offsets and access_max_offsets must agree on "
+           "per-spatial-dim length; the signed-reach carriers disagree";
+    failed = true;
+    return;
+  }
+  // Spatial-aligned mirror only; the owner-dim projection (halo length != reach
+  // length) is out of scope for this check.
+  if (haloVals->size() != minVals->size())
+    return;
+  for (auto [slot, haloWidth] : llvm::enumerate(*haloVals)) {
+    int64_t lower = (*minVals)[slot];
+    int64_t upper = (*maxVals)[slot];
+    int64_t reach = std::max<int64_t>(lower < 0 ? -lower : lower,
+                                      upper < 0 ? -upper : upper);
+    if (haloWidth != reach) {
+      codelet.emitOpError()
+          << "halo_shape entry #" << slot << " (" << haloWidth
+          << ") does not mirror the stencil reach recomputed from "
+             "access_min/max_offsets (max(|"
+          << lower << "|, |" << upper << "|) = " << reach
+          << "); the halo width must equal the ghost width of the committed "
+             "access reach";
+      failed = true;
+    }
+  }
+}
+
 struct VerifyCodirPass : public codir::impl::VerifyCodirBase<VerifyCodirPass> {
   void runOnOperation() override {
     bool failed = false;
     getOperation().walk([&](codir::CodeletOp codelet) {
+      verifyHaloShapeMirrorsAccessReach(codelet, failed);
+
       ArrayAttr depModes = codelet.getDepModesAttr();
       if (!codelet.getDeps().empty() && !depModes) {
         codelet.emitOpError()
