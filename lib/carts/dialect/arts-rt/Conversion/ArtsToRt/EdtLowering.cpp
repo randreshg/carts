@@ -231,7 +231,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   if (edtOp.getPartialReductionSplitRequiredAttr()) {
     InFlightDiagnostic diag =
         edtOp.emitError()
-        << "partial-reduction split plan was not materialized before "
+        << "partial-reduction split facts were not split before "
            "ARTS-RT EDT lowering";
     if (auto ownerCount = edtOp.getPartialReductionSplitOwnerTaskCountAttr())
       diag << "; split owner task count: " << ownerCount.getInt();
@@ -240,7 +240,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
       diag << "; split target worker count: " << targetCount.getInt();
     if (auto splitFactor = edtOp.getPartialReductionSplitFactorAttr())
       diag << "; partial-reduction split factor: " << splitFactor.getInt();
-    diag << "; the ARTS layer must materialize reduction-tile partial DBs and "
+    diag << "; the ARTS layer must split reduction-tile partial DBs and "
             "a combine tree before this runtime ABI pass";
     return failure();
   }

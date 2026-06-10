@@ -38,8 +38,8 @@ std::unique_ptr<Pass> createDbCommitDistributedDepsPass();
 std::unique_ptr<Pass> createDbConsolidateStencilHalosPass();
 std::unique_ptr<Pass> createDbShortenLifetimesPass();
 std::unique_ptr<Pass> createDbDeadRootEliminationPass();
-std::unique_ptr<Pass> createPartialReductionSplitMaterializationPass();
-std::unique_ptr<Pass> createMatmulContractionMaterializationPass();
+std::unique_ptr<Pass> createPartialReductionSplitPass();
+std::unique_ptr<Pass> createBlockContractionSplitPass();
 std::unique_ptr<Pass> createDistributedLaunchConsistencyPass();
 /// Author the EDT distribution plan (family, version, block-halo capability)
 /// from the committed dep pattern and access-window facts.

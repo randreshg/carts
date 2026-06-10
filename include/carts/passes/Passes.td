@@ -119,9 +119,9 @@ def DbDeadRootElimination
       "mlir::carts::arts::createDbDeadRootEliminationPass()";
 }
 
-def PartialReductionSplitMaterialization
-    : Pass<"partial-reduction-split-materialization", "mlir::ModuleOp"> {
-  let summary = "Materialize partial-reduction split plans into ARTS objects";
+def PartialReductionSplit
+    : Pass<"partial-reduction-split", "mlir::ModuleOp"> {
+  let summary = "Split partial-reduction facts into ARTS objects";
   let description = [{
     Consumes `partialReductionSplitRequired` on supported ARTS partial
     reduction EDTs by creating reduction-tile partial DBs, split worker EDTs,
@@ -132,29 +132,31 @@ def PartialReductionSplitMaterialization
        "::mlir::arith::ArithDialect", "::mlir::memref::MemRefDialect",
        "::mlir::carts::arts::ArtsDialect"];
   let constructor =
-      "mlir::carts::arts::createPartialReductionSplitMaterializationPass()";
+      "mlir::carts::arts::createPartialReductionSplitPass()";
 }
 
-def MatmulContractionMaterialization
-    : Pass<"matmul-contraction-materialization", "mlir::ModuleOp"> {
-  let summary = "Split chained-matmul G contraction into per-tile producers";
+def BlockContractionSplit
+    : Pass<"block-contraction-split", "mlir::ModuleOp"> {
+  let summary = "Split owner-block contractions into per-tile producers";
   let description = [{
-    Rewrites a block matmul consumer marked with contraction split facts that
-    reads its contraction operand from a coarse `replicatedRead` copy into
-    per-(owner-block, k-tile) partial-product producer EDTs reading block-native
-    from the `perBlockReplicated` all-gather replica, plus a per-block summing
-    settle that reduces the partials into the settled block with `arith.addf`.
-    Each producer and the settle acquire every DB outside the EDT as a block-arg
-    dependency, so no EDT body GEPs an outer DB alloc. The trigger is the generic
-    ARTS plan shape (`partialReductionDims`, block dependencies, and a matching
-    per-block replica), not benchmark names or source paths.
+    Rewrites an owner-block add-contraction consumer marked with reduction facts
+    that reads one contraction operand from a coarse `replicatedRead` copy into
+    per-(owner-block, replica-tile) producer EDTs reading block-native from the
+    `perBlockReplicated` all-gather replica, plus a per-block summing settle
+    that reduces the partials into the settled block with `arith.addf`. Each
+    producer and the settle acquire every DB outside the EDT as a block-arg
+    dependency, so no EDT body GEPs an outer DB alloc. The trigger is the
+    ARTS fact shape (`partialReductionDims`, `partialReductionDepResultDimMaps`,
+    `reduction_strategy = local_accumulate`, block dependencies, a single
+    replicated-read contraction operand, and a matching per-block all-gather
+    replica), not benchmark names or source paths.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
        "::mlir::arith::ArithDialect", "::mlir::memref::MemRefDialect",
        "::mlir::carts::arts::ArtsDialect"];
   let constructor =
-      "mlir::carts::arts::createMatmulContractionMaterializationPass()";
+      "mlir::carts::arts::createBlockContractionSplitPass()";
 }
 
 def DistributedLaunchConsistency
@@ -328,7 +330,7 @@ def VerifyArtsObjectsOnly : Pass<"verify-arts-objects-only", "mlir::ModuleOp"> {
   let summary = "Verify the CODIR-to-ARTS boundary contains only ARTS objects";
   let description = [{
     Rejects IR that violates the target dialect layering contract: no residual
-    SDE or OpenMP operations may remain after CODIR-to-ARTS materialization.
+    SDE or OpenMP operations may remain after CODIR-to-ARTS conversion.
   }];
   let dependentDialects = [
     "::mlir::carts::arts::ArtsDialect",

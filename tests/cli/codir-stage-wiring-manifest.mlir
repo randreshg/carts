@@ -4,8 +4,8 @@
 // RUN:   | %FileCheck %s --check-prefix=NO-GROUP-ALIAS
 // RUN: not %carts-compile %s --pipeline arts-rt-lowering -o %t 2>&1 \
 // RUN:   | %FileCheck %s --check-prefix=NO-GROUP-ALIAS-RT
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(matmul-3mm-contraction-materialization)' -o %t 2>&1 \
-// RUN:   | %FileCheck %s --check-prefix=NO-MATMUL-3MM
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(contraction-shortcut)' -o %t 2>&1 \
+// RUN:   | %FileCheck %s --check-prefix=NO-CONTRACTION-ALIAS
 
 // Verifies production CODIR wiring: SDE planning no longer runs direct
 // codelet lowering to ARTS, and executable `sde-planning` / `sde-to-codir` /
@@ -46,7 +46,7 @@ module {}
 // MANIFEST: "VerifyArtsObjectsOnly"
 // MANIFEST-SAME: "dependsOn": ["codir-to-arts"]
 // MANIFEST: "name": "post-db-refinement"
-// MANIFEST: "PartialReductionSplitMaterialization"
+// MANIFEST: "PartialReductionSplit"
 // MANIFEST: "DbScratchElimination"
 // MANIFEST: "CSE(arts.edt)"
 // MANIFEST: "DistributedLaunchConsistency"
@@ -60,4 +60,4 @@ module {}
 
 // NO-GROUP-ALIAS-RT: Unknown pipeline step: 'arts-rt-lowering'
 
-// NO-MATMUL-3MM: 'matmul-3mm-contraction-materialization' does not refer to a registered pass or pass pipeline
+// NO-CONTRACTION-ALIAS: 'contraction-shortcut' does not refer to a registered pass or pass pipeline

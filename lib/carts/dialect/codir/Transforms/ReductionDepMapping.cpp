@@ -253,7 +253,7 @@ static ArrayAttr getDeclaredPartialReductionDims(codir::CodeletOp codelet) {
   return codelet.getPartialReductionDimsAttr();
 }
 
-static LogicalResult setOrVerifyReductionPlanAttr(Operation *op,
+static LogicalResult setOrVerifyReductionFactAttr(Operation *op,
                                                   StringRef attrName,
                                                   Attribute desired,
                                                   StringRef factName) {
@@ -276,9 +276,9 @@ static LogicalResult setOrVerifyReductionPlanAttr(Operation *op,
 }
 
 static LogicalResult
-stampPartialReductionSplitPlan(codir::CodeletOp codelet,
-                               ArrayAttr depResultDimMaps,
-                               std::optional<int64_t> targetWorkerCount) {
+stampPartialReductionSplitFacts(codir::CodeletOp codelet,
+                                ArrayAttr depResultDimMaps,
+                                std::optional<int64_t> targetWorkerCount) {
   MLIRContext *ctx = codelet.getContext();
   Attribute splitRequired;
   Attribute splitDims;
@@ -287,27 +287,27 @@ stampPartialReductionSplitPlan(codir::CodeletOp codelet,
   Attribute targetWorkerCountAttr;
 
   auto verifyAll = [&]() -> LogicalResult {
-    if (failed(setOrVerifyReductionPlanAttr(
+    if (failed(setOrVerifyReductionFactAttr(
             codelet.getOperation(),
             codelet.getPartialReductionSplitOwnerTaskCountAttrName(),
             ownerTaskCountAttr, "partial-reduction owner task count")))
       return failure();
-    if (failed(setOrVerifyReductionPlanAttr(
+    if (failed(setOrVerifyReductionFactAttr(
             codelet.getOperation(),
             codelet.getPartialReductionSplitTargetWorkerCountAttrName(),
             targetWorkerCountAttr, "partial-reduction target worker count")))
       return failure();
-    if (failed(setOrVerifyReductionPlanAttr(
+    if (failed(setOrVerifyReductionFactAttr(
             codelet.getOperation(),
             codelet.getPartialReductionSplitRequiredAttrName(), splitRequired,
             "partial-reduction split-required flag")))
       return failure();
-    if (failed(setOrVerifyReductionPlanAttr(
+    if (failed(setOrVerifyReductionFactAttr(
             codelet.getOperation(),
             codelet.getPartialReductionSplitDimsAttrName(), splitDims,
             "partial-reduction split dims")))
       return failure();
-    if (failed(setOrVerifyReductionPlanAttr(
+    if (failed(setOrVerifyReductionFactAttr(
             codelet.getOperation(),
             codelet.getPartialReductionSplitFactorAttrName(), splitFactorAttr,
             "partial-reduction split factor")))
@@ -381,15 +381,15 @@ struct ReductionDepMappingPass
       }
 
       ArrayAttr depMaps = buildDepResultDimMaps(codelet);
-      if (failed(setOrVerifyReductionPlanAttr(
+      if (failed(setOrVerifyReductionFactAttr(
               codelet.getOperation(),
               codelet.getPartialReductionDepResultDimMapsAttrName(), depMaps,
               "partial-reduction dep/result dimension maps"))) {
         signalPassFailure();
         return;
       }
-      if (failed(stampPartialReductionSplitPlan(codelet, depMaps,
-                                                targetWorkerCount))) {
+      if (failed(stampPartialReductionSplitFacts(codelet, depMaps,
+                                                 targetWorkerCount))) {
         signalPassFailure();
         return;
       }

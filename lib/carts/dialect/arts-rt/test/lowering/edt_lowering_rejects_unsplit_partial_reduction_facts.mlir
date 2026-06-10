@@ -1,10 +1,10 @@
 // RUN: not %carts-compile %s --pass-pipeline='builtin.module(edt-lowering)' 2>&1 | %FileCheck %s
 
-// CHECK: partial-reduction split plan was not materialized before ARTS-RT EDT lowering
+// CHECK: partial-reduction split facts were not split before ARTS-RT EDT lowering
 // CHECK: split owner task count: 1920
 // CHECK: split target worker count: 4096
 // CHECK: partial-reduction split factor: 3
-// CHECK: the ARTS layer must materialize reduction-tile partial DBs and a combine tree before this runtime ABI pass
+// CHECK: the ARTS layer must split reduction-tile partial DBs and a combine tree before this runtime ABI pass
 
 module attributes {
   arts.runtime_total_nodes = 64 : i64,
@@ -13,7 +13,7 @@ module attributes {
   llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128",
   llvm.target_triple = "aarch64-unknown-linux-gnu"
 } {
-  func.func @unmaterialized_split_plan_reaches_edt_lowering() {
+  func.func @unsplit_facts_reach_edt_lowering() {
     %route = arith.constant 0 : i32
     arts.edt <task> <internode> route(%route) attributes {
       partialReduction,

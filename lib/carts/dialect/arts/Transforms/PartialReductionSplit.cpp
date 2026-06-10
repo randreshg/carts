@@ -1,11 +1,11 @@
 ///==========================================================================///
-/// File: PartialReductionSplitMaterialization.cpp
+/// File: PartialReductionSplit.cpp
 ///
-/// Materializes ARTS partial-reduction split plans into concrete DB/EDT
-/// structure before ARTS-RT lowering.
+/// Splits ARTS partial-reduction facts into concrete DB/EDT structure before
+/// ARTS-RT lowering.
 ///==========================================================================///
 
-#define GEN_PASS_DEF_PARTIALREDUCTIONSPLITMATERIALIZATION
+#define GEN_PASS_DEF_PARTIALREDUCTIONSPLIT
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
@@ -38,7 +38,7 @@ struct ReductionLoopMatch {
   memref::LoadOp seedLoad;
 };
 
-struct SplitPlan {
+struct SplitFacts {
   unsigned resultDepIndex = 0;
   unsigned ownerParamIndex = 0;
   int64_t splitFactor = 0;
@@ -64,8 +64,8 @@ static Value createScalarZero(OpBuilder &builder, Location loc, Type type) {
 }
 
 static FailureOr<SmallVector<Value, 4>>
-rematerializeIndicesDominating(ValueRange indices, Operation *insertBefore,
-                               OpBuilder &builder, Location loc) {
+rebuildDominatingIndices(ValueRange indices, Operation *insertBefore,
+                         OpBuilder &builder, Location loc) {
   Operation *domRoot = insertBefore->getParentOfType<func::FuncOp>();
   if (!domRoot)
     domRoot = insertBefore->getParentOfType<ModuleOp>();
@@ -73,16 +73,16 @@ rematerializeIndicesDominating(ValueRange indices, Operation *insertBefore,
     return failure();
 
   DominanceInfo domInfo(domRoot);
-  SmallVector<Value, 4> rematerialized;
-  rematerialized.reserve(indices.size());
+  SmallVector<Value, 4> dominatingIndices;
+  dominatingIndices.reserve(indices.size());
   for (Value index : indices) {
-    Value dominating = ValueAnalysis::traceValueToDominating(
+    Value rebuilt = ValueAnalysis::traceValueToDominating(
         index, insertBefore, builder, domInfo, loc);
-    if (!dominating)
+    if (!rebuilt)
       return failure();
-    rematerialized.push_back(dominating);
+    dominatingIndices.push_back(rebuilt);
   }
-  return rematerialized;
+  return dominatingIndices;
 }
 
 static bool hasMultinodeRuntime(EdtOp edt) {
@@ -104,7 +104,7 @@ static int64_t ceilDivPositiveI64(int64_t lhs, int64_t rhs) {
   return (lhs + rhs - 1) / rhs;
 }
 
-static void clearSplitPlanAttrs(EdtOp edt) {
+static void clearSplitAttrs(EdtOp edt) {
   edt->removeAttr(edt.getPartialReductionSplitRequiredAttrName());
   edt->removeAttr(edt.getPartialReductionSplitDimsAttrName());
   edt->removeAttr(edt.getPartialReductionSplitFactorAttrName());
@@ -112,16 +112,16 @@ static void clearSplitPlanAttrs(EdtOp edt) {
   edt->removeAttr(edt.getPartialReductionSplitTargetWorkerCountAttrName());
 }
 
-static void stampEffectiveSplitPlanAttrs(EdtOp edt, const SplitPlan &plan) {
+static void stampEffectiveSplitAttrs(EdtOp edt, const SplitFacts &facts) {
   MLIRContext *ctx = edt.getContext();
   auto i64 = IntegerType::get(ctx, 64);
   edt.setPartialReductionSplitFactorAttr(
-      IntegerAttr::get(i64, plan.splitFactor));
+      IntegerAttr::get(i64, facts.splitFactor));
   edt.setPartialReductionSplitTargetWorkerCountAttr(
-      IntegerAttr::get(i64, plan.targetWorkerCount));
+      IntegerAttr::get(i64, facts.targetWorkerCount));
 }
 
-static bool reconcileSplitTopology(EdtOp edt, SplitPlan &plan,
+static bool reconcileSplitTopology(EdtOp edt, SplitFacts &facts,
                                    bool &distributedTopology) {
   bool multinode = hasMultinodeRuntime(edt);
   bool depsAllowDistributed =
@@ -135,23 +135,23 @@ static bool reconcileSplitTopology(EdtOp edt, SplitPlan &plan,
     return true;
 
   int64_t effectiveTarget = *localWorkers;
-  if (effectiveTarget > plan.targetWorkerCount)
-    effectiveTarget = plan.targetWorkerCount;
-  if (effectiveTarget <= plan.ownerTaskCount) {
-    clearSplitPlanAttrs(edt);
+  if (effectiveTarget > facts.targetWorkerCount)
+    effectiveTarget = facts.targetWorkerCount;
+  if (effectiveTarget <= facts.ownerTaskCount) {
+    clearSplitAttrs(edt);
     return false;
   }
 
   int64_t requestedFactor =
-      ceilDivPositiveI64(effectiveTarget, plan.ownerTaskCount);
+      ceilDivPositiveI64(effectiveTarget, facts.ownerTaskCount);
   if (requestedFactor <= 1) {
-    clearSplitPlanAttrs(edt);
+    clearSplitAttrs(edt);
     return false;
   }
-  if (requestedFactor < plan.splitFactor)
-    plan.splitFactor = requestedFactor;
-  plan.targetWorkerCount = effectiveTarget;
-  stampEffectiveSplitPlanAttrs(edt, plan);
+  if (requestedFactor < facts.splitFactor)
+    facts.splitFactor = requestedFactor;
+  facts.targetWorkerCount = effectiveTarget;
+  stampEffectiveSplitAttrs(edt, facts);
   return true;
 }
 
@@ -184,7 +184,7 @@ static void markDistributedRemoteUse(Value dep) {
     alloc.removeLocalOnlyAttr();
 }
 
-static void markMaterializedReductionDistribution(Operation *op,
+static void markReductionSplitDistribution(Operation *op,
                                                   bool distributed) {
   if (!op)
     return;
@@ -200,12 +200,12 @@ static LogicalResult readRequiredI64Array(EdtOp edt, ArrayAttr attr,
   auto parsed = readI64ArrayAttr(attr);
   if (!parsed)
     return edt.emitOpError() << "requires integer array attribute '" << name
-                             << "' for partial-reduction split materialization";
+                             << "' for partial-reduction split";
   values.assign(parsed->begin(), parsed->end());
   return success();
 }
 
-static LogicalResult findResultDependencyIndex(EdtOp edt, SplitPlan &plan) {
+static LogicalResult findResultDependencyIndex(EdtOp edt, SplitFacts &facts) {
   ArrayAttr depMaps = edt.getPartialReductionDepResultDimMapsAttr();
   if (!depMaps)
     return edt.emitOpError()
@@ -230,7 +230,7 @@ static LogicalResult findResultDependencyIndex(EdtOp edt, SplitPlan &plan) {
       continue;
 
     bool coversOwnerDims = true;
-    for (int64_t ownerDim : plan.ownerDims)
+    for (int64_t ownerDim : facts.ownerDims)
       coversOwnerDims &= llvm::is_contained(*dims, ownerDim);
     if (!coversOwnerDims)
       continue;
@@ -241,16 +241,16 @@ static LogicalResult findResultDependencyIndex(EdtOp edt, SplitPlan &plan) {
 
     if (resultIndex)
       return edt.emitOpError()
-             << "partial-reduction split materialization found multiple "
+             << "partial-reduction split found multiple "
                 "candidate result dependencies";
     resultIndex = static_cast<unsigned>(idx);
   }
 
   if (!resultIndex)
     return edt.emitOpError()
-           << "partial-reduction split materialization could not identify a "
+           << "partial-reduction split could not identify a "
               "result dependency with owner dims and no reduction-only dims";
-  plan.resultDepIndex = *resultIndex;
+  facts.resultDepIndex = *resultIndex;
   return success();
 }
 
@@ -289,8 +289,9 @@ static FailureOr<DbRefOp> findSingleResultRef(EdtOp edt,
 }
 
 static FailureOr<ReductionLoopMatch> matchReductionLoop(EdtOp edt,
-                                                        SplitPlan plan) {
-  FailureOr<DbRefOp> resultRef = findSingleResultRef(edt, plan.resultDepIndex);
+                                                        SplitFacts facts) {
+  FailureOr<DbRefOp> resultRef =
+      findSingleResultRef(edt, facts.resultDepIndex);
   if (failed(resultRef))
     return failure();
 
@@ -352,7 +353,7 @@ static FailureOr<ReductionLoopMatch> matchReductionLoop(EdtOp edt,
   return rootMatches.front();
 }
 
-static LogicalResult validateSplitPlan(EdtOp edt, SplitPlan &plan) {
+static LogicalResult validateSplitFacts(EdtOp edt, SplitFacts &facts) {
   if (!edt.getPartialReductionAttr())
     return edt.emitOpError()
            << "partialReductionSplitRequired requires partialReduction";
@@ -361,81 +362,82 @@ static LogicalResult validateSplitPlan(EdtOp edt, SplitPlan &plan) {
   if (!splitFactor || *splitFactor <= 1)
     return edt.emitOpError()
            << "requires static partialReductionSplitFactor > 1";
-  plan.splitFactor = *splitFactor;
+  facts.splitFactor = *splitFactor;
 
   auto ownerTaskCount = edt.getPartialReductionSplitOwnerTaskCount();
   if (!ownerTaskCount || *ownerTaskCount <= 0)
     return edt.emitOpError()
            << "requires positive partialReductionSplitOwnerTaskCount";
-  plan.ownerTaskCount = *ownerTaskCount;
+  facts.ownerTaskCount = *ownerTaskCount;
 
   auto targetWorkerCount = edt.getPartialReductionSplitTargetWorkerCount();
   if (!targetWorkerCount || *targetWorkerCount <= 0)
     return edt.emitOpError()
            << "requires positive partialReductionSplitTargetWorkerCount";
-  plan.targetWorkerCount = *targetWorkerCount;
+  facts.targetWorkerCount = *targetWorkerCount;
 
   if (failed(readRequiredI64Array(edt, edt.getPartialReductionOwnerDimsAttr(),
                                   "partialReductionOwnerDims",
-                                  plan.ownerDims)) ||
+                                  facts.ownerDims)) ||
       failed(readRequiredI64Array(edt, edt.getPartialReductionDimsAttr(),
                                   "partialReductionDims",
-                                  plan.reductionDims)) ||
+                                  facts.reductionDims)) ||
       failed(readRequiredI64Array(edt, edt.getPartialReductionSplitDimsAttr(),
-                                  "partialReductionSplitDims", plan.splitDims)))
+                                  "partialReductionSplitDims",
+                                  facts.splitDims)))
     return failure();
 
-  if (plan.ownerDims.size() != 1 || plan.reductionDims.empty() ||
-      plan.splitDims.empty())
+  if (facts.ownerDims.size() != 1 || facts.reductionDims.empty() ||
+      facts.splitDims.empty())
     return edt.emitOpError()
-           << "partial-reduction split materialization currently supports "
+           << "partial-reduction split currently supports "
               "exactly one owner dim and one or more reduction/split dims";
-  for (int64_t splitDim : plan.splitDims) {
-    if (llvm::is_contained(plan.reductionDims, splitDim))
+  for (int64_t splitDim : facts.splitDims) {
+    if (llvm::is_contained(facts.reductionDims, splitDim))
       continue;
     return edt.emitOpError()
            << "partialReductionSplitDims must be contained in "
               "partialReductionDims for "
-              "the supported static materialization shape";
+              "the supported static split shape";
   }
 
   if (edt.getDependencies().size() < 2)
     return edt.emitOpError()
-           << "partial-reduction split materialization requires a result "
+           << "partial-reduction split requires a result "
               "dependency and at least one reduction input dependency";
 
-  if (failed(findResultDependencyIndex(edt, plan)))
+  if (failed(findResultDependencyIndex(edt, facts)))
     return failure();
 
   FailureOr<unsigned> ownerParamIndex = findOwnerParamIndex(edt);
   if (failed(ownerParamIndex))
     return edt.emitOpError()
-           << "partial-reduction split materialization requires an enclosing "
+           << "partial-reduction split requires an enclosing "
               "owner dispatch loop whose induction variable is an EDT param";
-  plan.ownerParamIndex = *ownerParamIndex;
+  facts.ownerParamIndex = *ownerParamIndex;
 
-  FailureOr<ReductionLoopMatch> reduction = matchReductionLoop(edt, plan);
+  FailureOr<ReductionLoopMatch> reduction = matchReductionLoop(edt, facts);
   if (failed(reduction))
     return edt.emitOpError()
-           << "partial-reduction split materialization could not prove the "
+           << "partial-reduction split could not prove the "
               "supported scalar floating add reduction loop";
-  plan.reduction = *reduction;
+  facts.reduction = *reduction;
 
   if (auto workerSlice =
           readI64ArrayAttr(getPlanLogicalWorkerSliceAttr(edt.getOperation()))) {
     if (!workerSlice->empty()) {
       if ((*workerSlice)[0] <= 0)
         return edt.emitOpError()
-               << "partial-reduction split materialization requires a "
+               << "partial-reduction split requires a "
                   "positive rank-1 result tile length";
-      plan.resultElementCount = (*workerSlice)[0];
+      facts.resultElementCount = (*workerSlice)[0];
     }
   }
 
   return success();
 }
 
-static void copyMaterializedEdtAttrs(EdtOp source, EdtOp dest) {
+static void copySplitEdtAttrs(EdtOp source, EdtOp dest) {
   StringAttr operandSegments =
       EdtOp::getOperandSegmentSizesAttrName(source->getName());
   for (NamedAttribute attr : source->getAttrs()) {
@@ -476,9 +478,9 @@ static void cloneEdtBody(EdtOp source, EdtOp dest) {
 }
 
 static LogicalResult retileSplitWorkerLoop(EdtOp splitEdt,
-                                           const SplitPlan &plan,
+                                           const SplitFacts &facts,
                                            unsigned originalParamCount) {
-  FailureOr<ReductionLoopMatch> match = matchReductionLoop(splitEdt, plan);
+  FailureOr<ReductionLoopMatch> match = matchReductionLoop(splitEdt, facts);
   if (failed(match))
     return failure();
 
@@ -489,9 +491,9 @@ static LogicalResult retileSplitWorkerLoop(EdtOp splitEdt,
 
   OpBuilder loopBuilder((*match).loop);
   Value one = createOneIndex(loopBuilder, loc);
-  Value splitFactor = createConstantIndex(loopBuilder, loc, plan.splitFactor);
+  Value splitFactor = createConstantIndex(loopBuilder, loc, facts.splitFactor);
   Value splitFactorMinusOne =
-      createConstantIndex(loopBuilder, loc, plan.splitFactor - 1);
+      createConstantIndex(loopBuilder, loc, facts.splitFactor - 1);
   Value range =
       arith::SubIOp::create(loopBuilder, loc, (*match).loop.getUpperBound(),
                             (*match).loop.getLowerBound());
@@ -519,7 +521,7 @@ static LogicalResult retileSplitWorkerLoop(EdtOp splitEdt,
   OpBuilder addBuilder((*match).add);
   SmallVector<Value, 4> addLoadIndices((*match).seedLoad.getIndices().begin(),
                                        (*match).seedLoad.getIndices().end());
-  FailureOr<SmallVector<Value, 4>> initIndices = rematerializeIndicesDominating(
+  FailureOr<SmallVector<Value, 4>> initIndices = rebuildDominatingIndices(
       addLoadIndices, (*match).loop.getOperation(), loopBuilder, loc);
   if (failed(initIndices))
     return failure();
@@ -590,7 +592,7 @@ static DbAllocOp createReductionBufferDb(OpBuilder &builder, Location loc,
               buildI64ArrayAttr(db, {resultElementCount}));
   db.setDepPatternAttr(
       ArtsDepPatternAttr::get(db.getContext(), ArtsDepPattern::reduction));
-  markMaterializedReductionDistribution(db.getOperation(), distributed);
+  markReductionSplitDistribution(db.getOperation(), distributed);
   if (distributed) {
     setDistributedDbAllocation(db.getOperation(), /*enabled=*/true);
     realizeDbOwnerMapFromPlan(db);
@@ -720,7 +722,7 @@ static LogicalResult createIntermediateCombineEdt(
                                   route, deps, ValueRange{});
   addEdtBlockArguments(combineEdt, deps, ValueRange{}, loc);
   copyCombineMetadata(sourceEdt, combineEdt);
-  markMaterializedReductionDistribution(
+  markReductionSplitDistribution(
       combineEdt.getOperation(), concurrency == EdtConcurrency::internode);
   return createIntermediateCombineBody(combineEdt, scalarType, elementCount,
                                        rightIndex.has_value());
@@ -752,7 +754,7 @@ static LogicalResult createFinalCombineEdt(OpBuilder &builder, Location loc,
                                   route, deps, ValueRange{});
   addEdtBlockArguments(combineEdt, deps, ValueRange{}, loc);
   copyCombineMetadata(sourceEdt, combineEdt);
-  markMaterializedReductionDistribution(
+  markReductionSplitDistribution(
       combineEdt.getOperation(), concurrency == EdtConcurrency::internode);
   // The final combine RO-acquires the per-tile partials and writes the result
   // block once, so downstream lowering can treat it as a block-native settle
@@ -763,7 +765,7 @@ static LogicalResult createFinalCombineEdt(OpBuilder &builder, Location loc,
                                 inputCount == 2);
 }
 
-static LogicalResult materializeSplitPlan(EdtOp edt, SplitPlan &plan) {
+static LogicalResult splitReductionFacts(EdtOp edt, SplitFacts &facts) {
   Location loc = edt.getLoc();
   OpBuilder builder(edt.getContext());
 
@@ -782,39 +784,39 @@ static LogicalResult materializeSplitPlan(EdtOp edt, SplitPlan &plan) {
     return failure();
 
   auto resultType =
-      cast<MemRefType>(plan.reduction.resultRef.getResult().getType());
+      cast<MemRefType>(facts.reduction.resultRef.getResult().getType());
   Type scalarType = resultType.getElementType();
   if (!isa<FloatType>(scalarType) || resultType.getRank() != 1)
     return failure();
 
   bool distributedTopology = false;
-  if (!reconcileSplitTopology(edt, plan, distributedTopology))
+  if (!reconcileSplitTopology(edt, facts, distributedTopology))
     return success();
-  EdtConcurrency materializedConcurrency =
+  EdtConcurrency splitConcurrency =
       distributedTopology ? EdtConcurrency::internode : edt.getConcurrency();
 
   builder.setInsertionPoint(ownerLoop);
   Value route = createCurrentNodeRoute(builder, loc);
-  Value ownerCount = createConstantIndex(builder, loc, plan.ownerTaskCount);
-  Value splitFactor = createConstantIndex(builder, loc, plan.splitFactor);
+  Value ownerCount = createConstantIndex(builder, loc, facts.ownerTaskCount);
+  Value splitFactor = createConstantIndex(builder, loc, facts.splitFactor);
   Value resultElementCount =
-      createConstantIndex(builder, loc, plan.resultElementCount);
+      createConstantIndex(builder, loc, facts.resultElementCount);
   DbAllocOp partialDb = createReductionBufferDb(
       builder, loc, route, ownerCount, splitFactor, resultElementCount,
-      plan.resultElementCount, scalarType, distributedTopology);
+      facts.resultElementCount, scalarType, distributedTopology);
   SmallVector<std::pair<DbAllocOp, int64_t>, 4> intermediateLevels;
-  for (int64_t currentCount = plan.splitFactor; currentCount > 2;) {
+  for (int64_t currentCount = facts.splitFactor; currentCount > 2;) {
     int64_t nextCount = (currentCount + 1) / 2;
     Value nextCountValue = createConstantIndex(builder, loc, nextCount);
     DbAllocOp nextDb = createReductionBufferDb(
         builder, loc, route, ownerCount, nextCountValue, resultElementCount,
-        plan.resultElementCount, scalarType, distributedTopology);
+        facts.resultElementCount, scalarType, distributedTopology);
     intermediateLevels.push_back({nextDb, nextCount});
     currentCount = nextCount;
   }
 
-  Value ownerIndex = edt.getParams()[plan.ownerParamIndex];
-  Type resultDepType = edt.getDependencies()[plan.resultDepIndex].getType();
+  Value ownerIndex = edt.getParams()[facts.ownerParamIndex];
+  Type resultDepType = edt.getDependencies()[facts.resultDepIndex].getType();
   SmallVector<Value> originalDeps(edt.getDependencies().begin(),
                                   edt.getDependencies().end());
   SmallVector<Value> originalParams(edt.getParams().begin(),
@@ -828,7 +830,7 @@ static LogicalResult materializeSplitPlan(EdtOp edt, SplitPlan &plan) {
   Value ownerOrdinal = createOwnerOrdinal(builder, loc, ownerLoop, ownerIndex);
   Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
-  Value splitUpper = createConstantIndex(builder, loc, plan.splitFactor);
+  Value splitUpper = createConstantIndex(builder, loc, facts.splitFactor);
   auto splitLoop = scf::ForOp::create(builder, loc, zero, splitUpper, one);
 
   {
@@ -839,30 +841,30 @@ static LogicalResult materializeSplitPlan(EdtOp edt, SplitPlan &plan) {
         builder, loc, partialDb, resultDepType, ownerOrdinal, tileIndex);
 
     SmallVector<Value> splitDeps = originalDeps;
-    splitDeps[plan.resultDepIndex] = partialTile.getPtr();
+    splitDeps[facts.resultDepIndex] = partialTile.getPtr();
     SmallVector<Value> splitParams = originalParams;
     splitParams.push_back(tileIndex);
 
     Value splitRoute =
         distributedTopology
             ? createDistributedRoute(builder, loc, ownerLoop, ownerIndex,
-                                     tileIndex, plan.splitFactor)
+                                     tileIndex, facts.splitFactor)
             : edt.getRoute();
     auto splitEdt =
-        EdtOp::create(builder, loc, edt.getType(), materializedConcurrency,
+        EdtOp::create(builder, loc, edt.getType(), splitConcurrency,
                       splitRoute, splitDeps, splitParams);
-    copyMaterializedEdtAttrs(edt, splitEdt);
-    markMaterializedReductionDistribution(splitEdt.getOperation(),
+    copySplitEdtAttrs(edt, splitEdt);
+    markReductionSplitDistribution(splitEdt.getOperation(),
                                           distributedTopology);
     addEdtBlockArguments(splitEdt, splitDeps, splitParams, loc);
     cloneEdtBody(edt, splitEdt);
-    if (failed(retileSplitWorkerLoop(splitEdt, plan, originalParamCount)))
+    if (failed(retileSplitWorkerLoop(splitEdt, facts, originalParamCount)))
       return failure();
   }
 
   builder.setInsertionPointAfter(splitLoop);
   DbAllocOp currentDb = partialDb;
-  int64_t currentCount = plan.splitFactor;
+  int64_t currentCount = facts.splitFactor;
   for (auto [nextDb, nextCount] : intermediateLevels) {
     for (int64_t outputIndex = 0; outputIndex < nextCount; ++outputIndex) {
       int64_t leftIndex = outputIndex * 2;
@@ -878,7 +880,7 @@ static LogicalResult materializeSplitPlan(EdtOp edt, SplitPlan &plan) {
       if (failed(createIntermediateCombineEdt(
               builder, loc, edt, currentDb, nextDb, resultDepType, ownerOrdinal,
               leftIndex, rightIndex, outputIndex, scalarType,
-              resultElementCount, materializedConcurrency, combineRoute)))
+              resultElementCount, splitConcurrency, combineRoute)))
         return failure();
     }
     currentDb = nextDb;
@@ -891,18 +893,18 @@ static LogicalResult materializeSplitPlan(EdtOp edt, SplitPlan &plan) {
                                    createZeroIndex(builder, loc), 1)
           : edt.getRoute();
   if (failed(createFinalCombineEdt(
-          builder, loc, edt, currentDb, originalDeps[plan.resultDepIndex],
+          builder, loc, edt, currentDb, originalDeps[facts.resultDepIndex],
           resultDepType, ownerOrdinal, currentCount, scalarType,
-          resultElementCount, materializedConcurrency, finalRoute)))
+          resultElementCount, splitConcurrency, finalRoute)))
     return failure();
 
   edt.erase();
   return success();
 }
 
-struct PartialReductionSplitMaterializationPass
-    : public impl::PartialReductionSplitMaterializationBase<
-          PartialReductionSplitMaterializationPass> {
+struct PartialReductionSplitPass
+    : public impl::PartialReductionSplitBase<
+          PartialReductionSplitPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
@@ -913,11 +915,11 @@ struct PartialReductionSplitMaterializationPass
     });
 
     for (EdtOp edt : worklist) {
-      SplitPlan plan;
-      if (failed(validateSplitPlan(edt, plan)) ||
-          failed(materializeSplitPlan(edt, plan))) {
+      SplitFacts facts;
+      if (failed(validateSplitFacts(edt, facts)) ||
+          failed(splitReductionFacts(edt, facts))) {
         edt.emitError()
-            << "failed to materialize partial-reduction split plan; leaving "
+            << "failed to split partial-reduction facts; leaving "
                "partialReductionSplitRequired for ARTS-RT guard";
         signalPassFailure();
         return;
@@ -929,6 +931,6 @@ struct PartialReductionSplitMaterializationPass
 } // namespace
 
 std::unique_ptr<Pass>
-mlir::carts::arts::createPartialReductionSplitMaterializationPass() {
-  return std::make_unique<PartialReductionSplitMaterializationPass>();
+mlir::carts::arts::createPartialReductionSplitPass() {
+  return std::make_unique<PartialReductionSplitPass>();
 }

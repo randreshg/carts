@@ -327,18 +327,12 @@ static const std::array<llvm::StringLiteral, 6> kCreateDbsPasses = {
 static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
     "DbModeTightening", "PolygeistCanonicalize", "CSE(arts.edt)", "Mem2Reg"};
 static const std::array<llvm::StringLiteral, 12> kPostDbRefinementPasses = {
-    "DbModeTightening",
-    "DbOwnerMapRealization",
-    "EdtDeadDepElimination",
-    "DbConsolidateStencilHalos",
-    "DbShortenLifetimes",
-    "DbDeadRootElimination",
-    "PartialReductionSplitMaterialization",
-    "MatmulContractionMaterialization",
-    "DbScratchElimination",
-    "PolygeistCanonicalize",
-    "CSE(arts.edt)",
-    "DistributedLaunchConsistency"};
+    "DbModeTightening",      "DbOwnerMapRealization",
+    "EdtDeadDepElimination", "DbConsolidateStencilHalos",
+    "DbShortenLifetimes",    "DbDeadRootElimination",
+    "PartialReductionSplit", "BlockContractionSplit",
+    "DbScratchElimination",  "PolygeistCanonicalize",
+    "CSE(arts.edt)",         "DistributedLaunchConsistency"};
 static const std::array<llvm::StringLiteral, 6> kLateConcurrencyCleanupPasses =
     {"Hoisting",         "PolygeistCanonicalize",   "CSE(arts.edt)",
      "EdtAllocaSinking", "ArtsDeadCodeElimination", "Mem2Reg"};
@@ -686,8 +680,8 @@ void registerDialects(DialectRegistry &registry) {
   /// ARTS pass registration is intentionally selective: lowering-only helpers
   /// are registered here, while staged compiler pipelines wire pass ordering.
   registerDeadCodeElimination();
-  registerPartialReductionSplitMaterialization();
-  registerMatmulContractionMaterialization();
+  registerPartialReductionSplit();
+  registerBlockContractionSplit();
   registerDistributedLaunchConsistency();
   registerRealizeEdtDistributionPlan();
   registerEpochTailContinuation();
@@ -1147,8 +1141,8 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
   optPM.addPass(polygeist::createCanonicalizeForPass());
 }
 
-/// OpenMP to SDE fact materialization. Codelets are intentionally not lowered
-/// here; SDE facts feed `sde-to-codir`, and CODIR then materializes ARTS.
+/// OpenMP to SDE fact conversion. Codelets are intentionally not lowered here;
+/// SDE facts feed `sde-to-codir`, and CODIR then realizes ARTS objects.
 void buildSdePlanningPipeline(PassManager &pm,
                               sde::SDECostModel *costModel = nullptr) {
   pm.addPass(sde::createConvertOpenMPToSdePass());
@@ -1197,7 +1191,7 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createVerifySdePass());
 }
 
-/// SDE-to-CODIR materialization. This is the mechanical codelet conversion:
+/// SDE-to-CODIR conversion. This is the mechanical codelet conversion:
 /// SDE owns transformed facts; CODIR owns isolated deps, params, and
 /// token-local memref views.
 void buildSdeToCodirPipeline(PassManager &pm) {
@@ -1267,8 +1261,8 @@ void buildPostDbRefinementPipeline(PassManager &pm) {
   pm.addPass(arts::createDbConsolidateStencilHalosPass());
   pm.addPass(arts::createDbShortenLifetimesPass());
   pm.addPass(arts::createDbDeadRootEliminationPass());
-  pm.addPass(arts::createPartialReductionSplitMaterializationPass());
-  pm.addPass(arts::createMatmulContractionMaterializationPass());
+  pm.addPass(arts::createPartialReductionSplitPass());
+  pm.addPass(arts::createBlockContractionSplitPass());
   pm.addPass(arts::createDbScratchEliminationPass());
   addCanonicalizeAndEdtLocalCSE(pm);
   pm.addPass(arts::createDistributedLaunchConsistencyPass());

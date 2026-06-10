@@ -89,9 +89,9 @@ PolygeistCanonicalizeFor(func)
 ### `sde-planning`
 
 This stage covers OpenMP-to-SDE conversion and SDE-owned rewrites. It
-intentionally stops before codelet materialization; `sde-to-codir` owns the
+intentionally stops before codelet conversion; `sde-to-codir` owns the
 mechanical codelet boundary and `codir-to-arts` owns mechanical ARTS object
-materialization.
+realization.
 
 ```text
 ConvertOpenMPToSde
@@ -192,8 +192,8 @@ EdtDeadDepElimination
 DbConsolidateStencilHalos
 DbShortenLifetimes
 DbDeadRootElimination
-PartialReductionSplitMaterialization
-MatmulContractionMaterialization
+PartialReductionSplit
+BlockContractionSplit
 DbScratchElimination
 PolygeistCanonicalize
 CSE(arts.edt)
