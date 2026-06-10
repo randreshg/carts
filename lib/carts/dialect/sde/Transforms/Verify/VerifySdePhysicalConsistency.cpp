@@ -1,11 +1,12 @@
 ///==========================================================================///
 /// File: VerifySdePhysicalConsistency.cpp
 ///
-/// The aggregate pre-CODIR physical-plan consistency gate. It fails closed on
-/// the stale-grain shape the SDE boundary forbids -- one `sde.su_iterate`
-/// carrying several incompatible truths at once (the jacobi-for class) -- so a
-/// committed physical plan that disagrees with its arrayLayout or schedule never
-/// reaches CODIR.
+/// The pre-window physical-plan consistency gate. It runs before the rank-expand
+/// and access-window transforms so it fails closed on the stale-grain shape the
+/// SDE boundary forbids -- one `sde.su_iterate` carrying several incompatible
+/// truths at once (the jacobi-for class) -- before SdeRankExpandMu consumes the
+/// committed physical plan, instead of letting a stale plan disagree with its
+/// arrayLayout or schedule and reach CODIR.
 ///
 /// For every `sde.su_iterate` carrying a committed physical plan
 /// (`physicalOwnerDims` + `physicalBlockShape`) it checks:

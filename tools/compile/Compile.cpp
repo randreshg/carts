@@ -297,6 +297,7 @@ static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
     "BarrierElimination",
     "MemoryUnitMaterialization",
     "SdeCuNormalization",
+    "VerifySdePhysicalConsistency",
     "SdeRankExpandMu",
     "VerifySdeMuLayout",
     "RaiseToMuAccessWindow",
@@ -307,8 +308,7 @@ static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
     "VerifySdeRedistribute",
     "SdeCoarseAvoidance",
     "VerifySdeCoarseAvoidance",
-    "VerifySde",
-    "VerifySdePhysicalConsistency"};
+    "VerifySde"};
 static const std::array<llvm::StringLiteral, 1> kSdeToCodirPasses = {
     "ConvertSdeToCodir"};
 static const std::array<llvm::StringLiteral, 5> kCodirGraphTransformsPasses = {
@@ -1175,6 +1175,12 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createMemoryUnitMaterializationPass());
   pm.addPass(sde::createSdeCuNormalizationPass());
+  // Pre-window physical-plan consistency gate: the committed physical plan must
+  // agree with its arrayLayout and SU schedule BEFORE the rank-expand transform
+  // consumes it. A stale grain (the jacobi-for row-strip-over-owner-tile class)
+  // fails closed here instead of being realized into a coarse grid or silently
+  // bailed to flat by SdeRankExpandMu.
+  pm.addPass(sde::createVerifySdePhysicalConsistencyPass());
   // Each real SDE grain transform is immediately gated by its companion
   // verifier in the production order, so a stale or mismatched physical grain
   // fails closed at the SDE boundary instead of being repaired downstream.
@@ -1189,9 +1195,6 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createSdeCoarseAvoidancePass());
   pm.addPass(sde::createVerifySdeCoarseAvoidancePass());
   pm.addPass(sde::createVerifySdePass());
-  // Aggregate pre-CODIR gate: the committed physical plan must agree with its
-  // arrayLayout, SU schedule, and CU body before CODIR consumes it.
-  pm.addPass(sde::createVerifySdePhysicalConsistencyPass());
 }
 
 /// SDE-to-CODIR materialization. This is the mechanical codelet conversion:
