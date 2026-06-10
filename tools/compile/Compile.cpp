@@ -280,7 +280,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 29> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "SdeCuNormalization",
     "Parallelize",
@@ -298,6 +298,7 @@ static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
     "MemoryUnitMaterialization",
     "SdeCuNormalization",
     "VerifySdePhysicalConsistency",
+    "VerifySdePartitionPlan",
     "SdeRankExpandMu",
     "VerifySdeMuLayout",
     "RaiseToMuAccessWindow",
@@ -1181,6 +1182,12 @@ void buildSdePlanningPipeline(PassManager &pm,
   // fails closed here instead of being realized into a coarse grid or silently
   // bailed to flat by SdeRankExpandMu.
   pm.addPass(sde::createVerifySdePhysicalConsistencyPass());
+  // Pre-window CU/MU partition-plan gate: the committed partition_graph /
+  // partition_score evidence must stay runtime-neutral and its primary-MU grain
+  // must mirror the committed physical plan (which verify-sde-mu-layout in turn
+  // proves against the rank-expanded MU structure). Stale or recomputed
+  // partition evidence fails closed before the window chain consumes it.
+  pm.addPass(sde::createVerifySdePartitionPlanPass());
   // Each real SDE grain transform is immediately gated by its companion
   // verifier in the production order, so a stale or mismatched physical grain
   // fails closed at the SDE boundary instead of being repaired downstream.

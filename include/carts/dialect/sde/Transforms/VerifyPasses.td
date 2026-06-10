@@ -14,6 +14,20 @@ def VerifySdeLowered : Pass<"verify-sde-lowered", "mlir::ModuleOp"> {
 
 def VerifySdePartitionPlan : Pass<"verify-sde-partition-plan", "mlir::ModuleOp"> {
   let summary = "Verify committed SDE CU/MU partition plans before boundary conversion";
+  let description = [{
+    Pre-window gate for the committed CU/MU partition plan
+    (`partition_graph` + `partition_score`). It runs after the physical-plan
+    consistency gate and before the rank-expand/window chain consumes the plan.
+    For every `sde.su_iterate` that carries committed partition evidence it
+    checks that the evidence stays runtime-neutral (only SDE CU/MU geometry,
+    abstract cost, and concurrency keys/values -- no collectives, DBs, routes,
+    or runtime policy), that a committed physical plan is present and realizable
+    by the current SDE loop rank, and that each primary-MU (owner_block) edge's
+    `ownerDims`/`blockShape` still mirrors the committed `physicalOwnerDims`/
+    `physicalBlockShape`. The physical plan it mirrors is in turn proved against
+    the rank-expanded MU structure by `verify-sde-mu-layout`, so the partition
+    graph is a verifier-checked mirror of real structure, not a free attr.
+  }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createVerifySdePartitionPlanPass()";
 }
