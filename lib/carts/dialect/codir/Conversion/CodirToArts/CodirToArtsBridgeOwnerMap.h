@@ -6,7 +6,7 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BRIDGEOWNERMAP_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BRIDGEOWNERMAP_H
 
-#include "CodirToArtsBridgePayload.h"
+#include "CodirToArtsHostBridgeTypes.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 
 namespace {

@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-codir-to-arts,verify-arts-objects-only)' \
 // RUN:   --arts-config %inputs_dir/arts_8t.cfg \
 // RUN:   | %FileCheck %s --implicit-check-not=codir.
 

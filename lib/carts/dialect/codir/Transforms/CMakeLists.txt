@@ -1,6 +1,7 @@
 add_mlir_dialect_library(MLIRCartsCodirTransforms
   CodirCodeletDCE.cpp
   DepStorageAssignment.cpp
+  CodirHaloExchange.cpp
   ReductionAtomicMaterialization.cpp
   ReductionDepMapping.cpp
   Verify/VerifyCodir.cpp

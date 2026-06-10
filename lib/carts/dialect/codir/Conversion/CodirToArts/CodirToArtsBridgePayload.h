@@ -6,7 +6,7 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BRIDGEPAYLOAD_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BRIDGEPAYLOAD_H
 
-#include "CodirToArtsHostBlockCopy.h"
+#include "CodirToArtsHostBridgeTypes.h"
 
 namespace {
 
@@ -14,22 +14,6 @@ static inline int64_t getScalarElementBytes(Type elementType) {
   if (!elementType || !elementType.isIntOrFloat())
     return 0;
   return llvm::divideCeil(elementType.getIntOrFloatBitWidth(), 8);
-}
-
-static inline int64_t saturatingMul(int64_t lhs, int64_t rhs) {
-  if (lhs <= 0 || rhs <= 0)
-    return 0;
-  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
-    return std::numeric_limits<int64_t>::max();
-  return lhs * rhs;
-}
-
-static inline std::optional<int64_t> getPositiveStaticIndex(Value value) {
-  std::optional<int64_t> folded =
-      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value);
-  if (folded && *folded > 0)
-    return folded;
-  return std::nullopt;
 }
 
 static inline int64_t getStaticBlockPayloadBytes(arts::DbAllocOp blockAlloc) {

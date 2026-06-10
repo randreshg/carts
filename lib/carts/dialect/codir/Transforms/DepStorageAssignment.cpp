@@ -8,6 +8,7 @@
 
 #include "carts/dialect/codir/Utils/CodeletABIUtils.h"
 #include "carts/dialect/codir/Utils/CodirAccessTraceUtils.h"
+#include "carts/dialect/codir/Utils/CodirAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -240,6 +241,18 @@ static bool isCrossOwnerReduceReducedReadInput(codir::CodeletOp codelet,
 
 static std::optional<SmallVector<unsigned, 4>>
 getDepOwnerDims(codir::CodeletOp codelet, unsigned depIndex) {
+  if (!codelet || depIndex >= codelet.getDeps().size())
+    return std::nullopt;
+  auto depType = dyn_cast<MemRefType>(codelet.getDeps()[depIndex].getType());
+  if (!depType || depType.getRank() == 0)
+    return std::nullopt;
+  ArrayAttr depArrayIds = codelet.getDepArrayIdsAttr();
+  if (depArrayIds && depIndex < depArrayIds.size()) {
+    auto arrayId = dyn_cast<IntegerAttr>(depArrayIds[depIndex]);
+    if (!arrayId || arrayId.getInt() < 0)
+      return std::nullopt;
+  }
+
   std::optional<SmallVector<unsigned, 4>> tileOwnerDims =
       getTileOwnerDims(codelet);
   if (isStencilCodelet(codelet) && tileOwnerDims && tileOwnerDims->size() > 1)
@@ -609,6 +622,23 @@ rejectFullTimestepUniformWithIncompatibleStencilBlockParticipant(
   return success();
 }
 
+static bool depLayoutOwnerDimsMatch(codir::CodeletOp codelet, unsigned depIndex,
+                                    ArrayRef<unsigned> ownerDims) {
+  DictionaryAttr layout = codir::getArrayLayoutEntryForDep(codelet, depIndex);
+  if (!layout)
+    return false;
+  auto layoutOwnerDims = readI64ArrayAttr(dyn_cast_or_null<ArrayAttr>(
+      layout.get(codir::AttrNames::LayoutGraphKeys::OwnerDims)));
+  if (!layoutOwnerDims || layoutOwnerDims->empty() ||
+      layoutOwnerDims->size() != ownerDims.size())
+    return false;
+  for (auto [idx, ownerDim] : llvm::enumerate(ownerDims))
+    if ((*layoutOwnerDims)[idx] < 0 ||
+        static_cast<unsigned>((*layoutOwnerDims)[idx]) != ownerDim)
+      return false;
+  return true;
+}
+
 static bool partitionedWriteRequiresComputeBlock(codir::CodeletOp codelet,
                                                  unsigned depIndex) {
   if (!codelet || depIndex >= codelet.getDeps().size() ||
@@ -619,39 +649,52 @@ static bool partitionedWriteRequiresComputeBlock(codir::CodeletOp codelet,
       getDepAccessMode(codelet, depIndex);
   if (!mode || !accessModeMayWrite(*mode))
     return false;
-  if (!depAccessesStayWithinSingleOwnerSlice(codelet, depIndex))
-    return false;
 
   std::optional<SmallVector<unsigned, 4>> ownerValues =
       getTileOwnerDims(codelet);
   std::optional<SmallVector<int64_t, 4>> blockValues =
       readI64ArrayAttr(codelet.getTileShapeAttr());
-  std::optional<SmallVector<int64_t, 4>> logicalValues =
-      readI64ArrayAttr(codelet.getLogicalWorkerSliceAttr());
   if (!ownerValues || ownerValues->empty() || !blockValues ||
-      blockValues->empty() || !logicalValues || logicalValues->empty())
+      blockValues->empty())
     return false;
 
   for (auto [slot, ownerDim] : llvm::enumerate(*ownerValues)) {
     size_t ownerIndex = static_cast<size_t>(ownerDim);
     size_t blockIndex = ownerIndex < blockValues->size() ? ownerIndex : slot;
-    size_t logicalIndex =
-        ownerIndex < logicalValues->size() ? ownerIndex : slot;
-    if (blockIndex >= blockValues->size() ||
-        logicalIndex >= logicalValues->size() ||
-        (*blockValues)[blockIndex] <= 0 ||
-        (*logicalValues)[logicalIndex] > (*blockValues)[blockIndex]) {
+    if (blockIndex >= blockValues->size() || (*blockValues)[blockIndex] <= 0)
       return false;
-    }
   }
-  return true;
+  return depAccessesStayWithinSingleOwnerSlice(codelet, depIndex) ||
+         depLayoutOwnerDimsMatch(codelet, depIndex, *ownerValues);
+}
+
+static bool partitionedReadRequiresComputeBlock(codir::CodeletOp codelet,
+                                                unsigned depIndex) {
+  if (!codelet || depIndex >= codelet.getDeps().size() ||
+      !hasTileOwnerSlicePlan(codelet) || codelet.getPartialReductionAttr())
+    return false;
+  std::optional<codir::CodirAccessMode> mode =
+      getDepAccessMode(codelet, depIndex);
+  if (!mode || *mode != codir::CodirAccessMode::read)
+    return false;
+  auto depType = dyn_cast<MemRefType>(codelet.getDeps()[depIndex].getType());
+  if (!depType || depType.getRank() == 0)
+    return false;
+  std::optional<SmallVector<unsigned, 4>> ownerValues =
+      getTileOwnerDims(codelet);
+  std::optional<SmallVector<int64_t, 4>> blockValues =
+      readI64ArrayAttr(codelet.getTileShapeAttr());
+  return ownerValues && !ownerValues->empty() && blockValues &&
+         !blockValues->empty() &&
+         depLayoutOwnerDimsMatch(codelet, depIndex, *ownerValues);
 }
 
 static bool depSemanticallyRequiresComputeBlock(codir::CodeletOp codelet,
                                                 unsigned depIndex) {
   return stencilDepRequiresComputeBlock(codelet, depIndex) ||
          shouldDemoteFullTimestepUniformDepToComputeBlock(codelet, depIndex) ||
-         partitionedWriteRequiresComputeBlock(codelet, depIndex);
+         partitionedWriteRequiresComputeBlock(codelet, depIndex) ||
+         partitionedReadRequiresComputeBlock(codelet, depIndex);
 }
 
 static bool isCompatibleBlockStorageParticipant(codir::CodeletOp seed,
@@ -1033,10 +1076,12 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
       partialReductionResultRequiresComputeBlock(codelet, depIndex);
   bool partitionedWriteComputeBlock =
       partitionedWriteRequiresComputeBlock(codelet, depIndex);
+  bool partitionedReadComputeBlock =
+      partitionedReadRequiresComputeBlock(codelet, depIndex);
   bool semanticComputeBlock =
       stencilRequiresComputeBlock || uniformRequiresComputeBlock ||
       matmulRequiresComputeBlock || partialReductionRequiresComputeBlock ||
-      partitionedWriteComputeBlock;
+      partitionedWriteComputeBlock || partitionedReadComputeBlock;
   /// Replicated-read eligibility is a semantic property of the dep (matmul
   /// inner operand, or stencil read with halo crossing). The initial view the
   /// SDE→CODIR materializer stamps (host_whole for whole-storage tokens,
@@ -1066,6 +1111,9 @@ chooseStorageView(codir::CodeletOp codelet, unsigned depIndex,
     requested = codir::CodirStorageViewKind::compute_block;
   if (requested == codir::CodirStorageViewKind::host_whole &&
       partitionedWriteComputeBlock)
+    requested = codir::CodirStorageViewKind::compute_block;
+  if (requested == codir::CodirStorageViewKind::host_whole &&
+      partitionedReadComputeBlock)
     requested = codir::CodirStorageViewKind::compute_block;
   if (requested != codir::CodirStorageViewKind::compute_block)
     return requested;

@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(convert-sde-boundary-to-arts)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(convert-codir-to-arts)' 2>&1 | %FileCheck %s
 
 // A partitioned SDE MU with committed CODIR owner facts must not become a
 // coarse DB just because the dependency storage view was left host_whole.

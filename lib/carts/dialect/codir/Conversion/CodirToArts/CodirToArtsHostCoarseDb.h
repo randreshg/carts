@@ -6,7 +6,7 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTCOARSEDB_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTCOARSEDB_H
 
-#include "CodirToArtsHostCopyNests.h"
+#include "CodirToArtsCodirDbBackedMemref.h"
 
 namespace {
 

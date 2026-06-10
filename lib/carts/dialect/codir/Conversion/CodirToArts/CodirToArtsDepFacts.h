@@ -6,7 +6,7 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_DEPFACTS_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_DEPFACTS_H
 
-#include "CodirToArtsBlockLocalAccess.h"
+#include "CodirToArtsBlockLocalRewrite.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/codir/Utils/CodirConversionUtils.h"
 #include "carts/utils/Utils.h"
@@ -103,20 +103,6 @@ static inline bool codirDepAllowsComputeBlockStorage(codir::CodeletOp codelet,
   std::optional<codir::CodirStorageViewKind> view =
       getCodirDepStorageViewKind(codelet, depIndex);
   return view && codirStorageViewUsesComputeBlock(*view);
-}
-
-// An iterative-stencil dep carrying a committed `halo` collective legitimately
-// reads neighbor tiles OUTSIDE its owner slice; the per-block halo exchange
-// supplies those neighbors, so it qualifies for block-native distributed
-// storage even though its accesses cross the owner slice. This is the ARTS dual
-// of DepStorageAssignment's stencil-halo compute_block demotion: without it
-// ARTS re-derives single-owner-slice containment, rejects the committed
-// compute_block+halo plan, and coarse-falls-back the stencil buffer to a single
-// local_only block (correct-but-not-distributed).
-static inline bool codirDepIsHaloStencilStorage(codir::CodeletOp codelet,
-                                                unsigned depIndex) {
-  return getFinalizedCodirDepCollectiveKind(codelet, depIndex) ==
-         codir::CodirCollectiveKind::halo;
 }
 
 static inline bool codirDepRequiresComputeBlockStorage(codir::CodeletOp codelet,

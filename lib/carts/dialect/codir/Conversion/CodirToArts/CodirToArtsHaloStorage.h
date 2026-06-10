@@ -46,7 +46,8 @@ codirBackingBufferHaloWindows(Value rootMemref, unsigned memrefRank) {
 
   module.walk([&](codir::CodeletOp codelet) {
     for (auto [idx, dep] : llvm::enumerate(codelet.getDeps())) {
-      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != rootMemref)
+      Value depRoot = getCodirHaloStorageRoot(dep);
+      if (depRoot != rootMemref)
         continue;
       unsigned depIdx = static_cast<unsigned>(idx);
       if (!codirDepUsesHaloStencilStorage(codelet, depIdx))
@@ -77,9 +78,7 @@ getCodirBlockStorageHaloWindows(codir::CodeletOp codelet, unsigned depIndex,
 
   SmallVector<CodirOwnerHaloWindow, 4> storageWindows =
       codirBackingBufferHaloWindows(
-          ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
-              codelet.getDeps()[depIndex]),
-          memrefRank);
+          getCodirHaloStorageRoot(codelet.getDeps()[depIndex]), memrefRank);
   windows.reserve(ownerDims->size());
   for (unsigned ownerDim : *ownerDims) {
     CodirOwnerHaloWindow resolved;
@@ -93,6 +92,84 @@ getCodirBlockStorageHaloWindows(codir::CodeletOp codelet, unsigned depIndex,
     windows.push_back(resolved);
   }
   return windows;
+}
+
+static inline std::optional<unsigned>
+getCodirRankExpandedHaloStorageDim(codir::CodeletOp codelet, unsigned depIndex,
+                                   unsigned ownerSlot, unsigned memrefRank) {
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      readI64ArrayAttr(codir::getDepPhysicalBlockShapeAttr(codelet, depIndex));
+  if (!ownerDims || ownerDims->empty() || ownerSlot >= ownerDims->size() ||
+      !blockShape || blockShape->size() != memrefRank)
+    return std::nullopt;
+
+  unsigned ownerRank = static_cast<unsigned>(ownerDims->size());
+  if (ownerRank + ownerSlot >= memrefRank)
+    return std::nullopt;
+
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    if (ownerDim != slot || ownerDim >= blockShape->size())
+      return std::nullopt;
+    if ((*blockShape)[ownerDim] != 1)
+      return std::nullopt;
+  }
+
+  unsigned storageDim = ownerRank + ownerSlot;
+  if (storageDim >= blockShape->size() || (*blockShape)[storageDim] <= 1)
+    return std::nullopt;
+  return storageDim;
+}
+
+static inline unsigned getCodirHaloStorageDim(codir::CodeletOp codelet,
+                                              unsigned depIndex,
+                                              unsigned ownerSlot,
+                                              unsigned ownerDim,
+                                              unsigned memrefRank) {
+  if (std::optional<unsigned> storageDim = getCodirRankExpandedHaloStorageDim(
+          codelet, depIndex, ownerSlot, memrefRank))
+    return *storageDim;
+  return ownerDim;
+}
+
+static inline std::optional<int64_t>
+getCodirHaloStorageBlockSize(codir::CodeletOp codelet, unsigned depIndex,
+                             unsigned ownerSlot, unsigned memrefRank,
+                             int64_t ownerBlockSize) {
+  if (std::optional<unsigned> storageDim = getCodirRankExpandedHaloStorageDim(
+          codelet, depIndex, ownerSlot, memrefRank)) {
+    std::optional<SmallVector<int64_t, 4>> blockShape = readI64ArrayAttr(
+        codir::getDepPhysicalBlockShapeAttr(codelet, depIndex));
+    if (!blockShape || *storageDim >= blockShape->size() ||
+        (*blockShape)[*storageDim] <= 0)
+      return std::nullopt;
+    return (*blockShape)[*storageDim];
+  }
+  return ownerBlockSize > 0 ? std::optional<int64_t>(ownerBlockSize)
+                            : std::nullopt;
+}
+
+static inline bool codirAllocUsesProjectedRankExpandedHaloStorage(
+    codir::CodeletOp codelet, unsigned depIndex, arts::DbAllocOp alloc,
+    unsigned ownerSlot, unsigned ownerDim, unsigned memrefRank,
+    int64_t tileExtent, CodirOwnerHaloWindow halo) {
+  if (!alloc || tileExtent <= 0 || halo.empty())
+    return false;
+  std::optional<unsigned> storageDim = getCodirRankExpandedHaloStorageDim(
+      codelet, depIndex, ownerSlot, memrefRank);
+  if (!storageDim || ownerDim >= alloc.getElementSizes().size() ||
+      *storageDim >= alloc.getElementSizes().size())
+    return false;
+  std::optional<int64_t> ownerElements =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
+          alloc.getElementSizes()[ownerDim]);
+  std::optional<int64_t> storageElements =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(
+          alloc.getElementSizes()[*storageDim]);
+  if (!ownerElements || !storageElements || *ownerElements != 1)
+    return false;
+  return *storageElements >= tileExtent + halo.lower + halo.upper;
 }
 
 static inline ArrayAttr
@@ -162,7 +239,10 @@ blockAllocStorageHaloForDim(arts::DbAllocOp blockAlloc, unsigned ownerDim) {
     return window;
   int64_t halo = 0;
   if (haloShape && static_cast<size_t>(slot) < haloShape->size()) {
-    halo = (*haloShape)[slot];
+    if (ownerDim < haloShape->size() && haloShape->size() != ownerDims->size())
+      halo = (*haloShape)[ownerDim];
+    else
+      halo = (*haloShape)[slot];
   } else if (op->hasAttr(blockAlloc.getStencilSupportedBlockHaloAttrName())) {
     int64_t padded = *elem - block;
     if (padded <= 0 || padded % 2 != 0)

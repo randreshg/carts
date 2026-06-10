@@ -74,11 +74,8 @@ def ReductionAtomicMaterialization
 def DepStorageAssignment : Pass<"dep-storage-assignment", "mlir::ModuleOp"> {
   let summary = "Assign CODIR dependency storage views before ARTS lowering";
   let description = [{
-    CODIR-owned dependency storage assignment. It turns high-level dependency
-    storage requests into explicit per-dependency facts that ARTS
-    materialization can consume directly: owner-local compute blocks, phase
-    redistribution bridges, replicated reads, or host-whole local fallback.
-    This keeps bridge selection out of the CODIR-to-ARTS conversion.
+    CODIR-owned dependency storage assignment. It finalizes dependency storage
+    views, owner dims, and collective carriers before ARTS lowering.
   }];
   let dependentDialects = [
     "::mlir::carts::codir::CartsCodirDialect",
@@ -87,6 +84,20 @@ def DepStorageAssignment : Pass<"dep-storage-assignment", "mlir::ModuleOp"> {
     "::mlir::scf::SCFDialect"
   ];
   let constructor = "mlir::carts::codir::createDepStorageAssignmentPass()";
+}
+
+def CodirHaloExchange
+    : Pass<"codir-halo-exchange", "mlir::ModuleOp"> {
+  let summary = "Insert explicit CODIR halo exchange nodes";
+  let description = [{
+    CODIR-owned halo graph transform. It rewrites finalized halo dependencies
+    to explicit `codir.halo_exchange` movement nodes before ARTS lowering.
+  }];
+  let dependentDialects = [
+    "::mlir::carts::codir::CartsCodirDialect",
+    "::mlir::memref::MemRefDialect"
+  ];
+  let constructor = "mlir::carts::codir::createCodirHaloExchangePass()";
 }
 
 #endif // CARTS_DIALECT_CODIR_TRANSFORMS_PASSES

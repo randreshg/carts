@@ -3,10 +3,19 @@
 ///
 /// Materializes CODIR codelets as abstract ARTS DB/EDT objects.
 ///==========================================================================///
-#include "CodirToArtsHostBridgeMaterialization.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/codir/Conversion/Passes.h"
 #include <numeric>
+
+using namespace mlir;
+using namespace mlir::carts;
+
+#include "CodirToArtsExistingDbMaterialization.h"
+#include "CodirToArtsHostBridgeLogicalSizes.h"
+#include "CodirToArtsHostCopyNests.h"
+#include "CodirToArtsRawDependencyMaterialization.h"
+#include "CodirToArtsSdeBoundary.h"
+
 namespace mlir::carts::codir {
 #define GEN_PASS_DEF_CONVERTCODIRTOARTS
 #include "carts/dialect/codir/Conversion/Passes.h.inc"
@@ -152,9 +161,9 @@ static LogicalResult rejectResidualSdeOps(ModuleOp module) {
   module.walk([&](Operation *op) {
     if (!op->getDialect() || op->getDialect()->getNamespace() != "sde")
       return;
-    op->emitError() << "SDE operation reached CODIR-to-ARTS; run "
-                       "`convert-sde-boundary-to-arts` before "
-                       "`convert-codir-to-arts`";
+    op->emitError()
+        << "SDE operation reached CODIR-to-ARTS after boundary lowering; run "
+           "`convert-sde-to-codir` before `convert-codir-to-arts`";
     found = true;
   });
   return failure(found);
@@ -185,6 +194,9 @@ struct CodirDepSlice {
 static CodirDepSlice getCodirDepSlice(Value dep, OpBuilder &builder,
                                       Location loc) {
   CodirDepSlice slice;
+  if (Value source = getCodirHaloExchangeSource(dep))
+    dep = source;
+
   auto subview = dep.getDefiningOp<memref::SubViewOp>();
   if (subview) {
     slice.sliced = true;
@@ -251,6 +263,7 @@ struct BlockDepAccessRewrite {
   SmallVector<int64_t, 4> upperHaloBlockCounts;
   SmallVector<bool, 4> allowFullWindowAccesses;
   SmallVector<bool, 4> requireOwnerWindowProofs;
+  SmallVector<bool, 4> rankExpandedLogicalGridAccesses;
   bool grouped = false;
 
   bool empty() const { return ownerDims.empty(); }
@@ -302,6 +315,65 @@ getCodirLogicalOwnerBlockCounts(codir::CodeletOp codelet, unsigned depIndex,
   return groupBlocks;
 }
 
+static std::optional<SmallVector<int64_t, 4>>
+getCodirLogicalTileExtentsForOwnerDims(codir::CodeletOp codelet,
+                                       ArrayRef<unsigned> ownerDims) {
+  if (!codelet || ownerDims.empty())
+    return std::nullopt;
+  std::optional<SmallVector<int64_t, 4>> tileShape =
+      readI64ArrayAttr(codelet.getTileShapeAttr());
+  if (!tileShape || tileShape->empty())
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> extents;
+  extents.reserve(ownerDims.size());
+  for (unsigned ownerDim : ownerDims) {
+    std::optional<unsigned> ownerSlot = getCodirOwnerDimSlot(codelet, ownerDim);
+    if (!ownerSlot || *ownerSlot >= tileShape->size())
+      return std::nullopt;
+    int64_t extent = (*tileShape)[*ownerSlot];
+    if (extent <= 0)
+      return std::nullopt;
+    extents.push_back(extent);
+  }
+  return extents;
+}
+
+static bool
+codirDepUsesLogicalGridIndices(codir::CodeletOp codelet, unsigned depIndex,
+                               ArrayRef<unsigned> ownerDims,
+                               ArrayRef<int64_t> logicalTileExtents) {
+  if (!codelet || codelet.getBody().empty() ||
+      depIndex >= codelet.getDeps().size() || ownerDims.empty() ||
+      ownerDims.size() != logicalTileExtents.size())
+    return false;
+
+  Block &body = codelet.getBody().front();
+  if (depIndex >= body.getNumArguments())
+    return false;
+  Value depArg = body.getArgument(depIndex);
+
+  bool sawAccess = false;
+  bool valid = true;
+  body.walk([&](Operation *op) {
+    auto access = getCodirMemoryAccessInfo(op);
+    if (!access || access->memref != depArg)
+      return WalkResult::advance();
+    sawAccess = true;
+    for (auto [slot, ownerDim] : llvm::enumerate(ownerDims)) {
+      if (ownerDim >= access->indices.size() ||
+          !getDividedLogicalIndex(access->indices[ownerDim],
+                                  logicalTileExtents[slot])) {
+        valid = false;
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+
+  return sawAccess && valid;
+}
+
 static bool planReplicatedReadFullBlockAccess(
     codir::CodeletOp codelet, unsigned depIndex, arts::DbAllocOp alloc,
     OpBuilder &builder, Location loc, BlockDepAccessRewrite &plannedAccess) {
@@ -348,6 +420,8 @@ static bool planReplicatedReadFullBlockAccess(
   plannedAccess.upperHaloBlockCounts.assign(ownerDims->size(), 0);
   plannedAccess.allowFullWindowAccesses.assign(ownerDims->size(), true);
   plannedAccess.requireOwnerWindowProofs.assign(ownerDims->size(), false);
+  plannedAccess.rankExpandedLogicalGridAccesses.assign(ownerDims->size(),
+                                                       false);
   plannedAccess.grouped = true;
   return true;
 }
@@ -567,7 +641,10 @@ static bool planRankExpandedSubviewBlockAccess(
       !codirDepCanUseBlockStorageAccess(codelet, depIndex) || !alloc)
     return false;
 
-  auto subview = codelet.getDeps()[depIndex].getDefiningOp<memref::SubViewOp>();
+  Value dep = codelet.getDeps()[depIndex];
+  if (Value source = getCodirHaloExchangeSource(dep))
+    dep = source;
+  auto subview = dep.getDefiningOp<memref::SubViewOp>();
   if (!subview)
     return false;
 
@@ -600,6 +677,8 @@ static bool planRankExpandedSubviewBlockAccess(
         return false;
       Value offsetValue = dyn_cast<Value>(subviewOffsets[ownerDim]);
       if (!offsetValue)
+        return false;
+      if (::mlir::carts::ValueAnalysis::tryFoldConstantIndex(offsetValue))
         return false;
       ownerParams.push_back(offsetValue);
     }
@@ -686,8 +765,8 @@ static bool planRankExpandedSubviewBlockAccess(
       acquiredBlockCount =
           arith::AddIOp::create(builder, loc, lowerAndCenter, upperAvailable);
       maxGroupBlocks += lowerHaloBlocks + upperHaloBlocks;
-      grouped = true;
     }
+    grouped |= maxGroupBlocks > 1;
 
     dbOffsets.push_back(acquiredBlockBase);
     Value remainingBlocks = arith::SubIOp::create(
@@ -708,8 +787,113 @@ static bool planRankExpandedSubviewBlockAccess(
     plannedAccess.upperHaloBlockCounts.push_back(upperHaloBlocks);
     plannedAccess.allowFullWindowAccesses.push_back(false);
     plannedAccess.requireOwnerWindowProofs.push_back(false);
+    plannedAccess.rankExpandedLogicalGridAccesses.push_back(false);
   }
 
+  plannedAccess.grouped = grouped;
+  return true;
+}
+
+static bool planRankExpandedDirectBlockAccess(
+    codir::CodeletOp codelet, unsigned depIndex, arts::DbAllocOp alloc,
+    OpBuilder &builder, Location loc, SmallVectorImpl<Value> &dbOffsets,
+    SmallVectorImpl<Value> &dbSizes, BlockDepAccessRewrite &plannedAccess) {
+  if (!codirDepRequiresComputeBlockStorage(codelet, depIndex) ||
+      !hasCodirTileOwnerSlicePlan(codelet) ||
+      !codirDepCanUseBlockStorageAccess(codelet, depIndex) || !alloc ||
+      codelet.getParams().empty() || !codelet.getLogicalWorkerSliceAttr())
+    return false;
+
+  std::optional<arts::PartitionMode> partitionMode =
+      arts::getPartitionMode(alloc.getOperation());
+  if (!partitionMode || (*partitionMode != arts::PartitionMode::block &&
+                         *partitionMode != arts::PartitionMode::stencil))
+    return false;
+
+  MemRefType depType = getCodeletDepSourceType(codelet, depIndex);
+  if (!depType || depType.getRank() == 0)
+    return false;
+  unsigned memrefRank = static_cast<unsigned>(depType.getRank());
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<unsigned, 4>> allocOwnerDims =
+      getBackingAllocOwnerDims(alloc);
+  std::optional<SmallVector<int64_t, 4>> allocBlockSizes =
+      allocOwnerDims ? getBackingAllocOwnerBlockSizes(*allocOwnerDims, alloc)
+                     : std::nullopt;
+  std::optional<SmallVector<int64_t, 4>> logicalTileExtents =
+      ownerDims ? getCodirLogicalTileExtentsForOwnerDims(codelet, *ownerDims)
+                : std::nullopt;
+  SmallVector<Value, 4> ownerParams =
+      getCodirDepOwnerParamValues(codelet, depIndex);
+  if (!ownerDims || !allocOwnerDims || !allocBlockSizes ||
+      !logicalTileExtents || ownerDims->empty() ||
+      ownerDims->size() != allocOwnerDims->size() ||
+      ownerDims->size() != allocBlockSizes->size() ||
+      ownerDims->size() != logicalTileExtents->size() ||
+      ownerParams.size() != ownerDims->size() ||
+      alloc.getSizes().size() != ownerDims->size())
+    return false;
+
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    if (ownerDim != (*allocOwnerDims)[slot] || (*allocBlockSizes)[slot] != 1 ||
+        (*logicalTileExtents)[slot] <= 1)
+      return false;
+  }
+  if (!codirDepUsesLogicalGridIndices(codelet, depIndex, *ownerDims,
+                                      *logicalTileExtents))
+    return false;
+
+  std::optional<SmallVector<int64_t, 4>> groupBlockCounts =
+      getCodirLogicalOwnerBlockCounts(codelet, depIndex, memrefRank,
+                                      *logicalTileExtents);
+  if (!groupBlockCounts || groupBlockCounts->size() != ownerDims->size())
+    return false;
+
+  dbOffsets.clear();
+  dbSizes.clear();
+  bool grouped = false;
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    int64_t tileExtent = (*logicalTileExtents)[slot];
+    int64_t groupBlockCount = (*groupBlockCounts)[slot];
+    if (groupBlockCount <= 0)
+      return false;
+
+    Value ownerParam = ownerParams[slot];
+    Value domainBase =
+        materializeCodirOwnerDomainBase(builder, loc, codelet, ownerParam);
+    Value relativeBase =
+        ::mlir::carts::ValueAnalysis::sameValue(ownerParam, domainBase)
+            ? createZeroIndex(builder, loc)
+            : arith::SubIOp::create(builder, loc, ownerParam, domainBase)
+                  .getResult();
+    Value tileExtentValue = createConstantIndex(builder, loc, tileExtent);
+    Value blockIndex =
+        arith::DivUIOp::create(builder, loc, relativeBase, tileExtentValue);
+
+    Value requestedBlocks = createConstantIndex(builder, loc, groupBlockCount);
+    Value remainingBlocks =
+        arith::SubIOp::create(builder, loc, alloc.getSizes()[slot], blockIndex);
+    dbOffsets.push_back(blockIndex);
+    dbSizes.push_back(
+        arith::MinUIOp::create(builder, loc, remainingBlocks, requestedBlocks));
+
+    plannedAccess.ownerDims.push_back(ownerDim);
+    plannedAccess.blockSizes.push_back(1);
+    plannedAccess.ownerParams.push_back(ownerParam);
+    plannedAccess.ownerDomainBases.push_back(domainBase);
+    plannedAccess.acquiredElementBases.push_back(blockIndex);
+    plannedAccess.groupBlockCounts.push_back(groupBlockCount);
+    plannedAccess.ownerWindowExtents.push_back(groupBlockCount);
+    plannedAccess.rankExpandedTileExtents.push_back(tileExtent);
+    plannedAccess.lowerHaloBlockCounts.push_back(0);
+    plannedAccess.upperHaloBlockCounts.push_back(0);
+    plannedAccess.allowFullWindowAccesses.push_back(false);
+    plannedAccess.requireOwnerWindowProofs.push_back(false);
+    plannedAccess.rankExpandedLogicalGridAccesses.push_back(true);
+    grouped |= groupBlockCount > 1;
+  }
   plannedAccess.grouped = grouped;
   return true;
 }
@@ -718,7 +902,10 @@ static bool canPlanRankExpandedOwnerTileGridWindow(codir::CodeletOp codelet,
                                                    unsigned depIndex) {
   if (!codelet || depIndex >= codelet.getDeps().size())
     return false;
-  arts::DbAllocOp alloc = findBackingDbAlloc(codelet.getDeps()[depIndex]);
+  Value dep = codelet.getDeps()[depIndex];
+  if (Value source = getCodirHaloExchangeSource(dep))
+    dep = source;
+  arts::DbAllocOp alloc = findBackingDbAlloc(dep);
   if (!alloc)
     return false;
   if (!codirDepAllowsComputeBlockStorage(codelet, depIndex) ||
@@ -726,7 +913,7 @@ static bool canPlanRankExpandedOwnerTileGridWindow(codir::CodeletOp codelet,
       !codirDepCanUseBlockStorageAccess(codelet, depIndex) ||
       !canUseCodirOwnerSliceForAlloc(codelet, depIndex, alloc))
     return false;
-  if (!codelet.getDeps()[depIndex].getDefiningOp<memref::SubViewOp>())
+  if (!dep.getDefiningOp<memref::SubViewOp>())
     return false;
 
   std::optional<SmallVector<unsigned, 4>> ownerDims =
@@ -741,7 +928,7 @@ static bool canPlanRankExpandedOwnerTileGridWindow(codir::CodeletOp codelet,
       ownerDims->size() != ownerGridBlockSizes->size() ||
       alloc.getSizes().size() != ownerDims->size())
     return false;
-  auto subview = codelet.getDeps()[depIndex].getDefiningOp<memref::SubViewOp>();
+  auto subview = dep.getDefiningOp<memref::SubViewOp>();
   SmallVector<OpFoldResult> subviewOffsets(subview.getMixedOffsets());
   SmallVector<OpFoldResult> subviewSizes(subview.getMixedSizes());
   SmallVector<OpFoldResult> subviewStrides(subview.getMixedStrides());
@@ -889,6 +1076,8 @@ static bool planReadOnlyHostWholeBlockAccess(
   }
   plannedAccess.allowFullWindowAccesses.assign(ownerDims->size(), true);
   plannedAccess.requireOwnerWindowProofs.assign(ownerDims->size(), false);
+  plannedAccess.rankExpandedLogicalGridAccesses.assign(ownerDims->size(),
+                                                       false);
   plannedAccess.grouped = true;
   return true;
 }
@@ -1032,6 +1221,7 @@ static bool planReadOnlyBlockStorageAccessFromBackingAlloc(
         plannedAccess.ownerWindowExtents.push_back(ownerWindowExtent);
         plannedAccess.allowFullWindowAccesses.push_back(false);
         plannedAccess.requireOwnerWindowProofs.push_back(true);
+        plannedAccess.rankExpandedLogicalGridAccesses.push_back(false);
         continue;
       }
     } else {
@@ -1068,6 +1258,7 @@ static bool planReadOnlyBlockStorageAccessFromBackingAlloc(
     plannedAccess.ownerWindowExtents.push_back(ownerWindowExtent);
     plannedAccess.allowFullWindowAccesses.push_back(allowFullWindowAccess);
     plannedAccess.requireOwnerWindowProofs.push_back(false);
+    plannedAccess.rankExpandedLogicalGridAccesses.push_back(false);
   }
   if (grouped && hasHaloWindow &&
       !codirDepAccessesStayWithinSingleOwnerSlice(codelet, depIndex))
@@ -1208,18 +1399,7 @@ struct ConvertCodirToArtsPass
     return false;
   }
 
-  // A rank-expanded owner_tile compute-block halo read addresses neighbor grid
-  // blocks: the SDE rank-expand split the spatial owner extent into a
-  // (grid, tile) index pair, so a stencil neighbor read `u[i-1]` becomes
-  // `u[divui(i-1, T)][remui(i-1, T)]`. At a tile boundary the grid coord is
-  // `baseGrid - 1` -- a *different* block, not the owner slice. The per-dep
-  // block-local rewrite materializes one block-local index per owner dim
-  // against the owner block's payload; it cannot express a select among the
-  // owner tile and its neighbor grid blocks. Realizing this needs per-neighbor
-  // grid-block acquires plus a body select keyed on the grid offset, which is
-  // not yet implemented. Fail closed here instead of materializing the
-  // grid-dim-padded neighborhood storage (which is never populated) and
-  // miscompiling.
+  // Rank-expanded owner-tile halo reads require an explicit grid-block window.
   bool isRankExpandedOwnerTileNeighborHaloDep(codir::CodeletOp codelet,
                                               unsigned depIdx) {
     auto topology = codelet.getIterationTopologyAttr();
@@ -1292,11 +1472,22 @@ struct ConvertCodirToArtsPass
       if (codirDepRequiresComputeBlockStorage(codelet, depIdx) &&
           getFinalizedCodirDepCollectiveKind(codelet, depIdx) ==
               codir::CodirCollectiveKind::halo &&
-          !codirDepHasHaloWindow(codelet, depIdx))
+          !codirDepHasHaloWindow(codelet, depIdx)) {
         return codelet.emitOpError()
                << "dependency #" << depIdx
                << " commits a halo collective but has no access-window halo "
                   "facts to materialize block-native halo storage";
+      }
+      if (codirDepRequiresComputeBlockStorage(codelet, depIdx) &&
+          getFinalizedCodirDepCollectiveKind(codelet, depIdx) ==
+              codir::CodirCollectiveKind::halo &&
+          !codelet.getDeps()[depIdx].getDefiningOp<codir::HaloExchangeOp>()) {
+        return codelet.emitOpError()
+               << "dependency #" << depIdx
+               << " commits a halo collective but was not rewritten to "
+                  "codir.halo_exchange; run codir-halo-exchange before "
+                  "CODIR-to-ARTS";
+      }
       if (isRankExpandedOwnerStripReadOnlyHaloDep(codelet, depIdx))
         return codelet.emitOpError()
                << "dependency #" << depIdx
@@ -1428,8 +1619,53 @@ struct ConvertCodirToArtsPass
     return task.getOperation();
   }
 
+  LogicalResult lowerHaloExchange(codir::CodeletOp codelet, unsigned depIndex) {
+    auto exchange =
+        codelet.getDeps()[depIndex].getDefiningOp<codir::HaloExchangeOp>();
+    if (!exchange)
+      return success();
+
+    arts::DbAllocOp blockAlloc = findBackingDbAlloc(exchange.getSource());
+    if (!blockAlloc)
+      return codelet.emitOpError()
+             << "dependency #" << depIndex
+             << " halo exchange source has no backing ARTS DB";
+    std::optional<arts::PartitionMode> mode =
+        arts::getPartitionMode(blockAlloc.getOperation());
+    if (!mode || (*mode != arts::PartitionMode::block &&
+                  *mode != arts::PartitionMode::stencil))
+      return codelet.emitOpError()
+             << "dependency #" << depIndex
+             << " codir.halo_exchange source is not backed by a block DB";
+
+    OpBuilder builder(exchange);
+    FailureOr<Value> payload = emitPerBlockSingleWriterStencilDb(
+        builder, exchange.getLoc(), blockAlloc, codelet, depIndex);
+    if (failed(payload))
+      return codelet.emitOpError()
+             << "dependency #" << depIndex
+             << " codir.halo_exchange cannot be lowered to per-block halo";
+
+    for (OpOperand &use :
+         llvm::make_early_inc_range(exchange.getResult().getUses())) {
+      if (isa<codir::CodeletOp>(use.getOwner()))
+        continue;
+      use.set(*payload);
+    }
+    if (payload->use_empty())
+      if (Operation *payloadOp = payload->getDefiningOp())
+        payloadOp->erase();
+    if (exchange->use_empty())
+      exchange.erase();
+    return success();
+  }
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    if (failed(lowerSdeBoundaryToArts(module))) {
+      signalPassFailure();
+      return;
+    }
     if (failed(rejectResidualSdeOps(module))) {
       signalPassFailure();
       return;
@@ -1448,7 +1684,10 @@ struct ConvertCodirToArtsPass
     for (codir::CodeletOp codelet : codelets) {
       for (auto [depIndex, dep] : llvm::enumerate(codelet.getDeps())) {
         unsigned depIdx = static_cast<unsigned>(depIndex);
-        if (findBackingDbAlloc(dep)) {
+        Value storageDep = getCodirHaloExchangeSource(dep);
+        if (!storageDep)
+          storageDep = dep;
+        if (findBackingDbAlloc(storageDep)) {
           if (failed(
                   materializeExistingDbComputeBlockIfNeeded(codelet, depIdx))) {
             codelet.emitOpError()
@@ -1469,10 +1708,21 @@ struct ConvertCodirToArtsPass
           }
           continue;
         }
-        if (failed(materializeRawCodirDependency(dep, codelet, depIdx))) {
+        if (failed(
+                materializeRawCodirDependency(storageDep, codelet, depIdx))) {
           codelet.emitOpError()
               << "dependency is not backed by SDE/CODIR DB materialization "
                  "and cannot be converted from a local memref allocation";
+          signalPassFailure();
+          return;
+        }
+      }
+    }
+
+    for (codir::CodeletOp codelet : codelets) {
+      for (auto [depIndex, dep] : llvm::enumerate(codelet.getDeps())) {
+        if (failed(
+                lowerHaloExchange(codelet, static_cast<unsigned>(depIndex)))) {
           signalPassFailure();
           return;
         }
@@ -1485,6 +1735,14 @@ struct ConvertCodirToArtsPass
         return;
       }
     }
+
+    SmallVector<codir::HaloExchangeOp> unusedHaloExchanges;
+    module.walk([&](codir::HaloExchangeOp exchange) {
+      if (exchange->use_empty())
+        unusedHaloExchanges.push_back(exchange);
+    });
+    for (codir::HaloExchangeOp exchange : unusedHaloExchanges)
+      exchange.erase();
   }
 
   LogicalResult lowerCodelet(codir::CodeletOp codelet) {
@@ -1501,6 +1759,7 @@ struct ConvertCodirToArtsPass
     SmallVector<CodirDepSlice, 4> depSlices;
     SmallVector<BlockDepAccessRewrite, 4> blockAccessRewrites;
     SmallVector<Operation *, 4> depViewCleanup;
+    SmallVector<Operation *, 4> haloCleanup;
     taskDeps.reserve(codelet.getDeps().size());
     blockArgTypes.reserve(codelet.getDeps().size());
     depTaskArgIndices.reserve(codelet.getDeps().size());
@@ -1508,8 +1767,13 @@ struct ConvertCodirToArtsPass
     blockAccessRewrites.reserve(codelet.getDeps().size());
 
     for (auto [idx, dep] : llvm::enumerate(codelet.getDeps())) {
-      if (isCodirViewDep(dep))
-        depViewCleanup.push_back(dep.getDefiningOp());
+      Value cleanupDep = dep;
+      if (auto exchange = dep.getDefiningOp<codir::HaloExchangeOp>()) {
+        haloCleanup.push_back(exchange.getOperation());
+        cleanupDep = exchange.getSource();
+      }
+      if (isCodirViewDep(cleanupDep))
+        depViewCleanup.push_back(cleanupDep.getDefiningOp());
 
       auto modeAttr = cast<codir::CodirAccessModeAttr>(depModes[idx]);
       arts::DbAllocOp alloc = findBackingDbAlloc(dep);
@@ -1543,6 +1807,9 @@ struct ConvertCodirToArtsPass
       if (plannedAccess.empty())
         planRankExpandedSubviewBlockAccess(codelet, depIdx, alloc, builder, loc,
                                            dbOffsets, dbSizes, plannedAccess);
+      if (plannedAccess.empty())
+        planRankExpandedDirectBlockAccess(codelet, depIdx, alloc, builder, loc,
+                                          dbOffsets, dbSizes, plannedAccess);
       if (plannedAccess.empty())
         planReadOnlyBlockStorageAccessFromBackingAlloc(codelet, depIdx, alloc,
                                                        builder, loc, dbOffsets,
@@ -1641,6 +1908,7 @@ struct ConvertCodirToArtsPass
             plannedAccess.upperHaloBlockCounts.push_back(0);
             plannedAccess.allowFullWindowAccesses.push_back(false);
             plannedAccess.requireOwnerWindowProofs.push_back(false);
+            plannedAccess.rankExpandedLogicalGridAccesses.push_back(false);
           }
           plannedAccess.grouped = grouped;
         }
@@ -1796,6 +2064,8 @@ struct ConvertCodirToArtsPass
             accessPlan.allowFullWindowAccesses.size() !=
                 accessPlan.ownerDims.size() ||
             accessPlan.requireOwnerWindowProofs.size() !=
+                accessPlan.ownerDims.size() ||
+            accessPlan.rankExpandedLogicalGridAccesses.size() !=
                 accessPlan.ownerDims.size())
           return codelet.emitOpError()
                  << "failed to materialize owner-base parameters for "
@@ -1861,6 +2131,10 @@ struct ConvertCodirToArtsPass
           CodirOwnerHaloWindow ownerHalo = getCodirBlockStorageHaloWindowForDim(
               codelet, idx, ownerDim,
               static_cast<unsigned>(payloadType.getRank()));
+          if (ownerHalo.empty())
+            ownerHalo = getCodirOwnerHaloWindowForDim(
+                codelet, idx, ownerDim,
+                static_cast<unsigned>(payloadType.getRank()));
           // Keep producer stores aligned with the DB's storage halo.
           if (ownerHalo.lower <= 0 || ownerHalo.upper <= 0) {
             CodirOwnerHaloWindow allocHalo =
@@ -1883,7 +2157,8 @@ struct ConvertCodirToArtsPass
                rankExpandedTileExtent, accessPlan.grouped,
                accessPlan.allowFullWindowAccesses[slot],
                accessPlan.requireOwnerWindowProofs[slot],
-               rankExpandedTileExtent > 0});
+               rankExpandedTileExtent > 0,
+               accessPlan.rankExpandedLogicalGridAccesses[slot]});
         }
       }
       mapper.map(codeletBlock.getArgument(idx), payload);
@@ -1926,6 +2201,9 @@ struct ConvertCodirToArtsPass
     }
 
     codelet.erase();
+    for (Operation *halo : haloCleanup)
+      if (halo && halo->use_empty())
+        halo->erase();
     for (Operation *view : depViewCleanup)
       if (view && view->use_empty())
         view->erase();

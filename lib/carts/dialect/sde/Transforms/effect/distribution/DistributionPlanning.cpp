@@ -1286,10 +1286,12 @@ static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
     if (!root || sde::isDefinedInside(op.getOperation(), root))
       return;
     auto memrefType = dyn_cast<MemRefType>(root.getType());
-    if (!memrefType || memrefType.getRank() == 0) {
+    if (!memrefType) {
       rejected = true;
       return;
     }
+    if (memrefType.getRank() == 0)
+      return;
 
     sawExternalStore = true;
     OperandRange indices = storeOp.getIndices();
@@ -1419,9 +1421,8 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
 // Consume the one committed node-agnostic budget layout for every SU that
 // writes a multi-owner-distributed data-parallel array, stamping identical
 // physicalOwnerDims + physicalBlockShape (+ logicalWorkerSlice) across all
-// writers of that array. That equality is what hasSameHostBridgePlan
-// (ArtsMaterializationUtils.h) requires, so the per-timestep host bridge hoists
-// and the iterative double-buffer stencils stop materializing a coarse
+// writers of that array. That equality lets the per-timestep host bridge hoist
+// once and keeps iterative double-buffer stencils from materializing a coarse
 // per-timestep copy. Runs first in the stamper dispatch and is the default for
 // the multi-owner data-parallel family (matmul/contraction excluded).
 // Realization is not gated on the loop step: the committed layout is the
@@ -1773,6 +1774,8 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
     std::optional<sde::LoopIndexedOutputPlan> multiOwnerPlan =
         findConsistentMultiOwnerOutputPlan(op);
     if (multiOwnerPlan && multiOwnerPlan->ownerPhysicalDims.size() >= 2 &&
+        assignedWriteLayoutMatchesOwnerDims(
+            op, multiOwnerPlan->ownerPhysicalDims) &&
         op.getLowerBounds().size() >=
             multiOwnerPlan->ownerPhysicalDims.size() &&
         op.getUpperBounds().size() >=

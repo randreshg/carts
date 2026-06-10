@@ -280,7 +280,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 29> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "SdeCuNormalization",
     "Parallelize",
@@ -299,6 +299,7 @@ static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
     "SdeCuNormalization",
     "VerifySdePhysicalConsistency",
     "SdeRankExpandMu",
+    "SdeScalarBlockReduction",
     "VerifySdeMuLayout",
     "RaiseToMuAccessWindow",
     "VerifySdeMuAccessWindow",
@@ -311,11 +312,15 @@ static const std::array<llvm::StringLiteral, 28> kSdePlanningPasses = {
     "VerifySde"};
 static const std::array<llvm::StringLiteral, 1> kSdeToCodirPasses = {
     "ConvertSdeToCodir"};
-static const std::array<llvm::StringLiteral, 5> kCodirGraphTransformsPasses = {
-    "CodirCodeletDCE", "ReductionDepMapping", "ReductionAtomicMaterialization",
-    "DepStorageAssignment", "VerifyCodir"};
-static const std::array<llvm::StringLiteral, 2> kCodirToArtsPasses = {
-    "ConvertSdeBoundaryToArts", "ConvertCodirToArts"};
+static const std::array<llvm::StringLiteral, 6> kCodirGraphTransformsPasses = {
+    "CodirCodeletDCE",
+    "ReductionDepMapping",
+    "ReductionAtomicMaterialization",
+    "DepStorageAssignment",
+    "CodirHaloExchange",
+    "VerifyCodir"};
+static const std::array<llvm::StringLiteral, 1> kCodirToArtsPasses = {
+    "ConvertCodirToArts"};
 static const std::array<llvm::StringLiteral, 3> kEdtDepRealizationPasses = {
     "RealizeEdtDistributionPlan", "VerifySdeLowered", "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 6> kEdtLocalCleanupPasses = {
@@ -326,13 +331,20 @@ static const std::array<llvm::StringLiteral, 6> kCreateDbsPasses = {
     "Mem2Reg",   "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
     "DbModeTightening", "PolygeistCanonicalize", "CSE(arts.edt)", "Mem2Reg"};
-static const std::array<llvm::StringLiteral, 12> kPostDbRefinementPasses = {
-    "DbModeTightening",      "DbOwnerMapRealization",
-    "EdtDeadDepElimination", "DbConsolidateStencilHalos",
-    "DbShortenLifetimes",    "DbDeadRootElimination",
-    "PartialReductionSplit", "BlockContractionSplit",
-    "DbScratchElimination",  "PolygeistCanonicalize",
-    "CSE(arts.edt)",         "DistributedLaunchConsistency"};
+static const std::array<llvm::StringLiteral, 13> kPostDbRefinementPasses = {
+    "DbModeTightening",
+    "DbOwnerMapRealization",
+    "EdtDeadDepElimination",
+    "DbConsolidateStencilHalos",
+    "DbStorageBridgeCopyPlacement",
+    "DbShortenLifetimes",
+    "DbDeadRootElimination",
+    "PartialReductionSplit",
+    "BlockContractionSplit",
+    "DbScratchElimination",
+    "PolygeistCanonicalize",
+    "CSE(arts.edt)",
+    "DistributedLaunchConsistency"};
 static const std::array<llvm::StringLiteral, 6> kLateConcurrencyCleanupPasses =
     {"Hoisting",         "PolygeistCanonicalize",   "CSE(arts.edt)",
      "EdtAllocaSinking", "ArtsDeadCodeElimination", "Mem2Reg"};
@@ -1179,6 +1191,7 @@ void buildSdePlanningPipeline(PassManager &pm,
   // verifier in the production order, so a stale or mismatched physical grain
   // fails closed at the SDE boundary instead of being repaired downstream.
   pm.addPass(sde::createSdeRankExpandMuPass());
+  pm.addPass(sde::createSdeScalarBlockReductionPass());
   pm.addPass(sde::createVerifySdeMuLayoutPass());
   pm.addPass(sde::createRaiseToMuAccessWindowPass());
   pm.addPass(sde::createVerifySdeMuAccessWindowPass());
@@ -1204,13 +1217,13 @@ void buildCodirGraphTransformsPipeline(PassManager &pm) {
   pm.addPass(codir::createReductionDepMappingPass());
   pm.addPass(codir::createReductionAtomicMaterializationPass());
   pm.addPass(codir::createDepStorageAssignmentPass());
+  pm.addPass(codir::createCodirHaloExchangePass());
   pm.addPass(codir::createVerifyCodirPass());
 }
 
 /// SDE/CODIR boundary conversion to ARTS. Every ARTS EDT must come from a
 /// CODIR codelet.
 void buildCodirToArtsPipeline(PassManager &pm) {
-  pm.addPass(codir::createConvertSdeBoundaryToArtsPass());
   pm.addPass(codir::createConvertCodirToArtsPass());
 }
 
@@ -1259,6 +1272,7 @@ void buildPostDbRefinementPipeline(PassManager &pm) {
   /// Re-run DB-local refinement after EDT dep pruning so cleanup-only acquires
   /// and now-unreachable DB roots are removed in the DB layer.
   pm.addPass(arts::createDbConsolidateStencilHalosPass());
+  pm.addPass(arts::createDbStorageBridgeCopyPlacementPass());
   pm.addPass(arts::createDbShortenLifetimesPass());
   pm.addPass(arts::createDbDeadRootEliminationPass());
   pm.addPass(arts::createPartialReductionSplitPass());

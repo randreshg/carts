@@ -6,9 +6,29 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTCOPYNESTS_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTCOPYNESTS_H
 
-#include "CodirToArtsHostBridgePlanning.h"
+#include "carts/utils/Utils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/Location.h"
+#include "mlir/IR/Value.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace {
+
+using llvm::ArrayRef;
+using llvm::SmallVector;
+using llvm::SmallVectorImpl;
+using mlir::Location;
+using mlir::OpBuilder;
+using mlir::Value;
+using mlir::carts::createOneIndex;
+using mlir::carts::createZeroIndex;
+namespace arith = mlir::arith;
+namespace memref = mlir::memref;
+namespace scf = mlir::scf;
 
 static inline void materializeHostBlockElementCopyNest(
     OpBuilder &builder, Location loc, Value hostView, Value blockPayload,

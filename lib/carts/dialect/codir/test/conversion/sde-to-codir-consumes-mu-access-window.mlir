@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,raise-to-mu-access-window,convert-sde-to-codir,verify-codir)' 2>&1 | %FileCheck %s --check-prefix=SDE2CODIR --implicit-check-not=host_whole --implicit-check-not=sde.mu_access_window
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,raise-to-mu-access-window,convert-sde-to-codir,verify-codir,dep-storage-assignment,verify-codir,convert-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' 2>&1 | %FileCheck %s --check-prefix=ARTS --implicit-check-not=codir.codelet --implicit-check-not=sde.mu_alloc --implicit-check-not='partitioning(<coarse>)'
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,raise-to-mu-access-window,convert-sde-to-codir,verify-codir,dep-storage-assignment,verify-codir,convert-codir-to-arts,verify-arts-objects-only)' 2>&1 | %FileCheck %s --check-prefix=ARTS --implicit-check-not=codir.codelet --implicit-check-not=sde.mu_alloc --implicit-check-not='partitioning(<coarse>)'
 
 // CODIR consumes the committed sde.mu_access_window over a rank-expanded
 // (block-shaped) MU: the codelet dependency becomes a concrete MU subview over

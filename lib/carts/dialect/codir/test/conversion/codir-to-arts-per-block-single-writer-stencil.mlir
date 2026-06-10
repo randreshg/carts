@@ -412,25 +412,14 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-DAG: %[[EIGHT_G:.*]] = arith.constant 8 : index
 // CHECK-DAG: %[[SIXTEEN_G:.*]] = arith.constant 16 : index
 // CHECK: owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>
-// CHECK: scf.for %{{.*}} = %[[ZERO_G]] to %[[SIXTEEN_G]] step %[[TWO_G]]
 // CHECK: attributes {storageBridgeCopy}
-// CHECK: scf.for %[[BLOCK_BASE:.*]] = %[[ZERO_G]] to %[[SIXTEEN_G]] step %[[TWO_G]]
-// CHECK: %[[LANE1_RAW:.*]] = arith.addi %[[BLOCK_BASE]], %[[ONE_G]] : index
-// CHECK: %[[LANE1:.*]] = arith.remui %[[LANE1_RAW]], %[[SIXTEEN_G]] : index
 // CHECK: arts.db_acquire[<inout>]
 // CHECK-SAME: partitioning(<block>)
 // CHECK: arts.db_acquire[<in>]
 // CHECK-SAME: bounds_valid
 // CHECK-SAME: element_offsets[%[[EIGHT_G]], %[[ZERO_G]]]
 // CHECK-SAME: element_sizes[%[[ONE_G]], %[[FOUR_G]]]
-// CHECK: arts.db_acquire[<in>]
-// CHECK-SAME: bounds_valid
-// CHECK-SAME: element_offsets[%[[ONE_G]], %[[ZERO_G]]]
-// CHECK-SAME: element_sizes[%[[ONE_G]], %[[FOUR_G]]]
-// CHECK: %[[SCALED_G:.*]] = arith.muli %[[BLOCK_BASE]], %[[EIGHT_G]] : index
-// CHECK: %[[ROUTE_IDX_G:.*]] = arith.divui %[[SCALED_G]], %[[SIXTEEN_G]] : index
-// CHECK: %[[ROUTE_G:.*]] = arith.index_cast %[[ROUTE_IDX_G]] : index to i32
-// CHECK: arts.edt <task> <internode> route(%[[ROUTE_G]]) (%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) :
+// CHECK: arts.edt <task> <internode> route
 // CHECK-SAME: perBlockHaloExchange
 // CHECK-SAME: storageBridgeCopy
 // CHECK: memref.store
@@ -451,9 +440,13 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-SAME: distributed
 // CHECK-SAME: planOwnerDims = [0, 1]
 // CHECK-SAME: planPhysicalBlockShape = [8, 4]
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
+// CHECK-SAME: distributed
+// CHECK-SAME: planOwnerDims = [0, 1]
+// CHECK-SAME: planPhysicalBlockShape = [8, 4]
 // CHECK-SAME: storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
 // CHECK: arts.edt <task> <internode> route{{.*}}memref<?xmemref<?x?xf32>>, memref<?x?xmemref<?x?xf32>>{{.*}}storageBridgeCopy
-// CHECK: arts.edt <task> <intranode> route{{.*}}memref<?x?xmemref<?x?xf32>>, memref<?x?xmemref<?x?xf32>>, memref<?x?xmemref<?x?xf32>>{{.*}}depPattern = #arts.dep_pattern<alternating_buffer_stencil>
+// CHECK: arts.edt <task> <internode> route{{.*}}memref<?x?xmemref<?x?xf32>>, memref<?x?xmemref<?x?xf32>>, memref<?x?xmemref<?x?xf32>>{{.*}}depPattern = #arts.dep_pattern<alternating_buffer_stencil>
 // CHECK-SAME: planOwnerDims = [0, 1]
 
 // CHECK-LABEL: func.func @read_compute_block_uses_storage_block_origin
@@ -461,8 +454,7 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK-DAG: %[[EIGHT_R:.*]] = arith.constant 8 : index
 // CHECK: arts.db_alloc
 // CHECK-SAME: planPhysicalBlockShape = [8, 8]
-// CHECK: arts.edt <task>
-// CHECK-SAME: depPattern = #arts.dep_pattern<stencil_tiling_nd>
+// CHECK: arts.edt <task> <internode> route{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK: ^bb0(%{{.*}}, %{{.*}}, %[[BASE_I:arg[0-9]+]]: index, %[[BASE_J:arg[0-9]+]]: index):
 // CHECK: %[[READ_RELATIVE_I:.*]] = arith.subi %[[BASE_I]], %[[ONE_R]]
 // CHECK: %[[READ_BLOCK_I:.*]] = arith.divui %[[READ_RELATIVE_I]], %[[EIGHT_R]]
@@ -489,11 +481,10 @@ module attributes {arts.runtime_total_nodes = 8 : i64, arts.runtime_total_worker
 // CHECK: arith.subi %[[LOWER_READ_I]], %[[READ_PAYLOAD_BASE_I]]
 
 // CHECK-LABEL: func.func @read_compute_block_retiles_unaligned_halo_block
-// CHECK: arts.db_alloc[<in>, <heap>, <read>, <block>]
+// CHECK: arts.db_alloc[<inout>, <heap>, <write>, <block>]
 // CHECK-SAME: planPhysicalBlockShape = [2, 4]
 // CHECK-SAME: stencil_supported_block_halo
-// CHECK: arts.edt <task>
-// CHECK-SAME: depPattern = #arts.dep_pattern<stencil_tiling_nd>
+// CHECK: arts.edt <task> <internode> route{{.*}}depPattern = #arts.dep_pattern<stencil_tiling_nd>
 // CHECK-SAME: planPhysicalBlockShape = [2, 4]
 
 // CHECK-LABEL: func.func @full_timestep_pair_reuses_sibling_writer_block_shape

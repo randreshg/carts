@@ -95,6 +95,22 @@ def DbConsolidateStencilHalos
       "mlir::carts::arts::createDbConsolidateStencilHalosPass()";
 }
 
+def DbStorageBridgeCopyPlacement
+    : Pass<"db-storage-bridge-copy-placement", "mlir::ModuleOp"> {
+  let summary = "Place single-node storage-bridge copy-outs at host reads";
+  let description = [{
+    Moves already-realized single-node block-to-host storage-bridge copy EDTs
+    from producer boundaries to the first coarse host observation when no
+    coarse host access is crossed. Later block writes make earlier copy-outs
+    stale, so they are removed while preserving realized DB grain.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
+       "::mlir::memref::MemRefDialect", "::mlir::carts::arts::ArtsDialect"];
+  let constructor =
+      "mlir::carts::arts::createDbStorageBridgeCopyPlacementPass()";
+}
+
 def DbShortenLifetimes : Pass<"db-shorten-lifetimes", "mlir::ModuleOp"> {
   let summary = "Remove cleanup-only DB acquire chains";
   let description = [{

@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-codir-to-arts,realize-edt-distribution-plan,verify-arts-objects-only)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,codir-halo-exchange,convert-codir-to-arts,realize-edt-distribution-plan,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s --implicit-check-not=replicated_read
 
 // Every owner-dim-shifted read-only input of a single-owner-dim owner-strip

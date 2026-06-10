@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(convert-sde-boundary-to-arts,convert-codir-to-arts)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(codir-halo-exchange,convert-codir-to-arts)' 2>&1 | %FileCheck %s
 
 // A rank-expanded owner_tile compute-block stencil splits the spatial owner
 // extent into a (grid, tile) index pair, so a neighbor read u[i-1] becomes

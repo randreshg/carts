@@ -16,9 +16,12 @@ namespace mlir::carts::sde {
 
 #include "carts/utils/ValueAnalysis.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
+#include "polygeist/Ops.h"
 #include "llvm/ADT/SetVector.h"
 
 using namespace mlir;
@@ -199,6 +202,63 @@ static void eraseDeallocUsers(Value root, PatternRewriter &rewriter) {
     rewriter.eraseOp(dealloc);
 }
 
+static bool isNullPointer(Value value) {
+  return value && value.getDefiningOp<LLVM::ZeroOp>();
+}
+
+static std::optional<bool> foldMuNullComparison(LLVM::ICmpOp cmp,
+                                                Value muPointer) {
+  if (!cmp || !muPointer)
+    return std::nullopt;
+  bool comparesMuToNull =
+      (cmp.getLhs() == muPointer && isNullPointer(cmp.getRhs())) ||
+      (cmp.getRhs() == muPointer && isNullPointer(cmp.getLhs()));
+  if (!comparesMuToNull)
+    return std::nullopt;
+
+  switch (cmp.getPredicate()) {
+  case LLVM::ICmpPredicate::eq:
+    return false;
+  case LLVM::ICmpPredicate::ne:
+    return true;
+  default:
+    return std::nullopt;
+  }
+}
+
+static void foldMuAllocNullChecks(Value muMemref, PatternRewriter &rewriter) {
+  SmallVector<polygeist::Memref2PointerOp, 4> pointers;
+  for (Operation *user : llvm::make_early_inc_range(muMemref.getUsers()))
+    if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(user))
+      pointers.push_back(m2p);
+
+  for (polygeist::Memref2PointerOp m2p : pointers) {
+    bool sawUnsupportedUse = false;
+    SmallVector<std::pair<LLVM::ICmpOp, bool>, 4> foldedCmps;
+    for (Operation *user :
+         llvm::make_early_inc_range(m2p.getResult().getUsers())) {
+      auto cmp = dyn_cast<LLVM::ICmpOp>(user);
+      std::optional<bool> folded = foldMuNullComparison(cmp, m2p.getResult());
+      if (!folded) {
+        sawUnsupportedUse = true;
+        continue;
+      }
+      foldedCmps.push_back({cmp, *folded});
+    }
+    if (sawUnsupportedUse)
+      continue;
+    for (auto [cmp, value] : foldedCmps) {
+      rewriter.setInsertionPoint(cmp);
+      Value constant = arith::ConstantOp::create(rewriter, cmp.getLoc(),
+                                                 rewriter.getBoolAttr(value));
+      cmp.getResult().replaceAllUsesWith(constant);
+      rewriter.eraseOp(cmp);
+    }
+    if (m2p->use_empty())
+      rewriter.eraseOp(m2p);
+  }
+}
+
 static FailureOr<Value> createMuAllocForRoot(Value root,
                                              PatternRewriter &rewriter) {
   Operation *def = root.getDefiningOp();
@@ -222,6 +282,7 @@ static FailureOr<Value> createMuAllocForRoot(Value root,
 
   eraseDeallocUsers(root, rewriter);
   root.replaceAllUsesWith(muAlloc.getMemref());
+  foldMuAllocNullChecks(muAlloc.getMemref(), rewriter);
   if (def->use_empty())
     rewriter.eraseOp(def);
   return muAlloc.getMemref();

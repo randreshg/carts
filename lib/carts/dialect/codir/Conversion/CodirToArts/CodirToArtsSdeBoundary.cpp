@@ -1,18 +1,16 @@
 ///==========================================================================///
-/// File: ConvertSdeBoundaryToArts.cpp
+/// File: CodirToArtsSdeBoundary.cpp
 ///
-/// Converts remaining SDE storage/control boundary ops before CODIR-to-ARTS.
+/// Lowers remaining SDE storage/control boundary ops inside CODIR-to-ARTS.
 ///==========================================================================///
-#include "CodirToArtsHostBridgeMaterialization.h"
-#include "carts/dialect/codir/Conversion/Passes.h"
-
-namespace mlir::carts::codir {
-#define GEN_PASS_DEF_CONVERTSDEBOUNDARYTOARTS
-#include "carts/dialect/codir/Conversion/Passes.h.inc"
-} // namespace mlir::carts::codir
+#include "CodirToArtsSdeBoundary.h"
 
 using namespace mlir;
 using namespace mlir::carts;
+
+#include "CodirToArtsHostBridgeLogicalSizes.h"
+#include "CodirToArtsHostCopyNests.h"
+#include "CodirToArtsRawDependencyMaterialization.h"
 
 namespace {
 
@@ -127,7 +125,7 @@ scanMuAllocCodirStorageFacts(sde::SdeMuAllocOp op) {
   WalkResult result = module.walk([&](codir::CodeletOp codelet) {
     for (auto [idx, dep] : llvm::enumerate(codelet.getDeps())) {
       if (!::mlir::carts::ValueAnalysis::sameValue(
-              ::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep), root))
+              getCodirHaloStorageRoot(dep), root))
         continue;
       unsigned depIndex = static_cast<unsigned>(idx);
       if (failed(processMuAllocCodirDep(scan, codelet, depIndex)))
@@ -194,7 +192,7 @@ static LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op) {
   if (hasResidualPartitionedSdeFact(op))
     return op.emitOpError()
            << "has unconsumed SDE partition or movement facts; run "
-              "`convert-sde-to-codir` before `convert-sde-boundary-to-arts`";
+              "`convert-sde-to-codir` before `convert-codir-to-arts`";
 
   FailureOr<MuAllocCodirStorageScan> codirStorage =
       scanMuAllocCodirStorageFacts(op);
@@ -284,78 +282,53 @@ static LogicalResult eraseConsumedSdeControlToken(sde::SdeControlTokenOp op) {
   return success();
 }
 
-struct ConvertSdeBoundaryToArtsPass
-    : public codir::impl::ConvertSdeBoundaryToArtsBase<
-          ConvertSdeBoundaryToArtsPass> {
-  void runOnOperation() override {
-    ModuleOp module = getOperation();
-
-    SmallVector<sde::SdeMuDataOp> muDatas;
-    module.walk([&](sde::SdeMuDataOp op) { muDatas.push_back(op); });
-    for (sde::SdeMuDataOp op : muDatas) {
-      if (failed(lowerMuData(op))) {
-        signalPassFailure();
-        return;
-      }
-    }
-
-    SmallVector<sde::SdeMuAllocOp> muAllocs;
-    module.walk([&](sde::SdeMuAllocOp op) { muAllocs.push_back(op); });
-    for (sde::SdeMuAllocOp op : muAllocs) {
-      if (failed(lowerMuAlloc(op))) {
-        signalPassFailure();
-        return;
-      }
-    }
-
-    SmallVector<sde::SdeResourceQueryOp> resourceQueries;
-    module.walk(
-        [&](sde::SdeResourceQueryOp op) { resourceQueries.push_back(op); });
-    for (sde::SdeResourceQueryOp op : resourceQueries) {
-      if (failed(lowerSdeResourceQuery(op))) {
-        signalPassFailure();
-        return;
-      }
-    }
-
-    SmallVector<sde::SdeSuBarrierOp> controlBarriers;
-    module.walk([&](sde::SdeSuBarrierOp op) { controlBarriers.push_back(op); });
-    for (sde::SdeSuBarrierOp op : controlBarriers) {
-      if (failed(lowerSdeControlBarrier(op))) {
-        signalPassFailure();
-        return;
-      }
-    }
-
-    SmallVector<sde::SdeControlTokenOp> controlTokens;
-    module.walk(
-        [&](sde::SdeControlTokenOp op) { controlTokens.push_back(op); });
-    for (sde::SdeControlTokenOp op : controlTokens) {
-      if (failed(eraseConsumedSdeControlToken(op))) {
-        signalPassFailure();
-        return;
-      }
-    }
-
-    SmallVector<sde::SdeMuTokenOp> tokens;
-    module.walk([&](sde::SdeMuTokenOp op) { tokens.push_back(op); });
-    for (sde::SdeMuTokenOp token : tokens) {
-      if (!token.getToken().use_empty()) {
-        token.emitOpError()
-            << "survived SDE boundary conversion; run "
-               "`convert-sde-to-codir` before "
-               "`convert-sde-boundary-to-arts` so SDE codelets become "
-               "CODIR codelets before ARTS lowering";
-        signalPassFailure();
-        return;
-      }
-      token.erase();
-    }
-  }
-};
-
 } // namespace
 
-std::unique_ptr<Pass> mlir::carts::codir::createConvertSdeBoundaryToArtsPass() {
-  return std::make_unique<ConvertSdeBoundaryToArtsPass>();
+LogicalResult mlir::carts::lowerSdeBoundaryToArts(ModuleOp module) {
+  SmallVector<sde::SdeMuDataOp> muDatas;
+  module.walk([&](sde::SdeMuDataOp op) { muDatas.push_back(op); });
+  for (sde::SdeMuDataOp op : muDatas)
+    if (failed(lowerMuData(op)))
+      return failure();
+
+  SmallVector<sde::SdeMuAllocOp> muAllocs;
+  module.walk([&](sde::SdeMuAllocOp op) { muAllocs.push_back(op); });
+  for (sde::SdeMuAllocOp op : muAllocs)
+    if (failed(lowerMuAlloc(op)))
+      return failure();
+
+  SmallVector<sde::SdeResourceQueryOp> resourceQueries;
+  module.walk([&](sde::SdeResourceQueryOp op) {
+    resourceQueries.push_back(op);
+  });
+  for (sde::SdeResourceQueryOp op : resourceQueries)
+    if (failed(lowerSdeResourceQuery(op)))
+      return failure();
+
+  SmallVector<sde::SdeSuBarrierOp> controlBarriers;
+  module.walk([&](sde::SdeSuBarrierOp op) { controlBarriers.push_back(op); });
+  for (sde::SdeSuBarrierOp op : controlBarriers)
+    if (failed(lowerSdeControlBarrier(op)))
+      return failure();
+
+  SmallVector<sde::SdeControlTokenOp> controlTokens;
+  module.walk(
+      [&](sde::SdeControlTokenOp op) { controlTokens.push_back(op); });
+  for (sde::SdeControlTokenOp op : controlTokens)
+    if (failed(eraseConsumedSdeControlToken(op)))
+      return failure();
+
+  SmallVector<sde::SdeMuTokenOp> tokens;
+  module.walk([&](sde::SdeMuTokenOp op) { tokens.push_back(op); });
+  for (sde::SdeMuTokenOp token : tokens) {
+    if (!token.getToken().use_empty()) {
+      token.emitOpError()
+          << "survived CODIR-to-ARTS boundary lowering; run "
+             "`convert-sde-to-codir` before `convert-codir-to-arts` so SDE "
+             "codelets become CODIR codelets before ARTS lowering";
+      return failure();
+    }
+    token.erase();
+  }
+  return success();
 }

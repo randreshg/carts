@@ -1,6 +1,6 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,dep-storage-assignment,verify-codir)' \
 // RUN:   | %FileCheck %s --check-prefix=CODIR
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,dep-storage-assignment,verify-codir,convert-sde-boundary-to-arts,convert-codir-to-arts,verify-arts-objects-only)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,dep-storage-assignment,verify-codir,convert-codir-to-arts,verify-arts-objects-only)' \
 // RUN:   | %FileCheck %s --check-prefix=ARTS --implicit-check-not=codir.codelet
 
 module {

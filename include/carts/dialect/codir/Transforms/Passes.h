@@ -17,6 +17,7 @@ namespace mlir::carts::codir {
 
 std::unique_ptr<Pass> createCodirCodeletDCEPass();
 std::unique_ptr<Pass> createDepStorageAssignmentPass();
+std::unique_ptr<Pass> createCodirHaloExchangePass();
 std::unique_ptr<Pass> createReductionAtomicMaterializationPass();
 std::unique_ptr<Pass> createReductionDepMappingPass();
 std::unique_ptr<Pass> createVerifyCodirPass();

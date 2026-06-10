@@ -6,7 +6,8 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTWHOLETOBLOCKBRIDGE_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTWHOLETOBLOCKBRIDGE_H
 
-#include "CodirToArtsPerBlockCollectives.h"
+#include "CodirToArtsHostBlockCopyMaterialization.h"
+#include "CodirToArtsPerBlockStencilDb.h"
 
 namespace {
 
@@ -103,35 +104,6 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
               "copy";
   }
 
-  // Dispatch the concrete bridge realization from CODIR's per-dep collective
-  // carrier. The BridgePlan is intentionally generic; this first slice keeps
-  // the existing emitters intact while moving workload sizing onto the plan.
-  bool perBlockAllGather =
-      bridgePlan.needsCopyOut && bridgePlan.hasInterNodeRuntime &&
-      bridgePlanHasCollective(bridgePlan,
-                              codir::CodirCollectiveKind::all_gather);
-
-  bool crossNodeGatherCopyOut =
-      bridgePlan.needsCopyOut &&
-      bridgePlanHasCollective(bridgePlan,
-                              codir::CodirCollectiveKind::reduce_scatter);
-
-  // Block-native summing settle follows from CODIR's committed reduce_scatter
-  // storage transition. The split factor gives the number of partial blocks to
-  // sum.
-  bool perBlockSummingSettle =
-      hasInterNodeRuntime && bridgePlan.needsCopyOut &&
-      llvm::any_of(bridgePlan.participants,
-                   [](const HostBridgeParticipant &participant) {
-                     return codirDepUsesBlockNativeSettle(participant.codelet,
-                                                          participant.depIndex);
-                   });
-
-  // Iterative stencil halo uses a distributed per-block DB plus
-  // nearest-neighbor RO reads. This follows the committed CODIR `halo`
-  // participant, not the presence of a copy-out writer in the same bridge.
-  bool perBlockStencilHalo = bridgePlanHasHaloStencilStorage(bridgePlan);
-
   // Read-only stencil bridges with zero reach along the committed owner
   // dimensions are block-local after the host-whole -> compute-block copy-in.
   // Commit the existing per-block single-writer stencil fact here so ARTS
@@ -155,13 +127,91 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
     arts::BarrierOp::create(builder, loc, reason);
   }
 
-  if (perBlockStencilHalo) {
-    if (failed(preparePerBlockSingleWriterStencilDb(blockAlloc)))
-      return failure();
-    if (failed(emitPerBlockStencilHaloBeforeReadPhases(
-            builder, loc, blockAlloc, participants, &bridgePlan)))
-      return failure();
+  Value blockStaticView = blockView;
+  if (blockStaticView.getType() != memrefType) {
+    builder.setInsertionPointAfterValue(blockView);
+    blockStaticView =
+        memref::CastOp::create(builder, loc, memrefType, blockView);
   }
+  Operation *castDef = blockStaticView.getDefiningOp();
+  auto repointViewSource = [&](OpOperand &viewSource) {
+    Operation *viewOp = viewSource.getOwner();
+    if (castDef && viewOp && viewOp->getBlock() == castDef->getBlock() &&
+        viewOp->isBeforeInBlock(castDef))
+      viewOp->moveAfter(castDef);
+    viewSource.set(blockStaticView);
+  };
+  for (HostBridgeParticipant &participant : participants) {
+    if (participant.repointOperand)
+      repointViewSource(*participant.repointOperand);
+    else
+      participant.codelet->setOperand(participant.depIndex, blockStaticView);
+  }
+
+  bool drainsSdeMuRoot =
+      muRoot && muRoot != blockView &&
+      isa_and_nonnull<sde::SdeMuAllocOp>(muRoot.getDefiningOp());
+  SmallVector<Operation *> drainedWriteAnchors;
+  SmallVector<codir::CodeletOp> drainedWriterCodelets;
+  if (drainsSdeMuRoot) {
+    for (OpOperand &use : llvm::make_early_inc_range(muRoot.getUses())) {
+      Operation *owner = use.getOwner();
+      if (isa_and_nonnull<memref::DeallocOp, memref::DimOp>(owner))
+        continue;
+      std::optional<HostBridgeCodeletUse> codeletUse =
+          resolveHostBridgeCodeletUse(use);
+      if (!codeletUse)
+        return codelet.emitOpError()
+               << "host-read array has a residual non-compute use that the "
+                  "host-whole to compute-block bridge cannot drain";
+      if (!isCompatibleHostBridgeParticipant(
+              codelet, depIndex, codeletUse->codelet, codeletUse->depIndex))
+        return codeletUse->codelet.emitOpError()
+               << "host-read array is consumed at an incompatible block grain "
+                  "across dispatch anchors; a single canonical block DB cannot "
+                  "serve both this access and the seed compute_block grain "
+                  "(cross-anchor storage-grain reconciliation required)";
+      std::optional<codir::CodirAccessMode> residualMode =
+          getCodirDepAccessMode(codeletUse->codelet, codeletUse->depIndex);
+      if (!residualMode)
+        return failure();
+      if (codirAccessMayWrite(*residualMode)) {
+        if (!llvm::is_contained(drainedWriterCodelets, codeletUse->codelet))
+          drainedWriterCodelets.push_back(codeletUse->codelet);
+        Operation *dispatchAnchor =
+            findCodirDispatchBridgeAnchor(codeletUse->codelet);
+        if (dispatchAnchor && !isUseInsideAnchor(anchor, dispatchAnchor) &&
+            !llvm::is_contained(drainedWriteAnchors, dispatchAnchor))
+          drainedWriteAnchors.push_back(dispatchAnchor);
+      }
+      if (codeletUse->viewSourceOperand)
+        repointViewSource(*codeletUse->viewSourceOperand);
+      else
+        codeletUse->codelet->setOperand(codeletUse->depIndex, blockStaticView);
+    }
+  }
+  if (!drainedWriteAnchors.empty()) {
+    needsCopyOut = true;
+    bridgePlan.needsCopyOut = true;
+  }
+
+  bool perBlockAllGather =
+      bridgePlan.needsCopyOut && bridgePlan.hasInterNodeRuntime &&
+      bridgePlanHasCollective(bridgePlan,
+                              codir::CodirCollectiveKind::all_gather);
+
+  bool crossNodeGatherCopyOut =
+      bridgePlan.needsCopyOut &&
+      bridgePlanHasCollective(bridgePlan,
+                              codir::CodirCollectiveKind::reduce_scatter);
+
+  bool perBlockSummingSettle =
+      hasInterNodeRuntime && bridgePlan.needsCopyOut &&
+      llvm::any_of(bridgePlan.participants,
+                   [](const HostBridgeParticipant &participant) {
+                     return codirDepUsesBlockNativeSettle(participant.codelet,
+                                                          participant.depIndex);
+                   });
 
   if (needsCopyOut) {
     for (HostBridgeParticipant &participant : participants) {
@@ -169,6 +219,8 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
         participant.codelet.setCompletionBarrierAttr(
             UnitAttr::get(participant.codelet->getContext()));
     }
+    for (codir::CodeletOp writer : drainedWriterCodelets)
+      writer.setCompletionBarrierAttr(UnitAttr::get(writer.getContext()));
     SmallVector<Operation *> syncAnchors = filterHostBridgeReadSyncAnchors(
         anchor, participants, readObservationAnchors);
     for (Operation *observationAnchor : syncAnchors) {
@@ -180,11 +232,24 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
               /*copyIntoBlock=*/false, crossNodeGatherCopyOut, &bridgePlan)))
         return failure();
     }
-    builder.setInsertionPointAfter(anchor);
-    if (failed(materializeHostBlockCopyLoop(
-            builder, loc, hostView, blockAlloc, codelet, depIndex,
-            /*copyIntoBlock=*/false, crossNodeGatherCopyOut, &bridgePlan)))
-      return failure();
+    SmallVector<Operation *> finalCopyOutAnchors;
+    if (!hasInterNodeRuntime && drainsSdeMuRoot &&
+        !drainedWriteAnchors.empty()) {
+      for (Operation *writeAnchor : drainedWriteAnchors) {
+        if (writeAnchor &&
+            !llvm::is_contained(finalCopyOutAnchors, writeAnchor))
+          finalCopyOutAnchors.push_back(writeAnchor);
+      }
+    } else {
+      finalCopyOutAnchors.push_back(anchor);
+    }
+    for (Operation *copyOutAnchor : finalCopyOutAnchors) {
+      builder.setInsertionPointAfter(copyOutAnchor);
+      if (failed(materializeHostBlockCopyLoop(
+              builder, loc, hostView, blockAlloc, codelet, depIndex,
+              /*copyIntoBlock=*/false, crossNodeGatherCopyOut, &bridgePlan)))
+        return failure();
+    }
 
     // Keep the coarse write-back for whole-array consumers and add the
     // block-native replicated DB substrate for tiled consumers.
@@ -212,84 +277,6 @@ materializeHostWholeToComputeBlockBridge(codir::CodeletOp codelet,
     }
   }
 
-  Value blockStaticView = blockView;
-  if (blockStaticView.getType() != memrefType) {
-    builder.setInsertionPointAfterValue(blockView);
-    blockStaticView =
-        memref::CastOp::create(builder, loc, memrefType, blockView);
-  }
-  Operation *castDef = blockStaticView.getDefiningOp();
-  auto repointViewSource = [&](OpOperand &viewSource) {
-    Operation *viewOp = viewSource.getOwner();
-    if (castDef && viewOp && viewOp->getBlock() == castDef->getBlock() &&
-        viewOp->isBeforeInBlock(castDef))
-      viewOp->moveAfter(castDef);
-    viewSource.set(blockStaticView);
-  };
-  for (HostBridgeParticipant &participant : participants) {
-    if (participant.repointOperand)
-      repointViewSource(*participant.repointOperand);
-    else
-      participant.codelet->setOperand(participant.depIndex, blockStaticView);
-  }
-
-  // An sde.mu_alloc host-bridge root MUST be fully drained:
-  // convert-codir-to-arts rejects any surviving sde op. The coarse swap already
-  // moved the genuine host accesses onto the coarse DB and the seed loop
-  // repointed the seed anchor, so any MU use left here is a compute_block view
-  // living in a sibling dispatch anchor (e.g. the separate init/timestep
-  // dispatch loops of a double-buffered stencil). Repoint each onto the single
-  // canonical block DB when it commits the SAME block grain as the seed; fail
-  // closed with evidence otherwise, rather than leaving the MU to surface as an
-  // opaque "SDE operation reached CODIR-to-ARTS" or repointing an incompatible
-  // grain that aborts the block-local access rewrite downstream. memref.alloc
-  // roots are not subject to this rule: their residual per-dep uses are
-  // materialized later, so leave them for the existing
-  // materializeRawCodirDependency path.
-  if (muRoot && muRoot != blockView &&
-      isa_and_nonnull<sde::SdeMuAllocOp>(muRoot.getDefiningOp())) {
-    SmallVector<Operation *> drainedWriteAnchors;
-    for (OpOperand &use : llvm::make_early_inc_range(muRoot.getUses())) {
-      Operation *owner = use.getOwner();
-      if (isa_and_nonnull<memref::DeallocOp, memref::DimOp>(owner))
-        continue;
-      std::optional<HostBridgeCodeletUse> codeletUse =
-          resolveHostBridgeCodeletUse(use);
-      if (!codeletUse)
-        return codelet.emitOpError()
-               << "host-read array has a residual non-compute use that the "
-                  "host-whole to compute-block bridge cannot drain";
-      if (!isCompatibleHostBridgeParticipant(
-              codelet, depIndex, codeletUse->codelet, codeletUse->depIndex))
-        return codeletUse->codelet.emitOpError()
-               << "host-read array is consumed at an incompatible block grain "
-                  "across dispatch anchors; a single canonical block DB cannot "
-                  "serve both this access and the seed compute_block grain "
-                  "(cross-anchor storage-grain reconciliation required)";
-      std::optional<codir::CodirAccessMode> residualMode =
-          getCodirDepAccessMode(codeletUse->codelet, codeletUse->depIndex);
-      if (!residualMode)
-        return failure();
-      if (codirAccessMayWrite(*residualMode)) {
-        Operation *dispatchAnchor =
-            findCodirDispatchBridgeAnchor(codeletUse->codelet);
-        if (dispatchAnchor && !isUseInsideAnchor(anchor, dispatchAnchor) &&
-            !llvm::is_contained(drainedWriteAnchors, dispatchAnchor))
-          drainedWriteAnchors.push_back(dispatchAnchor);
-      }
-      if (codeletUse->viewSourceOperand)
-        repointViewSource(*codeletUse->viewSourceOperand);
-      else
-        codeletUse->codelet->setOperand(codeletUse->depIndex, blockStaticView);
-    }
-    for (Operation *writeAnchor : drainedWriteAnchors) {
-      builder.setInsertionPointAfter(writeAnchor);
-      if (failed(materializeHostBlockCopyLoop(
-              builder, loc, hostView, blockAlloc, codelet, depIndex,
-              /*copyIntoBlock=*/false, crossNodeGatherCopyOut, &bridgePlan)))
-        return failure();
-    }
-  }
   return blockView;
 }
 

@@ -6,6 +6,7 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BRIDGEGROUPING_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_BRIDGEGROUPING_H
 
+#include "CodirToArtsBridgePayload.h"
 #include "CodirToArtsBridgePlan.h"
 
 namespace {

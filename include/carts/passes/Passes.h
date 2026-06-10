@@ -36,6 +36,7 @@ std::unique_ptr<Pass> createDbScratchEliminationPass();
 std::unique_ptr<Pass> createDbOwnerMapRealizationPass();
 std::unique_ptr<Pass> createDbCommitDistributedDepsPass();
 std::unique_ptr<Pass> createDbConsolidateStencilHalosPass();
+std::unique_ptr<Pass> createDbStorageBridgeCopyPlacementPass();
 std::unique_ptr<Pass> createDbShortenLifetimesPass();
 std::unique_ptr<Pass> createDbDeadRootEliminationPass();
 std::unique_ptr<Pass> createPartialReductionSplitPass();

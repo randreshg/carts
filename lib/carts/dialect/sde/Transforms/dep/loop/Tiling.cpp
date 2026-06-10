@@ -903,16 +903,15 @@ static bool isBudgetReconciledTileCandidate(sde::SdeSuIterateOp op) {
 }
 
 // The op's representative write-role budget fact. Single-store writers return
-// their one fact. An affine-disjoint MULTI-store writer (e.g. a jacobi-style
-// init that writes f/u/unew in one nest) returns a representative fact only
-// when every written array names a distinct id and all writes agree on
-// ownerDims + budgetBlockShape + block_parallel kind, so one shared budget
-// grain is correct for all of them. A true multi-writer (same id stored twice),
-// any owner/grain/kind disagreement, or a non-block layout fails closed -- the
-// SU then keeps the generic tiler, never an unverifiable shared grain. Tiling
-// owns this multi-store budget grain as a real loop retile while the loop is
-// still step-1, so the grain is structurally true rather than an attr-only
-// promise.
+// their one fact. An affine-disjoint MULTI-store writer (e.g. an init that
+// writes A/B/C in one nest) returns a representative fact only when every
+// written array names a distinct id and all writes agree on ownerDims +
+// budgetBlockShape + block_parallel kind, so one shared budget grain is correct
+// for all of them. A true multi-writer (same id stored twice), any
+// owner/grain/kind disagreement, or a non-block layout fails closed -- the SU
+// then keeps the generic tiler, never an unverifiable shared grain. Tiling owns
+// this budget grain as a real loop retile while the loop is still step-1, so
+// the grain is structurally true rather than an attr-only promise.
 static std::optional<sde::LayoutGraphFact>
 selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
                                   bool allowSingleOwnerDim) {
@@ -961,10 +960,12 @@ static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
     if (!root || sde::isDefinedInside(op.getOperation(), root))
       return;
     auto memrefType = dyn_cast<MemRefType>(root.getType());
-    if (!memrefType || memrefType.getRank() == 0) {
+    if (!memrefType) {
       rejected = true;
       return;
     }
+    if (memrefType.getRank() == 0)
+      return;
 
     sawExternalStore = true;
     OperandRange indices = storeOp.getIndices();
@@ -995,10 +996,7 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
     return std::nullopt;
 
   auto classification = op.getStructuredClassification();
-  bool allowSingleOwnerDim =
-      classification &&
-      *classification == sde::SdeStructuredClassification::stencil &&
-      op.getInPlaceSafeAttr();
+  bool allowSingleOwnerDim = true;
   std::optional<sde::LayoutGraphFact> writeLayout =
       selectSingleBudgetWriteLayoutFact(op, allowSingleOwnerDim);
   if (!writeLayout)

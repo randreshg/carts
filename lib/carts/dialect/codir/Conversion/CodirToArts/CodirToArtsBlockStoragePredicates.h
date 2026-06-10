@@ -11,6 +11,19 @@
 
 namespace {
 
+static inline Value getCodirHaloExchangeSource(Value value) {
+  if (auto exchange = value.getDefiningOp<codir::HaloExchangeOp>())
+    return exchange.getSource();
+  return {};
+}
+
+static inline Value getCodirHaloStorageRoot(Value value) {
+  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(value);
+  if (Value source = getCodirHaloExchangeSource(root))
+    return ::mlir::carts::ValueAnalysis::stripMemrefViewOps(source);
+  return root;
+}
+
 static inline bool codirDepRequiresPlannedOwnerDims(codir::CodeletOp codelet,
                                                     unsigned depIndex) {
   std::optional<codir::CodirStorageViewKind> view =
@@ -71,6 +84,8 @@ static inline bool codirDepHasHaloWindow(codir::CodeletOp codelet,
 static inline bool codirDepUsesHaloStencilStorage(codir::CodeletOp codelet,
                                                   unsigned depIndex) {
   if (!codelet || depIndex >= codelet.getDeps().size())
+    return false;
+  if (!codelet.getDeps()[depIndex].getDefiningOp<codir::HaloExchangeOp>())
     return false;
   if (!codirDepRequiresComputeBlockStorage(codelet, depIndex))
     return false;
@@ -206,8 +221,7 @@ codirRootHasHaloStencilStorageParticipant(codir::CodeletOp codelet,
                                           unsigned depIndex) {
   if (!codelet || depIndex >= codelet.getDeps().size())
     return false;
-  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
-      codelet.getDeps()[depIndex]);
+  Value root = getCodirHaloStorageRoot(codelet.getDeps()[depIndex]);
   Operation *scope = codelet->getParentOfType<ModuleOp>();
   if (!root || !scope)
     return false;
@@ -217,7 +231,7 @@ codirRootHasHaloStencilStorageParticipant(codir::CodeletOp codelet,
     if (found)
       return;
     for (auto [idx, dep] : llvm::enumerate(candidate.getDeps())) {
-      if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) != root)
+      if (getCodirHaloStorageRoot(dep) != root)
         continue;
       if (codirDepUsesHaloStencilStorage(candidate,
                                          static_cast<unsigned>(idx))) {

@@ -13,7 +13,6 @@ namespace mlir::carts::codir {
 
 std::unique_ptr<Pass> createConvertSdeToCodirPass();
 std::unique_ptr<Pass> createConvertCodirToArtsPass();
-std::unique_ptr<Pass> createConvertSdeBoundaryToArtsPass();
 
 #define GEN_PASS_DECL
 #include "carts/dialect/codir/Conversion/Passes.h.inc"

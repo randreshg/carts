@@ -1,8 +1,8 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline codir-to-arts --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
-// Same trip counts are not enough to form a repeated timestep. SDE must expose
-// legal nested output parallelism and carry the resulting owner-tile/owner-strip
-// plans to CODIR/ARTS instead of inventing an SDE redistribution target.
+// Same trip counts are not enough to form a repeated timestep. SDE must not
+// stamp an owner-tile plan when the committed write layout is single-owner; the
+// later owner-strip plan remains a real transformed fact.
 
 // CHECK-LABEL: // -----// IR Dump After PatternAnalysis (sde-pattern-analysis) //----- //
 // CHECK: func.func @mismatched_uniform_adjacent
@@ -11,10 +11,7 @@
 
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // CHECK: func.func @mismatched_uniform_adjacent
-// CHECK: iterationTopology = #sde.iteration_topology<owner_tile>
-// CHECK-SAME: logicalWorkerSlice = [6, 3]
-// CHECK-SAME: physicalBlockShape = [3, 3]
-// CHECK-SAME: physicalOwnerDims = [0, 1]
+// CHECK-NOT: iterationTopology = #sde.iteration_topology<owner_tile>
 // CHECK: iterationTopology = #sde.iteration_topology<owner_strip>
 // CHECK-SAME: logicalWorkerSlice = [3]
 // CHECK-SAME: physicalBlockShape = [3]
@@ -22,10 +19,7 @@
 
 // CHECK-LABEL: // -----// IR Dump After ConvertCodirToArts (convert-codir-to-arts) //----- //
 // CHECK: attributes {storageBridgeCopy}
-// CHECK: planIterationTopology = #arts.plan_iteration_topology<owner_tile>
-// CHECK-SAME: planLogicalWorkerSlice = [6, 3]
-// CHECK-SAME: planOwnerDims = [0, 1]
-// CHECK-SAME: planPhysicalBlockShape = [3, 3]
+// CHECK-NOT: planIterationTopology = #arts.plan_iteration_topology<owner_tile>
 // CHECK: arts.barrier
 // CHECK: planIterationTopology = #arts.plan_iteration_topology<owner_strip>
 // CHECK-SAME: planLogicalWorkerSlice = [3]

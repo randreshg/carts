@@ -9,6 +9,7 @@
 include "carts/dialect/codir/IR/CodirAttrs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 def CartsCodir_CodeletOp
@@ -103,6 +104,19 @@ def CartsCodir_AtomicAddOp
   let arguments = (ins AnyType:$addr, AnyType:$value);
   let assemblyFormat =
       "`(` $addr `,` $value `:` type($addr) `,` type($value) `)` attr-dict";
+}
+
+def CartsCodir_HaloExchangeOp
+    : CartsCodir_Op<"halo_exchange", [Pure, SameOperandsAndResultType]> {
+  let summary = "CODIR halo movement node over a block-storage dependency";
+  let description = [{
+    `codir.halo_exchange` makes halo movement explicit before CODIR-to-ARTS.
+  }];
+
+  let arguments = (ins AnyMemRef:$source);
+  let results = (outs AnyMemRef:$result);
+  let assemblyFormat =
+      "$source attr-dict `:` type($source) `->` type($result)";
 }
 
 #endif // CARTS_CODIR_OPS

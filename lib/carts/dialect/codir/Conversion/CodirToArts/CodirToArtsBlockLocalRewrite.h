@@ -65,19 +65,26 @@ static inline LogicalResult rewriteBlockLocalAccesses(
           return WalkResult::interrupt();
         }
         Value relativeBlock;
-        FailureOr<Value> localIndex =
-            rewrite->rankExpandedGridAccess
-                ? materializeRankExpandedGridWindowIndex(
-                      builder, op->getLoc(), indices[rewrite->ownerDim].get(),
-                      rewrite->ownerBase, rewrite->localOrigin, relativeBlock)
-                : materializeGroupedBlockLocalIndex(
-                      builder, op->getLoc(), indices[rewrite->ownerDim].get(),
-                      rewrite->ownerBase, rewrite->localOrigin,
-                      rewrite->lowerHalo, rewrite->upperHalo,
-                      rewrite->blockSize, rewrite->groupBlockCount,
-                      rewrite->ownerWindowExtent, rewrite->sourceDimExtent,
-                      relativeBlock, rewrite->allowFullWindowAccess,
-                      rewrite->requireOwnerWindowProof, sourceByBlockArgument);
+        FailureOr<Value> localIndex;
+        if (rewrite->rankExpandedLogicalGridAccess) {
+          localIndex = materializeRankExpandedLogicalGridWindowIndex(
+              builder, op->getLoc(), indices[rewrite->ownerDim].get(),
+              rewrite->ownerBase, rewrite->localOrigin,
+              rewrite->rankExpandedTileExtent, rewrite->groupBlockCount,
+              relativeBlock, sourceByBlockArgument);
+        } else if (rewrite->rankExpandedGridAccess) {
+          localIndex = materializeRankExpandedGridWindowIndex(
+              builder, op->getLoc(), indices[rewrite->ownerDim].get(),
+              rewrite->ownerBase, rewrite->localOrigin, relativeBlock);
+        } else {
+          localIndex = materializeGroupedBlockLocalIndex(
+              builder, op->getLoc(), indices[rewrite->ownerDim].get(),
+              rewrite->ownerBase, rewrite->localOrigin, rewrite->lowerHalo,
+              rewrite->upperHalo, rewrite->blockSize, rewrite->groupBlockCount,
+              rewrite->ownerWindowExtent, rewrite->sourceDimExtent,
+              relativeBlock, rewrite->allowFullWindowAccess,
+              rewrite->requireOwnerWindowProof, sourceByBlockArgument);
+        }
         if (failed(localIndex)) {
           op->emitError("grouped block-local access for owner dim ")
               << rewrite->ownerDim << " does not stay within the block window";

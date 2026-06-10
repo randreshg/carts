@@ -5,6 +5,7 @@ set(CARTS_SDE_TRANSFORMS_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/state/MemoryUnitMaterialization.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/RankExpandMu.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/CuNormalization.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/state/ScalarBlockReduction.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/RaiseToMuAccessWindow.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/CoarseAvoidance.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/Redistribute.cpp"

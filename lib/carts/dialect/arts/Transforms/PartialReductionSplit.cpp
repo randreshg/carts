@@ -184,8 +184,7 @@ static void markDistributedRemoteUse(Value dep) {
     alloc.removeLocalOnlyAttr();
 }
 
-static void markReductionSplitDistribution(Operation *op,
-                                                  bool distributed) {
+static void markReductionSplitDistribution(Operation *op, bool distributed) {
   if (!op)
     return;
   setEdtDistributionPattern(op, EdtDistributionPattern::uniform);
@@ -240,9 +239,8 @@ static LogicalResult findResultDependencyIndex(EdtOp edt, SplitFacts &facts) {
         continue;
 
     if (resultIndex)
-      return edt.emitOpError()
-             << "partial-reduction split found multiple "
-                "candidate result dependencies";
+      return edt.emitOpError() << "partial-reduction split found multiple "
+                                  "candidate result dependencies";
     resultIndex = static_cast<unsigned>(idx);
   }
 
@@ -290,8 +288,7 @@ static FailureOr<DbRefOp> findSingleResultRef(EdtOp edt,
 
 static FailureOr<ReductionLoopMatch> matchReductionLoop(EdtOp edt,
                                                         SplitFacts facts) {
-  FailureOr<DbRefOp> resultRef =
-      findSingleResultRef(edt, facts.resultDepIndex);
+  FailureOr<DbRefOp> resultRef = findSingleResultRef(edt, facts.resultDepIndex);
   if (failed(resultRef))
     return failure();
 
@@ -418,18 +415,16 @@ static LogicalResult validateSplitFacts(EdtOp edt, SplitFacts &facts) {
 
   FailureOr<ReductionLoopMatch> reduction = matchReductionLoop(edt, facts);
   if (failed(reduction))
-    return edt.emitOpError()
-           << "partial-reduction split could not prove the "
-              "supported scalar floating add reduction loop";
+    return edt.emitOpError() << "partial-reduction split could not prove the "
+                                "supported scalar floating add reduction loop";
   facts.reduction = *reduction;
 
   if (auto workerSlice =
           readI64ArrayAttr(getPlanLogicalWorkerSliceAttr(edt.getOperation()))) {
     if (!workerSlice->empty()) {
       if ((*workerSlice)[0] <= 0)
-        return edt.emitOpError()
-               << "partial-reduction split requires a "
-                  "positive rank-1 result tile length";
+        return edt.emitOpError() << "partial-reduction split requires a "
+                                    "positive rank-1 result tile length";
       facts.resultElementCount = (*workerSlice)[0];
     }
   }
@@ -722,8 +717,8 @@ static LogicalResult createIntermediateCombineEdt(
                                   route, deps, ValueRange{});
   addEdtBlockArguments(combineEdt, deps, ValueRange{}, loc);
   copyCombineMetadata(sourceEdt, combineEdt);
-  markReductionSplitDistribution(
-      combineEdt.getOperation(), concurrency == EdtConcurrency::internode);
+  markReductionSplitDistribution(combineEdt.getOperation(),
+                                 concurrency == EdtConcurrency::internode);
   return createIntermediateCombineBody(combineEdt, scalarType, elementCount,
                                        rightIndex.has_value());
 }
@@ -754,8 +749,8 @@ static LogicalResult createFinalCombineEdt(OpBuilder &builder, Location loc,
                                   route, deps, ValueRange{});
   addEdtBlockArguments(combineEdt, deps, ValueRange{}, loc);
   copyCombineMetadata(sourceEdt, combineEdt);
-  markReductionSplitDistribution(
-      combineEdt.getOperation(), concurrency == EdtConcurrency::internode);
+  markReductionSplitDistribution(combineEdt.getOperation(),
+                                 concurrency == EdtConcurrency::internode);
   // The final combine RO-acquires the per-tile partials and writes the result
   // block once, so downstream lowering can treat it as a block-native settle
   // rather than a shared-frontier <inout> accumulate.
@@ -850,12 +845,11 @@ static LogicalResult splitReductionFacts(EdtOp edt, SplitFacts &facts) {
             ? createDistributedRoute(builder, loc, ownerLoop, ownerIndex,
                                      tileIndex, facts.splitFactor)
             : edt.getRoute();
-    auto splitEdt =
-        EdtOp::create(builder, loc, edt.getType(), splitConcurrency,
-                      splitRoute, splitDeps, splitParams);
+    auto splitEdt = EdtOp::create(builder, loc, edt.getType(), splitConcurrency,
+                                  splitRoute, splitDeps, splitParams);
     copySplitEdtAttrs(edt, splitEdt);
     markReductionSplitDistribution(splitEdt.getOperation(),
-                                          distributedTopology);
+                                   distributedTopology);
     addEdtBlockArguments(splitEdt, splitDeps, splitParams, loc);
     cloneEdtBody(edt, splitEdt);
     if (failed(retileSplitWorkerLoop(splitEdt, facts, originalParamCount)))
@@ -903,8 +897,7 @@ static LogicalResult splitReductionFacts(EdtOp edt, SplitFacts &facts) {
 }
 
 struct PartialReductionSplitPass
-    : public impl::PartialReductionSplitBase<
-          PartialReductionSplitPass> {
+    : public impl::PartialReductionSplitBase<PartialReductionSplitPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
@@ -918,9 +911,8 @@ struct PartialReductionSplitPass
       SplitFacts facts;
       if (failed(validateSplitFacts(edt, facts)) ||
           failed(splitReductionFacts(edt, facts))) {
-        edt.emitError()
-            << "failed to split partial-reduction facts; leaving "
-               "partialReductionSplitRequired for ARTS-RT guard";
+        edt.emitError() << "failed to split partial-reduction facts; leaving "
+                           "partialReductionSplitRequired for ARTS-RT guard";
         signalPassFailure();
         return;
       }
@@ -930,7 +922,6 @@ struct PartialReductionSplitPass
 
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::carts::arts::createPartialReductionSplitPass() {
+std::unique_ptr<Pass> mlir::carts::arts::createPartialReductionSplitPass() {
   return std::make_unique<PartialReductionSplitPass>();
 }

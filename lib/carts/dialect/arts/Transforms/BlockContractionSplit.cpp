@@ -114,8 +114,8 @@ static DbAcquireOp emitBlockAcquire(OpBuilder &builder, Location loc,
 static DbAcquireOp emitSingleBlockAcquire(OpBuilder &builder, Location loc,
                                           DbAllocOp alloc, ArtsMode mode,
                                           Value offset, Value size) {
-  return emitBlockAcquire(builder, loc, alloc, mode,
-                          SmallVector<Value>{offset}, SmallVector<Value>{size});
+  return emitBlockAcquire(builder, loc, alloc, mode, SmallVector<Value>{offset},
+                          SmallVector<Value>{size});
 }
 
 /// The db_ref payload (rank-N memref view) of an EDT body's `depIndex` block
@@ -190,13 +190,11 @@ static bool allGatherWritesReplicaFromSource(EdtOp copyEdt, DbAllocOp replica,
         copyEdt.getDependencies()[i + 1].getDefiningOp<DbAcquireOp>();
     if (!srcAcquire || !dstAcquire)
       return false;
-    DbAllocOp dstAlloc =
-        dstAcquire.getSourcePtr().getDefiningOp<DbAllocOp>();
+    DbAllocOp dstAlloc = dstAcquire.getSourcePtr().getDefiningOp<DbAllocOp>();
     if (dstAlloc != replica)
       continue;
 
-    DbAllocOp srcAlloc =
-        srcAcquire.getSourcePtr().getDefiningOp<DbAllocOp>();
+    DbAllocOp srcAlloc = srcAcquire.getSourcePtr().getDefiningOp<DbAllocOp>();
     if (srcAlloc != expectedSource)
       return false;
     sawReplicaWrite = true;
@@ -236,8 +234,8 @@ static DbAllocOp findMatchingReplica(ModuleOp module,
     module.walk([&](EdtOp edt) {
       if (graphMatched)
         return;
-      graphMatched =
-          allGatherWritesReplicaFromSource(edt, alloc, coarseReplicaSourceAlloc);
+      graphMatched = allGatherWritesReplicaFromSource(edt, alloc,
+                                                      coarseReplicaSourceAlloc);
     });
     if (!graphMatched)
       return;
@@ -252,8 +250,9 @@ static DbAllocOp findMatchingReplica(ModuleOp module,
 /// loads must use the same loop and same payload dimension so the producer can
 /// rebase that dimension from whole-replica coordinates to tile-local
 /// coordinates.
-static LogicalResult findReplicatedContractionAccesses(
-    EdtOp consumerEdt, unsigned replicatedDep, BlockContractionTarget &t) {
+static LogicalResult
+findReplicatedContractionAccesses(EdtOp consumerEdt, unsigned replicatedDep,
+                                  BlockContractionTarget &t) {
   Block &body = consumerEdt.getBody().front();
   if (replicatedDep >= body.getNumArguments())
     return failure();
@@ -297,8 +296,7 @@ static LogicalResult findReplicatedContractionAccesses(
     if (!loadContractionDim)
       continue;
     if (contractionLoop &&
-        (contractionLoop != loadLoop ||
-         *contractionDim != *loadContractionDim))
+        (contractionLoop != loadLoop || *contractionDim != *loadContractionDim))
       return failure();
     contractionLoop = loadLoop;
     contractionDim = *loadContractionDim;
@@ -355,8 +353,9 @@ static std::optional<BlockContractionTarget> matchTarget(EdtOp edt) {
   auto ownerDims = readI64ArrayAttr(edt.getPartialReductionOwnerDimsAttr());
   if (!ownerDims)
     return std::nullopt;
-  auto readDepMap = [](ArrayAttr maps,
-                       unsigned depIndex) -> std::optional<SmallVector<int64_t, 4>> {
+  auto readDepMap =
+      [](ArrayAttr maps,
+         unsigned depIndex) -> std::optional<SmallVector<int64_t, 4>> {
     if (depIndex >= maps.size())
       return std::nullopt;
     return readI64ArrayAttr(dyn_cast<ArrayAttr>(maps[depIndex]));
@@ -499,7 +498,8 @@ static DbAllocOp createPartialsDb(OpBuilder &builder, Location loc,
 }
 
 /// Emit one per-tile contraction producer EDT. The EDT acquires OUTSIDE its
-/// body: the replica strip for tile `tileIdx` (<in>), every original block input
+/// body: the replica strip for tile `tileIdx` (<in>), every original block
+/// input
 /// (<in>), and the partial tile `tileIdx` (<out>). Its body recomputes the
 /// contraction only for that tile, accumulating into the partial.
 static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
@@ -511,9 +511,8 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
   Value tileVal = createConstantIndex(builder, loc, tileIdx);
 
   // OUTSIDE-the-EDT acquires (block-arg deps).
-  DbAcquireOp partialAcq =
-      emitSingleBlockAcquire(builder, loc, partialsDb, ArtsMode::out, tileVal,
-                             one);
+  DbAcquireOp partialAcq = emitSingleBlockAcquire(builder, loc, partialsDb,
+                                                  ArtsMode::out, tileVal, one);
   SmallVector<Value> deps{partialAcq.getPtr()};
   deps.reserve(t.inputDeps.size() + 2);
   for (BlockInputDep &input : t.inputDeps) {
@@ -527,14 +526,12 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
       sizes.assign(offsets.size(), one);
     if (offsets.size() != sizes.size())
       return failure();
-    DbAcquireOp inputBlock =
-        emitBlockAcquire(builder, loc, input.alloc, ArtsMode::in, offsets,
-                         sizes);
+    DbAcquireOp inputBlock = emitBlockAcquire(builder, loc, input.alloc,
+                                              ArtsMode::in, offsets, sizes);
     deps.push_back(inputBlock.getPtr());
   }
-  DbAcquireOp replicaStrip =
-      emitSingleBlockAcquire(builder, loc, t.replicaAlloc, ArtsMode::in,
-                             tileVal, one);
+  DbAcquireOp replicaStrip = emitSingleBlockAcquire(
+      builder, loc, t.replicaAlloc, ArtsMode::in, tileVal, one);
   unsigned replicaBodyArgIndex = deps.size();
   deps.push_back(replicaStrip.getPtr());
 
@@ -565,8 +562,8 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
     body.addArgument(param.getType(), loc);
 
   // Clone the original body into the producer. The producer body args are
-  // [partial, block inputs..., replica strip, params...]; the original body args
-  // are [deps..., params...].
+  // [partial, block inputs..., replica strip, params...]; the original body
+  // args are [deps..., params...].
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(&body);
   // Tile bounds are created first so they dominate the cloned contraction loop
@@ -584,9 +581,9 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
   mapper.map(consumerBody.getArgument(t.replicatedDep),
              body.getArgument(replicaBodyArgIndex));
   for (unsigned pi = 0, pe = t.consumerEdt.getParams().size(); pi < pe; ++pi)
-    mapper.map(consumerBody.getArgument(t.consumerEdt.getDependencies().size() +
-                                        pi),
-               body.getArgument(deps.size() + pi));
+    mapper.map(
+        consumerBody.getArgument(t.consumerEdt.getDependencies().size() + pi),
+        body.getArgument(deps.size() + pi));
   for (Operation &op : consumerBody.without_terminator())
     builder.clone(op, mapper);
 
@@ -632,8 +629,8 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
 /// Emit the per-block summing settle: sum the partial tiles into the settled
 /// block (the original result DB), written <out> once.
 static LogicalResult emitSettle(OpBuilder &builder, Location loc,
-                                BlockContractionTarget &t,
-                                DbAllocOp partialsDb, Value ownerOrdinal) {
+                                BlockContractionTarget &t, DbAllocOp partialsDb,
+                                Value ownerOrdinal) {
   ModuleOp module = t.consumerEdt->getParentOfType<ModuleOp>();
   DbAllocOp resultAlloc = getDepAlloc(t.consumerEdt, t.resultDep);
   DbAcquireOp resultAcq = getDepAcquire(t.consumerEdt, t.resultDep);
@@ -652,14 +649,12 @@ static LogicalResult emitSettle(OpBuilder &builder, Location loc,
   deps.reserve(t.numTiles + 1);
   for (int64_t tile = 0; tile < t.numTiles; ++tile) {
     Value tileVal = createConstantIndex(builder, loc, tile);
-    DbAcquireOp partialAcq =
-        emitSingleBlockAcquire(builder, loc, partialsDb, ArtsMode::in, tileVal,
-                               one);
+    DbAcquireOp partialAcq = emitSingleBlockAcquire(builder, loc, partialsDb,
+                                                    ArtsMode::in, tileVal, one);
     deps.push_back(partialAcq.getPtr());
   }
-  DbAcquireOp dstAcq =
-      emitSingleBlockAcquire(builder, loc, resultAlloc, ArtsMode::out,
-                             resultOffset, one);
+  DbAcquireOp dstAcq = emitSingleBlockAcquire(builder, loc, resultAlloc,
+                                              ArtsMode::out, resultOffset, one);
   deps.push_back(dstAcq.getPtr());
 
   SmallVector<Value> params(blockElementSizes.begin(), blockElementSizes.end());
@@ -749,8 +744,7 @@ static LogicalResult splitTarget(BlockContractionTarget &t) {
 }
 
 struct BlockContractionSplitPass
-    : public impl::BlockContractionSplitBase<
-          BlockContractionSplitPass> {
+    : public impl::BlockContractionSplitBase<BlockContractionSplitPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<BlockContractionTarget, 2> targets;
@@ -769,7 +763,6 @@ struct BlockContractionSplitPass
 
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::carts::arts::createBlockContractionSplitPass() {
+std::unique_ptr<Pass> mlir::carts::arts::createBlockContractionSplitPass() {
   return std::make_unique<BlockContractionSplitPass>();
 }

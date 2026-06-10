@@ -6,7 +6,8 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTBRIDGETYPES_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTBRIDGETYPES_H
 
-#include "CodirToArtsCommonMaterialization.h"
+#include "CodirToArtsCodirDbBackedMemref.h"
+#include <limits>
 
 namespace {
 
@@ -91,6 +92,22 @@ struct HostBridgeUseCollection {
   SmallVector<HostBridgeParticipant> participants;
   SmallVector<Operation *> readObservationAnchors;
 };
+
+static inline int64_t saturatingMul(int64_t lhs, int64_t rhs) {
+  if (lhs <= 0 || rhs <= 0)
+    return 0;
+  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
+    return std::numeric_limits<int64_t>::max();
+  return lhs * rhs;
+}
+
+static inline std::optional<int64_t> getPositiveStaticIndex(Value value) {
+  std::optional<int64_t> folded =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value);
+  if (folded && *folded > 0)
+    return folded;
+  return std::nullopt;
+}
 
 static inline BridgeWorkGroupPlan
 planBridgeWorkGroups(const BridgePlan &plan, BridgeWorkloadKind workloadKind,

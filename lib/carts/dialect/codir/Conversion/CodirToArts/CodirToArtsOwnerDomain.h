@@ -6,7 +6,7 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_OWNERDOMAIN_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_OWNERDOMAIN_H
 
-#include "CodirToArtsOwnerSlices.h"
+#include "CodirToArtsOwnerSliceContainment.h"
 
 namespace {
 

@@ -1,11 +1,17 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-codir-to-arts,realize-edt-distribution-plan,verify-arts-objects-only)' \
-// RUN:   | %FileCheck %s --implicit-check-not=host_whole --implicit-check-not=depPattern --implicit-check-not=distribution_pattern
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(verify-codir,codir-halo-exchange,convert-codir-to-arts,realize-edt-distribution-plan,verify-arts-objects-only)' \
+// RUN:   | %FileCheck %s --implicit-check-not='partitioning(<coarse>)' --implicit-check-not=depPattern --implicit-check-not=distribution_pattern
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-codir-to-arts)' 2>&1 \
+// RUN:   | %FileCheck %s --check-prefix=MISSING-HALO
 
 // The source pattern attribute is not required for movement materialization.
 // With the committed halo collective, compute-block storage view, and the
 // access-window halo, CODIR-to-ARTS materializes block-native halo storage even
 // though no source pattern is present. There is no source-pattern fallback: the
 // committed structure alone drives the movement, and nothing coarse-gathers.
+// Direct CODIR-to-ARTS without the CODIR graph transform fails closed.
+
+// MISSING-HALO: was not rewritten to codir.halo_exchange
+// MISSING-HALO-SAME: run codir-halo-exchange before CODIR-to-ARTS
 
 module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_workers = 256 : i64} {
   func.func @halo_block_storage_without_source_pattern() {
@@ -45,6 +51,13 @@ module attributes {arts.runtime_total_nodes = 4 : i64, arts.runtime_total_worker
 // CHECK-LABEL: func.func @halo_block_storage_without_source_pattern
 // CHECK: arts.db_alloc
 // CHECK-SAME: <block>
+// CHECK-SAME: perBlockSingleWriterStencil
+// CHECK-SAME: stencil_supported_block_halo
+// CHECK: arts.db_alloc
+// CHECK-SAME: <block>
+// CHECK-SAME: compact_halo_payload
+// CHECK-SAME: perBlockSingleWriterStencil
+// CHECK-SAME: storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>
 // CHECK: arts.db_acquire
 // CHECK-SAME: partitioning(<block>)
 // CHECK: arts.edt <task>

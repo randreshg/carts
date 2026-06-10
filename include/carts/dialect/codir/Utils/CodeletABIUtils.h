@@ -58,11 +58,9 @@ ArrayAttr getDepPhysicalBlockShapeAttr(CodeletOp codelet, unsigned depIndex);
 bool stencilWriteFitsInTile(CodeletOp codelet);
 
 /// --- First-class CODIR collective selection -------------------------------
-/// These predicates are the EXACT gate bodies that ConvertCodirToArts has
-/// historically used to decide the all-gather and cross-owner reduce
-/// realizations (ArtsMaterializationUtils.h). Hoisted here so
-/// DepStorageAssignment can stamp the first-class `dep_collectives` carrier
-/// from the same bodies.
+/// These predicates are the shared CODIR gates for all-gather and cross-owner
+/// reduce edges. DepStorageAssignment uses them to commit the first-class
+/// `dep_collectives` carrier before ARTS lowering.
 
 /// True when |producer|'s |depIndex| coarse intermediate buffer is read by a
 /// sibling `replicated_read` contraction consumer. This is the all-gather

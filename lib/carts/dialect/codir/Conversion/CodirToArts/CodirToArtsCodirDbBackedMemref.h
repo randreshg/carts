@@ -70,8 +70,8 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
 
   SmallVector<CodirOwnerHaloWindow, 4> ownerHalos;
   if (depIndex) {
-    Value backingRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
-        planSource.getDeps()[*depIndex]);
+    Value backingRoot =
+        getCodirHaloStorageRoot(planSource.getDeps()[*depIndex]);
     ownerHalos = codirBackingBufferHaloWindows(
         backingRoot, static_cast<unsigned>(memrefType.getRank()));
     for (const CodirOwnerHaloWindow &ownerHalo : ownerHalos) {
@@ -114,15 +114,18 @@ createDbBackedMemref(OpBuilder &builder, Location loc, MemRefType memrefType,
 }
 
 static inline arts::DbAllocOp findBackingDbAlloc(Value storage) {
+  if (Value source = getCodirHaloExchangeSource(storage))
+    storage = source;
   return dyn_cast_or_null<arts::DbAllocOp>(arts::DbUtils::getUnderlyingDbAlloc(
       ::mlir::carts::ValueAnalysis::stripMemrefViewOps(storage)));
 }
 
 static inline std::optional<unsigned>
 findCodirDependencyIndexForRoot(codir::CodeletOp codelet, Value root) {
-  for (auto [idx, dep] : llvm::enumerate(codelet.getDeps()))
-    if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(dep) == root)
+  for (auto [idx, dep] : llvm::enumerate(codelet.getDeps())) {
+    if (getCodirHaloStorageRoot(dep) == root)
       return static_cast<unsigned>(idx);
+  }
   return std::nullopt;
 }
 

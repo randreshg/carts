@@ -17,15 +17,14 @@ materializeExistingDbHostBridgeIfNeeded(codir::CodeletOp codelet,
     return failure();
 
   Value dep = codelet.getDeps()[depIndex];
+  if (auto exchange = dep.getDefiningOp<codir::HaloExchangeOp>())
+    dep = exchange.getSource();
   arts::DbAllocOp hostAlloc = findBackingDbAlloc(dep);
   if (!hostAlloc)
     return success();
-  // Phase-redistributed deps AND iterative-stencil halo deps both need the
-  // host-whole -> compute-block bridge: the bridge is where the per-block
-  // single-writer stencil DB + halo exchange are realized
-  // (perBlockStencilHalo). A committed compute_block+halo stencil with a coarse
-  // backing host DB would otherwise never reach the bridge and stay coarse
-  // local_only (not distributed).
+  // Phase-redistributed and halo deps with a coarse host DB still need the
+  // host-whole -> compute-block copy. The explicit codir.halo_exchange op owns
+  // the later halo movement.
   bool needsBridgeForRootHaloParticipant =
       codirDepRequiresComputeBlockStorage(codelet, depIndex) &&
       codirRootHasHaloStencilStorageParticipant(codelet, depIndex);

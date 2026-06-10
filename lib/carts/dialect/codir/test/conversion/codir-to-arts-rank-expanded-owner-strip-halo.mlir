@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-codir,convert-codir-to-arts)' 2>&1 \
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-codir,codir-halo-exchange,convert-codir-to-arts)' 2>&1 \
 // RUN:   | %FileCheck %s
 
 // Rank-expanded owner-strip storage may group adjacent row blocks, but a halo

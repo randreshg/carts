@@ -30,13 +30,13 @@ module {}
 // MANIFEST: "ReductionDepMapping"
 // MANIFEST: "ReductionAtomicMaterialization"
 // MANIFEST: "DepStorageAssignment"
+// MANIFEST: "CodirHaloExchange"
 // MANIFEST: "VerifyCodir"
 // MANIFEST-SAME: "dependsOn": ["sde-to-codir"]
 // MANIFEST: "name": "codir-to-arts"
 // MANIFEST-NOT: "ReductionDepMapping"
 // MANIFEST-NOT: "ReductionAtomicMaterialization"
 // MANIFEST-NOT: "DepStorageAssignment"
-// MANIFEST: "ConvertSdeBoundaryToArts"
 // MANIFEST: "ConvertCodirToArts"
 // MANIFEST-NOT: "ConvertSdeToArts"
 // MANIFEST-SAME: "dependsOn": ["codir-graph-transforms"]

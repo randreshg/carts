@@ -7,6 +7,9 @@
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_HOSTBLOCKCOPYMATERIALIZATION_H
 
 #include "CodirToArtsBridgeAcquireUtils.h"
+#include "CodirToArtsBridgeGrouping.h"
+#include "CodirToArtsHostBridgeLogicalSizes.h"
+#include "CodirToArtsHostCopyNests.h"
 #include "carts/utils/ValueAnalysis.h"
 
 namespace {

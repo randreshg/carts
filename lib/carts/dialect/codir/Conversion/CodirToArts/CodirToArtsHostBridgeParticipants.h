@@ -10,6 +10,286 @@
 
 namespace {
 
+static inline bool codirBridgeIndexIsAddOf(Value candidate, Value base,
+                                           int64_t offset) {
+  candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
+  base = ::mlir::carts::ValueAnalysis::stripNumericCasts(base);
+  if (offset == 0)
+    return ::mlir::carts::ValueAnalysis::sameValue(candidate, base);
+
+  auto add = candidate.getDefiningOp<arith::AddIOp>();
+  if (!add)
+    return false;
+  auto rhs = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(add.getRhs());
+  if (rhs && *rhs == offset &&
+      ::mlir::carts::ValueAnalysis::sameValue(add.getLhs(), base))
+    return true;
+  auto lhs = ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(add.getLhs());
+  return lhs && *lhs == offset &&
+         ::mlir::carts::ValueAnalysis::sameValue(add.getRhs(), base);
+}
+
+static inline bool codirBridgeUpperMatchesLinearExtent(Value upper, Value base,
+                                                       int64_t extent) {
+  upper = ::mlir::carts::ValueAnalysis::stripNumericCasts(upper);
+  if (codirBridgeIndexIsAddOf(upper, base, extent))
+    return true;
+  if (auto min = upper.getDefiningOp<arith::MinUIOp>())
+    return codirBridgeIndexIsAddOf(min.getLhs(), base, extent) ||
+           codirBridgeIndexIsAddOf(min.getRhs(), base, extent);
+  if (auto min = upper.getDefiningOp<arith::MinSIOp>())
+    return codirBridgeIndexIsAddOf(min.getLhs(), base, extent) ||
+           codirBridgeIndexIsAddOf(min.getRhs(), base, extent);
+  return false;
+}
+
+static inline bool codirBridgeLoopStepEquals(scf::ForOp loop, int64_t step) {
+  if (!loop || step <= 0)
+    return false;
+  std::optional<int64_t> folded =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+  return folded && *folded == step;
+}
+
+static inline Value codirBridgeBodyParamSource(codir::CodeletOp codelet,
+                                               Value bodyValue) {
+  auto bodyArg = dyn_cast<BlockArgument>(
+      ::mlir::carts::ValueAnalysis::stripNumericCasts(bodyValue));
+  if (!codelet || !bodyArg || codelet.getBody().empty() ||
+      bodyArg.getOwner() != &codelet.getBody().front())
+    return {};
+  unsigned depCount = codelet.getDeps().size();
+  if (bodyArg.getArgNumber() < depCount)
+    return {};
+  unsigned paramIndex = bodyArg.getArgNumber() - depCount;
+  if (paramIndex >= codelet.getParams().size())
+    return {};
+  return codelet.getParams()[paramIndex];
+}
+
+static inline bool codirBridgeBodyParamIsDivOf(codir::CodeletOp codelet,
+                                               Value quotientBodyParam,
+                                               Value dividendBodyParam,
+                                               int64_t divisor) {
+  if (divisor <= 0)
+    return false;
+  Value quotientSource = codirBridgeBodyParamSource(codelet, quotientBodyParam);
+  Value dividendSource = codirBridgeBodyParamSource(codelet, dividendBodyParam);
+  if (!quotientSource || !dividendSource)
+    return false;
+  auto div = ::mlir::carts::ValueAnalysis::stripNumericCasts(quotientSource)
+                 .getDefiningOp<arith::DivUIOp>();
+  if (!div ||
+      !::mlir::carts::ValueAnalysis::sameValue(div.getLhs(), dividendSource))
+    return false;
+  std::optional<int64_t> folded =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(div.getRhs());
+  return folded && *folded == divisor;
+}
+
+static inline Value codirBridgeRankExpandedLinearStoreIndex(
+    Value ownerIndex, Value tileIndex, Value ownerBlockBase, int64_t tileExtent,
+    bool &ownerIndexIsRelative) {
+  if (tileExtent <= 0)
+    return {};
+  ownerIndex = ::mlir::carts::ValueAnalysis::stripNumericCasts(ownerIndex);
+  tileIndex = ::mlir::carts::ValueAnalysis::stripNumericCasts(tileIndex);
+  ownerBlockBase =
+      ::mlir::carts::ValueAnalysis::stripNumericCasts(ownerBlockBase);
+
+  auto rem = tileIndex.getDefiningOp<arith::RemUIOp>();
+  if (!rem)
+    return {};
+  std::optional<int64_t> remRhs =
+      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(rem.getRhs());
+  if (!remRhs || *remRhs != tileExtent)
+    return {};
+
+  auto getDivLinearIndex = [&](Value candidate) -> Value {
+    auto div = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate)
+                   .getDefiningOp<arith::DivUIOp>();
+    if (!div)
+      return {};
+    std::optional<int64_t> divRhs =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(div.getRhs());
+    if (!divRhs || *divRhs != tileExtent ||
+        !::mlir::carts::ValueAnalysis::sameValue(div.getLhs(), rem.getLhs()))
+      return {};
+    return div.getLhs();
+  };
+
+  if (Value direct = getDivLinearIndex(ownerIndex)) {
+    ownerIndexIsRelative = false;
+    return direct;
+  }
+
+  auto sub = ownerIndex.getDefiningOp<arith::SubIOp>();
+  if (!sub ||
+      !::mlir::carts::ValueAnalysis::sameValue(sub.getRhs(), ownerBlockBase))
+    return {};
+  if (Value relative = getDivLinearIndex(sub.getLhs())) {
+    ownerIndexIsRelative = true;
+    return relative;
+  }
+  return {};
+}
+
+static inline bool codirBridgeStoreHasOnlyLoopAncestors(Operation *store,
+                                                        Operation *bodyRoot) {
+  if (!store || !bodyRoot)
+    return false;
+  for (Operation *parent = store->getParentOp(); parent && parent != bodyRoot;
+       parent = parent->getParentOp()) {
+    if (!isa<scf::ForOp>(parent))
+      return false;
+  }
+  return true;
+}
+
+static inline bool
+codirBridgeIsRankExpandedFullLinearWriter(codir::CodeletOp codelet,
+                                          unsigned depIndex) {
+  if (!codelet || depIndex >= codelet.getDeps().size() ||
+      codelet.getBody().empty())
+    return false;
+  if (getFinalizedCodirDepCollectiveKind(codelet, depIndex) !=
+      codir::CodirCollectiveKind::none)
+    return false;
+
+  std::optional<codir::CodirAccessMode> mode =
+      getCodirDepAccessMode(codelet, depIndex);
+  if (!mode || *mode != codir::CodirAccessMode::write)
+    return false;
+  if (!codirDepRequiresComputeBlockStorage(codelet, depIndex) ||
+      !hasCodirTileOwnerSlicePlan(codelet))
+    return false;
+
+  std::optional<SmallVector<unsigned, 4>> ownerDims =
+      getCodirDepOwnerDims(codelet, depIndex);
+  std::optional<SmallVector<int64_t, 4>> tileShape =
+      readI64ArrayAttr(codelet.getTileShapeAttr());
+  std::optional<SmallVector<int64_t, 4>> logicalSlice =
+      readI64ArrayAttr(codelet.getLogicalWorkerSliceAttr());
+  if (!ownerDims || ownerDims->size() != 1 || ownerDims->front() != 0 ||
+      !tileShape || tileShape->size() != 1 || tileShape->front() <= 0 ||
+      !logicalSlice || logicalSlice->size() != 1 || logicalSlice->front() <= 0)
+    return false;
+
+  Block &body = codelet.getBody().front();
+  if (depIndex >= body.getNumArguments())
+    return false;
+  Value depArg = body.getArgument(depIndex);
+  auto depType = dyn_cast<MemRefType>(depArg.getType());
+  if (!depType || depType.getRank() != 2 ||
+      (depType.getDimSize(1) != ShapedType::kDynamic &&
+       depType.getDimSize(1) != tileShape->front()))
+    return false;
+
+  SmallVector<Value, 4> ownerBaseCandidates;
+  unsigned depCount = codelet.getDeps().size();
+  unsigned paramCount = codelet.getParams().size();
+  if (body.getNumArguments() < depCount + paramCount)
+    return false;
+  ownerBaseCandidates.reserve(paramCount);
+  for (unsigned paramIndex = 0; paramIndex < paramCount; ++paramIndex)
+    ownerBaseCandidates.push_back(body.getArgument(depCount + paramIndex));
+
+  int64_t tileExtent = tileShape->front();
+  int64_t logicalExtent = logicalSlice->front();
+
+  bool sawStore = false;
+  bool rejected = false;
+  Value selectedOwnerBase;
+  body.walk([&](Operation *op) {
+    if (rejected)
+      return WalkResult::interrupt();
+    auto access = getCodirMemoryAccessInfo(op);
+    if (!access || access->memref != depArg)
+      return WalkResult::advance();
+
+    if (isa<memref::LoadOp, polygeist::DynLoadOp, affine::AffineLoadOp>(op)) {
+      rejected = true;
+      return WalkResult::interrupt();
+    }
+    if (!isa<memref::StoreOp, polygeist::DynStoreOp, affine::AffineStoreOp>(
+            op) ||
+        access->indices.size() != 2 ||
+        !codirBridgeStoreHasOnlyLoopAncestors(op, codelet.getOperation())) {
+      rejected = true;
+      return WalkResult::interrupt();
+    }
+
+    Value matchedOwnerBase;
+    for (Value candidateOwnerBase : ownerBaseCandidates) {
+      bool ownerIndexIsRelative = false;
+      Value linearIndex = codirBridgeRankExpandedLinearStoreIndex(
+          access->indices[0], access->indices[1], candidateOwnerBase,
+          tileExtent, ownerIndexIsRelative);
+      if (!linearIndex)
+        continue;
+
+      auto innerIv = dyn_cast<BlockArgument>(
+          ::mlir::carts::ValueAnalysis::stripNumericCasts(linearIndex));
+      auto innerLoop =
+          innerIv
+              ? dyn_cast_or_null<scf::ForOp>(innerIv.getOwner()->getParentOp())
+              : scf::ForOp{};
+      if (!innerLoop || innerLoop.getInductionVar() != innerIv ||
+          !codirBridgeLoopStepEquals(innerLoop, 1))
+        continue;
+
+      auto outerIv = dyn_cast<BlockArgument>(
+          ::mlir::carts::ValueAnalysis::stripNumericCasts(
+              innerLoop.getLowerBound()));
+      auto outerLoop =
+          outerIv
+              ? dyn_cast_or_null<scf::ForOp>(outerIv.getOwner()->getParentOp())
+              : scf::ForOp{};
+      if (!outerLoop || outerLoop.getInductionVar() != outerIv ||
+          !codirBridgeLoopStepEquals(outerLoop, tileExtent) ||
+          !codirBridgeUpperMatchesLinearExtent(innerLoop.getUpperBound(),
+                                               outerIv, tileExtent))
+        continue;
+
+      bool ownerMatches = false;
+      if (ownerIndexIsRelative) {
+        ownerMatches = codirBridgeBodyParamIsDivOf(codelet, candidateOwnerBase,
+                                                   outerLoop.getLowerBound(),
+                                                   tileExtent) &&
+                       codirBridgeUpperMatchesLinearExtent(
+                           outerLoop.getUpperBound(), outerLoop.getLowerBound(),
+                           logicalExtent);
+      } else {
+        ownerMatches =
+            ::mlir::carts::ValueAnalysis::sameValue(outerLoop.getLowerBound(),
+                                                    candidateOwnerBase) &&
+            codirBridgeUpperMatchesLinearExtent(
+                outerLoop.getUpperBound(), candidateOwnerBase, logicalExtent);
+      }
+      if (!ownerMatches)
+        continue;
+
+      if (matchedOwnerBase) {
+        rejected = true;
+        return WalkResult::interrupt();
+      }
+      matchedOwnerBase = candidateOwnerBase;
+    }
+
+    if (!matchedOwnerBase ||
+        (selectedOwnerBase && matchedOwnerBase != selectedOwnerBase)) {
+      rejected = true;
+      return WalkResult::interrupt();
+    }
+    selectedOwnerBase = matchedOwnerBase;
+
+    sawStore = true;
+    return WalkResult::advance();
+  });
+
+  return sawStore && !rejected;
+}
+
 static inline bool
 hostBridgeNeedsInitialCopyIn(Operation *anchor,
                              ArrayRef<HostBridgeParticipant> participants) {
@@ -28,12 +308,17 @@ hostBridgeNeedsInitialCopyIn(Operation *anchor,
       });
   if (!hasReadParticipant) {
     // A write participant with no committed write footprint cannot be proven to
-    // define its whole owner block, so seed the block from the host view first.
-    // The write-footprint carrier is the structural coverage evidence.
-    bool hasUnprovenCoverageWriter =
-        llvm::any_of(participants, [](HostBridgeParticipant participant) {
-          return codirAccessMayWrite(participant.mode) &&
-                 !participant.codelet.getWriteFootprintAttr();
+    // define its whole owner block unless its rank-expanded body already
+    // exposes the contiguous owner/tile overwrite structure.
+    bool hasUnprovenCoverageWriter = llvm::any_of(
+        participants, [](const HostBridgeParticipant &participant) {
+          if (!codirAccessMayWrite(participant.mode))
+            return false;
+          codir::CodeletOp codelet = participant.codelet;
+          if (codelet.getWriteFootprintAttr())
+            return false;
+          return !codirBridgeIsRankExpandedFullLinearWriter(
+              codelet, participant.depIndex);
         });
     if (hasUnprovenCoverageWriter)
       return true;

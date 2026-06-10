@@ -6,7 +6,7 @@
 #ifndef CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_PERBLOCKALLGATHER_H
 #define CARTS_DIALECT_CODIR_CONVERSION_CODIRTOARTS_PERBLOCKALLGATHER_H
 
-#include "CodirToArtsBridgeWorkGroups.h"
+#include "CodirToArtsBridgeLaunch.h"
 
 namespace {
 

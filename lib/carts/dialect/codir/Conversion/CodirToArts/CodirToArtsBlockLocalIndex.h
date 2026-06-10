@@ -64,6 +64,7 @@ struct BlockLocalAccessRewrite {
   bool allowFullWindowAccess = false;
   bool requireOwnerWindowProof = false;
   bool rankExpandedGridAccess = false;
+  bool rankExpandedLogicalGridAccess = false;
 };
 
 static inline Value materializeBlockLocalOrigin(OpBuilder &builder,
@@ -189,6 +190,35 @@ static inline FailureOr<Value> materializeRankExpandedGridWindowIndex(
   return createZeroIndex(builder, loc);
 }
 
+static inline FailureOr<Value> materializeRankExpandedLogicalGridWindowIndex(
+    OpBuilder &builder, Location loc, Value index, Value ownerElementBase,
+    Value acquiredGridBase, int64_t tileExtent, int64_t groupBlockCount,
+    Value &relativeBlock,
+    const DenseMap<Value, Value> *sourceByBlockArgument = nullptr) {
+  if (!index || !ownerElementBase || !acquiredGridBase || tileExtent <= 0 ||
+      groupBlockCount <= 0)
+    return failure();
+
+  Value logicalIndex = getDividedLogicalIndex(index, tileExtent);
+  if (!logicalIndex)
+    return failure();
+
+  if (groupBlockCount > std::numeric_limits<int64_t>::max() / tileExtent)
+    return failure();
+  BlockWindowProof proof{ownerElementBase, groupBlockCount * tileExtent,
+                         sourceByBlockArgument};
+  if (!proof.pointStaysInWindow(logicalIndex))
+    return failure();
+
+  Value gridCoord = ::mlir::carts::ValueAnalysis::stripNumericCasts(index);
+  relativeBlock =
+      ::mlir::carts::ValueAnalysis::sameValue(gridCoord, acquiredGridBase)
+          ? createZeroIndex(builder, loc)
+          : arith::SubIOp::create(builder, loc, gridCoord, acquiredGridBase)
+                .getResult();
+  return createZeroIndex(builder, loc);
+}
+
 static inline std::optional<std::pair<Value, int64_t>>
 splitAddOrSubConstant(Value candidate) {
   candidate = ::mlir::carts::ValueAnalysis::stripNumericCasts(candidate);
@@ -220,7 +250,8 @@ static inline FailureOr<Value> materializeGroupedBlockLocalIndex(
     return failure();
   if (groupBlockCount > std::numeric_limits<int64_t>::max() / blockSize)
     return failure();
-  if (!allowFullWindowAccess && !indexSelectsOwnerSlice(index, ownerBase))
+  if (!allowFullWindowAccess && lowerHalo == 0 && upperHalo == 0 &&
+      !indexSelectsOwnerSlice(index, ownerBase))
     return failure();
   index = recoverOwnerAbsoluteIndex(index, ownerBase);
 

@@ -63,6 +63,7 @@ std::unique_ptr<Pass> createScalarForwardingPass();
 std::unique_ptr<Pass> createMemoryUnitMaterializationPass();
 std::unique_ptr<Pass> createSdeRankExpandMuPass();
 std::unique_ptr<Pass> createSdeCuNormalizationPass();
+std::unique_ptr<Pass> createSdeScalarBlockReductionPass();
 std::unique_ptr<Pass> createRaiseToMuAccessWindowPass();
 std::unique_ptr<Pass> createSdeCoarseAvoidancePass();
 std::unique_ptr<Pass> createSdeRedistributePass();

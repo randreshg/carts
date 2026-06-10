@@ -72,8 +72,11 @@ def MemoryUnitMaterialization
     rewrite exists. The pass does not rediscover target-object layouts or
     perform concrete index rewriting.
   }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::memref::MemRefDialect"];
+  let dependentDialects = ["::mlir::arith::ArithDialect",
+                           "::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::LLVM::LLVMDialect",
+                           "::mlir::memref::MemRefDialect",
+                           "::mlir::polygeist::PolygeistDialect"];
   let constructor =
       "mlir::carts::sde::createMemoryUnitMaterializationPass()";
 }
@@ -137,6 +140,35 @@ def SdeCuNormalization
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createSdeCuNormalizationPass()";
+}
+
+def SdeScalarBlockReduction
+    : Pass<"sde-scalar-block-reduction", "mlir::ModuleOp"> {
+  let summary = "Expose scalar checksum reductions as SDE block partial work";
+  let description = [{
+    Rewrites legal scalar add-reduction tails over committed 1-D block-layout
+    arrays into real SDE work: a per-block partial buffer, an owner-strip
+    `sde.su_iterate` that fills one partial per block, and a final scalar
+    combine in block order.
+
+    This is an SDE source/state transformation, not a downstream contract. It
+    runs after SDE has committed and rank-expanded physical block facts. For
+    already-expanded MU inputs, the partial buffer is emitted as an expanded
+    `sde.mu_alloc` with the same structural block-grid proof used by normal MU
+    layout verification.
+
+    The pass is intentionally fail-closed: it requires add reductions to rank-0
+    accumulators, committed compatible 1-D block plans for every loaded data
+    array, no unsupported side effects in the loop body, and deterministic
+    floating-point order through per-slot partials when a block contributes
+    multiple source samples. Unsupported loops remain unchanged with no
+    metadata promise.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::memref::MemRefDialect",
+                           "::mlir::scf::SCFDialect"];
+  let constructor = "mlir::carts::sde::createSdeScalarBlockReductionPass()";
 }
 
 def SdeRaiseToMuAccessWindow

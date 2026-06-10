@@ -34,14 +34,12 @@ struct EdtDeadDepEliminationPass
     module.walk([&](EdtOp edt) {
       Block &body = edt.getBody().front();
       ValueRange deps = edt.getDependencies();
-      unsigned numArgs = body.getNumArguments();
-
-      if (deps.size() != numArgs)
+      if (body.getNumArguments() < deps.size())
         return;
 
       SmallVector<unsigned, 4> deadIndices;
       llvm::SetVector<Operation *> cleanupOpsToErase;
-      for (unsigned i = 0; i < numArgs; ++i) {
+      for (unsigned i = 0; i < deps.size(); ++i) {
         BlockArgument arg = body.getArgument(i);
         DbAcquireOp acquire = deps[i].getDefiningOp<DbAcquireOp>();
 
@@ -51,7 +49,7 @@ struct EdtDeadDepEliminationPass
         llvm::SetVector<Operation *> cleanupChain;
         bool removable = DbUtils::collectCleanupOnlyUseChain(arg, cleanupChain,
                                                              &edt.getRegion());
-        if (!removable && acquire && acquire.getMode() == ArtsMode::out)
+        if (!removable && acquire && DbUtils::isWriterMode(acquire.getMode()))
           removable = DbUtils::collectTrueOnlyControlTokenUseChain(
               arg, cleanupChain, &edt.getRegion());
         if (!removable)
