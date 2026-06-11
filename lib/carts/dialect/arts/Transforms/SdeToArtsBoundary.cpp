@@ -23,7 +23,6 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
-#include <tuple>
 
 namespace mlir::carts::arts {
 #define GEN_PASS_DEF_SDESTORAGETOARTSDB
@@ -1070,106 +1069,6 @@ static bool containsDbAccessPlan(sde::SdeCuRegionOp source) {
     return WalkResult::interrupt();
   });
   return found;
-}
-
-struct OwnerSlotPlan {
-  SmallVector<int64_t, 4> ownerDims;
-  SmallVector<unsigned, 4> loopDims;
-  SmallVector<int64_t, 4> blockSizes;
-  SmallVector<unsigned, 4> rawSlots;
-};
-
-static FailureOr<OwnerSlotPlan>
-resolveOwnerSlotPlan(ArrayRef<int64_t> ownerDims, ArrayRef<int64_t> blockShape,
-                     unsigned loopRank, Operation *context) {
-  if (ownerDims.empty()) {
-    context->emitError()
-        << "requires at least one committed physical owner dimension";
-    return failure();
-  }
-  if (ownerDims.size() > loopRank) {
-    context->emitError()
-        << "names more physical owner dimensions than loop dimensions";
-    return failure();
-  }
-  bool ownerRankLoop = loopRank == ownerDims.size();
-  if (blockShape.size() != ownerDims.size() && blockShape.size() < loopRank) {
-    context->emitError()
-        << "requires physicalBlockShape rank to cover owner or loop rank";
-    return failure();
-  }
-
-  SmallVector<char, 4> seenOwner;
-  unsigned ownerSeenSize =
-      std::max<unsigned>(loopRank, static_cast<unsigned>(blockShape.size()));
-  seenOwner.assign(ownerSeenSize, 0);
-  SmallVector<char, 4> seenLoop(loopRank, 0);
-  SmallVector<std::tuple<int64_t, unsigned, int64_t, unsigned>, 4> slots;
-  slots.reserve(ownerDims.size());
-  for (auto [rawSlot, ownerDim] : llvm::enumerate(ownerDims)) {
-    if (ownerDim < 0) {
-      context->emitError() << "owner dim is negative";
-      return failure();
-    }
-    unsigned physicalOwnerDim = static_cast<unsigned>(ownerDim);
-    if (physicalOwnerDim >= seenOwner.size())
-      seenOwner.resize(physicalOwnerDim + 1, 0);
-    if (seenOwner[physicalOwnerDim]) {
-      context->emitError() << "commits duplicate physical owner dimensions";
-      return failure();
-    }
-    seenOwner[physicalOwnerDim] = 1;
-
-    unsigned loopDim = physicalOwnerDim;
-    if (static_cast<unsigned>(ownerDim) >= loopRank) {
-      if (!ownerRankLoop) {
-        context->emitError() << "owner dim exceeds loop rank";
-        return failure();
-      }
-      loopDim = static_cast<unsigned>(rawSlot);
-    }
-    if (seenLoop[loopDim]) {
-      context->emitError()
-          << "maps multiple physical owner dimensions to one loop dimension";
-      return failure();
-    }
-    seenLoop[loopDim] = 1;
-
-    int64_t blockSize = 0;
-    if (blockShape.size() == ownerDims.size()) {
-      blockSize = blockShape[rawSlot];
-    } else if (static_cast<size_t>(ownerDim) < blockShape.size()) {
-      blockSize = blockShape[ownerDim];
-    } else {
-      context->emitError()
-          << "physicalOwnerDims must index physicalBlockShape dimensions";
-      return failure();
-    }
-    if (blockSize <= 0) {
-      context->emitError()
-          << "requires a positive physical block size for every owner dim";
-      return failure();
-    }
-    slots.emplace_back(ownerDim, loopDim, blockSize,
-                       static_cast<unsigned>(rawSlot));
-  }
-
-  llvm::sort(slots, [](const auto &lhs, const auto &rhs) {
-    return std::get<0>(lhs) < std::get<0>(rhs);
-  });
-
-  OwnerSlotPlan plan;
-  plan.ownerDims.reserve(slots.size());
-  plan.loopDims.reserve(slots.size());
-  plan.blockSizes.reserve(slots.size());
-  plan.rawSlots.reserve(slots.size());
-  for (auto [ownerDim, loopDim, blockSize, rawSlot] : slots) {
-    plan.ownerDims.push_back(ownerDim);
-    plan.loopDims.push_back(loopDim);
-    plan.blockSizes.push_back(blockSize);
-    plan.rawSlots.push_back(rawSlot);
-  }
-  return plan;
 }
 
 static LogicalResult collectExternalScalarCaptures(sde::SdeSuIterateOp source,
@@ -2519,7 +2418,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
       source.getBody().front().getNumArguments() < loopRank)
     return source.emitOpError() << "has inconsistent loop bounds";
 
-  FailureOr<OwnerSlotPlan> ownerPlan = resolveOwnerSlotPlan(
+  FailureOr<ArtsOwnerSlotPlan> ownerPlan = resolveArtsOwnerSlotPlan(
       *ownerDims, *blockShape, loopRank, source.getOperation());
   if (failed(ownerPlan))
     return failure();
