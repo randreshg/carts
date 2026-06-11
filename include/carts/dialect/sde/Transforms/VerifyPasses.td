@@ -158,23 +158,23 @@ def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
   let description = [{
     Structural verifier for the SDE boundary. It enforces that:
 
-    - all source executable work lives inside a CU (sde.cu_work / cu_region /
-      cu_task / cu_reduce / cu_atomic); an `sde.su_iterate` body directly
-      contains only CUs, `sde.su_barrier`, and `sde.yield`, while an
-      `sde.su_distribute` body directly contains only nested SUs, `sde.redist`,
-      or `sde.su_barrier`; raw scf/source compute is legal under SDE only inside
-      a CU;
+    - all source executable work lives inside a CU. The owning SDE op verifiers
+      enforce direct SU body shape: `sde.su_iterate` directly contains only
+      direct-boundary CUs, `sde.array_layout_root`, `sde.su_barrier`, and
+      `sde.yield`, while `sde.su_distribute` directly contains only nested SUs,
+      `sde.redist`, or `sde.su_barrier`; raw scf/source compute is legal under
+      SDE only inside a CU;
     - SDE carries no target dependency graph: no consumed sde.mu_dep dependency
       graph and no generic token/dataflow
       dependency graph (token-carrying sde.su_barrier / consumed
       sde.control_token);
-    - CUs are async/schedulable by default — sibling CUs with a provable MU
-      access conflict must be ordered explicitly (SU sequence/parallel-wave
-      structure, source effect/control ordering, or a last-resort plain
-      sde.su_barrier), not by textual position alone.
+    - CU ops are executable bodies, not scheduling scopes. Sibling CU work with
+      a provable MU access conflict must be ordered explicitly (SU
+      sequence/parallel-wave structure, source effect/control ordering, or a
+      last-resort plain sde.su_barrier), not by textual position alone.
 
     It deliberately does NOT require CU `IsolatedFromAbove`, an `sde.mu_token`,
-    a slice op, or any specific access-window carrier; isolation is a CODIR
+    a slice op, or any specific access-window carrier; isolation is a ARTS
     concern and access windows are raised later by RaiseToMuAccessWindow. The
     pass reads only current IR and local op structure; it stamps no metadata
     and branches on no downstream contract.

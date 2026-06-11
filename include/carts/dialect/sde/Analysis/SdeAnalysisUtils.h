@@ -21,12 +21,13 @@
 
 namespace mlir::carts::sde {
 
-/// Get the computation block inside su_iterate, looking through an optional
-/// cu_region wrapper inserted by OpenMP conversion or CU normalization.
+/// Get the executable leaf CU block inside an `sde.su_iterate`.
 inline Block *getSuIterateComputeBlock(SdeSuIterateOp op) {
   Block &body = op.getBody().front();
   SdeCuRegionOp onlyCuRegion;
   for (Operation &inner : body.without_terminator()) {
+    if (isa<SdeArrayLayoutRootOp>(&inner))
+      continue;
     if (auto cuRegion = dyn_cast<SdeCuRegionOp>(&inner)) {
       if (onlyCuRegion)
         return &body;
@@ -157,7 +158,8 @@ inline bool isKnownPureScalarLibmCall(Operation *op) {
 }
 
 inline bool hasUnmodeledMemoryEffect(Operation *op) {
-  if (!op || op->hasTrait<OpTrait::IsTerminator>() || isa<SdeYieldOp>(op))
+  if (!op || op->hasTrait<OpTrait::IsTerminator>() ||
+      isa<SdeYieldOp, SdeArrayLayoutRootOp>(op))
     return false;
 
   if (isa<memref::LoadOp, memref::StoreOp>(op))

@@ -41,67 +41,6 @@ struct RedistEndpoint {
   SmallVector<int64_t, 4> blockShape;
 };
 
-static bool isStaticExternalDataRoot(Value root, SdeSuIterateOp su) {
-  root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
-  if (!root || isDefinedInside(su.getOperation(), root))
-    return false;
-  auto type = dyn_cast<MemRefType>(root.getType());
-  return type && type.hasStaticShape() && type.getRank() != 0;
-}
-
-static void appendUniqueRoot(SmallVectorImpl<Value> &roots, Value root,
-                             SdeSuIterateOp su) {
-  root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
-  if (!isStaticExternalDataRoot(root, su) || llvm::is_contained(roots, root))
-    return;
-  roots.push_back(root);
-}
-
-static void collectLayoutRoots(SdeSuIterateOp su,
-                               SmallVectorImpl<Value> &writes,
-                               SmallVectorImpl<Value> &reads) {
-  su.walk([&](Operation *op) {
-    if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      if (!isa<MemRefType>(store.getValueToStore().getType()))
-        appendUniqueRoot(writes, store.getMemref(), su);
-      return;
-    }
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      if (!isa<MemRefType>(load.getResult().getType()))
-        appendUniqueRoot(reads, load.getMemref(), su);
-    }
-  });
-}
-
-static void
-addGroundedLayoutRoots(Operation *moduleOp,
-                       llvm::DenseMap<int64_t, Value> &rootByArrayId) {
-  moduleOp->walk([&](SdeSuIterateOp su) {
-    ArrayAttr layout = su.getArrayLayoutAttr();
-    if (!layout)
-      return;
-    SmallVector<LayoutGraphFact, 4> facts = parseArrayLayoutFacts(layout);
-    SmallVector<Value, 4> writes;
-    SmallVector<Value, 4> reads;
-    collectLayoutRoots(su, writes, reads);
-    unsigned writeIdx = 0;
-    unsigned readIdx = 0;
-    for (const LayoutGraphFact &fact : facts) {
-      if (rootByArrayId.contains(fact.id))
-        continue;
-      if (fact.role == LayoutGraphRole::write) {
-        if (writeIdx < writes.size())
-          rootByArrayId.try_emplace(fact.id, writes[writeIdx]);
-        ++writeIdx;
-        continue;
-      }
-      if (readIdx < reads.size())
-        rootByArrayId.try_emplace(fact.id, reads[readIdx]);
-      ++readIdx;
-    }
-  });
-}
-
 static std::optional<LayoutGraphFact> findLayoutFact(SdeSuIterateOp su,
                                                      int64_t arrayId) {
   if (ArrayAttr layout = su.getArrayLayoutAttr())
@@ -323,13 +262,27 @@ getRankExpandedReductionEndpoint(const HomeLayout &home, MemRefType muType) {
 RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
   RedistributionEdges result;
 
-  // Module access relations + the single arrayId numbering shared with
-  // sde-layout-assignment, so a committed `arrayId` joins back to its root.
+  // Module access relations are used only to classify the consumer access
+  // family. Root-to-arrayId grounding is explicit SDE provenance.
   ModuleAccessRelations relations = buildModuleAccessRelations(moduleOp);
   llvm::DenseMap<int64_t, Value> rootByArrayId;
-  for (const auto &kv : assignStableArrayIds(relations))
-    rootByArrayId[kv.second] = kv.first;
-  addGroundedLayoutRoots(moduleOp, rootByArrayId);
+  llvm::DenseSet<int64_t> conflictingRoots;
+  auto recordRoot = [&](int64_t arrayId, Value root) {
+    root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
+    if (!root || arrayId < 0)
+      return;
+    auto [it, inserted] = rootByArrayId.try_emplace(arrayId, root);
+    if (!inserted &&
+        !::mlir::carts::ValueAnalysis::sameMemrefRoot(it->second, root))
+      conflictingRoots.insert(arrayId);
+  };
+  moduleOp->walk([&](SdeArrayLayoutRootOp provenance) {
+    recordRoot(provenance.getArrayId(), provenance.getRoot());
+  });
+  moduleOp->walk([&](SdeMuAllocOp mu) {
+    if (IntegerAttr arrayId = mu.getArrayIdAttr())
+      recordRoot(arrayId.getInt(), mu.getMemref());
+  });
   llvm::DenseMap<Operation *, unsigned> suIdOf;
   for (auto [i, su] : llvm::enumerate(relations.schedulingUnits))
     suIdOf[su.getOperation()] = i;
@@ -395,8 +348,12 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         continue;
       }
       auto rootIt = rootByArrayId.find(arrayId);
+      if (conflictingRoots.contains(arrayId)) {
+        fail("conflicting explicit array root provenance");
+        continue;
+      }
       if (rootIt == rootByArrayId.end()) {
-        fail("cannot ground the redistribution edge to an array root");
+        fail("cannot ground the redistribution edge to an explicit array root");
         continue;
       }
       Value root = rootIt->second;
@@ -531,6 +488,9 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
 
 bool redistMatchesEdge(SdeRedistOp redist, const RedistributionEdge &edge) {
   if (redist.getMu() != edge.root || redist.getFamily() != edge.family)
+    return false;
+  IntegerAttr arrayId = redist.getArrayIdAttr();
+  if (!arrayId || arrayId.getInt() != edge.arrayId)
     return false;
   std::optional<SmallVector<int64_t, 4>> so =
       readI64ArrayAttr(redist.getSourceOwnerDims());

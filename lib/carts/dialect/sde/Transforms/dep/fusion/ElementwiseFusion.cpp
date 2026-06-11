@@ -451,28 +451,8 @@ static sde::SdeSuIterateOp fuseStages(MutableArrayRef<ElementwiseStage> stages,
   sde::SdeSuIterateOp first = stages.front().op;
   Location loc = first.getLoc();
 
-  bool wrappedStages = llvm::all_of(stages, [](ElementwiseStage &stage) {
-    return stage.root != stage.op.getOperation() &&
-           isa<sde::SdeCuRegionOp>(stage.root);
-  });
-
-  Block *insertionBlock = nullptr;
   IRMapping fusedOperandMapping;
-  if (wrappedStages) {
-    rewriter.setInsertionPoint(stages.back().root);
-    auto outerCuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, /*resultTypes=*/TypeRange{},
-        sde::SdeCuKindAttr::get(rewriter.getContext(),
-                                sde::SdeCuKind::parallel),
-        /*nowait=*/nullptr,
-        /*iterArgs=*/ValueRange{});
-    insertionBlock = &sde::ensureBlock(outerCuRegion.getBody());
-    rewriter.setInsertionPointToStart(insertionBlock);
-    cloneSkippablePrefixOps(stages.front().root, first, rewriter,
-                            fusedOperandMapping);
-  } else {
-    rewriter.setInsertionPoint(stages.back().root);
-  }
+  rewriter.setInsertionPoint(stages.back().root);
 
   SmallVector<Value, 4> lowerBounds =
       mapValues(first.getLowerBounds(), fusedOperandMapping);
@@ -548,11 +528,6 @@ static sde::SdeSuIterateOp fuseStages(MutableArrayRef<ElementwiseStage> stages,
   // Yield at su_iterate level.
   rewriter.setInsertionPointAfter(innerCuRegion);
   sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
-
-  if (wrappedStages) {
-    rewriter.setInsertionPointToEnd(insertionBlock);
-    sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
-  }
 
   return fused;
 }

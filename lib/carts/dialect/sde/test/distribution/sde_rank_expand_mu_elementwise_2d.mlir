@@ -2,24 +2,23 @@
 
 // Structural carrier: a committed single-contiguous-owner elementwise BLOCK
 // plan (physicalOwnerDims=[0], physicalBlockShape=[16,64]) rank-expands the
-// sde.mu_alloc result memref so the block grid is the leading dim of the TYPE,
-// and rewrites every CU memref.load/store into the physical
-// [block, intra-block, ...] coordinate system via div/mod localization. The
-// chained verify-sde-mu-layout pass proves ownerDims == recover(structure).
+// written sde.mu_alloc result memref so the block grid is the leading dim of
+// the TYPE, and rewrites the CU store into the physical [block, intra-block,
+// ...] coordinate system via div/mod localization. The chained
+// verify-sde-mu-layout pass proves ownerDims == recover(structure).
 
 // CHECK-LABEL: func.func @rank_expand_elementwise_2d
-// The carrier is the TYPE (memref<8x16x64xf32>) with NO owner-dim/block-shape
-// attribute on the mu_alloc (no `{` before the `:` => no attr-dict).
+// The written carrier is the TYPE (memref<8x16x64xf32>) with NO
+// owner-dim/block-shape attribute on the mu_alloc.
+// CHECK: sde.mu_alloc : memref<128x64xf32>
 // CHECK: sde.mu_alloc : memref<8x16x64xf32>
-// CHECK: sde.mu_alloc : memref<8x16x64xf32>
-// Owner index %i is split into block (divui) and intra-block (remui) coords;
-// the non-owner index %j passes through.
+// Read-only input stays in its source memref. The owner index %i is split for
+// the write into block (divui) and intra-block (remui) coords; the non-owner
+// index %j passes through.
+// CHECK: memref.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<128x64xf32>
 // CHECK: %[[BIDA:.*]] = arith.divui %{{.*}}, %c16
 // CHECK: %[[OFFA:.*]] = arith.remui %{{.*}}, %c16
-// CHECK: memref.load %{{.*}}[%[[BIDA]], %[[OFFA]], %{{.*}}] : memref<8x16x64xf32>
-// CHECK: %[[BIDC:.*]] = arith.divui %{{.*}}, %c16
-// CHECK: %[[OFFC:.*]] = arith.remui %{{.*}}, %c16
-// CHECK: memref.store %{{.*}}, %{{.*}}[%[[BIDC]], %[[OFFC]], %{{.*}}] : memref<8x16x64xf32>
+// CHECK: memref.store %{{.*}}, %{{.*}}[%[[BIDA]], %[[OFFA]], %{{.*}}] : memref<8x16x64xf32>
 
 func.func @rank_expand_elementwise_2d() {
   %c0 = arith.constant 0 : index
@@ -28,16 +27,15 @@ func.func @rank_expand_elementwise_2d() {
   %c128 = arith.constant 128 : index
   %A = sde.mu_alloc : memref<128x64xf32>
   %C = sde.mu_alloc : memref<128x64xf32>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       scf.for %j = %c0 to %c64 step %c1 {
         %v = memref.load %A[%i, %j] : memref<128x64xf32>
         memref.store %v, %C[%i, %j] : memref<128x64xf32>
-      }
+    }
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
   return
 }

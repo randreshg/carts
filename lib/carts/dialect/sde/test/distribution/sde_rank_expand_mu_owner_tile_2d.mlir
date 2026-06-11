@@ -10,17 +10,13 @@
 // the single-contiguous-owner path could not realize.
 
 // CHECK-LABEL: func.func @rank_expand_owner_tile_2d
-// The carrier is the TYPE (memref<8x4x16x16xf32>) with NO owner-dim/block-shape
-// attribute on the mu_alloc (no `{` before the `:` => no attr-dict).
+// The written carrier is the TYPE (memref<8x4x16x16xf32>) with NO
+// owner-dim/block-shape attribute on the mu_alloc.
+// CHECK: sde.mu_alloc : memref<128x64xf32>
 // CHECK: sde.mu_alloc : memref<8x4x16x16xf32>
-// CHECK: sde.mu_alloc : memref<8x4x16x16xf32>
-// Both owner indices are split into block (divui) and intra-block (remui)
-// coords; there are no non-owner passthrough dims.
-// CHECK: arith.divui
-// CHECK: arith.divui
-// CHECK: arith.remui
-// CHECK: arith.remui
-// CHECK: memref.load %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<8x4x16x16xf32>
+// The read-only input stays in its source memref. Both owner indices are split
+// for the write into block (divui) and intra-block (remui) coords.
+// CHECK: memref.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<128x64xf32>
 // CHECK: arith.divui
 // CHECK: arith.divui
 // CHECK: arith.remui
@@ -34,15 +30,15 @@ func.func @rank_expand_owner_tile_2d() {
   %c128 = arith.constant 128 : index
   %A = sde.mu_alloc : memref<128x64xf32>
   %C = sde.mu_alloc : memref<128x64xf32>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0, %c0) to (%c128, %c64) step (%c1, %c1)
-        classification(<elementwise>) {
-    ^bb0(%i: index, %j: index):
+  sde.su_iterate (%c0, %c0) to (%c128, %c64) step (%c1, %c1)
+      classification(<elementwise>) {
+  ^bb0(%i: index, %j: index):
+    sde.cu_region <single> {
       %v = memref.load %A[%i, %j] : memref<128x64xf32>
       memref.store %v, %C[%i, %j] : memref<128x64xf32>
       sde.yield
-    } {physicalOwnerDims = [0, 1], physicalBlockShape = [16, 16]}
+    }
     sde.yield
-  }
+  } {physicalOwnerDims = [0, 1], physicalBlockShape = [16, 16]}
   return
 }

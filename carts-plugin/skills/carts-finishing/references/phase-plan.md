@@ -18,7 +18,7 @@ Phases are ordered to minimize attribution noise:
 **Do not reorder.** If you feel tempted, the rationale is wrong (update this doc) or the phase definition is wrong (update the task).
 
 Every phase uses the `carts-vision` spine: SDE commits real
-source/layout/alignment/tiling facts, CODIR represents SDE movement structure,
+source/layout/alignment/tiling facts, ARTS represents SDE movement structure,
 ARTS realizes DB/EDT ownership and grouped execution, and
 ARTS-RT lowers mechanically. Do not advance with downstream recomputation,
 benchmark-name fixes, hypergraph-as-owner-dims, or merged DB/CU grain.
@@ -71,9 +71,9 @@ benchmark-name fixes, hypergraph-as-owner-dims, or merged DB/CU grain.
 
 1. Fix heap-array shape before ARTS in `lib/carts/dialect/sde/Conversion/PolygeistToSde/MemrefNormalization.cpp` and, where OpenMP lowering owns the fact, `lib/carts/dialect/sde/Conversion/OmpToSde/ConvertOpenMPToSde.cpp`.
 
-2. If a supported case still needs tiled/block materialization, extend direct CODIR-to-ARTS token-local materialization instead of expanding `CreateDbs`. `CreateDbs.cpp` is only the guarded coarse raw-memref bridge and must reject non-coarse raw layout plans.
+2. If a supported case still needs tiled/block materialization, extend direct SDE-to-ARTS token-local materialization instead of expanding `CreateDbs`. `CreateDbs.cpp` is only the guarded coarse raw-memref bridge and must reject non-coarse raw layout plans.
 
-3. **Critical (anti-pattern 1):** the fix is in shape normalization or direct CODIR-to-ARTS materialization. Do NOT touch DB mode selection to mask the input shape. That layer is responding correctly to the wrong input shape; fixing it there would silently preserve coarse wrappers.
+3. **Critical (anti-pattern 1):** the fix is in shape normalization or direct SDE-to-ARTS materialization. Do NOT touch DB mode selection to mask the input shape. That layer is responding correctly to the wrong input shape; fixing it there would silently preserve coarse wrappers.
 
 **Effort:** ~7h primary + secondary.
 
@@ -101,11 +101,11 @@ captured under `.carts/sessions/...`.
 
 **Type:** targeted-fix
 
-**Stop condition:** `DbOwnerMapRealization` realizes the ARTS owner map and `distributed` marker over committed SDE/CODIR distribution structure in multinode builds (distribution is default-on); it does not make independent eligibility or distribution-family decisions. The 9 originally-passing samples (now extended to all 26 if phase 4 is green) compile under `-O3` on a multinode config.
+**Stop condition:** `DbOwnerMapRealization` realizes the ARTS owner map and `distributed` marker over committed SDE distribution structure in multinode builds (distribution is default-on); it does not make independent eligibility or distribution-family decisions. The 9 originally-passing samples (now extended to all 26 if phase 4 is green) compile under `-O3` on a multinode config.
 
 **Action:** keep SDE layout/distribution facts target-neutral and real, ensure
-CODIR has represented any required SDE movement structure, then add or
-adjust ARTS ownership/refinement gates so ARTS consumes SDE/CODIR structure and
+ARTS has represented any required SDE movement structure, then add or
+adjust ARTS ownership/refinement gates so ARTS consumes SDE structure and
 abstract-machine topology to realize local or distributed DB/EDT shape. ARTS
 must not redetect source patterns or invent owner dims; ARTS-RT must only lower
 the chosen realization.
@@ -146,7 +146,7 @@ the chosen realization.
 
 1. monte-carlo (already-verified distributed per the 2026-03-11 snapshot)
 2. graph500 (already-verified distributed; OOM on large is a separate scaling issue)
-3. PolybenchC (gemm, 2mm, 3mm — pure tensor kernels, benefit most directly from phase 3 fix)
+3. PolybenchC (gemm, 2mm, 3mm — dense linear-algebra kernels, benefit most directly from phase 3 fix)
 4. kastors-jacobi (stencil class — exercises distributed halo)
 5. seissol, sw4lite (grid-based, pre-allocated)
 6. ml-kernels (perfect nests, narrow benefit)
@@ -166,7 +166,7 @@ the chosen realization.
 2. **1h** — Verify `ScalarReplacement` lives under the ARTS-RT tree and remove any stale references to retired path names.
 
 3. **4h** — Keep active SDE passes wired in `Compile.cpp`; obsolete
-   state/codelet and tensor raising/lowering sources have been removed.
+   state/codelet and frontend-carrier raising/lowering sources have been removed.
 
 4. **6h** — Add SDE-contract verification/consumption guards to ARTS
    refinement passes so they consume or reject committed facts instead of
@@ -199,7 +199,7 @@ Each sub-step must pass regression-guard against ALL samples and benchmarks in s
 | 0 | none — direct user dialogue |
 | 1 | none — direct CLI |
 | 2 | `carts-pass-dev` if the depth-guard pattern is non-obvious |
-| 3 | `carts-pass-dev` for the SDE normalization / CODIR materialization change; `carts-stage-diff` to verify named stages `sde-input-normalization`, `sde-planning`, `sde-to-codir`, `codir-to-arts`, and `create-dbs` |
+| 3 | `carts-pass-dev` for the SDE normalization / ARTS materialization change; `carts-stage-diff` to verify named stages `sde-input-normalization`, `sde-planning`, `sde-to-arts`, `sde-to-arts`, and `create-dbs` |
 | 4 | per item: `carts-miscompile-triage`, `carts-debug`, `carts-analysis-triage`, `carts-stage-diff` |
 | 5 | `carts-pass-dev` for the gate additions |
 | 6 | per item: `carts-distributed-triage` (always start here for multinode), then `carts-miscompile-triage` if the symptom reduces to wrong output |

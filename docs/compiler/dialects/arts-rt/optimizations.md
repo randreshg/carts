@@ -19,7 +19,7 @@ Rules:
 - Do not alter task grain or DB layout.
 - Do not infer source dependencies.
 - Do not recover codelet captures.
-- Run these optimizations only after SDE/CODIR/ARTS shape is correct and traces
+- Run these optimizations only after SDE/ARTS shape is correct and traces
   show ABI overhead.
 
 Exit facts for LLVM:

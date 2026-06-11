@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-to-codir --mlir-print-ir-after-all 2>&1 \
+// RUN:   --start-from sde-planning --pipeline sde-planning --mlir-print-ir-after-all 2>&1 \
 // RUN:   | %FileCheck %s
 
 // A stream-style 1-D writer must realize the committed budget grain in the SU
@@ -22,15 +22,14 @@ module {
     %one = arith.constant 1.000000e+00 : f64
     %two = arith.constant 2.000000e+00 : f64
     %zero = arith.constant 0.000000e+00 : f64
-    sde.cu_region <parallel> {
-      sde.su_iterate (%c0) to (%c700000000) step (%c1) classification(<elementwise>) {
-      ^bb0(%i: index):
+    sde.su_iterate (%c0) to (%c700000000) step (%c1) classification(<elementwise>) {
+    ^bb0(%i: index):
+      sde.cu_region <single> {
         memref.store %one, %A[%i] : memref<700000000xf64>
         memref.store %two, %B[%i] : memref<700000000xf64>
         memref.store %zero, %C[%i] : memref<700000000xf64>
         sde.yield
       }
-      sde.yield
     }
     return
   }

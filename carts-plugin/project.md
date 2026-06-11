@@ -43,19 +43,19 @@ runtime.
 
 ## Compiler Shape
 
-CARTS is migrating toward four project dialect layers:
+CARTS is organized around three project dialect layers:
 
 - SDE (`sde`) - HPF-style `DISTRIBUTE`/`ALIGN`: source semantics, per-array
   block layouts from affine access relations, abstract communication-volume
   cost, PatternAnalysis, and real source/SU/CU/MU loop/layout transformations.
   It names no collectives, DBs, EDTs, owner maps, routes, GUIDs, or runtime
   policy.
-- CODIR (`codir`) - isolated codelets, explicit deps/params, token-local
-  memref views, graph optimizations, and mechanical representation of
-  SDE-authored movement structure at the first isolation boundary.
-- ARTS (`arts`) - abstract DB, EDT, epoch, dependency-slot, placement,
-  per-block single-writer DB realization, owner maps, DB modes, and grouped
-  compute/bridge/communication CUs.
+- ARTS (`arts`) - the first isolation boundary: isolated codelets, explicit
+  deps/params, token-local memref views, graph optimizations, and mechanical
+  representation of SDE-authored movement structure. It also owns abstract DB,
+  EDT, epoch, dependency-slot, placement, per-block single-writer DB
+  realization, owner maps, DB modes, and grouped compute/bridge/communication
+  CUs.
 - ARTS-RT (`arts_rt`) - runtime ABI, packing, pointer lowering, and
   LLVM-facing cleanup. It mechanically lowers ARTS facts and does not infer
   scheduling, ownership, partition, or collective policy.
@@ -69,10 +69,9 @@ skills disagree with the compiler, the live compiler manifest wins.
   owning dialect, and the runtime/compiler contract before patching symptoms.
 - Before changing compiler IR, state the function and limits of the affected
   dialect layer. SDE owns data layout and the real loop/source transformations
-  that make it true; CODIR owns isolated codelet graph structure and mechanical
-  movement representation; ARTS owns
-  DB/EDT/owner-map realization and grouped execution; ARTS-RT owns
-  lowering-ready runtime shape.
+  that make it true; ARTS owns isolated codelet graph structure, mechanical
+  movement representation, DB/EDT/owner-map realization, and grouped execution;
+  ARTS-RT owns lowering-ready runtime shape.
 - Do not hide correctness behind later cleanup passes, metadata-only promises,
   incidental pass order, fixture churn, or duplicated local helpers. If the
   owning layer cannot safely transform, fail closed with evidence.
@@ -88,10 +87,11 @@ skills disagree with the compiler, the live compiler manifest wins.
 - Use hypergraph partitioning as CU grouping/partition evidence over committed
   MU facts, not as benchmark-specific owner-dim, owner-map, or storage-grain
   repair.
-- Passes, operations, attributes, and dialect-owned IR metadata must be
-  declared through the owning TableGen/ODS files first. C++ code should consume
-  generated declarations/accessors instead of adding manual pass/attribute
-  surfaces.
+- Passes, operations, attributes, dialect-owned IR metadata, and local op
+  validation contracts must be declared through the owning TableGen/ODS files
+  first. Use op verifiers for operation region/body legality before assigning
+  validation to aggregate passes. C++ code should consume generated
+  declarations/accessors instead of adding manual pass/attribute surfaces.
 - Before adding a helper to a pass, use `carts-check-utils`. Reusable helpers
   belong in the narrowest owning dialect `Utils/` area or an owning analysis
   API; keep helpers pass-local only when they are genuinely one-pass logic.

@@ -111,7 +111,8 @@ static bool acquireHasCoarseEntry(DbAcquireOp acquire) {
   if (!acquire)
     return false;
   if (!acquire.hasMultiplePartitionEntries())
-    return acquire.getPartitionModeOr() == PartitionMode::coarse;
+    return acquire.getPartitionMode() &&
+           *acquire.getPartitionMode() == PartitionMode::coarse;
   for (size_t i = 0, e = acquire.getNumPartitionEntries(); i < e; ++i)
     if (acquire.getPartitionEntryMode(i) == PartitionMode::coarse)
       return true;
@@ -122,7 +123,8 @@ static bool acquireHasSubpartitionEntry(DbAcquireOp acquire) {
   if (!acquire)
     return false;
   if (!acquire.hasMultiplePartitionEntries())
-    return acquire.getPartitionModeOr() != PartitionMode::coarse;
+    return acquire.getPartitionMode() &&
+           *acquire.getPartitionMode() != PartitionMode::coarse;
   for (size_t i = 0, e = acquire.getNumPartitionEntries(); i < e; ++i)
     if (acquire.getPartitionEntryMode(i) != PartitionMode::coarse)
       return true;
@@ -208,7 +210,7 @@ LogicalResult EdtUtils::verifyNoMixedRootDependencies(ModuleOp module) {
           "carries both a coarse and a subpartitioned acquire of the same "
           "root datablock without planned-block evidence; ARTS cannot realize "
           "a mixed dependency grain. Commit a single dependency grain "
-          "upstream (SDE/CODIR).");
+          "upstream (SDE).");
       sawViolation = true;
     }
   });

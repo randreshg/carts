@@ -35,9 +35,9 @@ For layer ownership or value-optimization questions, read [[carts-vision]].
 - `sde-planning`: SDE has committed real source/layout/alignment/tiling facts.
   These facts must be backed by actual loop/layout transformations, not
   metadata promises.
-- `sde-to-codir`: CODIR has isolated codelets with explicit deps/params and
+- `sde-to-arts`: ARTS has isolated codelets with explicit deps/params and
   committed collective/bridge/contraction/halo intent derived from SDE facts.
-- `codir-to-arts` through `post-db-refinement`: ARTS realizes DBs, EDTs, owner
+- `sde-to-arts` through `post-db-refinement`: ARTS realizes DBs, EDTs, owner
   maps, storage modes, and grouped compute/bridge/communication CUs.
 - `pre-lowering` and `arts-rt-to-llvm`: ARTS-RT mechanically lowers chosen ARTS
   facts to runtime/LLVM shape.

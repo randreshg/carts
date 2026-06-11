@@ -22,7 +22,7 @@ Transitional note:
   cost-model-driven wavefront tile policy belong to SDE.
 - Any ARTS-side classification or attr stamping described below should be read
   as current implementation debt, fallback behavior, or realized-fact
-  materialization after the CODIR-to-ARTS boundary.
+  materialization after the SDE-to-ARTS boundary.
 
 ## 0. Motivation: Bridging AMT, OpenMP, and MPI
 
@@ -104,7 +104,7 @@ annotation level.
 | Cannon-style shifts | Feasible but complex | Not implemented (future) |
 | SUMMA-style broadcast panels | Feasible via events/active messages | Not implemented (future) |
 | 2.5D replication | Possible but high complexity | Runtime can create/read cached duplicates through DB frontiers; compiler-directed eager replication is not implemented |
-| Stencil halo | Strong | SDE stamps halo/window facts; CODIR/direct ARTS materialization must preserve token-local block/window views. The raw `create-dbs` bridge is coarse-only and rejects blocked/tiled physical layout attrs |
+| Stencil halo | Strong | SDE stamps halo/window facts; ARTS/direct ARTS materialization must preserve token-local block/window views. The raw `create-dbs` bridge is coarse-only and rejects blocked/tiled physical layout attrs |
 
 ### 2.2 Why CARTS currently prefers 2D tiling over Cannon/SUMMA
 
@@ -120,7 +120,7 @@ Cannon and SUMMA remain viable future paths once collective-like orchestration i
 Current selection policy is implemented in SDE by
 `DistributionPlanning` (`lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`).
 ARTS consumes and materializes the selected distribution intent; it should not
-recover source-level distribution policy after the CODIR-to-ARTS boundary.
+recover source-level distribution policy after the SDE-to-ARTS boundary.
 
 Selection order matters:
 
@@ -143,7 +143,7 @@ Operational note:
 
 ## 4. Current ARTS-Side Inputs
 
-ARTS-side passes consume committed SDE/CODIR facts and direct ARTS IR shape.
+ARTS-side passes consume committed SDE facts and direct ARTS IR shape.
 The old cached ARTS `Analysis/` graph stack has been removed; passes use narrow
 query utilities or pass-local walks instead of graph nodes.
 
@@ -171,24 +171,19 @@ Access and ownership queries are direct IR utilities:
 
 ## 5. Pipeline Architecture
 
-Distribution is transformed inside `sde-planning`. `sde-to-codir` mechanically
-isolates the transformed codelets, `codir-graph-transforms` runs CODIR graph,
-reduction, and storage transforms, and `codir-to-arts` mechanically creates
-ARTS DB/EDT objects. The remaining `create-dbs` stage is a compatibility
-bridge for raw memref work that has not yet become canonical MU token/codelet
-form.
+Distribution is transformed inside `sde-planning`. `sde-to-arts` mechanically
+materializes committed SDE storage, access-window, scheduling, and control
+facts as ARTS DB/EDT objects. Later ARTS stages refine that object graph.
+`CreateDbs` consumes authored ARTS facts and must reject blocked/tiled raw
+memref work that SDE did not make real.
 
 - `sde-planning`: SDE pattern/distribution/reduction planning.
-- `sde-to-codir`: SDE codelet plans become explicit CODIR deps, params, and
-  token-local views.
-- `codir-graph-transforms`: CODIR codelet graph, reduction, storage, and
-  boundary checks over isolated codelets.
-- `codir-to-arts`: CODIR deps and codelets become ARTS DB/acquire/EDT objects,
+- `sde-to-arts`: SDE MU/CU/SU facts become explicit ARTS deps, params,
+  DB/acquire/EDT objects, and token-local views.
 - `edt-dep-realization`: ARTS realizes EDT dependency distribution facts and
   runs SDE/ARTS boundary checks before DB creation.
-- `create-dbs`: guarded coarse raw-memref bridge. It creates whole-storage
-  `arts.db_alloc`/`arts.db_acquire` for residual raw EDT captures only.
-  SDE/CODIR must handle token-local tiled/block rewrites before ARTS.
+- `create-dbs`: consumes ARTS storage facts and rejects tiled/block raw EDT
+  captures that should have been rewritten in SDE.
 - `db-opt`: tightens DB access modes from real uses.
 - `post-db-refinement`: refines DB/EDT facts already present in the IR.
 - `late-concurrency-cleanup`: hoisting and late cleanup. Loop/data-shape
@@ -198,7 +193,7 @@ form.
 Key files:
 - `tools/compile/Compile.cpp`
 - `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`
-- `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
+- `lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp`
 - `lib/carts/dialect/arts/Transforms/db/DbConsolidateStencilHalos.cpp`
 - `lib/carts/dialect/arts/Transforms/db/DbShortenLifetimes.cpp`
 - `lib/carts/dialect/arts/Transforms/db/DbDeadRootElimination.cpp`
@@ -207,7 +202,7 @@ Useful stop points:
 
 ```bash
 dekk carts compile input.mlir --pipeline=sde-planning
-dekk carts compile input.mlir --pipeline=codir-to-arts
+dekk carts compile input.mlir --pipeline=sde-to-arts
 dekk carts compile input.mlir --pipeline=post-db-refinement
 dekk carts compile input.mlir --pipeline=pre-lowering
 ```
@@ -230,20 +225,20 @@ Current implementation:
   marked multi-DB allocations:
   - route = `linearIndex % artsGetTotalNodes()`
   - unmarked allocations keep the existing route behavior.
-- Boundary guard: after CODIR-to-ARTS materialization, an `internode` task must
+- Boundary guard: after SDE-to-ARTS materialization, an `internode` task must
   not depend on a coarse single-block aggregate user DB. This keeps distributed
   execution from silently scaling one large DB through remote task traffic.
-  SDE/CODIR must materialize the block DB layout before ARTS binds routes.
-- CODIR-to-ARTS only binds DB-dependent codelets to `internode` placement when
+  SDE must materialize the block DB layout before ARTS binds routes.
+- SDE-to-ARTS only binds DB-dependent codelets to `internode` placement when
   the codelet carries generic tile owner/shape storage metadata. Distribution
-  intent without a materialized storage plan remains local until the SDE/CODIR
+  intent without a materialized storage plan remains local until the SDE
   MU/token path can create shaped DBs.
 
 Current eligibility policy is intentionally conservative:
 - allocation is host-level (outside `arts.edt`)
 - not `DbAllocType::global`
 - has multiple DB blocks
-- has supported matrix/tensor allocation shape (`elementSizes` rank >= 2)
+- has supported ranked memref allocation shape (`elementSizes` rank >= 2)
 - handle uses are restricted to DB dependency flow; `db_ref` / `db_gep` and
   memref/cast forwarding are allowed only when their result users remain in
   the allowed flow
@@ -303,7 +298,7 @@ Current answer: **no for existing 1D outer-loop distribution path**.
 Reason:
 - The semantic work inside `sde-planning` mostly targets inner serial
   `scf.for` structure.
-- `sde-to-codir`, `codir-to-arts`, and later ARTS stages consume the
+- `sde-to-arts`, `sde-to-arts`, and later ARTS stages consume the
   SDE-authored materialization facts and preserve concrete DB/EDT/epoch
   distribution facts.
 
@@ -318,7 +313,7 @@ Future caveat:
 
 ## 9. Lowering Architecture
 
-The production lowering path materializes SDE plan data through CODIR codelets
+The production lowering path materializes SDE plan data through ARTS codelets
 and then ARTS DB/EDT/epoch objects. Strategy-specific helpers must consume
 explicit plan data rather than a late ARTS semantic loop carrier.
 
@@ -349,7 +344,7 @@ Distribution selection now lives in SDE:
 - `DistributionPlanning` reads SDE pattern/effect facts and the SDE cost model.
 - It stamps `sde.su_distribute` or distribution attributes on eligible
   `sde.su_iterate` operations.
-- CODIR carries the explicit codelet facts.
+- ARTS carries the explicit codelet facts.
 - ARTS DB/EDT/epoch passes consume concrete distribution attrs and ownership
   metadata; they should validate and refine the object graph, not reselect
   source-level policy.
@@ -366,20 +361,20 @@ Wavefront note:
 dekk carts build
 
 # Missing config must fail fast
-dekk carts compile input.mlir --pipeline=codir-to-arts
+dekk carts compile input.mlir --pipeline=sde-to-arts
 
 # Inspect distribution attributes
-dekk carts compile gemm.mlir -O3 --arts-config arts.cfg --pipeline=codir-to-arts
+dekk carts compile gemm.mlir -O3 --arts-config arts.cfg --pipeline=sde-to-arts
 
 # Multi-node counters
 # (example harness depends on your local benchmark setup)
 ```
 
 Expected checks:
-- SDE planning attrs are present before CODIR-to-ARTS materialization when
+- SDE planning attrs are present before SDE-to-ARTS materialization when
   applicable.
 - ARTS `distribution_kind/pattern/version` attrs are present on concrete
-  DB/EDT/epoch objects after `codir-to-arts` when the plan needs them.
+  DB/EDT/epoch objects after `sde-to-arts` when the plan needs them.
 - checksums unchanged for benchmark kernels
 - node/thread counters show non-zero work on remote nodes for distributed runs
 

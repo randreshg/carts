@@ -1501,7 +1501,13 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
         newBody.addArgument(rewriter.getIndexType(), loc);
 
       OpBuilder::InsertionGuard guard(rewriter);
+      IRMapping mapper;
       rewriter.setInsertionPointToStart(&newBody);
+      for (auto root : srcBody.getOps<sde::SdeArrayLayoutRootOp>()) {
+        sde::SdeArrayLayoutRootOp::create(
+            rewriter, root.getLoc(), mapper.lookupOrDefault(root.getRoot()),
+            root.getModeAttr(), root.getArrayIdAttr());
+      }
 
       auto newCuRegion = sde::SdeCuRegionOp::create(
           rewriter, loc, /*resultTypes=*/TypeRange{},
@@ -1513,7 +1519,6 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       Block &newCuBody = sde::ensureBlock(newCuRegion.getBody());
       rewriter.setInsertionPointToStart(&newCuBody);
 
-      IRMapping mapper;
       SmallVector<scf::ForOp, 4> tileLoops;
       for (unsigned d = 0; d < numDims; ++d) {
         Value tileBase = newBody.getArgument(d);

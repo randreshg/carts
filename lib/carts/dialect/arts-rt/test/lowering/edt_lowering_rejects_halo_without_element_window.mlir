@@ -1,7 +1,7 @@
 // RUN: not %carts-compile %s --pass-pipeline='builtin.module(edt-lowering)' 2>&1 \
 // RUN:   | %FileCheck %s
 
-// CHECK: per-block halo read dependency requires an explicit provably nonzero byte window
+// CHECK: haloViewDependency requires explicit element_offsets/element_sizes
 
 module attributes {
   arts.runtime_total_nodes = 4 : i64,
@@ -18,9 +18,9 @@ module attributes {
     %c16 = arith.constant 16 : index
 
     %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <stencil>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c16] {distributed, db_memory_placement = #arts.db_memory_placement<owner_scattered>, owner_block_shape = [16], owner_map_dims = [0], owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>, owner_map_version = 1 : i32, planOwnerDims = [0], planPhysicalBlockShape = [16]} : (memref<?xi64>, memref<?xmemref<?xf64>>)
-    %acq_guid, %acq_ptr = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<stencil>), indices[%c0], offsets[%c0], sizes[%c1] {halo_slice = #arts.halo_slice<lower = [-1], upper = [0]>, runtime_db_mode = #arts.runtime_db_mode<ro>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %acq_guid, %acq_ptr = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<stencil>), indices[%c0], offsets[%c0], sizes[%c1] {haloViewDependency, halo_slice = #arts.halo_slice<lower = [-1], upper = [0]>, runtime_db_mode = #arts.runtime_db_mode<ro>, stencil_max_offsets = [0], stencil_min_offsets = [-1], stencil_supported_block_halo} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
 
-    arts.edt <task> <internode> route(%route) (%acq_ptr) : memref<?xmemref<?xf64>> attributes {perBlockHaloExchange} {
+    arts.edt <task> <internode> route(%route) (%acq_ptr) : memref<?xmemref<?xf64>> {
     ^bb0(%dep: memref<?xmemref<?xf64>>):
       arts.db_release(%dep) : memref<?xmemref<?xf64>>
       arts.yield

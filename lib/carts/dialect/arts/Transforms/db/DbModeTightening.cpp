@@ -473,8 +473,8 @@ static bool hasTrustedPartitionedWriteFacts(DbAcquireOp acquire) {
   if (!acquire)
     return false;
 
-  auto mode = acquire.getPartitionMode().value_or(PartitionMode::coarse);
-  if (!usesBlockLayout(mode))
+  std::optional<PartitionMode> mode = acquire.getPartitionMode();
+  if (!mode || !usesBlockLayout(*mode))
     return false;
 
   bool hasPartitionWindow =
@@ -520,8 +520,8 @@ static bool canUsePlannedCoarseUnorderedOutWrite(DbAcquireOp acquire,
   auto totalNodes = arts::getRuntimeTotalNodes(module);
   if (!totalNodes || *totalNodes != 1)
     return false;
-  if (acquire.getPartitionMode().value_or(PartitionMode::coarse) !=
-      PartitionMode::coarse)
+  std::optional<PartitionMode> partitionMode = acquire.getPartitionMode();
+  if (!partitionMode || *partitionMode != PartitionMode::coarse)
     return false;
   auto alloc = dyn_cast_or_null<DbAllocOp>(
       DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
@@ -582,8 +582,8 @@ static bool canUseInPlaceSafeCoarseUnorderedWrite(DbAcquireOp acquire,
   auto totalNodes = arts::getRuntimeTotalNodes(module);
   if (!totalNodes || *totalNodes != 1)
     return false;
-  if (acquire.getPartitionMode().value_or(PartitionMode::coarse) !=
-      PartitionMode::coarse)
+  std::optional<PartitionMode> partitionMode = acquire.getPartitionMode();
+  if (!partitionMode || *partitionMode != PartitionMode::coarse)
     return false;
   auto alloc = dyn_cast_or_null<DbAllocOp>(
       DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));

@@ -37,7 +37,7 @@ dekk carts triage-benchmark <suite/name> --size small --threads 2
 
 Optional narrowing to specific stages:
 ```bash
-dekk carts triage-benchmark <suite/name> --stages sde-planning,codir-to-arts,post-db-refinement
+dekk carts triage-benchmark <suite/name> --stages sde-planning,sde-to-arts,post-db-refinement
 ```
 
 Only use stage names from `dekk carts pipeline --json`.
@@ -52,10 +52,10 @@ Only use stage names from `dekk carts pipeline --json`.
    - ARTS-only regression from a pipeline stage
    - Benchmark-side UB or invalid verification
    - Runtime/distributed lowering issue
-5. Read stage dumps in order: `sde-planning` -> `sde-to-codir` -> `codir-to-arts` -> `edt-transforms` -> `create-dbs` -> `db-opt` -> `post-db-refinement` -> `late-concurrency-cleanup` -> `epochs` -> `pre-lowering` -> `arts-rt-to-llvm`
+5. Read stage dumps in order: `sde-planning` -> `sde-to-arts` -> `sde-to-arts` -> `edt-transforms` -> `create-dbs` -> `db-opt` -> `post-db-refinement` -> `late-concurrency-cleanup` -> `epochs` -> `pre-lowering` -> `arts-rt-to-llvm`
 6. Check structural evidence before proposing a fix:
    - SDE committed real layout/tiling facts;
-   - CODIR committed collectives/bridges from layout mismatch and compute
+   - ARTS committed collectives/bridges from layout mismatch and compute
      pattern;
    - ARTS realized owner maps, DB/EDT graphs, and grouped CUs;
    - DB/MU grain is distinct from CU/bridge grain;
@@ -76,8 +76,7 @@ dekk carts clang bench-omp.ll ... -o bench_omp
 
 - `docs/compiler/pipeline.md`, `docs/heuristics/partitioning.md`, `docs/heuristics/distribution.md`
 - `tools/compile/Compile.cpp`
-- `lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp`
-- `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
+- `lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp`
 - `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`
 - `lib/carts/dialect/sde/Transforms/effect/scheduling/ReductionStrategy.cpp`
 - `lib/carts/dialect/arts/Transforms/db/DbModeTightening.cpp`

@@ -60,7 +60,6 @@ config.test_exec_root = os.path.join(build_dir, "tests", "lit-output")
 
 # Tell lit which subdirectories to scan for tests (IREE pattern).
 config.test_subdirs = [
-    os.path.join("lib", "carts", "dialect", "codir", "test"),
     os.path.join("lib", "carts", "dialect", "sde", "test"),
     os.path.join("lib", "carts", "dialect", "arts", "test"),
     os.path.join("lib", "carts", "dialect", "arts-rt", "test"),

@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-to-codir --mlir-print-ir-after-all 2>&1 \
+// RUN:   --start-from sde-planning --pipeline sde-planning --mlir-print-ir-after-all 2>&1 \
 // RUN:   | %FileCheck %s
 
 // Tiling must consume the committed array-layout budget for multi-owner
@@ -19,31 +19,18 @@
 // CHECK-SAME: physicalBlockShape = [512, 512]
 // CHECK-SAME: physicalOwnerDims = [0, 1]
 
-// CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir (convert-sde-to-codir) //----- //
-// CHECK-LABEL: func.func @budget_reconciles_elementwise_2d
-// CHECK: arith.constant 512 : index
-// CHECK: arith.constant 512 : index
-// CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %c512{{(_[0-9]+)?}}
-// CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %c1
-// CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %c1
-// CHECK: codir.codelet
-// CHECK-SAME: iteration_topology = #codir.iteration_topology<owner_tile>
-// CHECK-SAME: logical_worker_slice = [1024, 512]
-// CHECK-SAME: tile_shape = [512, 512]
-
 module {
   func.func @budget_reconciles_elementwise_2d(%A: memref<5120x5120xf64>, %B: memref<5120x5120xf64>) {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c5120 = arith.constant 5120 : index
-    sde.cu_region <parallel> {
-      sde.su_iterate (%c0, %c0) to (%c5120, %c5120) step (%c1, %c1) classification(<elementwise>) {
-      ^bb0(%i: index, %j: index):
+    sde.su_iterate (%c0, %c0) to (%c5120, %c5120) step (%c1, %c1) classification(<elementwise>) {
+    ^bb0(%i: index, %j: index):
+      sde.cu_region <single> {
         %v = memref.load %B[%i, %j] : memref<5120x5120xf64>
         memref.store %v, %A[%i, %j] : memref<5120x5120xf64>
         sde.yield
       }
-      sde.yield
     }
     return
   }

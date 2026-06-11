@@ -44,10 +44,6 @@ set(LIBS
   MLIRCartsSdeTransforms
   MLIRCartsArtsTransforms
   MLIRCartsArtsRtTransforms
-  MLIRCartsCodir
-  MLIRCartsSdeToCodirConversion
-  MLIRCartsCodirToArtsConversion
-  MLIRCartsCodirTransforms
   MLIRFuncAllExtensions
   MLIRPolygeist
   MLIRPolygeistTransforms
@@ -94,9 +90,7 @@ set(LIBS
 
 target_link_libraries(carts-compile PRIVATE ${LIBS})
 add_dependencies(carts-compile MLIRArtsOpsIncGen MLIRArtsRtOpsIncGen
-                 MLIRSdeOpsIncGen MLIRCodirOpsIncGen MLIRCartsArtsPassIncGen
-                 MLIRCartsCodirConversionPassIncGen
-                 MLIRCartsCodirPassIncGen)
+                 MLIRSdeOpsIncGen MLIRCartsArtsPassIncGen)
 
 if(CARTS_ENABLE_TESTS AND CARTS_TESTS_REQUIRE_INSTALLED_RUNNER)
   set(_carts_install_bin_dir ${CMAKE_INSTALL_PREFIX}/${CARTS_TOOLS_DIR})

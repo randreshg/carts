@@ -21,4 +21,4 @@ Emitted facts:
 - pointer and depv locality facts;
 - diagnostics when runtime ABI overhead is the remaining bottleneck.
 
-ARTS-RT analysis must not compensate for missing SDE/CODIR/ARTS object shape.
+ARTS-RT analysis must not compensate for missing SDE/ARTS object shape.

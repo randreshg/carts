@@ -2,7 +2,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-scalar-block-reduction,verify-sde-mu-layout,verify-sde)' 2>&1 | %FileCheck %s --check-prefix=EXP
 
 // SDE owns this rewrite: a legal scalar checksum loop becomes real owner-block
-// partial work before CODIR/ARTS. The FP case is order-preserving because the
+// partial work before SDE/ARTS. The FP case is order-preserving because the
 // sample stride is at least the committed block extent, so each block
 // contributes at most one element to the final scalar combine.
 
@@ -31,14 +31,13 @@ func.func @fp_stride_checksum_block_partials(%A: memref<1024xf64>) -> f64 {
   %one = arith.constant 1.0 : f64
   %sum = memref.alloca() : memref<f64>
   memref.store %zero, %sum[] : memref<f64>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c1024) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c1024) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       memref.store %one, %A[%i] : memref<1024xf64>
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [16]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [16]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c1024 step %c128 {
       %old = memref.load %sum[] : memref<f64>
@@ -69,14 +68,13 @@ func.func @strict_fp_dense_checksum_ordered_partials(%A: memref<128xf64>) -> f64
   %one = arith.constant 1.0 : f64
   %sum = memref.alloca() : memref<f64>
   memref.store %zero, %sum[] : memref<f64>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       memref.store %one, %A[%i] : memref<128xf64>
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [16]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [16]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {
       %old = memref.load %sum[] : memref<f64>
@@ -105,14 +103,13 @@ func.func @integer_dense_checksum_block_partials(%A: memref<128xi32>) -> i32 {
   %one = arith.constant 1 : i32
   %sum = memref.alloca() : memref<i32>
   memref.store %zero, %sum[] : memref<i32>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       memref.store %one, %A[%i] : memref<128xi32>
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [16]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [16]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {
       %old = memref.load %sum[] : memref<i32>
@@ -144,16 +141,15 @@ func.func @rank_expanded_source_checksum_partials() -> f64 {
   %A = sde.mu_alloc : memref<8x16xf64>
   %sum = memref.alloca() : memref<f64>
   memref.store %zero, %sum[] : memref<f64>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       %block = arith.divui %i, %c16 : index
       %tile = arith.remui %i, %c16 : index
       memref.store %one, %A[%block, %tile] : memref<8x16xf64>
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [16]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [16]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {
       %old = memref.load %sum[] : memref<f64>

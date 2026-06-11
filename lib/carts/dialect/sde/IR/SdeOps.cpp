@@ -3,7 +3,9 @@
 /// Defines SDE dialect operation helpers and verifiers.
 ///==========================================================================///
 
+#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
+#include "carts/dialect/sde/Utils/SdeCuStructure.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -17,6 +19,31 @@ using namespace mlir::carts::sde;
 
 #define GET_OP_CLASSES
 #include "carts/dialect/sde/IR/SdeOps.cpp.inc"
+
+namespace {
+
+static bool isAllowedSuIterateChild(Operation *op) {
+  return isa<SdeYieldOp, SdeCuRegionOp, SdeCuAtomicOp>(op) ||
+         isa<SdeArrayLayoutRootOp, SdeSuBarrierOp>(op);
+}
+
+static bool isAllowedSuDistributeChild(Operation *op) {
+  return sde::isSuOp(op) || isa<SdeRedistOp, SdeSuBarrierOp>(op);
+}
+
+static std::optional<SdeAccessMode> modeForLayoutRole(LayoutGraphRole role) {
+  switch (role) {
+  case LayoutGraphRole::read:
+    return SdeAccessMode::read;
+  case LayoutGraphRole::write:
+    return SdeAccessMode::write;
+  case LayoutGraphRole::unknown:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // SdeCuRegionOp — custom assembly format + verifier
@@ -208,6 +235,22 @@ LogicalResult SdeCuRegionOp::verify() {
       return emitOpError()
              << "sde.yield operands require matching cu_region results";
   }
+
+  bool failed = false;
+  getBody().walk([&](Operation *nested) {
+    if (nested == getOperation())
+      return WalkResult::advance();
+    if (!sde::isCuForbiddenSchedulingOp(nested))
+      return WalkResult::advance();
+    nested->emitOpError()
+        << "is nested inside an sde.cu_region body; compute units are "
+           "executable leaves and SU scheduling must be represented outside "
+           "the CU";
+    failed = true;
+    return WalkResult::advance();
+  });
+  if (failed)
+    return failure();
 
   return success();
 }
@@ -491,6 +534,44 @@ LogicalResult SdeSuIterateOp::verify() {
     return emitOpError() << "expects body to contain a single block";
 
   Block &entry = getBody().front();
+  unsigned numDims = getLowerBounds().size();
+  if (numDims == 0)
+    return emitOpError() << "expects at least one loop dimension";
+  if (getUpperBounds().size() != numDims)
+    return emitOpError() << "expects " << numDims
+                         << " upper bound(s) matching lower bounds; got "
+                         << getUpperBounds().size();
+  if (getSteps().size() != numDims)
+    return emitOpError() << "expects " << numDims
+                         << " step value(s) matching lower bounds; got "
+                         << getSteps().size();
+  if (getChunkSize() && !getScheduleAttr())
+    return emitOpError() << "chunk size requires an explicit schedule";
+
+  unsigned expectedBlockArgs = numDims + getNumResults();
+  if (entry.getNumArguments() != expectedBlockArgs)
+    return emitOpError() << "expects " << expectedBlockArgs
+                         << " body block argument(s) (" << numDims
+                         << " induction + " << getNumResults()
+                         << " iter_arg/result); got "
+                         << entry.getNumArguments();
+  for (unsigned dim = 0; dim < numDims; ++dim) {
+    if (!entry.getArgument(dim).getType().isIndex())
+      return emitOpError() << "induction block argument #" << dim
+                           << " must have index type";
+  }
+  if (getNumResults() > getReductionAccumulators().size())
+    return emitOpError() << "expects at least one iter_arg/init operand per "
+                            "result-producing su_iterate";
+  for (auto [i, pair] : llvm::enumerate(llvm::zip(
+           entry.getArguments().drop_front(numDims), getResultTypes()))) {
+    auto [blockArg, resultTy] = pair;
+    if (blockArg.getType() != resultTy)
+      return emitOpError() << "iter_arg block argument #" << i << " type ("
+                           << blockArg.getType()
+                           << ") does not match result type (" << resultTy
+                           << ")";
+  }
 
   // Body must have a terminator (sde.yield)
   auto yield = dyn_cast_or_null<SdeYieldOp>(entry.getTerminator());
@@ -514,6 +595,88 @@ LogicalResult SdeSuIterateOp::verify() {
                            << ") does not match result type (" << resultTy
                            << ")";
   }
+
+  bool failed = false;
+  for (Operation &child : entry) {
+    if (isAllowedSuIterateChild(&child))
+      continue;
+    child.emitOpError()
+        << "is directly inside an sde.su_iterate body; SU bodies are "
+           "scheduling-only and may contain only direct-boundary CUs "
+           "(sde.cu_region or sde.cu_atomic), sde.array_layout_root, "
+           "sde.su_barrier, and the sde.yield terminator";
+    failed = true;
+  }
+
+  ArrayAttr layout = getArrayLayoutAttr();
+  SmallVector<LayoutGraphFact, 4> facts;
+  if (layout)
+    facts = parseArrayLayoutFacts(layout);
+
+  SmallVector<SdeArrayLayoutRootOp, 4> roots;
+  for (SdeArrayLayoutRootOp root : entry.getOps<SdeArrayLayoutRootOp>())
+    roots.push_back(root);
+
+  if (!layout && !roots.empty()) {
+    roots.front().emitOpError()
+        << "commits array root provenance but the enclosing sde.su_iterate "
+           "has no arrayLayout";
+    failed = true;
+  }
+
+  for (SdeArrayLayoutRootOp root : roots) {
+    bool matchesLayout = false;
+    for (const LayoutGraphFact &fact : facts) {
+      std::optional<SdeAccessMode> mode = modeForLayoutRole(fact.role);
+      if (mode && fact.id == static_cast<int64_t>(root.getArrayId()) &&
+          *mode == root.getMode()) {
+        matchesLayout = true;
+        break;
+      }
+    }
+    if (!matchesLayout) {
+      root.emitOpError()
+          << "does not match any arrayLayout entry in the enclosing "
+             "sde.su_iterate";
+      failed = true;
+    }
+  }
+
+  for (const LayoutGraphFact &fact : facts) {
+    std::optional<SdeAccessMode> mode = modeForLayoutRole(fact.role);
+    if (!mode)
+      continue;
+    bool found = false;
+    for (SdeArrayLayoutRootOp root : roots)
+      if (static_cast<int64_t>(root.getArrayId()) == fact.id &&
+          root.getMode() == *mode)
+        found = true;
+    if (!found) {
+      emitOpError() << "arrayLayout entry for arrayId " << fact.id
+                    << " has no explicit sde.array_layout_root provenance; "
+                       "refusing downstream root/order inference";
+      failed = true;
+    }
+  }
+
+  for (auto [index, lhs] : llvm::enumerate(roots)) {
+    for (SdeArrayLayoutRootOp rhs :
+         ArrayRef<SdeArrayLayoutRootOp>(roots).drop_front(index + 1)) {
+      if (lhs.getRoot() == rhs.getRoot() &&
+          lhs.getArrayId() != rhs.getArrayId()) {
+        rhs.emitOpError() << "maps one SDE array root to a conflicting arrayId";
+        failed = true;
+      }
+      if (lhs.getArrayId() == rhs.getArrayId() &&
+          lhs.getMode() == rhs.getMode() && lhs.getRoot() != rhs.getRoot()) {
+        rhs.emitOpError()
+            << "maps one arrayId/role to a different SDE array root";
+        failed = true;
+      }
+    }
+  }
+  if (failed)
+    return failure();
 
   if (auto topology = getIterationTopology();
       topology && (*topology == SdeIterationTopology::owner_tile ||
@@ -547,6 +710,23 @@ LogicalResult SdeSuIterateOp::verify() {
   return success();
 }
 
+LogicalResult SdeSuDistributeOp::verify() {
+  if (getBody().empty())
+    return emitOpError() << "expects body to contain a single block";
+
+  bool failed = false;
+  for (Operation &child : getBody().front()) {
+    if (isAllowedSuDistributeChild(&child))
+      continue;
+    child.emitOpError()
+        << "is directly inside an sde.su_distribute body; distribution "
+           "wrappers may contain only nested SUs, sde.redist, or "
+           "sde.su_barrier";
+    failed = true;
+  }
+  return failure(failed);
+}
+
 SmallVector<Region *> SdeSuIterateOp::getLoopRegions() { return {&getBody()}; }
 
 std::optional<SmallVector<Value>> SdeSuIterateOp::getLoopInductionVars() {
@@ -573,6 +753,58 @@ std::optional<SmallVector<OpFoldResult>> SdeSuIterateOp::getLoopSteps() {
   return SmallVector<OpFoldResult>(getSteps().begin(), getSteps().end());
 }
 
+//===----------------------------------------------------------------------===//
+// SdeArrayLayoutRootOp — custom assembly format + verifier
+//===----------------------------------------------------------------------===//
+
+// Print: sde.array_layout_root <mode> %root : type(%root) array_id(<N>)
+void SdeArrayLayoutRootOp::print(OpAsmPrinter &p) {
+  p << " " << stringifySdeAccessMode(getMode()) << " " << getRoot() << " : "
+    << getRoot().getType() << " array_id(" << getArrayId() << ")";
+  p.printOptionalAttrDict((*this)->getAttrs(), {"mode", "arrayId"});
+}
+
+ParseResult SdeArrayLayoutRootOp::parse(OpAsmParser &parser,
+                                        OperationState &result) {
+  MLIRContext *ctx = parser.getContext();
+  IntegerType i64 = IntegerType::get(ctx, 64);
+
+  StringRef modeKw;
+  if (parser.parseKeyword(&modeKw))
+    return failure();
+  std::optional<SdeAccessMode> mode = symbolizeSdeAccessMode(modeKw);
+  if (!mode)
+    return parser.emitError(parser.getNameLoc(),
+                            "expected sde access mode (read|write)");
+  result.addAttribute("mode", SdeAccessModeAttr::get(ctx, *mode));
+
+  OpAsmParser::UnresolvedOperand rootOperand;
+  Type rootType;
+  if (parser.parseOperand(rootOperand) || parser.parseColon() ||
+      parser.parseType(rootType) ||
+      parser.resolveOperand(rootOperand, rootType, result.operands))
+    return failure();
+
+  int64_t arrayId = -1;
+  if (parser.parseKeyword("array_id") || parser.parseLParen() ||
+      parser.parseInteger(arrayId) || parser.parseRParen())
+    return failure();
+  result.addAttribute("arrayId", IntegerAttr::get(i64, arrayId));
+
+  return parser.parseOptionalAttrDict(result.attributes);
+}
+
+LogicalResult SdeArrayLayoutRootOp::verify() {
+  if (getMode() == SdeAccessMode::readwrite)
+    return emitOpError("mode must be read or write; readwrite is not a "
+                       "role-specific arrayLayout identity");
+  if (!isa<MemRefType>(getRoot().getType()))
+    return emitOpError("root operand must be a memref");
+  if (getArrayId() < 0)
+    return emitOpError("arrayId must be non-negative");
+  return success();
+}
+
 ///===----------------------------------------------------------------------===///
 /// SdeMuAllocOp verifier — dynamic dim count must match `?` in result memref.
 ///===----------------------------------------------------------------------===///
@@ -583,6 +815,9 @@ LogicalResult SdeMuAllocOp::verify() {
     return emitOpError() << "expects " << numDynamic
                          << " dynamic size(s) for result type " << memrefTy
                          << "; got " << getDynamicSizes().size();
+  if (IntegerAttr arrayId = getArrayIdAttr())
+    if (arrayId.getInt() < 0)
+      return emitOpError("arrayId must be non-negative when present");
   return success();
 }
 
@@ -595,6 +830,8 @@ LogicalResult SdeMuAllocOp::verify() {
 void SdeMuAccessWindowOp::print(OpAsmPrinter &p) {
   p << " " << stringifySdeAccessMode(getMode()) << " " << getMu() << " : "
     << getMu().getType();
+  if (IntegerAttr arrayId = getArrayIdAttr())
+    p << " array_id(" << arrayId.getInt() << ")";
   p << " owner_dims(" << getOwnerDimCount() << ")";
   auto printArr = [&](StringRef kw, ArrayAttr arr) {
     p << " " << kw << " [";
@@ -605,9 +842,9 @@ void SdeMuAccessWindowOp::print(OpAsmPrinter &p) {
   printArr("block_lo", getBlockLo());
   printArr("block_hi", getBlockHi());
   printArr("valid", getValidExtents());
-  p.printOptionalAttrDict(
-      (*this)->getAttrs(),
-      {"mode", "ownerDimCount", "blockLo", "blockHi", "validExtents"});
+  p.printOptionalAttrDict((*this)->getAttrs(),
+                          {"mode", "arrayId", "ownerDimCount", "blockLo",
+                           "blockHi", "validExtents"});
 }
 
 ParseResult SdeMuAccessWindowOp::parse(OpAsmParser &parser,
@@ -630,6 +867,14 @@ ParseResult SdeMuAccessWindowOp::parse(OpAsmParser &parser,
       parser.parseType(muType) ||
       parser.resolveOperand(muOperand, muType, result.operands))
     return failure();
+
+  if (succeeded(parser.parseOptionalKeyword("array_id"))) {
+    int64_t arrayId = -1;
+    if (parser.parseLParen() || parser.parseInteger(arrayId) ||
+        parser.parseRParen())
+      return failure();
+    result.addAttribute("arrayId", IntegerAttr::get(i64, arrayId));
+  }
 
   int64_t ownerDimCount = 0;
   if (parser.parseKeyword("owner_dims") || parser.parseLParen() ||
@@ -675,6 +920,10 @@ LogicalResult SdeMuAccessWindowOp::verify() {
   if (!getMu().getDefiningOp<SdeMuAllocOp>())
     return emitOpError(
         "sde.mu_access_window: mu operand must be defined by sde.mu_alloc");
+  if (IntegerAttr arrayId = getArrayIdAttr())
+    if (arrayId.getInt() < 0)
+      return emitOpError(
+          "sde.mu_access_window: arrayId must be non-negative when present");
 
   int64_t ownerDimCount = static_cast<int64_t>(getOwnerDimCount());
   if (ownerDimCount < 1)
@@ -746,6 +995,8 @@ void SdeRedistOp::print(OpAsmPrinter &p) {
   };
   p << " <" << stringifySdeMovementFamily(getFamily()) << "> " << getMu()
     << " : " << getMu().getType();
+  if (IntegerAttr arrayId = getArrayIdAttr())
+    p << " array_id(" << arrayId.getInt() << ")";
   p << " from";
   printArr("owner", getSourceOwnerDims());
   printArr("block", getSourceBlockShape());
@@ -757,9 +1008,9 @@ void SdeRedistOp::print(OpAsmPrinter &p) {
   if (IntegerAttr cost = getCommVolumeBytesAttr())
     p << " cost " << cost.getInt();
   p.printOptionalAttrDict((*this)->getAttrs(),
-                          {"family", "sourceOwnerDims", "sourceBlockShape",
-                           "targetOwnerDims", "targetBlockShape", "haloShape",
-                           "commVolumeBytes"});
+                          {"family", "arrayId", "sourceOwnerDims",
+                           "sourceBlockShape", "targetOwnerDims",
+                           "targetBlockShape", "haloShape", "commVolumeBytes"});
 }
 
 ParseResult SdeRedistOp::parse(OpAsmParser &parser, OperationState &result) {
@@ -782,6 +1033,14 @@ ParseResult SdeRedistOp::parse(OpAsmParser &parser, OperationState &result) {
       parser.parseType(muType) ||
       parser.resolveOperand(muOperand, muType, result.operands))
     return failure();
+
+  if (succeeded(parser.parseOptionalKeyword("array_id"))) {
+    int64_t arrayId = -1;
+    if (parser.parseLParen() || parser.parseInteger(arrayId) ||
+        parser.parseRParen())
+      return failure();
+    result.addAttribute("arrayId", IntegerAttr::get(i64, arrayId));
+  }
 
   // Parse a bare `[i64, ...]` list (no leading keyword).
   auto parseList = [&](SmallVectorImpl<Attribute> &vals) -> ParseResult {
@@ -837,6 +1096,11 @@ LogicalResult SdeRedistOp::verify() {
   if (!muType.hasStaticShape())
     return emitOpError(
         "sde.redist: dynamic MU shape has no static redistribution layout");
+  if (IntegerAttr arrayId = getArrayIdAttr()) {
+    if (arrayId.getInt() < 0)
+      return emitOpError(
+          "sde.redist: arrayId must be non-negative when present");
+  }
   int64_t rank = muType.getRank();
   ArrayRef<int64_t> shape = muType.getShape();
 

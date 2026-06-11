@@ -8,19 +8,20 @@
 /// invariant "all source executable work lives in a CU" (enforced by
 /// `verify-sde`) holds for non-OpenMP host code too: init loops, scalar
 /// check/verification code, sequential reductions, and scalar-effect work that
-/// `ConvertOpenMPToSde` / `Parallelize` did not already place in a CU. The
-/// `sde.su_iterate` bodies are normalized strictly: tile-local loops and scalar
-/// plumbing are moved into the CU they schedule, leaving the SU to contain CUs,
-/// barriers, and its terminator. `sde.su_distribute` direct-child legality is
-/// verifier-owned because that wrapper can only contain nested SUs,
-/// `sde.redist`, or barriers.
+/// `ConvertOpenMPToSde` / `Parallelize` did not already place in a CU. Local
+/// SU/CU region legality is owned by the SDE operation contracts and op
+/// verifiers. `sde.su_iterate` bodies are normalized strictly: tile-local loops
+/// and scalar plumbing are moved into the CU they schedule, leaving the SU to
+/// contain leaf CUs, barriers, provenance, and its terminator.
+/// `sde.su_distribute` direct-child legality is verifier-owned because that
+/// wrapper can only contain nested SUs, `sde.redist`, or barriers.
 ///
 /// This is a STRUCTURAL transformation only. It:
 ///   * reads current IR and moves existing ops into a CU container — it stamps
 ///     no metadata and branches on no downstream contract;
 ///   * requires no CU isolation, no MU token, and no slice, and it introduces
 ///     none;
-///   * introduces no CODIR concept and no codelet isolation (`cu_region` is not
+///   * introduces no ARTS concept and no codelet isolation (`cu_region` is not
 ///     `IsolatedFromAbove`; the wrapped body keeps referencing enclosing SSA
 ///     values directly);
 ///   * makes no distribution, movement, DB-grain, or access-window decision;
@@ -78,21 +79,7 @@ static bool funcHasSdeOp(func::FuncOp fn) {
   return found;
 }
 
-/// The block-level (direct-child-of-`block`) ancestor of `user`, or null if
-/// `user` is not nested under any op that is a direct child of `block`.
-static Operation *blockLevelAncestor(Operation *user, Block *block) {
-  Operation *cursor = user;
-  while (cursor && cursor->getBlock() != block)
-    cursor = cursor->getParentOp();
-  return cursor;
-}
-
-static bool isNestedUnder(Operation *op, Operation *container) {
-  for (Operation *cursor = op; cursor; cursor = cursor->getParentOp())
-    if (cursor == container)
-      return true;
-  return false;
-}
+static bool normalizeSchedulingCarrierRegions(Operation *op);
 
 /// Collect direct-child results that are used outside `span`.
 static void collectEscapingValues(ArrayRef<Operation *> span, Block *block,
@@ -101,7 +88,7 @@ static void collectEscapingValues(ArrayRef<Operation *> span, Block *block,
   for (Operation *op : span)
     for (Value result : op->getResults())
       for (Operation *user : result.getUsers()) {
-        Operation *ancestor = blockLevelAncestor(user, block);
+        Operation *ancestor = getBlockLevelAncestor(user, block);
         if (!ancestor || !spanSet.contains(ancestor)) {
           escaping.push_back(result);
           break;
@@ -137,7 +124,7 @@ static void wrapSpanInCuRegion(Operation *first, Operation *last,
     Value oldValue = std::get<0>(pair);
     Value newValue = std::get<1>(pair);
     oldValue.replaceUsesWithIf(newValue, [&](OpOperand &use) {
-      return !isNestedUnder(use.getOwner(), cuRegion);
+      return !sde::isNestedUnder(use.getOwner(), cuRegion);
     });
   }
 }
@@ -162,9 +149,18 @@ static bool normalizeBlock(Block *block, bool strictSuBody = false) {
       ++i;
       continue;
     }
+    // SCF/source carriers that contain SDE scheduling are schedule structure,
+    // not executable CU bodies. Normalize their regions so source-effect spans
+    // become leaf CUs while nested SUs/barriers remain outside those CUs.
+    if (containsCuForbiddenSchedulingOp(ops[i])) {
+      ok &= normalizeSchedulingCarrierRegions(ops[i]);
+      ++i;
+      continue;
+    }
     // Maximal movable run, bounded by the next SDE structural op.
     size_t runEnd = i;
-    while (runEnd < n && !isSdeDialectOp(ops[runEnd]))
+    while (runEnd < n && !isSdeDialectOp(ops[runEnd]) &&
+           !containsCuForbiddenSchedulingOp(ops[runEnd]))
       ++runEnd;
     size_t lo = i, hi = runEnd;
     if (!strictSuBody) {
@@ -178,12 +174,22 @@ static bool normalizeBlock(Block *block, bool strictSuBody = false) {
     }
     if (lo < hi) {
       ArrayRef<Operation *> span(ops.data() + lo, hi - lo);
+      OpBuilder constantBuilder(ops[lo]);
+      materializeEscapingConstantLikeValues(span, block, constantBuilder);
       SmallVector<Value> escaping;
       collectEscapingValues(span, block, escaping);
       wrapSpanInCuRegion(ops[lo], ops[hi - 1], escaping);
     }
     i = runEnd;
   }
+  return ok;
+}
+
+static bool normalizeSchedulingCarrierRegions(Operation *op) {
+  bool ok = true;
+  for (Region &region : op->getRegions())
+    for (Block &block : region)
+      ok &= normalizeBlock(&block);
   return ok;
 }
 

@@ -13,7 +13,7 @@ point.
 ## Compiler Areas
 
 - SDE distribution planning.
-- Codelet materialization through `sde-to-codir` and `codir-to-arts`; any
+- Codelet materialization through `sde-to-arts` and `sde-to-arts`; any
   surviving SDE operation is a boundary failure.
 - ARTS DB refinement.
 - Distributed DB ownership.
@@ -25,7 +25,7 @@ point.
 1. Prove single-node first.
 2. Use the same input with a multinode config.
 3. Check that distributed flags/config are actually active.
-4. Inspect stage IR around `sde-planning`, `codir-to-arts`,
+4. Inspect stage IR around `sde-planning`, `sde-to-arts`,
    `post-db-refinement`, and `pre-lowering`.
 5. Collect per-node logs/counters when the runtime fails.
 

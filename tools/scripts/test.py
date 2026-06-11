@@ -79,7 +79,6 @@ def _resolve_lit_targets(config: CartsConfig, suite: str) -> List[Path]:
 
     # Co-located pass test directories (IREE-style)
     pass_test_dirs = [
-        carts_dir / "lib" / "carts" / "dialect" / "codir" / "test",
         carts_dir / "lib" / "carts" / "dialect" / "sde" / "test",
         carts_dir / "lib" / "carts" / "dialect" / "arts" / "test",
         carts_dir / "lib" / "carts" / "dialect" / "arts-rt" / "test",
@@ -291,7 +290,7 @@ def lit(
 
     Examples:
       carts lit
-      carts lit lib/carts/dialect/codir/test/transforms/codir-conversion-passes.mlir
+      carts lit lib/carts/dialect/arts/test/conversion/sde-to-arts-consumes-mu-access-window.mlir
       carts lit -v lib/arts/dialect/core/test
       carts lit -- --filter=db_lowering lib/arts/dialect/core/test
     """

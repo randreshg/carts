@@ -41,7 +41,7 @@ spine is:
 
 - SDE commits real source/layout/alignment/tiling facts and performs the
   source/SU/CU/MU transformations that make them true.
-- CODIR commits isolated codelet graph structure and preserves SDE-authored
+- ARTS commits isolated codelet graph structure and preserves SDE-authored
   movement facts.
 - ARTS realizes per-block single-writer DBs, EDTs, owner maps, DB modes, and
   grouped compute/bridge/communication CUs.
@@ -73,7 +73,7 @@ When invoked (default action `next`):
 | 2 (#3) | retired diagnostic | The monolithic partitioning heuristic pass and cached ARTS graph-analysis stack are gone. If metadata-copy recursion or DB-mode churn reappears, inspect live metadata copy sites and focused DB passes; do not recreate the retired partitioning layer. |
 | 3 (#4) | targeted-fix | Edit `lib/carts/dialect/sde/Conversion/PolygeistToSde/MemrefNormalization.cpp` first; `CreateDbs.cpp` is only the ARTS coarse raw bridge and boundary guard. The fix is in shape normalization, NOT in DB partitioning. See `references/triage-rubric.md` anti-pattern #1. |
 | 4 (#5) | per-item iteration | One sample at a time. Use the per-item workflow below. |
-| 5 (#6) | targeted-fix | Keep SDE layout facts target-neutral and real. Add or adjust ARTS realization only when SDE/CODIR have already committed valid layout and movement structure; ARTS consumes that structure plus abstract-machine topology without redetecting source patterns or pushing owner policy into ARTS-RT. |
+| 5 (#6) | targeted-fix | Keep SDE layout facts target-neutral and real. Add or adjust ARTS realization only when SDE have already committed valid layout and movement structure; ARTS consumes that structure plus abstract-machine topology without redetecting source patterns or pushing owner policy into ARTS-RT. |
 | 6 (#7) | per-item iteration | One sample at a time, multinode. See `references/multinode-failures.md` before opening any file. |
 | 7 (#8) | baseline | Re-run benchmark suite single-node. Document each regression vs the 2026-03-11 snapshot. |
 | 8 (#9) | per-item iteration | One benchmark at a time, multinode. Same workflow as Phase 6. |
@@ -94,7 +94,7 @@ For each failing sample or benchmark:
    - Crash, segfault, generic compile error → `carts-debug`
    - Need to compare two stages → `carts-stage-diff`
 5. **Apply the fix in the originating layer**, not the surface layer. SDE fixes
-   layout/source facts, CODIR fixes collective/bridge materialization, ARTS
+   layout/source facts, ARTS fixes collective/bridge materialization, ARTS
    fixes DB/EDT/owner-map realization and grouped execution, and ARTS-RT fixes
    only mechanical lowering.
 6. **Regression-guard.** Run the 10-item checklist. Re-run all prior-green samples in BOTH single-node and multinode.
@@ -116,7 +116,7 @@ If the per-item workflow keeps failing on a single item across multiple iteratio
 This skill cites but does not duplicate:
 
 - `docs/compiler/pipeline.md` — live pipeline documentation; verify with `dekk carts pipeline --json`
-- `docs/compiler/dialects/*` — dialect ownership docs for SDE, CODIR, ARTS, and ARTS-RT
+- `docs/compiler/dialects/*` — dialect ownership docs for SDE, ARTS, and ARTS-RT
 - `.carts/sessions/...` — planning, experiments, investigation notes, and benchmark evidence
 - `tools/compile/Compile.cpp` plus ARTS DB/ownership implementation anchors — current failure taxonomy lives with the pipeline and refinement code
 

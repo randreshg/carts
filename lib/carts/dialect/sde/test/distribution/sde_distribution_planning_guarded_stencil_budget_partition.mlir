@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_multinode.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-to-codir \
+// RUN:   --start-from sde-planning --pipeline sde-planning \
 // RUN:   --min-distributed-tile-bytes=1048576 \
 // RUN:   --mlir-print-ir-after-all 2>&1 \
 // RUN:   | awk '/IR Dump After DistributionPlanning/,/IR Dump After IterationSpaceDecomposition/' \
@@ -36,9 +36,9 @@ module attributes {
     %c16 = arith.constant 16 : index
     %c63 = arith.constant 63 : index
     %c64 = arith.constant 64 : index
-    sde.cu_region <parallel> {
-      sde.su_iterate (%c0, %c0) to (%c64, %c64) step (%c8, %c16) classification(<stencil>) {
-      ^bb0(%tile_i: index, %tile_j: index):
+    sde.su_iterate (%c0, %c0) to (%c64, %c64) step (%c8, %c16) classification(<stencil>) {
+    ^bb0(%tile_i: index, %tile_j: index):
+      sde.cu_region <single> {
         %tile_i_end_raw = arith.addi %tile_i, %c8 : index
         %tile_i_end = arith.minui %tile_i_end_raw, %c64 : index
         scf.for %i = %tile_i to %tile_i_end step %c1 {
@@ -70,21 +70,20 @@ module attributes {
               memref.store %sum, %B[%i, %j] : memref<64x64xf64>
             }
           }
-        }
+      }
         sde.yield
-      } {accessMaxOffsets = [1, 1],
-         accessMinOffsets = [-1, -1],
-         iterationTopology = #sde.iteration_topology<owner_tile>,
-         logicalWorkerSlice = [8, 16],
-         ownerDims = [0, 1],
-         pattern = #sde.pattern<stencil_tiling_nd>,
-         physicalBlockShape = [8, 16],
-         physicalHaloShape = [1, 1],
-         physicalOwnerDims = [0, 1],
-         spatialDims = [0, 1],
-         writeFootprint = [1, 1]}
-      sde.yield
-    }
+      }
+    } {accessMaxOffsets = [1, 1],
+       accessMinOffsets = [-1, -1],
+       iterationTopology = #sde.iteration_topology<owner_tile>,
+       logicalWorkerSlice = [8, 16],
+       ownerDims = [0, 1],
+       pattern = #sde.pattern<stencil_tiling_nd>,
+       physicalBlockShape = [8, 16],
+       physicalHaloShape = [1, 1],
+       physicalOwnerDims = [0, 1],
+       spatialDims = [0, 1],
+       writeFootprint = [1, 1]}
     return
   }
 }

@@ -43,19 +43,19 @@ runtime.
 
 ## Compiler Shape
 
-CARTS is migrating toward four project dialect layers:
+CARTS is organized around three project dialect layers:
 
 - SDE (`sde`) - HPF-style `DISTRIBUTE`/`ALIGN`: source semantics, per-array
   block layouts from affine access relations, abstract communication-volume
   cost, PatternAnalysis, and real source/SU/CU/MU loop/layout transformations.
   It names no collectives, DBs, EDTs, owner maps, routes, GUIDs, or runtime
   policy.
-- CODIR (`codir`) - isolated codelets, explicit deps/params, token-local
-  memref views, graph optimizations, and mechanical representation of
-  SDE-authored movement structure at the first isolation boundary.
-- ARTS (`arts`) - abstract DB, EDT, epoch, dependency-slot, placement,
-  per-block single-writer DB realization, owner maps, DB modes, and grouped
-  compute/bridge/communication CUs.
+- ARTS (`arts`) - the first isolation boundary: isolated codelets, explicit
+  deps/params, token-local memref views, graph optimizations, and mechanical
+  representation of SDE-authored movement structure. It also owns abstract DB,
+  EDT, epoch, dependency-slot, placement, per-block single-writer DB
+  realization, owner maps, DB modes, and grouped compute/bridge/communication
+  CUs.
 - ARTS-RT (`arts_rt`) - runtime ABI, packing, pointer lowering, and
   LLVM-facing cleanup. It mechanically lowers ARTS facts and does not infer
   scheduling, ownership, partition, or collective policy.
@@ -69,10 +69,9 @@ skills disagree with the compiler, the live compiler manifest wins.
   owning dialect, and the runtime/compiler contract before patching symptoms.
 - Before changing compiler IR, state the function and limits of the affected
   dialect layer. SDE owns data layout and the real loop/source transformations
-  that make it true; CODIR owns isolated codelet graph structure and mechanical
-  movement representation; ARTS owns
-  DB/EDT/owner-map realization and grouped execution; ARTS-RT owns
-  lowering-ready runtime shape.
+  that make it true; ARTS owns isolated codelet graph structure, mechanical
+  movement representation, DB/EDT/owner-map realization, and grouped execution;
+  ARTS-RT owns lowering-ready runtime shape.
 - Do not hide correctness behind later cleanup passes, metadata-only promises,
   incidental pass order, fixture churn, or duplicated local helpers. If the
   owning layer cannot safely transform, fail closed with evidence.
@@ -88,10 +87,11 @@ skills disagree with the compiler, the live compiler manifest wins.
 - Use hypergraph partitioning as CU grouping/partition evidence over committed
   MU facts, not as benchmark-specific owner-dim, owner-map, or storage-grain
   repair.
-- Passes, operations, attributes, and dialect-owned IR metadata must be
-  declared through the owning TableGen/ODS files first. C++ code should consume
-  generated declarations/accessors instead of adding manual pass/attribute
-  surfaces.
+- Passes, operations, attributes, dialect-owned IR metadata, and local op
+  validation contracts must be declared through the owning TableGen/ODS files
+  first. Use op verifiers for operation region/body legality before assigning
+  validation to aggregate passes. C++ code should consume generated
+  declarations/accessors instead of adding manual pass/attribute surfaces.
 - Before adding a helper to a pass, use `carts-check-utils`. Reusable helpers
   belong in the narrowest owning dialect `Utils/` area or an owning analysis
   API; keep helpers pass-local only when they are genuinely one-pass logic.
@@ -170,12 +170,12 @@ Match verification to the change:
 | `analysis-triage` | Use when behavior depends on pass order, stale facts, or metadata inconsistency across staged CARTS pipelines. | `carts-plugin/skills/analysis-triage/SKILL.md` |
 | `miscompile-triage` | Use when a program compiles but produces wrong output, checksum mismatches, phase-equivalence failures, or suspicious partitioning/distribution decisions. | `carts-plugin/skills/miscompile-triage/SKILL.md` |
 | `runtime-triage` | Use when compilation succeeds but the generated ARTS executable hangs, deadlocks, crashes, stalls, or reports anomalous runtime counters. | `carts-plugin/skills/runtime-triage/SKILL.md` |
-| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/CODIR/ARTS distributed work materialization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
+| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work materialization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
 | `benchmark-triage` | Use when a benchmark fails, times out, produces wrong checksums, shows suspicious speedups, or needs pass-by-pass/runtime diagnosis. | `carts-plugin/skills/benchmark-triage/SKILL.md` |
 | `heuristic-explain` | Use when a benchmark or test has unexpected partitioning, wrong distribution mode, or heuristic drift in ARTS DB/EDT placement decisions. | `carts-plugin/skills/heuristic-explain/SKILL.md` |
 | `reproducer` | Use when a large failing program, benchmark, or stage dump needs to become a minimal C, MLIR, or lit reproducer. | `carts-plugin/skills/reproducer/SKILL.md` |
 | `stage-diff` | Use when debugging miscompiles, verifying pass correctness, comparing MLIR between pipeline stages, or finding where semantics diverge. | `carts-plugin/skills/stage-diff/SKILL.md` |
-| `dialect-trace` | Use when debugging lowering paths, understanding operation placement across SDE/CODIR/ARTS/ARTS-RT, or verifying dialect boundary invariants. | `carts-plugin/skills/dialect-trace/SKILL.md` |
+| `dialect-trace` | Use when debugging lowering paths, understanding operation placement across SDE/ARTS/ARTS-RT, or verifying dialect boundary invariants. | `carts-plugin/skills/dialect-trace/SKILL.md` |
 | `runtime-first` | Use after runtime triage shows the compiler must match an ARTS runtime contract for EDTs, DBs, epochs, dependencies, or distributed execution. | `carts-plugin/skills/runtime-first/SKILL.md` |
 
 ### Authoring + maintenance
@@ -190,7 +190,7 @@ Match verification to the change:
 
 | Skill | Description | Path |
 | --- | --- | --- |
-| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, GASNet/distributed scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
+| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, GASNet/distributed scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
 | `carts-worktrees` | Use when working on multiple CARTS/ARTS changes in parallel, isolating a risky compiler/runtime change, or running concurrent builds/benchmarks without clobbering the main checkout. Covers the carts-wt tool and the shared-LLVM/Polygeist worktree model. | `carts-plugin/skills/carts-worktrees/SKILL.md` |
 
 <!-- END SKILLS INVENTORY -->

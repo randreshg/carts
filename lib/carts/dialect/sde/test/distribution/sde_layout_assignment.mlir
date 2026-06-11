@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --start-from sde-planning --pipeline sde-to-codir --mlir-print-ir-after-all 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --start-from sde-planning --pipeline sde-planning --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
 // Module-scoped affine-driven per-array BLOCK layout assignment. The
 // `sde-layout-assignment` pass stamps one element-space BLOCK layout per array
@@ -34,21 +34,6 @@
 // CHECK: arrayLayout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}], commVolumeBytes = 2097152 : i64
 // CHECK-SAME: layoutsDisagree = [3]
 
-// Boundary proof: CODIR receives the neutral layout facts as `array_layout` and
-// joins dependency operands to those facts with `dep_array_ids`. Committed SDE
-// movement is consumed as dependency movement, so the disagreement marker is not
-// retained after the boundary.
-// CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir
-// CHECK: func.func @three_mm
-// CHECK: codir.codelet
-// CHECK-SAME: array_layout = [
-// CHECK: codir.codelet
-// CHECK: codir.codelet
-// CHECK-SAME: array_layout = [{arrayId = 0 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 3 : i64, {{.*}}commVolumeBytes = 2097152 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 6 : i64, {{.*}}commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}]
-// CHECK-NOT: comm_volume_bytes
-// CHECK-SAME: dep_array_ids = [0, 3, 6]
-// CHECK-SAME: dep_collectives = [#codir.collective<none>, #codir.collective<reduce_scatter>, #codir.collective<none>]
-
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,
   llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128",
@@ -61,10 +46,10 @@ module attributes {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c1024 = arith.constant 1024 : index
-    sde.cu_region <parallel> {
-      // E = A * B
-      sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
-      ^bb0(%i: index, %j: index):
+    // E = A * B
+    sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
+    ^bb0(%i: index, %j: index):
+      sde.cu_region <single> {
         scf.for %k = %c0 to %c1024 step %c1 {
           %a = memref.load %A[%i, %k] : memref<1024x1024xf32>
           %b = memref.load %B[%k, %j] : memref<1024x1024xf32>
@@ -72,12 +57,14 @@ module attributes {
           %p = arith.mulf %a, %b : f32
           %s = arith.addf %e, %p : f32
           memref.store %s, %E[%i, %j] : memref<1024x1024xf32>
-        }
+      }
         sde.yield
       }
-      // F = C * D
-      sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
-      ^bb0(%i: index, %j: index):
+    }
+    // F = C * D
+    sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
+    ^bb0(%i: index, %j: index):
+      sde.cu_region <single> {
         scf.for %k = %c0 to %c1024 step %c1 {
           %c = memref.load %C[%i, %k] : memref<1024x1024xf32>
           %d = memref.load %D[%k, %j] : memref<1024x1024xf32>
@@ -85,12 +72,14 @@ module attributes {
           %p = arith.mulf %c, %d : f32
           %s = arith.addf %f, %p : f32
           memref.store %s, %F[%i, %j] : memref<1024x1024xf32>
-        }
+      }
         sde.yield
       }
-      // G = E * F  (contracts F on F's row dim k)
-      sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
-      ^bb0(%i: index, %j: index):
+    }
+    // G = E * F  (contracts F on F's row dim k)
+    sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
+    ^bb0(%i: index, %j: index):
+      sde.cu_region <single> {
         scf.for %k = %c0 to %c1024 step %c1 {
           %e = memref.load %E[%i, %k] : memref<1024x1024xf32>
           %f = memref.load %F[%k, %j] : memref<1024x1024xf32>
@@ -98,10 +87,9 @@ module attributes {
           %p = arith.mulf %e, %f : f32
           %s = arith.addf %g, %p : f32
           memref.store %s, %G[%i, %j] : memref<1024x1024xf32>
-        }
+      }
         sde.yield
       }
-      sde.yield
     }
     return
   }

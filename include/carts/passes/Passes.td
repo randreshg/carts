@@ -55,7 +55,7 @@ def DbOwnerMapRealization
   let summary = "Realize ARTS owner-map and memory-placement facts on "
                 "distribution-eligible DB allocations";
   let description = [{
-    Selects host-level DB allocations whose committed SDE/CODIR owner/block plan
+    Selects host-level DB allocations whose committed SDE owner/block plan
     can be realized across nodes, marks them `distributed`, and projects the plan
     into ARTS owner-map and `db_memory_placement` facts. It does not choose a
     distribution family or recompute block shape.
@@ -191,6 +191,55 @@ def DistributedLaunchConsistency
       "mlir::carts::arts::createDistributedLaunchConsistencyPass()";
 }
 
+def SdeStorageToArtsDb : Pass<"sde-storage-to-arts-db", "mlir::ModuleOp"> {
+  let summary = "Materialize SDE MU storage as ARTS DB-backed memrefs";
+  let description = [{
+    Consumes committed SDE MU allocation/data facts and creates the corresponding
+    ARTS DB-backed memrefs. It also lowers committed SDE access windows into
+    short-lived ARTS DB access-plan operations so later passes can create
+    acquires without re-inferring dependency shape. It fails closed when SDE
+    movement facts are not representable as direct ARTS storage facts.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
+       "::mlir::arith::ArithDialect", "::mlir::memref::MemRefDialect",
+       "::mlir::carts::sde::CartsSdeDialect",
+       "::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts::createSdeStorageToArtsDbPass()";
+}
+
+def SdeAccessesToArtsDeps
+    : Pass<"sde-accesses-to-arts-deps", "mlir::ModuleOp"> {
+  let summary = "Materialize SDE scheduling/access facts as ARTS dependencies";
+  let description = [{
+    Consumes SDE scheduling facts plus ARTS DB access-plan operations and creates
+    ARTS `db_acquire` and `edt` objects. The pass preserves committed SDE
+    owner/block/window facts and rejects missing dependency structure instead of
+    falling back to raw memref inference.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
+       "::mlir::arith::ArithDialect", "::mlir::memref::MemRefDialect",
+       "::mlir::carts::sde::CartsSdeDialect",
+       "::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts::createSdeAccessesToArtsDepsPass()";
+}
+
+def FinalizeSdeToArts : Pass<"finalize-sde-to-arts", "mlir::ModuleOp"> {
+  let summary = "Finalize direct SDE-to-ARTS control cleanup";
+  let description = [{
+    Lowers remaining SDE resource/control wrappers after DB and dependency
+    materialization, then rejects any residual SDE or boundary access-plan
+    operations. It is the final pass in the direct SDE-to-ARTS boundary.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
+       "::mlir::arith::ArithDialect", "::mlir::memref::MemRefDialect",
+       "::mlir::carts::sde::CartsSdeDialect",
+       "::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts::createFinalizeSdeToArtsPass()";
+}
+
 def VerifyArtsCdag : Pass<"verify-arts-cdag", "mlir::ModuleOp"> {
   let summary = "Verify the ARTS boundary before ARTS-RT lowering";
   let description = [{
@@ -245,7 +294,7 @@ def EdtInlineNoDepTasks
   let description = [{
     Splices top-level task or sync EDT bodies that have no deps into the
     parent block. It does not reason about barriers, DB frontiers, epochs, or
-    memory dependence; those ordering decisions belong to SDE/CODIR structure and
+    memory dependence; those ordering decisions belong to SDE structure and
     ARTS epoch realization.
   }];
   let dependentDialects =
@@ -343,10 +392,10 @@ def Hoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
 ///===----------------------------------------------------------------------===///
 
 def VerifyArtsObjectsOnly : Pass<"verify-arts-objects-only", "mlir::ModuleOp"> {
-  let summary = "Verify the CODIR-to-ARTS boundary contains only ARTS objects";
+  let summary = "Verify the SDE-to-ARTS boundary contains only ARTS objects";
   let description = [{
     Rejects IR that violates the target dialect layering contract: no residual
-    SDE or OpenMP operations may remain after CODIR-to-ARTS conversion.
+    SDE, ARTS, or OpenMP operations may remain after SDE-to-ARTS conversion.
   }];
   let dependentDialects = [
     "::mlir::carts::arts::ArtsDialect",

@@ -14,7 +14,7 @@ mkdir -p "$outdir"
 
 stages=(
   sde-planning
-  codir-to-arts
+  sde-to-arts
   post-db-refinement
   pre-lowering
 )

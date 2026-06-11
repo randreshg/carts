@@ -18,6 +18,7 @@ using namespace mlir::carts::arts_rt;
 
 namespace {
 constexpr int32_t kArtsRtDepFlagHaloView = 1 << 2;
+constexpr int32_t kArtsRtDbModeRo = 1;
 
 Value createZeroI32(OpBuilder &builder, Location loc) {
   return arith::ConstantIntOp::create(builder, loc, 0, 32);
@@ -94,11 +95,14 @@ void DbGepOp::build(OpBuilder &builder, OperationState &state, Type ptr,
 
 LogicalResult RecordDepOp::verify() {
   const size_t dbCount = getDatablocks().size();
-  if (auto modes = getAcquireModes()) {
-    if (modes->size() != dbCount)
-      return emitOpError("acquire_modes entries (")
-             << modes->size() << ") must match datablocks (" << dbCount << ")";
-  }
+  auto modes = getAcquireModes();
+  if (!modes)
+    return emitOpError()
+           << "requires acquire_modes for every datablock; ARTS-RT must not "
+              "infer DB dependency modes";
+  if (modes->size() != dbCount)
+    return emitOpError("acquire_modes entries (")
+           << modes->size() << ") must match datablocks (" << dbCount << ")";
 
   if (!getByteOffsets().empty() && getByteOffsets().size() != dbCount)
     return emitOpError("byte_offsets entries (")
@@ -118,6 +122,9 @@ LogicalResult RecordDepOp::verify() {
     for (auto [index, flag] : llvm::enumerate(*flags)) {
       if ((flag & kArtsRtDepFlagHaloView) == 0)
         continue;
+      if ((*modes)[index] != kArtsRtDbModeRo)
+        return emitOpError("HALO_VIEW dependency #")
+               << index << " requires read acquire mode";
       if (!hasByteWindows)
         return emitOpError("HALO_VIEW dependency #")
                << index << " requires byte_offsets and byte_sizes";

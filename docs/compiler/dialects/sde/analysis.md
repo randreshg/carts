@@ -27,7 +27,7 @@ Emitted facts:
 - `logicalWorkerSlice`
 - MU roots and MU tokens
 - reduction attributes
-- token/codelet boundary requirements for SDE-to-CODIR
+- token/codelet boundary requirements for SDE-to-ARTS
 
-SDE analysis facts are consumed by SDE transforms and SDE-to-CODIR conversion.
+SDE analysis facts are consumed by SDE transforms and SDE-to-ARTS conversion.
 They must not become hidden ARTS analysis inputs.

@@ -230,12 +230,18 @@ def SdeCuRegionOp
       SingleBlock,
       RecursiveMemoryEffects
     ]> {
-  let summary = "Parallel or single execution region";
+  let summary = "Executable compute-unit region";
   let description = [{
     Captures `omp.parallel`, `omp.single`, `omp.master`. Represents a
     source-level compute region. The region kind records OpenMP execution
     semantics such as parallel, single, or task; concrete machine topology and
     distributed placement are resolved later.
+
+    A compute unit is an executable leaf in the SDE MU/CU/SU structure. It may
+    contain local compute/control-flow and SDE memory/access-window facts, but
+    it must not contain SU scheduling operations such as `sde.su_iterate`,
+    `sde.su_distribute`, `sde.su_barrier`, or `sde.redist`. SU ops compose and
+    schedule CUs; CUs do not schedule SUs.
 
     The `nowait` attribute preserves OpenMP nowait semantics. Optional
     `iter_args` thread loop-carried SSA values through the region body. Result
@@ -364,6 +370,11 @@ def SdeSuIterateOp
     Represents a parallel iteration space with optional schedule, chunk size,
     nowait, and reduction metadata.
 
+    The body is scheduling-only: direct children are executable leaf CUs
+    (`sde.cu_region` or `sde.cu_atomic`), `sde.array_layout_root` provenance,
+    `sde.su_barrier`, and the `sde.yield` terminator. Source compute and
+    compute-local scalar/index plumbing belong inside a direct child CU.
+
     Reduction accumulators can carry the combiner kind and identity value,
     preserving information lost by the current pipeline.
 
@@ -430,7 +441,7 @@ def SdeSuIterateOp
     //   - `muBlockCount` (I64): number of memory-unit blocks implied by the
     //                         owner dims and block shape.
     // Element-space only: encodes no target nodes, routes, concrete worker
-    // placement, communication primitive, or split factor. CODIR consumes these
+    // placement, communication primitive, or split factor. ARTS consumes these
     // facts on explicit codelet deps; ARTS realizes target objects later.
     OptionalAttr<ArrayAttr>:$arrayLayout,
     // Per-edge geometric layouts-disagree marker. An ArrayAttr of the
@@ -462,6 +473,8 @@ def SdeSuDistributeOp
   let description = [{
     Wraps a scheduling-unit region with a runtime-neutral distribution kind.
     It does not encode concrete worker, route, or node identifiers.
+    Direct children are nested SUs, `sde.redist`, or `sde.su_barrier`; compute
+    remains in leaf CUs under the nested SUs.
   }];
 
   let arguments = (ins SdeDistributionKindAttr:$kind);
@@ -470,6 +483,7 @@ def SdeSuDistributeOp
   let assemblyFormat = [{
     $kind $body attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 def SdeSuBarrierOp
@@ -503,7 +517,7 @@ def SdeMuDepOp
     and is distinct from `sde.control_token` (ordering/completion) and
     `sde.mu_token` (an MU access token).
 
-    `sde.mu_dep` is an SDE-only declaration consumed by SDE-to-CODIR
+    `sde.mu_dep` is an SDE-only declaration consumed by SDE-to-ARTS
     conversion, which materializes concrete storage and access requests. It does
     not survive the dialect boundary and must not be wired as a target
     dependency graph.
@@ -562,10 +576,10 @@ def SdeCuWorkOp
       RecursiveMemoryEffects,
       AttrSizedOperandSegments
     ]> {
-  let summary = "Isolated compute unit consumed by the SDE-to-CODIR conversion.";
+  let summary = "Isolated compute unit consumed by the SDE-to-ARTS conversion.";
   let description = [{
-    The isolated compute-unit form that `convert-sde-to-codir` lowers into a
-    `codir.codelet`. Its only communication with the enclosing scope is through
+    The isolated compute-unit form consumed by direct SDE-to-ARTS dependency
+    materialization. Its only communication with the enclosing scope is through
     `sde.mu_token` operands and explicit capture operands. Memref tokens pass
     mutable views directly and do not require yielded replacement values.
 
@@ -596,6 +610,35 @@ def SdeCuWorkOp
   let hasVerifier = 1;
 }
 
+def SdeArrayLayoutRootOp : CartsSde_Op<"array_layout_root", [
+      // NOT Pure: a zero-result provenance fact must survive until SDE
+      // verifiers and boundary lowering consume it.
+      MemoryEffects<[MemWrite]>
+    ]> {
+  let summary = "SDE arrayLayout root-to-arrayId provenance";
+  let description = [{
+    Binds one dependency-visible memref root to the module-stable `arrayId`
+    committed in an enclosing `sde.su_iterate` `arrayLayout` entry. This is SDE
+    structural provenance: it names no collective, DB, EDT, route, GUID, node,
+    or runtime policy.
+
+    `mode` is the layout role for this scheduling unit (`read` or `write`);
+    `readwrite` is invalid because `arrayLayout` entries are role-specific.
+    ARTS may consume this fact into `dep_array_ids`, but must not recover the
+    same identity by operand order, read size, or replaying layout analysis.
+  }];
+
+  let arguments = (ins
+    AnyMemRef:$root,
+    SdeAccessModeAttr:$mode,
+    I64Attr:$arrayId
+  );
+
+  let results = (outs);
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
 def SdeMuAllocOp : CartsSde_Op<"mu_alloc", [Pure]> {
   let summary = "Allocate an SDE memref value with given shape.";
   let description = [{
@@ -605,8 +648,16 @@ def SdeMuAllocOp : CartsSde_Op<"mu_alloc", [Pure]> {
     Examples:
       %arr = sde.mu_alloc : memref<100xi32>
       %mat = sde.mu_alloc(%n, %m) : memref<?x?xf64>
+
+    Optional `arrayId` is SDE-authored root provenance from committed
+    `arrayLayout` facts. It binds this MU root to the module-stable SDE array
+    identity before ARTS consumes dependency facts. It names no ARTS or
+    runtime object.
   }];
-  let arguments = (ins Variadic<Index>:$dynamicSizes);
+  let arguments = (ins
+    Variadic<Index>:$dynamicSizes,
+    OptionalAttr<I64Attr>:$arrayId
+  );
   let results = (outs AnyMemRef:$memref);
   let assemblyFormat = [{
     (`(` $dynamicSizes^ `)`)? attr-dict `:` type($memref)
@@ -631,12 +682,16 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
     operand is the rank-expanded `sde.mu_alloc` result (visible because
     `sde.cu_region` is NOT `IsolatedFromAbove`). It names no collective, DB,
     EDT, owner map, route, GUID, or runtime policy — it is a pure SDE structural
-    fact, consumed (not reinterpreted) by mechanical SDE-to-CODIR lowering.
+    fact, consumed (not reinterpreted) by mechanical SDE-to-ARTS lowering.
 
     Attributes (block-grid coordinates, all static `I64 ArrayAttr`):
       - `mode`          : SdeAccessMode, `read` or `write`. A CU that both reads
                           and writes the same MU (in-place) is out of scope
                           and gets no window.
+      - `arrayId`       : optional committed SDE array identity for `mu`,
+                          copied from the MU root. When the enclosing SU has
+                          `arrayLayout`, consumers must require a non-negative
+                          value instead of inferring by root order or size.
       - `ownerDimCount` : number of leading owner (grid) dims.
       - `blockLo`/`blockHi` : per-owner-dim half-open block range [lo, hi) the CU
                           touches; `blockHi[k]` == grid dim k of the expanded
@@ -652,12 +707,13 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
     halo-redistribution transform); `validExtents` is the in-tile extent.
 
     Production SDE planning emits this carrier for in-scope block-grid MUs
-    before SDE-to-CODIR conversion consumes it.
+    before SDE-to-ARTS conversion consumes it.
   }];
 
   let arguments = (ins
     AnyMemRef:$mu,
     SdeAccessModeAttr:$mode,
+    OptionalAttr<I64Attr>:$arrayId,
     I64Attr:$ownerDimCount,
     ArrayAttr:$blockLo,
     ArrayAttr:$blockHi,
@@ -690,10 +746,13 @@ def SdeRedistOp : CartsSde_Op<"redist", [
     `allreduce_like`, `halo_like`, `phase_redist`). It names no collective,
     transport algorithm, DB, EDT, owner map, route, GUID, or runtime policy:
     like `sde.mu_dep`/`sde.mu_access_window` it is consumed by
-    SDE-to-CODIR lowering and does NOT survive the dialect boundary.
+    SDE-to-ARTS lowering and does NOT survive the dialect boundary.
 
     Attributes (element-space geometry, all static `I64 ArrayAttr`):
       - `family`            : the geometric movement family.
+      - `arrayId`           : committed SDE array identity for `mu`; the value
+                              must match the `layoutsDisagree` entry this
+                              movement represents.
       - `sourceOwnerDims`/`sourceBlockShape` : the home (writer) layout. Empty
                               `sourceOwnerDims` with a full-extent block means a
                               replicated source.
@@ -711,12 +770,13 @@ def SdeRedistOp : CartsSde_Op<"redist", [
     `IsolatedFromAbove`, so it is visible at the redistribution site.
 
     Production SDE planning emits this carrier for representable movement edges
-    before SDE-to-CODIR conversion consumes it.
+    before SDE-to-ARTS conversion consumes it.
   }];
 
   let arguments = (ins
     AnyMemRef:$mu,
     SdeMovementFamilyAttr:$family,
+    OptionalAttr<I64Attr>:$arrayId,
     ArrayAttr:$sourceOwnerDims,
     ArrayAttr:$sourceBlockShape,
     ArrayAttr:$targetOwnerDims,
@@ -787,7 +847,18 @@ def SdeMuReductionDeclOp
 //===----------------------------------------------------------------------===//
 
 def SdeYieldOp
-    : CartsSde_Op<"yield", [Pure, ReturnLike, Terminator]> {
+    : CartsSde_Op<"yield", [
+      Pure,
+      ReturnLike,
+      Terminator,
+      ParentOneOf<[
+        "SdeCuRegionOp",
+        "SdeCuWorkOp",
+        "SdeSuIterateOp",
+        "SdeCuReduceOp",
+        "SdeMuReductionDeclOp"
+      ]>
+    ]> {
   let summary = "SDE region terminator";
   let description = [{
     Terminates all SDE regions. Can optionally return values for reductions

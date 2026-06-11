@@ -17,7 +17,7 @@
 /// Out-of-scope MUs/CU accesses (dynamic, matmul/reduction, multi-owner,
 /// same-CU in-place, unsupported use) are skipped conservatively — no window,
 /// no error, no existing op mutated. It introduces no `sde.mu_token`, slice,
-/// `sde.mu_dep`, or CODIR concept.
+/// `sde.mu_dep`, or ARTS concept.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -85,9 +85,12 @@ struct RaiseToMuAccessWindowPass
           continue;
 
         OpBuilder builder(insertBefore);
+        IntegerAttr arrayIdAttr;
+        if (plan.arrayId)
+          arrayIdAttr = builder.getI64IntegerAttr(*plan.arrayId);
         carts::sde::SdeMuAccessWindowOp::create(
             builder, mu.getLoc(), plan.mu,
-            carts::sde::SdeAccessModeAttr::get(ctx, plan.mode),
+            carts::sde::SdeAccessModeAttr::get(ctx, plan.mode), arrayIdAttr,
             builder.getI64IntegerAttr(plan.ownerDimCount),
             builder.getI64ArrayAttr(plan.blockLo),
             builder.getI64ArrayAttr(plan.blockHi),

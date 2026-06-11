@@ -50,6 +50,24 @@ def ReductionStrategy : Pass<"reduction-strategy", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createReductionStrategyPass()";
 }
 
+def SdeAtomicReductionMaterialization
+    : Pass<"sde-atomic-reduction-materialization", "mlir::ModuleOp"> {
+  let summary = "Materialize SDE atomic reductions as explicit CU atomics";
+  let description = [{
+    Consumes `reduction_strategy(<atomic>)` on eligible `sde.su_iterate`
+    operations by rewriting the leaf-CU load/add/store update on the reduction
+    accumulator into an explicit `sde.cu_atomic`. After the source effect is
+    represented directly, the pass removes the consumed reduction operands and
+    attrs so the SDE-to-ARTS boundary only sees executable CU work plus
+    scheduling facts.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor =
+      "mlir::carts::sde::createSdeAtomicReductionMaterializationPass()";
+}
+
 def DistributionPlanning
     : Pass<"distribution-planning", "mlir::ModuleOp"> {
   let summary = "Commit SDE distribution facts on structured SDE loops";
@@ -95,12 +113,12 @@ def MuAccessWindowSyncOpt
     the barrier orders a real dependency. Reading the shared `classifyBarrierSync`
     analysis, this pass erases every barrier proven REDUNDANT — the ordered CUs
     touch disjoint blocks or only read shared blocks, and both phases are fully
-    described by windows, so removing the global ordering point makes the
-    independent CUs available for parallel scheduling (and later CODIR dataflow).
+    described by windows, so removing the global ordering point lets SU
+    structure expose independent CU bodies for later ARTS dataflow.
 
     It is conservative and fails closed by construction: it removes a barrier
     only on a REDUNDANT verdict. JUSTIFIED barriers (a real aligned RAW/WAW/WAR
-    ordering) are preserved as the irreducible global ordering CODIR refines into
+    ordering) are preserved as the irreducible global ordering ARTS refines into
     explicit dependency edges from the same windows; MISALIGNED barriers (a
     consumer reaching blocks the producer never wrote) are preserved for the
     later SDE redistribution transform that owns the movement; and out-of-scope,

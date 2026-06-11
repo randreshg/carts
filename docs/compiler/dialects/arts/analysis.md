@@ -1,7 +1,7 @@
 # ARTS Analyses
 
-ARTS analyses operate on abstract ARTS objects after SDE/CODIR have fixed the
-semantic plan and codelet ABI.
+ARTS analyses operate on abstract ARTS objects after SDE has fixed the
+semantic plan and task boundary facts.
 
 Owned analyses:
 
@@ -23,7 +23,7 @@ Emitted facts:
 - dependency slot layouts;
 - validated DB/acquire/window facts;
 - placement/resource binding attrs;
-- diagnostics when SDE/CODIR did not provide enough plan information.
+- diagnostics when SDE did not provide enough plan information.
 
 ARTS analysis must validate and refine mechanics. It must not invent missing
 source policy.

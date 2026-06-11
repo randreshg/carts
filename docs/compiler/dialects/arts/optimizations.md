@@ -20,7 +20,7 @@ Rules:
 - Do not move scalar computations across the explicit EDT dep/param ABI.
 - Do not introduce `arts.db_control`.
 - Keep any remaining `CreateDbs` use coarse-only; blocked/tiled raw memrefs
-  must fail at the boundary and be fixed in SDE/CODIR.
+  must fail at the boundary and be fixed in SDE.
 
 Exit facts for ARTS-RT:
 

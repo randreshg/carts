@@ -27,30 +27,6 @@ Important transform areas:
 - `effect/` - scheduling, distribution, fusion/vectorization decisions.
 - `Verify/` - SDE boundary contracts.
 
-## CODIR Dialect: `codir`
-
-Paths:
-
-- `include/carts/dialect/codir/IR/`
-- `lib/carts/dialect/codir/`
-- tests: `lib/carts/dialect/codir/test/`
-
-Purpose: isolated codelet bodies with explicit dependencies, params,
-codelet-local verification, and graph structure. CODIR consumes committed SDE
-layout, access-window, and movement facts, representing them mechanically before
-ARTS realization.
-
-Limits: CODIR should not encode runtime ABI or redo SDE data-layout analysis.
-SDE hands codelets, layout facts, and movement structure here; ARTS picks up
-that structure for orchestration.
-
-Important areas:
-
-- `IR/` - CodirDialect, CodirOps (codelet, dep slice).
-- `Conversion/SdeToCodir/`, `Conversion/CodirToArts/`.
-- `Transforms/` - CodirCodeletDCE, VerifyCodir.
-- `Utils/` - CodeletABIUtils.
-
 ## ARTS Dialect: `arts`
 
 Paths:
@@ -59,20 +35,24 @@ Paths:
 - `lib/carts/dialect/arts/`
 - tests: `lib/carts/dialect/arts/test/`
 
-Purpose: high-level ARTS orchestration IR: EDTs, DBs, epochs, implementation
-`scf.for` loops inside tasks/dispatch, barriers, atomics, runtime queries,
-lowering contracts, per-block single-writer DB realization, owner maps,
-DB modes, focused DB/EDT queries, and grouped compute/bridge/communication CU
-realization.
+Purpose: high-level ARTS orchestration IR: isolated task bodies with explicit
+dependencies and params, token-local views, EDTs, DBs, epochs, implementation
+`scf.for` loops inside tasks/dispatch, barriers, atomics, lowering contracts,
+per-block single-writer DB realization, owner maps, DB modes, focused DB/EDT
+queries, and grouped compute/bridge/communication CU realization. ARTS consumes
+committed SDE layout, access-window, and movement facts and represents them as
+runtime-independent ARTS objects.
 
 Limits: ARTS should not become a runtime ABI shim or a place to patch
 frontend semantic loss. It should own orchestration invariants and
-IR-backed decisions over committed SDE/CODIR facts. It may verify,
+IR-backed decisions over committed SDE facts. It may verify,
 consume, realize, or reject upstream plans; it must not silently recompute
 owner dims, block shape, movement family, storage grain, or runtime mode.
 
 Important areas:
 
+- `IR/` - ArtsDialect, ArtsOps.
+- `Transforms/SdeToArtsBoundary.cpp` - direct SDE-to-ARTS materialization.
 - `Transforms/db`, `Transforms/edt`, `Transforms/epoch`, `Transforms/verify`.
 - `Utils/` - DbUtils, EdtUtils, LoweringFactUtils,
   PartitionPredicates, BlockedAccessUtils, ARTSCostModel.
@@ -94,7 +74,7 @@ state pack/unpack, dep bind/forward, and call-friendly values.
 
 Limits: ARTS-RT should not introduce new high-level semantics, scheduling
 policy, or analysis decisions. If a fix requires understanding OpenMP intent,
-DB/EDT graph state, or partition ownership, it likely belongs in SDE, CODIR,
+DB/EDT graph state, or partition ownership, it likely belongs in SDE, ARTS,
 or ARTS.
 
 Important areas:

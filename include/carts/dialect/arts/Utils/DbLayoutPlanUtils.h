@@ -3,7 +3,7 @@
 ///
 /// Helpers for materializing DB layouts from an already-authored plan.
 ///
-/// These utilities do not choose tensor partitioning policy. SDE owns owner
+/// These utilities do not choose partitioning policy. SDE owns owner
 /// dimensions, physical block shape, and halo policy. ARTS utilities may
 /// inspect those attrs for diagnostics or ARTS object materialization, but
 /// block-local access rewriting belongs to SDE MU/token lowering.
@@ -28,7 +28,7 @@ bool hasPhysicalDbLayoutPlan(Operation *op);
 
 /// Resolve explicit owner-dimension and physical-block-shape attrs into a
 /// concrete DB rewrite plan for an allocation with the provided logical element
-/// extents. This is for dialect boundaries that have SDE/CODIR-authored plan
+/// extents. This is for dialect boundaries that have SDE-authored plan
 /// attrs before an ARTS op exists to carry the generic plan attributes.
 FailureOr<DbPhysicalLayoutPlan>
 resolvePhysicalDbLayoutPlan(ArrayAttr ownerDimsAttr, ArrayAttr blockShapeAttr,

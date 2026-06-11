@@ -54,9 +54,10 @@ def Parallelize : Pass<"sde-parallelize", "mlir::ModuleOp"> {
     IVs, no read of a written array, read-only array inputs allowed, pure body).
     It also recognizes closed-form scalar induction counters whose final mutable
     state is not observed. The pass raises eligible raw or normalized
-    `sde.cu_region <single>` loop nests to `sde.su_iterate` before
-    LayoutAssignment, so SDE exposes real schedulable structure instead of a
-    serial host whole-array CU. Fail-closed: unprovable nests are left untouched.
+    leaf `sde.cu_region <single>` loop nests to sibling `sde.su_iterate`
+    schedule structure before LayoutAssignment, so SDE exposes real ordering
+    and work structure instead of a serial host whole-array CU. Fail-closed:
+    unprovable nests are left untouched.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::arith::ArithDialect",

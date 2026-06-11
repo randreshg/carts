@@ -19,10 +19,10 @@ dialect/                     MLIR dialects (one subdirectory per CARTS dialect)
       effect/distribution/   DistributionPlanning, BarrierElimination
     Utils/                   SDE-specific utilities (SDECostModel)
     Verify/                  VerifySdeLowered
-  codir/                     CODIR dialect — codelet isolation
-    IR/                      CodirDialect, CodirOps
-    Conversion/              SdeToCodir, CodirToArts
-    Transforms/              CodirCodeletDCE, VerifyCodir
+  arts/                     ARTS dialect — codelet isolation
+    IR/                      ArtsDialect, ArtsOps
+    Conversion/              SdeToArts, ArtsToArts
+    Transforms/              ArtsCodeletDCE, VerifyArts
     Utils/                   CodeletABIUtils
   arts/                      ARTS dialect — abstract orchestration (DB, EDT, epoch)
     Analysis/                All analysis (db, edt, graphs, heuristics, loop,

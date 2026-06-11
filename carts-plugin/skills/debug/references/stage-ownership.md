@@ -4,9 +4,9 @@ Use this when deciding where to start a bisection.
 
 | Stage | Primary Question |
 |---|---|
-| `sde-planning` | Did OpenMP structure become the right SDE plan? Did SDE pattern discovery (`DistributionPlanning`, `LoopInterchange`, ...) stamp the right contracts before CODIR? |
-| `sde-to-codir` | Did SDE codelet plans become isolated CODIR codelets with explicit deps, params, and token-local views? |
-| `codir-to-arts` | Did CODIR materialize the right ARTS DB/acquire/EDT shape, and did any SDE op survive the boundary? |
+| `sde-planning` | Did OpenMP structure become the right SDE plan? Did SDE pattern discovery (`DistributionPlanning`, `LoopInterchange`, ...) stamp the right contracts before ARTS? |
+| `sde-to-arts` | Did SDE codelet plans become isolated ARTS codelets with explicit deps, params, and token-local views? |
+| `sde-to-arts` | Did ARTS materialize the right ARTS DB/acquire/EDT shape, and did any SDE op survive the boundary? |
 | `edt-transforms` | Did EDT structure or pointer rematerialization change dependencies or task boundaries? |
 | `create-dbs` | Did the right allocations become DBs with plausible initial partition hints? |
 | `db-opt` | Did load/store reality produce the correct in/out/inout modes? |

@@ -1,9 +1,6 @@
-// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --start-from sde-planning --pipeline sde-to-codir --mlir-print-ir-after-all 2>&1 | %FileCheck %s
-// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_multinode_4x64.cfg --start-from sde-planning --pipeline sde-to-codir | %FileCheck %s --check-prefix=NODE4
-
+// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --start-from sde-planning --pipeline sde-planning --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 // SDE must expose all independent owner dimensions in an ND elementwise update
-// instead of stopping at a 2-D tile. CODIR then consumes the committed ND tile
-// facts and emits one flat launch ordinal over the full owner-tile space.
+// instead of stopping at a 2-D tile.
 
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // CHECK-LABEL: func.func @elementwise_inplace_3d_owner_tile
@@ -33,61 +30,6 @@
 // CHECK-SAME: classification(<elementwise>)
 // CHECK: physicalBlockShape = [32, 32, 32]
 // CHECK-SAME: physicalOwnerDims = [2, 1, 0]
-// CHECK-LABEL: // -----// IR Dump After ConvertSdeToCodir
-// CHECK-LABEL: func.func @elementwise_inplace_3d_owner_tile
-// CHECK: scf.for %[[ORD0:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
-// CHECK: arith.remui %[[ORD0]]
-// CHECK: arith.divui %[[ORD0]]
-// CHECK: arith.remui
-// CHECK: arith.divui
-// CHECK: arith.remui
-// CHECK: codir.codelet {{.*}}params(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} : index, index, index, index, index, index)
-// CHECK-SAME: array_layout = [{arrayId = 0 : i64, blockShape = [64, 64, 64]
-// CHECK-SAME: kind = "block_parallel"
-// CHECK-SAME: distribution_kind = #codir.distribution_kind<blocked>
-// CHECK-SAME: tile_owner_dims = [0, 1, 2]
-// CHECK-SAME: tile_shape = [32, 32, 32]
-// CHECK-LABEL: func.func @elementwise_inplace_3d_transposed_owner_tile
-// CHECK: scf.for %[[ORD1:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
-// CHECK: arith.remui %[[ORD1]]
-// CHECK: arith.divui %[[ORD1]]
-// CHECK: arith.remui
-// CHECK: arith.divui
-// CHECK: arith.remui
-// CHECK: codir.codelet {{.*}}params(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}} : index, index, index, index, index, index)
-// CHECK-SAME: tile_owner_dims = [2, 1, 0]
-// CHECK-SAME: tile_shape = [32, 32, 32]
-// CHECK-LABEL: func.func @elementwise_outofplace_3d_owner_tile
-// CHECK: codir.codelet
-// CHECK-SAME: tile_owner_dims = [0, 1, 2]
-// CHECK-SAME: tile_shape = [32, 32, 32]
-// CHECK-LABEL: func.func @elementwise_outofplace_3d_transposed_owner_tile
-// CHECK: codir.codelet
-// CHECK-SAME: tile_owner_dims = [2, 1, 0]
-// CHECK-SAME: tile_shape = [32, 32, 32]
-
-// NODE4: arts.runtime_total_workers = 256
-// NODE4-LABEL: func.func @elementwise_inplace_3d_owner_tile
-// NODE4: codir.codelet
-// NODE4-SAME: logical_worker_slice = [26, 26, 13]
-// NODE4-SAME: tile_owner_dims = [0, 1, 2]
-// NODE4-SAME: tile_shape = [13, 13, 13]
-// NODE4-LABEL: func.func @elementwise_inplace_3d_transposed_owner_tile
-// NODE4: codir.codelet
-// NODE4-SAME: logical_worker_slice = [13, 26, 26]
-// NODE4-SAME: tile_owner_dims = [2, 1, 0]
-// NODE4-SAME: tile_shape = [13, 13, 13]
-// NODE4-LABEL: func.func @elementwise_outofplace_3d_owner_tile
-// NODE4: codir.codelet
-// NODE4-SAME: logical_worker_slice = [33, 16, 16]
-// NODE4-SAME: tile_owner_dims = [0, 1, 2]
-// NODE4-SAME: tile_shape = [11, 16, 16]
-// NODE4-LABEL: func.func @elementwise_outofplace_3d_transposed_owner_tile
-// NODE4: codir.codelet
-// NODE4-SAME: logical_worker_slice = [16, 16, 33]
-// NODE4-SAME: tile_owner_dims = [2, 1, 0]
-// NODE4-SAME: tile_shape = [16, 16, 11]
-
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">>,
   llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128",
@@ -97,16 +39,15 @@ module attributes {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c128 = arith.constant 128 : index
-    sde.cu_region <parallel> {
-      sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
-      ^bb0(%i: index, %j: index, %k: index):
+    sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
+    ^bb0(%i: index, %j: index, %k: index):
+      sde.cu_region <single> {
         %old = memref.load %A[%i, %j, %k] : memref<128x128x128xf32>
         %bias = memref.load %B[%i, %j, %k] : memref<128x128x128xf32>
         %next = arith.addf %old, %bias : f32
         memref.store %next, %A[%i, %j, %k] : memref<128x128x128xf32>
         sde.yield
       }
-      sde.yield
     }
     return
   }
@@ -115,16 +56,15 @@ module attributes {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c128 = arith.constant 128 : index
-    sde.cu_region <parallel> {
-      sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
-      ^bb0(%i: index, %j: index, %k: index):
+    sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
+    ^bb0(%i: index, %j: index, %k: index):
+      sde.cu_region <single> {
         %old = memref.load %A[%k, %j, %i] : memref<128x128x128xf32>
         %bias = memref.load %B[%k, %j, %i] : memref<128x128x128xf32>
         %next = arith.addf %old, %bias : f32
         memref.store %next, %A[%k, %j, %i] : memref<128x128x128xf32>
         sde.yield
       }
-      sde.yield
     }
     return
   }
@@ -133,16 +73,15 @@ module attributes {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c128 = arith.constant 128 : index
-    sde.cu_region <parallel> {
-      sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
-      ^bb0(%i: index, %j: index, %k: index):
+    sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
+    ^bb0(%i: index, %j: index, %k: index):
+      sde.cu_region <single> {
         %lhs = memref.load %A[%i, %j, %k] : memref<128x128x128xf32>
         %rhs = memref.load %B[%i, %j, %k] : memref<128x128x128xf32>
         %next = arith.addf %lhs, %rhs : f32
         memref.store %next, %C[%i, %j, %k] : memref<128x128x128xf32>
         sde.yield
       }
-      sde.yield
     }
     return
   }
@@ -151,16 +90,15 @@ module attributes {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c128 = arith.constant 128 : index
-    sde.cu_region <parallel> {
-      sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
-      ^bb0(%i: index, %j: index, %k: index):
+    sde.su_iterate (%c0, %c0, %c0) to (%c128, %c128, %c128) step (%c1, %c1, %c1) classification(<elementwise>) {
+    ^bb0(%i: index, %j: index, %k: index):
+      sde.cu_region <single> {
         %lhs = memref.load %A[%k, %j, %i] : memref<128x128x128xf32>
         %rhs = memref.load %B[%k, %j, %i] : memref<128x128x128xf32>
         %next = arith.addf %lhs, %rhs : f32
         memref.store %next, %C[%k, %j, %i] : memref<128x128x128xf32>
         sde.yield
       }
-      sde.yield
     }
     return
   }

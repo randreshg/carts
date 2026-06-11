@@ -29,8 +29,9 @@ struct RaisedWindowPlan {
   SdeCuRegionOp cu; ///< the CU this window describes
   mlir::Value mu;   ///< the rank-expanded mu_alloc result
   SdeAccessMode mode = SdeAccessMode::read; ///< read or write (never readwrite)
-  int64_t ownerDimCount = 0;                ///< leading grid (owner) dims (==1)
-  llvm::SmallVector<int64_t, 2> blockLo;    ///< per-owner-dim block lo (==0)
+  std::optional<int64_t> arrayId; ///< committed SDE array identity, if known
+  int64_t ownerDimCount = 0;      ///< leading grid (owner) dims (==1)
+  llvm::SmallVector<int64_t, 2> blockLo; ///< per-owner-dim block lo (==0)
   llvm::SmallVector<int64_t, 2>
       blockHi; ///< per-owner-dim block hi (grid count)
   llvm::SmallVector<int64_t, 4> validExtents; ///< per-logical-dim tile extent

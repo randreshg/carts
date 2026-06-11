@@ -9,7 +9,7 @@ lowering, and LLVM-facing cleanup belong in `arts-rt/Utils` or an ARTS-RT
 conversion helper.
 
 Keep source-semantics and codelet-isolation helpers out as well. SDE owns
-OpenMP/source transformations, and CODIR owns codelet-local deps, params, and
+OpenMP/source transformations, and ARTS owns codelet-local deps, params, and
 token-local views.
 
 Current utility groups:

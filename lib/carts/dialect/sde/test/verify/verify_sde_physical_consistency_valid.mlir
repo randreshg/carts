@@ -16,6 +16,7 @@ func.func @consistent_owner_tile_plan(%A: memref<512x512xf64>) {
   sde.su_iterate (%c0, %c0) to (%c512, %c512) step (%c1, %c1)
       classification(<elementwise>) {
   ^bb0(%i: index, %j: index):
+    sde.array_layout_root write %A : memref<512x512xf64> array_id(0)
     sde.cu_region <single> {
       memref.store %cst, %A[%i, %j] : memref<512x512xf64>
       sde.yield
@@ -42,6 +43,7 @@ func.func @no_physical_plan_skipped(%A: memref<512x512xf64>) {
   sde.su_iterate (%c0, %c0) to (%c512, %c512) step (%c1, %c1)
       classification(<elementwise>) {
   ^bb0(%i: index, %j: index):
+    sde.array_layout_root write %A : memref<512x512xf64> array_id(0)
     sde.cu_region <single> {
       memref.store %cst, %A[%i, %j] : memref<512x512xf64>
       sde.yield

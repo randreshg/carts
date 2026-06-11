@@ -24,7 +24,7 @@ Read `conventions.md` for CARTS-specific rules.
    duplicated helpers, utility placement, stale debug output, existing API
    reuse, and `.carts/` artifact discipline?
 9. Does the patch preserve the `carts-vision` spine: SDE real layout/tiling,
-   CODIR collectives/bridges, ARTS DB/EDT owner-map realization plus grouped
+   ARTS collectives/bridges, ARTS DB/EDT owner-map realization plus grouped
    execution, and ARTS-RT mechanical lowering?
 10. Are optimizer triggers structural and benchmark-agnostic, with DB/MU grain
     kept separate from CU/bridge grain and hypergraph evidence used only for

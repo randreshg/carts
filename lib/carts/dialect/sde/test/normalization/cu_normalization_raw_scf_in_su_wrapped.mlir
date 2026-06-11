@@ -1,13 +1,9 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-sde)' 2>&1 \
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(canonicalize)' 2>&1 \
 // RUN:   | %FileCheck %s --check-prefix=REJECT
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization)' \
-// RUN:   | %FileCheck %s --check-prefix=NORM
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,verify-sde)'
 
 // Raw scf/source compute sitting directly inside an SU body makes the SU not
-// scheduling-only. verify-sde REJECTS it; sde-cu-normalization moves the loop
-// into a cu_region<single> inside the SU body, leaving the SU to schedule a CU.
-// The su_iterate scheduling structure itself is preserved.
+// scheduling-only. This is an SDE dialect invariant now, so parsing/verifying
+// the op rejects it before any cleanup pass can treat invalid SDE as input.
 
 module {
   func.func @raw_in_su(%A: memref<8xf32>) {
@@ -26,11 +22,5 @@ module {
   }
 }
 
-// REJECT: raw scf/source compute directly inside an SU body
-
-// NORM-LABEL: func @raw_in_su
-// NORM:         sde.su_iterate
-// NORM:           sde.cu_region <single> {
-// NORM:             scf.for
-// NORM:               memref.load
-// NORM:               memref.store
+// REJECT: 'scf.for' op is directly inside an sde.su_iterate body
+// REJECT: SU bodies are scheduling-only and may contain only direct-boundary CUs

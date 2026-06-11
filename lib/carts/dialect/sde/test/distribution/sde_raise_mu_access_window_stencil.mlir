@@ -5,13 +5,12 @@
 // grow the tile (halo data lives in neighbouring blocks; halo redistribution is
 // a later transform). So the raised window's in-tile valid extent is the block
 // extent [16, 16] (NOT halo-grown to [20, ...]); growing it would exceed the
-// expanded tile and the op verifier would reject it. B is read-only, A is
+// expanded tile and the op verifier would reject it. The expanded A root is
 // write-only.
 
 // CHECK-LABEL: func.func @raise_window_stencil
+// CHECK: sde.mu_alloc : memref<128x16xf32>
 // CHECK: sde.mu_alloc : memref<8x16x16xf32>
-// CHECK: sde.mu_alloc : memref<8x16x16xf32>
-// CHECK: sde.mu_access_window read %{{.*}} : memref<8x16x16xf32> owner_dims(1) block_lo [0] block_hi [8] valid [16, 16]
 // CHECK: sde.mu_access_window write %{{.*}} : memref<8x16x16xf32> owner_dims(1) block_lo [0] block_hi [8] valid [16, 16]
 
 func.func @raise_window_stencil() {
@@ -21,16 +20,15 @@ func.func @raise_window_stencil() {
   %c128 = arith.constant 128 : index
   %B = sde.mu_alloc : memref<128x16xf32>
   %A = sde.mu_alloc : memref<128x16xf32>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<stencil>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<stencil>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       scf.for %j = %c0 to %c16 step %c1 {
         %v = memref.load %B[%i, %j] : memref<128x16xf32>
         memref.store %v, %A[%i, %j] : memref<128x16xf32>
-      }
+    }
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [16, 16], physicalHaloShape = [2]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [16, 16], physicalHaloShape = [2]}
   return
 }

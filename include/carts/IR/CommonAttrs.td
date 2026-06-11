@@ -13,9 +13,9 @@
 include "mlir/IR/EnumAttr.td"
 
 // IterationTopology is defined with identical cases (owner_strip / owner_tile /
-// owner_tile_2d) in the SDE, CODIR, and ARTS dialects. Each dialect keeps its
-// own enum class (via its own dialect wrapper) but shares this case list so the
-// case set stays in lock-step across the SDE->CODIR->ARTS boundary.
+// owner_tile_2d) in the SDE and ARTS dialects. Each dialect keeps its own enum
+// class (via its own dialect wrapper) but shares this case list so the case set
+// stays in lock-step across the SDE->ARTS boundary.
 defvar CartsIterationTopologyCases = [
     I32EnumAttrCase<"owner_strip", 0, "owner_strip">,
     I32EnumAttrCase<"owner_tile", 1, "owner_tile">,
@@ -23,7 +23,7 @@ defvar CartsIterationTopologyCases = [
 ];
 
 // ReductionStrategy is defined with identical cases (atomic / tree /
-// local_accumulate) in the SDE, CODIR, and ARTS dialects.
+// local_accumulate) in the SDE and ARTS dialects.
 defvar CartsReductionStrategyCases = [
     I32EnumAttrCase<"atomic", 0, "atomic">,
     I32EnumAttrCase<"tree", 1, "tree">,

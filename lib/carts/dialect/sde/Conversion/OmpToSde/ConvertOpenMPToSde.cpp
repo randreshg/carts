@@ -18,10 +18,10 @@
 ///     }
 ///
 ///   After:
-///     sde.cu_region parallel {
-///       sde.su_iterate (%c0) to (%N) step (%c1)
-///           schedule(<static>, %c4)
-///           reduction [#sde<reduction_kind<add>>] (%sum : f64) {
+///     sde.su_iterate (%c0) to (%N) step (%c1)
+///         schedule(<static>, %c4)
+///         reduction [#sde<reduction_kind<add>>] (%sum : f64) {
+///       sde.cu_region <parallel> {
 ///         ...
 ///         sde.yield
 ///       }
@@ -56,7 +56,7 @@ ARTS_DEBUG_SETUP(convert_openmp_to_sde);
 #include "llvm/ADT/Statistic.h"
 static llvm::Statistic numParallelConverted{
     "convert_openmp_to_sde", "NumParallelConverted",
-    "Number of omp.parallel regions converted to sde.cu_region"};
+    "Number of omp.parallel regions converted or flattened to SDE"};
 static llvm::Statistic numWsloopsConverted{
     "convert_openmp_to_sde", "NumWsloopsConverted",
     "Number of omp.wsloop converted to sde.su_iterate"};
@@ -107,6 +107,56 @@ static bool hasWorkAfterInParentBlock(Operation *op) {
     return true;
   }
   return false;
+}
+
+static sde::SdeCuRegionOp cloneBodyIntoCuRegion(PatternRewriter &rewriter,
+                                                Location loc,
+                                                sde::SdeCuKind kind, Block &src,
+                                                IRMapping &mapper) {
+  auto cuRegion = sde::SdeCuRegionOp::create(
+      rewriter, loc, /*resultTypes=*/TypeRange{},
+      sde::SdeCuKindAttr::get(rewriter.getContext(), kind),
+      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  Block &innerBlk = sde::ensureBlock(cuRegion.getBody());
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(&innerBlk);
+  for (Operation &srcOp : src.without_terminator())
+    rewriter.clone(srcOp, mapper);
+  sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
+  return cuRegion;
+}
+
+static bool isSchedulingBoundaryOp(Operation *op) {
+  return isa<omp::WsloopOp, omp::TaskloopOp, omp::TaskOp, omp::BarrierOp,
+             omp::TaskwaitOp, omp::SingleOp, omp::MasterOp, scf::ParallelOp,
+             sde::SdeCuRegionOp, sde::SdeCuTaskOp, sde::SdeSuIterateOp,
+             sde::SdeSuDistributeOp, sde::SdeSuBarrierOp, sde::SdeRedistOp>(op);
+}
+
+static bool regionContainsSchedulingBoundaryOp(Region &region) {
+  if (region.empty())
+    return false;
+  for (Operation &op : region.front().without_terminator()) {
+    bool found = false;
+    op.walk([&](Operation *nested) {
+      if (isSchedulingBoundaryOp(nested)) {
+        found = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (found)
+      return true;
+  }
+  return false;
+}
+
+static void spliceRegionBodyBefore(Operation *target, Region &region) {
+  Block &old = region.front();
+  Block::iterator end =
+      old.getTerminator() ? old.getTerminator()->getIterator() : old.end();
+  target->getBlock()->getOperations().splice(
+      Block::iterator(target), old.getOperations(), old.begin(), end);
 }
 
 /// Map OMP schedule kind to SDE schedule kind.
@@ -359,7 +409,10 @@ static void mapWsloopCapturedArgs(omp::WsloopOp op, IRMapping &mapper) {
 // Conversion Patterns
 //===----------------------------------------------------------------------===//
 
-/// omp.parallel -> sde.cu_region parallel
+/// omp.parallel either carries raw executable work or a scheduling body.
+/// Raw parallel bodies become a leaf CU. Bodies that contain OpenMP scheduling
+/// operations are flattened so the child conversions can produce sibling SUs,
+/// barriers, and CUs without nesting an SU inside a CU.
 struct OMPParallelToSdePattern : public OpRewritePattern<omp::ParallelOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -367,9 +420,16 @@ struct OMPParallelToSdePattern : public OpRewritePattern<omp::ParallelOp> {
                                 PatternRewriter &rewriter) const override {
     if (isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
-    ARTS_INFO("Converting omp.parallel to sde.cu_region parallel");
+    ARTS_INFO("Converting omp.parallel to SDE");
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
+
+    if (regionContainsSchedulingBoundaryOp(op.getRegion())) {
+      spliceRegionBodyBefore(op.getOperation(), op.getRegion());
+      ++numParallelConverted;
+      rewriter.eraseOp(op);
+      return success();
+    }
 
     auto cuRegion = sde::SdeCuRegionOp::create(
         rewriter, loc, /*resultTypes=*/TypeRange{},
@@ -397,6 +457,15 @@ struct MasterToSdePattern : public OpRewritePattern<omp::MasterOp> {
       return failure();
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
+    if (regionContainsSchedulingBoundaryOp(op.getRegion())) {
+      spliceRegionBodyBefore(op.getOperation(), op.getRegion());
+      rewriter.setInsertionPoint(op);
+      sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
+                                  /*barrierReason=*/nullptr);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
     auto cuRegion = sde::SdeCuRegionOp::create(
         rewriter, loc, /*resultTypes=*/TypeRange{},
         sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
@@ -423,6 +492,17 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
       return failure();
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
+    if (regionContainsSchedulingBoundaryOp(op.getRegion())) {
+      spliceRegionBodyBefore(op.getOperation(), op.getRegion());
+      if (!op.getNowait()) {
+        rewriter.setInsertionPoint(op);
+        sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
+                                    /*barrierReason=*/nullptr);
+      }
+      rewriter.eraseOp(op);
+      return success();
+    }
+
     auto cuRegion = sde::SdeCuRegionOp::create(
         rewriter, loc, /*resultTypes=*/TypeRange{},
         sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
@@ -540,19 +620,8 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     }
     mapWsloopCapturedArgs(op, mapper);
 
-    // Wrap cloned body ops in cu_region <parallel> so downstream passes
-    // see a uniform cu_region→su_iterate→cu_region nesting.
-    auto innerCuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, /*resultTypes=*/TypeRange{},
-        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-        /*nowait=*/nullptr,
-        /*iterArgs=*/ValueRange{});
-    Block &innerBlk = sde::ensureBlock(innerCuRegion.getBody());
-    OpBuilder::InsertionGuard IG2(rewriter);
-    rewriter.setInsertionPointToStart(&innerBlk);
-    for (Operation &srcOp : src.without_terminator())
-      rewriter.clone(srcOp, mapper);
-    sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
+    auto innerCuRegion = cloneBodyIntoCuRegion(
+        rewriter, loc, sde::SdeCuKind::parallel, src, mapper);
 
     // Yield at su_iterate level (outside cu_region).
     rewriter.setInsertionPointAfter(innerCuRegion);
@@ -626,7 +695,10 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
     }
 
     Block &old = op.getRegion().front();
-    blk.getOperations().splice(blk.end(), old.getOperations());
+    Block::iterator end =
+        old.getTerminator() ? old.getTerminator()->getIterator() : old.end();
+    blk.getOperations().splice(blk.end(), old.getOperations(), old.begin(),
+                               end);
 
     ++numTasksConverted;
     rewriter.eraseOp(op);
@@ -691,8 +763,9 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
             arith::IndexCastOp::create(rewriter, loc, oldArg.getType(), newArg);
       mapper.map(oldArg, newArg);
     }
-    for (Operation &srcOp : src.without_terminator())
-      rewriter.clone(srcOp, mapper);
+    auto innerCuRegion =
+        cloneBodyIntoCuRegion(rewriter, loc, sde::SdeCuKind::task, src, mapper);
+    rewriter.setInsertionPointAfter(innerCuRegion);
     sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
 
     rewriter.eraseOp(op);
@@ -700,25 +773,16 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
   }
 };
 
-/// scf.parallel -> sde.cu_region parallel + sde.su_iterate
+/// scf.parallel -> sde.su_iterate with a leaf parallel CU body.
 struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(scf::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
-    ARTS_INFO("Converting scf.parallel to sde.cu_region + sde.su_iterate");
+    ARTS_INFO("Converting scf.parallel to sde.su_iterate");
     auto loc = op.getLoc();
-    auto *ctx = rewriter.getContext();
     rewriter.setInsertionPoint(op);
 
-    auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, /*resultTypes=*/TypeRange{},
-        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-        /*nowait=*/nullptr,
-        /*iterArgs=*/ValueRange{});
-    Block &parBlk = sde::ensureBlock(cuRegion.getBody());
-
-    rewriter.setInsertionPointToStart(&parBlk);
     Value lb = ensureIndex(rewriter, loc, op.getLowerBound().front());
     Value ub = ensureIndex(rewriter, loc, op.getUpperBound().front());
     Value st = ensureIndex(rewriter, loc, op.getStep().front());
@@ -761,15 +825,13 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
       mapper.map(op.getInductionVars().front(), dst.getArgument(0));
     if (!src.getArguments().empty())
       mapper.map(src.getArgument(0), dst.getArgument(0));
-    for (Operation &srcOp : src.without_terminator())
-      rewriter.clone(srcOp, mapper);
-    sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
-
-    rewriter.setInsertionPointToEnd(&parBlk);
+    auto innerCuRegion = cloneBodyIntoCuRegion(
+        rewriter, loc, sde::SdeCuKind::parallel, src, mapper);
+    rewriter.setInsertionPointAfter(innerCuRegion);
     sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
 
     if (hasWorkAfterInParentBlock(op.getOperation())) {
-      rewriter.setInsertionPointAfter(cuRegion);
+      rewriter.setInsertionPointAfter(suIter);
       sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
                                   /*barrierReason=*/nullptr);
     }
@@ -888,18 +950,15 @@ struct TaskwaitToSdePattern : public OpRewritePattern<omp::TaskwaitOp> {
 
 namespace {
 
-/// Sink static parallel-private scratch into its consuming worksharing loop.
-/// Such storage is iteration-local once every use is contained by one
-/// su_iterate; leaving it at parallel-region scope makes it look shared.
+/// Sink static scratch into its consuming worksharing loop. Such storage is
+/// iteration-local once every use is contained by one su_iterate; leaving it
+/// at schedule scope makes it look shared.
 static void sinkParallelPrivateScratch(ModuleOp module) {
   SmallVector<sde::SdeSuIterateOp> iters;
   module.walk([&](sde::SdeSuIterateOp it) { iters.push_back(it); });
   for (sde::SdeSuIterateOp it : iters) {
     Block *parent = it->getBlock();
     if (!parent)
-      continue;
-    auto parentCu = dyn_cast_or_null<sde::SdeCuRegionOp>(parent->getParentOp());
-    if (!parentCu || parentCu.getKind() != sde::SdeCuKind::parallel)
       continue;
     Block &body = it.getBody().front();
     if (body.empty())

@@ -5,7 +5,7 @@
 // The jacobi-for class: the arrayLayout says a 2-D [512, 512] owner-tile budget
 // over owner dims [0, 1], but the physical plan stamps a row strip
 // ([1280, 10240], owner [0]). Both owner-dim block extents (1280, 10240) coarsen
-// past the [512, 512] budget grain, so the stale plan fails closed before CODIR.
+// past the [512, 512] budget grain, so the stale plan fails closed before SDE-to-ARTS.
 
 // CHECK: physicalBlockShape is coarser than the committed node-agnostic budget
 func.func @jacobi_for_row_strip_over_owner_tile(%A: memref<10240x10240xf64>) {
@@ -16,6 +16,7 @@ func.func @jacobi_for_row_strip_over_owner_tile(%A: memref<10240x10240xf64>) {
   sde.su_iterate (%c0, %c0) to (%c10240, %c10240) step (%c1, %c1)
       classification(<elementwise>) {
   ^bb0(%i: index, %j: index):
+    sde.array_layout_root write %A : memref<10240x10240xf64> array_id(0)
     sde.cu_region <single> {
       memref.store %cst, %A[%i, %j] : memref<10240x10240xf64>
       sde.yield
@@ -43,6 +44,7 @@ func.func @block_coarser_than_budget(%A: memref<10240x10240xf64>) {
   sde.su_iterate (%c0, %c0) to (%c10240, %c10240) step (%c1, %c1)
       classification(<elementwise>) {
   ^bb0(%i: index, %j: index):
+    sde.array_layout_root write %A : memref<10240x10240xf64> array_id(0)
     sde.cu_region <single> {
       memref.store %cst, %A[%i, %j] : memref<10240x10240xf64>
       sde.yield

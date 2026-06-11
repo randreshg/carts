@@ -108,6 +108,29 @@ static bool hasSingleDbSlot(Operation *dbOp) {
       sizes, [](Value size) { return ValueAnalysis::isOneLikeValue(size); });
 }
 
+static bool hasLocalFullElementWindow(DbAcquireOp acquire, DbAllocOp alloc) {
+  if (!acquire || !alloc)
+    return false;
+
+  auto elementOffsets = acquire.getElementOffsets();
+  auto elementSizes = acquire.getElementSizes();
+  auto allocElementSizes = alloc.getElementSizes();
+  if (elementOffsets.size() != allocElementSizes.size() ||
+      elementSizes.size() != allocElementSizes.size())
+    return false;
+
+  for (Value offset : elementOffsets)
+    if (!ValueAnalysis::isZeroConstant(offset))
+      return false;
+
+  for (auto [windowSize, blockSize] :
+       llvm::zip_equal(elementSizes, allocElementSizes))
+    if (!ValueAnalysis::sameValue(windowSize, blockSize))
+      return false;
+
+  return true;
+}
+
 ///===----------------------------------------------------------------------===///
 /// EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
@@ -455,7 +478,7 @@ FailureOr<Value> EdtLoweringPass::packParams(
   /// Pack user parameters first
   for (Value v : parameters) {
     /// Skip undef-like values - they can be recreated in the outlined body.
-    /// CODIR explicit ABI params are positional block arguments, so even
+    /// ARTS explicit ABI params are positional block arguments, so even
     /// undef-like scalar slots must be preserved to keep arg mapping aligned.
     if (!preserveUndefParams && isUndefLikeOp(v.getDefiningOp()))
       continue;
@@ -900,24 +923,32 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
             alloc && alloc.getPartitionMode() == PartitionMode::coarse;
         if (alloc && !alloc.getElementSizes().empty() && !isCoarseAlloc) {
           auto elementSizes = alloc.getElementSizes();
+          bool haloViewDependency =
+              static_cast<bool>(dbAcquireOp.getHaloViewDependencyAttr());
+          bool committedHaloWindow =
+              haloViewDependency &&
+              DbUtils::acquiresPartialHaloWindow(dbAcquireOp);
+          bool committedLocalFullHaloWindow =
+              committedHaloWindow &&
+              hasLocalFullElementWindow(dbAcquireOp, alloc);
           Value useSliceTransport = AC->create<arith::ConstantIntOp>(loc, 1, 1);
-          if (!dbAcquireOp.getElementOffsets().empty())
+          if (!dbAcquireOp.getElementOffsets().empty() &&
+              !committedLocalFullHaloWindow)
             if (auto normalized =
                     normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
               elemOffsets.assign(normalized->offsets.begin(),
                                  normalized->offsets.end());
               elemSizes.assign(normalized->sizes.begin(),
                                normalized->sizes.end());
-              bool compactHaloPayload =
-                  alloc.getCompactHaloPayload().value_or(false) &&
-                  edtOp.getPerBlockHaloExchangeAttr();
               /// If the normalized slice still covers the entire local DB
-              /// block, the normal whole-DB dependence path is cheaper unless
-              /// this DB is already a compact halo payload. In that case the
-              /// full compact DB is the halo face and must still use the halo
-              /// byte-window runtime path.
+              /// block, the normal whole-DB dependence path is cheaper for
+              /// ordinary reads. A halo-view dependency is different: ARTS has
+              /// already committed this acquire slot as halo transport, and
+              /// the explicit element window remains the byte-window authority
+              /// even when today's window is a full block rather than a split
+              /// face.
               Value sliceNarrowerThanBlock;
-              if (compactHaloPayload) {
+              if (haloViewDependency) {
                 sliceNarrowerThanBlock =
                     AC->create<arith::ConstantIntOp>(loc, 1, 1);
               } else {
@@ -961,7 +992,13 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
             totalElements = AC->create<arith::MulIOp>(loc, totalElements, sz);
           }
           byteSize = AC->create<arith::MulIOp>(loc, totalElements, scalarSize);
-          if (ValueAnalysis::isConstantBool(useSliceTransport, false)) {
+          if (haloViewDependency) {
+            if (ValueAnalysis::isConstantBool(useSliceTransport, false))
+              return dbAcquireOp.emitOpError()
+                     << "per-block halo read dependency has an explicit "
+                        "element window that is not representable as a "
+                        "contiguous byte slice";
+          } else if (ValueAnalysis::isConstantBool(useSliceTransport, false)) {
             Value zeroIdx = AC->createIndexConstant(0, loc);
             byteOffset = zeroIdx;
             byteSize = zeroIdx;
@@ -974,9 +1011,10 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
           }
           hasHaloWindowDeps = true;
         } else {
-          /// Fallback: no allocation info available
-          byteOffset = AC->createIndexConstant(0, loc);
-          byteSize = AC->createIndexConstant(0, loc);
+          return dbAcquireOp.emitOpError()
+                 << "has explicit element_offsets/element_sizes but ARTS-RT "
+                    "cannot resolve non-coarse source allocation metadata; "
+                    "refusing whole-DB byte-window fallback";
         }
       }
     } else {
@@ -1046,18 +1084,20 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
     bool hasExplicitSlice = byteOffset && byteSize &&
                             ValueAnalysis::isProvablyNonZero(
                                 ValueAnalysis::stripNumericCasts(byteSize));
-    if (depDbAcquireOp && hasExplicitSlice) {
-      /// Depv-carried slices are still unstable for continuation-style
-      /// generated EDTs. Fall back to whole-block dependencies for depv
-      /// acquires instead of preserving a compact slice through the runtime
-      /// transport.
-      Value zeroIdx = AC->createIndexConstant(0, loc);
-      byteOffset = zeroIdx;
-      byteSize = zeroIdx;
-      hasExplicitSlice = false;
-    }
-    if (dbAcquireOp && edtOp.getPerBlockHaloExchangeAttr() &&
-        dbMode == DbMode::read) {
+    if (depDbAcquireOp && hasExplicitSlice)
+      return depDbAcquireOp.emitOpError()
+             << "carries an explicit byte window through depv, but this "
+                "lowering path cannot preserve the slice; refusing whole-DB "
+                "dependency fallback";
+    bool haloViewDependency =
+        dbAcquireOp && dbAcquireOp.getHaloViewDependencyAttr();
+    if (haloViewDependency) {
+      if (dbMode != DbMode::read)
+        return dbAcquireOp.emitOpError()
+               << "halo-view dependency must lower as a read dependency";
+      if (!DbUtils::acquiresPartialHaloWindow(dbAcquireOp))
+        return dbAcquireOp.emitOpError()
+               << "halo-view dependency lacks committed stencil halo reach";
       if (!hasExplicitSlice)
         return dbAcquireOp.emitOpError()
                << "per-block halo read dependency requires an explicit "

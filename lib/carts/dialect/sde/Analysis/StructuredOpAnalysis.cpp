@@ -440,8 +440,8 @@ collectMemrefAccessesImpl(Operation *scope, Block &body, ArrayRef<Value> ivs,
     if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
       // Skip pointer-to-memref wrapper loads (e.g., memref.load %wrapper[] :
       // memref<memref<?xi32>>). These are pointer dereferences, not data
-      // accesses.  Including them would create linalg.generic inputs with
-      // memref-of-memref types, which cannot be raised to tensors.
+      // accesses. Including them would create structured inputs with
+      // memref-of-memref types rather than element memrefs.
       if (isa<MemRefType>(loadOp.getResult().getType()))
         continue;
       auto memrefType = dyn_cast<MemRefType>(loadOp.getMemref().getType());

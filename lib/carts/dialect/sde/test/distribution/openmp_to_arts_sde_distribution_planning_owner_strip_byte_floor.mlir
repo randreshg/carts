@@ -1,9 +1,9 @@
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_multinode.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-to-codir \
+// RUN:   --start-from sde-planning --pipeline sde-planning \
 // RUN:   --mlir-print-ir-after-all 2>&1 \
 // RUN:   | %FileCheck %s --check-prefix=BASE
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_multinode.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-to-codir \
+// RUN:   --start-from sde-planning --pipeline sde-planning \
 // RUN:   --min-distributed-tile-bytes=4194304 \
 // RUN:   --mlir-print-ir-after-all 2>&1 \
 // RUN:   | %FileCheck %s --check-prefix=COARSE

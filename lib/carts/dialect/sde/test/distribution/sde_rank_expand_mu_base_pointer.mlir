@@ -20,16 +20,15 @@ func.func @rank_expand_with_null_check() -> i1 {
   %A = sde.mu_alloc : memref<128x64xf32>
   %p = polygeist.memref2pointer %A : memref<128x64xf32> to !llvm.ptr
   %isnull = llvm.icmp "eq" %p, %null : !llvm.ptr
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       scf.for %j = %c0 to %c64 step %c1 {
         %v = memref.load %A[%i, %j] : memref<128x64xf32>
         memref.store %v, %A[%i, %j] : memref<128x64xf32>
-      }
+    }
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
   return %isnull : i1
 }

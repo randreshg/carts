@@ -511,9 +511,11 @@ bool mlir::carts::arts::shouldUsePartitionSliceAsDepWindow(
     const LoweringFactInfo &facts, DbAcquireOp acquire) {
   if (!acquire)
     return false;
-  return shouldUsePartitionSliceAsDepWindow(
-      facts, acquire.getMode(),
-      acquire.getPartitionMode().value_or(PartitionMode::coarse));
+  std::optional<PartitionMode> partitionMode = acquire.getPartitionMode();
+  if (!partitionMode)
+    return false;
+  return shouldUsePartitionSliceAsDepWindow(facts, acquire.getMode(),
+                                            *partitionMode);
 }
 
 bool mlir::carts::arts::shouldPreserveParentDepRange(

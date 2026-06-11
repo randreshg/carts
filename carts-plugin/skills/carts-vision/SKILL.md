@@ -1,6 +1,6 @@
 ---
 name: carts-vision
-description: Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, GASNet/distributed scaling, or asks where a fix belongs.
+description: Use when a CARTS compiler/runtime task mentions the vision, SDE/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, GASNet/distributed scaling, or asks where a fix belongs.
 ---
 
 # CARTS Vision
@@ -15,13 +15,13 @@ distributed execution, optimization placement, or benchmark scaling.
   relations, abstract communication-volume cost, and real source/SU/CU/MU
   loop/layout transformations. It names no collectives, DBs, EDTs, owner maps,
   routes, GUIDs, or runtime policy.
-- **CODIR commits codelet graph structure.** CODIR owns isolated codelets,
+- **ARTS commits codelet graph structure.** ARTS owns isolated codelets,
   explicit deps/params, storage views, and graph optimizations. It consumes
   SDE-authored layout, access-window, and movement structure; it does not redo
   SDE layout or choose movement families.
 - **ARTS realizes DB/EDT ownership and grouped execution.** ARTS owns
   per-block single-writer DBs, owner maps, DB/EDT graphs, placement, DB modes,
-  and grouped compute/bridge/communication CUs over committed SDE/CODIR facts.
+  and grouped compute/bridge/communication CUs over committed SDE facts.
 - **ARTS-RT lowers mechanically.** ARTS-RT lowers chosen ARTS objects to
   runtime ABI and LLVM-facing shape. It must not infer scheduling, ownership,
   partition, storage grain, or collective policy.
@@ -68,7 +68,7 @@ Use the CU/MU hypergraph to investigate grouping and partition quality over
 committed layout facts:
 
 - CU vertices model owner-local work candidates over committed MUs. Bridge and
-  communication CU grouping is materialized later, after CODIR represents SDE
+  communication CU grouping is materialized later, after ARTS represents SDE
   movement structure and ARTS realizes DB/EDT ownership.
 - MU hyperedges model memory blocks and dependency fanout, weighted by abstract
   communication volume, byte traffic, halo/collective cost, or remote fanout.
@@ -92,7 +92,7 @@ For locality-aware concurrent-start stencils, keep the mapping strict:
 - SDE proves Jacobi-style legality, performs the real skew/diamond or
   time-band loop transform, widens halo by `radius * bandDepth`, and commits
   layout/time-band facts.
-- CODIR consumes the transformed SDE movement structure as graph edges.
+- ARTS consumes the transformed SDE movement structure as graph edges.
 - ARTS realizes the same fine per-block DB/MU grain with grouped
   compute/bridge/communication CUs over block ranges.
 - ARTS-RT lowers mechanically; it must not infer time bands, stencil legality,
@@ -108,7 +108,7 @@ Barrier and epoch optimization must be a real graph transformation:
 - SDE removes or amortizes timestep barriers only by rewriting loop/dataflow
   shape, such as time-band/skew/diamond tiling with widened halo or explicit
   per-block/range tokens.
-- CODIR consumes the transformed SDE movement structure as graph edges.
+- ARTS consumes the transformed SDE movement structure as graph edges.
 - ARTS groups compute/bridge/communication CUs over committed block ranges while
   each lane keeps its own per-block DB acquire.
 - ARTS-RT/runtime lowers and tunes the emitted epoch/frontier/route calls; it
@@ -131,7 +131,7 @@ barrier/epoch optimization.
 
 ## Validation
 
-- Inspect IR shape first: `sde-planning`, `sde-to-codir`, `codir-to-arts`,
+- Inspect IR shape first: `sde-planning`, `sde-to-arts`, `sde-to-arts`,
   `post-db-refinement`, and `pre-lowering` for distributed work.
 - Add focused lit tests at the owning dialect boundary.
 - Run `dekk carts format`, focused lit tests, `dekk carts build`, and the

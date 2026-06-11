@@ -1,8 +1,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-parallelize)' \
 // RUN:   | %FileCheck %s --check-prefix=RAISE
-// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-planning \
-// RUN:   --mlir-print-ir-after-all 2>&1 | %FileCheck %s --check-prefix=PLAN
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-parallelize,sde-pattern-analysis)' \
+// RUN:   | %FileCheck %s --check-prefix=PLAN
 
 module {
   func.func @affine_counter_init() {
@@ -82,36 +81,32 @@ module {
 // RAISE:         sde.cu_region <single> {
 // RAISE:           memref.alloca
 // RAISE:           memref.store
-// RAISE:           sde.su_iterate
-// RAISE:             sde.cu_region <single> {
-// RAISE:               arith.index_cast
-// RAISE:               memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<8xf32>
+// RAISE:         sde.su_iterate
+// RAISE:           sde.cu_region <single> {
+// RAISE:             arith.index_cast
+// RAISE:             memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<8xf32>
 // RAISE-NOT:       memref.load %{{.*}}[] : memref<i32>
 
 // RAISE-LABEL: func.func @init_3d
-// RAISE:         sde.cu_region <parallel> {
-// RAISE:           sde.su_iterate
-// RAISE:             sde.cu_region <single> {
+// RAISE:         sde.su_iterate
+// RAISE:           sde.cu_region <single> {
+// RAISE:             scf.for
 // RAISE:               scf.for
-// RAISE:                 scf.for
-// RAISE:                   memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] : memref<4x5x6xf32>
+// RAISE:                 memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] : memref<4x5x6xf32>
 
 // RAISE-LABEL: func.func @init_2d_scalar_prefix
-// RAISE:         sde.cu_region <parallel> {
-// RAISE:           sde.su_iterate
-// RAISE:             sde.cu_region <single> {
-// RAISE:               arith.sitofp
-// RAISE:               scf.for
-// RAISE:                 memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<4x6xf32>
+// RAISE:         sde.su_iterate
+// RAISE:           sde.cu_region <single> {
+// RAISE:             arith.sitofp
+// RAISE:             scf.for
+// RAISE:               memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<4x6xf32>
 
 // RAISE-LABEL: func.func @multi_store_readonly
-// RAISE:         sde.cu_region <parallel> {
-// RAISE:           sde.su_iterate
-// RAISE:             sde.cu_region <single> {
-// RAISE:               memref.load %{{.*}}[%{{.*}}] : memref<16xf32>
-// RAISE:               memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<16xf32>
-// RAISE:               memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<16xf32>
+// RAISE:         sde.su_iterate
+// RAISE:           sde.cu_region <single> {
+// RAISE:             memref.load %{{.*}}[%{{.*}}] : memref<16xf32>
+// RAISE:             memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<16xf32>
+// RAISE:             memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<16xf32>
 
-// PLAN-LABEL: // -----// IR Dump After PatternAnalysis
 // PLAN-LABEL: func.func @init_3d
 // PLAN:       sde.su_iterate (%{{.*}}, %{{.*}}, %{{.*}}) to (%{{.*}}, %{{.*}}, %{{.*}}) step (%{{.*}}, %{{.*}}, %{{.*}}) classification(<elementwise>)

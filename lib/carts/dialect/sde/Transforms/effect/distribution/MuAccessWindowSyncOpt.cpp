@@ -11,10 +11,10 @@
 /// Removing a redundant global barrier is a real SDE structural change: the
 /// ordered CUs touch disjoint blocks (or only read shared blocks), so with the
 /// barrier gone they become async siblings — a parallel wave available to later
-/// scheduling and to CODIR dataflow derivation. The pass authors no replacement
+/// scheduling and to ARTS dataflow derivation. The pass authors no replacement
 /// structure (no token, slice, dependency graph, distribution, or stage
 /// boundary); a JUSTIFIED ordering is left as the irreducible `sde.su_barrier`
-/// for CODIR to refine into explicit dependency edges from the same windows, a
+/// for ARTS to refine into explicit dependency edges from the same windows, a
 /// MISALIGNED edge is left for the later SDE redistribution transform, and any
 /// barrier whose ordering cannot be proven is preserved for the verifier to
 /// gate.

@@ -49,9 +49,9 @@ rg -n '^static .*\\(' lib/carts include/carts --glob '*.cpp' --glob '*.h'
 - SDE semantics, HPF-style data layout, affine access relations, abstract
   communication-volume cost, and real source/SU/CU/MU loop/layout transforms:
   `lib/carts/dialect/sde`.
-- CODIR codelet isolation, dependency/parameter graph structure, and mechanical
+- ARTS codelet isolation, dependency/parameter graph structure, and mechanical
   representation of SDE-authored movement:
-  `lib/carts/dialect/codir`.
+  `lib/carts/dialect/arts`.
 - ARTS DB/EDT/epoch/analysis, per-block single-writer DB realization, owner
   maps, DB modes, and grouped compute/bridge/communication CUs:
   `lib/carts/dialect/arts`.
@@ -80,7 +80,7 @@ rg -n '^static .*\\(' lib/carts include/carts --glob '*.cpp' --glob '*.h'
 
 - Stale docs naming non-live stages or passes.
 - Fixture refresh hiding a real verifier failure.
-- CODIR or ARTS compensating for a bad SDE layout instead of rejecting it.
+- ARTS or ARTS compensating for a bad SDE layout instead of rejecting it.
 - ARTS-RT inferring scheduling, ownership, partition, or movement policy.
 - New static helpers duplicating existing utilities.
 - Runtime debug build left as final verification.

@@ -30,6 +30,9 @@ class RuntimeConfig;
 std::unique_ptr<Pass> createDCEPass();
 
 /// EDT and loop-structure transformation passes.
+std::unique_ptr<Pass> createSdeStorageToArtsDbPass();
+std::unique_ptr<Pass> createSdeAccessesToArtsDepsPass();
+std::unique_ptr<Pass> createFinalizeSdeToArtsPass();
 std::unique_ptr<Pass> createCreateDbsPass();
 std::unique_ptr<Pass> createDbModeTighteningPass(bool forceInout = false);
 std::unique_ptr<Pass> createDbScratchEliminationPass();
@@ -93,7 +96,7 @@ namespace polygeist {
 class PolygeistDialect;
 } // namespace polygeist
 
-// Core ARTS passes (generated from include/carts/passes/Passes.td)
+// ARTS passes (generated from include/carts/passes/Passes.td)
 #define GEN_PASS_DECL
 #define GEN_PASS_REGISTRATION
 #include "carts/passes/Passes.h.inc"

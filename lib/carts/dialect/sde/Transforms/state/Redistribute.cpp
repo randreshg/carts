@@ -67,9 +67,10 @@ struct SdeRedistributePass
             IntegerAttr::get(IntegerType::get(ctx, 64), edge.commVolumeBytes);
       carts::sde::SdeSuIterateOp consumer = edge.consumer;
       OpBuilder builder(consumer);
-      builder.create<carts::sde::SdeRedistOp>(
-          consumer.getLoc(), edge.root,
+      carts::sde::SdeRedistOp::create(
+          builder, consumer.getLoc(), edge.root,
           carts::sde::SdeMovementFamilyAttr::get(ctx, edge.family),
+          IntegerAttr::get(IntegerType::get(ctx, 64), edge.arrayId),
           buildI64ArrayAttr(ctx, edge.sourceOwnerDims),
           buildI64ArrayAttr(ctx, edge.sourceBlockShape),
           buildI64ArrayAttr(ctx, edge.targetOwnerDims),

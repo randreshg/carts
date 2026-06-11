@@ -2,7 +2,7 @@
 
 // sde.redist carries the full geometric movement-family taxonomy and round-trips
 // through parse/print/verify, including replicated endpoints (empty owner dims),
-// halo widths, and multi-owner block layouts. CODIR maps each family to a
+// halo widths, and multi-owner block layouts. ARTS materializes each family to a
 // concrete transport mechanically.
 
 // CHECK-LABEL: func.func @redist_taxonomy

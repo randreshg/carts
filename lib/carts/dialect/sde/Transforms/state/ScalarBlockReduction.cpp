@@ -15,17 +15,18 @@
 ///
 /// After:
 ///   %partials = memref.alloc() : memref<blocks x accumulators x T>
-///   sde.cu_region <single> {
-///     sde.su_iterate (%b) to (%blocks) step (%c1) classification(<elementwise>) {
-///       sde.cu_region <parallel> {
-///         scf.for %i = first_in_block(%b) to block_end(%b) step %stride {
-///           ... update local scalar accumulators ...
-///         }
-///         memref.store %local, %partials[%b, %slot]
+///   sde.su_iterate (%b) to (%blocks) step (%c1)
+///   classification(<elementwise>) {
+///     sde.cu_region <parallel> {
+///       scf.for %i = first_in_block(%b) to block_end(%b) step %stride {
+///         ... update local scalar accumulators ...
 ///       }
-///     } {physicalOwnerDims = [0], physicalBlockShape = [1, accumulators],
-///        logicalWorkerSlice = [1],
-///        iterationTopology = #sde.iteration_topology<owner_strip>}
+///       memref.store %local, %partials[%b, %slot]
+///     }
+///   } {physicalOwnerDims = [0], physicalBlockShape = [1, accumulators],
+///      logicalWorkerSlice = [1],
+///      iterationTopology = #sde.iteration_topology<owner_strip>}
+///   sde.cu_region <single> {
 ///     scf.for %b = %c0 to %blocks step %c1 {
 ///       ... combine partials into the original scalar accumulators ...
 ///     }
@@ -123,8 +124,8 @@ static bool isZeroBasedStaticLoop(scf::ForOp loop, int64_t &upper,
   return true;
 }
 
-static std::optional<unsigned> rank0AccumulatorIndex(
-    Value memref, ArrayRef<AccumulatorUpdate> accumulators) {
+static std::optional<unsigned>
+rank0AccumulatorIndex(Value memref, ArrayRef<AccumulatorUpdate> accumulators) {
   Value root = ValueAnalysis::stripMemrefViewOps(memref);
   for (auto [idx, acc] : llvm::enumerate(accumulators))
     if (ValueAnalysis::stripMemrefViewOps(acc.memref) == root)
@@ -140,8 +141,8 @@ static bool isLoadFromAccumulator(Value value, Value accumulator) {
          ValueAnalysis::stripMemrefViewOps(accumulator);
 }
 
-static std::optional<AccumulatorUpdate> matchAccumulatorStore(
-    memref::StoreOp store) {
+static std::optional<AccumulatorUpdate>
+matchAccumulatorStore(memref::StoreOp store) {
   if (!store.getIndices().empty() || !isRank0Memref(store.getMemref()))
     return std::nullopt;
 
@@ -155,13 +156,13 @@ static std::optional<AccumulatorUpdate> matchAccumulatorStore(
       !isLoadFromAccumulator(rhs, store.getMemref()))
     return std::nullopt;
 
-  Type elementType = cast<MemRefType>(store.getMemref().getType()).getElementType();
+  Type elementType =
+      cast<MemRefType>(store.getMemref().getType()).getElementType();
   return AccumulatorUpdate{ValueAnalysis::stripMemrefViewOps(store.getMemref()),
                            elementType, isa<FloatType>(elementType)};
 }
 
-static std::optional<SmallVector<int64_t, 2>>
-readI64Vector(ArrayAttr attr) {
+static std::optional<SmallVector<int64_t, 2>> readI64Vector(ArrayAttr attr) {
   std::optional<SmallVector<int64_t, 4>> values = readI64ArrayAttr(attr);
   if (!values)
     return std::nullopt;
@@ -181,8 +182,8 @@ static std::optional<BlockPlan1D> findCommittedPlanForRoot(Value root) {
     if (!isa<memref::LoadOp, memref::StoreOp>(user))
       continue;
     sde::SdeSuIterateOp su = user->getParentOfType<sde::SdeSuIterateOp>();
-    while (su && !(su.getPhysicalOwnerDimsAttr() &&
-                   su.getPhysicalBlockShapeAttr()))
+    while (su &&
+           !(su.getPhysicalOwnerDimsAttr() && su.getPhysicalBlockShapeAttr()))
       su = su->getParentOfType<sde::SdeSuIterateOp>();
     if (!su)
       continue;
@@ -194,17 +195,19 @@ static std::optional<BlockPlan1D> findCommittedPlanForRoot(Value root) {
     if (!ownerDims || !blockShape || ownerDims->size() != 1 ||
         (*ownerDims)[0] != 0 || blockShape->empty())
       continue;
-    int64_t blockExtent = rankExpandedMu ? type.getDimSize(1) : (*blockShape)[0];
-    int64_t blockCount =
-        rankExpandedMu ? type.getDimSize(0) : ceilDiv(type.getDimSize(0), blockExtent);
+    int64_t blockExtent =
+        rankExpandedMu ? type.getDimSize(1) : (*blockShape)[0];
+    int64_t blockCount = rankExpandedMu
+                             ? type.getDimSize(0)
+                             : ceilDiv(type.getDimSize(0), blockExtent);
     int64_t extent =
         rankExpandedMu ? blockCount * blockExtent : type.getDimSize(0);
     if (blockExtent <= 0 || blockCount <= 1)
       continue;
     if (!rankExpandedMu && blockExtent > type.getDimSize(0))
       continue;
-    BlockPlan1D candidate{root, type, extent, blockExtent, blockCount,
-                          rankExpandedMu};
+    BlockPlan1D candidate{root,        type,       extent,
+                          blockExtent, blockCount, rankExpandedMu};
     if (result) {
       if (result->extent != candidate.extent ||
           result->blockExtent != candidate.blockExtent ||
@@ -271,6 +274,49 @@ static bool validateLoopBody(ReductionCandidate &candidate) {
   return static_cast<bool>(candidate.plan.root);
 }
 
+static bool isValueDefinedInsideCu(Value value, sde::SdeCuRegionOp cu,
+                                   Operation *allowedNestedOp) {
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    Block *owner = blockArg.getOwner();
+    return owner && cu.getBody().isAncestor(owner->getParent());
+  }
+
+  Operation *def = value.getDefiningOp();
+  if (!def)
+    return false;
+  if (allowedNestedOp && allowedNestedOp->isAncestor(def))
+    return false;
+  Region *parentRegion = def->getParentRegion();
+  return parentRegion && cu.getBody().isAncestor(parentRegion);
+}
+
+static bool canHoistProducerOutsideParentCu(ReductionCandidate &candidate,
+                                            sde::SdeCuRegionOp parentCu) {
+  if (!parentCu || parentCu.getNumResults() != 0 ||
+      !parentCu.getIterArgs().empty())
+    return false;
+  if (candidate.loop->getBlock() != &parentCu.getBody().front())
+    return false;
+
+  auto valueCanHoist = [&](Value value) {
+    return !isValueDefinedInsideCu(value, parentCu, candidate.loop);
+  };
+  if (!valueCanHoist(candidate.loop.getLowerBound()) ||
+      !valueCanHoist(candidate.loop.getUpperBound()) ||
+      !valueCanHoist(candidate.loop.getStep()))
+    return false;
+
+  for (Operation &op : candidate.loop.getBody()->without_terminator()) {
+    for (Value operand : op.getOperands()) {
+      if (operand == candidate.loop.getInductionVar())
+        continue;
+      if (!valueCanHoist(operand))
+        return false;
+    }
+  }
+  return true;
+}
+
 static std::optional<ReductionCandidate> matchReductionLoop(scf::ForOp loop) {
   if (loop->getParentOfType<sde::SdeSuIterateOp>())
     return std::nullopt;
@@ -308,13 +354,13 @@ static std::optional<ReductionCandidate> matchReductionLoop(scf::ForOp loop) {
   if (upper > candidate.plan.extent)
     return std::nullopt;
 
-  bool hasFloat = llvm::any_of(candidate.accumulators,
-                               [](const AccumulatorUpdate &acc) {
-                                 return acc.isFloat;
-                               });
+  bool hasFloat =
+      llvm::any_of(candidate.accumulators,
+                   [](const AccumulatorUpdate &acc) { return acc.isFloat; });
   if (hasFloat && candidate.step < candidate.plan.blockExtent) {
     candidate.preserveFloatOrder = true;
-    candidate.partialSlots = ceilDiv(candidate.plan.blockExtent, candidate.step);
+    candidate.partialSlots =
+        ceilDiv(candidate.plan.blockExtent, candidate.step);
   }
 
   return candidate;
@@ -397,10 +443,10 @@ partialPhysicalBlockShape(const ReductionCandidate &candidate) {
   return shape;
 }
 
-static SmallVector<Value, 4>
-partialIndices(const ReductionCandidate &candidate, OpBuilder &builder,
-               Location loc, Value blockIv, Value partialSlot,
-               unsigned accumulatorSlot) {
+static SmallVector<Value, 4> partialIndices(const ReductionCandidate &candidate,
+                                            OpBuilder &builder, Location loc,
+                                            Value blockIv, Value partialSlot,
+                                            unsigned accumulatorSlot) {
   SmallVector<Value, 4> indices;
   indices.push_back(blockIv);
   if (candidate.plan.rankExpandedMu)
@@ -441,20 +487,21 @@ static void cloneReductionBody(ReductionCandidate &candidate,
 
 static void storePartials(ReductionCandidate &candidate, Value partial,
                           Value blockIv, Value partialSlot,
-                          ArrayRef<memref::AllocaOp> locals,
-                          OpBuilder &builder, Location loc) {
+                          ArrayRef<memref::AllocaOp> locals, OpBuilder &builder,
+                          Location loc) {
   for (auto [idx, local] : llvm::enumerate(locals)) {
     Value value = memref::LoadOp::create(builder, loc, local->getResult(0));
-    memref::StoreOp::create(
-        builder, loc, value, partial,
-        partialIndices(candidate, builder, loc, blockIv, partialSlot,
-                       static_cast<unsigned>(idx)));
+    memref::StoreOp::create(builder, loc, value, partial,
+                            partialIndices(candidate, builder, loc, blockIv,
+                                           partialSlot,
+                                           static_cast<unsigned>(idx)));
   }
 }
 
-static scf::ForOp createOrderPreservingProducerBody(
-    ReductionCandidate &candidate, Value partial, Value blockIv, Value first,
-    Value end, OpBuilder &builder, Location loc) {
+static scf::ForOp
+createOrderPreservingProducerBody(ReductionCandidate &candidate, Value partial,
+                                  Value blockIv, Value first, Value end,
+                                  OpBuilder &builder, Location loc) {
   Value zero = constantIndex(builder, loc, 0);
   Value one = constantIndex(builder, loc, 1);
   Value slots = constantIndex(builder, loc, candidate.partialSlots);
@@ -464,12 +511,11 @@ static scf::ForOp createOrderPreservingProducerBody(
   Value slotIv = slotLoop.getInductionVar();
   SmallVector<memref::AllocaOp, 4> locals =
       createLocalAccumulators(candidate, builder, loc);
-  Value offset = arith::MulIOp::create(builder, loc, slotIv,
-                                       candidate.loop.getStep());
+  Value offset =
+      arith::MulIOp::create(builder, loc, slotIv, candidate.loop.getStep());
   Value sampleIv = arith::AddIOp::create(builder, loc, first, offset);
-  Value valid =
-      arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult, sampleIv,
-                            end);
+  Value valid = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult,
+                                      sampleIv, end);
   auto ifOp = scf::IfOp::create(builder, loc, TypeRange{}, valid,
                                 /*withElseRegion=*/false);
   builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
@@ -519,8 +565,7 @@ static void createProducer(ReductionCandidate &candidate, Value partial,
       /*pattern=*/nullptr,
       /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
       /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
-      /*writeFootprint=*/nullptr,
-      buildI64ArrayAttr(ctx, {0}),
+      /*writeFootprint=*/nullptr, buildI64ArrayAttr(ctx, {0}),
       candidate.plan.rankExpandedMu
           ? buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate))
           : buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate)),
@@ -546,12 +591,12 @@ static void createProducer(ReductionCandidate &candidate, Value partial,
   Block &cuBody = sde::ensureBlock(cu.getBody());
   builder.setInsertionPointToStart(&cuBody);
 
-  Value first = buildFirstIndexInBlock(builder, loc, blockIv,
-                                       candidate.loop.getStep(),
-                                       candidate.plan.blockExtent);
-  Value end = buildBlockEnd(builder, loc, blockIv,
-                            candidate.loop.getUpperBound(),
-                            candidate.plan.blockExtent);
+  Value first =
+      buildFirstIndexInBlock(builder, loc, blockIv, candidate.loop.getStep(),
+                             candidate.plan.blockExtent);
+  Value end =
+      buildBlockEnd(builder, loc, blockIv, candidate.loop.getUpperBound(),
+                    candidate.plan.blockExtent);
   if (candidate.preserveFloatOrder) {
     scf::ForOp slotLoop = createOrderPreservingProducerBody(
         candidate, partial, blockIv, first, end, builder, loc);
@@ -566,8 +611,8 @@ static void createProducer(ReductionCandidate &candidate, Value partial,
   sde::SdeYieldOp::create(builder, loc, ValueRange{});
 }
 
-static void createFinalCombine(ReductionCandidate &candidate,
-                               Value partial, OpBuilder &builder) {
+static void createFinalCombine(ReductionCandidate &candidate, Value partial,
+                               OpBuilder &builder) {
   Location loc = candidate.loop.getLoc();
   Value zero = constantIndex(builder, loc, 0);
   Value one = constantIndex(builder, loc, 1);
@@ -592,10 +637,9 @@ static void createFinalCombine(ReductionCandidate &candidate,
     builder.setInsertionPointAfter(combine);
     return;
   }
-  auto slotLoop = scf::ForOp::create(builder, loc, zero,
-                                    constantIndex(builder, loc,
-                                                  candidate.partialSlots),
-                                    one);
+  auto slotLoop = scf::ForOp::create(
+      builder, loc, zero, constantIndex(builder, loc, candidate.partialSlots),
+      one);
   builder.setInsertionPointToStart(slotLoop.getBody());
   emitAccumulates(slotLoop.getInductionVar());
   builder.setInsertionPointAfter(combine);
@@ -604,38 +648,37 @@ static void createFinalCombine(ReductionCandidate &candidate,
 static LogicalResult rewriteReduction(ReductionCandidate candidate) {
   sde::SdeCuRegionOp parentCu =
       candidate.loop->getParentOfType<sde::SdeCuRegionOp>();
-  bool needsLocalCu =
-      candidate.plan.rankExpandedMu &&
-      (!parentCu || candidate.loop->getBlock() != &parentCu.getBody().front());
+  if (!canHoistProducerOutsideParentCu(candidate, parentCu))
+    return success();
 
-  OpBuilder builder(candidate.loop);
   Location loc = candidate.loop.getLoc();
-  sde::SdeCuRegionOp localCu;
-  if (needsLocalCu) {
-    localCu = sde::SdeCuRegionOp::create(
-        builder, loc, /*resultTypes=*/TypeRange{},
-        sde::SdeCuKindAttr::get(builder.getContext(), sde::SdeCuKind::single),
-        /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
-    Block &body = sde::ensureBlock(localCu.getBody());
-    builder.setInsertionPointToStart(&body);
-  }
+  OpBuilder outerBuilder(parentCu);
 
-  MemRefType partialType = buildPartialType(builder.getContext(), candidate);
+  MemRefType partialType =
+      buildPartialType(outerBuilder.getContext(), candidate);
   Value partial;
   if (candidate.plan.rankExpandedMu) {
-    partial = sde::SdeMuAllocOp::create(builder, loc, partialType,
-                                        ValueRange{})
-                  .getMemref();
+    partial =
+        sde::SdeMuAllocOp::create(outerBuilder, loc, partialType, ValueRange{})
+            .getMemref();
   } else {
-    partial = memref::AllocOp::create(builder, loc, partialType).getMemref();
+    auto allocCu = sde::SdeCuRegionOp::create(
+        outerBuilder, loc, TypeRange{partialType},
+        sde::SdeCuKindAttr::get(outerBuilder.getContext(),
+                                sde::SdeCuKind::single),
+        /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+    Block &allocBody = sde::ensureBlock(allocCu.getBody());
+    outerBuilder.setInsertionPointToStart(&allocBody);
+    Value alloc =
+        memref::AllocOp::create(outerBuilder, loc, partialType).getMemref();
+    sde::SdeYieldOp::create(outerBuilder, loc, ValueRange{alloc});
+    partial = allocCu.getResult(0);
+    outerBuilder.setInsertionPointAfter(allocCu);
   }
-  createProducer(candidate, partial, builder);
-  builder.setInsertionPoint(candidate.loop);
-  if (localCu)
-    builder.setInsertionPointToEnd(&localCu.getBody().front());
-  createFinalCombine(candidate, partial, builder);
-  if (localCu)
-    sde::SdeYieldOp::create(builder, loc, ValueRange{});
+  createProducer(candidate, partial, outerBuilder);
+
+  OpBuilder innerBuilder(candidate.loop);
+  createFinalCombine(candidate, partial, innerBuilder);
   candidate.loop.erase();
   return success();
 }

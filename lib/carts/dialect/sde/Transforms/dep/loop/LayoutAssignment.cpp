@@ -409,7 +409,7 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
         candidate.kind == sde::ArrayLayoutKind::blockContraction)
       selectionCost = 0;
     // A full-rank writer feeding stencil readers is owned distributed state.
-    // Replication would erase the SDE layout fact and force CODIR/ARTS to
+    // Replication would erase the SDE layout fact and force SDE/ARTS to
     // repair state placement instead of materializing the communication edge.
     if (preferFullWriterBlock &&
         candidate.kind == sde::ArrayLayoutKind::replicated)
@@ -588,9 +588,15 @@ struct LayoutAssignmentPass
 
     // Accumulate per-SU stamps before applying so each su_iterate gets one
     // combined `arrayLayout` array of all its accessed roots.
+    struct RootProvenance {
+      Value root;
+      int64_t arrayId = -1;
+      sde::SdeAccessMode mode = sde::SdeAccessMode::read;
+    };
     struct SchedulingUnitStamp {
       SmallVector<DictionaryAttr, 4> entries;
       SmallVector<int64_t, 2> disagree;
+      SmallVector<RootProvenance, 4> roots;
       int64_t commVolumeBytes = 0;
     };
     SmallVector<SchedulingUnitStamp> stamps(relations.schedulingUnits.size());
@@ -638,6 +644,9 @@ struct LayoutAssignmentPass
                     : sde::AttrNames::LayoutGraphValues::RoleRead,
             edgeBytes, std::max<int64_t>(1, elementBytes(profile.root)));
         stamps[suId].entries.push_back(entry);
+        stamps[suId].roots.push_back(
+            {profile.root, arrayId,
+             isWrite ? sde::SdeAccessMode::write : sde::SdeAccessMode::read});
         stamps[suId].commVolumeBytes += edgeBytes;
         if (edgeBytes > 0 && profile.hasWriter)
           stamps[suId].disagree.push_back(arrayId);
@@ -656,6 +665,24 @@ struct LayoutAssignmentPass
         op.setLayoutsDisagreeAttr(buildI64ArrayAttr(ctx, stamp.disagree));
       op.setCommVolumeBytesAttr(
           IntegerAttr::get(IntegerType::get(ctx, 64), stamp.commVolumeBytes));
+
+      OpBuilder builder(&op.getBody().front(), op.getBody().front().begin());
+      for (const RootProvenance &root : stamp.roots) {
+        bool exists = false;
+        for (sde::SdeArrayLayoutRootOp existing :
+             op.getBody().front().getOps<sde::SdeArrayLayoutRootOp>()) {
+          exists |=
+              existing.getRoot() == root.root &&
+              static_cast<int64_t>(existing.getArrayId()) == root.arrayId &&
+              existing.getMode() == root.mode;
+        }
+        if (exists)
+          continue;
+        sde::SdeArrayLayoutRootOp::create(
+            builder, op.getLoc(), root.root,
+            sde::SdeAccessModeAttr::get(ctx, root.mode),
+            IntegerAttr::get(IntegerType::get(ctx, 64), root.arrayId));
+      }
     }
   }
 

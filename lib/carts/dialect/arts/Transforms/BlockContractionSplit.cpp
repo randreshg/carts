@@ -5,9 +5,9 @@
 /// EDTs plus a per-block summing settle, so cross-node contraction reads avoid
 /// a single coarse <inout> replica.
 ///
-/// Why a dedicated ARTS pass (not the CodirToArts bridge, not the existing
+/// Why a dedicated ARTS pass (not the ArtsToArts bridge, not the existing
 /// scalar partial-reduction split pass):
-///   - codir.codelet is IsolatedFromAbove, so a contraction-loop body transform
+///   - arts.codelet is IsolatedFromAbove, so a contraction-loop body transform
 ///     that must reference the cross-node all-gather replica (the
 ///     `perBlockReplicated` DB emitted by emitPerBlockAllGatherWriteBack) can
 ///     only run AFTER lowerCodelet when the consumer is an arts.edt. This pass

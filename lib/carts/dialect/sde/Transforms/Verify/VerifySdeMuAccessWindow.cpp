@@ -77,6 +77,15 @@ struct VerifySdeMuAccessWindowPass
           }
         });
 
+    auto windowCarriesExpectedArrayId =
+        [&](sde::SdeMuAccessWindowOp win,
+            const sde::RaisedWindowPlan &plan) -> bool {
+      if (!plan.arrayId)
+        return !win.getArrayIdAttr();
+      IntegerAttr windowId = win.getArrayIdAttr();
+      return windowId && windowId.getInt() == *plan.arrayId;
+    };
+
     module.walk([&](sde::SdeCuRegionOp cu) {
       for (Operation &op : cu.getBody().front()) {
         auto win = dyn_cast<sde::SdeMuAccessWindowOp>(op);
@@ -90,6 +99,12 @@ struct VerifySdeMuAccessWindowPass
             if (plan.cu == cu && plan.mu == win.getMu() &&
                 plan.mode == win.getMode()) {
               hasExpected = true;
+              if (!windowCarriesExpectedArrayId(win, plan)) {
+                win.emitOpError()
+                    << "arrayId does not match the committed SDE MU root "
+                       "identity for this access window";
+                failed = true;
+              }
               break;
             }
           if (!hasExpected) {

@@ -7,8 +7,9 @@ git grep -n \
   -e 'DbOwnerMapRealization' \
   -e 'DbDistributedEligibility' \
   -e 'DistributionPlanning' \
-  -e 'ConvertSdeToCodir' \
-  -e 'ConvertCodirToArts' \
+  -e 'SdeStorageToArtsDb' \
+  -e 'SdeAccessesToArtsDeps' \
+  -e 'FinalizeSdeToArts' \
   -e 'distributed_db_init' \
   -e 'distributed_db_init_worker' \
   -e 'artsGetTotalNodes' \

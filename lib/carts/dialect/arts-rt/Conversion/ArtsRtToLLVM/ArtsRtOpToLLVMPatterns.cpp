@@ -189,8 +189,11 @@ struct RecordDepPattern : public ArtsRtToLLVMPattern<RecordDepOp> {
 
     auto accessMode = op.getAccessMode();
     auto acquireModesAttr = op.getAcquireModes();
-    ArrayRef<int32_t> acquireModeValues =
-        acquireModesAttr ? *acquireModesAttr : ArrayRef<int32_t>{};
+    if (!acquireModesAttr)
+      return op.emitOpError()
+             << "requires acquire_modes for every datablock; ARTS-RT must not "
+                "infer DB dependency modes";
+    ArrayRef<int32_t> acquireModeValues = *acquireModesAttr;
     auto depFlagsAttr = op.getDepFlags();
     ArrayRef<int32_t> depFlagValues =
         depFlagsAttr ? *depFlagsAttr : ArrayRef<int32_t>{};
@@ -552,9 +555,9 @@ private:
   }
 
   /// Extract DB lowering info and stencil metadata from a dbGuid's defining op.
-  DepDbInfo extractDbInfoForDeps(Value dbGuid,
-                                 std::optional<int32_t> acquireMode,
-                                 Location loc) const {
+  FailureOr<DepDbInfo> extractDbInfoForDeps(Value dbGuid,
+                                            std::optional<int32_t> acquireMode,
+                                            Location loc) const {
     DepDbInfo result;
 
     /// Resolve the underlying DB operation, tracing through pointer casts
@@ -584,7 +587,7 @@ private:
       /// the correct owned-center block. stencil_center_offset is only a
       /// symmetric-radius fallback when richer facts data is unavailable.
       int32_t writeMode = static_cast<int32_t>(DbMode::write);
-      bool writerMode = !acquireMode || *acquireMode == writeMode;
+      bool writerMode = acquireMode && *acquireMode == writeMode;
       auto partitionMode = dbAcquireOp.getPartitionMode();
       if (writerMode && partitionMode && usesBlockLayout(*partitionMode)) {
         result.stencilFacts = getAcquireStencilFacts(dbAcquireOp, loc);
@@ -600,11 +603,10 @@ private:
       result.depStruct = depDbAcquireOp.getDepStruct();
       result.baseOffset = depDbAcquireOp.getOffset();
     } else {
-      /// Fallback: the GUID value went through casts/outlining that made
-      /// the original DbAcquireOp unreachable.  Treat as a single-element
-      /// DB with the value itself as guidStorage.
-      result.dbInfo.isSingleElement = true;
-      result.guidStorage = dbGuid;
+      emitError(loc)
+          << "cannot recover DB acquire provenance for dependency GUID; "
+             "refusing single-element DB shape fallback";
+      return failure();
     }
 
     return result;
@@ -735,7 +737,15 @@ private:
                                 std::optional<int32_t> depFlags,
                                 Value boundsValid, Value byteOffset,
                                 Value byteSize, Location loc) const {
-    DepDbInfo depInfo = extractDbInfoForDeps(dbGuid, acquireMode, loc);
+    if (!acquireMode)
+      return emitError(loc)
+             << "arts_rt.rec_dep requires an explicit acquire mode for every "
+                "datablock; refusing write-mode fallback";
+    FailureOr<DepDbInfo> maybeDepInfo =
+        extractDbInfoForDeps(dbGuid, acquireMode, loc);
+    if (failed(maybeDepInfo))
+      return failure();
+    DepDbInfo depInfo = *maybeDepInfo;
     DepBoundsInfo bounds =
         computeDepBounds(dbGuid, depInfo, accessMode, boundsValid);
     return emitRecordDepCalls(dbGuid, edtGuid, sharedSlotAlloc, accessMode,
@@ -871,7 +881,11 @@ private:
     auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
     int32_t readMode = static_cast<int32_t>(DbMode::read);
     int32_t writeMode = static_cast<int32_t>(DbMode::write);
-    int32_t modeInt = acquireMode.value_or(writeMode);
+    if (!acquireMode)
+      return emitError(loc)
+             << "arts_rt.rec_dep requires an explicit acquire mode for every "
+                "datablock; refusing write-mode fallback";
+    int32_t modeInt = *acquireMode;
     Value modeValue = AC->createIntConstant(modeInt, AC->Int32, loc);
 
     Value isCenterBlock;
@@ -926,14 +940,11 @@ private:
         effectiveByteOffset && effectiveByteSize &&
         !ValueAnalysis::isZeroConstant(
             ValueAnalysis::stripNumericCasts(effectiveByteSize));
-    if (hasPartialSlice && modeInt != readMode && !isCenterBlock) {
-      /// ARTS-RT only lowers committed byte windows as HALO_VIEW read slices.
-      /// For write-mode (EW) deps without stencil center-block
-      /// semantics, fall back to whole-DB dependencies.
-      effectiveByteOffset = nullptr;
-      effectiveByteSize = nullptr;
-      hasPartialSlice = false;
-    }
+    if (hasPartialSlice && modeInt != readMode && !isCenterBlock)
+      return emitError(loc)
+             << "write-mode dependency carries a committed byte window but has "
+                "no center-block semantics; refusing whole-DB widening "
+                "fallback";
     Value byteOffsetI64 =
         hasPartialSlice ? AC->ensureI64(effectiveByteOffset, loc) : nullptr;
     Value byteSizeI64 =

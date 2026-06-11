@@ -20,21 +20,22 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f32, dense<32> : 
     %c128 = arith.constant 128 : index
     %c1 = arith.constant 1 : index
     %cst = arith.constant 1.000000e+00 : f32
-    sde.cu_region <parallel> {
-      sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-      ^bb0(%i: index):
+    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+    ^bb0(%i: index):
+      sde.cu_region <single> {
         %v = memref.load %A[%i] : memref<128xf32>
         memref.store %v, %B[%i] : memref<128xf32>
         sde.yield
       }
-      sde.su_barrier
-      sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-      ^bb0(%i: index):
+    }
+    sde.su_barrier
+    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+    ^bb0(%i: index):
+      sde.cu_region <single> {
         func.call @opaque_touch(%C) : (memref<128xf32>) -> ()
         memref.store %cst, %D[%i] : memref<128xf32>
         sde.yield
       }
-      sde.yield
     }
     return
   }

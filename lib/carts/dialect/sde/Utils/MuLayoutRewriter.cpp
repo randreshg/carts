@@ -64,6 +64,56 @@ bool isBlockGridRealizable(SdeSuIterateOp si, MemRefType logicalType,
   return true;
 }
 
+struct ComparableBlockGrid {
+  unsigned logicalRank = 0;
+  llvm::SmallVector<unsigned, 4> ownerDims;
+  llvm::SmallVector<int64_t, 4> blockExtents;
+  llvm::SmallVector<int64_t, 4> gridCounts;
+};
+
+static ComparableBlockGrid comparableBlockGrid(const MuPhysicalLayout &layout) {
+  ComparableBlockGrid result;
+  result.logicalRank = layout.logicalRank();
+  result.ownerDims.assign(layout.ownerDims.begin(), layout.ownerDims.end());
+  result.blockExtents.assign(layout.blockExtents.begin(),
+                             layout.blockExtents.end());
+  result.gridCounts.assign(layout.blockCounts.begin(),
+                           layout.blockCounts.end());
+  return result;
+}
+
+static ComparableBlockGrid
+comparableBlockGrid(const ExpandedBlockGridMu &layout) {
+  ComparableBlockGrid result;
+  result.logicalRank = layout.logicalRank;
+  result.ownerDims.assign(layout.ownerDims.begin(), layout.ownerDims.end());
+  result.blockExtents.assign(layout.blockExtents.begin(),
+                             layout.blockExtents.end());
+  result.gridCounts.assign(layout.gridCounts.begin(), layout.gridCounts.end());
+  return result;
+}
+
+static std::optional<ComparableBlockGrid>
+resolveComparableBlockGrid(SdeSuIterateOp si, MemRefType muType) {
+  if (!si || !muType)
+    return std::nullopt;
+  if (std::optional<MuPhysicalLayout> flat =
+          resolveMuPhysicalLayout(muType, si.getPhysicalOwnerDimsAttr(),
+                                  si.getPhysicalBlockShapeAttr()))
+    return comparableBlockGrid(*flat);
+  if (std::optional<ExpandedBlockGridMu> expanded =
+          recognizeExpandedBlockGridMu(si, muType))
+    return comparableBlockGrid(*expanded);
+  return std::nullopt;
+}
+
+static bool samePhysicalLayout(const ComparableBlockGrid &lhs,
+                               const ComparableBlockGrid &rhs) {
+  return lhs.logicalRank == rhs.logicalRank && lhs.ownerDims == rhs.ownerDims &&
+         lhs.blockExtents == rhs.blockExtents &&
+         lhs.gridCounts == rhs.gridCounts;
+}
+
 llvm::SmallVector<Value, 6> MuBlockIndexer::localize(ValueRange logicalIndices,
                                                      OpBuilder &builder,
                                                      Location loc) const {
@@ -116,11 +166,15 @@ static bool hasStaticIterationDomain(SdeSuIterateOp si) {
 }
 
 SdeSuIterateOp findCommittedBlockPlanWriter(SdeMuAllocOp muAlloc) {
+  auto logicalType = dyn_cast<MemRefType>(muAlloc.getMemref().getType());
+  if (!logicalType)
+    return SdeSuIterateOp();
+
   SdeSuIterateOp result;
   SdeSuIterateOp staticResult;
-  ArrayAttr ownerA, blockA;
+  std::optional<ComparableBlockGrid> committedPlan;
   for (Operation *user : muAlloc.getMemref().getUsers()) {
-    if (!isa<memref::LoadOp, memref::StoreOp>(user))
+    if (!isa<memref::StoreOp>(user))
       continue;
     SdeSuIterateOp si = user->getParentOfType<SdeSuIterateOp>();
     while (si &&
@@ -128,12 +182,14 @@ SdeSuIterateOp findCommittedBlockPlanWriter(SdeMuAllocOp muAlloc) {
       si = si->getParentOfType<SdeSuIterateOp>();
     if (!si)
       continue;
+    std::optional<ComparableBlockGrid> plan =
+        resolveComparableBlockGrid(si, logicalType);
+    if (!plan)
+      continue;
     if (!result) {
       result = si;
-      ownerA = si.getPhysicalOwnerDimsAttr();
-      blockA = si.getPhysicalBlockShapeAttr();
-    } else if (si.getPhysicalOwnerDimsAttr() != ownerA ||
-               si.getPhysicalBlockShapeAttr() != blockA) {
+      committedPlan = *plan;
+    } else if (!samePhysicalLayout(*committedPlan, *plan)) {
       return SdeSuIterateOp(); // conflicting committed plans -> conservative
     }
     // Among writers that committed the IDENTICAL block plan, retain the first
@@ -158,7 +214,7 @@ static bool isLayoutInvariantBasePointer(polygeist::Memref2PointerOp m2p) {
 bool muRootHasUnsupportedUse(Value root) {
   for (Operation *user : root.getUsers()) {
     if (isa<memref::LoadOp, memref::StoreOp, memref::DeallocOp,
-            SdeMuAccessWindowOp, SdeRedistOp>(user))
+            SdeArrayLayoutRootOp, SdeMuAccessWindowOp, SdeRedistOp>(user))
       continue;
     if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(user))
       if (isLayoutInvariantBasePointer(m2p))
@@ -291,8 +347,15 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
   llvm::SmallVector<memref::StoreOp, 8> stores;
   llvm::SmallVector<memref::DeallocOp, 2> deallocs;
   llvm::SmallVector<polygeist::Memref2PointerOp, 2> basePointers;
+  llvm::SmallVector<SdeArrayLayoutRootOp, 4> provenance;
   for (OpOperand &use : oldMemref.getUses()) {
     Operation *user = use.getOwner();
+    if (auto root = dyn_cast<SdeArrayLayoutRootOp>(user)) {
+      if (root.getRoot() != oldMemref)
+        return failure();
+      provenance.push_back(root);
+      continue;
+    }
     if (auto dealloc = dyn_cast<memref::DeallocOp>(user)) {
       deallocs.push_back(dealloc);
       continue;
@@ -328,7 +391,12 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
   OpBuilder builder(muAlloc);
   auto newAlloc = SdeMuAllocOp::create(builder, muAlloc.getLoc(), expandedType,
                                        ValueRange{});
+  if (IntegerAttr arrayId = muAlloc.getArrayIdAttr())
+    newAlloc.setArrayIdAttr(arrayId);
   Value newMemref = newAlloc.getMemref();
+
+  for (SdeArrayLayoutRootOp root : provenance)
+    root->setOperand(0, newMemref);
 
   // Rewrite reads.
   for (memref::LoadOp load : loads) {

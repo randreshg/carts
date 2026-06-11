@@ -539,9 +539,8 @@ bool DbUtils::isCoarseUserDataDb(DbAllocOp alloc) {
   if (llvm::all_of(alloc.getElementSizes(), ValueAnalysis::isOneLikeValue))
     return false;
 
-  PartitionMode mode =
-      getPartitionMode(alloc.getOperation()).value_or(PartitionMode::coarse);
-  return mode == PartitionMode::coarse;
+  std::optional<PartitionMode> mode = getPartitionMode(alloc.getOperation());
+  return mode && *mode == PartitionMode::coarse;
 }
 
 bool DbUtils::isSmallCoarseUserDataDb(DbAllocOp alloc, int64_t maxElements) {
@@ -597,8 +596,7 @@ bool DbUtils::isHostWholeToComputeBlockBridgeMovement(EdtOp edt) {
       return false;
     auto alloc =
         dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
-    PartitionMode partition =
-        acquire.getPartitionMode().value_or(PartitionMode::coarse);
+    std::optional<PartitionMode> partition = acquire.getPartitionMode();
     // Only treat this as a host-whole->compute-block bridge if the coarse host
     // source is actually cross-node SERVABLE. A local_only coarse host (e.g. a
     // single_block-rejected A) with no replicatedRead cannot be delivered to a
@@ -606,8 +604,8 @@ bool DbUtils::isHostWholeToComputeBlockBridgeMovement(EdtOp edt) {
     // the non-owning rank. Excluding it here lets DistributedLaunchConsistency
     // localize the bridge to <intranode>+current-node, where each node
     // materializes the block from its own local host copy.
-    if (DbUtils::isCoarseUserDataDb(alloc) &&
-        partition == PartitionMode::coarse &&
+    if (DbUtils::isCoarseUserDataDb(alloc) && partition &&
+        *partition == PartitionMode::coarse &&
         (!alloc.getLocalOnly().value_or(false) ||
          static_cast<bool>(acquire.getReplicatedReadAttr()))) {
       hasCoarseHost = true;

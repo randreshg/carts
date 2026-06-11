@@ -991,6 +991,18 @@ LogicalResult DbAcquireOp::verify() {
     }
   }
 
+  if (getHaloViewDependencyAttr()) {
+    if (getMode() != ArtsMode::in)
+      return emitOpError() << "haloViewDependency requires a read-only acquire";
+    if (!DbUtils::acquiresPartialHaloWindow(*this))
+      return emitOpError()
+             << "haloViewDependency requires committed stencil halo reach "
+                "facts";
+    if (!DbUtils::hasCommittedDbSpaceWindow(*this))
+      return emitOpError() << "haloViewDependency requires explicit "
+                              "element_offsets/element_sizes";
+  }
+
   size_t numPartitionEntries = getNumPartitionEntries();
   auto verifyPartitionSegments = [&](std::optional<ArrayRef<int32_t>> segments,
                                      OperandRange operands,

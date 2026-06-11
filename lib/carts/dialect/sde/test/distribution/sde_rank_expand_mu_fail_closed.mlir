@@ -24,17 +24,16 @@ func.func @fail_closed_matmul() {
   %c128 = arith.constant 128 : index
   %A = sde.mu_alloc : memref<128x64xf32>
   %C = sde.mu_alloc : memref<128x64xf32>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<matmul>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<matmul>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       scf.for %j = %c0 to %c64 step %c1 {
         %v = memref.load %A[%i, %j] : memref<128x64xf32>
         memref.store %v, %C[%i, %j] : memref<128x64xf32>
-      }
+    }
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
   return
 }
 
@@ -48,15 +47,14 @@ func.func @fail_closed_dynamic(%n: index) {
   %c64 = arith.constant 64 : index
   %cst = arith.constant 0.0 : f32
   %A = sde.mu_alloc(%n) : memref<?x64xf32>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%n) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%n) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       scf.for %j = %c0 to %c64 step %c1 {
         memref.store %cst, %A[%i, %j] : memref<?x64xf32>
-      }
+    }
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
   return
 }

@@ -129,7 +129,7 @@ def SdeCuNormalization
     `sde.redist`, or barriers. Existing valid CUs are left unchanged.
 
     The pass is structural only: it adds no CU isolation, MU token, slice, or
-    consumed dependency edge, and introduces no CODIR concept. It makes no
+    consumed dependency edge, and introduces no ARTS concept. It makes no
     distribution, movement, DB-grain, or access-window decision; it reads
     current IR and rewrites structure, stamping no metadata and branching on no
     downstream contract.
@@ -187,7 +187,7 @@ def SdeRaiseToMuAccessWindow
     type VERBATIM (never recomputing owner dims or block shape), proves the
     structure against the writer `sde.su_iterate` iteration domain, and emits
     explicit window structure. It introduces no `sde.mu_token`, slice,
-    `sde.mu_dep`, or CODIR isolation concept, and stamps no downstream contract.
+    `sde.mu_dep`, or ARTS isolation concept, and stamps no downstream contract.
 
     Out-of-scope MUs are skipped conservatively (no window, no error): dynamic,
     matmul/reduction, multi-owner, in-place (read+write same MU in a CU),
@@ -195,7 +195,7 @@ def SdeRaiseToMuAccessWindow
     pass never mutates existing ops; it only inserts window facts.
 
     Production SDE planning runs this after MU layout has been materialized and
-    rank-expanded, then verifies the raised windows before crossing into CODIR.
+    rank-expanded, then verifies the raised windows before crossing into ARTS.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];
@@ -221,13 +221,13 @@ def SdeCoarseAvoidance
     The only hard failure is a committed plan that cannot be realized end to end:
     rather than leave a partial owner-dim promise, the pass fails closed with
     evidence. It owns no redistribution and invents no coarse fallback. It
-    introduces no `sde.mu_token`, slice, `sde.mu_dep`, owner map, DB, or CODIR
+    introduces no `sde.mu_token`, slice, `sde.mu_dep`, owner map, DB, or ARTS
     concept. Its only mutation is the block-grid rewrite (in-place load/store
     rewrites that move no op across a CU/SU boundary), so CU legality is preserved.
 
     Production SDE planning runs this after access-window and redistribution
     structure is available, then verifies that in-scope committed grids did not
-    remain coarse before crossing into CODIR.
+    remain coarse before crossing into ARTS.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect",
@@ -255,9 +255,9 @@ def SdeRedistribute
     Other layout disagreements remain broad mismatch evidence until SDE commits
     enough target-layout structure to materialize them directly. This pass
     introduces no `sde.mu_token`, slice,
-    `sde.mu_dep`, owner map, DB, route, collective, or CODIR isolation concept.
+    `sde.mu_dep`, owner map, DB, route, collective, or ARTS isolation concept.
 
-    Production SDE planning runs this before CODIR conversion so movement edges
+    Production SDE planning runs this before ARTS conversion so movement edges
     are committed as SDE structure before a downstream layer consumes them.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",

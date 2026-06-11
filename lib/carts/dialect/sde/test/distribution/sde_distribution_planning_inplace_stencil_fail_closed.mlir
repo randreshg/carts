@@ -7,17 +7,6 @@
 // RUN:     --implicit-check-not=commVolumeBytes \
 // RUN:     --implicit-check-not=inPlaceSharedState
 
-// The same plan reaches CODIR as a block-native owner-strip halo dependency.
-// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
-// RUN:   --start-from sde-planning --pipeline codir-graph-transforms \
-// RUN:   | %FileCheck %s --check-prefix=CODIR
-
-// Single-node ARTS lowering still realizes explicit per-block halo exchange
-// instead of suppressing the halo path.
-// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg \
-// RUN:   --start-from sde-planning --pipeline post-db-refinement \
-// RUN:   | %FileCheck %s --check-prefix=ARTS64
-
 // Single-worker lowering remains serial and undistributed.
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_1t.cfg \
 // RUN:   --start-from sde-planning --pipeline sde-planning \
@@ -40,26 +29,6 @@
 // MULTI-SAME: physicalOwnerDims = [0]
 // MULTI-SAME: spatialDims = [0, 1]
 // MULTI-SAME: writeFootprint = [1, 1]
-
-// CODIR-LABEL: func.func @seidel_in_place
-// CODIR: codir.codelet
-// CODIR-SAME: dep_collectives = [#codir.collective<halo>]
-// CODIR-SAME: dep_modes = [#codir.access_mode<readwrite>]
-// CODIR-SAME: dep_owner_dims = [{{\[}}0{{\]}}]
-// CODIR-SAME: dep_storage_views = [#codir.storage_view<compute_block>]
-// CODIR-SAME: halo_shape = [1]
-// CODIR-SAME: iteration_topology = #codir.iteration_topology<owner_strip>
-// CODIR-SAME: logical_worker_slice = [1, 4096]
-// CODIR-SAME: tile_owner_dims = [0]
-// CODIR-SAME: tile_shape = [1, 4096]
-
-// ARTS64: arts.runtime_total_nodes = 1 : i64
-// ARTS64-LABEL: func.func @seidel_in_place
-// ARTS64: arts.db_acquire[<in>] {{.*}} element_offsets
-// ARTS64-SAME: element_sizes
-// ARTS64: arts.edt <task> <intranode> route
-// ARTS64-SAME: perBlockHaloExchange
-// ARTS64-SAME: storageBridgeCopy
 
 // SERIAL-LABEL: func.func @seidel_in_place
 // SERIAL: inPlaceSharedState

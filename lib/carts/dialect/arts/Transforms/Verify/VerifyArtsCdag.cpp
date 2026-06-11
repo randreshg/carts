@@ -72,7 +72,7 @@ static void verifyCdagDistributedDbDeps(EdtOp edt, bool &failed) {
     diag.attachNote(alloc.getLoc())
         << "coarse DB allocation feeding the distributed task";
     diag.attachNote(edt.getLoc())
-        << "SDE/CODIR must materialize block DB storage before ARTS "
+        << "SDE must materialize block DB storage before ARTS "
            "distributed execution; CreateDbs is only a coarse raw-memref "
            "fallback";
     failed = true;

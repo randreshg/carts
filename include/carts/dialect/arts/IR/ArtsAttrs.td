@@ -101,7 +101,7 @@ def DbReleaseType : Arts_I32Enum<"DbReleaseType", "ARTS DB release type", [
 def DbReleaseTypeAttr : Arts_I32EnumAttr<"release_type", DbReleaseType>;
 
 /// Enum info for storage-bridge tags on `arts.db_alloc`. Marks an allocation
-/// as a bridge between two storage views in the CODIR->ARTS lowering.
+/// as a bridge between two storage views in the SDE->ARTS lowering.
 def StorageBridge : Arts_I32Enum<"StorageBridge", "ARTS storage-bridge tag", [
   I32EnumAttrCase<"host_whole_to_compute_block", 0,
                   "host_whole_to_compute_block">
@@ -112,7 +112,7 @@ def StorageBridgeAttr : Arts_I32EnumAttr<"storage_bridge", StorageBridge>;
 
 /// DB owner-map policy carried on distributed `arts.db_alloc` operations.
 /// ARTS owns this because DB homes, writer routes, and GUID reservation are
-/// runtime-realization facts, not SDE/CODIR layout facts.
+/// runtime-realization facts, not SDE layout facts.
 def DbOwnerMapKind
     : Arts_I32Enum<"DbOwnerMapKind", "distributed DB owner-map kind", [
       I32EnumAttrCase<"linear_mod_nodes", 0, "linear_mod_nodes">,
@@ -125,7 +125,7 @@ def DbOwnerMapKindAttr
 
 /// Where the blocks of a DB physically live. ARTS owns this because DB homes are
 /// a runtime-realization fact projected from committed owner dims, not an
-/// SDE/CODIR layout fact.
+/// SDE layout fact.
 ///   - node_local:          all blocks stay on the creating node (the
 ///                          conservative coarse raw-memref bridge home).
 ///   - owner_scattered:     blocks are scattered across owner ranks per the
@@ -214,7 +214,7 @@ def PartitionMode
 /// Enum attribute for DB partition modes
 def PartitionModeAttr : Arts_I32EnumAttr<"partition_mode", PartitionMode>;
 
-/// Distribution strategy carried by SDE/CODIR-authored ARTS materialization plans.
+/// Distribution strategy carried by SDE-authored ARTS materialization plans.
 def EdtDistributionKind
     : Arts_I32Enum<"EdtDistributionKind", "EDT distribution strategy kind", [
       I32EnumAttrCase<"block", 0, "block">,

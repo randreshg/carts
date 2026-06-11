@@ -8,20 +8,22 @@
 /// contract):
 ///
 ///   No consumed dependency graph. SDE carries no generic token/dataflow
-///     dependency graph; ordering edges are derived in CODIR after codelet
+///     dependency graph; ordering edges are derived in ARTS after codelet
 ///     isolation.
-///   SU bodies are scheduling-only. `sde.su_iterate` directly contains only
-///     CUs, `sde.su_barrier`, and its terminator; `sde.su_distribute` directly
-///     contains nested SUs, `sde.redist`, or barriers. Executable work,
-///     tile-local loops, and scalar plumbing for that work live in CUs.
+///   SU body shape is verified by the owning SDE op verifiers:
+///     `sde.su_iterate` directly contains only direct-boundary CUs,
+///     root-provenance facts, `sde.su_barrier`, and its terminator;
+///     `sde.su_distribute` directly contains nested SUs, `sde.redist`, or
+///     barriers. Executable work, tile-local loops, and scalar plumbing for
+///     that work live in CUs.
 ///   All source executable work lives in a CU. Within SDE-bearing functions,
 ///     source work may not sit outside every CU. scf is legal under SDE only
 ///     inside a CU.
-///   CUs are async/schedulable by default. Sibling CUs with a
-///   provable
-///     MU access conflict must be ordered explicitly, not by textual order.
+///   SDE has no hidden textual order between sibling CU work items. A
+///     provable MU access conflict must be ordered by SU/source ordering facts,
+///     not by assuming the CU op itself is a scheduling scope.
 ///
-/// Deliberately NOT checked: CU `IsolatedFromAbove` (a CODIR concern), the
+/// Deliberately NOT checked: CU `IsolatedFromAbove` (a ARTS concern), the
 /// presence of an `sde.mu_token` / slice op / any specific access-window
 /// carrier (windows are raised later by RaiseToMuAccessWindow).
 ///==========================================================================///
@@ -41,6 +43,7 @@ namespace mlir::carts::sde {
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -113,15 +116,6 @@ static bool barrierBetween(Operation *earlier, Operation *later) {
   return false;
 }
 
-static bool isAllowedSuIterateChild(Operation *op) {
-  return op->hasTrait<OpTrait::IsTerminator>() || isCuOp(op) ||
-         isa<sde::SdeSuBarrierOp>(op);
-}
-
-static bool isAllowedSuDistributeChild(Operation *op) {
-  return isSuOp(op) || isa<sde::SdeRedistOp, sde::SdeSuBarrierOp>(op);
-}
-
 struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -146,28 +140,6 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
 
     // Dependency graph rejection plus CU containment.
     module.walk([&](Operation *op) {
-      if (auto suIter = dyn_cast<sde::SdeSuIterateOp>(op)) {
-        for (Operation &child : suIter.getBody().front()) {
-          if (isAllowedSuIterateChild(&child))
-            continue;
-          child.emitOpError()
-              << "is directly inside an sde.su_iterate body; SU bodies are "
-                 "scheduling-only and may contain only CUs, sde.su_barrier, "
-                 "and the sde.yield terminator";
-          failed = true;
-        }
-      } else if (auto suDist = dyn_cast<sde::SdeSuDistributeOp>(op)) {
-        for (Operation &child : suDist.getBody().front()) {
-          if (isAllowedSuDistributeChild(&child))
-            continue;
-          child.emitOpError()
-              << "is directly inside an sde.su_distribute body; distribution "
-                 "wrappers may contain only nested SUs, sde.redist, or "
-                 "sde.su_barrier";
-          failed = true;
-        }
-      }
-
       // Reject mu_dep when consumed as a generic edge.
       if (auto dep = dyn_cast<sde::SdeMuDepOp>(op)) {
         if (!dep.getDep().use_empty()) {
@@ -256,8 +228,8 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
           cus[j].emitOpError()
               << "relies on hidden textual order: it conflicts with an earlier "
                  "compute unit on a shared memory unit but has no explicit "
-                 "ordering. CUs are async/schedulable by default; order them "
-                 "via "
+                 "ordering. CU ops are executable bodies, not scheduling "
+                 "scopes; order them via "
                  "SU sequence/parallel-wave structure, source effect/control "
                  "ordering, or sde.su_barrier";
           failed = true;

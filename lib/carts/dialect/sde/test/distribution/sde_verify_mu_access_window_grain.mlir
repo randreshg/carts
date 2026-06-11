@@ -18,16 +18,16 @@ func.func @grain_mismatch() {
   %c1024 = arith.constant 1024 : index
   %cst = arith.constant 1.0 : f32
   %A = sde.mu_alloc : memref<4x256xf32>
-  sde.cu_region <parallel> {
-    sde.mu_access_window write %A : memref<4x256xf32> owner_dims(1) block_lo [0] block_hi [3] valid [256]
-    sde.su_iterate (%c0) to (%c1024) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c1024) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
+      sde.mu_access_window write %A : memref<4x256xf32> owner_dims(1) block_lo [0] block_hi [3] valid [256]
       %bid = arith.divui %i, %c256 : index
       %off = arith.remui %i, %c256 : index
       memref.store %cst, %A[%bid, %off] : memref<4x256xf32>
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [256]}
+    }
     sde.yield
-  }
+  } {physicalOwnerDims = [0], physicalBlockShape = [256]}
   return
 }

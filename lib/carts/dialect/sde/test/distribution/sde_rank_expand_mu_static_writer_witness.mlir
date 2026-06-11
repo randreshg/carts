@@ -27,23 +27,21 @@ func.func @static_writer_witnesses_grid(%n: index) {
   // dynamic writer ahead of the static one): upper bound is the un-propagated
   // source extent %n (== 1024 at runtime, but not foldable). On its own this
   // writer's iteration domain cannot witness the committed grid count.
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%n) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%n) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       memref.store %cst, %A[%i] : memref<1024xf32>
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [256]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [256]}
   // Static-domain writer of the SAME committed plan: literal [0, 1024). This is
   // the witness the grid-count proof must fall back to.
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c1024) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c1024) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       memref.store %cst, %A[%i] : memref<1024xf32>
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [256]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [256]}
   return
 }

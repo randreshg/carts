@@ -11,7 +11,7 @@ when attribute access is hidden inside a helper.
 ## Hard Rule
 
 - Every CARTS IR attribute is ODS-declared in the owning dialect before C++ use.
-- Raw `arts.*`, `sde.*`, `codir.*`, and `arts_rt.*` attr API strings are banned.
+- Raw `arts.*`, `sde.*`, `arts.*`, and `arts_rt.*` attr API strings are banned.
 - New `AttrNames::` entries for CARTS IR are blocked.
 - Identical enum case sets across dialects are hoisted, not converted.
 - Tier-2 enums need semantic alignment before consolidation.
@@ -20,15 +20,15 @@ when attribute access is hidden inside a helper.
 
 | Tier | Enum | Dialects and cases |
 |------|------|--------------------|
-| 1 hoist | `IterationTopology` | SDE/CODIR/ARTS, 3 identical cases |
-| 1 hoist | `ReductionStrategy` | SDE/CODIR/ARTS, 3 identical cases |
-| 1 hoist | `StorageViewKind` | SDE/CODIR, 4 identical cases |
+| 1 hoist | `IterationTopology` | SDE/ARTS, 3 identical cases |
+| 1 hoist | `ReductionStrategy` | SDE/ARTS, 3 identical cases |
+| 1 hoist | `StorageViewKind` | SDE, 4 identical cases |
 | 1 hoist | `BarrierReason` | SDE/ARTS, 5 identical cases |
 | 2 defer | `AccessMode` | SDE 3, ARTS 4, ARTS-RT 2 cases |
-| 2 defer | `Pattern`/`DepPattern` | SDE/CODIR 9, ARTS 12 cases |
-| 2 defer | `DistributionKind` | SDE/CODIR 3, ARTS 5 cases |
-| 2 defer | `RepetitionStructure` | SDE/CODIR 4, ARTS 2 cases |
-| 2 defer | `AsyncStrategy` | SDE/CODIR 3, ARTS 2 cases |
+| 2 defer | `Pattern`/`DepPattern` | SDE 9, ARTS 12 cases |
+| 2 defer | `DistributionKind` | SDE 3, ARTS 5 cases |
+| 2 defer | `RepetitionStructure` | SDE 4, ARTS 2 cases |
+| 2 defer | `AsyncStrategy` | SDE 3, ARTS 2 cases |
 
 ## Procedure
 
@@ -52,13 +52,13 @@ belongs in a shared ODS definition. Do not preserve a pure rename conversion.
 ## Detection Greps
 
 ```bash
-rg 'getAttr\("(arts|sde|codir|arts_rt)\.[^"]*"\)' include/ lib/
-rg 'setAttr\("(arts|sde|codir|arts_rt)\.[^"]*"' include/ lib/
-rg 'hasAttr\("(arts|sde|codir|arts_rt)\.[^"]*"\)' include/ lib/
-rg 'removeAttr\("(arts|sde|codir|arts_rt)\.[^"]*"\)' include/ lib/
-rg 'StringAttr::get\([^,]+,\s*"(arts|sde|codir|arts_rt)\.' include/ lib/
-rg '(getDiscardableAttr|setDiscardableAttr|getInherentAttr|setInherentAttr)\("(arts|sde|codir|arts_rt)\.' include/ lib/
-rg 'getAttrOfType<[^>]+>\("(arts|sde|codir|arts_rt)\.' include/ lib/
+rg 'getAttr\("(arts|sde|arts|arts_rt)\.[^"]*"\)' include/ lib/
+rg 'setAttr\("(arts|sde|arts|arts_rt)\.[^"]*"' include/ lib/
+rg 'hasAttr\("(arts|sde|arts|arts_rt)\.[^"]*"\)' include/ lib/
+rg 'removeAttr\("(arts|sde|arts|arts_rt)\.[^"]*"\)' include/ lib/
+rg 'StringAttr::get\([^,]+,\s*"(arts|sde|arts|arts_rt)\.' include/ lib/
+rg '(getDiscardableAttr|setDiscardableAttr|getInherentAttr|setInherentAttr)\("(arts|sde|arts|arts_rt)\.' include/ lib/
+rg 'getAttrOfType<[^>]+>\("(arts|sde|arts|arts_rt)\.' include/ lib/
 rg 'AttrNames::[A-Za-z:]+' include/ lib/
 ```
 

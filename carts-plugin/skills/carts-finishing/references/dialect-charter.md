@@ -1,7 +1,7 @@
 # Dialect Charter
 
-The CARTS compiler is migrating around four dialect layers: SDE, CODIR, ARTS,
-and ARTS-RT. Each owns a clear slice of compiler responsibility. Pass
+The CARTS compiler is organized around three dialect layers: SDE, ARTS, and
+ARTS-RT. Each owns a clear slice of compiler responsibility. Pass
 placement is decided against this charter; if a placement decision feels
 arbitrary, the charter is wrong (update it) or the pass is wrong (move it).
 
@@ -17,7 +17,7 @@ The authoritative documents are:
 
 This file is a fast-lookup distillation. If it disagrees with the docs above, the docs win — update this file to match.
 
-## The four charters
+## The three charters
 
 ### SDE (`sde`) — Semantic planning and real layout transforms
 
@@ -35,7 +35,9 @@ to do, irrespective of how the runtime realizes them.
 - Tile geometry, halo geometry (when stamped as a contract)
 - Vectorization hints
 
-**IR level:** memref + scf + transient `linalg.generic` / `tensor` carriers. Carriers are created during analysis and erased before CODIR/ARTS materialization. No carriers escape the SDE window.
+**IR level:** memref + scf. Any transient frontend analysis carrier must be
+rewritten to memref-shaped SDE facts before SDE/ARTS materialization. No carrier
+escapes the SDE window.
 
 **Forbidden:**
 - Touching any `arts.*` op
@@ -43,7 +45,7 @@ to do, irrespective of how the runtime realizes them.
 - Baking ARTS-specific runtime semantics into decisions (decisions should be expressible as portable contracts)
 - Naming collectives, DBs, EDTs, routes, GUIDs, or runtime policy
 
-### CODIR (`codir.*`) — Codelet isolation and distribution patterns
+### ARTS (`arts.*`) — Codelet isolation and distribution patterns
 
 **Owns:** isolated codelet ABI and first-class distribution-pattern
 materialization between SDE planning and ARTS object creation.
@@ -67,7 +69,7 @@ materialization between SDE planning and ARTS object creation.
 
 ### ARTS (`arts.*`) — Abstract runtime object realization
 
-**Owns:** structural realization of SDE/CODIR facts as abstract ARTS
+**Owns:** structural realization of SDE facts as abstract ARTS
 objects.
 
 - DBs: per-block single-writer allocation, partition, owner maps,
@@ -78,16 +80,16 @@ objects.
 - Scope: local vs distributed, using abstract-machine analysis
 - Implementation loops: local `scf.for` control flow inside concrete ARTS objects
 - Epochs: creation, CPS scheduling, optimization
-- Contract attributes: consume SDE/CODIR decisions for ARTS realization and
+- Contract attributes: consume SDE decisions for ARTS realization and
   ARTS-RT lowering
 
 **IR level:** ARTS structural: regions, DBs, partitions, contracts. No
-tensor/linalg carriers survive the SDE-to-CODIR / CODIR-to-ARTS boundary.
+frontend carriers survive the SDE-to-ARTS / SDE-to-ARTS boundary.
 
 **Forbidden:**
 - Re-deriving classifications SDE already stamped (Invariant 5)
 - Recomputing owner dims, block shapes, collective families, or storage grain
-  that SDE/CODIR already committed
+  that SDE already committed
 - Emitting `arts_rt.*` ops before `pre-lowering`
 - Performing semantic analysis from scratch (consume SDE contracts instead)
 
@@ -113,19 +115,19 @@ tensor/linalg carriers survive the SDE-to-CODIR / CODIR-to-ARTS boundary.
 These are placement rules. If you are tempted to break one, update the charter first.
 
 1. **If a pass decides source layout or computation shape, it lives in SDE; if
-   it decides collective/bridge materialization, it lives in CODIR; if it
+   it decides collective/bridge materialization, it lives in ARTS; if it
    realizes DB/EDT ownership, it lives in ARTS; if it lowers runtime calls, it
    lives in ARTS-RT.** Later layers consume committed facts and do not
    rediscover them.
 
-2. **Cross-dialect op creation only at stage boundaries.** SDE planning feeds CODIR at `sde-to-codir`; CODIR creates ARTS objects at `codir-to-arts`; any SDE op left after CODIR conversion fails verification. ARTS lowers to ARTS-RT in pre-lowering (`EdtLowering` / `EpochLowering`). No pass creates ops outside its dialect, except those boundary conversion passes.
+2. **Cross-dialect op creation only at stage boundaries.** SDE planning feeds ARTS at `sde-to-arts`; ARTS creates ARTS objects at `sde-to-arts`; any SDE op left after ARTS conversion fails verification. ARTS lowers to ARTS-RT in pre-lowering (`EdtLowering` / `EpochLowering`). No pass creates ops outside its dialect, except those boundary conversion passes.
 
 3. **ARTS-RT has zero semantic deps on ARTS/SDE.** ARTS-RT passes only touch `arts_rt.*` ops. If an ARTS-RT pass needs to inspect ARTS semantics, the pass belongs in ARTS.
 
 4. **SDE does not include any header from retired ARTS-era path aliases.** Mechanical check; grep for old path aliases.
 
 5. **Cost-model-driven decisions belong in the *decision-owner*, not the
-   realizer.** SDE stamps layout, tile geometry, and movement family; CODIR
+   realizer.** SDE stamps layout, tile geometry, and movement family; ARTS
    represents those facts on isolated graph edges; ARTS realizes DB/EDT owner
    maps and grouped CUs. If two layers compute the same owner dims, block shape,
    movement family, or
@@ -142,16 +144,19 @@ These do not block correctness but should be cleaned up in Phase 9. Cite when de
 | # | Violation | Files | Fix |
 |---|---|---|---|
 | 1 | Wavefront family detection belongs in SDE, not ARTS (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Transforms/epoch/`, `lib/carts/dialect/arts/Transforms/db/` | Keep family + tile geometry in SDE; ARTS realizers consume already-authored structure. |
-| 2 | ARTS must not re-detect elementwise/stencil/matmul facts that SDE already proved (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/codir/Transforms/DepStorageAssignment.cpp`, `lib/carts/dialect/arts/Transforms/db/` | Consume SDE/CODIR facts instead of reclassifying source semantics. |
-| 3 | ARTS epoch/EDT structure must follow authored SDE/CODIR deps, not source-pattern rediscovery (Invariants 1 & 5) | `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Transforms/epoch/`, `lib/carts/dialect/arts/Transforms/edt/` | Enhance SDE dependency planning when source semantics are missing; keep ARTS structure realization mechanical. |
-| 4 | Historical docs disagreed about `arts.lowering_contract` ownership. | Archived planning notes under `.carts/sessions/...` | The live contract is in `docs/compiler/dialect-layering.md`: ARTS may carry abstract lowering contracts, but SDE/CODIR must materialize source facts before ARTS. |
+| 2 | ARTS must not re-detect elementwise/stencil/matmul facts that SDE already proved (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/arts/Transforms/DepStorageAssignment.cpp`, `lib/carts/dialect/arts/Transforms/db/` | Consume SDE facts instead of reclassifying source semantics. |
+| 3 | ARTS epoch/EDT structure must follow authored SDE deps, not source-pattern rediscovery (Invariants 1 & 5) | `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Transforms/epoch/`, `lib/carts/dialect/arts/Transforms/edt/` | Enhance SDE dependency planning when source semantics are missing; keep ARTS structure realization mechanical. |
+| 4 | Historical docs disagreed about `arts.lowering_contract` ownership. | Archived planning notes under `.carts/sessions/...` | The live contract is in `docs/compiler/dialect-layering.md`: ARTS may carry abstract lowering contracts, but SDE must materialize source facts before ARTS. |
 
 ## Open questions (Phase 0 / task #1)
 
 The user must decide these before further restructuring. Answers go to a
 session note under `.carts/sessions/<topic>/charter-decisions.md`.
 
-1. **DestinationStyleOpInterface on SDE ops.** Make CU/SU ops implement `ins`/`outs` for tensor composition, or keep transient `linalg.generic` carriers? Recommendation: keep transient until benchmarks are green, then upgrade. (Effort if upgrading: 8–10h.)
+1. **Destination-style SDE composition.** Keep CU/SU composition memref-shaped,
+with explicit inputs/outputs over SDE facts rather than frontend carrier IR.
+Recommendation: defer extra interface work until benchmarks are green. (Effort
+if upgrading: 8-10h.)
 
 2. **Scope of `PatternAnalysis`.** Does it own ALL semantic pattern approval (incl. wavefront/Jacobi), or split later execution planning into a separate SDE wavefront pass? Recommendation: keep pattern approval centralized; otherwise ARTS keeps re-deriving and Invariant 5 stays broken.
 
@@ -159,7 +164,8 @@ session note under `.carts/sessions/<topic>/charter-decisions.md`.
 
 4. **Backend-neutral SDE narrative.** Docs aspire to multi-backend (Legion / StarPU / GPU) but namespace, schedule kinds, and conversion target are all ARTS-tied. Keep aspiration or reframe as ARTS-optimized? Recommendation: reframe; pretending otherwise misleads contributors.
 
-5. **LoopReordering migration to SDE.** Blocked on (1). Prioritize the DSI + `SdeLoopInterchange` stack, or defer? Recommendation: defer.
+5. **LoopReordering migration to SDE.** Prioritize a memref-shaped
+`SdeLoopInterchange` stack, or defer? Recommendation: defer.
 
 ## Quick lookup: "where does X belong?"
 
@@ -169,7 +175,7 @@ session note under `.carts/sessions/<topic>/charter-decisions.md`.
 | A reduction strategy choice (atomic / tree / accumulate) | SDE (`ReductionStrategy`) |
 | A scope choice (local vs distributed) | ARTS, using abstract-machine analysis |
 | A schedule choice (static / dynamic / guided) | SDE (`ScheduleRefinement`) |
-| Tile / chunk / halo geometry **as a contract** | SDE (layout decision); CODIR (bridge/halo materialization); ARTS (DB/EDT realization) |
+| Tile / chunk / halo geometry **as a contract** | SDE (layout decision); ARTS (bridge/halo materialization); ARTS (DB/EDT realization) |
 | DB allocation / acquire / release / partitioning | ARTS |
 | EDT structural rewrite, fusion, distribution | ARTS |
 | Epoch creation | ARTS |
@@ -177,4 +183,4 @@ session note under `.carts/sessions/<topic>/charter-decisions.md`.
 | `arts_rt.edt_create` argument lowering | ARTS-RT |
 | LLVM-near final cleanup (DataPtrHoisting, GuidRangeCallOpt) | ARTS-RT |
 | Polygeist→MLIR frontend bridge | frontend conversion, before SDE planning |
-| `linalg.*`, `tensor.*` ops | SDE only, transient |
+| Frontend carrier ops | before SDE planning only; rewrite to memref-shaped SDE facts |

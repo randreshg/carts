@@ -39,7 +39,7 @@ for the actual extraction patch.
 | one pass family | yes | no | `lib/carts/.../Transforms/<area>/` |
 | multiple `.cpp` | no | no | parallel `include/carts/<dialect-or-utils>/...` |
 | multiple dialects | no | yes | public owner in `include/carts/...` |
-| generated or ODS contract | no | maybe | owning dialect `include/carts/.../IR` |
+| generated or ODS contract, including reusable op-shape validation | no | maybe | owning dialect `include/carts/.../IR` |
 
 ## Required Answer
 

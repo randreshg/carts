@@ -19,7 +19,7 @@ Goal: find the first stage where CARTS stops being semantically equivalent to th
 
 The first bad stage is not automatically the fix stage. Use [[carts-vision]]
 to attribute the wrong committed fact: SDE fixes source/layout/tiling facts,
-CODIR fixes graph/contraction materialization, ARTS fixes
+ARTS fixes graph/contraction materialization, ARTS fixes
 DB/EDT/owner-map realization and grouped execution, and ARTS-RT fixes only
 mechanical lowering.
 
@@ -48,7 +48,7 @@ Read these before guessing:
 4. Bisect the pipeline.
    - Use `dekk carts pipeline --json` for the stage list.
    - Use `dekk carts compile <file>.mlir --pipeline=<stage>` and `--all-pipelines -o DIR/`.
-   - Focus on: `sde-planning` -> `sde-to-codir` -> `codir-to-arts` -> `edt-transforms` -> `create-dbs` -> `db-opt` -> `post-db-refinement` -> `pre-lowering`.
+   - Focus on: `sde-planning` -> `sde-to-arts` -> `sde-to-arts` -> `edt-transforms` -> `create-dbs` -> `db-opt` -> `post-db-refinement` -> `pre-lowering`.
 5. Inspect semantic contracts before low-level codegen.
    - `dekk carts compile <file> --diagnose --diagnose-output diag.json -O3`
    - Check `LoweringContractInfo`, `distribution_*`, partition modes, full-range vs coarse, and `preserve_access_mode`.
@@ -75,8 +75,7 @@ For benchmark kernels, also consult `carts-benchmark-triage`.
 - `docs/heuristics/partitioning.md`
 - `docs/heuristics/distribution.md`
 - `tools/compile/Compile.cpp`
-- `lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp`
-- `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
+- `lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp`
 - `lib/carts/dialect/arts/Transforms/db/DbModeTightening.cpp`
 - `lib/carts/dialect/arts/Transforms/db/CreateDbs.cpp`
 - `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`

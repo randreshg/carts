@@ -16,8 +16,8 @@ disagree.
 | ARTS/ARTS-RT loop invariance and hoisting | `include/carts/dialect/arts/Utils/LoopInvarianceUtils.h` | `isLoopInvariant`, `findHoistTarget`, `allOperandsDominate`, `isSafeDivRemToHoist` |
 | Deferred removal | `include/carts/utils/RemovalUtils.h` | `markForRemoval`, `removeAllMarked` |
 | SDE access/planning facts | `include/carts/dialect/sde/Analysis` or `include/carts/dialect/sde/Utils` | `AffineAccessUtils`, `StructuredOpAnalysis`, `SDECostModel` |
-| CODIR codelet ABI | `include/carts/dialect/codir/Utils` | `CodeletABIUtils` |
-| CODIR boundary proof logic | boundary conversion helper | `SdeToCodir/TaskDepSliceUtils.*` |
+| ARTS codelet ABI | `include/carts/dialect/arts/Utils` | `CodeletABIUtils` |
+| ARTS boundary proof logic | boundary conversion helper | `SdeToArts/TaskDepSliceUtils.*` |
 | SDE Polygeist input normalization helpers | `lib/carts/dialect/sde/Conversion/PolygeistToSde/PolygeistToSdeUtils.h` | `materializeDependView`, `clampDepIndices`, `isInsideOmpRegion`, `containsOmpOp` |
 | ARTS DB mechanics | `include/carts/dialect/arts/Utils/DbUtils.h` | `traceToDbAlloc`, `getUnderlyingDb`, `getMemoryAccessInfo`, `isWriterMode` |
 | ARTS EDT mechanics | `include/carts/dialect/arts/Utils/EdtUtils.h` | `EdtEnvManager`, `isInsideEpoch`, `classifyEdtArgAccesses` |
@@ -126,7 +126,7 @@ include/carts/dialect/sde/Analysis/AffineAccessUtils.h
 include/carts/dialect/sde/Analysis/StructuredOpAnalysis.h
 include/carts/dialect/sde/Utils/SDECostModel.h
 lib/carts/dialect/sde/Conversion/PolygeistToSde/PolygeistToSdeUtils.h
-include/carts/dialect/codir/Utils/CodeletABIUtils.h
+include/carts/dialect/arts/Utils/CodeletABIUtils.h
 include/carts/dialect/arts/Utils/DbUtils.h
 include/carts/dialect/arts/Utils/EdtUtils.h
 include/carts/dialect/arts/Utils/BlockedAccessUtils.h

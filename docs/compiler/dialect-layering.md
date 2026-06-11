@@ -14,40 +14,37 @@ are not part of the durable docs tree.
 
 ## One-Line Rule
 
-SDE proves source semantics and transforms MU/CU/SU shape. CODIR isolates that
-shape into codelets with explicit deps and params. `arts` binds those codelets
-to the abstract ARTS DB/EDT/epoch machine. `arts-rt` lowers the abstract
-machine shape to runtime-facing calls.
+SDE proves source semantics and transforms MU/CU/SU shape. ARTS consumes that
+shape as the first isolation boundary, materializes explicit deps and params,
+and binds the resulting graph to abstract DB/EDT/epoch objects. `arts-rt`
+lowers the abstract machine shape to runtime-facing calls.
 
 ## Target Stack
 
 The target compiler stack is:
 
 ```text
-Polygeist -> sde -> codir -> arts -> arts-rt -> LLVM
+Polygeist -> sde -> arts -> arts-rt -> LLVM
 ```
 
 The names are part of the layering rule:
 
 - `sde` is a CARTS semantic-decomposition dialect. It is not an ARTS dialect.
-- `codir` is a CARTS codelet dialect. It is not an ARTS dialect.
-- `arts` is the abstract ARTS-machine dialect. It replaces the documentation
-  term "Core ARTS"; do not use retired `core/` source paths in new docs or
-  code.
+- `arts` is the abstract ARTS dialect. It owns the first isolation boundary,
+  explicit deps/params, DB/EDT/epoch objects, owner maps, and grouped execution.
 - `arts-rt` is the runtime-facing ARTS bridge. It replaces the documentation
   term "RT"; the textual dialect uses `arts_rt` where MLIR syntax requires an
   underscore.
 
 Namespaces follow the same rule: `mlir::carts::sde`,
-`mlir::carts::codir`, `mlir::carts::arts`, and
-`mlir::carts::arts_rt` are the intended namespace roots.
+`mlir::carts::arts`, and `mlir::carts::arts_rt` are the intended namespace
+roots.
 
-The codelet split is deliberate. Codelet IR is useful enough to stand on its
-own: it is the place where isolated task bodies, token-local memory views,
-scalar params, and explicit dependency lists are verified before any ARTS EDT
-object exists. The IEEE codelet/CODIR paper referenced by issue discussion is
-useful prior art, but CARTS should keep the dialect minimal and shaped around
-the boundaries below.
+The isolation boundary is deliberate. ARTS verifies task bodies, token-local
+memory views, scalar params, explicit dependency lists, and abstract ARTS
+objects in one dialect before runtime ABI lowering. The IEEE codelet/ARTS paper
+referenced by issue discussion is useful prior art, but CARTS keeps the live
+compiler stack minimal and shaped around the boundaries below.
 
 ## SDE
 
@@ -73,10 +70,9 @@ SDE must not contain ARTS-machine concepts: node count, workers per node,
 routes, current node/worker, ARTS runtime topology queries, depv layout, DB
 pointer layout, concrete EDT placement, or runtime API decisions.
 
-SDE also should not own the final codelet ABI. The current `sde.cu_codelet`
-operation is a migration surface and proof vehicle. In the target stack, SDE
-authors the MU/CU/SU shape, then SDE-to-CODIR materialization creates isolated
-`codir` codelets from that shape.
+SDE also should not own the final EDT ABI. SDE authors the MU/CU/SU shape, then
+SDE-to-ARTS materialization creates isolated ARTS tasks and object facts from
+that shape.
 
 The names are intentional:
 
@@ -90,66 +86,50 @@ The names are intentional:
   with ARTS-machine control, and do not move ARTS scheduling mechanics into
   SDE.
 
-## CODIR
+## ARTS
 
-CODIR is the codelet dialect. It is the bridge between SDE semantic shape
-and ARTS object materialization.
+ARTS is the bridge between SDE semantic shape and runtime-independent ARTS
+object materialization.
 
-CODIR owns:
+ARTS owns:
 
-- isolated codelet bodies;
-- the complete codelet boundary: memory deps, control deps, scalar params,
+- isolated task bodies;
+- the complete task boundary: memory deps, control deps, scalar params,
   yielded values, and local-only values;
 - token-local memref views and body rewrites derived from the SDE MU/CU/SU
   shape;
-- verification that codelets do not close over values from enclosing regions;
-- codelet-local canonicalization that is independent of the ARTS runtime.
+- verification that ARTS tasks do not close over values from enclosing regions;
+- runtime-independent DB, EDT, dependency, epoch, placement, mode, and owner-map
+  object facts;
+- ARTS-local canonicalization that is independent of the runtime ABI.
 
-CODIR may contain operations such as:
+ARTS may contain operations such as:
 
-- `codir.codelet`: an `IsolatedFromAbove` body whose region arguments are only
-  declared deps and params.
-- `codir.launch` or equivalent launch carrier: the scheduling edge that binds a
-  codelet to a logical work item before ARTS EDT materialization.
-- `codir.dep`: memory/control dependency operands derived from readable SDE
-  memory, access, scheduling, and synchronization structure.
-- `codir.param`: scalar, immutable, firstprivate-style values.
-- `codir.yield`: explicit result or completion values.
-
-The exact op names are design points. The invariant is not: every value used by
-a codelet must be local, a dep, a param, or a result of a dep/param-local op.
-Memrefs and mutable shared state are deps, not params. Scalars and small
-immutable captures are params. Values that can be reconstructed inside the
-codelet should be reconstructed inside the codelet.
-
-CODIR must not allocate ARTS DBs, choose ARTS worker routes, create ARTS EDTs,
-or depend on runtime topology. It consumes the SDE plan and produces a
-runtime-independent isolated codelet graph.
-
-## ARTS
-
-`arts` is the abstract ARTS-machine dialect. It mirrors runtime concepts
-without exposing runtime ABI calls.
-
-ARTS may contain:
-
-- `arts.edt`: concrete abstract EDT objects created from isolated CODIR
-  codelets.
+- `arts.edt`: concrete abstract EDT objects created from isolated ARTS
+  task bodies.
 - `arts.db_*`: DB allocation, acquire, release, ref, mode, layout, and access
   windows.
+- `arts.db_access_plan`: direct SDE boundary carrier for committed MU storage
+  and access-window facts before acquires are finalized.
 - `arts.epoch_*`: abstract epoch grouping, waits, continuation, and CPS shape.
 - typed ARTS facts on EDTs, DBs, and epochs while those facts are being
   materialized or checked.
-- ARTS topology and placement queries selected after SDE/CODIR have provided a
+- ARTS topology and placement queries selected after SDE has provided a
   logical work plan.
 - local `scf.for` control flow used to implement dispatch or task-local loops.
 
+The exact op set can evolve. The invariant is not: every value used by an ARTS
+task must be local, a dep, a param, or a result of a dep/param-local op. Memrefs
+and mutable shared state are deps, not params. Scalars and small immutable
+captures are params. Values that can be reconstructed inside the task should be
+reconstructed inside the task.
+
 ARTS must not contain source-level OpenMP carriers, semantic loop-family
 rediscovery, loop fusion policy, SDE-style distribution planning, or
-pass-local hardcoded string conventions.
+runtime ABI calls.
 
 The ARTS dialect binds logical worker lanes to the ARTS abstract machine after
-SDE and CODIR have produced logical work/codelet shape. If an ARTS pass needs
+SDE has produced logical work shape. If an ARTS pass needs
 to infer owner dims, tile legality, task dependence legality, or codelet
 captures from raw source-shaped regions, the missing fact belongs earlier.
 
@@ -169,7 +149,7 @@ ARTS-RT may contain:
 
 ARTS-RT must not choose task grain, stencil layout, loop distribution, DB
 layout, or epoch topology from semantic facts. Those decisions must already be
-fixed by SDE, CODIR, and ARTS.
+fixed by SDE and ARTS.
 
 ## EDT Isolation Rule
 
@@ -191,27 +171,24 @@ The rule is:
 This makes `EdtLowering` simpler. It should lower an already-isolated ARTS EDT
 object by emitting runtime params, dep records, and the body function ABI. It
 should not rediscover captures, infer missing deps, or repair codelet
-boundaries. CODIR is the verifier-enforced staging point that makes this true.
+boundaries. ARTS is the verifier-enforced staging point that makes this true.
 
 ## Current Flow
 
-The live implementation now routes codelets through the target SDE/CODIR/ARTS
-split. The canonical `sde-planning` stage performs OpenMP-to-SDE conversion
-and SDE-owned transforms, then `sde-to-codir`, `codir-graph-transforms`, and
-`codir-to-arts` keep conversion separate from CODIR graph/storage work:
+The live implementation uses the direct SDE-to-ARTS spine. The canonical
+`sde-planning` stage performs OpenMP-to-SDE conversion and SDE-owned transforms,
+then `sde-to-arts` mechanically materializes committed SDE storage, access, and
+scheduling facts as ARTS objects:
 
 ```text
 ConvertOpenMPToSde
 PatternAnalysis
 SDE transforms
 MemoryUnitMaterialization
-ConvertSdeToCodir
-CodirCodeletDCE
-ReductionDepMapping
-ReductionAtomicMaterialization
-DepStorageAssignment
-VerifyCodir
-ConvertCodirToArts
+RaiseToMuAccessWindow
+SdeStorageToArtsDb
+SdeAccessesToArtsDeps
+FinalizeSdeToArts
 RealizeEdtDistributionPlan
 VerifySdeLowered
 VerifyArtsObjectsOnly
@@ -219,13 +196,14 @@ VerifyArtsObjectsOnly
 
 The current boundary has one EDT-producing path:
 
-1. Canonical MU/codelet form lowers through CODIR: `sde.cu_codelet` becomes
-   `codir.codelet`, CODIR deps become `arts.db_acquire`, and CODIR codelets
-   become `arts.edt`.
-2. Remaining SDE work is not materialized by ARTS. It must be represented as
-   CODIR codelets before `codir-to-arts`, or `VerifySdeLowered` rejects it.
+1. SDE MU storage and access windows become `arts.db_alloc`,
+   `arts.db_access_plan`, and `arts.db_acquire`.
+2. SDE CU/SU scheduling structure becomes isolated `arts.edt` bodies with
+   explicit deps and params.
+3. Remaining SDE work is invalid after `sde-to-arts`; `VerifySdeLowered` and
+   `VerifyArtsObjectsOnly` reject it.
 
-`CreateDbs` materializes ARTS storage from the SDE/CODIR structure it receives.
+`CreateDbs` materializes ARTS storage from the SDE structure it receives.
 It must not choose owner dims, tile geometry, dependency-window policy, or
 block-local coordinates by inspecting task bodies.
 
@@ -234,7 +212,7 @@ not a semantic carrier.
 
 ## Target Flow
 
-The production target is the direct SDE/CODIR/ARTS path:
+The production target is the direct SDE/ARTS path:
 
 ```text
 sde
@@ -243,19 +221,14 @@ sde
   cu_region             planned compute body
   su_iterate            task topology
         |
-        | ConvertSdeToCodir
-        v
-codir
-  codir.codelet         isolated body
-  codir.dep             memory/control deps
-  codir.param           scalar params
-        |
-        | ConvertCodirToArts
+        | SdeStorageToArtsDb / SdeAccessesToArtsDeps / FinalizeSdeToArts
         v
 arts
   arts.db_alloc         created from MU storage
-  arts.db_acquire       created from codelet deps
-  arts.edt              created from codir.codelet with explicit deps/params
+  arts.db_access_plan   committed storage and access-window facts
+  arts.db_acquire       created from SDE access windows
+  arts.edt              isolated task body with explicit deps/params
+  arts.epoch_*          abstract frontier/continuation shape
         |
         | pre-lowering
         v
@@ -268,9 +241,9 @@ operation whose only purpose is to preserve user-provided dependency metadata
 until a later pass rediscovers what SDE already knew. The replacement is:
 
 - `sde.mu_dep` carries source-level dependency slices during SDE planning.
-- `sde.mu_token` carries memory access windows for SDE-to-CODIR.
+- `sde.mu_token` carries memory access windows for SDE-to-ARTS.
 - `sde.control_token` carries ordering/completion only.
-- CODIR turns those into explicit codelet deps.
+- ARTS turns those into explicit codelet deps.
 - ARTS turns those deps directly into DB acquires, control edges, and EDT
   creation operands.
 
@@ -281,7 +254,7 @@ Tiling is not valid unless the MU, CU, and SU all agree.
 A blocked or sliced MU is not a drop-in replacement for the original whole
 memref. A local payload view uses coordinates relative to the slice, while the
 source program's memref indices are usually global element coordinates.
-Therefore SDE planning and SDE-to-CODIR materialization must do all pieces
+Therefore SDE planning and SDE-to-ARTS materialization must do all pieces
 together:
 
 - choose the CU/SU tile and task schedule;
@@ -293,7 +266,7 @@ Simple one-dimensional owner slices are covered by the current memref-native
 boundary path: the boundary consumes SDE owner facts, creates the acquire
 window, and keeps the task body on full MU payload coordinates. That is a
 correctness bridge, not the final performance architecture. The final path is
-token-local CODIR codelet form, then direct ARTS DB/acquire/EDT lowering.
+token-local ARTS codelet form, then direct ARTS DB/acquire/EDT lowering.
 
 ## Work Shape Rule
 
@@ -319,18 +292,18 @@ The SDE plan on a work unit should include:
 
 The capture rule is explicit:
 
-- scalar firstprivate-style values can become CODIR params and then EDT params;
+- scalar firstprivate-style values can become ARTS params and then EDT params;
 - dynamic arrays, memrefs, and mutable shared state become deps;
 - values that can be constructed locally inside a codelet should be constructed
   locally rather than captured.
 
 ## Migration Status
 
-The CODIR path, direct CODIR-to-ARTS materialization, ARTS EDT verification,
-and tensor-raising/lowering removal are complete. Remaining work is narrower:
-finish token-local CODIR view rewrites for every supported benchmark, keep
-`CreateDbs` as a coarse raw-memref bridge only until that coverage is complete,
-and preserve the SDE/CODIR/ARTS/ARTS-RT responsibility split.
+The direct SDE-to-ARTS materialization path, ARTS EDT verification, and
+frontend-carrier raising/lowering removal is complete. Remaining work is narrower:
+finish token-local ARTS view rewrites for every supported benchmark, make DB
+creation consume already-authored ARTS facts, and preserve the
+SDE/ARTS/ARTS-RT responsibility split.
 
 SDE may request logical capacity; ARTS decides abstract-machine placement;
 ARTS-RT lowers the chosen runtime API shape.
@@ -339,11 +312,10 @@ ARTS-RT lowers the chosen runtime API shape.
 
 - Decisions about source meaning, legality, reductions, chunking, data layout,
   and distribution intent live in SDE.
-- Codelet isolation, token-local access rewriting, deps, and params live in
-  CODIR.
-- DB/EDT/epoch object materialization and ARTS-machine binding live in `arts`.
+- Isolation, token-local access rewriting, deps, params, DB/EDT/epoch object
+  materialization, and ARTS-machine binding live in `arts`.
 - Runtime ABI mapping lives in `arts-rt`.
 - If a pass needs to recover source semantics from ARTS implementation loops,
-  the required fact belongs in SDE or CODIR instead.
+  the required fact belongs in SDE instead.
 - If a utility is reusable, put it in the owning utility namespace instead of a
   local pass helper.

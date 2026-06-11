@@ -10,13 +10,12 @@ func.func @folds_mu_alloc_null_check() -> i1 {
   %A = memref.alloc() : memref<128xf32>
   %p = polygeist.memref2pointer %A : memref<128xf32> to !llvm.ptr
   %isnull = llvm.icmp "eq" %p, %null : !llvm.ptr
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       memref.store %v, %A[%i] : memref<128xf32>
       sde.yield
     }
-    sde.yield
   }
   memref.dealloc %A : memref<128xf32>
   return %isnull : i1
@@ -34,13 +33,12 @@ func.func @preserves_non_null_pointer_use() -> i1 {
   %p = polygeist.memref2pointer %A : memref<128xf32> to !llvm.ptr
   func.call @consume_ptr(%p) : (!llvm.ptr) -> ()
   %nonnull = llvm.icmp "ne" %p, %null : !llvm.ptr
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       memref.store %v, %A[%i] : memref<128xf32>
       sde.yield
     }
-    sde.yield
   }
   memref.dealloc %A : memref<128xf32>
   return %nonnull : i1

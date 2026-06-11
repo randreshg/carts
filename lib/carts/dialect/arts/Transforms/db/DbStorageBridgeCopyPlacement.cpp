@@ -89,7 +89,8 @@ static bool isSingleNode(ModuleOp module) {
 static bool isPartitionedAs(DbAcquireOp acquire, PartitionMode mode) {
   if (!acquire)
     return false;
-  return acquire.getPartitionMode().value_or(PartitionMode::coarse) == mode;
+  std::optional<PartitionMode> partitionMode = acquire.getPartitionMode();
+  return partitionMode && *partitionMode == mode;
 }
 
 static bool isHostWholeToComputeBlockBridgeDb(DbAllocOp alloc) {
@@ -169,8 +170,8 @@ static bool accessTouchesAlloc(const DbUtils::MemoryAccessInfo &access,
                                DbAllocOp alloc) {
   if (!alloc || !access.memref)
     return false;
-  auto root = dyn_cast_or_null<DbAllocOp>(
-      DbUtils::getUnderlyingDbAlloc(access.memref));
+  auto root =
+      dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(access.memref));
   return root == alloc;
 }
 
@@ -192,7 +193,8 @@ static bool operationReadsHostAlloc(Operation *op, DbAllocOp hostAlloc) {
   return readsHost;
 }
 
-static bool operationDirectlyReadsHostAlloc(Operation *op, DbAllocOp hostAlloc) {
+static bool operationDirectlyReadsHostAlloc(Operation *op,
+                                            DbAllocOp hostAlloc) {
   if (!op || op->getParentOfType<EdtOp>())
     return false;
   std::optional<DbUtils::MemoryAccessInfo> access =
@@ -228,8 +230,8 @@ static bool operationWritesHostAlloc(Operation *op, DbAllocOp hostAlloc) {
       return WalkResult::advance();
     if (isa<memref::DeallocOp>(nested)) {
       for (Value operand : nested->getOperands()) {
-        auto root = dyn_cast_or_null<DbAllocOp>(
-            DbUtils::getUnderlyingDbAlloc(operand));
+        auto root =
+            dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(operand));
         if (root == hostAlloc) {
           writesHost = true;
           return WalkResult::interrupt();
@@ -273,14 +275,16 @@ static bool sameBlockCopy(const BridgeCopyOut &lhs, const BridgeCopyOut &rhs) {
          lhs.barrier->getBlock() == rhs.barrier->getBlock();
 }
 
-static void eraseCopyOut(BridgeCopyOut copyOut, DenseSet<Operation *> &erasedOps) {
+static void eraseCopyOut(BridgeCopyOut copyOut,
+                         DenseSet<Operation *> &erasedOps) {
   erasedOps.insert(copyOut.loop.getOperation());
   erasedOps.insert(copyOut.barrier.getOperation());
   copyOut.barrier.erase();
   copyOut.loop.erase();
 }
 
-static bool isValueDefinedInsideButOutsideCopy(Value value, scf::ForOp outerLoop,
+static bool isValueDefinedInsideButOutsideCopy(Value value,
+                                               scf::ForOp outerLoop,
                                                scf::ForOp copyLoop) {
   if (Operation *def = value.getDefiningOp())
     return outerLoop->isAncestor(def) && !copyLoop->isAncestor(def);
@@ -326,8 +330,8 @@ static bool loopHasHostAccessOutsideCopy(scf::ForOp loop, DbAllocOp hostAlloc,
 
     if (isa<memref::DeallocOp>(nested)) {
       for (Value operand : nested->getOperands()) {
-        auto root = dyn_cast_or_null<DbAllocOp>(
-            DbUtils::getUnderlyingDbAlloc(operand));
+        auto root =
+            dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(operand));
         if (root == hostAlloc) {
           hasAccess = true;
           return WalkResult::interrupt();

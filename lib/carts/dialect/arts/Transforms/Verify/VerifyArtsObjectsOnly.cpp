@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: VerifyArtsObjectsOnly.cpp
 ///
-/// Verification pass for the target CODIR-to-ARTS boundary facts.
+/// Verification pass for the target SDE-to-ARTS boundary facts.
 ///==========================================================================///
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
@@ -31,7 +31,7 @@ static bool isInsideHostOpenMPIsland(Operation *op) {
 // verified in VerifyArtsCdag: it must run AFTER
 // DbOwnerMapRealization realizes owner maps and DistributedLaunchConsistency
 // localizes host-bridge EDTs to intranode, which only happen in
-// post-db-refinement. Checking it here (end of codir-to-arts) would reject
+// post-db-refinement. Checking it here (end of sde-to-arts) would reject
 // bridges that are legitimately localized downstream.
 
 static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
@@ -42,7 +42,7 @@ static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
   module.walk([&](Operation *op) {
     if (sdeDialect && op->getDialect() == sdeDialect) {
       op->emitError() << "SDE operation '" << op->getName()
-                      << "' remains after the CODIR-to-ARTS boundary";
+                      << "' remains after the SDE-to-ARTS boundary";
       found = true;
     }
 
@@ -50,7 +50,7 @@ static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
       if (isInsideHostOpenMPIsland(op))
         return;
       op->emitError() << "OpenMP operation '" << op->getName()
-                      << "' remains after the CODIR-to-ARTS boundary";
+                      << "' remains after the SDE-to-ARTS boundary";
       found = true;
     }
 
@@ -58,9 +58,9 @@ static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
       if (isInsideHostOpenMPIsland(op))
         return;
       op->emitError()
-          << "scf.parallel remains after the CODIR-to-ARTS boundary; "
+          << "scf.parallel remains after the SDE-to-ARTS boundary; "
              "parallel work must be materialized as ARTS objects or marked as "
-             "host OpenMP fallback";
+             "an explicit host OpenMP island";
       found = true;
     }
   });

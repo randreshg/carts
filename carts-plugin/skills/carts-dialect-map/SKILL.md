@@ -14,13 +14,12 @@ analysis, or test belongs.
   abstract communication-volume cost, and the real source/SU/CU/MU loop/layout
   transformations needed to make those facts true. It names no collective,
   DB, EDT, route, GUID, or runtime policy.
-- CODIR owns isolated codelets with explicit deps/params and first-class
-  distribution patterns. It consumes committed SDE layout facts, chooses
-  collectives/bridges from compute pattern plus layout mismatch, and
-  materializes contraction, redistribution, and halo structure.
-- ARTS owns DB/EDT/epoch orchestration, analyses, placement, distributed
-  ownership, owner maps, per-block single-writer DB realization, and grouped
-  compute/bridge/communication CUs.
+- ARTS owns isolated tasks with explicit deps/params, DB/EDT/epoch
+  orchestration, analyses, placement, distributed ownership, owner maps,
+  per-block single-writer DB realization, and grouped
+  compute/bridge/communication CUs. It consumes committed SDE layout,
+  access-window, and movement structure; it does not choose distribution
+  families or redo SDE layout.
 - ARTS-RT owns lowering-ready runtime ABI shape before LLVM. It mechanically
   lowers ARTS facts and does not infer scheduling, ownership, partition, or
   collective policy.
@@ -38,8 +37,10 @@ analysis, or test belongs.
 3. Check where it is transformed, verified, and erased or lowered.
 4. Confirm stage ownership with [[carts-pipeline-map]] and the live compiler.
 5. State the dialect contract and what that dialect must not own.
-6. Add tests in the owning dialect test directory.
-7. For duplicated attribute enums or convert-only boundaries, invoke
+6. State the op's TableGen traits, interfaces, and op-verifier contract before
+   assigning validation to a pass.
+7. Add tests in the owning dialect test directory.
+8. For duplicated attribute enums or convert-only boundaries, invoke
    [[carts-attr-consolidation]].
 
 ## Shared Attribute Boundary

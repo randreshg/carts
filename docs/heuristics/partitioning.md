@@ -16,7 +16,7 @@ stencil, or fine-grained allocation without collapsing the allocation itself.
 ## Ownership
 
 Distributed DB ownership is not selected by a DB graph or cached analysis layer.
-SDE and CODIR author the layout and movement facts while structured information
+SDE and ARTS author the layout and movement facts while structured information
 is still available. ARTS then consumes those committed facts and either realizes
 owner maps mechanically or rejects the allocation with a precise reason.
 
@@ -30,20 +30,16 @@ The relevant stages are:
 
 - `sde-planning`: chooses legal source-level distribution, grain, movement, and
   loop shape.
-- `sde-to-codir`: mechanically turns SDE structure into isolated codelet deps,
-  params, and token-local views.
-- `codir-graph-transforms`: transforms the isolated CODIR graph and commits
-  reduction/storage facts.
-- `codir-to-arts`: mechanically realizes codelet deps as ARTS DB/acquire/EDT
-  structure.
+- `sde-to-arts`: mechanically turns SDE MU/CU/SU structure into explicit ARTS
+  deps, params, token-local views, and DB/acquire/EDT objects.
 - `edt-dep-realization`: realizes ARTS EDT dependency distribution facts and
   checks the SDE/ARTS boundary.
-- `create-dbs`: compatibility bridge for residual raw EDT memref captures; it
-  is coarse-only and must reject tiled/block raw accesses.
+- `create-dbs`: consumes ARTS storage facts and must reject tiled/block raw
+  accesses that SDE did not rewrite.
 - `db-opt`: tightens DB modes from actual uses.
 - `post-db-refinement`: realizes owner maps, consolidates committed stencil
   halo windows, removes cleanup-only DB chains, and materializes ARTS-level
-  reduction/matmul continuation structure from CODIR-authored facts.
+  reduction/matmul continuation structure from ARTS-authored facts.
 
 ## Current Utilities
 

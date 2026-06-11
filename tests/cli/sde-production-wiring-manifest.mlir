@@ -15,21 +15,23 @@ module {}
 // PIPE-SAME: "SdeCoarseAvoidance"
 // PIPE-SAME: "VerifySde"
 // PIPE-SAME: "dependsOn": ["initial-cleanup"]
-// PIPE:      {"name": "sde-to-codir"
-// PIPE-SAME: "ConvertSdeToCodir"
+// PIPE:      {"name": "sde-to-arts"
+// PIPE-SAME: "SdeStorageToArtsDb"
+// PIPE-SAME: "SdeAccessesToArtsDeps"
+// PIPE-SAME: "FinalizeSdeToArts"
 // PIPE-SAME: "dependsOn": ["sde-planning"]
 
 // O1: "O1": {"pipeline_sequence": ["sde-input-normalization"
 // O1-SAME: "sde-planning"
-// O1-SAME: "sde-to-codir"
+// O1-SAME: "sde-to-arts"
 
 // O2: "O2": {"pipeline_sequence": ["sde-input-normalization"
 // O2-SAME: "sde-planning"
-// O2-SAME: "sde-to-codir"
+// O2-SAME: "sde-to-arts"
 
 // O3: "O3": {"pipeline_sequence": ["sde-input-normalization"
 // O3-SAME: "sde-planning"
-// O3-SAME: "sde-to-codir"
+// O3-SAME: "sde-to-arts"
 // O3-SAME: "epilogue_sequence": ["post-o3-opt"]
 
 // O0: "O0": {"pipeline_sequence": [], "epilogue_sequence": []}

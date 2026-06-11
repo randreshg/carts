@@ -60,8 +60,8 @@ conditionally when requested.
 | 1 | sde-input-normalization | Are Polygeist shapes and OpenMP deps normalized for SDE? |
 | 2 | initial-cleanup | Is dead code removed? |
 | 3 | sde-planning | Did OMP become the right SDE plan? |
-| 4 | sde-to-codir | Are SDE codelets isolated with explicit CODIR deps/params? |
-| 5 | codir-to-arts | Did CODIR materialize the intended ARTS DB/acquire/EDT objects? |
+| 4 | sde-to-arts | Are SDE codelets isolated with explicit ARTS deps/params? |
+| 5 | sde-to-arts | Did ARTS materialize the intended ARTS DB/acquire/EDT objects? |
 | 6 | edt-transforms | Is EDT structure optimized? |
 | 7 | create-dbs | Are coarse raw DataBlock allocations created only where allowed? |
 | 8 | db-opt | Are DB access modes correct? |
@@ -74,7 +74,7 @@ conditionally when requested.
 Expected fact evolution:
 
 - `sde-planning`: real SDE source/layout/alignment/tiling facts appear.
-- `sde-to-codir` / `codir-to-arts`: CODIR materializes explicit deps,
+- `sde-to-arts` / `sde-to-arts`: ARTS materializes explicit deps,
   storage views, collectives, bridges, contractions, reductions, and halos.
 - `edt-transforms` through `post-db-refinement`: ARTS realizes DB/EDT owner
   graphs, owner maps, DB modes, and grouped compute/bridge/communication CUs.
@@ -85,11 +85,11 @@ Expected fact evolution:
 
 | Symptom | Start Checking At |
 |---------|------------------|
-| Wrong array values | codir-to-arts (5), create-dbs (7), db-opt (8), then post-db-refinement (9) |
-| Missing parallelism | sde-planning (3), sde-to-codir (4), codir-to-arts (5), then edt-transforms (6) |
+| Wrong array values | sde-to-arts (5), create-dbs (7), db-opt (8), then post-db-refinement (9) |
+| Missing parallelism | sde-planning (3), sde-to-arts (4), sde-to-arts (5), then edt-transforms (6) |
 | Deadlock/hang | epochs (11), then pre-lowering (12) |
 | Wrong loop bounds | sde-planning (3), then late-concurrency-cleanup (10) |
-| Missing DB | codir-to-arts (5), create-dbs (7), then db-opt (8) |
+| Missing DB | sde-to-arts (5), create-dbs (7), then db-opt (8) |
 | Pattern/semantic issue | sde-planning (3) — inspect SDE sub-passes via `--arts-debug=<pass>` |
 | LLVM crash | arts-rt-to-llvm (13), then pre-lowering (12) |
 

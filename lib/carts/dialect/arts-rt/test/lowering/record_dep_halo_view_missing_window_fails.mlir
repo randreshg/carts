@@ -8,11 +8,13 @@ module attributes {
   llvm.data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128",
   llvm.target_triple = "aarch64-unknown-linux-gnu"
 } {
-  func.func @record_dep_halo_view_missing_window_fails(%edt: i64, %db: i64) {
+  func.func @record_dep_halo_view_missing_window_fails(%edt: i64) {
+    %route = arith.constant -1 : i32
     %c0 = arith.constant 0 : index
-    %storage = memref.alloca() : memref<1xi64>
-    memref.store %db, %storage[%c0] : memref<1xi64>
-    arts_rt.rec_dep %edt(%storage : memref<1xi64>) {acquire_modes = array<i32: 1>, dep_flags = array<i32: 4>}
+    %c1 = arith.constant 1 : index
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%route : i32) sizes[%c1] elementType(f64) elementSizes[%c1] {local_only} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %acq_guid, %acq_ptr = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] {runtime_db_mode = #arts.runtime_db_mode<ro>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+    arts_rt.rec_dep %edt(%acq_guid : memref<?xi64>) {acquire_modes = array<i32: 1>, dep_flags = array<i32: 4>}
     return
   }
 }

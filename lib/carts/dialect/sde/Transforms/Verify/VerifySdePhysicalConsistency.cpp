@@ -6,7 +6,7 @@
 /// stale-grain shape the SDE boundary forbids -- one `sde.su_iterate` carrying
 /// several incompatible truths at once (the jacobi-for class) -- before
 /// SdeRankExpandMu consumes the committed physical plan, instead of letting a
-/// stale plan disagree with its arrayLayout or schedule and reach CODIR.
+/// stale plan disagree with its arrayLayout or schedule and reach ARTS.
 ///
 /// For every `sde.su_iterate` carrying a committed physical plan
 /// (`physicalOwnerDims` + `physicalBlockShape`) it checks:
@@ -30,7 +30,7 @@
 ///
 /// Residual global-index access against an already rank-expanded MU (the body
 /// non-locality the vision warns about) is the companion `verify-sde-mu-layout`
-/// gate's job; flat owner-tile bodies that CODIR still localizes from committed
+/// gate's job; flat owner-tile bodies that ARTS still localizes from committed
 /// SU-local bounds are contract-correct here, so this gate does not re-derive
 /// body locality.
 ///

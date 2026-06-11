@@ -56,7 +56,7 @@ inline bool ownerDimsAddressDbRank(ArrayRef<int64_t> dims, unsigned rank) {
   return true;
 }
 
-/// Physical DB layout seed plan committed by SDE/CODIR onto an op (db_alloc,
+/// Physical DB layout seed plan committed by SDE onto an op (db_alloc,
 /// edt, or epoch): the owner dims plus the per-block physical shape. This is
 /// the single reader for the seed-plan attrs; callers that previously re-read
 /// planOwnerDims / planPhysicalBlockShape inline route through here.
@@ -483,21 +483,21 @@ inline DbOwnerMapKind chooseDbOwnerMapKind(DbAllocOp alloc) {
   return DbOwnerMapKind::owner_dim_contiguous;
 }
 
-/// Realize the ARTS owner-map and scattered home of a distributed DB from the
-/// committed SDE/CODIR seed plan. This is mechanical: owner dims and block
-/// shape are projected from the plan, never recomputed. Returns false (caller
-/// fails closed) when the plan cannot be projected into a usable owner map.
-inline bool realizeDbOwnerMapFromPlan(DbAllocOp alloc) {
+/// Project the committed SDE DB seed plan into an owner-map plan without
+/// mutating IR. Bridge launch routing uses this transient plan before the ARTS
+/// owner-map realization pass stamps persistent owner_map_* attrs.
+inline std::optional<DbOwnerMapPlan>
+deriveDbOwnerMapPlanFromSeed(DbAllocOp alloc) {
   if (!alloc)
-    return false;
+    return std::nullopt;
 
   auto blockShape = readI64ArrayAttr(getPlanPhysicalBlockShapeAttr(alloc));
   if (!blockShape || blockShape->empty())
-    return false;
+    return std::nullopt;
 
   auto ownerBlockShape = getDbOwnerBlockShapeFromPlan(alloc);
   if (!ownerBlockShape || ownerBlockShape->empty())
-    return false;
+    return std::nullopt;
 
   SmallVector<int64_t, 4> ownerMapDims;
   DbOwnerMapKind kind = chooseDbOwnerMapKind(alloc);
@@ -507,16 +507,35 @@ inline bool realizeDbOwnerMapFromPlan(DbAllocOp alloc) {
     auto dbOwnerDims = getDbOwnerMapDimsFromPlan(alloc);
     if (!dbOwnerDims ||
         !ownerDimsAddressDbRank(*dbOwnerDims, alloc.getSizes().size()))
-      return false;
+      return std::nullopt;
     ownerMapDims.assign(dbOwnerDims->begin(), dbOwnerDims->end());
   }
 
+  DbOwnerMapPlan plan;
+  plan.kind = kind;
+  plan.dims.assign(ownerMapDims.begin(), ownerMapDims.end());
+  plan.blockShape.assign(ownerBlockShape->begin(), ownerBlockShape->end());
+  return plan;
+}
+
+/// Realize the ARTS owner-map and scattered home of a distributed DB from the
+/// committed SDE seed plan. This is mechanical: owner dims and block
+/// shape are projected from the plan, never recomputed. Returns false (caller
+/// fails closed) when the plan cannot be projected into a usable owner map.
+inline bool realizeDbOwnerMapFromPlan(DbAllocOp alloc) {
+  if (!alloc)
+    return false;
+
+  std::optional<DbOwnerMapPlan> plan = deriveDbOwnerMapPlanFromSeed(alloc);
+  if (!plan)
+    return false;
+
   MLIRContext *ctx = alloc.getContext();
-  alloc.setOwnerMapKindAttr(DbOwnerMapKindAttr::get(ctx, kind));
+  alloc.setOwnerMapKindAttr(DbOwnerMapKindAttr::get(ctx, plan->kind));
   alloc.setOwnerMapVersionAttr(
       IntegerAttr::get(IntegerType::get(ctx, 32), kDbOwnerMapVersion));
-  alloc.setOwnerMapDimsAttr(buildI64ArrayAttr(ctx, ownerMapDims));
-  alloc.setOwnerBlockShapeAttr(buildI64ArrayAttr(ctx, *ownerBlockShape));
+  alloc.setOwnerMapDimsAttr(buildI64ArrayAttr(ctx, plan->dims));
+  alloc.setOwnerBlockShapeAttr(buildI64ArrayAttr(ctx, plan->blockShape));
   /// A realized owner map means the blocks are scattered across owner ranks;
   /// record that home alongside the map so it is readable, not implicit.
   alloc.setDbMemoryPlacement(DbMemoryPlacement::owner_scattered);

@@ -1,11 +1,10 @@
 // RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_multinode.cfg \
-// RUN:   --start-from sde-planning --pipeline sde-to-codir \
+// RUN:   --start-from sde-planning --pipeline sde-planning \
 // RUN:   --min-distributed-tile-bytes=4194304 \
 // RUN:   --mlir-print-ir-after-all 2>&1 \
 // RUN:   | %FileCheck %s
 
-// SDE owns layout and physical owner facts. It must not name collectives; CODIR
-// is the first layer allowed to choose all_gather/reduce_scatter/etc.
+// SDE owns layout and physical owner facts. It must not name collectives.
 
 // CHECK-LABEL: // -----// IR Dump After DistributionPlanning (distribution-planning) //----- //
 // CHECK: func.func @layout_facts_direct_row_matmul

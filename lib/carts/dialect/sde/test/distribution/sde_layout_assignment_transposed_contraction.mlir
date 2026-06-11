@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --start-from sde-planning --pipeline sde-to-codir --mlir-print-ir-after-all 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --start-from sde-planning --pipeline sde-planning --mlir-print-ir-after-all 2>&1 | %FileCheck %s
 
 // Regression: a sibling matmul intermediate may be consumed on a transposed
 // contraction window. SDE must derive the block_contraction owner position from
@@ -21,10 +21,10 @@ module attributes {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c1024 = arith.constant 1024 : index
-    sde.cu_region <parallel> {
-      // F = C * D
-      sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
-      ^bb0(%i: index, %j: index):
+    // F = C * D
+    sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
+    ^bb0(%i: index, %j: index):
+      sde.cu_region <single> {
         scf.for %k = %c0 to %c1024 step %c1 {
           %c = memref.load %C[%i, %k] : memref<1024x1024xf32>
           %d = memref.load %D[%k, %j] : memref<1024x1024xf32>
@@ -32,13 +32,15 @@ module attributes {
           %p = arith.mulf %c, %d : f32
           %s = arith.addf %f, %p : f32
           memref.store %s, %F[%i, %j] : memref<1024x1024xf32>
-        }
+      }
         sde.yield
       }
+    }
 
-      // G = E * F^T, so the contraction IV indexes F's physical dim 1.
-      sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
-      ^bb0(%i: index, %j: index):
+    // G = E * F^T, so the contraction IV indexes F's physical dim 1.
+    sde.su_iterate (%c0, %c0) to (%c1024, %c1024) step (%c1, %c1) {
+    ^bb0(%i: index, %j: index):
+      sde.cu_region <single> {
         scf.for %k = %c0 to %c1024 step %c1 {
           %e = memref.load %E[%i, %k] : memref<1024x1024xf32>
           %f = memref.load %F[%j, %k] : memref<1024x1024xf32>
@@ -46,10 +48,9 @@ module attributes {
           %p = arith.mulf %e, %f : f32
           %s = arith.addf %g, %p : f32
           memref.store %s, %G[%i, %j] : memref<1024x1024xf32>
-        }
+      }
         sde.yield
       }
-      sde.yield
     }
     return
   }

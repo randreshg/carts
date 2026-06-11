@@ -445,6 +445,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   // element_sizes remain the runtime byte-window authority.
   if (auto attr = acquireOp.getHaloSliceAttr())
     newAcquireOp.setHaloSliceAttr(attr);
+  if (auto attr = acquireOp.getHaloViewDependencyAttr())
+    newAcquireOp.setHaloViewDependencyAttr(attr);
   /// Rebuilt acquires must preserve the semantic stencil/distribution facts
   /// in addition to generic `arts.*` bookkeeping. Downstream passes such as
   /// dep lowering rely on these attrs (or the mirrored value facts) to

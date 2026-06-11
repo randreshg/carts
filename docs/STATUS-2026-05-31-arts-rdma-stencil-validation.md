@@ -34,10 +34,10 @@ Focused compiler validation:
 
 ```bash
 timeout --signal=TERM --kill-after=20s 180s .dekk/env/bin/dekk carts lit --skip-test-time-recording \
-  lib/carts/dialect/codir/test/conversion/codir-to-arts-per-block-single-writer-stencil.mlir \
-  lib/carts/dialect/codir/test/conversion/codir-to-arts-host-whole-stencil-promoted-to-block.mlir \
-  lib/carts/dialect/codir/test/conversion/codir-to-arts-stencil-tiling-nd-2d-no-replicated-read.mlir \
-  lib/carts/dialect/codir/test/conversion/codir-to-arts-alternating-buffer-stencil-stays-block.mlir
+  lib/carts/dialect/arts/test/conversion/sde-to-arts-per-block-single-writer-stencil.mlir \
+  lib/carts/dialect/arts/test/conversion/sde-to-arts-host-whole-stencil-promoted-to-block.mlir \
+  lib/carts/dialect/arts/test/conversion/sde-to-arts-stencil-tiling-nd-2d-no-replicated-read.mlir \
+  lib/carts/dialect/arts/test/conversion/sde-to-arts-alternating-buffer-stencil-stays-block.mlir
 ```
 
 2-node RDMA validation:
@@ -69,7 +69,7 @@ stencil compute EDTs.
 After that compiler fix, TCP passed with the same generated code, while RDMA
 first exposed connection-reset/refused behavior and then a timeout when eager
 connect was enabled with full-duplex rsocket reuse. This isolated the remaining
-failure to RDMA transport policy rather than CODIR halo placement or the CDAG
+failure to RDMA transport policy rather than ARTS halo placement or the CDAG
 memory model.
 
 The production RDMA default now keeps persistent eager connections open and
@@ -88,7 +88,7 @@ With those defaults, the no-override 2-node RDMA benchmark passes.
 The current implementation follows the intended layering:
 
 - SDE remains layout and graph planning only.
-- CODIR carries explicit codelet deps and collective intent.
+- ARTS carries explicit codelet deps and collective intent.
 - ARTS realizes the per-block single-writer DB substrate and halo exchange.
 - ARTS-RT lowers the already materialized EDT/DB/epoch shape to runtime calls.
 
@@ -105,10 +105,10 @@ storage-grain metadata rather than benchmark-specific size cuts:
 
 - SDE should compute storage block shape as layout evidence, separate from CU
   task shape.
-- CODIR should carry storage tile attrs independently from compute tile attrs
+- ARTS should carry storage tile attrs independently from compute tile attrs
   while still selecting collectives from pattern and layout mismatch.
 - ARTS should allocate DBs from storage grain and group bridge/communication CUs
   over ranges when the edge is read-only or copy-like.
 
-That keeps the SDE/CODIR/ARTS responsibilities aligned and avoids hardcoded
+That keeps the SDE/ARTS responsibilities aligned and avoids hardcoded
 benchmark behavior.

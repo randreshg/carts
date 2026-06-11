@@ -24,16 +24,15 @@ func.func @rank_expand_ceil_grid() {
   %c100 = arith.constant 100 : index
   %cst = arith.constant 2.0 : f32
   %A = sde.mu_alloc : memref<100x64xf32>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%c100) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%c100) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       scf.for %j = %c0 to %c64 step %c1 {
         memref.store %cst, %A[%i, %j] : memref<100x64xf32>
-      }
+    }
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [30, 64]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [30, 64]}
   return
 }
 
@@ -48,13 +47,12 @@ func.func @rank_expand_scalar_loaded_extent() {
   %loaded = memref.load %extent[] : memref<i64>
   %ub = arith.index_cast %loaded : i64 to index
   %A = sde.mu_alloc : memref<100xf32>
-  sde.cu_region <parallel> {
-    sde.su_iterate (%c0) to (%ub) step (%c1) classification(<elementwise>) {
-    ^bb0(%i: index):
+  sde.su_iterate (%c0) to (%ub) step (%c1) classification(<elementwise>) {
+  ^bb0(%i: index):
+    sde.cu_region <single> {
       memref.store %cst, %A[%i] : memref<100xf32>
       sde.yield
-    } {physicalOwnerDims = [0], physicalBlockShape = [30]}
-    sde.yield
-  }
+    }
+  } {physicalOwnerDims = [0], physicalBlockShape = [30]}
   return
 }

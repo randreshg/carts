@@ -18,9 +18,9 @@ module attributes {
     %c16 = arith.constant 16 : index
 
     %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <stencil>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c16] {db_memory_placement = #arts.db_memory_placement<owner_scattered>, owner_block_shape = [16], owner_map_dims = [0], owner_map_kind = #arts.owner_map_kind<owner_dim_contiguous>, owner_map_version = 1 : i32, planOwnerDims = [0], planPhysicalBlockShape = [16]} : (memref<?xi64>, memref<?xmemref<?xf64>>)
-    %acq_guid, %acq_ptr = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<stencil>), indices[%c0], offsets[%c0], sizes[%c1] element_offsets[%c0] element_sizes[%c0] {halo_slice = #arts.halo_slice<lower = [-1], upper = [0]>, runtime_db_mode = #arts.runtime_db_mode<ro>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %acq_guid, %acq_ptr = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<stencil>), indices[%c0], offsets[%c0], sizes[%c1] element_offsets[%c0] element_sizes[%c0] {haloViewDependency, halo_slice = #arts.halo_slice<lower = [-1], upper = [0]>, runtime_db_mode = #arts.runtime_db_mode<ro>, stencil_max_offsets = [0], stencil_min_offsets = [-1], stencil_supported_block_halo} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
 
-    arts.edt <task> <intranode> route(%route) (%acq_ptr) : memref<?xmemref<?xf64>> attributes {perBlockHaloExchange} {
+    arts.edt <task> <intranode> route(%route) (%acq_ptr) : memref<?xmemref<?xf64>> {
     ^bb0(%dep: memref<?xmemref<?xf64>>):
       arts.db_release(%dep) : memref<?xmemref<?xf64>>
       arts.yield

@@ -32,13 +32,13 @@ using namespace mlir::carts;
 
 namespace {
 
-static bool isInsideParallelRegion(sde::SdeSuIterateOp op) {
-  for (Operation *current = op->getParentOp(); current;
-       current = current->getParentOp()) {
-    auto cuRegion = dyn_cast<sde::SdeCuRegionOp>(current);
-    if (!cuRegion || cuRegion.getKind() != sde::SdeCuKind::parallel)
-      continue;
-    return true;
+static bool hasParallelLeafCu(sde::SdeSuIterateOp op) {
+  if (!op || op.getBody().empty())
+    return false;
+  for (Operation &child : op.getBody().front().without_terminator()) {
+    auto cuRegion = dyn_cast<sde::SdeCuRegionOp>(child);
+    if (cuRegion && cuRegion.getKind() == sde::SdeCuKind::parallel)
+      return true;
   }
   return false;
 }
@@ -662,7 +662,7 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
     return false;
 
   std::optional<unsigned> promotedPhysicalDim;
-  bool sawRankedTensorWrite = false;
+  bool sawRankedMemrefWrite = false;
   bool rejected = false;
   op.getBody().walk([&](memref::StoreOp storeOp) {
     if (rejected)
@@ -705,11 +705,11 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
       return WalkResult::interrupt();
     }
     promotedPhysicalDim = *storeDim;
-    sawRankedTensorWrite = true;
+    sawRankedMemrefWrite = true;
     return WalkResult::advance();
   });
 
-  return !rejected && sawRankedTensorWrite && promotedPhysicalDim.has_value();
+  return !rejected && sawRankedMemrefWrite && promotedPhysicalDim.has_value();
 }
 
 static sde::SdeSuIterateOp
@@ -1298,7 +1298,7 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
 /// (wrong vehicle for a matmul contraction without an accumulator carrier).
 ///
 /// SDE never names the communication operation, emits no combine, and encodes
-/// no nodes/routes/concrete split factor. Later SDE/CODIR structure must make
+/// no nodes/routes/concrete split factor. Later SDE structure must make
 /// the reduction explicit before ARTS realization.
 ///
 /// The gate is tight: it fires only for a canonical matmul whose contraction
@@ -1480,8 +1480,7 @@ struct PatternAnalysisPass
 
         auto memoryEffects = sde::collectStructuredMemoryEffects(op.getBody());
         if (!memoryEffects.hasUnknownEffects &&
-            sde::hasInPlaceSelfRead(memoryEffects) &&
-            isInsideParallelRegion(op)) {
+            sde::hasInPlaceSelfRead(memoryEffects) && hasParallelLeafCu(op)) {
           if (hasOnlyPointInPlaceSelfReads(*summary))
             op.setInPlaceSafeAttr(UnitAttr::get(op.getContext()));
           else

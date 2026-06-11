@@ -93,7 +93,7 @@ Examples:
 5. **Preserve semantic markers** — keep `arts.dep_pattern`, `arts.partition_mode`,
    `arts.distribution_kind` attributes in test IR
 6. **Use shared inputs** when possible — check `tests/inputs/` first
-7. **Assert the owning layer** — tests should prove SDE transforms layout, CODIR
+7. **Assert the owning layer** — tests should prove SDE transforms layout, ARTS
    materializes collectives/bridges, ARTS realizes DB/EDT/owner maps, or ARTS-RT
    lowers mechanically.
 8. **Avoid benchmark identity** — preserve structural facts, not benchmark

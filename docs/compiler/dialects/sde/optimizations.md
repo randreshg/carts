@@ -20,9 +20,9 @@ Rules:
 - Do not materialize ARTS worker counts, routes, nodes, or runtime calls.
 - Do not tile only CU/SU loops without matching MU token and access rewrites.
 - Do not use benchmark-specific constants.
-- Do not keep tensor carrier paths once memref MU/token coverage exists.
+- Do not keep frontend carrier paths once memref MU/token coverage exists.
 
-Exit facts for CODIR:
+Exit facts for ARTS:
 
 - token windows;
 - codelet boundary requirements;

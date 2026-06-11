@@ -26,13 +26,13 @@
 /// Responsibility split:
 /// - SDE chooses structured patterns, task grain, owner dimensions, physical
 ///   block shapes, and task element slices.
-/// - The target SDE/CODIR path emits explicit storage and codelet deps/params
+/// - The target SDE path emits explicit storage and codelet deps/params
 ///   that materialize to DB/EDT ops before this raw bridge.
 /// - CreateDbs materializes only remaining coarse raw EDT memref captures into
-///   ARTS DB ops. Tiled/block-local access rewriting is an SDE/CODIR
+///   ARTS DB ops. Tiled/block-local access rewriting is an SDE
 ///   responsibility and must not be rediscovered here.
 ///
-/// CreateDbs must not rediscover tensor/linalg partition policy.  Its
+/// CreateDbs must not rediscover SDE partition policy. Its
 /// remaining raw bridge is intentionally limited to a whole-storage DB ref
 /// (`db_ref[0]`) plus the original memref access. Structured/tiled layouts
 /// must lower through canonical storage/codelet form before ARTS.
@@ -188,7 +188,7 @@ static LogicalResult rewriteCoarseRawAccess(Operation *op, Value expectedRoot,
   if (!access) {
     if (isa<memref::CopyOp>(op)) {
       return op->emitError(
-          "raw memref copy reached ARTS DB materialization; SDE/CODIR must "
+          "raw memref copy reached ARTS DB materialization; SDE must "
           "materialize explicit storage copies before ARTS conversion");
     }
     return success();
@@ -197,7 +197,7 @@ static LogicalResult rewriteCoarseRawAccess(Operation *op, Value expectedRoot,
   if (expectedRoot && access->memref != expectedRoot) {
     return op->emitError(
         "raw memref view/alias access reached ARTS DB materialization; "
-        "SDE/CODIR must rewrite accesses to codelet-local memref views before "
+        "SDE must rewrite accesses to codelet-local memref views before "
         "ARTS "
         "conversion");
   }
@@ -207,7 +207,7 @@ static LogicalResult rewriteCoarseRawAccess(Operation *op, Value expectedRoot,
       materializeMemrefAsType(dbView, access->memref.getType(), op, builder);
   if (!typedView) {
     return op->emitError(
-        "cannot type the coarse DB view for raw memref access; SDE/CODIR "
+        "cannot type the coarse DB view for raw memref access; SDE "
         "must materialize an explicit codelet-local view");
   }
 
@@ -541,10 +541,8 @@ void CreateDbsPass::collectMemrefs() {
         }
 
         /// Skip allocations that are already a DB (e.g. produced directly by
-        /// the tensor-path lowering in SDE->ARTS, which materializes
-        /// `arts.db_alloc` + `arts.db_acquire` with `bufferization.to_tensor`
-        /// views up front). Those handles are already first-class DBs; only
-        /// the memref->DB conversion below needs to run on non-DB allocs.
+        /// SDE storage lowering). Those handles are already first-class DBs;
+        /// only the memref->DB conversion below needs to run on non-DB allocs.
         if (isa<DbAllocOp>(underlyingOp))
           continue;
 
@@ -661,7 +659,7 @@ void CreateDbsPass::createDbAllocOps() {
     if (Operation *planSource = findPhysicalLayoutPlanSource(alloc)) {
       InFlightDiagnostic diag = alloc->emitError(
           "SDE-authored physical DB layout reached CreateDbs as a raw "
-          "memref; SDE/CODIR must materialize storage and codelet-local "
+          "memref; SDE must materialize storage and codelet-local "
           "access rewrites before ARTS conversion");
       diag.attachNote(planSource->getLoc()) << "layout plan source";
       signalPassFailure();
@@ -861,14 +859,14 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
   ARTS_DEBUG(" - Creating DbAcquire operations for "
              << externalDeps.size() << " external dependencies");
 
-  /// Accumulate dependency operands to set on the EDT. CODIR-to-ARTS lowering
+  /// Accumulate dependency operands to set on the EDT. SDE-to-ARTS lowering
   /// may have already wired DB-backed dependencies before this pass; preserve
   /// those while appending dependencies that this raw bridge materializes from
   /// ordinary memrefs.
   SmallVector<Value> dependencyOperands(edt.getDependencies().begin(),
                                         edt.getDependencies().end());
 
-  /// One raw bridge acquire per allocation per EDT. Canonical SDE/CODIR memory
+  /// One raw bridge acquire per allocation per EDT. Canonical SDE memory
   /// dependencies do not reach this path.
   DenseSet<Operation *> processedAllocs;
 
@@ -931,7 +929,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     builder->setInsertionPoint(edt);
 
     /// Raw bridge acquires cover the whole physical DB range selected at
-    /// allocation time. SDE/CODIR-local slices lower before this pass.
+    /// allocation time. SDE-local slices lower before this pass.
     /// Build full DB-space range for the already-created coarse layout.
     SmallVector<Value> dbOffsets, dbSizes;
     SmallVector<Value> allocSizes(dbAllocOp.getSizes().begin(),

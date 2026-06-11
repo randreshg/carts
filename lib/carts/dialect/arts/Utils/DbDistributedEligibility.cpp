@@ -37,9 +37,9 @@ static bool hasMultipleAllocationBlocks(DbAllocOp alloc) {
 }
 
 static bool hasSupportedAllocationShape(DbAllocOp alloc) {
-  /// Distributed ownership currently targets matrix/tensor-style allocations.
+  /// Distributed ownership currently targets ranked memref allocations.
   /// Keep scalars local to avoid over-marking small or temporary DBs. Rank-1
-  /// vectors are eligible only when SDE/CODIR authored an explicit block plan;
+  /// vectors are eligible only when SDE authored an explicit block plan;
   /// otherwise a large vector still looks like an undifferentiated aggregate.
   if (alloc.getElementSizes().empty())
     return false;
@@ -170,12 +170,11 @@ static bool hasOnlyAllowedHandleUsers(Value rootHandle) {
   return true;
 }
 
-/// Returns true when an acquire node belongs to a stencil-family codelet,
-/// reading the stamped `ArtsDepPattern` rather than re-detecting from raw
-/// memory accesses (Invariant 5). The facts summary (which embeds halo
-/// geometry) is consulted first; if absent, the depPattern stamped on the
-/// acquire or its consumer EDT is authoritative.
-static bool isStencilAcquire(DbAcquireOp acquireOp, EdtOp edt) {
+/// Returns true when an acquire node carries dependency-scoped stencil facts.
+/// The parent EDT's aggregate stencil pattern is not enough: one stencil task
+/// can contain a plain read-only input, a writer, and a halo reader, and ARTS
+/// must not smear the halo reader's shape over every dependency.
+static bool isStencilAcquire(DbAcquireOp acquireOp) {
   if (!acquireOp)
     return false;
 
@@ -186,10 +185,6 @@ static bool isStencilAcquire(DbAcquireOp acquireOp, EdtOp edt) {
   if (auto depPattern = getDepPattern(acquireOp.getOperation()))
     if (isStencilFamilyDepPattern(*depPattern))
       return true;
-
-  if (edt)
-    if (auto depPattern = getDepPattern(edt.getOperation()))
-      return isStencilFamilyDepPattern(*depPattern);
 
   return false;
 }
@@ -204,7 +199,7 @@ struct EligibilityFacts {
   bool isStencilFamily = false;
   bool allHaveEdtAcquireUsers = true;
   /// True only when every internode read-only stencil acquire of |alloc|
-  /// carries the `replicatedRead` storage-view marker authored by CODIR
+  /// carries the `replicatedRead` storage-view marker authored by ARTS
   /// storage planning. This is the facts that says "the codelet wants
   /// the full DB replicated", not just "the access happens to be RO".
   bool allInternodeStencilReadsAreReplicated = true;
@@ -241,7 +236,7 @@ collectEligibilityFacts(DbAllocOp alloc) {
       facts.allAcquiresReadOnly = false;
 
     /// isStencilFamily (existential)
-    bool stencil = isStencilAcquire(acquire, edt);
+    bool stencil = isStencilAcquire(acquire);
     if (stencil)
       facts.isStencilFamily = true;
 
@@ -381,7 +376,7 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc) {
     /// keeps one writer frontier per block.
     if (alloc.getPerBlockSingleWriterStencil().value_or(false))
       return {true, DistributedDbEligibilityRejectReason::None};
-    /// CODIR storage planning marks acquires with `replicatedRead` when the
+    /// ARTS storage planning marks acquires with `replicatedRead` when the
     /// codelet wants the whole DB on every node. Without that marker, the
     /// codelet asked for a block view and ARTS must not unilaterally replicate.
     bool readOnly =

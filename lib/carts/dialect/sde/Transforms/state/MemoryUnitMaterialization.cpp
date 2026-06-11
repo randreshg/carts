@@ -49,6 +49,31 @@ static bool isMuMaterializableAllocation(Value root) {
   return false;
 }
 
+static Value resolveMaterializableStorageRoot(Value root) {
+  root = ValueAnalysis::stripMemrefViewOps(root);
+  SmallVector<Value, 4> seen;
+  while (root) {
+    if (llvm::is_contained(seen, root))
+      return Value();
+    seen.push_back(root);
+    if (isMuMaterializableAllocation(root))
+      return root;
+
+    auto result = dyn_cast<OpResult>(root);
+    auto cu = result ? dyn_cast<sde::SdeCuRegionOp>(result.getOwner())
+                     : sde::SdeCuRegionOp();
+    if (!cu || cu.getBody().empty())
+      return root;
+    auto yield =
+        dyn_cast_or_null<sde::SdeYieldOp>(cu.getBody().front().getTerminator());
+    if (!yield || result.getResultNumber() >= yield.getValues().size())
+      return root;
+    root = ValueAnalysis::stripMemrefViewOps(
+        yield.getValues()[result.getResultNumber()]);
+  }
+  return Value();
+}
+
 static bool isPrivateAllocationForSchedulingUnit(Value root,
                                                  sde::SdeSuIterateOp op) {
   if (!root || !op)
@@ -157,8 +182,9 @@ demoteUnsupportedPhysicalStoragePlan(sde::SdeSuIterateOp op) {
   return success();
 }
 
-static void collectSchedulingUnitMemrefRoots(sde::SdeSuIterateOp op,
-                                             SetVector<Value> &roots) {
+static void collectSchedulingUnitMemrefRoots(
+    sde::SdeSuIterateOp op, SetVector<Value> &roots,
+    DenseMap<Value, SetVector<Value>> &aliasesByRoot) {
   if (!op || !canMaterializePlannedOwnerSlices(op))
     return;
 
@@ -187,8 +213,21 @@ static void collectSchedulingUnitMemrefRoots(sde::SdeSuIterateOp op,
       return;
     if (isPrivateAllocationForSchedulingUnit(root, op))
       return;
-    if (isMuMaterializableAllocation(root))
-      roots.insert(root);
+    Value storageRoot = resolveMaterializableStorageRoot(root);
+    if (isMuMaterializableAllocation(storageRoot)) {
+      roots.insert(storageRoot);
+      if (storageRoot != root) {
+        aliasesByRoot[storageRoot].insert(root);
+        auto result = dyn_cast<OpResult>(root);
+        auto cu = result ? dyn_cast<sde::SdeCuRegionOp>(result.getOwner())
+                         : sde::SdeCuRegionOp();
+        if (cu)
+          for (Value sibling : cu->getResults())
+            if (isa<MemRefType>(sibling.getType()) &&
+                resolveMaterializableStorageRoot(sibling) == storageRoot)
+              aliasesByRoot[storageRoot].insert(sibling);
+      }
+    }
   });
 }
 
@@ -259,7 +298,56 @@ static void foldMuAllocNullChecks(Value muMemref, PatternRewriter &rewriter) {
   }
 }
 
+static std::optional<int64_t>
+lookupCommittedArrayId(Value root,
+                       const llvm::DenseMap<Value, int64_t> &arrayIdByRoot) {
+  root = ValueAnalysis::stripMemrefViewOps(root);
+  if (!root)
+    return std::nullopt;
+  if (auto it = arrayIdByRoot.find(root); it != arrayIdByRoot.end())
+    return it->second;
+  for (const auto &entry : arrayIdByRoot)
+    if (ValueAnalysis::sameMemrefRoot(entry.first, root))
+      return entry.second;
+  return std::nullopt;
+}
+
+static llvm::DenseMap<Value, int64_t> collectExplicitArrayIds(Operation *root) {
+  llvm::DenseMap<Value, int64_t> arrayIdByRoot;
+  root->walk([&](sde::SdeArrayLayoutRootOp provenance) {
+    Value memref = ValueAnalysis::stripMemrefViewOps(provenance.getRoot());
+    if (!memref)
+      return;
+    arrayIdByRoot.try_emplace(memref, provenance.getArrayId());
+  });
+  return arrayIdByRoot;
+}
+
+static Operation *findMuAllocInsertionPoint(Operation *def) {
+  Operation *insertionPoint = def;
+  for (Operation *parent = def->getParentOp(); parent;
+       parent = parent->getParentOp())
+    if (isa<sde::SdeCuRegionOp>(parent))
+      insertionPoint = parent;
+  return insertionPoint;
+}
+
+static Operation *
+findDominanceSafeMuAllocInsertionPoint(Operation *def,
+                                       ArrayRef<Value> dynamicSizes) {
+  Operation *insertionPoint = findMuAllocInsertionPoint(def);
+  if (insertionPoint == def)
+    return insertionPoint;
+
+  for (Value dynamicSize : dynamicSizes)
+    if (sde::isDefinedInside(insertionPoint, dynamicSize))
+      return def;
+  return insertionPoint;
+}
+
 static FailureOr<Value> createMuAllocForRoot(Value root,
+                                             std::optional<int64_t> arrayId,
+                                             ArrayRef<Value> aliases,
                                              PatternRewriter &rewriter) {
   Operation *def = root.getDefiningOp();
   if (!def)
@@ -274,14 +362,66 @@ static FailureOr<Value> createMuAllocForRoot(Value root,
     return failure();
   }
 
+  Operation *insertionPoint =
+      findDominanceSafeMuAllocInsertionPoint(def, dynamicSizes);
+  bool insertedAtRootDefinition = insertionPoint == def;
+
   auto memrefType = cast<MemRefType>(root.getType());
   OpBuilder::InsertionGuard guard(rewriter);
-  rewriter.setInsertionPoint(def);
+  rewriter.setInsertionPoint(insertionPoint);
   auto muAlloc = sde::SdeMuAllocOp::create(rewriter, def->getLoc(), memrefType,
                                            ValueRange(dynamicSizes));
+  if (arrayId)
+    muAlloc.setArrayIdAttr(rewriter.getI64IntegerAttr(*arrayId));
 
+  DenseMap<Type, Value> replacementByType;
+  auto getReplacementForType = [&](Type type) -> FailureOr<Value> {
+    if (type == muAlloc.getMemref().getType())
+      return muAlloc.getMemref();
+    auto sourceType = dyn_cast<MemRefType>(muAlloc.getMemref().getType());
+    auto targetType = dyn_cast<MemRefType>(type);
+    if (!sourceType || !targetType ||
+        !memref::CastOp::areCastCompatible(sourceType, targetType))
+      return failure();
+    auto [it, inserted] = replacementByType.try_emplace(type, Value());
+    if (inserted) {
+      OpBuilder::InsertionGuard castGuard(rewriter);
+      rewriter.setInsertionPointAfter(muAlloc);
+      it->second = memref::CastOp::create(rewriter, def->getLoc(), targetType,
+                                          muAlloc.getMemref());
+    }
+    return it->second;
+  };
+
+  for (Value alias : aliases)
+    if (alias && alias != root)
+      eraseDeallocUsers(alias, rewriter);
   eraseDeallocUsers(root, rewriter);
+  if (!insertedAtRootDefinition) {
+    for (Value alias : aliases) {
+      if (!alias || alias == root)
+        continue;
+      FailureOr<Value> replacement = getReplacementForType(alias.getType());
+      if (failed(replacement))
+        return failure();
+      alias.replaceAllUsesWith(*replacement);
+    }
+  }
+  SmallVector<OpOperand *, 4> unusedYieldedRoots;
+  if (!insertedAtRootDefinition)
+    for (OpOperand &use : root.getUses()) {
+      auto yield = dyn_cast<sde::SdeYieldOp>(use.getOwner());
+      if (!yield)
+        continue;
+      auto cu = yield->getParentOfType<sde::SdeCuRegionOp>();
+      unsigned resultNumber = use.getOperandNumber();
+      if (cu && resultNumber < cu->getNumResults() &&
+          cu->getResult(resultNumber).use_empty())
+        unusedYieldedRoots.push_back(&use);
+    }
   root.replaceAllUsesWith(muAlloc.getMemref());
+  for (OpOperand *use : unusedYieldedRoots)
+    use->set(root);
   foldMuAllocNullChecks(muAlloc.getMemref(), rewriter);
   if (def->use_empty())
     rewriter.eraseOp(def);
@@ -295,9 +435,10 @@ struct MemoryUnitMaterializationPass
     ModuleOp module = getOperation();
 
     SetVector<Value> roots;
+    DenseMap<Value, SetVector<Value>> aliasesByRoot;
     bool failedDemotion = false;
     module.walk([&](sde::SdeSuIterateOp op) {
-      collectSchedulingUnitMemrefRoots(op, roots);
+      collectSchedulingUnitMemrefRoots(op, roots, aliasesByRoot);
       failedDemotion |= failed(demoteUnsupportedPhysicalStoragePlan(op));
     });
     if (failedDemotion) {
@@ -305,11 +446,25 @@ struct MemoryUnitMaterializationPass
       return;
     }
 
+    llvm::DenseMap<Value, int64_t> arrayIdByRoot =
+        collectExplicitArrayIds(module);
+
     PatternRewriter rewriter(module.getContext());
     for (Value root : roots) {
       if (!isMuMaterializableAllocation(root))
         continue;
-      if (failed(createMuAllocForRoot(root, rewriter))) {
+      std::optional<int64_t> arrayId =
+          lookupCommittedArrayId(root, arrayIdByRoot);
+      SmallVector<Value, 4> aliases;
+      if (auto it = aliasesByRoot.find(root); it != aliasesByRoot.end()) {
+        aliases.append(it->second.begin(), it->second.end());
+        for (Value alias : it->second) {
+          if (arrayId)
+            break;
+          arrayId = lookupCommittedArrayId(alias, arrayIdByRoot);
+        }
+      }
+      if (failed(createMuAllocForRoot(root, arrayId, aliases, rewriter))) {
         if (Operation *def = root.getDefiningOp())
           def->emitError("failed to materialize SDE memory unit");
         signalPassFailure();

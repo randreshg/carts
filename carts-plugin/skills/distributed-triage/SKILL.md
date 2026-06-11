@@ -1,6 +1,6 @@
 ---
 name: carts-distributed-triage
-description: Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/CODIR/ARTS distributed work materialization, or uneven remote work distribution.
+description: Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work materialization, or uneven remote work distribution.
 user-invocable: true
 allowed-tools: Bash, Read, Write, Grep, Glob, Agent
 argument-hint: [<input-file | benchmark-path>]
@@ -12,10 +12,10 @@ Goal: determine whether a multi-node failure comes from ownership marking, lower
 
 Layer rule: diagnose the first layer where the committed fact is wrong, then fix
 that layer with a real transformation. SDE owns layout and source/SU/CU/MU
-rewrites; CODIR owns collective/bridge/contraction materialization; ARTS owns
+rewrites; ARTS owns collective/bridge/contraction materialization; ARTS owns
 per-block single-writer DB/EDT/owner-map realization and grouped
 compute/bridge/communication CUs; ARTS-RT lowers mechanically. Do not repair a
-bad SDE layout in CODIR/ARTS, and do not repair missing CODIR collective intent
+bad SDE layout in SDE/ARTS, and do not repair missing ARTS collective intent
 in ARTS-RT.
 
 Use bundled helpers when they fit:
@@ -41,16 +41,16 @@ Read these before patching anything:
    It is default-on for multinode and stripped from single-node rows.
 5. Inspect IR around:
    - `sde-planning`
-   - `codir-to-arts`
+   - `sde-to-arts`
    - `post-db-refinement`
    - `pre-lowering`
 6. Check ownership constraints:
    - SDE layout facts are backed by an actual loop/layout transformation, not
      metadata that downstream must reinterpret
-   - CODIR represents already-transformed SDE movement structure when a
+   - ARTS represents already-transformed SDE movement structure when a
      distributed edge requires communication
    - `distributed` marker present on eligible `DbAllocOp`
-   - SDE/CODIR/ARTS materialized structure is present when required
+   - SDE/ARTS materialized structure is present when required
    - DB/MU block grain and grouped CU/bridge grain are both sane; tiny DBs with
      one EDT each and coarse DBs that serialize independent writers are both
      failures to investigate
@@ -79,8 +79,7 @@ dekk carts benchmarks run polybench/2mm \
 
 - `docs/heuristics/distribution.md`
 - `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp`
-- `lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp`
-- `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
+- `lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp`
 - `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/ConvertArtsRtToLLVM.cpp`
 - `lib/carts/codegen/Codegen.cpp`
 

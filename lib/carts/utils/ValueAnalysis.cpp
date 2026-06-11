@@ -833,6 +833,10 @@ bool ValueAnalysis::isProvablyNonZero(Value v, unsigned depth) {
     return isProvablyNonZero(maxsi.getLhs(), depth + 1) ||
            isProvablyNonZero(maxsi.getRhs(), depth + 1);
   }
+  if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
+    return isProvablyNonZero(mul.getLhs(), depth + 1) &&
+           isProvablyNonZero(mul.getRhs(), depth + 1);
+  }
   return false;
 }
 

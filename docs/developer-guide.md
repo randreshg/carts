@@ -54,9 +54,9 @@ Both languages can use the same OpenMP constructs and memory layout patterns des
 
 CARTS provides comprehensive support for OpenMP pragmas through the staged
 compiler pipeline: `ConvertOpenMPToSde` captures source semantics,
-`ConvertSdeToCodir` isolates codelet deps/params, and `ConvertCodirToArts`
-materializes ARTS DB/EDT objects. The following OpenMP constructs are
-supported:
+`SdeStorageToArtsDb` and `SdeAccessesToArtsDeps` materialize committed storage
+and access-window facts as ARTS deps, and `FinalizeSdeToArts` rejects residual
+SDE. The following OpenMP constructs are supported:
 
 ### 1. Parallel Regions
 
@@ -69,8 +69,8 @@ Basic parallel regions are fully supported.
 }
 ```
 
-**Conversion**: Planned in SDE, isolated through CODIR when codelet-shaped, and
-materialized as ARTS work/dependency objects by `codir-to-arts`.
+**Conversion**: Planned in SDE, isolated through ARTS when codelet-shaped, and
+materialized as ARTS work/dependency objects by `sde-to-arts`.
 
 ### 2. Worksharing Loops
 
@@ -174,7 +174,7 @@ for (int i = 0; i < N; i++) {
 ```
 
 **Conversion**: Both are planned in SDE and must be materialized through the
-SDE/CODIR/ARTS boundary. `codir-to-arts` no longer runs a residual SDE-to-ARTS
+SDE/ARTS boundary. `sde-to-arts` no longer runs a residual SDE-to-ARTS
 bridge; surviving SDE operations fail verification.
 
 ### 6. Synchronization Constructs
@@ -222,7 +222,7 @@ counter += value;
 
 OpenMP thread-introspection calls can appear in source programs, but they are
 not CARTS topology APIs and must not be modeled as ARTS node queries in SDE or
-CODIR:
+ARTS:
 
 ```c
 int tid = omp_get_thread_num();

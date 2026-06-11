@@ -20,13 +20,13 @@ parameters:
 Trace and explain why the compiler chose a specific partitioning mode or
 distribution strategy. The live compiler no longer has a monolithic
 partitioning-heuristic pass or cached ARTS graph-analysis stack. Decisions live
-in the owning transformation: SDE distribution/grain passes, CODIR dependency
+in the owning transformation: SDE distribution/grain passes, ARTS dependency
 storage and reduction passes, and narrowly-scoped ARTS DB/EDT realization
 passes.
 
 Use [[carts-vision]] for placement questions. Heuristics explain structural
 evidence; they must not become benchmark-name policy or downstream
-recomputation of SDE/CODIR facts.
+recomputation of SDE facts.
 
 ## Quick Diagnostic Commands
 
@@ -79,7 +79,7 @@ points:
 
 - Heuristic triggers must be code-agnostic: affine structure, typed attrs,
   committed layout/movement facts, layout mismatch, and runtime topology.
-- SDE owns owner dims and block layout facts; CODIR owns collective/bridge
+- SDE owns owner dims and block layout facts; ARTS owns collective/bridge
   family selection from SDE facts; ARTS consumes those facts to realize DBs,
   EDTs, owner maps, and grouped execution.
 - DB/MU partition grain is not the same decision as CU/bridge grouping.
@@ -95,8 +95,7 @@ include/carts/dialect/arts/Utils/DbUtils.h — DB/acquire query helpers
 lib/carts/dialect/arts/Transforms/db/DbModeTightening.cpp — DB mode and acquire-window refinement
 lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp — distributed owner-map realization
 lib/carts/dialect/arts/Transforms/db/CreateDbs.cpp — raw bridge and DB creation
-lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp — SDE-to-CODIR materialization
-lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp — CODIR-to-ARTS materialization
+lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp — SDE-to-ARTS materialization
 ```
 
 ## Instructions
@@ -105,7 +104,7 @@ When the user asks to explain a heuristic decision:
 
 1. Identify the focus: partitioning or distribution.
 2. Compile with the relevant `--arts-debug` channel to capture decisions
-3. Dump IR at the decision stage (`sde-planning`, `codir-to-arts`, `db-opt`, or `post-db-refinement`)
+3. Dump IR at the decision stage (`sde-planning`, `sde-to-arts`, `db-opt`, or `post-db-refinement`)
 4. Parse debug output for which heuristic rule fired
 5. Explain: what the rule checks, why it matched, what alternatives exist
 6. If the decision seems wrong, suggest: which input properties to change,

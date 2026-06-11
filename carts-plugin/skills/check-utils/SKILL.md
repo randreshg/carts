@@ -20,7 +20,8 @@ a helper and choosing its canonical home.
 - Add no helper until existing utilities and sibling pass helpers are searched.
 - Keep pass-local only when one pass uses it and it is not a dialect invariant.
 - Put shared behavior in the narrowest semantic owner, not the nearest caller.
-- Declare CARTS IR attributes in ODS first; never add `AttrNames::` entries.
+- Declare CARTS IR operation contracts and attributes in ODS first; never add
+  `AttrNames::` entries for CARTS IR attrs.
 - Land declaration, implementation, caller cleanup, and verification together.
 
 ## Procedure
@@ -46,7 +47,7 @@ a helper and choosing its canonical home.
 | Deferred op removal | `include/carts/utils/RemovalUtils.h` |
 | Shared ODS attribute enum across dialects | `include/carts/IR/CommonAttrs.td` |
 | SDE source semantics, HPF-style layout/alignment, affine access maps, PatternAnalysis, MU/CU/SU planning, real loop/layout facts | `include/carts/dialect/sde/Analysis` or `Utils` |
-| CODIR codelet isolation, dep/param ABI, token-local views, collective/contraction/bridge/halo materialization | `include/carts/dialect/codir/Utils` |
+| ARTS codelet isolation, dep/param ABI, token-local views, collective/contraction/bridge/halo materialization | `include/carts/dialect/arts/Utils` |
 | ARTS DB/EDT/epoch objects, dependency slots, placement, ownership, owner maps, per-block DB realization, grouped CU/bridge execution | `include/carts/dialect/arts/Utils` or `Analysis` |
 | ARTS loop invariance, hoist legality, dominance | `include/carts/dialect/arts/Utils/LoopInvarianceUtils.h` |
 | ARTS-RT runtime ABI packing, depv layout, runtime calls, pointer lowering only | `include/carts/dialect/arts-rt/Utils` |
@@ -54,16 +55,18 @@ a helper and choosing its canonical home.
 
 Do not place helpers where they enable downstream recomputation of committed
 facts. Owner dims belong to SDE layout analysis; collective families belong to
-CODIR materialization; owner maps and grouped DB/EDT realization belong to
+ARTS materialization; owner maps and grouped DB/EDT realization belong to
 ARTS; ABI call mechanics belong to ARTS-RT.
 
 ## Attribute Strings
 
-Never hardcode CARTS IR attribute strings. Declare the attribute on its owning
-op, or as a free-standing ODS attr plus op-interface for multi-op cases, in the
-dialect `*Attrs.td`/`*Ops.td`; use generated `op.get*AttrName()` /
-`op.get*()` accessors. `AttrNames::` is not a placement option for CARTS IR
-attributes.
+Never hardcode CARTS IR attribute strings, and do not put local op-region
+legality into an aggregate pass when it belongs in an op contract. Declare the
+attribute or local validation surface on its owning op, or as a free-standing
+ODS attr plus op-interface for multi-op cases, in the dialect
+`*Attrs.td`/`*Ops.td`; use generated `op.get*AttrName()` / `op.get*()`
+accessors and op verifiers. `AttrNames::` is not a placement option for CARTS
+IR attributes.
 
 ## Existing Helpers To Reuse
 

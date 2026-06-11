@@ -15,9 +15,9 @@ pass names matter.
 1. `sde-input-normalization`
 2. `initial-cleanup`
 3. `sde-planning`
-4. `sde-to-codir`
-5. `codir-to-arts`
-6. `edt-transforms`
+4. `sde-to-arts`
+5. `edt-dep-realization`
+6. `edt-local-cleanup`
 7. `create-dbs`
 8. `db-opt`
 9. `post-db-refinement`
@@ -43,10 +43,10 @@ you are specifically fixing outdated docs.
   `SdeMemrefNormalization`, and `SdeHandleDeps`.
 - `sde-planning` owns OpenMP-to-SDE conversion, pattern/distribution/reduction
   planning, iteration-space decomposition, and MU materialization intent.
-- `sde-to-codir` owns codelet isolation, explicit deps/params, token-local
-  memref views, and `VerifyCodir`.
-- `codir-to-arts` owns CODIR-to-ARTS DB/acquire/EDT materialization and
+- `sde-to-arts` owns mechanical SDE-to-ARTS DB/acquire/EDT materialization and
   rejects any surviving SDE operation.
+- `edt-dep-realization` realizes EDT distribution deps and verifies the ARTS
+  object boundary.
 - `post-db-refinement` runs DB/EDT refinements and contract validation after
   DB mode tightening.
 - `pre-lowering` lowers ARTS DB/EDT/epoch objects to ARTS-RT-shaped operations and

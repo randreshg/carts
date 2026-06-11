@@ -228,6 +228,30 @@ def DbAllocOp : Arts_Op<"db_alloc",
   }];
 }
 
+def DbAccessPlanOp : Arts_Op<"db_access_plan", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Boundary-local DB access plan consumed into acquires";
+  let description = [{
+    Carries one committed SDE MU access window after MU storage has been
+    materialized as an ARTS DB-backed memref and before EDT dependency
+    materialization creates the corresponding `arts.db_acquire`.
+
+    The op is a short-lived boundary carrier in the direct SDE-to-ARTS stage. It
+    preserves committed block-grid window facts so the acquire pass does not
+    infer dependency shape from raw memref body walks. It must be consumed before
+    the ARTS object-only verifier.
+  }];
+  let arguments = (ins
+    AnyMemRef:$mu,
+    ArtsModeAttr:$mode,
+    OptionalAttr<I64Attr>:$arrayId,
+    I64Attr:$ownerDimCount,
+    ArrayAttr:$blockLo,
+    ArrayAttr:$blockHi,
+    ArrayAttr:$validExtents,
+    OptionalAttr<ArrayAttr>:$haloShape
+  );
+}
+
 def DbAcquireOp : Arts_Op<"db_acquire",
                           [AttrSizedOperandSegments,
                            ArtsPartitionedOpInterface,
@@ -287,6 +311,10 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     // Stencil-reach metadata for a halo acquire; element_* operands carry the
     // runtime byte-window authority.
     OptionalAttr<HaloSliceAttr>:$halo_slice,
+    // ARTS-owned per-dependency verdict: this acquire lowers as a halo-view
+    // runtime dependency. ARTS-RT consumes this slot-level fact only; it must
+    // not infer halo policy from the surrounding EDT or stencil metadata.
+    OptionalAttr<UnitAttr>:$haloViewDependency,
     OptionalAttr<UnitAttr>:$replicatedRead,
     OptionalAttr<ArtsDepPatternAttr>:$depPattern,
     OptionalAttr<EdtDistributionKindAttr>:$distribution_kind,
@@ -367,7 +395,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     /// Check if this acquire has a partition mode set
     bool hasPartitionMode() { return getPartitionMode().has_value(); }
 
-    /// Get partition mode, returns coarse if not set
+    /// Get partition mode with an explicit caller-provided legacy default.
     PartitionMode getPartitionModeOr(PartitionMode defaultMode =
                                          PartitionMode::coarse) {
       return getPartitionMode().value_or(defaultMode);
@@ -375,17 +403,24 @@ def DbAcquireOp : Arts_Op<"db_acquire",
 
     /// Check if this is a fine-grained (element-wise) acquire
     bool isFineGrained() {
-      return getPartitionModeOr() == PartitionMode::fine_grained;
+      return getPartitionMode() &&
+             *getPartitionMode() == PartitionMode::fine_grained;
     }
 
     /// Check if this is a block acquire
-    bool isBlock() { return getPartitionModeOr() == PartitionMode::block; }
+    bool isBlock() {
+      return getPartitionMode() && *getPartitionMode() == PartitionMode::block;
+    }
 
     /// Check if this is a stencil acquire
-    bool isStencil() { return getPartitionModeOr() == PartitionMode::stencil; }
+    bool isStencil() {
+      return getPartitionMode() && *getPartitionMode() == PartitionMode::stencil;
+    }
 
     /// Check if this is a coarse acquire
-    bool isCoarse() { return getPartitionModeOr() == PartitionMode::coarse; }
+    bool isCoarse() {
+      return getPartitionMode() && *getPartitionMode() == PartitionMode::coarse;
+    }
 
     /// Check if this acquire has partition hints (element-space
     /// indices/offsets/sizes)

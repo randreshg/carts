@@ -6,7 +6,7 @@
 /// ARTS runtime to expose total logical worker capacity and abstract locality
 /// groups. SDE uses those values only for source-level grain and task-wave
 /// decisions; ARTS still owns DB ownership, EDT placement, routes, and runtime
-/// memory-model choices after CODIR materialization.
+/// memory-model choices after ARTS materialization.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_ARTS_ANALYSIS_ARTSCOSTMODEL_H

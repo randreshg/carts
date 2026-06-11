@@ -126,7 +126,7 @@ void ConvertArtsRtToLLVMPass::runOnOperation() {
   config.setUseTopDownTraversal(true);
   config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
 
-  /// Run 1: runtime patterns (core arts ops: RuntimeQuery, Barrier, AtomicAdd)
+  /// Run 1: runtime patterns (ARTS ops: RuntimeQuery, Barrier, AtomicAdd)
   {
     ARTS_INFO("Running runtime patterns");
     RewritePatternSet runtimePatterns(context);

@@ -27,7 +27,6 @@ set(_carts_common_mlir_link_libs
   MLIRSCFToControlFlow
   MLIRSideEffectInterfaces
   MLIRTargetLLVMIRImport
-  MLIRTensorDialect
   MLIRTransformUtils
 )
 

@@ -22,7 +22,6 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
@@ -46,9 +45,6 @@
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/ARTSCostModel.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
-#include "carts/dialect/codir/Conversion/PassRegistration.h"
-#include "carts/dialect/codir/IR/CodirDialect.h"
-#include "carts/dialect/codir/Transforms/PassRegistration.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/passes/Passes.h"
 #include "carts/utils/Debug.h"
@@ -181,9 +177,7 @@ enum class StageId {
   SdeInputNormalization,
   InitialCleanup,
   SdePlanning,
-  SdeToCodir,
-  CodirGraphTransforms,
-  CodirToArts,
+  SdeToArts,
   EdtDepRealization,
   EdtLocalCleanup,
   CreateDbs,
@@ -280,7 +274,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 29> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 30> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "SdeCuNormalization",
     "Parallelize",
@@ -296,6 +290,7 @@ static const std::array<llvm::StringLiteral, 29> kSdePlanningPasses = {
     "IterationSpaceDecomposition",
     "BarrierElimination",
     "MemoryUnitMaterialization",
+    "SdeAtomicReductionMaterialization",
     "SdeCuNormalization",
     "VerifySdePhysicalConsistency",
     "SdeRankExpandMu",
@@ -310,17 +305,9 @@ static const std::array<llvm::StringLiteral, 29> kSdePlanningPasses = {
     "SdeCoarseAvoidance",
     "VerifySdeCoarseAvoidance",
     "VerifySde"};
-static const std::array<llvm::StringLiteral, 1> kSdeToCodirPasses = {
-    "ConvertSdeToCodir"};
-static const std::array<llvm::StringLiteral, 6> kCodirGraphTransformsPasses = {
-    "CodirCodeletDCE",
-    "ReductionDepMapping",
-    "ReductionAtomicMaterialization",
-    "DepStorageAssignment",
-    "CodirHaloExchange",
-    "VerifyCodir"};
-static const std::array<llvm::StringLiteral, 1> kCodirToArtsPasses = {
-    "ConvertCodirToArts"};
+static const std::array<llvm::StringLiteral, 4> kSdeToArtsPasses = {
+    "SdeStorageToArtsDb", "SdeAccessesToArtsDeps", "FinalizeSdeToArts",
+    "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 3> kEdtDepRealizationPasses = {
     "RealizeEdtDistributionPlan", "VerifySdeLowered", "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 6> kEdtLocalCleanupPasses = {
@@ -424,41 +411,29 @@ static constexpr llvm::StringLiteral kFrontendLayers[] = {"polygeist", "memref",
 static constexpr llvm::StringLiteral kArtsLayers[] = {"arts"};
 static constexpr llvm::StringLiteral kArtsRtLayers[] = {"arts-rt", "llvm"};
 static constexpr llvm::StringLiteral kSdeLayers[] = {"sde"};
-static constexpr llvm::StringLiteral kCodirLayers[] = {"codir"};
-static constexpr llvm::StringLiteral kSdeToCodirLayers[] = {"sde", "codir"};
-static constexpr llvm::StringLiteral kCodirToArtsLayers[] = {"codir", "arts"};
+static constexpr llvm::StringLiteral kSdeToArtsLayers[] = {"sde", "arts"};
 
 static constexpr llvm::StringLiteral kFrontendStages[] = {
     "sde-input-normalization", "initial-cleanup"};
 static constexpr llvm::StringLiteral kSdePlanningStages[] = {"sde-planning"};
-static constexpr llvm::StringLiteral kSdeToCodirStages[] = {"sde-to-codir"};
-static constexpr llvm::StringLiteral kCodirStages[] = {
-    "codir-graph-transforms"};
-static constexpr llvm::StringLiteral kCodirToArtsStages[] = {"codir-to-arts"};
+static constexpr llvm::StringLiteral kSdeToArtsStages[] = {"sde-to-arts"};
 static constexpr llvm::StringLiteral kArtsStages[] = {
     "edt-dep-realization", "edt-local-cleanup",        "create-dbs", "db-opt",
     "post-db-refinement",  "late-concurrency-cleanup", "epochs"};
 static constexpr llvm::StringLiteral kArtsRtStages[] = {"pre-lowering",
                                                         "arts-rt-to-llvm"};
 
-static const std::array<DialectGroupDescriptor, 7> kDialectGroups = {{
+static const std::array<DialectGroupDescriptor, 5> kDialectGroups = {{
     {"frontend-normalization", "canonical",
      "Normalize frontend IR before entering the CARTS dialect stack.",
      kFrontendLayers, kFrontendStages},
     {"sde", "canonical",
      "SDE proves source semantics and authors MU/CU/SU shape facts.",
      kSdeLayers, kSdePlanningStages},
-    {"sde-to-codir", "canonical",
-     "Mechanically lower SDE CU/MU/SU structure into isolated CODIR codelets "
-     "and token-local views.",
-     kSdeToCodirLayers, kSdeToCodirStages},
-    {"codir", "canonical",
-     "Run isolated-codelet graph, reduction, storage, and boundary checks.",
-     kCodirLayers, kCodirStages},
-    {"codir-to-arts", "canonical",
-     "Mechanically lower explicit CODIR deps and codelets to ARTS DB/EDT "
-     "objects.",
-     kCodirToArtsLayers, kCodirToArtsStages},
+    {"sde-to-arts", "canonical",
+     "Mechanically lower committed SDE storage, window, scheduling, and "
+     "control facts directly into ARTS DB/EDT objects.",
+     kSdeToArtsLayers, kSdeToArtsStages},
     {"arts", "canonical",
      "Refine abstract ARTS DB, EDT, epoch, dep, and placement objects.",
      kArtsLayers, kArtsStages},
@@ -686,12 +661,14 @@ configurePassManager(PassManager &pm, PassTimingData *timingData = nullptr) {
 /// Register standard MLIR dialects, passes, and translations.
 void registerDialects(DialectRegistry &registry) {
   registry.insert<polygeist::PolygeistDialect, arts::ArtsDialect,
-                  arts_rt::ArtsRtDialect, sde::CartsSdeDialect,
-                  codir::CartsCodirDialect>();
+                  arts_rt::ArtsRtDialect, sde::CartsSdeDialect>();
   registerAllPasses();
   /// ARTS pass registration is intentionally selective: lowering-only helpers
   /// are registered here, while staged compiler pipelines wire pass ordering.
   registerDeadCodeElimination();
+  registerSdeStorageToArtsDb();
+  registerSdeAccessesToArtsDeps();
+  registerFinalizeSdeToArts();
   registerPartialReductionSplit();
   registerBlockContractionSplit();
   registerDistributedLaunchConsistency();
@@ -702,8 +679,6 @@ void registerDialects(DialectRegistry &registry) {
   registerVerifyArtsObjectsOnly();
   registerArtsRtPasses();
   sde::registerCartsSdePasses();
-  codir::registerCartsCodirConversionPasses();
-  codir::registerCartsCodirPasses();
   registerAllTranslations();
   registerpolygeistPasses();
   func::registerInlinerExtension(registry);
@@ -730,13 +705,11 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<math::MathDialect>();
   context.getOrLoadDialect<memref::MemRefDialect>();
   context.getOrLoadDialect<linalg::LinalgDialect>();
-  context.getOrLoadDialect<tensor::TensorDialect>();
   context.getOrLoadDialect<bufferization::BufferizationDialect>();
   context.getOrLoadDialect<polygeist::PolygeistDialect>();
   context.getOrLoadDialect<arts::ArtsDialect>();
   context.getOrLoadDialect<arts_rt::ArtsRtDialect>();
   context.getOrLoadDialect<sde::CartsSdeDialect>();
-  context.getOrLoadDialect<codir::CartsCodirDialect>();
   context.getOrLoadDialect<cf::ControlFlowDialect>();
 
   /// Register all necessary interfaces for LLVM conversion
@@ -1153,8 +1126,8 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
   optPM.addPass(polygeist::createCanonicalizeForPass());
 }
 
-/// OpenMP to SDE fact conversion. Codelets are intentionally not lowered here;
-/// SDE facts feed `sde-to-codir`, and CODIR then realizes ARTS objects.
+/// OpenMP to SDE fact conversion. ARTS objects are intentionally not lowered
+/// here; SDE facts feed the direct `sde-to-arts` boundary.
 void buildSdePlanningPipeline(PassManager &pm,
                               sde::SDECostModel *costModel = nullptr) {
   pm.addPass(sde::createConvertOpenMPToSdePass());
@@ -1180,6 +1153,7 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createIterationSpaceDecompositionPass());
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createMemoryUnitMaterializationPass());
+  pm.addPass(sde::createSdeAtomicReductionMaterializationPass());
   pm.addPass(sde::createSdeCuNormalizationPass());
   // Pre-window physical consistency gate: committed physical facts must agree
   // with arrayLayout and SU schedule BEFORE the rank-expand transform consumes
@@ -1204,30 +1178,16 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createVerifySdePass());
 }
 
-/// SDE-to-CODIR conversion. This is the mechanical codelet conversion:
-/// SDE owns transformed facts; CODIR owns isolated deps, params, and
-/// token-local memref views.
-void buildSdeToCodirPipeline(PassManager &pm) {
-  pm.addPass(codir::createConvertSdeToCodirPass());
+/// SDE-to-ARTS conversion. SDE owns transformed facts; ARTS materializes DB,
+/// acquire, EDT, and control objects directly from those committed facts.
+void buildSdeToArtsPipeline(PassManager &pm) {
+  pm.addPass(arts::createSdeStorageToArtsDbPass());
+  pm.addPass(arts::createSdeAccessesToArtsDepsPass());
+  pm.addPass(arts::createFinalizeSdeToArtsPass());
+  pm.addPass(arts::createVerifyArtsObjectsOnlyPass());
 }
 
-/// CODIR graph transforms over already isolated codelets.
-void buildCodirGraphTransformsPipeline(PassManager &pm) {
-  pm.addPass(codir::createCodirCodeletDCEPass());
-  pm.addPass(codir::createReductionDepMappingPass());
-  pm.addPass(codir::createReductionAtomicMaterializationPass());
-  pm.addPass(codir::createDepStorageAssignmentPass());
-  pm.addPass(codir::createCodirHaloExchangePass());
-  pm.addPass(codir::createVerifyCodirPass());
-}
-
-/// SDE/CODIR boundary conversion to ARTS. Every ARTS EDT must come from a
-/// CODIR codelet.
-void buildCodirToArtsPipeline(PassManager &pm) {
-  pm.addPass(codir::createConvertCodirToArtsPass());
-}
-
-/// EDT dependency realization from facts produced by CODIR-to-ARTS.
+/// EDT dependency realization over direct SDE-to-ARTS objects.
 void buildEdtDepRealizationPipeline(PassManager &pm) {
   pm.addPass(arts::createRealizeEdtDistributionPlanPass());
   pm.addPass(sde::createVerifySdeLoweredPass());
@@ -1399,10 +1359,7 @@ static constexpr llvm::StringLiteral kDepSdeInputNormalization[] = {
     "sde-input-normalization"};
 static constexpr llvm::StringLiteral kDepInitialCleanup[] = {"initial-cleanup"};
 static constexpr llvm::StringLiteral kDepSdePlanning[] = {"sde-planning"};
-static constexpr llvm::StringLiteral kDepSdeToCodir[] = {"sde-to-codir"};
-static constexpr llvm::StringLiteral kDepCodirGraphTransforms[] = {
-    "codir-graph-transforms"};
-static constexpr llvm::StringLiteral kDepCodirToArts[] = {"codir-to-arts"};
+static constexpr llvm::StringLiteral kDepSdeToArts[] = {"sde-to-arts"};
 static constexpr llvm::StringLiteral kDepEdtDepRealization[] = {
     "edt-dep-realization"};
 static constexpr llvm::StringLiteral kDepCreateDbs[] = {"create-dbs"};
@@ -1412,7 +1369,7 @@ static constexpr llvm::StringLiteral kDepPreLowering[] = {
     "epochs", "late-concurrency-cleanup"};
 static constexpr llvm::StringLiteral kDepArtsRtToLLVM[] = {"pre-lowering"};
 static ArrayRef<StageDescriptor> getStageRegistry() {
-  static const std::array<StageDescriptor, 17> kStageRegistry = {{
+  static const std::array<StageDescriptor, 15> kStageRegistry = {{
       {StageId::SdeInputNormalization, "sde-input-normalization",
        StageKind::Core, true, true, false, "Error when normalizing SDE input",
        kSdeInputNormalizationPasses,
@@ -1436,28 +1393,13 @@ static ArrayRef<StageDescriptor> getStageRegistry() {
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepInitialCleanup},
-      {StageId::SdeToCodir, "sde-to-codir", StageKind::Core, true, true, false,
-       "Error when converting SDE to CODIR", kSdeToCodirPasses,
+      {StageId::SdeToArts, "sde-to-arts", StageKind::Core, true, true, false,
+       "Error when converting SDE to ARTS", kSdeToArtsPasses,
        [](PassManager &pm, const StageExecutionContext &) {
-         buildSdeToCodirPipeline(pm);
+         buildSdeToArtsPipeline(pm);
        },
        isStageEnabledAlways,
        /*dependsOn=*/kDepSdePlanning},
-      {StageId::CodirGraphTransforms, "codir-graph-transforms", StageKind::Core,
-       true, true, false, "Error when transforming CODIR codelet graph",
-       kCodirGraphTransformsPasses,
-       [](PassManager &pm, const StageExecutionContext &) {
-         buildCodirGraphTransformsPipeline(pm);
-       },
-       isStageEnabledAlways,
-       /*dependsOn=*/kDepSdeToCodir},
-      {StageId::CodirToArts, "codir-to-arts", StageKind::Core, true, true,
-       false, "Error when converting CODIR to ARTS", kCodirToArtsPasses,
-       [](PassManager &pm, const StageExecutionContext &) {
-         buildCodirToArtsPipeline(pm);
-       },
-       isStageEnabledAlways,
-       /*dependsOn=*/kDepCodirGraphTransforms},
       {StageId::EdtDepRealization, "edt-dep-realization", StageKind::Core, true,
        true, false, "Error when realizing EDT dependencies",
        kEdtDepRealizationPasses,
@@ -1465,7 +1407,7 @@ static ArrayRef<StageDescriptor> getStageRegistry() {
          buildEdtDepRealizationPipeline(pm);
        },
        isStageEnabledAlways,
-       /*dependsOn=*/kDepCodirToArts},
+       /*dependsOn=*/kDepSdeToArts},
       {StageId::EdtLocalCleanup, "edt-local-cleanup", StageKind::Core, true,
        true, false, "Error when running EDT-local cleanup",
        kEdtLocalCleanupPasses,

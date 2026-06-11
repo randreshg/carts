@@ -93,18 +93,19 @@ makeMuAccessIndexer(SdeStructuredClassification cls,
 bool isBlockGridRealizable(SdeSuIterateOp si, mlir::MemRefType logicalType,
                            MuPhysicalLayout &out);
 
-/// Find the committed block-grid plan governing `muAlloc`: the nearest
-/// enclosing `su_iterate` of any load/store user that carries both
-/// `physicalOwnerDims` and `physicalBlockShape`. Returns null when there is no
-/// such writer, or when distinct users disagree on the committed
-/// owner-dims/block-shape (a layout conflict the caller leaves conservative).
+/// Find the committed block-grid storage plan governing `muAlloc`: the nearest
+/// enclosing `su_iterate` of any store user that carries both
+/// `physicalOwnerDims` and `physicalBlockShape`. Reader layouts are consumers
+/// of storage and may require SDE movement; they must not choose or conflict
+/// with storage grain. Returns null when there is no such writer, or when
+/// distinct writers disagree on the committed owner-dims/block-shape.
 SdeSuIterateOp findCommittedBlockPlanWriter(SdeMuAllocOp muAlloc);
 
 /// True if `root` has a use a block-grid layout cannot localize — any user
-/// other than a direct `memref.load`/`store`/`dealloc`, an
-/// `sde.mu_access_window` fact, or an `sde.redist` fact. The single allow-list
-/// shared by the coarse-avoidance gate and redistribution realization so they
-/// never drift.
+/// other than a direct `memref.load`/`store`/`dealloc`,
+/// `sde.array_layout_root` provenance, an `sde.mu_access_window` fact, or an
+/// `sde.redist` fact. The single allow-list shared by the coarse-avoidance
+/// gate and redistribution realization so they never drift.
 bool muRootHasUnsupportedUse(mlir::Value root);
 
 /// A rank-expanded block-grid MU candidate (any number of owner dims),

@@ -44,6 +44,15 @@ namespace {
 // Shared helpers keep the block-grid realize gate and index localization
 // identical across rank expansion, coarse avoidance, and verification.
 
+static ArrayAttr buildCanonicalOwnerDimsAttr(MLIRContext *ctx,
+                                             ArrayRef<unsigned> ownerDims) {
+  SmallVector<int64_t, 4> values;
+  values.reserve(ownerDims.size());
+  for (unsigned dim : ownerDims)
+    values.push_back(static_cast<int64_t>(dim));
+  return Builder(ctx).getI64ArrayAttr(values);
+}
+
 struct SdeRankExpandMuPass
     : public carts::sde::impl::SdeRankExpandMuBase<SdeRankExpandMuPass> {
   void runOnOperation() override {
@@ -77,7 +86,10 @@ struct SdeRankExpandMuPass
                "rank-expanded MU (unsupported use of the MU root); refusing to "
                "leave a partial owner-dim promise";
         failed = true;
+        continue;
       }
+      si.setPhysicalOwnerDimsAttr(
+          buildCanonicalOwnerDimsAttr(module.getContext(), plan.ownerDims));
     }
 
     if (failed)

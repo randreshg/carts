@@ -3,7 +3,7 @@
 ///
 /// Realizes ARTS owner-map and memory-placement facts on DbAlloc operations
 /// that are eligible for distributed ownership. The pass is mechanical: it
-/// consumes the committed SDE/CODIR owner/block plan and projects it into an
+/// consumes the committed SDE owner/block plan and projects it into an
 /// ARTS owner map plus a scattered home. It does not choose a distribution
 /// family, recompute block shape, or coarsen grain.
 ///

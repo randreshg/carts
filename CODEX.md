@@ -35,19 +35,17 @@ dekk carts skills generate
 
 ## Current Compiler Shape
 
-The project is organized around four dialect layers:
+The project is organized around three dialect layers:
 
 - `sde`: HPF-style `DISTRIBUTE`/`ALIGN`, source semantics, per-array block
   layouts from affine access relations, abstract communication-volume cost,
   PatternAnalysis, and real source/SU/CU/MU loop/layout transformations. It
   names no collectives, DBs, EDTs, routes, GUIDs, or runtime policy.
-- `codir`: isolated codelets, explicit deps/params, token-local memref views,
-  first-class MPI distribution patterns, collective/bridge selection from SDE
-  layout mismatch plus compute pattern, and materialized
-  contraction/redistribution/halo structure.
-- `arts`: abstract DB, EDT, epoch, dependency-slot, placement, distributed
-  ownership, per-block single-writer DB realization, owner maps, and grouped
-  compute/bridge/communication CUs.
+- `arts`: first isolation boundary, isolated codelets, explicit deps/params,
+  token-local memref views, graph optimizations, mechanical representation of
+  SDE-authored movement structure, abstract DB, EDT, epoch, dependency-slot,
+  placement, distributed ownership, per-block single-writer DB realization,
+  owner maps, and grouped compute/bridge/communication CUs.
 - `arts_rt`: runtime ABI, packing, pointer lowering, runtime calls, and
   LLVM-facing cleanup. It mechanically lowers ARTS facts and does not infer
   scheduling, ownership, partition, or collective policy.
@@ -55,8 +53,8 @@ The project is organized around four dialect layers:
 Physical layout:
 
 ```text
-include/carts/dialect/{sde,codir,arts,arts-rt}/
-lib/carts/dialect/{sde,codir,arts,arts-rt}/
+include/carts/dialect/{sde,arts,arts-rt}/
+lib/carts/dialect/{sde,arts,arts-rt}/
 lib/carts/dialect/*/test/
 tools/compile/Compile.cpp
 ```
@@ -68,8 +66,8 @@ tools/compile/Compile.cpp
 - Do not hardcode project attribute names. Use generated ODS accessors such as
   `op.getStencilMinOffsetsAttrName()` or the owning dialect utility API.
 - Do real transformations in the owning layer. SDE commits layout/source and
-  movement facts, CODIR represents them as graph structure, ARTS realizes
-  DB/EDT owner maps and grouped execution, and ARTS-RT lowers mechanically.
+  movement facts, ARTS represents them as graph structure, realizes DB/EDT
+  owner maps and grouped execution, and ARTS-RT lowers mechanically.
   Downstream consumes, verifies, realizes, or rejects committed facts; it does
   not silently recompute them.
 - Keep DB/MU grain separate from CU/bridge grain. Use the hypergraph only as
@@ -93,8 +91,6 @@ Match verification to the change:
 
 <!-- BEGIN SKILLS INVENTORY -->
 ## Available Skills
-
-Before editing CARTS sources, scan the Skills inventory below and read the SKILL.md for any whose description matches your task.
 
 ### Session lifecycle
 
@@ -139,12 +135,12 @@ Before editing CARTS sources, scan the Skills inventory below and read the SKILL
 | `analysis-triage` | Use when behavior depends on pass order, stale facts, or metadata inconsistency across staged CARTS pipelines. | `carts-plugin/skills/analysis-triage/SKILL.md` |
 | `miscompile-triage` | Use when a program compiles but produces wrong output, checksum mismatches, phase-equivalence failures, or suspicious partitioning/distribution decisions. | `carts-plugin/skills/miscompile-triage/SKILL.md` |
 | `runtime-triage` | Use when compilation succeeds but the generated ARTS executable hangs, deadlocks, crashes, stalls, or reports anomalous runtime counters. | `carts-plugin/skills/runtime-triage/SKILL.md` |
-| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/CODIR/ARTS distributed work materialization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
+| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work materialization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
 | `benchmark-triage` | Use when a benchmark fails, times out, produces wrong checksums, shows suspicious speedups, or needs pass-by-pass/runtime diagnosis. | `carts-plugin/skills/benchmark-triage/SKILL.md` |
 | `heuristic-explain` | Use when a benchmark or test has unexpected partitioning, wrong distribution mode, or heuristic drift in ARTS DB/EDT placement decisions. | `carts-plugin/skills/heuristic-explain/SKILL.md` |
 | `reproducer` | Use when a large failing program, benchmark, or stage dump needs to become a minimal C, MLIR, or lit reproducer. | `carts-plugin/skills/reproducer/SKILL.md` |
 | `stage-diff` | Use when debugging miscompiles, verifying pass correctness, comparing MLIR between pipeline stages, or finding where semantics diverge. | `carts-plugin/skills/stage-diff/SKILL.md` |
-| `dialect-trace` | Use when debugging lowering paths, understanding operation placement across SDE/CODIR/ARTS/ARTS-RT, or verifying dialect boundary invariants. | `carts-plugin/skills/dialect-trace/SKILL.md` |
+| `dialect-trace` | Use when debugging lowering paths, understanding operation placement across SDE/ARTS/ARTS-RT, or verifying dialect boundary invariants. | `carts-plugin/skills/dialect-trace/SKILL.md` |
 | `runtime-first` | Use after runtime triage shows the compiler must match an ARTS runtime contract for EDTs, DBs, epochs, dependencies, or distributed execution. | `carts-plugin/skills/runtime-first/SKILL.md` |
 
 ### Authoring + maintenance
@@ -159,7 +155,7 @@ Before editing CARTS sources, scan the Skills inventory below and read the SKILL
 
 | Skill | Description | Path |
 | --- | --- | --- |
-| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/CODIR/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, GASNet/distributed scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
+| `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, GASNet/distributed scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
 | `carts-worktrees` | Use when working on multiple CARTS/ARTS changes in parallel, isolating a risky compiler/runtime change, or running concurrent builds/benchmarks without clobbering the main checkout. Covers the carts-wt tool and the shared-LLVM/Polygeist worktree model. | `carts-plugin/skills/carts-worktrees/SKILL.md` |
 
 <!-- END SKILLS INVENTORY -->

@@ -15,7 +15,7 @@ parameters:
 Goal: determine whether the bug is caused by stale facts, a pass-ordering
 assumption, or a transformation reading facts after it has invalidated them.
 
-Use [[carts-vision]] when stale facts cross SDE/CODIR/ARTS/ARTS-RT boundaries.
+Use [[carts-vision]] when stale facts cross SDE/ARTS/ARTS-RT boundaries.
 Do not recreate the retired ARTS cached graph stack; prefer stage diffs,
 pass-local queries, and focused utilities.
 
@@ -60,7 +60,7 @@ Read these before editing invalidation behavior:
 - Do not add a broad manager or graph cache to “fix” a stale-fact symptom.
 - If a pass mutates DB/EDT structure, prove later queries are reading the new IR.
 - Invalidation fixes must preserve committed-fact flow: SDE layout and movement
-  facts, CODIR graph facts, ARTS owner maps/DB/EDT facts, and ARTS-RT
+  facts, ARTS graph facts, ARTS owner maps/DB/EDT facts, and ARTS-RT
   mechanical lowering facts stay in their owning layers.
 
 ## Hand-off

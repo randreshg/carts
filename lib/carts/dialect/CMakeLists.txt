@@ -1,5 +1,4 @@
 add_subdirectory(arts-rt)
-add_subdirectory(codir)
 add_subdirectory(sde)
 
 set(CARTS_RT_TO_LLVM_SOURCE_FILES ${CARTS_RT_TO_LLVM_SOURCE_FILES} PARENT_SCOPE)

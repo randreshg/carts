@@ -28,17 +28,15 @@ samples/           End-to-end C/C++ demo programs (moved from tests/examples/)
 | 1 sde-input-normalization           | `lib/carts/dialect/sde/test/`       |
 | 2 initial-cleanup                       | `lib/carts/dialect/sde/test/`       |
 | 3 sde-planning                          | `lib/carts/dialect/sde/test/`       |
-| 4 sde-to-codir                          | `lib/carts/dialect/codir/test/`    |
-| 5 codir-graph-transforms                | `lib/carts/dialect/codir/test/`    |
-| 6 codir-to-arts                         | `lib/carts/dialect/codir/test/`    |
-| 7 edt-dep-realization                   | `lib/carts/dialect/arts/test/`      |
-| 8 edt-local-cleanup                     | `lib/carts/dialect/arts/test/`      |
-| 9 create-dbs                            | `lib/carts/dialect/arts/test/`      |
-| 10 db-opt                               | `lib/carts/dialect/arts/test/`      |
-| 11 post-db-refinement                   | `lib/carts/dialect/arts/test/`      |
-| 12 late-concurrency-cleanup             | `lib/carts/dialect/arts/test/`      |
-| 13 epochs                               | `lib/carts/dialect/arts/test/`      |
-| 14 pre-lowering                         | `lib/carts/dialect/arts/test/`      |
-| 15 arts-rt-to-llvm                      | `lib/carts/dialect/arts-rt/test/`        |
+| 4 sde-to-arts                          | `lib/carts/dialect/arts/test/`    |
+| 5 edt-dep-realization                   | `lib/carts/dialect/arts/test/`      |
+| 6 edt-local-cleanup                     | `lib/carts/dialect/arts/test/`      |
+| 7 create-dbs                            | `lib/carts/dialect/arts/test/`      |
+| 8 db-opt                                | `lib/carts/dialect/arts/test/`      |
+| 9 post-db-refinement                    | `lib/carts/dialect/arts/test/`      |
+| 10 late-concurrency-cleanup             | `lib/carts/dialect/arts/test/`      |
+| 11 epochs                               | `lib/carts/dialect/arts/test/`      |
+| 12 pre-lowering                         | `lib/carts/dialect/arts/test/`      |
+| 13 arts-rt-to-llvm                      | `lib/carts/dialect/arts-rt/test/`        |
 | Verification passes (VerifyLowered etc) | `tests/verify/`                    |
 | CLI flag/option validation              | `tests/cli/`                       |

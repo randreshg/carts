@@ -23,7 +23,7 @@ parameters:
 **Layer-owned transformation** — do the real transformation in the owning
 dialect. Do not add metadata-only promises for another pass to repair later.
 If the layer cannot safely transform, fail closed with a verifier or explicit
-reject reason. SDE commits real layout/loop/source facts; CODIR commits
+reject reason. SDE commits real layout/loop/source facts; ARTS commits
 collective/bridge/contraction structure; ARTS realizes DB/EDT/owner-map and
 grouped CU/bridge execution; ARTS-RT lowers mechanically.
 
@@ -41,10 +41,11 @@ analysis managers. Do not add broad graph/node abstractions for facts that are
 already explicit in ARTS IR; transform the owning structure directly or fail
 closed.
 
-**Attribute names** — NEVER hardcode strings. For CARTS IR attrs, add/use the
-owning op or attr in TableGen and consume generated ODS accessors such as
-`op.getStencilMinOffsetsAttrName()`. Use `AttrNames::Operation` only for
-remaining shared or transitional metadata. `StencilAttributes.h` provides
+**Operation contracts and attribute names** — Put local operation structure,
+region/body legality, traits, interfaces, and CARTS IR attrs in the owning
+TableGen/ODS definition first. Use generated op verifiers and ODS accessors
+such as `op.getStencilMinOffsetsAttrName()`. Use `AttrNames::Operation` only
+for remaining shared or transitional metadata. `StencilAttributes.h` provides
 helper logic; it is not the source of manual attr names.
 
 **Naming** — DB passes: `Db` prefix. EDT passes: `Edt` prefix. LLVM style: 2-space indent, CamelCase types, camelCase variables.
@@ -70,11 +71,11 @@ for larger utility moves.
 
 ## Creating a New Pass
 
-1. Create source in the appropriate dialect directory (`lib/carts/dialect/{sde,codir,arts,arts-rt}/...`)
+1. Create source in the appropriate dialect directory (`lib/carts/dialect/{sde,arts,arts,arts-rt}/...`)
 2. Add the pass to the owning TableGen `Passes.td`; keep C++ factories behind
    generated declarations unless the pass needs temporary non-TableGen state
 3. Register in pipeline at appropriate stage in `tools/compile/Compile.cpp`
-4. Add lit test in the co-located `test/` directory (`lib/carts/dialect/{sde,codir,arts,arts-rt}/test/`)
+4. Add lit test in the co-located `test/` directory (`lib/carts/dialect/{sde,arts,arts,arts-rt}/test/`)
 5. `dekk carts format` then `dekk carts test --suite contracts`
 
 ## Thread Safety

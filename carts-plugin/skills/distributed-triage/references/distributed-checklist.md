@@ -15,7 +15,7 @@ Use this checklist when a workload fails only in multinode/distributed runs.
 Inspect these stage boundaries in order:
 
 1. `sde-planning`
-2. `codir-to-arts`
+2. `sde-to-arts`
 3. `post-db-refinement`
 4. `pre-lowering`
 
@@ -24,7 +24,7 @@ Look for:
 - SDE array-layout facts backed by real loop/layout/source transformation
   (`physicalOwnerDims`, `physicalBlockShape`, loop tiling, access-window shape)
 - `distribution_kind`, `distribution_pattern`, `distribution_version`
-- CODIR representation of SDE movement structure and storage views
+- ARTS representation of SDE movement structure and storage views
 - writable task acquires that should preserve owner hints
 - `DbAllocOp` instances marked `distributed`
 - cases where SDE distribution planning should have produced distributed ARTS

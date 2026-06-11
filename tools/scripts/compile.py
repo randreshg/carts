@@ -1154,12 +1154,9 @@ _DIALECT_BOUNDARIES: List[Tuple[str, str, List[Tuple[str, str]]]] = [
     # OMP dialect → SDE dialect (inside the SDE planning stage).
     ("01_omp_to_sde", "sde",
      [("sde-planning", "ConvertOpenMPToSde")]),
-    # SDE planning → CODIR codelet isolation.
-    ("02_sde_to_codir", "codir",
-     [("sde-to-codir", "ConvertSdeToCodir")]),
-    # CODIR codelet boundary → ARTS core objects.
-    ("03_codir_to_arts", "core",
-     [("codir-to-arts", "ConvertCodirToArts")]),
+    # SDE planning → ARTS core objects.
+    ("02_sde_to_arts", "core",
+     [("sde-to-arts", "FinalizeSdeToArts")]),
     # ARTS core → arts_rt runtime dialect (inside the pre-lowering stage).
     ("04_arts_to_rt", "rt", [
         ("pre-lowering", "DbLowering"),
@@ -1381,34 +1378,27 @@ def _compile_all_pipelines(
               01_sde-input-normalization/
               02_initial-cleanup/
               03_sde-planning/               # SDE planning passes
-          3_codir/                           # codelet isolation work
+          3_core/                            # ARTS core dialect work
             stages/
-              NN_sde-to-codir.mlir
-              NN_codir-graph-transforms.mlir
-            passes/
-              NN_sde-to-codir/
-              NN_codir-graph-transforms/
-          4_core/                            # ARTS core dialect work
-            stages/
-              NN_codir-to-arts.mlir          # output is core (post conversion)
+              NN_sde-to-arts.mlir            # output is core (post conversion)
               NN_edt-dep-realization.mlir
               NN_edt-local-cleanup.mlir … NN_epochs.mlir
             passes/
-              NN_codir-to-arts/
+              NN_sde-to-arts/
               NN_edt-dep-realization/
               NN_edt-local-cleanup/ … NN_epochs/
               NN_pre-lowering/               # core passes before rt-lowering
-          5_rt/                              # arts_rt dialect + lowering
+          4_rt/                              # arts_rt dialect + lowering
             stages/
               NN_pre-lowering.mlir
               NN_arts-rt-to-llvm.mlir
             passes/
               NN_pre-lowering/               # rt-lowering passes onward
               NN_arts-rt-to-llvm/
-          6_llvm/
+          5_llvm/
             <stem>.ll                        # final LLVM IR (--emit-llvm)
           boundaries/                        # dialect-conversion slices
-            01_omp_to_sde/ 02_sde_to_codir/ 03_codir_to_arts/ 04_arts_to_rt/
+            01_omp_to_sde/ 02_sde_to_arts/ 04_arts_to_rt/
           complete.mlir                      # final MLIR (after --O3 cleanup)
 
     Bucketing rules (all derived from ``_DIALECT_BOUNDARIES`` + the live
@@ -1418,9 +1408,8 @@ def _compile_all_pipelines(
       - Per-stage MLIR is placed in the phase its output IR belongs to
         (see ``_stage_phase_map``).
       - Per-pass dumps are placed by an execution-order cursor that flips on
-        boundary passes (see ``_phase_flip_passes``). The current codelet
-        boundary uses separate stages for SDE planning, CODIR isolation, and
-        ARTS materialization.
+        boundary passes (see ``_phase_flip_passes``). SDE planning feeds
+        direct ARTS materialization.
 
     For ``.mlir`` input the ``1_polygeist/`` phase is skipped (caller already
     has the pre-ARTS MLIR on disk).
@@ -1532,7 +1521,7 @@ def _compile_all_pipelines(
 
         # Phase 2c: per-pass IR dumps, routed to phase buckets by an
         # execution-order cursor that flips on boundary passes
-        # (ConvertCodirToArts → core; rt-lowering passes → rt). Each per-pass
+        # (FinalizeSdeToArts → core; rt-lowering passes → rt). Each per-pass
         # dump is written to <phase>/passes/<NN>_<stage>/<MMM>_<Class>.mlir.
         # Stages whose passes straddle a boundary (3 and 15) appear under
         # two phase buckets — that's intentional and informative.
@@ -1598,8 +1587,7 @@ def _compile_all_pipelines(
         results.append((label, total_dumps > 0))
         progress.advance(task)
 
-        # Phase 2d: dialect-boundary view (OMP→SDE, SDE→CODIR,
-        # CODIR→ARTS, ARTS→RT).
+        # Phase 2d: dialect-boundary view (OMP->SDE, SDE->ARTS, ARTS->RT).
         # Materialized from the per-pass dumps we just wrote, by searching
         # across all phase buckets.
         progress.update(task, description="Phase 2: dialect boundaries")

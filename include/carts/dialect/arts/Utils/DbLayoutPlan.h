@@ -1,12 +1,12 @@
 ///==========================================================================///
 /// File: DbLayoutPlan.h
 ///
-/// Physical DB layout data projected from SDE/CODIR plans.
+/// Physical DB layout data projected from SDE plans.
 ///
-/// SDE owns the tensor/linalg analysis and chooses the physical owner
+/// SDE owns memref/access analysis and chooses the physical owner
 /// dimensions, block shape, and task slice facts. ARTS may use this small
 /// value type for object materialization and diagnostics, but block-local
-/// access rewriting belongs to SDE/CODIR token-local memref lowering.
+/// access rewriting belongs to SDE token-local memref lowering.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_ARTS_UTILS_DBLAYOUTPLAN_H
@@ -27,7 +27,7 @@ struct DbPhysicalLayoutPlan {
 
   /// N-D block sizes, one per partitioned owner dimension.
   SmallVector<Value> blockSizes;
-  /// Original memref/tensor dimension index for each partitioned owner dim.
+  /// Original memref dimension index for each partitioned owner dim.
   SmallVector<unsigned> partitionedDims;
 
   /// Allocation shape.  `outerSizes` are DB coordinates; `innerSizes` are the

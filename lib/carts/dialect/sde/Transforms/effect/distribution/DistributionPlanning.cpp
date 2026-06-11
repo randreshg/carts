@@ -35,6 +35,7 @@ namespace mlir::carts::sde {
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/MathExtras.h"
@@ -1178,8 +1179,9 @@ findConsistentMultiOwnerOutputPlan(sde::SdeSuIterateOp op) {
       return WalkResult::advance();
     }
 
-    if (candidate.root != selectedPlan->root ||
-        candidate.shape != selectedPlan->shape ||
+    auto selectedType = dyn_cast<MemRefType>(selectedPlan->root.getType());
+    if (!selectedType || candidate.shape != selectedPlan->shape ||
+        memRefType.getElementType() != selectedType.getElementType() ||
         candidate.ownerPhysicalDims != selectedPlan->ownerPhysicalDims) {
       rejected = true;
       return WalkResult::interrupt();
@@ -1256,13 +1258,22 @@ selectSingleWriteLayoutFact(sde::SdeSuIterateOp op) {
     return std::nullopt;
 
   std::optional<sde::LayoutGraphFact> selected;
+  llvm::SmallDenseSet<int64_t, 4> writtenIds;
   for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
     if (fact.role != sde::LayoutGraphRole::write || fact.ownerDims.empty() ||
         fact.blockShape.empty())
       continue;
-    if (selected)
+    if (fact.id < 0 || !writtenIds.insert(fact.id).second)
       return std::nullopt;
-    selected = fact;
+    if (!selected) {
+      selected = fact;
+      continue;
+    }
+    if (selected->layoutKind != fact.layoutKind ||
+        selected->ownerDims != fact.ownerDims ||
+        selected->blockShape != fact.blockShape ||
+        selected->budgetBlockShape != fact.budgetBlockShape)
+      return std::nullopt;
   }
   return selected;
 }

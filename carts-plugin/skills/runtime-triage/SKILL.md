@@ -18,7 +18,7 @@ parameters:
 Goal: classify the runtime failure before changing compiler code.
 
 Runtime fixes cannot compensate for wrong compiler shape. Use [[carts-vision]]
-to verify that SDE committed layout/tiling facts, CODIR committed
+to verify that SDE committed layout/tiling facts, ARTS committed
 collectives/bridges, and ARTS realized DB/EDT owner maps before changing
 ARTS-RT or runtime code.
 
@@ -75,7 +75,7 @@ dekk carts build --arts --counters 3
 ## Distributed-Specific Checks
 
 - Verify whether the DB is marked `distributed`
-- Verify ARTS consumed committed SDE/CODIR facts instead of recomputing
+- Verify ARTS consumed committed SDE facts instead of recomputing
   distribution policy
 - Check route selection and owner assumptions in `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/ConvertArtsRtToLLVM.cpp`
 - Check distributed init / worker-local creation in `lib/carts/codegen/Codegen.cpp`
@@ -87,8 +87,7 @@ dekk carts build --arts --counters 3
 - `docs/heuristics/partitioning.md`
 - `AGENTS.md` section: Distributed Runtime Debug
 - `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/ConvertArtsRtToLLVM.cpp`
-- `lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp`
-- `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
+- `lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp`
 - `lib/carts/dialect/arts-rt/Conversion/ArtsToRt/EdtLowering.cpp`
 - `lib/carts/dialect/arts-rt/Conversion/ArtsToRt/EpochLowering.cpp`
 - `lib/carts/dialect/arts/Transforms/edt/`

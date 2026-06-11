@@ -52,7 +52,7 @@ before commit, PR review, or final task completion.
    - canonicalization, folding, and cleanup passes are not required for
      correctness;
    - SDE does not name collectives or runtime policy;
-   - CODIR does not redo SDE data-layout analysis;
+   - ARTS does not redo SDE data-layout analysis;
    - ARTS does not rediscover source semantics;
    - ARTS-RT does not infer scheduling, ownership, partition, or collective
      policy;

@@ -7,6 +7,7 @@
 
 #include "carts/dialect/sde/Analysis/AccessWindowSync.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Block.h"
@@ -72,7 +73,7 @@ bool phaseFullyWindowed(ArrayRef<SdeCuRegionOp> phase) {
     llvm::DenseSet<Value> windowed;
     for (Operation &op : cu.getBody().front())
       if (auto win = dyn_cast<SdeMuAccessWindowOp>(op))
-        windowed.insert(win.getMu());
+        windowed.insert(ValueAnalysis::stripMemrefViewOps(win.getMu()));
     bool ok = true;
     cu.getBody().walk([&](Operation *op) {
       Value memref;
@@ -82,7 +83,10 @@ bool phaseFullyWindowed(ArrayRef<SdeCuRegionOp> phase) {
         memref = store.getMemRef();
       else
         return;
-      if (!windowed.contains(memref))
+      Value root = ValueAnalysis::stripMemrefViewOps(memref);
+      if (!root.getDefiningOp<SdeMuAllocOp>())
+        return;
+      if (!windowed.contains(root))
         ok = false; // an access no window describes
     });
     if (!ok)

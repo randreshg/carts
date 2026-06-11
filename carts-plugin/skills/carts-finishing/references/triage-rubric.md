@@ -13,7 +13,7 @@ Apply this rubric whenever a sample or benchmark fails. The principle: **errors 
 7. Cross-check against **anti-patterns** to confirm you are not repeating a documented mistake.
 
 Use the `carts-vision` spine to classify the originating layer: SDE fixes real
-source/layout/tiling facts; CODIR fixes graph/contraction/halo
+source/layout/tiling facts; ARTS fixes graph/contraction/halo
 materialization; ARTS fixes DB/EDT owner-map realization and grouped execution;
 ARTS-RT fixes only mechanical lowering.
 
@@ -23,17 +23,17 @@ When an error surfaces at stage N, check the listed prior stages first.
 
 | Surface | Symptom text | Likely originating stages | First thing to check |
 |---|---|---|---|
-| `codir-to-arts` | `SDE operation ... survived past SDE lowering` | `ConvertOpenMPToSde`, `sde-planning`, `ConvertSdeToCodir` | Which SDE op did not become a CODIR codelet or explicit CODIR boundary object? |
+| `sde-to-arts` | `SDE operation ... survived past SDE lowering` | `ConvertOpenMPToSde`, `sde-planning`, `SdeStorageToArtsDb`, `SdeAccessesToArtsDeps`, `FinalizeSdeToArts` | Which SDE op did not become an ARTS DB, dependency, task, or explicit boundary object? |
 | `sde-input-normalization` / `create-dbs` | `cannot trace memref operand to its underlying allocation` | `SdeMemrefNormalization`, `SdeHandleDeps`, `CreateDbs` | Memref-of-memref reaching CreateDbs from a heap allocation. |
 | `create-dbs` | `un-normalizable nested memref pattern (element type is memref)` | `SdeMemrefNormalization`, `ConvertOpenMPToSde` | Polygeist producing `memref<?xmemref<?xT>>` from `int *A = malloc(N)`. Fix upstream. |
 | `create-dbs` / `post-db-refinement` | Metadata-copy recursion or DB-mode churn | Live metadata copy sites and focused DB refinement rewrites | Fix the producer or rewrite that invalidates the fact. Do not recreate the retired monolithic partitioning layer. |
-| `create-dbs` / `post-db-refinement` | Wrong answer; a raw memref bridge silently becomes one coarse wrapper DB, indices dropped | SDE/CODIR shape normalization or direct CODIR-to-ARTS materialization | Single-element wrapper DB instead of N-element data. The fix is upstream in shape/token-local materialization; `CreateDbs` is only a guarded coarse raw bridge. |
+| `create-dbs` / `post-db-refinement` | Wrong answer; a raw memref bridge silently becomes one coarse wrapper DB, indices dropped | SDE shape normalization or direct SDE-to-ARTS materialization | Single-element wrapper DB instead of N-element data. The fix is upstream in shape/token-local materialization; `CreateDbs` is only a guarded coarse raw bridge. |
 | `post-db-refinement` | Stencil halo bounds wrong | SDE access-window plan, DB refinement contract rewrite | Confirm SDE stamped the right halo/window, then check whether DB refinement rewrote it. |
 | `pre-lowering` / `arts-rt-to-llvm` | `arts.db_alloc` / `arts.edt` / `arts.epoch` survived to LLVM | DbLowering, EdtLowering, EpochLowering | A lowering was skipped. Check the owning lowering and any contract-validity gate that excluded this op. |
-| `pre-lowering` | `arts.db_acquire` references GUID that does not exist | DB refinement (GUID lost), CODIR-to-ARTS materialization for codelet deps, EpochLowering (CPS carry corruption) | Trace the GUID source. Did an intermediate pass erase it? |
+| `pre-lowering` | `arts.db_acquire` references GUID that does not exist | DB refinement (GUID lost), SDE-to-ARTS materialization for codelet deps, EpochLowering (CPS carry corruption) | Trace the GUID source. Did an intermediate pass erase it? |
 | `pre-lowering` | CPS chain: wrong iteration counter or outer epoch GUID | Epoch continuation construction, `EpochLowering` propagation | Check carry attrs before and after epoch-tail/continuation passes. |
 | `pre-lowering` | `CPS advance: rebuilt continuation pack with N schema holes` | Epoch continuation construction, intermediate EDT rewrites, `EdtLowering` pack ordering | Carry arity changed before `EpochLowering`. Zero-filled slots carry garbage. |
-| `post-db-refinement` (distributed) | Stencil halo not applied, internode acquire uses full range | SDE window/layout mismatch, CODIR movement representation missing, ARTS owner-map fact missing | Did SDE commit a real layout/window, did CODIR preserve movement structure, and did ARTS realize distributed owner maps after consuming those facts? |
+| `post-db-refinement` (distributed) | Stencil halo not applied, internode acquire uses full range | SDE window/layout mismatch, ARTS movement representation missing, ARTS owner-map fact missing | Did SDE commit a real layout/window, did ARTS preserve movement structure, and did ARTS realize distributed owner maps after consuming those facts? |
 | `post-db-refinement` (distributed) | Task hangs on remote data acquire | Dependency-window narrowing, DB refinement scope-aware bounds | A dep window may have narrowed to local-only; distributed task cannot reach halo. |
 | `pre-lowering` | `arts_rt.edt_create` argument count mismatch | `EdtLowering` pack construction, prior DB/EDT rewrites invalidating pack operand | `EdtParamPackOp` was rewritten; `EdtCreateOp` references old pack. |
 | Post-LLVM | Wrong value in loop or task parameter (silent miscompute) | `EpochLowering` CPS carry slot corruption, `EdtLowering` pack slot reordering | Run `dekk carts compile --all-pipelines` and inspect `pipelines/4_rt/` for the pack structure. |
@@ -44,8 +44,8 @@ Each verification pass is a freeze point. If barrier X passes but barrier Y fail
 
 | Barrier | File | Asserts | Failure severity |
 |---|---|---|---|
-| `VerifySdeLowered` | `lib/carts/dialect/sde/Verify/VerifySdeLowered.cpp` | No `sde.*` ops survive `codir-to-arts`. No transient linalg/tensor carriers survive the SDE-to-CODIR / CODIR-to-ARTS boundary. | Fatal |
-| `VerifyArtsObjectsOnly` | `lib/carts/dialect/arts/Transforms/verify/VerifyArtsObjectsOnly.cpp` | No source semantic carrier survives `codir-to-arts`. ARTS contains runtime-shaped EDT/DB/epoch objects plus implementation `scf.for`. | Fatal |
+| `VerifySdeLowered` | `lib/carts/dialect/sde/Verify/VerifySdeLowered.cpp` | No `sde.*` ops survive `sde-to-arts`. No transient source carriers survive the SDE-to-ARTS / SDE-to-ARTS boundary. | Fatal |
+| `VerifyArtsObjectsOnly` | `lib/carts/dialect/arts/Transforms/verify/VerifyArtsObjectsOnly.cpp` | No source semantic carrier survives `sde-to-arts`. ARTS contains runtime-shaped EDT/DB/epoch objects plus implementation `scf.for`. | Fatal |
 | `VerifyEdtCreated` | `lib/carts/dialect/arts/Transforms/verify/VerifyEdtCreated.cpp` | At least one `arts.edt` exists post-OpenMP conversion. | Warning |
 | `VerifyDbLowered` | `lib/carts/dialect/arts-rt/Transforms/VerifyDbLowered.cpp` | No `arts.db_alloc` / `db_acquire` / `db_release` survive pre-lowering. | Fatal |
 | `VerifyEpochLowered` | `lib/carts/dialect/arts-rt/Transforms/VerifyEpochLowered.cpp` | No `arts.epoch` survives pre-lowering. All become `arts_rt.create_epoch` + `wait_on_epoch`. | Fatal |
@@ -58,11 +58,10 @@ Each verification pass is a freeze point. If barrier X passes but barrier Y fail
 Use to locate where to grep when triaging.
 
 - `sde-input-normalization` / `sde-planning`: `lib/carts/dialect/sde/Transforms/` + `lib/carts/dialect/sde/Conversion/OmpToSde/`
-- `sde-to-codir`: `lib/carts/dialect/codir/Conversion/SdeToCodir/SdeToCodir.cpp`
-- `codir-to-arts`: `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
+- `sde-to-arts`: `lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp`
 - `create-dbs`: `lib/carts/dialect/arts/Transforms/db/CreateDbs.cpp`
 - `db-opt` / `post-db-refinement`: `lib/carts/dialect/arts/Transforms/db/`, `include/carts/dialect/arts/Utils/DbUtils.h`, `include/carts/dialect/arts/Utils/DbLayoutPlanUtils.h`
-- CODIR-to-ARTS materialization: `lib/carts/dialect/codir/Conversion/CodirToArts/CodirToArts.cpp`
+- SDE-to-ARTS materialization: `lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp`
 - SDE distribution/reduction planning: `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/sde/Transforms/effect/scheduling/ReductionStrategy.cpp`
 - ARTS-RT ABI conversion: `pre-lowering` implementation in `lib/carts/dialect/arts-rt/Conversion/ArtsToRt/` and LLVM lowering in `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/`
 - ARTS-RT LLVM cleanup: `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/ArtsRtOpToLLVMPatterns.cpp`
@@ -76,7 +75,7 @@ These are real cases where fixes landed in the wrong layer and caused regression
 
 17 historical samples failed on `memref<?xmemref<?xi32>>` (heap-allocated arrays). The error surfaced downstream in DB refinement. The temptation was to patch partition-mode selection.
 
-**The actual fix is upstream in SDE shape normalization** (`SdeMemrefNormalization` or `ConvertOpenMPToSde`) or in direct CODIR-to-ARTS token-local materialization. Patching DB mode selection would silently mask the wrapper-of-pointer shape and produce coarse-grained partitions for what should be fine-grained, dropping partition indices and serializing tasks.
+**The actual fix is upstream in SDE shape normalization** (`SdeMemrefNormalization` or `ConvertOpenMPToSde`) or in direct SDE-to-ARTS token-local materialization. Patching DB mode selection would silently mask the wrapper-of-pointer shape and produce coarse-grained partitions for what should be fine-grained, dropping partition indices and serializing tasks.
 
 **Lesson:** when the error surface is in a heuristic but the input shape is wrong, the fix belongs in shape normalization, not in the heuristic gating logic.
 
@@ -102,7 +101,7 @@ ARTS no longer has a dependency-marker operation. If a failure involves
 unmaterialized `sde.mu_dep`, missing DB acquires, or a raw memref body that was
 not localized, do not add new ARTS rediscovery logic. The originating issue is
 that SDE did not produce canonical `mu_data`/`mu_token`/`cu_codelet` form before
-the SDE-to-CODIR / CODIR-to-ARTS boundary.
+the SDE-to-ARTS / SDE-to-ARTS boundary.
 
 **Lesson:** user dependency slices are SDE MU facts. ARTS may bind them to DBs,
 but it should not infer them by rescanning task bodies.

@@ -113,6 +113,8 @@ static bool isPureScalarOp(Operation *op) {
   if (op->getDialect() && (op->getDialect()->getNamespace() == "arith" ||
                            op->getDialect()->getNamespace() == "math"))
     return true;
+  if (isa<scf::IfOp>(op) && isMemoryEffectFree(op))
+    return true;
   return false;
 }
 
@@ -229,8 +231,7 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
   ParallelNest nest;
   if (auto cu = outer->getParentOfType<sde::SdeCuRegionOp>()) {
     if (outer->getParentOp() != cu.getOperation() ||
-        cu.getKind() != sde::SdeCuKind::single || !cu.getIterArgs().empty() ||
-        cu.getNumResults() != 0)
+        cu.getKind() != sde::SdeCuKind::single || !cu.getIterArgs().empty())
       return std::nullopt;
     nest.enclosingSingleCu = cu;
   } else if (!enclosingFunctionHasSdeOp(outer.getOperation())) {
@@ -379,23 +380,215 @@ static int64_t linearStride(ArrayRef<int64_t> extents, unsigned d) {
   return s;
 }
 
-static bool directCuBodyHasUnscheduledSourceCompute(sde::SdeCuRegionOp cu) {
-  if (!cu || cu.getBody().empty())
-    return false;
-  for (Operation &op : cu.getBody().front().without_terminator()) {
-    if (sde::isSourceComputeOp(&op))
-      return true;
+static void collectEscapingValues(ArrayRef<Operation *> span, Block *block,
+                                  SmallVectorImpl<Value> &escaping) {
+  llvm::DenseSet<Operation *> spanSet(span.begin(), span.end());
+  for (Operation *op : span) {
+    for (Value result : op->getResults()) {
+      for (Operation *user : result.getUsers()) {
+        Operation *ancestor = sde::getBlockLevelAncestor(user, block);
+        if (!ancestor || !spanSet.contains(ancestor)) {
+          escaping.push_back(result);
+          break;
+        }
+      }
+    }
   }
-  return false;
 }
 
-static void promoteSingleCuIfFullyScheduled(sde::SdeCuRegionOp cu) {
+static bool spanHasSourceCompute(ArrayRef<Operation *> span) {
+  return llvm::any_of(span,
+                      [](Operation *op) { return sde::isSourceComputeOp(op); });
+}
+
+static void moveSpanBeforeCu(ArrayRef<Operation *> span,
+                             sde::SdeCuRegionOp cu) {
+  if (span.empty())
+    return;
+  Block *sourceBlock = span.front()->getBlock();
+  cu->getBlock()->getOperations().splice(
+      Block::iterator(cu.getOperation()), sourceBlock->getOperations(),
+      span.front()->getIterator(), std::next(span.back()->getIterator()));
+}
+
+static sde::SdeCuRegionOp moveSpanToSiblingCu(Operation *first,
+                                              Operation *last) {
+  Block *block = first->getBlock();
+  SmallVector<Operation *> span;
+  for (Operation *op = first;; op = &*std::next(op->getIterator())) {
+    span.push_back(op);
+    if (op == last)
+      break;
+  }
+
+  OpBuilder constantBuilder(first->getContext());
+  constantBuilder.setInsertionPoint(first->getParentOp());
+  sde::materializeEscapingConstantLikeValues(span, block, constantBuilder);
+
+  SmallVector<Value> escaping;
+  collectEscapingValues(span, block, escaping);
+  SmallVector<Type> resultTypes;
+  for (Value value : escaping)
+    resultTypes.push_back(value.getType());
+
+  OpBuilder builder(first->getParentOp());
+  builder.setInsertionPoint(first->getParentOp());
+  auto siblingCu = sde::SdeCuRegionOp::create(
+      builder, first->getLoc(), resultTypes,
+      sde::SdeCuKindAttr::get(builder.getContext(), sde::SdeCuKind::single),
+      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  Block &body = sde::ensureBlock(siblingCu.getBody());
+  body.getOperations().splice(body.end(), block->getOperations(),
+                              first->getIterator(),
+                              std::next(last->getIterator()));
+  OpBuilder yieldBuilder = OpBuilder::atBlockEnd(&body);
+  sde::SdeYieldOp::create(yieldBuilder, first->getLoc(), escaping);
+
+  for (auto [oldValue, newValue] :
+       llvm::zip(escaping, siblingCu->getResults())) {
+    oldValue.replaceUsesWithIf(newValue, [&](OpOperand &use) {
+      return !sde::isNestedUnder(use.getOwner(), siblingCu);
+    });
+  }
+  return siblingCu;
+}
+
+static sde::SdeCuRegionOp wrapSpanInPlaceInCu(Operation *first,
+                                              Operation *last) {
+  Block *block = first->getBlock();
+  SmallVector<Operation *> span;
+  for (Operation *op = first;; op = &*std::next(op->getIterator())) {
+    span.push_back(op);
+    if (op == last)
+      break;
+  }
+
+  OpBuilder constantBuilder(first);
+  sde::materializeEscapingConstantLikeValues(span, block, constantBuilder);
+
+  SmallVector<Value> escaping;
+  collectEscapingValues(span, block, escaping);
+  SmallVector<Type> resultTypes;
+  for (Value value : escaping)
+    resultTypes.push_back(value.getType());
+
+  OpBuilder builder(first);
+  auto cu = sde::SdeCuRegionOp::create(
+      builder, first->getLoc(), resultTypes,
+      sde::SdeCuKindAttr::get(builder.getContext(), sde::SdeCuKind::single),
+      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  Block &body = sde::ensureBlock(cu.getBody());
+  body.getOperations().splice(body.end(), block->getOperations(),
+                              first->getIterator(),
+                              std::next(last->getIterator()));
+  OpBuilder yieldBuilder = OpBuilder::atBlockEnd(&body);
+  sde::SdeYieldOp::create(yieldBuilder, first->getLoc(), escaping);
+
+  for (auto [oldValue, newValue] : llvm::zip(escaping, cu->getResults())) {
+    oldValue.replaceUsesWithIf(newValue, [&](OpOperand &use) {
+      return !sde::isNestedUnder(use.getOwner(), cu);
+    });
+  }
+  return cu;
+}
+
+static void normalizeSchedulingCarrierRegions(Operation *op);
+
+static void normalizeSchedulingCarrierBlock(Block *block) {
+  SmallVector<Operation *> ops;
+  for (Operation &op : block->without_terminator())
+    ops.push_back(&op);
+
+  size_t i = 0, n = ops.size();
+  while (i < n) {
+    Operation *op = ops[i];
+    if (sde::isSdeDialectOp(op)) {
+      ++i;
+      continue;
+    }
+    if (sde::containsCuForbiddenSchedulingOp(op)) {
+      normalizeSchedulingCarrierRegions(op);
+      ++i;
+      continue;
+    }
+
+    size_t runEnd = i;
+    while (runEnd < n && !sde::isSdeDialectOp(ops[runEnd]) &&
+           !sde::containsCuForbiddenSchedulingOp(ops[runEnd]))
+      ++runEnd;
+
+    size_t lo = i, hi = runEnd;
+    while (lo < hi && !sde::isSourceComputeOp(ops[lo]))
+      ++lo;
+    while (hi > lo && !sde::isSourceComputeOp(ops[hi - 1]))
+      --hi;
+    if (lo < hi)
+      wrapSpanInPlaceInCu(ops[lo], ops[hi - 1]);
+    i = runEnd;
+  }
+}
+
+static void normalizeSchedulingCarrierRegions(Operation *op) {
+  for (Region &region : op->getRegions())
+    for (Block &block : region)
+      normalizeSchedulingCarrierBlock(&block);
+}
+
+static void splitSingleCuAroundSchedulingOps(sde::SdeCuRegionOp cu) {
   if (!cu || cu.getKind() != sde::SdeCuKind::single)
     return;
-  if (directCuBodyHasUnscheduledSourceCompute(cu))
+  if (!cu.getIterArgs().empty() || cu.getBody().empty())
     return;
-  cu.setKindAttr(
-      sde::SdeCuKindAttr::get(cu.getContext(), sde::SdeCuKind::parallel));
+
+  Block &body = cu.getBody().front();
+  bool hasScheduling = false;
+  for (Operation &op : body.without_terminator()) {
+    if (sde::isCuSchedulingBoundary(&op)) {
+      hasScheduling = true;
+      break;
+    }
+  }
+  if (!hasScheduling)
+    return;
+
+  while (!body.without_terminator().empty()) {
+    Operation *first = &body.front();
+    if (sde::isCuSchedulingBoundary(first)) {
+      if (!sde::isCuForbiddenSchedulingOp(first))
+        normalizeSchedulingCarrierRegions(first);
+      cu->getBlock()->getOperations().splice(Block::iterator(cu.getOperation()),
+                                             body.getOperations(),
+                                             first->getIterator());
+      continue;
+    }
+
+    Operation *last = first;
+    for (Operation &candidate : llvm::make_early_inc_range(
+             llvm::drop_begin(body.without_terminator()))) {
+      if (sde::isCuSchedulingBoundary(&candidate))
+        break;
+      last = &candidate;
+    }
+    SmallVector<Operation *> span;
+    for (Operation *op = first;; op = &*std::next(op->getIterator())) {
+      span.push_back(op);
+      if (op == last)
+        break;
+    }
+    if (spanHasSourceCompute(span))
+      moveSpanToSiblingCu(first, last);
+    else
+      moveSpanBeforeCu(span, cu);
+  }
+
+  SmallVector<Value> yielded;
+  if (auto yield = dyn_cast_or_null<sde::SdeYieldOp>(body.getTerminator()))
+    llvm::append_range(yielded, yield.getValues());
+  for (auto [oldResult, yieldedValue] : llvm::zip(cu->getResults(), yielded))
+    oldResult.replaceAllUsesWith(yieldedValue);
+  if (Operation *terminator = body.getTerminator())
+    terminator->erase();
+  cu.erase();
 }
 
 static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
@@ -532,49 +725,43 @@ static void substituteCounters(ParallelNest &nest, sde::SdeSuIterateOp suIter,
 
 static void raiseNest(ParallelNest &nest, OpBuilder &builder) {
   scf::ForOp outer = nest.loops.front();
-  Location loc = outer.getLoc();
-  MLIRContext *ctx = builder.getContext();
 
   if (nest.enclosingSingleCu) {
     sde::SdeSuIterateOp suIter =
         createSuIterateForNest(nest, builder, outer.getOperation());
     substituteCounters(nest, suIter, builder);
     outer.erase();
-    promoteSingleCuIfFullyScheduled(nest.enclosingSingleCu);
+    splitSingleCuAroundSchedulingOps(nest.enclosingSingleCu);
     return;
   }
 
   builder.setInsertionPoint(outer);
-  auto cuRegion = sde::SdeCuRegionOp::create(
-      builder, loc, /*resultTypes=*/TypeRange{},
-      sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
-  Block &parBlk = sde::ensureBlock(cuRegion.getBody());
-  builder.setInsertionPointToStart(&parBlk);
-
   sde::SdeSuIterateOp suIter = createSuIterateForNest(nest, builder, nullptr);
   substituteCounters(nest, suIter, builder);
-  builder.setInsertionPointToEnd(&parBlk);
-  sde::SdeYieldOp::create(builder, loc, ValueRange{});
-
   outer.erase();
+}
+
+static std::optional<ParallelNest> findNextParallelNest(ModuleOp module) {
+  std::optional<ParallelNest> next;
+  module.walk([&](scf::ForOp outer) -> WalkResult {
+    if (isa<scf::ForOp>(outer->getParentOp()))
+      return WalkResult::advance();
+    if (std::optional<ParallelNest> nest = matchParallelNest(outer)) {
+      next = std::move(*nest);
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return next;
 }
 
 struct ParallelizePass : public sde::impl::ParallelizeBase<ParallelizePass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    SmallVector<ParallelNest, 4> matches;
-    module.walk([&](scf::ForOp outer) {
-      if (isa<scf::ForOp>(outer->getParentOp()))
-        return;
-      if (std::optional<ParallelNest> nest = matchParallelNest(outer))
-        matches.push_back(std::move(*nest));
-    });
-
     OpBuilder builder(&getContext());
-    for (ParallelNest &nest : matches) {
+    while (std::optional<ParallelNest> nest = findNextParallelNest(module)) {
       ARTS_DEBUG("Parallelizing+raising legal host/init/check nest");
-      raiseNest(nest, builder);
+      raiseNest(*nest, builder);
     }
   }
 };

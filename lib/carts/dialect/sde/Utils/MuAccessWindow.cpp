@@ -89,7 +89,7 @@ llvm::SmallVector<RaisedWindowPlan, 4> planAccessWindows(SdeMuAllocOp mu) {
   // already-raised window (so the planner is idempotent across re-runs).
   for (Operation *user : mu.getMemref().getUsers()) {
     if (isa<memref::LoadOp, memref::StoreOp, memref::DeallocOp,
-            SdeMuAccessWindowOp>(user))
+            SdeArrayLayoutRootOp, SdeMuAccessWindowOp>(user))
       continue;
     return plans; // subview / cast / capture / escape -> conservative
   }
@@ -135,6 +135,8 @@ llvm::SmallVector<RaisedWindowPlan, 4> planAccessWindows(SdeMuAllocOp mu) {
     plan.cu = access.cu;
     plan.mu = mu.getMemref();
     plan.mode = access.hasWrite ? SdeAccessMode::write : SdeAccessMode::read;
+    if (IntegerAttr arrayId = mu.getArrayIdAttr())
+      plan.arrayId = arrayId.getInt();
     plan.ownerDimCount = static_cast<int64_t>(ownerDimCount);
     plan.blockLo.assign(ownerDimCount, /*value=*/0);
     plan.blockHi.assign(exp->gridCounts.begin(), exp->gridCounts.end());
