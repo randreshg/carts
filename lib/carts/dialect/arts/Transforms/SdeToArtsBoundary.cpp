@@ -21,6 +21,8 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include <algorithm>
+#include <functional>
+#include <limits>
 #include <tuple>
 
 namespace mlir::carts::arts {
@@ -598,13 +600,90 @@ static bool hasDistributedWriterStoragePlan(ArrayRef<DirectDepPlan> deps) {
   });
 }
 
-static LogicalResult verifyDistributedWriterGroupingOwnerLocal(
+struct WriterGroupingPlan {
+  SmallVector<int64_t, 4> dbSizes;
+  DbOwnerMapPlan ownerPlan;
+};
+
+static bool areWriterGroupsRouteLocal(ArrayRef<WriterGroupingPlan> writerPlans,
+                                      ArrayRef<int64_t> counts,
+                                      int64_t totalNodes) {
+  return llvm::all_of(writerPlans, [&](const WriterGroupingPlan &plan) {
+    return isStaticDbOwnerGroupedBlockScheduleRouteLocal(
+        plan.dbSizes, counts, totalNodes, plan.ownerPlan);
+  });
+}
+
+static int64_t saturatedMul(int64_t lhs, int64_t rhs) {
+  if (lhs <= 0 || rhs <= 0)
+    return 0;
+  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
+    return std::numeric_limits<int64_t>::max();
+  return lhs * rhs;
+}
+
+static std::optional<SmallVector<int64_t, 4>>
+findLargestOwnerLocalGroupCounts(ArrayRef<WriterGroupingPlan> writerPlans,
+                                 ArrayRef<int64_t> requestedCounts,
+                                 int64_t totalNodes) {
+  if (writerPlans.empty() || requestedCounts.empty())
+    return std::nullopt;
+  if (areWriterGroupsRouteLocal(writerPlans, requestedCounts, totalNodes))
+    return SmallVector<int64_t, 4>(requestedCounts.begin(),
+                                   requestedCounts.end());
+
+  SmallVector<int64_t, 4> upperCounts(requestedCounts.begin(),
+                                      requestedCounts.end());
+  for (const WriterGroupingPlan &plan : writerPlans) {
+    if (plan.dbSizes.size() != upperCounts.size())
+      return std::nullopt;
+    for (auto &&[upper, dbSize] : llvm::zip_equal(upperCounts, plan.dbSizes))
+      upper = std::min(upper, dbSize);
+  }
+
+  SmallVector<int64_t, 4> suffixMax(upperCounts.size() + 1, 1);
+  for (int64_t dim = static_cast<int64_t>(upperCounts.size()) - 1; dim >= 0;
+       --dim)
+    suffixMax[dim] = saturatedMul(upperCounts[dim], suffixMax[dim + 1]);
+
+  SmallVector<int64_t, 4> current(upperCounts.size(), 1);
+  SmallVector<int64_t, 4> best;
+  int64_t bestScore = 0;
+  std::function<void(unsigned, int64_t)> visit = [&](unsigned dim,
+                                                     int64_t prefixScore) {
+    if (saturatedMul(prefixScore, suffixMax[dim]) <= bestScore)
+      return;
+    if (dim == upperCounts.size()) {
+      if (!areWriterGroupsRouteLocal(writerPlans, current, totalNodes))
+        return;
+      if (prefixScore > bestScore) {
+        bestScore = prefixScore;
+        best.assign(current.begin(), current.end());
+      }
+      return;
+    }
+    for (int64_t count = upperCounts[dim]; count >= 1; --count) {
+      current[dim] = count;
+      visit(dim + 1, saturatedMul(prefixScore, count));
+    }
+  };
+  visit(/*dim=*/0, /*prefixScore=*/1);
+  if (best.empty())
+    return std::nullopt;
+  return best;
+}
+
+static LogicalResult ensureDistributedWriterOwnerLocalGroups(
     sde::SdeSuIterateOp source, ArrayRef<DirectDepPlan> deps,
-    ArrayRef<int64_t> groupBlockCounts, int64_t totalNodes) {
+    SmallVectorImpl<int64_t> &groupBlockCounts,
+    SmallVectorImpl<int64_t> &workerSpans, ArrayRef<int64_t> ownerBlockSizes,
+    int64_t totalNodes, bool &splitToOwnerLocalGroups) {
+  splitToOwnerLocalGroups = false;
   if (totalNodes <= 1 ||
       !llvm::any_of(groupBlockCounts, [](int64_t count) { return count > 1; }))
     return success();
 
+  SmallVector<WriterGroupingPlan, 4> writerPlans;
   for (const DirectDepPlan &dep : deps) {
     arts::DbAllocOp alloc = dep.alloc;
     if (!alloc || !arts::DbUtils::isWriterMode(dep.mode) ||
@@ -629,13 +708,30 @@ static LogicalResult verifyDistributedWriterGroupingOwnerLocal(
                 "range cannot be proven owner-local from static DB block-grid "
                 "facts";
 
-    if (!isStaticDbOwnerGroupedBlockScheduleRouteLocal(
-            *dbSizes, groupBlockCounts, totalNodes, *ownerPlan))
-      return source.emitOpError()
-             << "commits logicalWorkerSlice that groups distributed writer "
-                "blocks across owner routes; SDE-to-ARTS must split writer "
-                "codelets into owner-local block ranges";
+    writerPlans.push_back({*dbSizes, *ownerPlan});
   }
+
+  std::optional<SmallVector<int64_t, 4>> ownerLocalCounts =
+      findLargestOwnerLocalGroupCounts(writerPlans, groupBlockCounts,
+                                       totalNodes);
+  if (!ownerLocalCounts)
+    return source.emitOpError()
+           << "cannot split grouped distributed writer into proven "
+              "owner-local block ranges from committed owner-map facts";
+
+  if (sameI64Values(*ownerLocalCounts, groupBlockCounts))
+    return success();
+
+  if (ownerBlockSizes.size() != groupBlockCounts.size())
+    return source.emitOpError()
+           << "cannot split distributed writer grouping because physical "
+              "owner block rank does not match logicalWorkerSlice rank";
+
+  groupBlockCounts.assign(ownerLocalCounts->begin(), ownerLocalCounts->end());
+  for (auto [span, blockSize, count] :
+       llvm::zip_equal(workerSpans, ownerBlockSizes, groupBlockCounts))
+    span = blockSize * count;
+  splitToOwnerLocalGroups = true;
 
   return success();
 }
@@ -2462,6 +2558,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
     }
   }
 
+  bool splitToOwnerLocalGroups = false;
   if (hasDistributedWriterStoragePlan(deps)) {
     std::optional<int64_t> totalNodes =
         arts::getRuntimeTotalNodes(source->getParentOfType<ModuleOp>());
@@ -2469,9 +2566,25 @@ convertSuIterate(sde::SdeSuIterateOp source,
       return source.emitOpError()
              << "requires runtime node count to keep grouped distributed "
                 "writers owner-local";
-    if (failed(verifyDistributedWriterGroupingOwnerLocal(
-            source, deps, groupBlockCounts, *totalNodes)))
+    if (failed(ensureDistributedWriterOwnerLocalGroups(
+            source, deps, groupBlockCounts, workerSpans, ownerBlockSizes,
+            *totalNodes, splitToOwnerLocalGroups)))
       return failure();
+  }
+
+  SmallVector<int64_t, 4> effectiveLogicalWorkerSlice;
+  if (auto workerSlice = readI64ArrayAttr(source.getLogicalWorkerSliceAttr())) {
+    effectiveLogicalWorkerSlice.assign(workerSlice->begin(),
+                                       workerSlice->end());
+    if (effectiveLogicalWorkerSlice.size() == loopRank) {
+      for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+        effectiveLogicalWorkerSlice[ownerPlan->loopDims[slot]] =
+            workerSpans[slot];
+    } else if (effectiveLogicalWorkerSlice.size() == ownerDimCount) {
+      for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+        effectiveLogicalWorkerSlice[ownerPlan->rawSlots[slot]] =
+            workerSpans[slot];
+    }
   }
 
   SetVector<Value> scalarCaptures;
@@ -2674,6 +2787,12 @@ convertSuIterate(sde::SdeSuIterateOp source,
                           route, taskDeps, taskParams);
   if (failed(attachCommittedSdeFacts(source, task)))
     return failure();
+  if (!effectiveLogicalWorkerSlice.empty())
+    arts::setPlanLogicalWorkerSliceAttr(
+        task.getOperation(),
+        buildI64ArrayAttr(source.getContext(), effectiveLogicalWorkerSlice));
+  if (splitToOwnerLocalGroups)
+    task.setOwnerLocalWriterSplitAttr(UnitAttr::get(source.getContext()));
 
   Block &taskBlock = task.getBody().front();
   for (Value dep : taskDeps)

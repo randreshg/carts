@@ -1,25 +1,28 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-accesses-to-arts-deps,verify-arts-objects-only)' 2>&1 \
-// RUN:   | %FileCheck %s --implicit-check-not=sde.su_iterate --implicit-check-not=sde.cu_region --implicit-check-not=arts.db_access_plan --implicit-check-not="writes a distributed DB range that may span multiple owners"
+// RUN:   | %FileCheck %s --implicit-check-not=sde.su_iterate --implicit-check-not=sde.cu_region --implicit-check-not=arts.db_access_plan --implicit-check-not="groups distributed writer blocks across owner routes"
 
-// The SDE-to-ARTS boundary must preserve a committed logicalWorkerSlice when
-// the grouped distributed writer ranges stay inside one owner route.
+// A grouped writer range that crosses owner-map route boundaries is split into
+// the largest proven owner-local physical DB-block ranges before launch.
 
-// CHECK-LABEL: func.func @owner_local_grouped_distributed_writer_preserved
-// CHECK: %[[C8:.*]] = arith.constant 8 : index
-// CHECK: scf.for %{{.*}} = {{.*}} to {{.*}} step %[[C8]]
-// CHECK: %[[C2:.*]] = arith.constant 2 : index
-// CHECK: %[[GROUP:.*]] = arith.minui {{.*}}, %[[C2]] : index
+// CHECK-LABEL: func.func @owner_crossing_grouped_distributed_writer_split
+// CHECK: %[[DB_BLOCKS:.*]] = arith.constant 4 : index
+// CHECK: arts.db_alloc
+// CHECK-SAME: sizes[%[[DB_BLOCKS]]]
+// CHECK: %[[STEP:.*]] = arith.constant 8 : index
+// CHECK: scf.for %{{.*}} = {{.*}} to {{.*}} step %[[STEP]]
+// CHECK: %[[TWO_BLOCKS:.*]] = arith.constant 2 : index
+// CHECK: %[[GROUP:.*]] = arith.minui {{.*}}, %[[TWO_BLOCKS]] : index
 // CHECK: arts.db_acquire[<out>]
 // CHECK-SAME: partitioning(<block>)
 // CHECK-SAME: sizes[%[[GROUP]]]
 // CHECK: arts.edt <task> <internode> route
-// CHECK-NOT: ownerLocalWriterSplit
+// CHECK-SAME: ownerLocalWriterSplit
 // CHECK-SAME: planLogicalWorkerSlice = [8]
 // CHECK-SAME: planOwnerDims = [0]
 // CHECK-SAME: planPhysicalBlockShape = [4]
 
 module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_workers = 8 : i64} {
-  func.func @owner_local_grouped_distributed_writer_preserved() {
+  func.func @owner_crossing_grouped_distributed_writer_split() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
@@ -39,7 +42,7 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
         %local = arith.remui %i, %c4 : index
         memref.store %value, %A[%owner, %local] : memref<4x4xf32>
       }
-    } {physicalOwnerDims = [0], physicalBlockShape = [4], logicalWorkerSlice = [8]}
+    } {physicalOwnerDims = [0], physicalBlockShape = [4], logicalWorkerSlice = [12]}
     return
   }
 }

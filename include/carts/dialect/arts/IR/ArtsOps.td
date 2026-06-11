@@ -664,6 +664,9 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<ArrayAttr>:$planPhysicalBlockShape,
     OptionalAttr<ArrayAttr>:$planLogicalWorkerSlice,
     OptionalAttr<ArrayAttr>:$planHaloShape,
+    // Grouped writer EDT split to owner-local block ranges; DB/MU grain stays
+    // fixed by committed SDE facts.
+    OptionalAttr<UnitAttr>:$ownerLocalWriterSplit,
     OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
     OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure,
     OptionalAttr<ArtsReductionStrategyAttr>:$reductionStrategy,
