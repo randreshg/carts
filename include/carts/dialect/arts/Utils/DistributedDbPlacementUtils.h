@@ -4,6 +4,7 @@
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -12,6 +13,9 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <algorithm>
+#include <functional>
+#include <limits>
 #include <numeric>
 #include <optional>
 
@@ -370,6 +374,185 @@ inline Value createDbOwnerRouteForLinearIndex(OpBuilder &builder, Location loc,
     return {};
   return createDbOwnerRouteForCoords(builder, loc, dbSizes, dbCoords,
                                      totalNodes, plan);
+}
+
+inline std::optional<SmallVector<int64_t, 4>>
+foldStaticDbIndexValues(ArrayRef<Value> values, bool requirePositive = true) {
+  SmallVector<int64_t, 4> folded;
+  folded.reserve(values.size());
+  for (Value value : values) {
+    std::optional<int64_t> constant =
+        ValueAnalysis::tryFoldConstantIndex(value);
+    if (!constant || (requirePositive ? *constant <= 0 : *constant < 0))
+      return std::nullopt;
+    folded.push_back(*constant);
+  }
+  return folded;
+}
+
+inline std::optional<int64_t> checkedMul(int64_t lhs, int64_t rhs) {
+  if (lhs < 0 || rhs < 0)
+    return std::nullopt;
+  if (lhs != 0 && rhs > std::numeric_limits<int64_t>::max() / lhs)
+    return std::nullopt;
+  return lhs * rhs;
+}
+
+inline std::optional<int64_t> staticProduct(ArrayRef<int64_t> values) {
+  int64_t product = 1;
+  for (int64_t value : values) {
+    if (value <= 0)
+      return std::nullopt;
+    std::optional<int64_t> next = checkedMul(product, value);
+    if (!next)
+      return std::nullopt;
+    product = *next;
+  }
+  return product;
+}
+
+inline std::optional<SmallVector<int64_t, 4>>
+staticRowMajorStrides(ArrayRef<int64_t> sizes) {
+  SmallVector<int64_t, 4> strides(sizes.size(), 1);
+  int64_t suffix = 1;
+  for (int64_t idx = static_cast<int64_t>(sizes.size()) - 1; idx >= 0; --idx) {
+    strides[idx] = suffix;
+    if (sizes[idx] <= 0)
+      return std::nullopt;
+    std::optional<int64_t> next = checkedMul(suffix, sizes[idx]);
+    if (!next)
+      return std::nullopt;
+    suffix = *next;
+  }
+  return strides;
+}
+
+inline std::optional<int64_t> staticLinearIndex(ArrayRef<int64_t> sizes,
+                                                ArrayRef<int64_t> coords) {
+  if (sizes.size() != coords.size())
+    return std::nullopt;
+  std::optional<SmallVector<int64_t, 4>> strides = staticRowMajorStrides(sizes);
+  if (!strides)
+    return std::nullopt;
+
+  int64_t linear = 0;
+  for (auto [size, coord, stride] : llvm::zip_equal(sizes, coords, *strides)) {
+    if (coord < 0 || coord >= size)
+      return std::nullopt;
+    std::optional<int64_t> term = checkedMul(coord, stride);
+    if (!term || linear > std::numeric_limits<int64_t>::max() - *term)
+      return std::nullopt;
+    linear += *term;
+  }
+  return linear;
+}
+
+inline std::optional<int64_t>
+staticOwnerDimContiguousRoute(int64_t ownerLinear, int64_t ownerSpace,
+                              int64_t totalNodes) {
+  if (ownerLinear < 0 || ownerSpace <= 0 || totalNodes <= 0)
+    return std::nullopt;
+  std::optional<int64_t> scaled = checkedMul(ownerLinear, totalNodes);
+  if (!scaled)
+    return std::nullopt;
+  return *scaled / ownerSpace;
+}
+
+/// Proves that a rectangular DB-block range maps to one runtime owner under the
+/// committed owner-map plan. This is a static legality proof for grouped writer
+/// CUs/EDTs; callers still materialize the real grouped acquire/EDT shape.
+inline bool isStaticDbOwnerBlockRangeRouteLocal(ArrayRef<int64_t> dbSizes,
+                                                ArrayRef<int64_t> offsets,
+                                                ArrayRef<int64_t> sizes,
+                                                int64_t totalNodes,
+                                                const DbOwnerMapPlan &plan) {
+  if (totalNodes <= 1)
+    return true;
+  if (dbSizes.empty() || offsets.size() != dbSizes.size() ||
+      sizes.size() != dbSizes.size())
+    return false;
+  for (auto [dbSize, offset, size] : llvm::zip_equal(dbSizes, offsets, sizes)) {
+    if (dbSize <= 0 || offset < 0 || size <= 0 || offset >= dbSize ||
+        size > dbSize - offset)
+      return false;
+  }
+
+  if (plan.kind == DbOwnerMapKind::owner_dim_contiguous) {
+    if (!ownerDimsAddressDbRank(plan.dims, dbSizes.size()))
+      return false;
+
+    SmallVector<int64_t, 4> ownerSizes;
+    SmallVector<int64_t, 4> firstCoords;
+    SmallVector<int64_t, 4> lastCoords;
+    ownerSizes.reserve(plan.dims.size());
+    firstCoords.reserve(plan.dims.size());
+    lastCoords.reserve(plan.dims.size());
+    for (int64_t rawDim : plan.dims) {
+      unsigned dim = static_cast<unsigned>(rawDim);
+      ownerSizes.push_back(dbSizes[dim]);
+      firstCoords.push_back(offsets[dim]);
+      lastCoords.push_back(offsets[dim] + sizes[dim] - 1);
+    }
+
+    std::optional<int64_t> ownerSpace = staticProduct(ownerSizes);
+    std::optional<int64_t> firstLinear =
+        staticLinearIndex(ownerSizes, firstCoords);
+    std::optional<int64_t> lastLinear =
+        staticLinearIndex(ownerSizes, lastCoords);
+    if (!ownerSpace || !firstLinear || !lastLinear)
+      return false;
+
+    std::optional<int64_t> firstRoute =
+        staticOwnerDimContiguousRoute(*firstLinear, *ownerSpace, totalNodes);
+    std::optional<int64_t> lastRoute =
+        staticOwnerDimContiguousRoute(*lastLinear, *ownerSpace, totalNodes);
+    return firstRoute && lastRoute && *firstRoute == *lastRoute;
+  }
+
+  if (plan.kind == DbOwnerMapKind::linear_mod_nodes) {
+    std::optional<SmallVector<int64_t, 4>> strides =
+        staticRowMajorStrides(dbSizes);
+    if (!strides)
+      return false;
+    for (auto [size, stride] : llvm::zip_equal(sizes, *strides)) {
+      if (size > 1 && stride % totalNodes != 0)
+        return false;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+inline bool isStaticDbOwnerGroupedBlockScheduleRouteLocal(
+    ArrayRef<int64_t> dbSizes, ArrayRef<int64_t> groupBlockCounts,
+    int64_t totalNodes, const DbOwnerMapPlan &plan) {
+  if (totalNodes <= 1)
+    return true;
+  if (dbSizes.empty() || groupBlockCounts.size() != dbSizes.size())
+    return false;
+  for (auto [dbSize, groupCount] : llvm::zip_equal(dbSizes, groupBlockCounts))
+    if (dbSize <= 0 || groupCount <= 0)
+      return false;
+
+  SmallVector<int64_t, 4> offsets(dbSizes.size(), 0);
+  SmallVector<int64_t, 4> rangeSizes(dbSizes.size(), 1);
+
+  std::function<bool(unsigned)> visit = [&](unsigned dim) -> bool {
+    if (dim == dbSizes.size())
+      return isStaticDbOwnerBlockRangeRouteLocal(dbSizes, offsets, rangeSizes,
+                                                 totalNodes, plan);
+    int64_t groupCount = groupBlockCounts[dim];
+    for (int64_t offset = 0; offset < dbSizes[dim]; offset += groupCount) {
+      offsets[dim] = offset;
+      rangeSizes[dim] = std::min(groupCount, dbSizes[dim] - offset);
+      if (!visit(dim + 1))
+        return false;
+    }
+    return true;
+  };
+
+  return visit(0);
 }
 
 inline bool ownerMapPreservesPlanOwnerDims(DbAllocOp alloc,

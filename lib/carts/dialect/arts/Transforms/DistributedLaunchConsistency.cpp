@@ -14,6 +14,7 @@
 #include "carts/passes/Passes.h.inc"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/STLExtras.h"
@@ -299,25 +300,140 @@ static bool isKnownSingleBlockSpan(Value value) {
   return false;
 }
 
+static std::optional<int64_t> getKnownSpanUpperBound(Value value) {
+  if (!value)
+    return std::nullopt;
+  if (auto constant = ValueAnalysis::tryFoldConstantIndex(value))
+    return *constant > 0 ? std::optional<int64_t>(*constant) : std::nullopt;
+  if (ValueAnalysis::isOneLikeValue(value))
+    return int64_t{1};
+  if (auto min = value.getDefiningOp<arith::MinUIOp>()) {
+    std::optional<int64_t> lhs = getKnownSpanUpperBound(min.getLhs());
+    std::optional<int64_t> rhs = getKnownSpanUpperBound(min.getRhs());
+    if (lhs && rhs)
+      return std::min(*lhs, *rhs);
+    if (lhs)
+      return lhs;
+    return rhs;
+  }
+  return std::nullopt;
+}
+
+static std::optional<int64_t>
+getDispatchGroupBlockCountFromOffset(Value offset) {
+  auto div =
+      ValueAnalysis::stripNumericCasts(offset).getDefiningOp<arith::DivUIOp>();
+  if (!div)
+    return std::nullopt;
+
+  std::optional<int64_t> blockSize =
+      ValueAnalysis::tryFoldConstantIndex(div.getRhs());
+  if (!blockSize || *blockSize <= 0)
+    return std::nullopt;
+
+  Value base = div.getLhs();
+  Value normalizedLower;
+  if (auto sub = base.getDefiningOp<arith::SubIOp>()) {
+    base = sub.getLhs();
+    normalizedLower = sub.getRhs();
+  } else {
+    auto blockArg = dyn_cast<BlockArgument>(base);
+    auto loop =
+        blockArg
+            ? dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp())
+            : scf::ForOp();
+    if (!loop || loop.getInductionVar() != base ||
+        !ValueAnalysis::isZeroConstant(loop.getLowerBound()))
+      return std::nullopt;
+  }
+
+  auto blockArg = dyn_cast<BlockArgument>(base);
+  auto loop =
+      blockArg
+          ? dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp())
+          : scf::ForOp();
+  if (!loop || loop.getInductionVar() != base)
+    return std::nullopt;
+  if (normalizedLower &&
+      !equivalentIndexValues(normalizedLower, loop.getLowerBound()))
+    return std::nullopt;
+
+  std::optional<int64_t> step =
+      ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+  if (!step || *step <= 0 || *step % *blockSize != 0)
+    return std::nullopt;
+  return *step / *blockSize;
+}
+
+static std::optional<SmallVector<int64_t, 4>>
+getDispatchGroupBlockCounts(DbAcquireOp acquire, unsigned dbRank) {
+  if (acquire.getOffsets().size() < dbRank ||
+      acquire.getSizes().size() < dbRank)
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> groupCounts;
+  groupCounts.reserve(dbRank);
+  for (unsigned dim = 0; dim < dbRank; ++dim) {
+    std::optional<int64_t> groupCount =
+        getDispatchGroupBlockCountFromOffset(acquire.getOffsets()[dim]);
+    std::optional<int64_t> spanUpperBound =
+        getKnownSpanUpperBound(acquire.getSizes()[dim]);
+    if (!groupCount || *groupCount <= 0 || !spanUpperBound ||
+        *spanUpperBound > *groupCount)
+      return std::nullopt;
+    groupCounts.push_back(*groupCount);
+  }
+  return groupCounts;
+}
+
 static bool writerAcquireMaySpanMultipleOwners(DbAcquireOp acquire,
                                                const DbOwnerMapPlan &plan,
-                                               unsigned dbRank,
+                                               ArrayRef<Value> dbSizeValues,
                                                std::optional<int64_t> nodes) {
   if (nodes && *nodes <= 1)
     return false;
 
-  SmallVector<unsigned, 4> dims = getRouteComparisonDims(plan, dbRank);
+  SmallVector<unsigned, 4> dims =
+      getRouteComparisonDims(plan, dbSizeValues.size());
   if (dims.empty())
     return true;
 
   ValueRange sizes = acquire.getSizes();
+  bool hasNonSingleSpan = false;
   for (unsigned dim : dims) {
     if (dim >= sizes.size())
       return true;
     if (!isKnownSingleBlockSpan(sizes[dim]))
-      return true;
+      hasNonSingleSpan = true;
   }
-  return false;
+  if (!hasNonSingleSpan)
+    return false;
+  if (!nodes)
+    return true;
+
+  SmallVector<Value, 4> offsets(acquire.getOffsets().begin(),
+                                acquire.getOffsets().end());
+  SmallVector<Value, 4> rangeSizes(sizes.begin(), sizes.end());
+  std::optional<SmallVector<int64_t, 4>> dbSizes =
+      foldStaticDbIndexValues(dbSizeValues);
+  std::optional<SmallVector<int64_t, 4>> staticOffsets =
+      foldStaticDbIndexValues(offsets, /*requirePositive=*/false);
+  std::optional<SmallVector<int64_t, 4>> staticRangeSizes =
+      foldStaticDbIndexValues(rangeSizes);
+  if (!dbSizes)
+    return true;
+  if (staticOffsets && staticRangeSizes &&
+      isStaticDbOwnerBlockRangeRouteLocal(*dbSizes, *staticOffsets,
+                                          *staticRangeSizes, *nodes, plan))
+    return false;
+
+  std::optional<SmallVector<int64_t, 4>> groupCounts =
+      getDispatchGroupBlockCounts(acquire, dbSizeValues.size());
+  if (groupCounts && isStaticDbOwnerGroupedBlockScheduleRouteLocal(
+                         *dbSizes, *groupCounts, *nodes, plan))
+    return false;
+
+  return true;
 }
 
 static bool sameWriterOwnerTarget(const WriterOwnerTarget &lhs,
@@ -378,7 +494,7 @@ getWriterOwnerTarget(Value dep, std::optional<int64_t> totalNodes,
                                 alloc.getSizes().end());
   if (dbSizes.empty())
     return {WriterOwnerTargetStatus::Unroutable, std::nullopt};
-  if (writerAcquireMaySpanMultipleOwners(acquire, *ownerMap, dbSizes.size(),
+  if (writerAcquireMaySpanMultipleOwners(acquire, *ownerMap, dbSizes,
                                          totalNodes)) {
     multiOwnerRange = true;
     return {WriterOwnerTargetStatus::MultiOwnerRange, std::nullopt};

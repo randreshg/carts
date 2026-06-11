@@ -568,6 +568,48 @@ static bool hasDistributedWriterStoragePlan(ArrayRef<DirectDepPlan> deps) {
   });
 }
 
+static LogicalResult verifyDistributedWriterGroupingOwnerLocal(
+    sde::SdeSuIterateOp source, ArrayRef<DirectDepPlan> deps,
+    ArrayRef<int64_t> groupBlockCounts, int64_t totalNodes) {
+  if (totalNodes <= 1 ||
+      !llvm::any_of(groupBlockCounts, [](int64_t count) { return count > 1; }))
+    return success();
+
+  for (const DirectDepPlan &dep : deps) {
+    arts::DbAllocOp alloc = dep.alloc;
+    if (!alloc || !arts::DbUtils::isWriterMode(dep.mode) ||
+        !hasArtsDbPhysicalLayoutPlan(alloc.getOperation()))
+      continue;
+
+    std::optional<DbOwnerMapPlan> ownerPlan =
+        deriveDbOwnerMapPlanFromSeed(alloc);
+    if (!ownerPlan)
+      return source.emitOpError()
+             << "commits logicalWorkerSlice whose grouped distributed writer "
+                "range cannot be proven owner-local from committed DB "
+                "owner-map facts";
+
+    SmallVector<Value, 4> dbSizeValues(alloc.getSizes().begin(),
+                                       alloc.getSizes().end());
+    std::optional<SmallVector<int64_t, 4>> dbSizes =
+        foldStaticDbIndexValues(dbSizeValues);
+    if (!dbSizes || dbSizes->size() != groupBlockCounts.size())
+      return source.emitOpError()
+             << "commits logicalWorkerSlice whose grouped distributed writer "
+                "range cannot be proven owner-local from static DB block-grid "
+                "facts";
+
+    if (!isStaticDbOwnerGroupedBlockScheduleRouteLocal(
+            *dbSizes, groupBlockCounts, totalNodes, *ownerPlan))
+      return source.emitOpError()
+             << "commits logicalWorkerSlice that groups distributed writer "
+                "blocks across owner routes; SDE-to-ARTS must split writer "
+                "codelets into owner-local block ranges";
+  }
+
+  return success();
+}
+
 struct CoarseSuDependency {
   arts::DbAllocOp alloc;
   ArtsMode mode = ArtsMode::uninitialized;
@@ -1851,10 +1893,9 @@ convertSuIterate(sde::SdeSuIterateOp source,
       return source.emitOpError()
              << "requires runtime node count to keep grouped distributed "
                 "writers owner-local";
-    if (*totalNodes > 1) {
-      workerSpans.assign(ownerBlockSizes.begin(), ownerBlockSizes.end());
-      std::fill(groupBlockCounts.begin(), groupBlockCounts.end(), 1);
-    }
+    if (failed(verifyDistributedWriterGroupingOwnerLocal(
+            source, deps, groupBlockCounts, *totalNodes)))
+      return failure();
   }
 
   SetVector<Value> scalarCaptures;
