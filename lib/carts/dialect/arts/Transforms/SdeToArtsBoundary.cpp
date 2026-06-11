@@ -555,6 +555,36 @@ struct DirectDepPlan {
   ArrayAttr haloShape;
 };
 
+enum class Halo2DFace {
+  Center,
+  Top,
+  Bottom,
+  Left,
+  Right,
+};
+
+struct CompactHaloColumnPlan {
+  arts::DbAllocOp leftColumnDb;
+  arts::DbAllocOp rightColumnDb;
+  Value rowExtent;
+  Value colExtent;
+};
+
+struct Halo2DTaskPlan {
+  unsigned centerTaskDepIndex = 0;
+  unsigned topTaskDepIndex = 0;
+  unsigned bottomTaskDepIndex = 0;
+  unsigned leftTaskDepIndex = 0;
+  unsigned rightTaskDepIndex = 0;
+  Value rowExtent;
+  Value colExtent;
+};
+
+struct HaloLoadRewrite {
+  unsigned haloPlanIndex = 0;
+  Halo2DFace face = Halo2DFace::Center;
+};
+
 static bool hasDistributedLaunchStoragePlan(ArrayRef<DirectDepPlan> deps) {
   return llvm::any_of(deps, [](DirectDepPlan dep) {
     return dep.alloc && hasArtsDbPhysicalLayoutPlan(dep.alloc.getOperation());
@@ -1242,6 +1272,552 @@ getOwnerHaloRadii(ArrayAttr haloShape, unsigned ownerDimCount,
   return radii;
 }
 
+static bool hasGroupedOwnerBlocks(ArrayRef<int64_t> groupBlockCounts) {
+  return llvm::any_of(groupBlockCounts,
+                      [](int64_t count) { return count > 1; });
+}
+
+static FailureOr<int64_t>
+requireStaticPositiveIndex(Value value, Operation *context, StringRef name) {
+  std::optional<int64_t> folded = ValueAnalysis::tryFoldConstantIndex(
+      ValueAnalysis::stripNumericCasts(value));
+  if (!folded || *folded <= 0) {
+    context->emitError() << "requires static positive " << name
+                         << " for ARTS compact halo face materialization";
+    return failure();
+  }
+  return *folded;
+}
+
+static void attachStencilHaloAcquireFacts(sde::SdeSuIterateOp source,
+                                          arts::DbAcquireOp acquire,
+                                          ArrayRef<int64_t> minOffsets,
+                                          ArrayRef<int64_t> maxOffsets) {
+  acquire.setDepPatternAttr(
+      ArtsDepPatternAttr::get(source.getContext(), ArtsDepPattern::stencil));
+  acquire.setDistributionPatternAttr(EdtDistributionPatternAttr::get(
+      source.getContext(), EdtDistributionPattern::stencil));
+  OpBuilder attrBuilder(source.getContext());
+  acquire->setAttr(acquire.getStencilMinOffsetsAttrName(),
+                   attrBuilder.getI64ArrayAttr(minOffsets));
+  acquire->setAttr(acquire.getStencilMaxOffsetsAttrName(),
+                   attrBuilder.getI64ArrayAttr(maxOffsets));
+  if (auto ownerDims = source.getOwnerDimsAttr())
+    acquire->setAttr(acquire.getStencilOwnerDimsAttrName(), ownerDims);
+  if (auto spatialDims = source.getSpatialDimsAttr())
+    acquire->setAttr(acquire.getStencilSpatialDimsAttrName(), spatialDims);
+  acquire->setAttr(acquire.getStencilSupportedBlockHaloAttrName(),
+                   UnitAttr::get(source.getContext()));
+}
+
+static FailureOr<CompactHaloColumnPlan>
+materializeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
+                                  ArrayRef<int64_t> groupBlockCounts,
+                                  OpBuilder &builder, Location loc) {
+  if (dep.ownerDimCount != 2) {
+    return source.emitOpError()
+           << "commits a halo dependency whose owner rank is not supported by "
+              "ARTS compact 2D unit-halo face materialization; refusing a "
+              "full-block halo byte-window";
+  }
+  if (hasGroupedOwnerBlocks(groupBlockCounts)) {
+    return source.emitOpError()
+           << "commits grouped halo CUs, but ARTS compact halo face "
+              "materialization currently requires one CU per DB block; "
+              "refusing a full-block halo byte-window";
+  }
+
+  FailureOr<SmallVector<int64_t, 4>> haloRadii = getOwnerHaloRadii(
+      dep.haloShape, dep.ownerDimCount, source.getOperation());
+  if (failed(haloRadii))
+    return failure();
+  if (haloRadii->size() != 2 || (*haloRadii)[0] != 1 || (*haloRadii)[1] != 1) {
+    return source.emitOpError()
+           << "commits a halo dependency outside the supported 2D unit-halo "
+              "shape; ARTS must materialize the exact halo graph instead of "
+              "widening to a full-block byte window";
+  }
+
+  if (dep.alloc.getSizes().size() != 2 ||
+      dep.alloc.getElementSizes().size() != 4) {
+    return source.emitOpError()
+           << "commits a rank shape that ARTS compact 2D unit-halo face "
+              "materialization cannot represent; refusing a full-block halo "
+              "byte-window";
+  }
+
+  FailureOr<int64_t> rowExtentStatic = requireStaticPositiveIndex(
+      dep.alloc.getElementSizes()[2], source.getOperation(), "halo row extent");
+  FailureOr<int64_t> colExtentStatic =
+      requireStaticPositiveIndex(dep.alloc.getElementSizes()[3],
+                                 source.getOperation(), "halo column extent");
+  if (failed(rowExtentStatic) || failed(colExtentStatic))
+    return failure();
+
+  ArrayAttr ownerDimsAttr = getPlanOwnerDimsAttr(dep.alloc.getOperation());
+  ArrayAttr physicalBlockShapeAttr =
+      getPlanPhysicalBlockShapeAttr(dep.alloc.getOperation());
+  std::optional<SmallVector<int64_t, 4>> physicalBlockShape =
+      readI64ArrayAttr(physicalBlockShapeAttr);
+  if (!ownerDimsAttr || !physicalBlockShape ||
+      physicalBlockShape->size() != dep.alloc.getElementSizes().size()) {
+    return source.emitOpError()
+           << "requires committed DB owner/block facts to materialize compact "
+              "halo payload DBs; refusing a full-block halo byte-window";
+  }
+
+  MLIRContext *ctx = source.getContext();
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  Value route = arts::createCurrentNodeRoute(builder, loc);
+  Value rowExtent = dep.alloc.getElementSizes()[2];
+  Value colExtent = dep.alloc.getElementSizes()[3];
+  SmallVector<Value, 4> compactElementSizes{one, one, rowExtent,
+                                            createOneIndex(builder, loc)};
+  SmallVector<int64_t, 4> compactPhysicalBlockShape(*physicalBlockShape);
+  compactPhysicalBlockShape[3] = 1;
+
+  auto createCompactDb = [&]() -> arts::DbAllocOp {
+    auto db = arts::DbAllocOp::create(
+        builder, loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
+        dep.alloc.getElementType(),
+        SmallVector<Value>(dep.alloc.getSizes().begin(),
+                           dep.alloc.getSizes().end()),
+        SmallVector<Value>(compactElementSizes.begin(),
+                           compactElementSizes.end()),
+        PartitionMode::block);
+    db.setCompactHaloPayloadAttr(UnitAttr::get(ctx));
+    setPlanOwnerDimsAttr(db.getOperation(), ownerDimsAttr);
+    setPlanPhysicalBlockShapeAttr(
+        db.getOperation(),
+        Builder(ctx).getI64ArrayAttr(compactPhysicalBlockShape));
+    copyDistributionAttrs(dep.alloc.getOperation(), db.getOperation());
+    copyDbOwnerMapAttrs(dep.alloc, db);
+    return db;
+  };
+
+  CompactHaloColumnPlan plan;
+  plan.leftColumnDb = createCompactDb();
+  plan.rightColumnDb = createCompactDb();
+  plan.rowExtent = rowExtent;
+  plan.colExtent = colExtent;
+
+  auto outer = scf::ForOp::create(builder, loc, zero, dep.alloc.getSizes()[0],
+                                  createOneIndex(builder, loc));
+  builder.setInsertionPointToStart(outer.getBody());
+  auto inner = scf::ForOp::create(builder, loc, zero, dep.alloc.getSizes()[1],
+                                  createOneIndex(builder, loc));
+  builder.setInsertionPointToStart(inner.getBody());
+
+  Value blockI = outer.getInductionVar();
+  Value blockJ = inner.getInductionVar();
+  SmallVector<Value> blockOffsets{blockI, blockJ};
+  SmallVector<Value> blockSizes{createOneIndex(builder, loc),
+                                createOneIndex(builder, loc)};
+
+  auto sourceAcquire = arts::DbAcquireOp::create(
+      builder, loc, ArtsMode::in, dep.alloc.getGuid(), dep.alloc.getPtr(),
+      std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+      SmallVector<Value>{}, blockOffsets, blockSizes, SmallVector<Value>{},
+      SmallVector<Value>{}, SmallVector<Value>{}, Value{}, SmallVector<Value>{},
+      SmallVector<Value>{});
+  sourceAcquire.setPreserveAccessMode();
+  auto leftAcquire = arts::DbAcquireOp::create(
+      builder, loc, ArtsMode::out, plan.leftColumnDb.getGuid(),
+      plan.leftColumnDb.getPtr(),
+      std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+      SmallVector<Value>{}, blockOffsets, blockSizes, SmallVector<Value>{},
+      SmallVector<Value>{}, SmallVector<Value>{}, Value{}, SmallVector<Value>{},
+      SmallVector<Value>{});
+  leftAcquire.setPreserveAccessMode();
+  auto rightAcquire = arts::DbAcquireOp::create(
+      builder, loc, ArtsMode::out, plan.rightColumnDb.getGuid(),
+      plan.rightColumnDb.getPtr(),
+      std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+      SmallVector<Value>{}, blockOffsets, blockSizes, SmallVector<Value>{},
+      SmallVector<Value>{}, SmallVector<Value>{}, Value{}, SmallVector<Value>{},
+      SmallVector<Value>{});
+  rightAcquire.setPreserveAccessMode();
+
+  SmallVector<Value, 4> packDeps{sourceAcquire.getPtr(), leftAcquire.getPtr(),
+                                 rightAcquire.getPtr()};
+  SmallVector<Value, 4> packParams{rowExtent, colExtent};
+  auto packEdt = arts::EdtOp::create(
+      builder, loc, arts::EdtType::task, arts::EdtConcurrency::intranode,
+      arts::createCurrentNodeRoute(builder, loc), packDeps, packParams);
+  packEdt.setCompactHaloPackAttr(UnitAttr::get(ctx));
+
+  Block &packBlock = packEdt.getBody().front();
+  for (Value depValue : packDeps)
+    packBlock.addArgument(depValue.getType(), loc);
+  unsigned paramOffset = packBlock.getNumArguments();
+  for (Value param : packParams)
+    packBlock.addArgument(param.getType(), loc);
+
+  OpBuilder bodyBuilder(packEdt.getContext());
+  bodyBuilder.setInsertionPointToStart(&packBlock);
+  Value sourcePayload = arts::materializeDbInnerPayload(
+      bodyBuilder, loc, packBlock.getArgument(0));
+  Value leftPayload = arts::materializeDbInnerPayload(bodyBuilder, loc,
+                                                      packBlock.getArgument(1));
+  Value rightPayload = arts::materializeDbInnerPayload(
+      bodyBuilder, loc, packBlock.getArgument(2));
+  Value rowLimit = packBlock.getArgument(paramOffset);
+  Value colLimit = packBlock.getArgument(paramOffset + 1);
+  Value lastCol = arith::SubIOp::create(bodyBuilder, loc, colLimit,
+                                        createOneIndex(bodyBuilder, loc));
+  auto rowLoop =
+      scf::ForOp::create(bodyBuilder, loc, createZeroIndex(bodyBuilder, loc),
+                         rowLimit, createOneIndex(bodyBuilder, loc));
+  bodyBuilder.setInsertionPointToStart(rowLoop.getBody());
+  Value row = rowLoop.getInductionVar();
+  SmallVector<Value, 4> sourceLeftIdx{createZeroIndex(bodyBuilder, loc),
+                                      createZeroIndex(bodyBuilder, loc), row,
+                                      createZeroIndex(bodyBuilder, loc)};
+  Value leftValue =
+      memref::LoadOp::create(bodyBuilder, loc, sourcePayload, sourceLeftIdx);
+  memref::StoreOp::create(bodyBuilder, loc, leftValue, leftPayload,
+                          sourceLeftIdx);
+  SmallVector<Value, 4> sourceRightIdx{createZeroIndex(bodyBuilder, loc),
+                                       createZeroIndex(bodyBuilder, loc), row,
+                                       lastCol};
+  SmallVector<Value, 4> compactRightIdx{createZeroIndex(bodyBuilder, loc),
+                                        createZeroIndex(bodyBuilder, loc), row,
+                                        createZeroIndex(bodyBuilder, loc)};
+  Value rightValue =
+      memref::LoadOp::create(bodyBuilder, loc, sourcePayload, sourceRightIdx);
+  memref::StoreOp::create(bodyBuilder, loc, rightValue, rightPayload,
+                          compactRightIdx);
+  bodyBuilder.setInsertionPointToEnd(&packBlock);
+  arts::YieldOp::create(bodyBuilder, loc);
+
+  builder.setInsertionPointAfter(outer);
+  return plan;
+}
+
+static arts::DbAcquireOp
+create2DUnitRowHaloAcquire(sde::SdeSuIterateOp source, DirectDepPlan dep,
+                           ArrayRef<Value> currentBlockOffsets,
+                           CompactHaloColumnPlan plan, bool topFace,
+                           SmallVectorImpl<Value> &dbOffsets,
+                           OpBuilder &builder, Location loc) {
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  Value blockI = currentBlockOffsets[0];
+  Value blockJ = currentBlockOffsets[1];
+  Value sourceI;
+  Value boundsValid;
+  Value elementRowOffset;
+  if (topFace) {
+    Value canShift = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::uge, blockI, one);
+    Value shifted = arith::SubIOp::create(builder, loc, blockI, one);
+    sourceI = arith::SelectOp::create(builder, loc, canShift, shifted, zero);
+    boundsValid = canShift;
+    elementRowOffset = arith::SubIOp::create(builder, loc, plan.rowExtent, one);
+  } else {
+    sourceI = arith::AddIOp::create(builder, loc, blockI, one);
+    boundsValid = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult,
+                                        sourceI, dep.alloc.getSizes()[0]);
+    sourceI =
+        arith::SelectOp::create(builder, loc, boundsValid, sourceI, blockI);
+    elementRowOffset = zero;
+  }
+
+  SmallVector<Value> offsets{sourceI, blockJ};
+  SmallVector<Value> sizes{one, createOneIndex(builder, loc)};
+  dbOffsets.assign(offsets.begin(), offsets.end());
+  SmallVector<Value> elementOffsets{
+      createZeroIndex(builder, loc), createZeroIndex(builder, loc),
+      elementRowOffset, createZeroIndex(builder, loc)};
+  SmallVector<Value> elementSizes{createOneIndex(builder, loc),
+                                  createOneIndex(builder, loc),
+                                  createOneIndex(builder, loc), plan.colExtent};
+  auto acquire = arts::DbAcquireOp::create(
+      builder, loc, ArtsMode::in, dep.alloc.getGuid(), dep.alloc.getPtr(),
+      std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+      SmallVector<Value>{}, offsets, sizes, SmallVector<Value>{},
+      SmallVector<Value>{}, SmallVector<Value>{}, boundsValid, elementOffsets,
+      elementSizes);
+  acquire.setPreserveAccessMode();
+  if (topFace)
+    attachStencilHaloAcquireFacts(source, acquire, {-1, 0}, {0, 0});
+  else
+    attachStencilHaloAcquireFacts(source, acquire, {0, 0}, {1, 0});
+  return acquire;
+}
+
+static arts::DbAcquireOp create2DUnitCompactColumnAcquire(
+    DirectDepPlan dep, ArrayRef<Value> currentBlockOffsets,
+    CompactHaloColumnPlan plan, bool leftFace,
+    SmallVectorImpl<Value> &dbOffsets, OpBuilder &builder, Location loc) {
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  Value blockI = currentBlockOffsets[0];
+  Value blockJ = currentBlockOffsets[1];
+  Value sourceJ;
+  Value boundsValid;
+  arts::DbAllocOp compactDb;
+  if (leftFace) {
+    Value canShift = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::uge, blockJ, one);
+    Value shifted = arith::SubIOp::create(builder, loc, blockJ, one);
+    sourceJ = arith::SelectOp::create(builder, loc, canShift, shifted, zero);
+    boundsValid = canShift;
+    compactDb = plan.rightColumnDb;
+  } else {
+    sourceJ = arith::AddIOp::create(builder, loc, blockJ, one);
+    boundsValid = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult,
+                                        sourceJ, dep.alloc.getSizes()[1]);
+    sourceJ =
+        arith::SelectOp::create(builder, loc, boundsValid, sourceJ, blockJ);
+    compactDb = plan.leftColumnDb;
+  }
+
+  SmallVector<Value> offsets{blockI, sourceJ};
+  SmallVector<Value> sizes{one, createOneIndex(builder, loc)};
+  dbOffsets.assign(offsets.begin(), offsets.end());
+  auto acquire = arts::DbAcquireOp::create(
+      builder, loc, ArtsMode::in, compactDb.getGuid(), compactDb.getPtr(),
+      std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+      SmallVector<Value>{}, offsets, sizes, SmallVector<Value>{},
+      SmallVector<Value>{}, SmallVector<Value>{}, boundsValid,
+      SmallVector<Value>{}, SmallVector<Value>{});
+  acquire.setPreserveAccessMode();
+  return acquire;
+}
+
+static Value getCommonDivRemSource(Value divValue, Value remValue,
+                                   Value expectedDivisor) {
+  auto div = ValueAnalysis::stripNumericCasts(divValue)
+                 .getDefiningOp<arith::DivUIOp>();
+  auto rem = ValueAnalysis::stripNumericCasts(remValue)
+                 .getDefiningOp<arith::RemUIOp>();
+  if (!div || !rem)
+    return {};
+  if (!ValueAnalysis::sameValue(div.getLhs(), rem.getLhs()) &&
+      !ValueAnalysis::areValuesEquivalent(div.getLhs(), rem.getLhs()))
+    return {};
+  if ((!ValueAnalysis::sameValue(div.getRhs(), rem.getRhs()) &&
+       !ValueAnalysis::areValuesEquivalent(div.getRhs(), rem.getRhs())) ||
+      (!ValueAnalysis::sameValue(div.getRhs(), expectedDivisor) &&
+       !ValueAnalysis::areValuesEquivalent(div.getRhs(), expectedDivisor)))
+    return {};
+  return div.getLhs();
+}
+
+static FailureOr<std::optional<HaloLoadRewrite>>
+classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloPlanIndex,
+                       const Halo2DTaskPlan &plan, Value rowIv, Value colIv) {
+  OperandRange indices = load.getIndices();
+  if (indices.size() != 4) {
+    load.emitOpError()
+        << "uses a rank shape unsupported by ARTS compact 2D unit-halo "
+           "materialization";
+    return failure();
+  }
+
+  Value rowExpr = getCommonDivRemSource(indices[0], indices[2], plan.rowExtent);
+  Value colExpr = getCommonDivRemSource(indices[1], indices[3], plan.colExtent);
+  if (!rowExpr || !colExpr) {
+    load.emitOpError()
+        << "does not expose div/rem rank-expanded indices required for ARTS "
+           "compact 2D unit-halo load rewriting";
+    return failure();
+  }
+
+  ValueAnalysis::IndexExpr row =
+      ValueAnalysis::analyzeIndexExpr(rowExpr, rowIv);
+  ValueAnalysis::IndexExpr col =
+      ValueAnalysis::analyzeIndexExpr(colExpr, colIv);
+  auto valid = [](const ValueAnalysis::IndexExpr &expr) {
+    return expr.dependsOnIV && expr.multiplier && *expr.multiplier == 1 &&
+           expr.offset;
+  };
+  if (!valid(row) || !valid(col)) {
+    load.emitOpError()
+        << "does not expose affine unit-neighborhood indices required for ARTS "
+           "compact 2D unit-halo load rewriting";
+    return failure();
+  }
+
+  int64_t rowOffset = *row.offset;
+  int64_t colOffset = *col.offset;
+  if (rowOffset == 0 && colOffset == 0)
+    return std::optional<HaloLoadRewrite>{
+        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Center}};
+  if (rowOffset != 0 && colOffset != 0) {
+    load.emitOpError()
+        << "requires corner halo materialization, which ARTS has not "
+           "committed; refusing a full-block halo byte-window";
+    return failure();
+  }
+  if (rowOffset == -1 && colOffset == 0)
+    return std::optional<HaloLoadRewrite>{
+        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Top}};
+  if (rowOffset == 1 && colOffset == 0)
+    return std::optional<HaloLoadRewrite>{
+        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Bottom}};
+  if (rowOffset == 0 && colOffset == -1)
+    return std::optional<HaloLoadRewrite>{
+        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Left}};
+  if (rowOffset == 0 && colOffset == 1)
+    return std::optional<HaloLoadRewrite>{
+        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Right}};
+
+  load.emitOpError()
+      << "requires non-unit halo materialization, which ARTS has not "
+         "committed; refusing a full-block halo byte-window";
+  return failure();
+}
+
+static SmallVector<Value, 4> buildRankExpandedElementIndices(OpBuilder &builder,
+                                                             Location loc,
+                                                             Value row,
+                                                             Value col) {
+  return SmallVector<Value, 4>{createZeroIndex(builder, loc),
+                               createZeroIndex(builder, loc), row, col};
+}
+
+static LogicalResult recordClonedHaloLoadRewrites(
+    Operation *original, Operation *cloned,
+    const DenseMap<Operation *, HaloLoadRewrite> &originalRewrites,
+    DenseMap<Operation *, HaloLoadRewrite> &clonedRewrites) {
+  auto recordIfMapped = [&](Operation *originalLoad, Operation *clonedLoad) {
+    auto it = originalRewrites.find(originalLoad);
+    if (it != originalRewrites.end())
+      clonedRewrites[clonedLoad] = it->second;
+  };
+
+  SmallVector<memref::LoadOp, 8> originalLoads;
+  SmallVector<memref::LoadOp, 8> clonedLoads;
+  if (auto load = dyn_cast<memref::LoadOp>(original))
+    originalLoads.push_back(load);
+  else
+    original->walk([&](memref::LoadOp load) { originalLoads.push_back(load); });
+  if (auto load = dyn_cast<memref::LoadOp>(cloned))
+    clonedLoads.push_back(load);
+  else
+    cloned->walk([&](memref::LoadOp load) { clonedLoads.push_back(load); });
+
+  bool hasMappedLoad = llvm::any_of(originalLoads, [&](memref::LoadOp load) {
+    return originalRewrites.contains(load.getOperation());
+  });
+  if (!hasMappedLoad)
+    return success();
+  if (originalLoads.size() != clonedLoads.size())
+    return cloned->emitError()
+           << "could not preserve compact halo load rewrite mapping while "
+              "cloning SDE compute body";
+  for (auto [originalLoad, clonedLoad] : llvm::zip(originalLoads, clonedLoads))
+    recordIfMapped(originalLoad.getOperation(), clonedLoad.getOperation());
+  return success();
+}
+
+static LogicalResult rewriteCloned2DUnitHaloLoads(
+    arts::EdtOp task, const DenseMap<Operation *, HaloLoadRewrite> &rewrites,
+    ArrayRef<Halo2DTaskPlan> haloPlans, ArrayRef<Value> payloads,
+    ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs) {
+  OpBuilder builder(task.getContext());
+
+  for (const auto &entry : rewrites) {
+    auto load = dyn_cast_or_null<memref::LoadOp>(entry.first);
+    if (!load)
+      continue;
+    const HaloLoadRewrite &rewrite = entry.second;
+    if (rewrite.haloPlanIndex >= haloPlans.size())
+      return task.emitOpError() << "has stale compact halo load rewrite state";
+    const Halo2DTaskPlan &plan = haloPlans[rewrite.haloPlanIndex];
+    auto requirePayload = [&](unsigned index) -> FailureOr<Value> {
+      if (index >= payloads.size() || index >= depBlockOffsetArgs.size() ||
+          depBlockOffsetArgs[index].size() != 2) {
+        task.emitOpError() << "has inconsistent compact halo dependency state";
+        return failure();
+      }
+      return payloads[index];
+    };
+
+    FailureOr<Value> centerPayload = requirePayload(plan.centerTaskDepIndex);
+    if (failed(centerPayload))
+      return failure();
+    OperandRange indices = load.getIndices();
+    if (indices.size() != 4)
+      return load.emitOpError()
+             << "has unsupported compact halo rank after cloning";
+
+    Location loc = load.getLoc();
+    builder.setInsertionPoint(load);
+    Value elemRow = indices[2];
+    Value elemCol = indices[3];
+    if (rewrite.face == Halo2DFace::Center) {
+      load.getIndicesMutable()[0].set(createZeroIndex(builder, loc));
+      load.getIndicesMutable()[1].set(createZeroIndex(builder, loc));
+      continue;
+    }
+
+    unsigned ownerSlot = 0;
+    unsigned faceDepIndex = plan.topTaskDepIndex;
+    SmallVector<Value, 4> faceIndices;
+    switch (rewrite.face) {
+    case Halo2DFace::Top:
+      ownerSlot = 0;
+      faceDepIndex = plan.topTaskDepIndex;
+      faceIndices = buildRankExpandedElementIndices(
+          builder, loc, createZeroIndex(builder, loc), elemCol);
+      break;
+    case Halo2DFace::Bottom:
+      ownerSlot = 0;
+      faceDepIndex = plan.bottomTaskDepIndex;
+      faceIndices = buildRankExpandedElementIndices(
+          builder, loc, createZeroIndex(builder, loc), elemCol);
+      break;
+    case Halo2DFace::Left:
+      ownerSlot = 1;
+      faceDepIndex = plan.leftTaskDepIndex;
+      faceIndices = buildRankExpandedElementIndices(
+          builder, loc, elemRow, createZeroIndex(builder, loc));
+      break;
+    case Halo2DFace::Right:
+      ownerSlot = 1;
+      faceDepIndex = plan.rightTaskDepIndex;
+      faceIndices = buildRankExpandedElementIndices(
+          builder, loc, elemRow, createZeroIndex(builder, loc));
+      break;
+    case Halo2DFace::Center:
+      llvm_unreachable("center handled above");
+    }
+
+    FailureOr<Value> facePayload = requirePayload(faceDepIndex);
+    if (failed(facePayload))
+      return failure();
+
+    Value centerBlock = depBlockOffsetArgs[plan.centerTaskDepIndex][ownerSlot];
+    Value crossesBlock =
+        arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
+                              indices[ownerSlot], centerBlock);
+    SmallVector<Type, 1> resultTypes{load.getType()};
+    auto ifOp = scf::IfOp::create(builder, loc, resultTypes, crossesBlock,
+                                  /*withElseRegion=*/true);
+
+    builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+    Value faceValue =
+        memref::LoadOp::create(builder, loc, *facePayload, faceIndices);
+    scf::YieldOp::create(builder, loc, ValueRange{faceValue});
+
+    builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
+    SmallVector<Value, 4> coreIndices =
+        buildRankExpandedElementIndices(builder, loc, elemRow, elemCol);
+    Value coreValue =
+        memref::LoadOp::create(builder, loc, *centerPayload, coreIndices);
+    scf::YieldOp::create(builder, loc, ValueRange{coreValue});
+
+    load.replaceAllUsesWith(ifOp.getResult(0));
+    load.erase();
+  }
+
+  return success();
+}
+
 static LogicalResult
 rewriteOwnerIndicesToLocal(arts::EdtOp task, ArrayRef<Value> payloads,
                            ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs,
@@ -1904,6 +2480,34 @@ convertSuIterate(sde::SdeSuIterateOp source,
 
   Location loc = source.getLoc();
   OpBuilder builder(source);
+  Block *computeBlock = sde::getSuIterateComputeBlock(source);
+  if (!computeBlock)
+    return source.emitOpError() << "has no computable body";
+
+  SmallVector<CompactHaloColumnPlan, 4> compactHaloColumnPlans;
+  DenseMap<unsigned, unsigned> compactColumnPlanByDepIndex;
+  for (auto [depIndex, dep] : llvm::enumerate(deps)) {
+    if (!dep.haloShape)
+      continue;
+    if (dep.mode != ArtsMode::in)
+      return source.emitOpError()
+             << "commits a halo dependency that is not read-only; ARTS cannot "
+                "materialize a writable halo window";
+    FailureOr<CompactHaloColumnPlan> compactPlan =
+        materializeCompactHaloColumnPacks(source, dep, groupBlockCounts,
+                                          builder, loc);
+    if (failed(compactPlan))
+      return failure();
+    compactColumnPlanByDepIndex[depIndex] =
+        static_cast<unsigned>(compactHaloColumnPlans.size());
+    compactHaloColumnPlans.push_back(*compactPlan);
+  }
+  if (!compactHaloColumnPlans.empty()) {
+    auto reason = arts::ArtsBarrierReasonAttr::get(
+        source.getContext(), arts::ArtsBarrierReason::required_memory);
+    arts::BarrierOp::create(builder, loc, reason);
+  }
+
   SmallVector<Value, 4> dispatchBases;
   SmallVector<Value, 4> dispatchBlockOffsets;
   scf::ForOp dispatchRoot;
@@ -1930,12 +2534,26 @@ convertSuIterate(sde::SdeSuIterateOp source,
   }
 
   SmallVector<Value, 4> taskDeps;
-  taskDeps.reserve(deps.size());
+  taskDeps.reserve(deps.size() + compactHaloColumnPlans.size() * 4);
   SmallVector<SmallVector<Value, 4>> depBlockOffsets;
   SmallVector<bool> depRequiresDbRef;
-  depBlockOffsets.reserve(deps.size());
-  depRequiresDbRef.reserve(deps.size());
-  for (DirectDepPlan &dep : deps) {
+  SmallVector<unsigned, 4> primaryTaskDepForDep(deps.size(), 0);
+  SmallVector<Halo2DTaskPlan, 4> haloTaskPlans;
+  DenseMap<unsigned, unsigned> haloTaskPlanByDepIndex;
+  depBlockOffsets.reserve(taskDeps.capacity());
+  depRequiresDbRef.reserve(taskDeps.capacity());
+
+  auto appendTaskDep = [&](Value depPtr, ArrayRef<Value> blockOffsets,
+                           bool requiresDbRef) -> unsigned {
+    unsigned taskDepIndex = static_cast<unsigned>(taskDeps.size());
+    taskDeps.push_back(depPtr);
+    depBlockOffsets.push_back(
+        SmallVector<Value, 4>(blockOffsets.begin(), blockOffsets.end()));
+    depRequiresDbRef.push_back(requiresDbRef);
+    return taskDepIndex;
+  };
+
+  for (auto [depIndex, dep] : llvm::enumerate(deps)) {
     SmallVector<Value> offsets(dispatchBlockOffsets.begin(),
                                dispatchBlockOffsets.end());
     SmallVector<Value> sizes;
@@ -1947,81 +2565,78 @@ convertSuIterate(sde::SdeSuIterateOp source,
           builder, loc, remaining,
           createConstantIndex(builder, loc, groupBlockCounts[slot])));
     }
-    bool needsDepSpecificDbRef = false;
+
     if (dep.haloShape) {
-      if (dep.mode != ArtsMode::in)
+      auto planIt = compactColumnPlanByDepIndex.find(depIndex);
+      if (planIt == compactColumnPlanByDepIndex.end())
         return source.emitOpError()
-               << "commits a halo dependency that is not read-only; ARTS "
-                  "cannot materialize a writable halo window";
-      FailureOr<SmallVector<int64_t, 4>> haloRadii = getOwnerHaloRadii(
-          dep.haloShape, ownerDimCount, source.getOperation());
-      if (failed(haloRadii))
-        return failure();
-      Value zero = createZeroIndex(builder, loc);
-      for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-        int64_t radius = (*haloRadii)[slot];
-        if (radius <= 0)
-          continue;
-        Value halo = createConstantIndex(builder, loc, radius);
-        Value canShiftLeft = arith::CmpIOp::create(
-            builder, loc, arith::CmpIPredicate::uge, offsets[slot], halo);
-        Value shiftedLeft =
-            arith::SubIOp::create(builder, loc, offsets[slot], halo);
-        Value expandedOffset = arith::SelectOp::create(
-            builder, loc, canShiftLeft, shiftedLeft, zero);
-        Value leftGrowth =
-            arith::SubIOp::create(builder, loc, offsets[slot], expandedOffset);
-        Value desired =
-            arith::AddIOp::create(builder, loc, leftGrowth, sizes[slot]);
-        desired = arith::AddIOp::create(builder, loc, desired, halo);
-        Value remaining = arith::SubIOp::create(
-            builder, loc, dep.alloc.getSizes()[slot], expandedOffset);
-        offsets[slot] = expandedOffset;
-        sizes[slot] = arith::MinUIOp::create(builder, loc, remaining, desired);
-        needsDepSpecificDbRef = true;
-      }
+               << "lost compact halo payload state for committed halo "
+                  "dependency";
+      const CompactHaloColumnPlan &compactPlan =
+          compactHaloColumnPlans[planIt->second];
+
+      auto centerAcquire = arts::DbAcquireOp::create(
+          builder, loc, dep.mode, dep.alloc.getGuid(), dep.alloc.getPtr(),
+          std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+          SmallVector<Value>{}, offsets, sizes, SmallVector<Value>{},
+          SmallVector<Value>{}, SmallVector<Value>{}, Value{},
+          SmallVector<Value>{}, SmallVector<Value>{});
+      centerAcquire.setPreserveAccessMode();
+      unsigned centerTaskDep = appendTaskDep(centerAcquire.getPtr(), offsets,
+                                             /*requiresDbRef=*/false);
+      primaryTaskDepForDep[depIndex] = centerTaskDep;
+
+      SmallVector<Value, 4> topOffsets;
+      auto topAcquire = create2DUnitRowHaloAcquire(
+          source, dep, dispatchBlockOffsets, compactPlan, /*topFace=*/true,
+          topOffsets, builder, loc);
+      unsigned topTaskDep = appendTaskDep(topAcquire.getPtr(), topOffsets,
+                                          /*requiresDbRef=*/false);
+
+      SmallVector<Value, 4> bottomOffsets;
+      auto bottomAcquire = create2DUnitRowHaloAcquire(
+          source, dep, dispatchBlockOffsets, compactPlan, /*topFace=*/false,
+          bottomOffsets, builder, loc);
+      unsigned bottomTaskDep = appendTaskDep(
+          bottomAcquire.getPtr(), bottomOffsets, /*requiresDbRef=*/false);
+
+      SmallVector<Value, 4> leftOffsets;
+      auto leftAcquire = create2DUnitCompactColumnAcquire(
+          dep, dispatchBlockOffsets, compactPlan, /*leftFace=*/true,
+          leftOffsets, builder, loc);
+      unsigned leftTaskDep = appendTaskDep(leftAcquire.getPtr(), leftOffsets,
+                                           /*requiresDbRef=*/false);
+
+      SmallVector<Value, 4> rightOffsets;
+      auto rightAcquire = create2DUnitCompactColumnAcquire(
+          dep, dispatchBlockOffsets, compactPlan, /*leftFace=*/false,
+          rightOffsets, builder, loc);
+      unsigned rightTaskDep = appendTaskDep(rightAcquire.getPtr(), rightOffsets,
+                                            /*requiresDbRef=*/false);
+
+      Halo2DTaskPlan haloTaskPlan;
+      haloTaskPlan.centerTaskDepIndex = centerTaskDep;
+      haloTaskPlan.topTaskDepIndex = topTaskDep;
+      haloTaskPlan.bottomTaskDepIndex = bottomTaskDep;
+      haloTaskPlan.leftTaskDepIndex = leftTaskDep;
+      haloTaskPlan.rightTaskDepIndex = rightTaskDep;
+      haloTaskPlan.rowExtent = compactPlan.rowExtent;
+      haloTaskPlan.colExtent = compactPlan.colExtent;
+      haloTaskPlanByDepIndex[depIndex] =
+          static_cast<unsigned>(haloTaskPlans.size());
+      haloTaskPlans.push_back(haloTaskPlan);
+      continue;
     }
-    depBlockOffsets.push_back(
-        SmallVector<Value, 4>(offsets.begin(), offsets.end()));
-    depRequiresDbRef.push_back(needsDepSpecificDbRef);
-    SmallVector<Value> elementOffsets;
-    SmallVector<Value> elementSizes;
-    if (dep.haloShape) {
-      if (dep.alloc.getElementSizes().empty())
-        return source.emitOpError()
-               << "commits a halo dependency without DB element-size facts; "
-                  "ARTS-RT must not infer halo byte windows";
-      elementOffsets.reserve(dep.alloc.getElementSizes().size());
-      elementSizes.reserve(dep.alloc.getElementSizes().size());
-      for (Value elementSize : dep.alloc.getElementSizes()) {
-        elementOffsets.push_back(createZeroIndex(builder, loc));
-        elementSizes.push_back(elementSize);
-      }
-    }
+
     auto acquire = arts::DbAcquireOp::create(
         builder, loc, dep.mode, dep.alloc.getGuid(), dep.alloc.getPtr(),
         std::optional<arts::PartitionMode>(arts::PartitionMode::block),
         SmallVector<Value>{}, offsets, sizes, SmallVector<Value>{},
-        SmallVector<Value>{}, SmallVector<Value>{}, Value{}, elementOffsets,
-        elementSizes);
+        SmallVector<Value>{}, SmallVector<Value>{}, Value{},
+        SmallVector<Value>{}, SmallVector<Value>{});
     acquire.setPreserveAccessMode();
-    if (dep.haloShape) {
-      acquire.setDepPatternAttr(ArtsDepPatternAttr::get(
-          source.getContext(), ArtsDepPattern::stencil));
-      acquire.setDistributionPatternAttr(EdtDistributionPatternAttr::get(
-          source.getContext(), EdtDistributionPattern::stencil));
-      if (auto minOffsets = source.getAccessMinOffsetsAttr())
-        acquire->setAttr(acquire.getStencilMinOffsetsAttrName(), minOffsets);
-      if (auto maxOffsets = source.getAccessMaxOffsetsAttr())
-        acquire->setAttr(acquire.getStencilMaxOffsetsAttrName(), maxOffsets);
-      if (auto ownerDims = source.getOwnerDimsAttr())
-        acquire->setAttr(acquire.getStencilOwnerDimsAttrName(), ownerDims);
-      if (auto spatialDims = source.getSpatialDimsAttr())
-        acquire->setAttr(acquire.getStencilSpatialDimsAttrName(), spatialDims);
-      acquire->setAttr(acquire.getStencilSupportedBlockHaloAttrName(),
-                       UnitAttr::get(source.getContext()));
-    }
-    taskDeps.push_back(acquire.getPtr());
+    primaryTaskDepForDep[depIndex] =
+        appendTaskDep(acquire.getPtr(), offsets, /*requiresDbRef=*/false);
   }
 
   SmallVector<Value, 8> taskParams;
@@ -2069,13 +2684,17 @@ convertSuIterate(sde::SdeSuIterateOp source,
 
   IRMapping mapper;
   SmallVector<Value, 4> payloads;
+  payloads.reserve(taskDeps.size());
   OpBuilder bodyBuilder(task.getContext());
   bodyBuilder.setInsertionPointToStart(&taskBlock);
-  for (auto [idx, dep] : llvm::enumerate(deps)) {
+  for (auto [idx, dep] : llvm::enumerate(taskDeps)) {
     Value payload = arts::materializeDbInnerPayload(bodyBuilder, loc,
                                                     taskBlock.getArgument(idx));
     payloads.push_back(payload);
-    mapper.map(dep.alloc.getPtr(), taskBlock.getArgument(idx));
+  }
+  for (auto [depIdx, dep] : llvm::enumerate(deps)) {
+    unsigned taskDepIndex = primaryTaskDepForDep[depIdx];
+    mapper.map(dep.alloc.getPtr(), taskBlock.getArgument(taskDepIndex));
   }
   source.getBody().walk([&](Operation *op) {
     Value memref;
@@ -2093,10 +2712,11 @@ convertSuIterate(sde::SdeSuIterateOp source,
     if (it == deps.end())
       return;
     unsigned depIdx = static_cast<unsigned>(std::distance(deps.begin(), it));
-    mapper.map(memref, payloads[depIdx]);
+    unsigned taskDepIndex = primaryTaskDepForDep[depIdx];
+    mapper.map(memref, payloads[taskDepIndex]);
     Value root = ValueAnalysis::stripMemrefViewOps(memref);
     if (root && root != memref)
-      mapper.map(root, payloads[depIdx]);
+      mapper.map(root, payloads[taskDepIndex]);
   });
   for (auto [idx, param] : llvm::enumerate(taskParams))
     mapper.map(param, taskBlock.getArgument(paramOffset + idx));
@@ -2134,11 +2754,60 @@ convertSuIterate(sde::SdeSuIterateOp source,
         }
         unsigned depIdx =
             static_cast<unsigned>(std::distance(deps.begin(), it));
-        mapper.map(plan.getMu(), payloads[depIdx]);
+        mapper.map(plan.getMu(), payloads[primaryTaskDepForDep[depIdx]]);
         return WalkResult::advance();
       });
   if (accessPlanMapResult.wasInterrupted())
     return failure();
+
+  DenseMap<Operation *, HaloLoadRewrite> originalHaloLoadRewrites;
+  if (!haloTaskPlans.empty()) {
+    if (ownerDimCount != 2 || ownerPlan->loopDims.size() != 2)
+      return source.emitOpError() << "commits a halo dependency whose owner "
+                                     "rank is not supported by "
+                                     "ARTS compact 2D unit-halo load rewriting";
+    WalkResult classifyResult =
+        computeBlock->walk([&](memref::LoadOp load) {
+          arts::DbAllocOp alloc = resolveBoundaryDbAlloc(load.getMemref());
+          if (!alloc)
+            return WalkResult::advance();
+          auto depIt = llvm::find_if(deps, [&](const DirectDepPlan &dep) {
+            return dep.alloc == alloc;
+          });
+          if (depIt == deps.end())
+            return WalkResult::advance();
+          unsigned depIdx =
+              static_cast<unsigned>(std::distance(deps.begin(), depIt));
+          auto haloIt = haloTaskPlanByDepIndex.find(depIdx);
+          if (haloIt == haloTaskPlanByDepIndex.end())
+            return WalkResult::advance();
+
+          SmallVector<Value, 4> loopIvs;
+          for (Operation *parent = load->getParentOp(); parent;
+               parent = parent->getParentOp())
+            if (auto loop = dyn_cast<scf::ForOp>(parent))
+              loopIvs.push_back(loop.getInductionVar());
+          if (loopIvs.size() < 2) {
+            load.emitOpError()
+                << "is not nested in the 2D compute loops required for ARTS "
+                   "compact unit-halo load rewriting";
+            return WalkResult::interrupt();
+          }
+          Value rowIv = loopIvs[1];
+          Value colIv = loopIvs[0];
+          FailureOr<std::optional<HaloLoadRewrite>> rewrite =
+              classify2DUnitHaloLoad(load, haloIt->second,
+                                     haloTaskPlans[haloIt->second], rowIv,
+                                     colIv);
+          if (failed(rewrite))
+            return WalkResult::interrupt();
+          if (rewrite->has_value())
+            originalHaloLoadRewrites[load.getOperation()] = **rewrite;
+          return WalkResult::advance();
+        });
+    if (classifyResult.wasInterrupted())
+      return failure();
+  }
 
   for (unsigned dim = 0; dim < loopRank; ++dim) {
     auto ownerIt = llvm::find(ownerPlan->loopDims, dim);
@@ -2162,15 +2831,23 @@ convertSuIterate(sde::SdeSuIterateOp source,
     bodyBuilder.setInsertionPointToStart(localLoop.getBody());
   }
 
-  Block *computeBlock = sde::getSuIterateComputeBlock(source);
-  if (!computeBlock)
-    return source.emitOpError() << "has no computable body";
+  DenseMap<Operation *, HaloLoadRewrite> clonedHaloLoadRewrites;
   for (Operation &nested : computeBlock->without_terminator()) {
     if (isa<arts::DbAccessPlanOp>(&nested))
       continue;
-    bodyBuilder.insert(nested.clone(mapper));
+    Operation *cloned = nested.clone(mapper);
+    bodyBuilder.insert(cloned);
+    if (!originalHaloLoadRewrites.empty())
+      if (failed(recordClonedHaloLoadRewrites(&nested, cloned,
+                                              originalHaloLoadRewrites,
+                                              clonedHaloLoadRewrites)))
+        return failure();
   }
 
+  if (failed(rewriteCloned2DUnitHaloLoads(task, clonedHaloLoadRewrites,
+                                          haloTaskPlans, payloads,
+                                          taskDepBlockOffsetArgs)))
+    return failure();
   if (failed(translateSdeAtomicsToArts(task.getBody())))
     return failure();
   if (failed(rewriteOwnerIndicesToLocal(task, payloads, taskDepBlockOffsetArgs,

@@ -9,20 +9,23 @@
 // RUN:   --implicit-check-not='local_only' \
 // RUN:   --implicit-check-not='distributed_reject_reason' \
 // RUN:   --implicit-check-not='arts.db_alloc{{.*}}<coarse>{{.*}}elementType(f64)' \
+// RUN:   --implicit-check-not='byte_sizes({{.*}}%c8192' \
+// RUN:   --implicit-check-not='element_sizes[%c1, %c1, %c32, %c32]{{.*}}haloViewDependency' \
 // RUN:   < %t.dir/poisson-for.pre-lowering.mlir
 
-// RT keeps Jacobi state in block DBs and marks the stencil dependency with
-// explicit block-halo facts. The compute EDT indexes dependency payloads through
-// block-local coordinates and launches the halo/stencil frontier once before
-// waiting on it.
+// RT keeps Poisson state in block DBs and lowers the stencil frontier with
+// explicit row-face halo byte windows plus compact column payload deps.
 // RT-DAG: arts.db_alloc{{.*}}<block>{{.*}}elementSizes[%c1, %c1, %c32, %c32]
 // RT-DAG: arts.db_alloc{{.*}}planHaloShape = [1, 1, 0, 0]
-// RT: arts.db_acquire[<in>]{{.*}}partitioning(<block>){{.*}}stencil_supported_block_halo
+// RT: arts.db_acquire[<in>]{{.*}}element_offsets[%c0, %c0, %c31, %c0] element_sizes[%c1, %c1, %c1, %c32]{{.*}}haloViewDependency
+// RT: arts.db_acquire[<in>]{{.*}}element_offsets[%c0, %c0, %c0, %c0] element_sizes[%c1, %c1, %c1, %c32]{{.*}}haloViewDependency
 // RT: arts_rt.edt_param_pack
 // RT: %[[HALO_EDT:[A-Za-z0-9_]+]] = arts_rt.edt_create(%{{[A-Za-z0-9_]+}} : memref<?xi64>){{.*}}epoch(%[[HALO_EPOCH:[A-Za-z0-9_]+]] : i64)
 // RT: arts_rt.rec_dep %[[HALO_EDT]]
-// RT-SAME: acquire_modes = array<i32: 1, 1, 2
-// RT-SAME: dep_flags = array<i32: 0, 4, 0
+// RT-SAME: byte_offsets(%c0, %c0, %c7936, %c0, %c0, %c0, %c0)
+// RT-SAME: byte_sizes(%c0, %c0, %c256, %c256, %c0, %c0, %c0)
+// RT-SAME: acquire_modes = array<i32: 1, 1, 1, 1, 1, 1, 2>
+// RT-SAME: dep_flags = array<i32: 0, 0, 4, 4, 0, 0, 0>
 // RT-NOT: arts_rt.create_epoch
 // RT: arts_rt.wait_on_epoch %[[HALO_EPOCH]] : i64
 // RT: %[[VERIFY_PACK:[A-Za-z0-9_]+]] = arts_rt.edt_param_pack

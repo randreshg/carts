@@ -131,6 +131,71 @@ static bool hasLocalFullElementWindow(DbAcquireOp acquire, DbAllocOp alloc) {
   return true;
 }
 
+static std::optional<int64_t> tryFoldIndex(Value value) {
+  return ValueAnalysis::tryFoldConstantIndex(
+      ValueAnalysis::stripNumericCasts(value));
+}
+
+static bool collectStaticLocalElementWindow(ValueRange elementOffsets,
+                                            ValueRange elementSizes,
+                                            ValueRange blockSpans,
+                                            SmallVectorImpl<int64_t> &offsets,
+                                            SmallVectorImpl<int64_t> &sizes,
+                                            SmallVectorImpl<int64_t> &spans) {
+  if (elementOffsets.size() != elementSizes.size() ||
+      elementSizes.size() != blockSpans.size())
+    return false;
+
+  offsets.clear();
+  sizes.clear();
+  spans.clear();
+  offsets.reserve(elementOffsets.size());
+  sizes.reserve(elementSizes.size());
+  spans.reserve(blockSpans.size());
+  for (auto [offsetValue, sizeValue, spanValue] :
+       llvm::zip_equal(elementOffsets, elementSizes, blockSpans)) {
+    std::optional<int64_t> offset = tryFoldIndex(offsetValue);
+    std::optional<int64_t> size = tryFoldIndex(sizeValue);
+    std::optional<int64_t> span = tryFoldIndex(spanValue);
+    if (!offset || !size || !span)
+      return false;
+    if (*offset < 0 || *size <= 0 || *span <= 0 || *offset + *size > *span)
+      return false;
+    offsets.push_back(*offset);
+    sizes.push_back(*size);
+    spans.push_back(*span);
+  }
+  return true;
+}
+
+static bool isStaticContiguousElementWindow(ArrayRef<int64_t> offsets,
+                                            ArrayRef<int64_t> sizes,
+                                            ArrayRef<int64_t> spans) {
+  if (offsets.size() != sizes.size() || sizes.size() != spans.size() ||
+      offsets.empty())
+    return false;
+
+  for (unsigned pivot = 0; pivot < sizes.size(); ++pivot) {
+    bool contiguous = true;
+    for (unsigned dim = 0; dim < sizes.size(); ++dim) {
+      if (dim < pivot) {
+        if (sizes[dim] != 1) {
+          contiguous = false;
+          break;
+        }
+        continue;
+      }
+      if (dim > pivot && (offsets[dim] != 0 || sizes[dim] != spans[dim])) {
+        contiguous = false;
+        break;
+      }
+    }
+    if (contiguous)
+      return true;
+  }
+  return false;
+}
+
 ///===----------------------------------------------------------------------===///
 /// EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
@@ -872,6 +937,7 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
     /// compute byte_offset and byte_size using the allocation's elementSizes
     /// for linearization.
     Value byteOffset, byteSize;
+    bool explicitElementWindowHasNonZeroSize = false;
     if (dbAcquireOp) {
       auto rawElementOffsets = dbAcquireOp.getElementOffsets();
       auto rawElementSizes = dbAcquireOp.getElementSizes();
@@ -905,6 +971,12 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
         elemOffsets.assign(rawElementOffsets.begin(), rawElementOffsets.end());
         elemSizes.assign(rawElementSizes.begin(), rawElementSizes.end());
       }
+      explicitElementWindowHasNonZeroSize =
+          !rawElementSizes.empty() &&
+          llvm::all_of(rawElementSizes, [](Value size) {
+            return ValueAnalysis::isProvablyNonZero(
+                ValueAnalysis::stripNumericCasts(size));
+          });
 
       if (elemOffsets.empty()) {
         /// No partial acquisition - use zero for standard dependency
@@ -931,9 +1003,30 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
           bool committedLocalFullHaloWindow =
               committedHaloWindow &&
               hasLocalFullElementWindow(dbAcquireOp, alloc);
+          if (haloViewDependency && !explicitElementWindowHasNonZeroSize)
+            return dbAcquireOp.emitOpError()
+                   << "per-block halo read dependency requires an explicit "
+                      "provably nonzero byte window; ARTS-RT must not infer or "
+                      "widen to a whole DB";
+          SmallVector<int64_t, 4> staticElementOffsets, staticElementSizes,
+              staticBlockSpans;
+          bool hasStaticLocalElementWindow = collectStaticLocalElementWindow(
+              rawElementOffsets, rawElementSizes, elementSizes,
+              staticElementOffsets, staticElementSizes, staticBlockSpans);
+          bool hasStaticContiguousElementWindow =
+              hasStaticLocalElementWindow &&
+              isStaticContiguousElementWindow(
+                  staticElementOffsets, staticElementSizes, staticBlockSpans);
+          if (haloViewDependency && hasStaticLocalElementWindow &&
+              !hasStaticContiguousElementWindow)
+            return dbAcquireOp.emitOpError()
+                   << "per-block halo read dependency has an explicit "
+                      "element window that is not representable as a "
+                      "contiguous byte slice";
           Value useSliceTransport = AC->create<arith::ConstantIntOp>(loc, 1, 1);
           if (!dbAcquireOp.getElementOffsets().empty() &&
-              !committedLocalFullHaloWindow)
+              !committedLocalFullHaloWindow &&
+              !(haloViewDependency && hasStaticContiguousElementWindow))
             if (auto normalized =
                     normalizeCommonElementSlice(AC, dbAcquireOp, alloc)) {
               elemOffsets.assign(normalized->offsets.begin(),
@@ -993,10 +1086,10 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
           }
           byteSize = AC->create<arith::MulIOp>(loc, totalElements, scalarSize);
           if (haloViewDependency) {
-            if (ValueAnalysis::isConstantBool(useSliceTransport, false))
+            if (!ValueAnalysis::isTrueConstant(useSliceTransport))
               return dbAcquireOp.emitOpError()
                      << "per-block halo read dependency has an explicit "
-                        "element window that is not representable as a "
+                        "element window that is not statically proven as a "
                         "contiguous byte slice";
           } else if (ValueAnalysis::isConstantBool(useSliceTransport, false)) {
             Value zeroIdx = AC->createIndexConstant(0, loc);
@@ -1014,7 +1107,7 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
           return dbAcquireOp.emitOpError()
                  << "has explicit element_offsets/element_sizes but ARTS-RT "
                     "cannot resolve non-coarse source allocation metadata; "
-                    "refusing whole-DB byte-window fallback";
+                    "refusing a whole-DB byte window";
         }
       }
     } else {
@@ -1087,8 +1180,8 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
     if (depDbAcquireOp && hasExplicitSlice)
       return depDbAcquireOp.emitOpError()
              << "carries an explicit byte window through depv, but this "
-                "lowering path cannot preserve the slice; refusing whole-DB "
-                "dependency fallback";
+                "lowering path cannot preserve the slice; refusing a whole-DB "
+                "dependency";
     bool haloViewDependency =
         dbAcquireOp && dbAcquireOp.getHaloViewDependencyAttr();
     if (haloViewDependency) {
@@ -1098,11 +1191,11 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
       if (!DbUtils::acquiresPartialHaloWindow(dbAcquireOp))
         return dbAcquireOp.emitOpError()
                << "halo-view dependency lacks committed stencil halo reach";
-      if (!hasExplicitSlice)
+      if (!hasExplicitSlice && !explicitElementWindowHasNonZeroSize)
         return dbAcquireOp.emitOpError()
                << "per-block halo read dependency requires an explicit "
                   "provably nonzero byte window; ARTS-RT must not infer or "
-                  "fall back to a whole DB";
+                  "widen to a whole DB";
       depFlagBits |= kArtsDepFlagHaloView;
     }
     byteOffsets.push_back(byteOffset);
