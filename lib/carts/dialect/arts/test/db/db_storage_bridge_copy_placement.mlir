@@ -12,7 +12,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
 
     %host_guid, %host_ptr = arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%route : i32) sizes[%c1] elementType(f64) elementSizes[%c1, %c4] {local_only} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
     %host = arts.db_ref %host_ptr[%c0] : memref<?xmemref<?x?xf64>> -> memref<?x?xf64>
-    %block_guid, %block_ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>] route(%route : i32) sizes[%c1] elementType(f64) elementSizes[%c1, %c4] {planOwnerDims = [0], planPhysicalBlockShape = [1, 4], storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
+    %block_guid, %block_ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>] route(%route : i32) sizes[%c2] elementType(f64) elementSizes[%c1, %c4] {planOwnerDims = [0], planPhysicalBlockShape = [1, 4], storage_bridge = #arts.storage_bridge<host_whole_to_compute_block>} : (memref<?xi64>, memref<?xmemref<?x?xf64>>)
 
     scf.for %t = %c0 to %c2 step %c1 {
       %writer_guid, %writer_ptr = arts.db_acquire[<out>] (%block_guid : memref<?xi64>, %block_ptr : memref<?xmemref<?x?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?x?xf64>>)

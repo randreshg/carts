@@ -74,10 +74,10 @@ func.func @owner_strip_three_ro_inputs() {
   return
 }
 
-// CHECK-LABEL: func.func @in_place_gauss_seidel_stays_unwindowed
-// CHECK-NOT: sde.mu_access_window
+// CHECK-LABEL: func.func @in_place_gauss_seidel_gets_readwrite_window
+// CHECK: sde.mu_access_window readwrite %{{.*}} : memref<16x8x8x4xf32> owner_dims(1) block_lo [0] block_hi [16] valid [8, 8, 4]
 
-func.func @in_place_gauss_seidel_stays_unwindowed() {
+func.func @in_place_gauss_seidel_gets_readwrite_window() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c8 = arith.constant 8 : index

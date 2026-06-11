@@ -15,9 +15,11 @@
 /// owner dims or block shape), proves the structure against the writer
 /// su_iterate iteration domain, and inserts explicit window structure.
 /// Out-of-scope MUs/CU accesses (dynamic, matmul/reduction, multi-owner,
-/// same-CU in-place, unsupported use) are skipped conservatively — no window,
-/// no error, no existing op mutated. It introduces no `sde.mu_token`, slice,
-/// `sde.mu_dep`, or ARTS concept.
+/// unsupported use) are skipped conservatively — no window, no error, no
+/// existing op mutated. Same-CU in-place access gets a `readwrite` window
+/// unless the same MU has a committed halo read, where SDE emits separate read
+/// and write windows. It introduces no `sde.mu_token`, slice, `sde.mu_dep`, or
+/// ARTS concept.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"

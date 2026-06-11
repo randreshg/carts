@@ -190,9 +190,11 @@ def SdeRaiseToMuAccessWindow
     `sde.mu_dep`, or ARTS isolation concept, and stamps no downstream contract.
 
     Out-of-scope MUs are skipped conservatively (no window, no error): dynamic,
-    matmul/reduction, multi-owner, in-place (read+write same MU in a CU),
-    accesses spanning multiple CUs, and unsupported (non-load/store) uses. The
-    pass never mutates existing ops; it only inserts window facts.
+    matmul/reduction, multi-owner, and unsupported uses. Same-CU in-place
+    load/store access is raised as one `readwrite` window, except committed
+    halo reads are split into separate read and write windows so ARTS never
+    receives a writable halo dependency. The pass never mutates existing ops; it
+    only inserts window facts.
 
     Production SDE planning runs this after MU layout has been materialized and
     rank-expanded, then verifies the raised windows before crossing into ARTS.

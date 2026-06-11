@@ -23,10 +23,18 @@ namespace {
 /// One raised window, decoded into block-grid coordinates.
 struct WindowFact {
   Value mu;                   ///< the rank-expanded mu_alloc result
-  SdeAccessMode mode;         ///< read or write (never readwrite)
+  SdeAccessMode mode;         ///< read, write, or readwrite
   SmallVector<int64_t, 2> lo; ///< per-owner-dim block lo
   SmallVector<int64_t, 2> hi; ///< per-owner-dim block hi (half-open)
 };
+
+bool hasReadEffect(SdeAccessMode mode) {
+  return mode == SdeAccessMode::read || mode == SdeAccessMode::readwrite;
+}
+
+bool hasWriteEffect(SdeAccessMode mode) {
+  return mode == SdeAccessMode::write || mode == SdeAccessMode::readwrite;
+}
 
 /// Half-open block rectangles overlap iff they overlap on every owner dim.
 bool rectanglesOverlap(const WindowFact &a, const WindowFact &b) {
@@ -124,15 +132,15 @@ BarrierSyncVerdict classifyBarrierSync(ArrayRef<SdeCuRegionOp> before,
         rankMismatch = true;
         continue;
       }
-      bool bWrite = b.mode == SdeAccessMode::write;
-      bool aWrite = a.mode == SdeAccessMode::write;
+      bool bWrite = hasWriteEffect(b.mode);
+      bool aWrite = hasWriteEffect(a.mode);
       if ((!bWrite && !aWrite) || !rectanglesOverlap(a, b))
         continue; // both read, or disjoint blocks -> no dependency
       // A flow dependency (producer before, consumer reads after) is misaligned
       // when the consumer reaches blocks the producer never wrote. Anti- (WAR)
       // and output (WAW) dependencies need only the overlap; the read there
       // sources its data elsewhere.
-      if (bWrite && a.mode == SdeAccessMode::read &&
+      if (bWrite && hasReadEffect(a.mode) &&
           !rectangleWithin(/*inner=*/a, /*outer=*/b))
         misaligned = true;
       else

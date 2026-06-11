@@ -11,6 +11,7 @@
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #define GEN_PASS_DEF_REALIZEEDTDISTRIBUTIONPLAN
 #include "carts/passes/Passes.h"
@@ -46,6 +47,11 @@ static LogicalResult realizePerBlockHaloDependencies(arts::EdtOp edt) {
                 "element_offsets/element_sizes; ARTS-RT must not infer halo "
                 "byte windows";
     acquire.setHaloViewDependencyAttr(UnitAttr::get(acquire.getContext()));
+    auto alloc = dyn_cast_or_null<arts::DbAllocOp>(
+        arts::DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
+    if (alloc && arts::hasArtsDbPhysicalLayoutPlan(alloc.getOperation()))
+      alloc.setPerBlockSingleWriterStencilAttr(
+          UnitAttr::get(alloc.getContext()));
     hasCommittedHaloRead = true;
   }
 

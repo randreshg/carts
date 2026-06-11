@@ -217,6 +217,18 @@ struct WriterOwnerTarget {
   SmallVector<OwnerCoordKey, 4> coords;
 };
 
+enum class WriterOwnerTargetStatus {
+  NoDistributedWriter,
+  Ready,
+  MultiOwnerRange,
+  Unroutable
+};
+
+struct WriterOwnerTargetResult {
+  WriterOwnerTargetStatus status = WriterOwnerTargetStatus::NoDistributedWriter;
+  std::optional<WriterOwnerTarget> target;
+};
+
 static std::optional<SmallVector<OwnerCoordKey, 4>>
 getAcquireOwnerCoordKeys(DbAllocOp alloc, DbAcquireOp acquire,
                          const DbOwnerMapPlan &plan, unsigned rank) {
@@ -274,6 +286,40 @@ getRouteComparisonDims(const DbOwnerMapPlan &plan, unsigned dbRank) {
   return dims;
 }
 
+static bool isKnownSingleBlockSpan(Value value) {
+  if (!value)
+    return true;
+  if (auto constant = ValueAnalysis::tryFoldConstantIndex(value))
+    return *constant <= 1;
+  if (ValueAnalysis::isOneLikeValue(value))
+    return true;
+  if (auto min = value.getDefiningOp<arith::MinUIOp>())
+    return ValueAnalysis::isOneLikeValue(min.getLhs()) ||
+           ValueAnalysis::isOneLikeValue(min.getRhs());
+  return false;
+}
+
+static bool writerAcquireMaySpanMultipleOwners(DbAcquireOp acquire,
+                                               const DbOwnerMapPlan &plan,
+                                               unsigned dbRank,
+                                               std::optional<int64_t> nodes) {
+  if (nodes && *nodes <= 1)
+    return false;
+
+  SmallVector<unsigned, 4> dims = getRouteComparisonDims(plan, dbRank);
+  if (dims.empty())
+    return true;
+
+  ValueRange sizes = acquire.getSizes();
+  for (unsigned dim : dims) {
+    if (dim >= sizes.size())
+      return true;
+    if (!isKnownSingleBlockSpan(sizes[dim]))
+      return true;
+  }
+  return false;
+}
+
 static bool sameWriterOwnerTarget(const WriterOwnerTarget &lhs,
                                   const WriterOwnerTarget &rhs) {
   if (!sameOwnerRoutePlan(lhs.plan, rhs.plan))
@@ -313,23 +359,30 @@ static Value createOwnerRoute(OpBuilder &builder, Location loc, DbAllocOp alloc,
                                      plan);
 }
 
-static std::optional<WriterOwnerTarget> getWriterOwnerTarget(Value dep) {
+static WriterOwnerTargetResult
+getWriterOwnerTarget(Value dep, std::optional<int64_t> totalNodes,
+                     bool &multiOwnerRange) {
   Operation *underlying = DbUtils::getUnderlyingDb(dep);
   auto acquire = dyn_cast_or_null<DbAcquireOp>(underlying);
   if (!acquire || !DbUtils::isWriterMode(acquire.getMode()))
-    return std::nullopt;
+    return {};
 
   auto alloc = dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
   if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
-    return std::nullopt;
+    return {};
   auto ownerMap = getDbOwnerMapPlan(alloc);
   if (!ownerMap)
-    return std::nullopt;
+    return {WriterOwnerTargetStatus::Unroutable, std::nullopt};
 
   SmallVector<Value, 4> dbSizes(alloc.getSizes().begin(),
                                 alloc.getSizes().end());
   if (dbSizes.empty())
-    return std::nullopt;
+    return {WriterOwnerTargetStatus::Unroutable, std::nullopt};
+  if (writerAcquireMaySpanMultipleOwners(acquire, *ownerMap, dbSizes.size(),
+                                         totalNodes)) {
+    multiOwnerRange = true;
+    return {WriterOwnerTargetStatus::MultiOwnerRange, std::nullopt};
+  }
 
   WriterOwnerTarget target;
   target.alloc = alloc;
@@ -340,9 +393,62 @@ static std::optional<WriterOwnerTarget> getWriterOwnerTarget(Value dep) {
       getAcquireOwnerCoordKeys(alloc, acquire, target.plan,
                                target.dbSizes.size());
   if (!coords)
-    return std::nullopt;
+    return {WriterOwnerTargetStatus::Unroutable, std::nullopt};
   target.coords = std::move(*coords);
-  return target;
+  return {WriterOwnerTargetStatus::Ready, std::move(target)};
+}
+
+static bool hasDistributedWriterDependency(EdtOp edt) {
+  for (Value dep : edt.getDependencies()) {
+    Operation *underlying = DbUtils::getUnderlyingDb(dep);
+    auto acquire = dyn_cast_or_null<DbAcquireOp>(underlying);
+    if (!acquire || !DbUtils::isWriterMode(acquire.getMode()))
+      continue;
+    auto alloc =
+        dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
+    if (alloc && hasDistributedDbAllocation(alloc.getOperation()))
+      return true;
+  }
+  return false;
+}
+
+static std::optional<WriterOwnerTarget>
+getConsistentWriterOwnerTarget(EdtOp edt, bool &sawDistributedWriter,
+                               bool &conflict, bool &multiOwnerRange,
+                               bool &unroutable,
+                               std::optional<int64_t> totalNodes) {
+  std::optional<WriterOwnerTarget> expectedOwner;
+  sawDistributedWriter = false;
+  conflict = false;
+  multiOwnerRange = false;
+  unroutable = false;
+  for (Value dep : edt.getDependencies()) {
+    WriterOwnerTargetResult owner =
+        getWriterOwnerTarget(dep, totalNodes, multiOwnerRange);
+    if (owner.status == WriterOwnerTargetStatus::NoDistributedWriter)
+      continue;
+    sawDistributedWriter = true;
+    if (owner.status == WriterOwnerTargetStatus::MultiOwnerRange ||
+        multiOwnerRange)
+      break;
+    if (owner.status == WriterOwnerTargetStatus::Unroutable) {
+      unroutable = true;
+      break;
+    }
+    if (!owner.target) {
+      unroutable = true;
+      break;
+    }
+    if (!expectedOwner) {
+      expectedOwner = std::move(owner.target);
+      continue;
+    }
+    if (!sameWriterOwnerTarget(*expectedOwner, *owner.target)) {
+      conflict = true;
+      break;
+    }
+  }
+  return expectedOwner;
 }
 
 struct DistributedLaunchConsistencyPass
@@ -350,10 +456,24 @@ struct DistributedLaunchConsistencyPass
           DistributedLaunchConsistencyPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
     unsigned localized = 0;
+    unsigned promoted = 0;
     unsigned routed = 0;
+    bool failed = false;
 
     module.walk([&](EdtOp edt) {
+      if (failed)
+        return;
+      if (DbUtils::hasLocalOnlyDistributedLaunchDependency(edt) &&
+          hasDistributedWriterDependency(edt)) {
+        edt.emitError()
+            << "mixes a local-only distributed dependency with a distributed "
+               "writer; ARTS must split or explicitly sequence the codelet "
+               "instead of localizing distributed writes";
+        failed = true;
+        return;
+      }
       if (edt.getConcurrency() != EdtConcurrency::internode)
         return;
       if (!DbUtils::hasLocalOnlyDistributedLaunchDependency(edt))
@@ -369,46 +489,68 @@ struct DistributedLaunchConsistencyPass
     });
 
     module.walk([&](EdtOp edt) {
-      if (edt.getConcurrency() != EdtConcurrency::internode)
+      if (failed)
         return;
       if (DbUtils::hasLocalOnlyDistributedLaunchDependency(edt))
         return;
 
-      std::optional<WriterOwnerTarget> expectedOwner;
       bool sawDistributedWriter = false;
       bool conflict = false;
-      for (Value dep : edt.getDependencies()) {
-        std::optional<WriterOwnerTarget> owner = getWriterOwnerTarget(dep);
-        if (!owner)
-          continue;
-        sawDistributedWriter = true;
-        if (!expectedOwner) {
-          expectedOwner = std::move(owner);
-          continue;
-        }
-        if (!sameWriterOwnerTarget(*expectedOwner, *owner)) {
-          conflict = true;
-          break;
-        }
-      }
+      bool multiOwnerRange = false;
+      bool unroutable = false;
+      std::optional<WriterOwnerTarget> expectedOwner =
+          getConsistentWriterOwnerTarget(edt, sawDistributedWriter, conflict,
+                                         multiOwnerRange, unroutable,
+                                         totalNodes);
 
-      if (!sawDistributedWriter || conflict || !expectedOwner)
+      if (multiOwnerRange) {
+        edt.emitError()
+            << "writes a distributed DB range that may span multiple owners; "
+               "SDE-to-ARTS must split writer codelets into owner-local "
+               "block ranges before distributed launch";
+        failed = true;
         return;
+      }
+      if (!sawDistributedWriter)
+        return;
+      if (unroutable || conflict || !expectedOwner) {
+        edt.emitError()
+            << "writes distributed DBs whose owner route cannot be derived "
+               "from committed DB owner-map facts; ARTS must split or "
+               "explicitly sequence this codelet before distributed launch";
+        failed = true;
+        return;
+      }
 
       OpBuilder builder(edt);
       builder.setInsertionPoint(edt);
       Value expectedRoute =
           createOwnerRoute(builder, edt.getLoc(), expectedOwner->alloc,
                            expectedOwner->acquire, expectedOwner->plan);
-      if (!expectedRoute)
+      if (!expectedRoute) {
+        edt.emitError()
+            << "writes a distributed DB but ARTS could not materialize an "
+               "owner route from the committed DB owner map";
+        failed = true;
         return;
+      }
+      if (edt.getConcurrency() != EdtConcurrency::internode) {
+        edt.setConcurrency(EdtConcurrency::internode);
+        ++promoted;
+      }
       edt.getRouteMutable().set(expectedRoute);
       ++routed;
-      ARTS_DEBUG("Routed internode EDT to distributed DB owner: " << edt);
+      ARTS_DEBUG("Routed distributed writer EDT to DB owner: " << edt);
     });
 
+    if (failed) {
+      signalPassFailure();
+      return;
+    }
+
     ARTS_INFO("Distributed launch consistency localized "
-              << localized << " EDTs and routed " << routed << " EDTs");
+              << localized << " EDTs, promoted " << promoted
+              << " EDTs, and routed " << routed << " EDTs");
   }
 };
 

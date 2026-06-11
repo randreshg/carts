@@ -10,7 +10,7 @@
 /// MUs are in scope. It is a pure query: it reads the committed plan VERBATIM
 /// (it never recomputes owner dims or block shape) and returns an empty vector
 /// — conservative, not an error — for anything outside the supported
-/// elementwise/stencil, single-contiguous-owner, fully-static path.
+/// elementwise/stencil, committed-owner-grid, fully-static path.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_SDE_UTILS_MUACCESSWINDOW_H
@@ -28,7 +28,7 @@ namespace mlir::carts::sde {
 struct RaisedWindowPlan {
   SdeCuRegionOp cu; ///< the CU this window describes
   mlir::Value mu;   ///< the rank-expanded mu_alloc result
-  SdeAccessMode mode = SdeAccessMode::read; ///< read or write (never readwrite)
+  SdeAccessMode mode = SdeAccessMode::read; ///< read, write, or readwrite
   std::optional<int64_t> arrayId; ///< committed SDE array identity, if known
   int64_t ownerDimCount = 0;      ///< leading grid (owner) dims (==1)
   llvm::SmallVector<int64_t, 2> blockLo; ///< per-owner-dim block lo (==0)
@@ -38,12 +38,14 @@ struct RaisedWindowPlan {
 };
 
 /// Plan the access windows for one `sde.mu_alloc`. One window is returned for
-/// each CU that accesses the MU in a single mode. Out-of-scope (all
+/// each CU/mode that accesses the MU. Same-CU read+write normally returns one
+/// readwrite plan; committed halo reads are split into read and write plans so
+/// ARTS never receives a writable halo dependency. Out-of-scope (all
 /// conservative, no error): non-static/dynamic, no committed block-plan writer,
-/// classification not elementwise/stencil, multi-owner, a structure that does
-/// not recover the committed grain against the writer's iteration domain, an
-/// unsupported (non-load/store/dealloc/window) use of the MU root, an access
-/// outside any CU, or an in-place (read+write) access in that CU.
+/// classification not elementwise/stencil, a structure that does not recover
+/// the committed grain against the writer's iteration domain, an unsupported
+/// (non-load/store/dealloc/window) use of the MU root, or an access outside
+/// any CU.
 llvm::SmallVector<RaisedWindowPlan, 4> planAccessWindows(SdeMuAllocOp mu);
 
 /// Backward-compatible single-window query for callers that only accept the old

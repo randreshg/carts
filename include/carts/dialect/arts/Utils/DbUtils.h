@@ -158,6 +158,10 @@ public:
   /// transport facts that allow internode tasks to consume it.
   static bool isAllowedReadOnlyCoarseDep(Value dep, DbAllocOp alloc);
 
+  /// Return true for the explicit ARTS storage bridge allocation that carries
+  /// host-whole data into compute-block DB shape.
+  static bool isHostWholeToComputeBlockBridgeDb(DbAllocOp alloc);
+
   /// Return true for generated bridge EDTs that move data between a local
   /// coarse host allocation and a distributed compute-block bridge allocation.
   static bool isHostWholeToComputeBlockBridgeMovement(EdtOp edt);

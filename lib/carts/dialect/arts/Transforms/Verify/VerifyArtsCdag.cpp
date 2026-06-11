@@ -17,9 +17,12 @@
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
 #include "carts/utils/ValueAnalysis.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
 #include <functional>
@@ -97,20 +100,158 @@ static std::optional<std::string> blockKey(DbAcquireOp acquire) {
   return key;
 }
 
+struct PlannedDbUseSummary {
+  bool sawEdtDependency = false;
+  Operation *badUser = nullptr;
+};
+
+static bool isEdtDependencyUser(Operation *user, Value value) {
+  auto edt = dyn_cast_or_null<EdtOp>(user);
+  return edt && llvm::is_contained(edt.getDependencies(), value);
+}
+
+static bool isCleanupTerminalUse(Operation *user, Value value) {
+  if (auto release = dyn_cast_or_null<DbReleaseOp>(user))
+    return release.getSource() == value;
+  if (auto free = dyn_cast_or_null<DbFreeOp>(user))
+    return free.getSource() == value;
+  return false;
+}
+
+static bool isAcquireSourceUse(Operation *user, Value value) {
+  auto acquire = dyn_cast_or_null<DbAcquireOp>(user);
+  return acquire &&
+         (acquire.getSourcePtr() == value ||
+          (acquire.getSourceGuid() && acquire.getSourceGuid() == value));
+}
+
+static bool enqueueForwardedDbValues(Operation *user, Value value,
+                                     SmallVectorImpl<Value> &worklist) {
+  if (!user || !value)
+    return false;
+
+  if (auto acquire = dyn_cast<DbAcquireOp>(user)) {
+    if (!isAcquireSourceUse(user, value))
+      return false;
+    worklist.push_back(acquire.getGuid());
+    worklist.push_back(acquire.getPtr());
+    return true;
+  }
+  if (auto ref = dyn_cast<DbRefOp>(user)) {
+    if (ref.getSource() != value)
+      return false;
+    worklist.push_back(ref.getResult());
+    return true;
+  }
+  if (auto cast = dyn_cast<memref::CastOp>(user)) {
+    if (cast.getSource() != value)
+      return false;
+    worklist.push_back(cast.getResult());
+    return true;
+  }
+  if (auto subview = dyn_cast<memref::SubViewOp>(user)) {
+    if (subview.getSource() != value)
+      return false;
+    worklist.push_back(subview.getResult());
+    return true;
+  }
+  if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(user)) {
+    if (!llvm::is_contained(unrealized.getInputs(), value))
+      return false;
+    for (Value result : unrealized.getOutputs())
+      if (isa<MemRefType>(result.getType()))
+        worklist.push_back(result);
+    return true;
+  }
+
+  return false;
+}
+
+static PlannedDbUseSummary summarizePlannedDbUses(Value source,
+                                                  bool stopAtAcquire = false) {
+  PlannedDbUseSummary summary;
+  SmallVector<Value, 16> worklist;
+  DenseSet<Value> visited;
+  worklist.push_back(source);
+
+  while (!worklist.empty() && !summary.badUser) {
+    Value current = worklist.pop_back_val();
+    if (!current || !visited.insert(current).second)
+      continue;
+
+    for (Operation *user : current.getUsers()) {
+      if (isEdtDependencyUser(user, current)) {
+        summary.sawEdtDependency = true;
+        continue;
+      }
+      if (isCleanupTerminalUse(user, current))
+        continue;
+      if (stopAtAcquire && isAcquireSourceUse(user, current))
+        continue;
+      if (auto access = DbUtils::getMemoryAccessInfo(user)) {
+        if (access->memref == current) {
+          summary.badUser = user;
+          break;
+        }
+        continue;
+      }
+      if (enqueueForwardedDbValues(user, current, worklist))
+        continue;
+      summary.badUser = user;
+      break;
+    }
+  }
+
+  return summary;
+}
+
+static PlannedDbUseSummary summarizeAcquireUses(DbAcquireOp acquire) {
+  PlannedDbUseSummary ptrSummary = summarizePlannedDbUses(acquire.getPtr());
+  if (ptrSummary.badUser)
+    return ptrSummary;
+  if (acquire.getGuid()) {
+    PlannedDbUseSummary guidSummary = summarizePlannedDbUses(acquire.getGuid());
+    ptrSummary.sawEdtDependency |= guidSummary.sawEdtDependency;
+    if (guidSummary.badUser)
+      ptrSummary.badUser = guidSummary.badUser;
+  }
+  return ptrSummary;
+}
+
+static LogicalResult verifyCdagAllocDirectUses(DbAllocOp alloc) {
+  if (!hasArtsDbPhysicalLayoutPlan(alloc.getOperation()))
+    return success();
+
+  PlannedDbUseSummary ptrSummary =
+      summarizePlannedDbUses(alloc.getPtr(), /*stopAtAcquire=*/true);
+  if (ptrSummary.badUser)
+    return alloc.emitOpError()
+           << "exposes a committed SDE block-layout DB through a direct "
+              "non-EDT/non-cleanup use; ARTS must access committed DB state "
+              "through explicit acquires and EDT dependencies";
+
+  PlannedDbUseSummary guidSummary =
+      summarizePlannedDbUses(alloc.getGuid(), /*stopAtAcquire=*/true);
+  if (guidSummary.badUser)
+    return alloc.emitOpError()
+           << "exposes a committed SDE block-layout DB GUID through a direct "
+              "non-EDT/non-cleanup use; ARTS must access committed DB state "
+              "through explicit acquires and EDT dependencies";
+
+  return success();
+}
+
 /// (A) owner-map/mode/placement consistency + (B) distribution preservation.
 static LogicalResult verifyCdagAlloc(DbAllocOp alloc) {
   bool distributed = hasDistributedDbAllocation(alloc.getOperation());
 
   /// (B) An SDE-partitioned MU carries a committed physical block layout. ARTS
   /// must realize it as a distributed DB, or leave explicit evidence of an
-  /// intentional non-distributed home (a derived all-gather replica, a recorded
-  /// eligibility rejection, or an explicit local-only buffer). A committed plan
-  /// that is silently dropped from distribution with no such evidence is a lost
-  /// SDE-partitioned grain.
+  /// intentional non-distributed home (a derived all-gather replica or an
+  /// allowed eligibility rejection). A committed plan stamped `local_only` is a
+  /// local fallback, not valid preservation evidence.
   bool hasNonDistributedEvidence =
-      alloc.getLocalOnly().value_or(false) ||
-      alloc.getPerBlockReplicated().value_or(false) ||
-      alloc.getDistributedRejectReasonAttr();
+      alloc.getPerBlockReplicated().value_or(false);
   if (hasArtsDbPhysicalLayoutPlan(alloc.getOperation()) && !distributed &&
       !hasNonDistributedEvidence)
     return alloc.emitOpError()
@@ -133,6 +274,35 @@ static LogicalResult verifyCdagAlloc(DbAllocOp alloc) {
     return alloc.emitOpError()
            << "has inconsistent distributed owner-map/placement facts: "
            << toString(failure);
+  return success();
+}
+
+static bool hasCleanupOnlyAcquireUses(DbAcquireOp acquire);
+
+static LogicalResult verifyCdagWriterLaunch(DbAcquireOp acquire) {
+  if (!isWriterAcquire(acquire))
+    return success();
+  DbAllocOp alloc = underlyingAlloc(acquire);
+  if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
+    return success();
+  PlannedDbUseSummary uses = summarizeAcquireUses(acquire);
+  if (uses.badUser)
+    return acquire.emitOpError()
+           << "writes a distributed DB through a non-EDT/non-cleanup use; "
+              "distributed ownership requires explicit owner-routed codelets";
+
+  auto [edt, blockArg] = EdtUtils::getBlockArgumentForAcquire(acquire);
+  (void)blockArg;
+  if (!edt && !hasCleanupOnlyAcquireUses(acquire))
+    return acquire.emitOpError()
+           << "writes a distributed DB outside an ARTS EDT; distributed "
+              "ownership requires explicit owner-routed codelets";
+  if (!edt)
+    return success();
+  if (edt.getConcurrency() != EdtConcurrency::internode)
+    return edt.emitOpError()
+           << "writes a distributed DB from an intranode EDT after launch "
+              "consistency; ARTS must promote and route owner-local writers";
   return success();
 }
 
@@ -164,6 +334,34 @@ static LogicalResult verifyCdagAcquireWindow(DbAcquireOp acquire) {
          << "acquires a partial halo window of a distributed DB without "
             "explicit "
             "element_offsets/element_sizes; ARTS-RT must not infer it";
+}
+
+static bool hasCleanupOnlyAcquireUses(DbAcquireOp acquire) {
+  llvm::SetVector<Operation *> cleanupOps;
+  return DbUtils::collectCleanupOnlyUseChain(acquire.getGuid(), cleanupOps) &&
+         DbUtils::collectCleanupOnlyUseChain(acquire.getPtr(), cleanupOps);
+}
+
+static LogicalResult verifyCdagPlannedAcquireUser(DbAcquireOp acquire) {
+  DbAllocOp alloc = underlyingAlloc(acquire);
+  if (!alloc || !hasArtsDbPhysicalLayoutPlan(alloc.getOperation()))
+    return success();
+  PlannedDbUseSummary uses = summarizeAcquireUses(acquire);
+  if (uses.badUser)
+    return acquire.emitOpError()
+           << "observes a committed SDE block-layout DB through a "
+              "non-EDT/non-cleanup use; ARTS must materialize host/final "
+              "observation as explicit EDT/gather work before ARTS-RT";
+  auto [edt, blockArg] = EdtUtils::getBlockArgumentForAcquire(acquire);
+  (void)blockArg;
+  if (edt && uses.sawEdtDependency)
+    return success();
+  if (hasCleanupOnlyAcquireUses(acquire))
+    return success();
+  return acquire.emitOpError()
+         << "observes a committed SDE block-layout DB outside an ARTS EDT; "
+            "ARTS must materialize host/final observation as explicit "
+            "EDT/gather work before ARTS-RT";
 }
 
 /// (C) Single-writer per distributed DB block grain. The writer is the EDT that
@@ -257,11 +455,17 @@ struct VerifyArtsCdagPass
     module.walk([&](DbAllocOp alloc) {
       if (mlir::failed(verifyCdagAlloc(alloc)))
         failed = true;
+      if (mlir::failed(verifyCdagAllocDirectUses(alloc)))
+        failed = true;
     });
     module.walk([&](DbAcquireOp acquire) {
       if (mlir::failed(verifyCdagAcquireMode(acquire)))
         failed = true;
       if (mlir::failed(verifyCdagAcquireWindow(acquire)))
+        failed = true;
+      if (mlir::failed(verifyCdagPlannedAcquireUser(acquire)))
+        failed = true;
+      if (mlir::failed(verifyCdagWriterLaunch(acquire)))
         failed = true;
     });
     module.walk([&](EdtOp edt) { verifyCdagDistributedDbDeps(edt, failed); });

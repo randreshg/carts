@@ -82,6 +82,18 @@ struct DbOwnerMapRealizationPass
           return;
         }
       } else {
+        if (hasArtsDbPhysicalLayoutPlan(alloc.getOperation()) &&
+            eligibility.reason !=
+                DistributedDbEligibilityRejectReason::PerBlockReplicated) {
+          alloc.emitOpError()
+              << "carries a committed SDE block layout but is not eligible "
+                 "for distributed owner-map realization ("
+              << toString(eligibility.reason)
+              << "); ARTS must materialize explicit graph work or fail before "
+                 "owner-map realization";
+          failed = true;
+          return;
+        }
         alloc.setDistributedRejectReason(toString(eligibility.reason));
         ARTS_DEBUG("Reject DbAlloc arts.id=" << getArtsId(alloc.getOperation())
                                              << " reason="

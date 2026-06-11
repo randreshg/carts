@@ -22,6 +22,36 @@ static bool isStringGlobal(LLVM::GlobalOp globalOp) {
   return false;
 }
 
+static LLVM::GlobalOp traceStringGlobal(ModuleOp module, Value value,
+                                        DenseSet<Value> &visited) {
+  if (!module || !value || !visited.insert(value).second)
+    return nullptr;
+
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return nullptr;
+
+  if (auto addressOf = dyn_cast<LLVM::AddressOfOp>(defOp)) {
+    auto globalOp =
+        module.lookupSymbol<LLVM::GlobalOp>(addressOf.getGlobalName());
+    if (globalOp && isStringGlobal(globalOp))
+      return globalOp;
+    return nullptr;
+  }
+
+  if (auto gep = dyn_cast<LLVM::GEPOp>(defOp))
+    return traceStringGlobal(module, gep.getBase(), visited);
+  if (auto load = dyn_cast<LLVM::LoadOp>(defOp))
+    return traceStringGlobal(module, load.getAddr(), visited);
+
+  return nullptr;
+}
+
+static bool isBackedByStringGlobal(ModuleOp module, Value value) {
+  DenseSet<Value> visited;
+  return static_cast<bool>(traceStringGlobal(module, value, visited));
+}
+
 static bool isStringFunction(StringRef funcName) {
   const DenseSet<StringRef> stringFunctions = {
       "strlen", "strcpy", "strcat", "strcmp", "printf", "sprintf",
@@ -85,6 +115,11 @@ void mlir::carts::arts::StringUtils::collectStringMemRefs(
       if (isa<MemRefType>(memrefOperand.getType()))
         stringMemRefs.insert(memrefOperand);
     }
+  });
+
+  module.walk([&](polygeist::Pointer2MemrefOp ptr2Memref) {
+    if (isBackedByStringGlobal(module, ptr2Memref.getSource()))
+      stringMemRefs.insert(ptr2Memref.getResult());
   });
 }
 

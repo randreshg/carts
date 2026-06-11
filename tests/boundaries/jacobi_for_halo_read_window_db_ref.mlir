@@ -37,7 +37,7 @@
 // CHECK-SAME: element_sizes[%c1, %c1, %c32, %c32]
 // CHECK-SAME: haloViewDependency
 // CHECK-SAME: stencil_supported_block_halo
-// CHECK: arts.edt <task> <intranode> route{{.*}} params({{.*}}%[[HALO_I]], %[[HALO_J]],{{.*}} attributes {{.*}}perBlockHaloExchange{{.*}}stencil_supported_block_halo
+// CHECK: arts.edt <task> <internode> route{{.*}} params({{.*}}%[[HALO_I]], %[[HALO_J]],{{.*}} attributes {{.*}}perBlockHaloExchange{{.*}}stencil_supported_block_halo
 // CHECK-NEXT: ^bb0(%{{arg[0-9]+}}: {{[^,]*}}, %[[HALO_DEP:arg[0-9]+]]: {{[^,]*}}, %{{arg[0-9]+}}: {{[^,]*}}, %{{arg[0-9]+}}: index, %{{arg[0-9]+}}: index, %{{arg[0-9]+}}: index, %{{arg[0-9]+}}: index, %[[HALO_ARG_I:arg[0-9]+]]: index, %[[HALO_ARG_J:arg[0-9]+]]: index
 // CHECK-NOT: arts.db_ref %[[HALO_DEP]][%c0, %c0]
 // CHECK: %[[LOCAL_I:[A-Za-z0-9_]+]] = arith.subi %{{[A-Za-z0-9_]+}}, %[[HALO_ARG_I]] : index

@@ -93,14 +93,6 @@ static bool isPartitionedAs(DbAcquireOp acquire, PartitionMode mode) {
   return partitionMode && *partitionMode == mode;
 }
 
-static bool isHostWholeToComputeBlockBridgeDb(DbAllocOp alloc) {
-  if (!alloc)
-    return false;
-  StorageBridgeAttr bridge = alloc.getStorageBridgeAttr();
-  return bridge &&
-         bridge.getValue() == StorageBridge::host_whole_to_compute_block;
-}
-
 static bool classifyBlockToHostBridgeCopy(EdtOp edt, DbAllocOp &hostAlloc,
                                           DbAllocOp &blockAlloc) {
   if (!edt || !edt.getStorageBridgeCopyAttr())
@@ -128,7 +120,7 @@ static bool classifyBlockToHostBridgeCopy(EdtOp edt, DbAllocOp &hostAlloc,
       return false;
     auto depBlock =
         dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
-    if (!isHostWholeToComputeBlockBridgeDb(depBlock))
+    if (!DbUtils::isHostWholeToComputeBlockBridgeDb(depBlock))
       return false;
     if (candidateBlock && candidateBlock != depBlock)
       return false;

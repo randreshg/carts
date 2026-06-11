@@ -6,6 +6,8 @@
 
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
+#include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
@@ -18,6 +20,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include <algorithm>
 #include <tuple>
 
 namespace mlir::carts::arts {
@@ -155,12 +158,13 @@ static LogicalResult attachCommittedSdeFacts(sde::SdeSuIterateOp source,
   }
   if (auto topology = source.getIterationTopologyAttr())
     arts::setPlanIterationTopologyAttr(
-        taskOp, ArtsPlanIterationTopologyAttr::get(
-                    ctx, static_cast<ArtsPlanIterationTopology>(
-                             topology.getValue())));
+        taskOp,
+        ArtsPlanIterationTopologyAttr::get(
+            ctx, static_cast<ArtsPlanIterationTopology>(topology.getValue())));
   if (auto repetition = source.getRepetitionStructureAttr()) {
     FailureOr<ArtsPlanRepetitionStructure> converted =
-        convertRepetitionStructure(repetition.getValue(), source.getOperation());
+        convertRepetitionStructure(repetition.getValue(),
+                                   source.getOperation());
     if (failed(converted))
       return failure();
     arts::setPlanRepetitionStructureAttr(
@@ -244,11 +248,10 @@ blockShapeForExpandedWindow(sde::SdeMuAccessWindowOp window,
   return Builder(window.getContext()).getI64ArrayAttr(blockShape);
 }
 
-static LogicalResult requireCompatibleWindows(sde::SdeMuAllocOp op,
-                                              ArrayRef<sde::SdeMuAccessWindowOp>
-                                                  windows,
-                                              ArrayAttr &ownerDims,
-                                              ArrayAttr &blockShape) {
+static LogicalResult
+requireCompatibleWindows(sde::SdeMuAllocOp op,
+                         ArrayRef<sde::SdeMuAccessWindowOp> windows,
+                         ArrayAttr &ownerDims, ArrayAttr &blockShape) {
   if (windows.empty())
     return success();
   auto memrefType = dyn_cast<MemRefType>(op.getMemref().getType());
@@ -256,7 +259,8 @@ static LogicalResult requireCompatibleWindows(sde::SdeMuAllocOp op,
     return op.emitOpError() << "requires a memref type for ARTS DB lowering";
 
   sde::SdeMuAccessWindowOp firstWindow = windows.front();
-  unsigned ownerDimCount = static_cast<unsigned>(firstWindow.getOwnerDimCount());
+  unsigned ownerDimCount =
+      static_cast<unsigned>(firstWindow.getOwnerDimCount());
   ownerDims = ownerDimsForExpandedWindow(op.getContext(), ownerDimCount);
   FailureOr<ArrayAttr> maybeBlockShape =
       blockShapeForExpandedWindow(firstWindow, memrefType);
@@ -352,14 +356,13 @@ static LogicalResult materializeTaskDepMemrefStorage(ModuleOp module) {
     OpBuilder builder(rootOp);
     builder.setInsertionPointAfter(rootOp);
     Value replacement;
-    if (failed(arts::createCoarseDbBackedMemref(builder, rootOp->getLoc(),
-                                                memrefType, *dynamicSizes,
-                                                replacement)))
+    if (failed(arts::createCoarseDbBackedMemref(
+            builder, rootOp->getLoc(), memrefType, *dynamicSizes, replacement)))
       return rootOp->emitError()
              << "could not materialize task dependency memref as an ARTS DB";
     if (replacement.getType() != memrefType)
-      replacement = memref::CastOp::create(builder, rootOp->getLoc(), memrefType,
-                                           replacement);
+      replacement = memref::CastOp::create(builder, rootOp->getLoc(),
+                                           memrefType, replacement);
 
     eraseDeallocUsers(root);
     root.replaceAllUsesWith(replacement);
@@ -370,17 +373,17 @@ static LogicalResult materializeTaskDepMemrefStorage(ModuleOp module) {
   return success();
 }
 
-static LogicalResult validateAndCollectHaloRedists(
-    ModuleOp module, DenseMap<Value, HaloRedistPlan> &plans,
-    SmallVectorImpl<sde::SdeRedistOp> &redists) {
+static LogicalResult
+validateAndCollectHaloRedists(ModuleOp module,
+                              DenseMap<Value, HaloRedistPlan> &plans,
+                              SmallVectorImpl<sde::SdeRedistOp> &redists) {
   bool foundError = false;
   module.walk([&](sde::SdeRedistOp redist) {
     redists.push_back(redist);
     if (redist.getFamily() != sde::SdeMovementFamily::halo_like) {
-      redist.emitOpError()
-          << "direct SDE-to-ARTS lowering for movement family "
-          << stringifySdeMovementFamily(redist.getFamily())
-          << " requires a real ARTS materialization";
+      redist.emitOpError() << "direct SDE-to-ARTS lowering for movement family "
+                           << stringifySdeMovementFamily(redist.getFamily())
+                           << " requires a real ARTS materialization";
       foundError = true;
       return;
     }
@@ -401,8 +404,7 @@ static LogicalResult validateAndCollectHaloRedists(
       return;
     }
 
-    std::optional<SmallVector<int64_t, 4>> halo =
-        readI64ArrayAttr(haloShape);
+    std::optional<SmallVector<int64_t, 4>> halo = readI64ArrayAttr(haloShape);
     auto memrefType = dyn_cast<MemRefType>(redist.getMu().getType());
     if (!halo || !memrefType ||
         halo->size() != static_cast<size_t>(memrefType.getRank()) ||
@@ -452,10 +454,13 @@ static LogicalResult lowerMuData(sde::SdeMuDataOp op) {
   return success();
 }
 
-static LogicalResult lowerMuAlloc(
-    sde::SdeMuAllocOp op,
-    ArrayRef<sde::SdeMuAccessWindowOp> committedWindows,
-    ArrayAttr committedHaloShape) {
+static ArrayAttr getCommittedHaloShapeForWindow(sde::SdeMuAccessWindowOp window,
+                                                ArrayAttr committedHaloShape);
+
+static LogicalResult
+lowerMuAlloc(sde::SdeMuAllocOp op,
+             ArrayRef<sde::SdeMuAccessWindowOp> committedWindows,
+             ArrayAttr committedHaloShape) {
   auto memrefType = dyn_cast<MemRefType>(op.getMemref().getType());
   if (!memrefType)
     return op.emitOpError()
@@ -463,8 +468,8 @@ static LogicalResult lowerMuAlloc(
 
   ArrayAttr ownerDims;
   ArrayAttr blockShape;
-  if (failed(
-          requireCompatibleWindows(op, committedWindows, ownerDims, blockShape)))
+  if (failed(requireCompatibleWindows(op, committedWindows, ownerDims,
+                                      blockShape)))
     return failure();
 
   OpBuilder builder(op);
@@ -492,17 +497,22 @@ static LogicalResult lowerMuAlloc(
 
   for (sde::SdeMuAccessWindowOp window : committedWindows) {
     OpBuilder planBuilder(window);
-    ArrayAttr haloShape;
-    if (window.getMode() == sde::SdeAccessMode::read)
-      haloShape = committedHaloShape;
+    ArrayAttr haloShape =
+        getCommittedHaloShapeForWindow(window, committedHaloShape);
+    if (window.getMode() == sde::SdeAccessMode::write)
+      haloShape = {};
+    else if (window.getMode() == sde::SdeAccessMode::readwrite && haloShape) {
+      return window.emitOpError()
+             << "commits a writable halo dependency; SDE must split the read "
+                "halo and write access before ARTS materialization";
+    }
     FailureOr<ArtsMode> mode =
         convertAccessMode(window.getMode(), window.getOperation());
     if (failed(mode))
       return failure();
     arts::DbAccessPlanOp::create(
         planBuilder, window.getLoc(), replacement,
-        ArtsModeAttr::get(op.getContext(), *mode),
-        window.getArrayIdAttr(),
+        ArtsModeAttr::get(op.getContext(), *mode), window.getArrayIdAttr(),
         planBuilder.getI64IntegerAttr(
             static_cast<int64_t>(window.getOwnerDimCount())),
         window.getBlockLo(), window.getBlockHi(), window.getValidExtents(),
@@ -517,6 +527,24 @@ static LogicalResult lowerMuAlloc(
   return success();
 }
 
+static ArrayAttr getCommittedHaloShapeForWindow(sde::SdeMuAccessWindowOp window,
+                                                ArrayAttr committedHaloShape) {
+  if (!window || !committedHaloShape)
+    return {};
+  auto parentSu = window->getParentOfType<sde::SdeSuIterateOp>();
+  if (!parentSu)
+    return {};
+  for (Operation *op = parentSu->getPrevNode(); op; op = op->getPrevNode()) {
+    auto redist = dyn_cast<sde::SdeRedistOp>(op);
+    if (!redist)
+      continue;
+    if (redist.getMu() == window.getMu() &&
+        redist.getFamily() == sde::SdeMovementFamily::halo_like)
+      return redist.getHaloShapeAttr();
+  }
+  return {};
+}
+
 struct DirectDepPlan {
   arts::DbAllocOp alloc;
   ArtsMode mode = ArtsMode::uninitialized;
@@ -526,6 +554,19 @@ struct DirectDepPlan {
   SmallVector<int64_t, 4> validExtents;
   ArrayAttr haloShape;
 };
+
+static bool hasDistributedLaunchStoragePlan(ArrayRef<DirectDepPlan> deps) {
+  return llvm::any_of(deps, [](DirectDepPlan dep) {
+    return dep.alloc && hasArtsDbPhysicalLayoutPlan(dep.alloc.getOperation());
+  });
+}
+
+static bool hasDistributedWriterStoragePlan(ArrayRef<DirectDepPlan> deps) {
+  return llvm::any_of(deps, [](DirectDepPlan dep) {
+    return dep.alloc && arts::DbUtils::isWriterMode(dep.mode) &&
+           hasArtsDbPhysicalLayoutPlan(dep.alloc.getOperation());
+  });
+}
 
 struct CoarseSuDependency {
   arts::DbAllocOp alloc;
@@ -542,6 +583,18 @@ struct DirectCuDepPlan {
   ArrayAttr haloShape;
   Value acquiredPtr;
 };
+
+struct CuResultPlan {
+  arts::DbAllocOp alloc;
+  Value writePtr;
+  Value replacement;
+};
+
+static bool hasDistributedLaunchStoragePlan(ArrayRef<DirectCuDepPlan> deps) {
+  return llvm::any_of(deps, [](DirectCuDepPlan dep) {
+    return dep.alloc && hasArtsDbPhysicalLayoutPlan(dep.alloc.getOperation());
+  });
+}
 
 struct AccessPlanWindowFacts {
   SmallVector<int64_t, 4> blockLo;
@@ -593,16 +646,17 @@ static arts::DbAllocOp resolveBoundaryDbAlloc(Value memref) {
   auto cu = dyn_cast_or_null<sde::SdeCuRegionOp>(result.getOwner());
   if (!cu || cu.getBody().empty())
     return nullptr;
-  auto yield = dyn_cast_or_null<sde::SdeYieldOp>(cu.getBody().front().getTerminator());
+  auto yield =
+      dyn_cast_or_null<sde::SdeYieldOp>(cu.getBody().front().getTerminator());
   if (!yield || result.getResultNumber() >= yield.getValues().size())
     return nullptr;
   return resolveBoundaryDbAlloc(yield.getValues()[result.getResultNumber()]);
 }
 
-static LogicalResult recordCoarseSuAccess(
-    sde::SdeSuIterateOp source, Operation *site, Value memref, ArtsMode mode,
-    DenseMap<Operation *, unsigned> &depIndex,
-    SmallVectorImpl<CoarseSuDependency> &deps) {
+static LogicalResult
+recordCoarseSuAccess(sde::SdeSuIterateOp source, Operation *site, Value memref,
+                     ArtsMode mode, DenseMap<Operation *, unsigned> &depIndex,
+                     SmallVectorImpl<CoarseSuDependency> &deps) {
   arts::DbAllocOp alloc = resolveBoundaryDbAlloc(memref);
   if (!alloc) {
     Value root = ValueAnalysis::stripMemrefViewOps(memref);
@@ -705,27 +759,29 @@ recordAccessPlanDependency(arts::DbAccessPlanOp plan,
       getAccessPlanWindowFacts(plan, ownerDimCount);
   if (failed(facts))
     return failure();
+  if (plan.getHaloShapeAttr() && plan.getMode() != ArtsMode::in)
+    return plan.emitOpError()
+           << "commits a writable halo dependency; SDE must split the read "
+              "halo and write access before ARTS materialization";
 
   auto [it, inserted] = depIndex.try_emplace(alloc.getOperation(), deps.size());
   if (inserted) {
     ArrayAttr haloShape;
     if (plan.getMode() == ArtsMode::in)
       haloShape = plan.getHaloShapeAttr();
-    deps.push_back({alloc, plan.getMode(), ownerDimCount,
-                    SmallVector<int64_t, 4>(facts->blockLo.begin(),
-                                            facts->blockLo.end()),
-                    SmallVector<int64_t, 4>(facts->blockHi.begin(),
-                                            facts->blockHi.end()),
-                    SmallVector<int64_t, 4>(facts->validExtents.begin(),
-                                            facts->validExtents.end()),
-                    haloShape});
+    deps.push_back(
+        {alloc, plan.getMode(), ownerDimCount,
+         SmallVector<int64_t, 4>(facts->blockLo.begin(), facts->blockLo.end()),
+         SmallVector<int64_t, 4>(facts->blockHi.begin(), facts->blockHi.end()),
+         SmallVector<int64_t, 4>(facts->validExtents.begin(),
+                                 facts->validExtents.end()),
+         haloShape});
     return success();
   }
 
   DirectDepPlan &dep = deps[it->second];
   if (dep.ownerDimCount != ownerDimCount || dep.blockLo != facts->blockLo ||
-      dep.blockHi != facts->blockHi ||
-      dep.validExtents != facts->validExtents)
+      dep.blockHi != facts->blockHi || dep.validExtents != facts->validExtents)
     return plan.emitOpError()
            << "commits access-window evidence that conflicts with another "
               "window for the same DB";
@@ -758,27 +814,29 @@ recordCuAccessPlanDependency(arts::DbAccessPlanOp plan,
       getAccessPlanWindowFacts(plan, ownerDimCount);
   if (failed(facts))
     return failure();
+  if (plan.getHaloShapeAttr() && plan.getMode() != ArtsMode::in)
+    return plan.emitOpError()
+           << "commits a writable halo dependency; SDE must split the read "
+              "halo and write access before ARTS materialization";
 
   auto [it, inserted] = depIndex.try_emplace(alloc.getOperation(), deps.size());
   if (inserted) {
     ArrayAttr haloShape;
     if (plan.getMode() == ArtsMode::in)
       haloShape = plan.getHaloShapeAttr();
-    deps.push_back({alloc, plan.getMode(), ownerDimCount,
-                    SmallVector<int64_t, 4>(facts->blockLo.begin(),
-                                            facts->blockLo.end()),
-                    SmallVector<int64_t, 4>(facts->blockHi.begin(),
-                                            facts->blockHi.end()),
-                    SmallVector<int64_t, 4>(facts->validExtents.begin(),
-                                            facts->validExtents.end()),
-                    haloShape, Value{}});
+    deps.push_back(
+        {alloc, plan.getMode(), ownerDimCount,
+         SmallVector<int64_t, 4>(facts->blockLo.begin(), facts->blockLo.end()),
+         SmallVector<int64_t, 4>(facts->blockHi.begin(), facts->blockHi.end()),
+         SmallVector<int64_t, 4>(facts->validExtents.begin(),
+                                 facts->validExtents.end()),
+         haloShape, Value{}});
     return success();
   }
 
   DirectCuDepPlan &dep = deps[it->second];
   if (dep.ownerDimCount != ownerDimCount || dep.blockLo != facts->blockLo ||
-      dep.blockHi != facts->blockHi ||
-      dep.validExtents != facts->validExtents)
+      dep.blockHi != facts->blockHi || dep.validExtents != facts->validExtents)
     return plan.emitOpError()
            << "commits access-window evidence that conflicts with another "
               "window for the same DB in one CU";
@@ -818,8 +876,8 @@ collectSuDependencies(sde::SdeSuIterateOp source,
   };
 
   sde::SdeCuRegionOp parentCu = source->getParentOfType<sde::SdeCuRegionOp>();
-  WalkResult result =
-      parentCu ? parentCu.getBody().walk(consider) : source.getBody().walk(consider);
+  WalkResult result = parentCu ? parentCu.getBody().walk(consider)
+                               : source.getBody().walk(consider);
   return result.wasInterrupted() ? failure() : success();
 }
 
@@ -835,6 +893,15 @@ collectStandaloneCuDependencies(sde::SdeCuRegionOp source,
     return WalkResult::advance();
   });
   return result.wasInterrupted() ? failure() : success();
+}
+
+static bool containsDbAccessPlan(sde::SdeCuRegionOp source) {
+  bool found = false;
+  source.getBody().walk([&](arts::DbAccessPlanOp) {
+    found = true;
+    return WalkResult::interrupt();
+  });
+  return found;
 }
 
 struct OwnerSlotPlan {
@@ -937,8 +1004,8 @@ resolveOwnerSlotPlan(ArrayRef<int64_t> ownerDims, ArrayRef<int64_t> blockShape,
   return plan;
 }
 
-static LogicalResult collectExternalScalarCaptures(
-    sde::SdeSuIterateOp source, SetVector<Value> &captures) {
+static LogicalResult collectExternalScalarCaptures(sde::SdeSuIterateOp source,
+                                                   SetVector<Value> &captures) {
   auto addIfExternalScalar = [&](Value value) {
     if (!value || !isScalarParamType(value.getType()))
       return;
@@ -982,10 +1049,124 @@ static LogicalResult collectExternalScalarCaptures(sde::SdeCuTaskOp source,
   return success();
 }
 
+static LogicalResult collectExternalScalarCaptures(sde::SdeCuRegionOp source,
+                                                   SetVector<Value> &captures) {
+  auto addIfExternalScalar = [&](Value value) {
+    if (!value || !isScalarParamType(value.getType()) ||
+        isConstantLikeValue(value))
+      return;
+    if (!isDefinedInside(value, source.getOperation()))
+      captures.insert(value);
+  };
+
+  source.getBody().walk([&](Operation *op) {
+    if (isa<arts::DbAccessPlanOp, sde::SdeMuDepOp>(op))
+      return;
+    for (Value operand : op->getOperands())
+      addIfExternalScalar(operand);
+  });
+  return success();
+}
+
 static Value remapOrSelf(IRMapping &mapper, Value value) {
   if (Value mapped = mapper.lookupOrNull(value))
     return mapped;
   return value;
+}
+
+static bool enqueueForwardedMemrefResults(Operation *user, Value value,
+                                          SmallVectorImpl<Value> &worklist) {
+  if (auto cast = dyn_cast<memref::CastOp>(user)) {
+    if (cast.getSource() != value)
+      return false;
+    worklist.push_back(cast.getResult());
+    return true;
+  }
+  if (auto subview = dyn_cast<memref::SubViewOp>(user)) {
+    if (subview.getSource() != value)
+      return false;
+    worklist.push_back(subview.getResult());
+    return true;
+  }
+  if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(user)) {
+    if (!llvm::is_contained(unrealized.getInputs(), value))
+      return false;
+    for (Value result : unrealized.getOutputs())
+      if (isa<MemRefType>(result.getType()))
+        worklist.push_back(result);
+    return true;
+  }
+  return false;
+}
+
+static bool isReadOnlyMemrefUseInside(Value source, Operation *scope) {
+  SmallVector<Value, 8> worklist;
+  DenseSet<Value> visited;
+  worklist.push_back(source);
+
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!current || !visited.insert(current).second)
+      continue;
+
+    for (Operation *user : current.getUsers()) {
+      if (!scope->isAncestor(user))
+        continue;
+      if (auto access = arts::DbUtils::getMemoryAccessInfo(user)) {
+        if (access->memref == current &&
+            access->kind == arts::DbUtils::MemoryAccessKind::Write)
+          return false;
+        continue;
+      }
+      if (auto dim = dyn_cast<memref::DimOp>(user)) {
+        if (dim.getSource() == current)
+          continue;
+      }
+      if (enqueueForwardedMemrefResults(user, current, worklist))
+        continue;
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static LogicalResult
+collectRematerializableMemrefCaptures(sde::SdeCuRegionOp source,
+                                      const DenseSet<Value> &allowedDbHandles,
+                                      SetVector<Value> &captures) {
+  bool failed = false;
+  source.getBody().walk([&](Operation *op) {
+    if (isa<arts::DbAccessPlanOp, sde::SdeYieldOp>(op))
+      return;
+    for (Value operand : op->getOperands()) {
+      if (!isa<MemRefType>(operand.getType()) ||
+          isDefinedInside(operand, source.getOperation()))
+        continue;
+      if (allowedDbHandles.contains(operand))
+        continue;
+      if (operand.getDefiningOp<memref::GetGlobalOp>()) {
+        if (!isReadOnlyMemrefUseInside(operand, source.getOperation())) {
+          op->emitError()
+              << "writes or escapes a rematerialized memref.global inside a "
+                 "standalone CU; mutable global state must be represented as "
+                 "an explicit SDE/ARTS dependency";
+          failed = true;
+          continue;
+        }
+        captures.insert(operand);
+        continue;
+      }
+      if (resolveBoundaryDbAlloc(operand)) {
+        op->emitError()
+            << "uses a DB-backed external memref that was not remapped to an "
+               "EDT dependency; SDE must provide a committed access window for "
+               "this standalone CU access";
+        failed = true;
+      }
+    }
+  });
+  return failure(failed);
 }
 
 static FailureOr<SmallVector<int64_t, 4>>
@@ -995,8 +1176,7 @@ getOwnerHaloRadii(ArrayAttr haloShape, unsigned ownerDimCount,
   if (!haloShape)
     return radii;
 
-  std::optional<SmallVector<int64_t, 4>> parsed =
-      readI64ArrayAttr(haloShape);
+  std::optional<SmallVector<int64_t, 4>> parsed = readI64ArrayAttr(haloShape);
   if (!parsed) {
     context->emitError()
         << "has non-integer halo shape on a committed read dependency";
@@ -1020,11 +1200,12 @@ getOwnerHaloRadii(ArrayAttr haloShape, unsigned ownerDimCount,
   return radii;
 }
 
-static LogicalResult rewriteOwnerIndicesToLocal(
-    arts::EdtOp task, ArrayRef<Value> payloads,
-    ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs,
-    ArrayRef<bool> depRequiresDbRef, ArrayRef<int64_t> groupBlockCounts,
-    unsigned ownerDimCount) {
+static LogicalResult
+rewriteOwnerIndicesToLocal(arts::EdtOp task, ArrayRef<Value> payloads,
+                           ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs,
+                           ArrayRef<bool> depRequiresDbRef,
+                           ArrayRef<int64_t> groupBlockCounts,
+                           unsigned ownerDimCount) {
   if (ownerDimCount == 0)
     return success();
   if (payloads.size() != depBlockOffsetArgs.size() ||
@@ -1166,11 +1347,33 @@ materializeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   if (source.getBody().empty())
     return source.emitOpError()
            << "has no body during standalone CU access materialization";
+  if (!source.getIterArgs().empty())
+    return source.emitOpError()
+           << "access-bearing standalone CU iter_args are not representable "
+              "as an ARTS EDT; materialize an explicit SDE dataflow first";
+  for (Type resultType : source.getResultTypes())
+    if (!isScalarParamType(resultType))
+      return source.emitOpError()
+             << "access-bearing standalone CU non-scalar results require an "
+                "explicit SDE dataflow result before ARTS materialization";
   Block &body = source.getBody().front();
+  if (body.getNumArguments() != 0)
+    return source.emitOpError()
+           << "has region arguments during standalone CU EDT materialization";
   OpBuilder builder(source.getContext());
 
-  builder.setInsertionPointToStart(&body);
+  builder.setInsertionPoint(source);
   Location loc = source.getLoc();
+  arts::ArtsLaunchPolicy standaloneLaunch;
+  if (hasDistributedLaunchStoragePlan(deps)) {
+    Value zero = createZeroIndex(builder, loc);
+    standaloneLaunch = arts::resolveArtsOrdinalLaunchPolicy(
+        source->getParentOfType<ModuleOp>(), zero, builder, loc);
+  }
+  Value standaloneRoute = standaloneLaunch.route
+                              ? standaloneLaunch.route
+                              : arts::createCurrentNodeRoute(builder, loc);
+
   for (DirectCuDepPlan &dep : deps) {
     SmallVector<Value> offsets;
     SmallVector<Value> sizes;
@@ -1190,13 +1393,33 @@ materializeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
         SmallVector<Value>{}, SmallVector<Value>{});
     acquire.setPreserveAccessMode();
     if (dep.haloShape) {
-      acquire.setDepPatternAttr(
-          ArtsDepPatternAttr::get(source.getContext(),
-                                  ArtsDepPattern::stencil));
+      acquire.setDepPatternAttr(ArtsDepPatternAttr::get(
+          source.getContext(), ArtsDepPattern::stencil));
       acquire.setDistributionPatternAttr(EdtDistributionPatternAttr::get(
           source.getContext(), EdtDistributionPattern::stencil));
     }
     dep.acquiredPtr = acquire.getPtr();
+  }
+
+  SmallVector<CuResultPlan, 4> resultPlans;
+  resultPlans.reserve(source.getNumResults());
+  for (Type resultType : source.getResultTypes()) {
+    Value one = createOneIndex(builder, loc);
+    Type payloadType = arts::getElementMemRefType(resultType, 1);
+    Type pointerType = MemRefType::get({ShapedType::kDynamic}, payloadType);
+    auto resultDb = arts::DbAllocOp::create(
+        builder, loc, ArtsMode::inout, standaloneRoute, DbAllocType::heap,
+        DbMode::write, resultType, pointerType, SmallVector<Value>{one},
+        SmallVector<Value>{one}, arts::PartitionMode::coarse);
+    auto writeAcquire = arts::DbAcquireOp::create(
+        builder, loc, ArtsMode::out, resultDb.getGuid(), resultDb.getPtr(),
+        std::optional<arts::PartitionMode>(arts::PartitionMode::coarse),
+        SmallVector<Value>{}, SmallVector<Value>{createZeroIndex(builder, loc)},
+        SmallVector<Value>{one}, SmallVector<Value>{}, SmallVector<Value>{},
+        SmallVector<Value>{}, Value{}, SmallVector<Value>{},
+        SmallVector<Value>{});
+    writeAcquire.setPreserveAccessMode();
+    resultPlans.push_back({resultDb, writeAcquire.getPtr(), Value{}});
   }
 
   DenseMap<Operation *, DirectCuDepPlan *> depsByAlloc;
@@ -1228,9 +1451,8 @@ materializeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
             createConstantIndex(builder, op->getLoc(), dep.blockLo[idx]));
       localBlockIndices.push_back(local);
     }
-    Value payload =
-        arts::DbRefOp::create(builder, op->getLoc(), dep.acquiredPtr,
-                              localBlockIndices);
+    Value payload = arts::DbRefOp::create(builder, op->getLoc(),
+                                          dep.acquiredPtr, localBlockIndices);
     if (auto load = dyn_cast<memref::LoadOp>(op))
       load->setOperand(0, payload);
     else if (auto store = dyn_cast<memref::StoreOp>(op))
@@ -1263,6 +1485,119 @@ materializeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     builder.setInsertionPoint(terminator ? terminator : &body.back());
     arts::DbReleaseOp::create(builder, loc, dep.acquiredPtr);
   }
+
+  SetVector<Value> scalarCaptures;
+  if (failed(collectExternalScalarCaptures(source, scalarCaptures)))
+    return failure();
+  DenseSet<Value> allowedDbHandles;
+  for (DirectCuDepPlan &dep : deps) {
+    allowedDbHandles.insert(dep.acquiredPtr);
+    allowedDbHandles.insert(dep.alloc.getPtr());
+  }
+  for (CuResultPlan &result : resultPlans)
+    allowedDbHandles.insert(result.writePtr);
+  SetVector<Value> rematerializableMemrefCaptures;
+  if (failed(collectRematerializableMemrefCaptures(
+          source, allowedDbHandles, rematerializableMemrefCaptures)))
+    return failure();
+
+  SmallVector<Value, 4> taskDeps;
+  taskDeps.reserve(deps.size() + resultPlans.size());
+  for (DirectCuDepPlan &dep : deps)
+    taskDeps.push_back(dep.acquiredPtr);
+  for (CuResultPlan &result : resultPlans)
+    taskDeps.push_back(result.writePtr);
+
+  SmallVector<Value, 8> taskParams(scalarCaptures.begin(),
+                                   scalarCaptures.end());
+
+  builder.setInsertionPoint(source);
+  arts::ArtsLaunchPolicy launch = standaloneLaunch;
+  Value route = standaloneRoute;
+  auto task =
+      arts::EdtOp::create(builder, loc, arts::EdtType::sync, launch.concurrency,
+                          route, taskDeps, taskParams);
+
+  Block &taskBlock = task.getBody().front();
+  for (Value dep : taskDeps)
+    taskBlock.addArgument(dep.getType(), loc);
+  unsigned paramOffset = taskBlock.getNumArguments();
+  for (Value param : taskParams)
+    taskBlock.addArgument(param.getType(), loc);
+
+  IRMapping mapper;
+  for (auto [idx, dep] : llvm::enumerate(deps)) {
+    Value depArg = taskBlock.getArgument(idx);
+    mapper.map(dep.acquiredPtr, depArg);
+    mapper.map(dep.alloc.getPtr(), depArg);
+  }
+  unsigned resultDepBase = deps.size();
+  for (auto [idx, result] : llvm::enumerate(resultPlans))
+    mapper.map(result.writePtr, taskBlock.getArgument(resultDepBase + idx));
+  for (auto [idx, param] : llvm::enumerate(taskParams))
+    mapper.map(param, taskBlock.getArgument(paramOffset + idx));
+
+  auto yield = dyn_cast_or_null<sde::SdeYieldOp>(body.getTerminator());
+  if (source.getNumResults() != 0 &&
+      (!yield || yield.getValues().size() != source.getNumResults()))
+    return source.emitOpError()
+           << "has mismatched yield/result count during standalone CU EDT "
+              "materialization";
+
+  OpBuilder bodyBuilder(task.getContext());
+  bodyBuilder.setInsertionPointToStart(&taskBlock);
+  for (Value capture : rematerializableMemrefCaptures) {
+    Operation *def = capture.getDefiningOp();
+    Operation *cloned = def->clone(mapper);
+    bodyBuilder.insert(cloned);
+    mapper.map(capture, cloned->getResult(0));
+  }
+  for (Operation &nested : body) {
+    if (isa<arts::DbAccessPlanOp, sde::SdeYieldOp>(&nested))
+      continue;
+    bodyBuilder.insert(nested.clone(mapper));
+  }
+  if (failed(translateSdeAtomicsToArts(task.getBody())))
+    return failure();
+  bodyBuilder.setInsertionPointToEnd(&taskBlock);
+  for (auto [idx, result] : llvm::enumerate(resultPlans)) {
+    Value zero = createZeroIndex(bodyBuilder, loc);
+    Value payload =
+        arts::DbRefOp::create(bodyBuilder, loc,
+                              taskBlock.getArgument(resultDepBase + idx),
+                              SmallVector<Value>{zero})
+            .getResult();
+    Value yielded = remapOrSelf(mapper, yield.getValues()[idx]);
+    memref::StoreOp::create(bodyBuilder, loc, yielded, payload,
+                            SmallVector<Value>{zero});
+    arts::DbReleaseOp::create(bodyBuilder, loc,
+                              taskBlock.getArgument(resultDepBase + idx));
+  }
+  arts::YieldOp::create(bodyBuilder, loc);
+
+  builder.setInsertionPointAfter(task);
+  for (auto [idx, result] : llvm::enumerate(resultPlans)) {
+    Value zero = createZeroIndex(builder, loc);
+    Value one = createOneIndex(builder, loc);
+    auto readAcquire = arts::DbAcquireOp::create(
+        builder, loc, ArtsMode::in, result.alloc.getGuid(),
+        result.alloc.getPtr(),
+        std::optional<arts::PartitionMode>(arts::PartitionMode::coarse),
+        SmallVector<Value>{}, SmallVector<Value>{zero}, SmallVector<Value>{one},
+        SmallVector<Value>{}, SmallVector<Value>{}, SmallVector<Value>{},
+        Value{}, SmallVector<Value>{}, SmallVector<Value>{});
+    readAcquire.setPreserveAccessMode();
+    Value payload = arts::DbRefOp::create(builder, loc, readAcquire.getPtr(),
+                                          SmallVector<Value>{zero})
+                        .getResult();
+    Value loaded =
+        memref::LoadOp::create(builder, loc, payload, SmallVector<Value>{zero});
+    arts::DbReleaseOp::create(builder, loc, readAcquire.getPtr());
+    result.replacement = loaded;
+    source.getResult(idx).replaceAllUsesWith(loaded);
+  }
+
+  source.erase();
   return success();
 }
 
@@ -1368,8 +1703,8 @@ convertCoarseSuIterate(sde::SdeSuIterateOp source,
   SmallVector<Value, 4> payloads;
   payloads.reserve(deps.size());
   for (auto [idx, dep] : llvm::enumerate(deps)) {
-    Value payload = arts::materializeDbInnerPayload(
-        bodyBuilder, loc, taskBlock.getArgument(idx));
+    Value payload = arts::materializeDbInnerPayload(bodyBuilder, loc,
+                                                    taskBlock.getArgument(idx));
     payloads.push_back(payload);
     mapper.map(dep.alloc.getPtr(), taskBlock.getArgument(idx));
   }
@@ -1471,9 +1806,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
       source.getBody().front().getNumArguments() < loopRank)
     return source.emitOpError() << "has inconsistent loop bounds";
 
-  FailureOr<OwnerSlotPlan> ownerPlan =
-      resolveOwnerSlotPlan(*ownerDims, *blockShape, loopRank,
-                           source.getOperation());
+  FailureOr<OwnerSlotPlan> ownerPlan = resolveOwnerSlotPlan(
+      *ownerDims, *blockShape, loopRank, source.getOperation());
   if (failed(ownerPlan))
     return failure();
 
@@ -1497,9 +1831,9 @@ convertSuIterate(sde::SdeSuIterateOp source,
                 "iteration or owner rank";
     for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
       unsigned physicalDim = ownerPlan->loopDims[slot];
-      int64_t span =
-          workerSlice->size() == loopRank ? (*workerSlice)[physicalDim]
-                                          : (*workerSlice)[ownerPlan->rawSlots[slot]];
+      int64_t span = workerSlice->size() == loopRank
+                         ? (*workerSlice)[physicalDim]
+                         : (*workerSlice)[ownerPlan->rawSlots[slot]];
       int64_t blockSize = ownerBlockSizes[slot];
       if (span <= 0 || span < blockSize || span % blockSize != 0)
         return source.emitOpError()
@@ -1507,6 +1841,19 @@ convertSuIterate(sde::SdeSuIterateOp source,
                   "a whole-number group of physical DB blocks";
       workerSpans[slot] = span;
       groupBlockCounts[slot] = span / blockSize;
+    }
+  }
+
+  if (hasDistributedWriterStoragePlan(deps)) {
+    std::optional<int64_t> totalNodes =
+        arts::getRuntimeTotalNodes(source->getParentOfType<ModuleOp>());
+    if (!totalNodes)
+      return source.emitOpError()
+             << "requires runtime node count to keep grouped distributed "
+                "writers owner-local";
+    if (*totalNodes > 1) {
+      workerSpans.assign(ownerBlockSizes.begin(), ownerBlockSizes.end());
+      std::fill(groupBlockCounts.begin(), groupBlockCounts.end(), 1);
     }
   }
 
@@ -1522,9 +1869,9 @@ convertSuIterate(sde::SdeSuIterateOp source,
   for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
     unsigned physicalDim = ownerPlan->loopDims[slot];
     Value step = createConstantIndex(builder, loc, workerSpans[slot]);
-    auto loop = scf::ForOp::create(builder, loc,
-                                   source.getLowerBounds()[physicalDim],
-                                   source.getUpperBounds()[physicalDim], step);
+    auto loop =
+        scf::ForOp::create(builder, loc, source.getLowerBounds()[physicalDim],
+                           source.getUpperBounds()[physicalDim], step);
     if (!dispatchRoot)
       dispatchRoot = loop;
     dispatchBases.push_back(loop.getInductionVar());
@@ -1553,9 +1900,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
     SmallVector<Value> sizes;
     sizes.reserve(ownerDimCount);
     for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-      Value remaining =
-          arith::SubIOp::create(builder, loc, dep.alloc.getSizes()[slot],
-                                dispatchBlockOffsets[slot]);
+      Value remaining = arith::SubIOp::create(
+          builder, loc, dep.alloc.getSizes()[slot], dispatchBlockOffsets[slot]);
       sizes.push_back(arith::MinUIOp::create(
           builder, loc, remaining,
           createConstantIndex(builder, loc, groupBlockCounts[slot])));
@@ -1566,9 +1912,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
         return source.emitOpError()
                << "commits a halo dependency that is not read-only; ARTS "
                   "cannot materialize a writable halo window";
-      FailureOr<SmallVector<int64_t, 4>> haloRadii =
-          getOwnerHaloRadii(dep.haloShape, ownerDimCount,
-                            source.getOperation());
+      FailureOr<SmallVector<int64_t, 4>> haloRadii = getOwnerHaloRadii(
+          dep.haloShape, ownerDimCount, source.getOperation());
       if (failed(haloRadii))
         return failure();
       Value zero = createZeroIndex(builder, loc);
@@ -1581,25 +1926,22 @@ convertSuIterate(sde::SdeSuIterateOp source,
             builder, loc, arith::CmpIPredicate::uge, offsets[slot], halo);
         Value shiftedLeft =
             arith::SubIOp::create(builder, loc, offsets[slot], halo);
-        Value expandedOffset =
-            arith::SelectOp::create(builder, loc, canShiftLeft, shiftedLeft,
-                                    zero);
+        Value expandedOffset = arith::SelectOp::create(
+            builder, loc, canShiftLeft, shiftedLeft, zero);
         Value leftGrowth =
             arith::SubIOp::create(builder, loc, offsets[slot], expandedOffset);
         Value desired =
             arith::AddIOp::create(builder, loc, leftGrowth, sizes[slot]);
         desired = arith::AddIOp::create(builder, loc, desired, halo);
-        Value remaining =
-            arith::SubIOp::create(builder, loc, dep.alloc.getSizes()[slot],
-                                  expandedOffset);
+        Value remaining = arith::SubIOp::create(
+            builder, loc, dep.alloc.getSizes()[slot], expandedOffset);
         offsets[slot] = expandedOffset;
-        sizes[slot] =
-            arith::MinUIOp::create(builder, loc, remaining, desired);
+        sizes[slot] = arith::MinUIOp::create(builder, loc, remaining, desired);
         needsDepSpecificDbRef = true;
       }
     }
-    depBlockOffsets.push_back(SmallVector<Value, 4>(offsets.begin(),
-                                                    offsets.end()));
+    depBlockOffsets.push_back(
+        SmallVector<Value, 4>(offsets.begin(), offsets.end()));
     depRequiresDbRef.push_back(needsDepSpecificDbRef);
     SmallVector<Value> elementOffsets;
     SmallVector<Value> elementSizes;
@@ -1619,13 +1961,12 @@ convertSuIterate(sde::SdeSuIterateOp source,
         builder, loc, dep.mode, dep.alloc.getGuid(), dep.alloc.getPtr(),
         std::optional<arts::PartitionMode>(arts::PartitionMode::block),
         SmallVector<Value>{}, offsets, sizes, SmallVector<Value>{},
-        SmallVector<Value>{}, SmallVector<Value>{}, Value{},
-        elementOffsets, elementSizes);
+        SmallVector<Value>{}, SmallVector<Value>{}, Value{}, elementOffsets,
+        elementSizes);
     acquire.setPreserveAccessMode();
     if (dep.haloShape) {
-      acquire.setDepPatternAttr(
-          ArtsDepPatternAttr::get(source.getContext(),
-                                  ArtsDepPattern::stencil));
+      acquire.setDepPatternAttr(ArtsDepPatternAttr::get(
+          source.getContext(), ArtsDepPattern::stencil));
       acquire.setDistributionPatternAttr(EdtDistributionPatternAttr::get(
           source.getContext(), EdtDistributionPattern::stencil));
       if (auto minOffsets = source.getAccessMinOffsetsAttr())
@@ -1667,10 +2008,14 @@ convertSuIterate(sde::SdeSuIterateOp source,
   for (Value capture : scalarCaptures)
     appendParamIfMissing(capture);
 
-  Value route = arts::createCurrentNodeRoute(builder, loc);
-  auto task = arts::EdtOp::create(builder, loc, arts::EdtType::task,
-                                  arts::EdtConcurrency::intranode, route,
-                                  taskDeps, taskParams);
+  arts::ArtsLaunchPolicy launch = arts::resolveArtsLaunchPolicy(
+      source->getParentOfType<ModuleOp>(), dispatchRoot,
+      hasDistributedLaunchStoragePlan(deps), builder, loc);
+  Value route =
+      launch.route ? launch.route : arts::createCurrentNodeRoute(builder, loc);
+  auto task =
+      arts::EdtOp::create(builder, loc, arts::EdtType::task, launch.concurrency,
+                          route, taskDeps, taskParams);
   if (failed(attachCommittedSdeFacts(source, task)))
     return failure();
 
@@ -1686,8 +2031,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
   OpBuilder bodyBuilder(task.getContext());
   bodyBuilder.setInsertionPointToStart(&taskBlock);
   for (auto [idx, dep] : llvm::enumerate(deps)) {
-    Value payload = arts::materializeDbInnerPayload(
-        bodyBuilder, loc, taskBlock.getArgument(idx));
+    Value payload = arts::materializeDbInnerPayload(bodyBuilder, loc,
+                                                    taskBlock.getArgument(idx));
     payloads.push_back(payload);
     mapper.map(dep.alloc.getPtr(), taskBlock.getArgument(idx));
   }
@@ -1702,9 +2047,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
     arts::DbAllocOp alloc = resolveBoundaryDbAlloc(memref);
     if (!alloc)
       return;
-    auto it = llvm::find_if(deps, [&](const DirectDepPlan &dep) {
-      return dep.alloc == alloc;
-    });
+    auto it = llvm::find_if(
+        deps, [&](const DirectDepPlan &dep) { return dep.alloc == alloc; });
     if (it == deps.end())
       return;
     unsigned depIdx = static_cast<unsigned>(std::distance(deps.begin(), it));
@@ -1718,7 +2062,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
   for (auto [idx, base] : llvm::enumerate(dispatchBases))
     mapper.map(base, taskBlock.getArgument(paramOffset + idx));
   for (auto [idx, offset] : llvm::enumerate(dispatchBlockOffsets))
-    mapper.map(offset, taskBlock.getArgument(paramOffset + ownerDimCount + idx));
+    mapper.map(offset,
+               taskBlock.getArgument(paramOffset + ownerDimCount + idx));
   SmallVector<SmallVector<Value, 4>> taskDepBlockOffsetArgs;
   taskDepBlockOffsetArgs.reserve(depBlockOffsets.size());
   for (unsigned depIdx = 0; depIdx < depBlockOffsets.size(); ++depIdx) {
@@ -1731,25 +2076,26 @@ convertSuIterate(sde::SdeSuIterateOp source,
     taskDepBlockOffsetArgs.push_back(std::move(offsets));
   }
 
-  WalkResult accessPlanMapResult = source.getBody().walk([&](arts::DbAccessPlanOp plan) {
-    auto alloc = dyn_cast_or_null<arts::DbAllocOp>(
-        arts::DbUtils::getUnderlyingDbAlloc(plan.getMu()));
-    if (!alloc) {
-      plan.emitOpError() << "lost backing DB allocation during direct "
-                            "SDE-to-ARTS lowering";
-      return WalkResult::interrupt();
-    }
-    auto it = llvm::find_if(deps, [&](const DirectDepPlan &dep) {
-      return dep.alloc == alloc;
-    });
-    if (it == deps.end()) {
-      plan.emitOpError() << "has no matching direct ARTS dependency";
-      return WalkResult::interrupt();
-    }
-    unsigned depIdx = static_cast<unsigned>(std::distance(deps.begin(), it));
-    mapper.map(plan.getMu(), payloads[depIdx]);
-    return WalkResult::advance();
-  });
+  WalkResult accessPlanMapResult =
+      source.getBody().walk([&](arts::DbAccessPlanOp plan) {
+        auto alloc = dyn_cast_or_null<arts::DbAllocOp>(
+            arts::DbUtils::getUnderlyingDbAlloc(plan.getMu()));
+        if (!alloc) {
+          plan.emitOpError() << "lost backing DB allocation during direct "
+                                "SDE-to-ARTS lowering";
+          return WalkResult::interrupt();
+        }
+        auto it = llvm::find_if(
+            deps, [&](const DirectDepPlan &dep) { return dep.alloc == alloc; });
+        if (it == deps.end()) {
+          plan.emitOpError() << "has no matching direct ARTS dependency";
+          return WalkResult::interrupt();
+        }
+        unsigned depIdx =
+            static_cast<unsigned>(std::distance(deps.begin(), it));
+        mapper.map(plan.getMu(), payloads[depIdx]);
+        return WalkResult::advance();
+      });
   if (accessPlanMapResult.wasInterrupted())
     return failure();
 
@@ -1759,8 +2105,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
     Value upper = remapOrSelf(mapper, source.getUpperBounds()[dim]);
     Value step = remapOrSelf(mapper, source.getSteps()[dim]);
     if (ownerIt != ownerPlan->loopDims.end()) {
-      unsigned slot =
-          static_cast<unsigned>(std::distance(ownerPlan->loopDims.begin(), ownerIt));
+      unsigned slot = static_cast<unsigned>(
+          std::distance(ownerPlan->loopDims.begin(), ownerIt));
       lower = mapper.lookup(dispatchBases[slot]);
       Value localEnd = arith::AddIOp::create(
           bodyBuilder, loc, lower,
@@ -1814,33 +2160,35 @@ struct TaskDepPlan {
   SmallVector<Value, 4> sizes;
 };
 
-static LogicalResult collectTaskDependencies(
-    sde::SdeCuTaskOp source, SmallVectorImpl<TaskDepPlan> &deps) {
-  WalkResult result = source.getBody().walk([&](sde::SdeMuDepOp dep) {
-    if (!dep.getDep().use_empty()) {
-      dep.emitOpError()
-          << "result is consumed; SDE task dependencies must remain local "
-             "declarations before ARTS materialization";
-      return WalkResult::interrupt();
-    }
-    auto alloc = dyn_cast_or_null<arts::DbAllocOp>(
-        arts::DbUtils::getUnderlyingDbAlloc(dep.getSource()));
-    if (!alloc) {
-      dep.emitOpError()
-          << "does not reference an ARTS DB-backed memref after storage "
-             "materialization";
-      return WalkResult::interrupt();
-    }
-    FailureOr<ArtsMode> mode = convertAccessMode(dep.getMode(), dep);
-    if (failed(mode))
-      return WalkResult::interrupt();
-    deps.push_back({dep, alloc, *mode,
-                    SmallVector<Value, 4>(dep.getOffsets().begin(),
-                                          dep.getOffsets().end()),
-                    SmallVector<Value, 4>(dep.getSizes().begin(),
-                                          dep.getSizes().end())});
-    return WalkResult::advance();
-  });
+static LogicalResult
+collectTaskDependencies(sde::SdeCuTaskOp source,
+                        SmallVectorImpl<TaskDepPlan> &deps) {
+  WalkResult result =
+      source.getBody().walk([&](sde::SdeMuDepOp dep) {
+        if (!dep.getDep().use_empty()) {
+          dep.emitOpError()
+              << "result is consumed; SDE task dependencies must remain local "
+                 "declarations before ARTS materialization";
+          return WalkResult::interrupt();
+        }
+        auto alloc = dyn_cast_or_null<arts::DbAllocOp>(
+            arts::DbUtils::getUnderlyingDbAlloc(dep.getSource()));
+        if (!alloc) {
+          dep.emitOpError()
+              << "does not reference an ARTS DB-backed memref after storage "
+                 "materialization";
+          return WalkResult::interrupt();
+        }
+        FailureOr<ArtsMode> mode = convertAccessMode(dep.getMode(), dep);
+        if (failed(mode))
+          return WalkResult::interrupt();
+        deps.push_back({dep, alloc, *mode,
+                        SmallVector<Value, 4>(dep.getOffsets().begin(),
+                                              dep.getOffsets().end()),
+                        SmallVector<Value, 4>(dep.getSizes().begin(),
+                                              dep.getSizes().end())});
+        return WalkResult::advance();
+      });
   return result.wasInterrupted() ? failure() : success();
 }
 
@@ -1868,8 +2216,8 @@ static LogicalResult convertCuTask(sde::SdeCuTaskOp source) {
     auto acquire = arts::DbAcquireOp::create(
         builder, loc, dep.mode, dep.alloc.getGuid(), dep.alloc.getPtr(),
         partitionMode, SmallVector<Value>{}, offsets, sizes,
-        SmallVector<Value>{}, SmallVector<Value>(dep.offsets.begin(),
-                                                 dep.offsets.end()),
+        SmallVector<Value>{},
+        SmallVector<Value>(dep.offsets.begin(), dep.offsets.end()),
         SmallVector<Value>(dep.sizes.begin(), dep.sizes.end()), Value{},
         SmallVector<Value>{}, SmallVector<Value>{});
     acquire.setPreserveAccessMode();
@@ -1916,8 +2264,8 @@ static LogicalResult convertCuTask(sde::SdeCuTaskOp source) {
   OpBuilder bodyBuilder(task.getContext());
   bodyBuilder.setInsertionPointToStart(&taskBlock);
   for (auto [idx, dep] : llvm::enumerate(deps)) {
-    Value payload =
-        arts::materializeDbInnerPayload(bodyBuilder, loc, taskBlock.getArgument(idx));
+    Value payload = arts::materializeDbInnerPayload(bodyBuilder, loc,
+                                                    taskBlock.getArgument(idx));
     mapper.map(dep.alloc.getPtr(), taskBlock.getArgument(idx));
     Value sourceMemref = dep.dep.getSource();
     mapper.map(sourceMemref, payload);
@@ -2097,8 +2445,9 @@ struct SdeStorageToArtsDbPass
     for (sde::SdeMuAllocOp op : muAllocs) {
       auto it = windowsByMu.find(op.getMemref());
       ArrayRef<sde::SdeMuAccessWindowOp> windows =
-          it == windowsByMu.end() ? ArrayRef<sde::SdeMuAccessWindowOp>()
-                                  : ArrayRef<sde::SdeMuAccessWindowOp>(it->second);
+          it == windowsByMu.end()
+              ? ArrayRef<sde::SdeMuAccessWindowOp>()
+              : ArrayRef<sde::SdeMuAccessWindowOp>(it->second);
       ArrayAttr haloShape;
       auto haloIt = haloPlansByMu.find(op.getMemref());
       if (haloIt != haloPlansByMu.end())
@@ -2115,9 +2464,8 @@ struct SdeStorageToArtsDbPass
     }
 
     SmallVector<sde::SdeMuAccessWindowOp> residualWindows;
-    module.walk([&](sde::SdeMuAccessWindowOp op) {
-      residualWindows.push_back(op);
-    });
+    module.walk(
+        [&](sde::SdeMuAccessWindowOp op) { residualWindows.push_back(op); });
     for (sde::SdeMuAccessWindowOp window : residualWindows) {
       window.emitOpError()
           << "was not consumed during SDE storage materialization";
@@ -2132,8 +2480,7 @@ struct SdeStorageToArtsDbPass
 };
 
 struct SdeAccessesToArtsDepsPass
-    : public arts::impl::SdeAccessesToArtsDepsBase<
-          SdeAccessesToArtsDepsPass> {
+    : public arts::impl::SdeAccessesToArtsDepsBase<SdeAccessesToArtsDepsPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
@@ -2151,16 +2498,32 @@ struct SdeAccessesToArtsDepsPass
         standaloneRegions.push_back(op);
     });
     for (sde::SdeCuRegionOp op : standaloneRegions)
-      if (failed(materializeStandaloneCuAccesses(op))) {
-        signalPassFailure();
-        return;
-      }
-    for (sde::SdeCuRegionOp op : standaloneRegions)
-      if (op && op->getBlock())
+      if (op && op->getBlock() && !containsDbAccessPlan(op))
         if (failed(inlineSdeCuRegion(op))) {
           signalPassFailure();
           return;
         }
+
+    standaloneRegions.clear();
+    module.walk([&](sde::SdeCuRegionOp op) {
+      if (!op->getParentOfType<sde::SdeSuIterateOp>())
+        standaloneRegions.push_back(op);
+    });
+    for (sde::SdeCuRegionOp op : standaloneRegions)
+      if (failed(materializeStandaloneCuAccesses(op))) {
+        signalPassFailure();
+        return;
+      }
+    standaloneRegions.clear();
+    module.walk([&](sde::SdeCuRegionOp op) {
+      if (!op->getParentOfType<sde::SdeSuIterateOp>())
+        standaloneRegions.push_back(op);
+    });
+    for (sde::SdeCuRegionOp op : standaloneRegions)
+      if (failed(inlineSdeCuRegion(op))) {
+        signalPassFailure();
+        return;
+      }
 
     SmallVector<sde::SdeSuIterateOp> iterates;
     module.walk([&](sde::SdeSuIterateOp op) { iterates.push_back(op); });
@@ -2227,7 +2590,8 @@ struct FinalizeSdeToArtsPass
       }
 
     SmallVector<sde::SdeControlTokenOp> controlTokens;
-    module.walk([&](sde::SdeControlTokenOp op) { controlTokens.push_back(op); });
+    module.walk(
+        [&](sde::SdeControlTokenOp op) { controlTokens.push_back(op); });
     for (sde::SdeControlTokenOp op : controlTokens)
       if (failed(eraseConsumedSdeControlToken(op))) {
         signalPassFailure();

@@ -685,9 +685,11 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
     fact, consumed (not reinterpreted) by mechanical SDE-to-ARTS lowering.
 
     Attributes (block-grid coordinates, all static `I64 ArrayAttr`):
-      - `mode`          : SdeAccessMode, `read` or `write`. A CU that both reads
-                          and writes the same MU (in-place) is out of scope
-                          and gets no window.
+      - `mode`          : SdeAccessMode, `read`, `write`, or `readwrite`.
+                          Same-CU in-place access is represented as one
+                          `readwrite` window and lowers to an inout dependency,
+                          except committed halo reads are split into separate
+                          read and write windows before ARTS.
       - `arrayId`       : optional committed SDE array identity for `mu`,
                           copied from the MU root. When the enclosing SU has
                           `arrayLayout`, consumers must require a non-negative

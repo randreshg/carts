@@ -48,6 +48,7 @@
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/StringUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
 #include "carts/utils/RemovalUtils.h"
@@ -65,6 +66,7 @@
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -126,6 +128,43 @@ static bool isForwardingMemrefAliasOp(Operation *op, Value source) {
     return subindex.getSource() == source && op->getNumResults() == 1;
 
   return false;
+}
+
+static bool isReadOnlyEdtLocalGlobal(Value source, EdtOp edt) {
+  SmallVector<Value, 8> worklist;
+  DenseSet<Value> visited;
+  worklist.push_back(source);
+
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!current || !visited.insert(current).second)
+      continue;
+
+    for (Operation *user : current.getUsers()) {
+      if (!edt->isAncestor(user))
+        continue;
+
+      if (auto access = DbUtils::getMemoryAccessInfo(user)) {
+        if (access->memref == current &&
+            access->kind == DbUtils::MemoryAccessKind::Write)
+          return false;
+        continue;
+      }
+      if (auto dim = dyn_cast<memref::DimOp>(user)) {
+        if (dim.getSource() == current)
+          continue;
+      }
+      if (isForwardingMemrefAliasOp(user, current)) {
+        for (Value result : user->getResults())
+          if (isa<MemRefType>(result.getType()))
+            worklist.push_back(result);
+        continue;
+      }
+      return false;
+    }
+  }
+
+  return true;
 }
 
 static Value materializeMemrefAsType(Value value, Type targetType,
@@ -513,6 +552,9 @@ DbAllocType CreateDbsPass::inferAllocType(Operation *alloc) {
 ///===----------------------------------------------------------------------===///
 void CreateDbsPass::collectMemrefs() {
   memrefInfo.clear();
+  DenseSet<Value> stringMemRefs;
+  StringUtils::collectStringMemRefs(module, stringMemRefs);
+
   module.walk([&](EdtOp edt) {
     edt.walk([&](Operation *op) {
       /// Skip self-references
@@ -521,9 +563,19 @@ void CreateDbsPass::collectMemrefs() {
           return;
       }
 
+      /// A parent EDT must see nested EDT launch operands, but not the nested
+      /// EDT's private body internals. The nested EDT is collected on its own.
+      if (op != edt.getOperation()) {
+        if (EdtOp nearestEdt = op->getParentOfType<EdtOp>())
+          if (nearestEdt != edt)
+            return;
+      }
+
       /// Check all operands of all operations for memory references
       for (Value operand : op->getOperands()) {
         if (!isa<MemRefType>(operand.getType()))
+          continue;
+        if (stringMemRefs.contains(operand))
           continue;
 
         /// Get the underlying value of the memory reference
@@ -545,6 +597,23 @@ void CreateDbsPass::collectMemrefs() {
         /// only the memref->DB conversion below needs to run on non-DB allocs.
         if (isa<DbAllocOp>(underlyingOp))
           continue;
+
+        /// EDT-local scratch and read-only rematerialized globals are private
+        /// runtime plumbing, not shared raw memrefs that need DB conversion.
+        if (underlyingOp->getParentOfType<EdtOp>() == edt) {
+          if (isa<memref::AllocaOp>(underlyingOp))
+            continue;
+          if (isa<memref::GetGlobalOp>(underlyingOp)) {
+            if (isReadOnlyEdtLocalGlobal(operand, edt))
+              continue;
+            op->emitError()
+                << "writes or escapes an EDT-local memref.global; mutable "
+                   "global state used by EDTs must be materialized as an "
+                   "explicit DB dependency before CreateDbs";
+            signalPassFailure();
+            return;
+          }
+        }
 
         /// If it is found, check the parent edt
         EdtOp parentEdt = underlyingOp->getParentOfType<EdtOp>();

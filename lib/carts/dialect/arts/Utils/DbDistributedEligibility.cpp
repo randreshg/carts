@@ -192,7 +192,6 @@ static bool isStencilAcquire(DbAcquireOp acquireOp) {
 /// Summary of facts collected in a single pass over all acquire nodes
 /// belonging to a given DB allocation.
 struct EligibilityFacts {
-  bool hasInternodeEdtUse = false;
   bool hasStencilReadInternodeUse = false;
   bool hasInternodeWriteUse = false;
   bool allAcquiresReadOnly = true;
@@ -240,10 +239,7 @@ collectEligibilityFacts(DbAllocOp alloc) {
     if (stencil)
       facts.isStencilFamily = true;
 
-    /// hasInternodeEdtUse (existential)
     bool internode = edt && edt.getConcurrency() == EdtConcurrency::internode;
-    if (internode)
-      facts.hasInternodeEdtUse = true;
     /// Bridge-fill EDTs (carrying the `storageBridgeCopy` marker) are
     /// orchestration machinery that materializes the host->compute bridge,
     /// not user computation. Their writes must not block the halo-backed
@@ -271,14 +267,6 @@ static bool hasReadOnlyAfterInitAttr(DbAllocOp alloc) {
   return alloc.getReadOnlyAfterInit().value_or(false);
 }
 
-static bool isHostWholeToComputeBlockBridge(DbAllocOp alloc) {
-  if (!alloc)
-    return false;
-  auto bridge = alloc.getStorageBridgeAttr();
-  return bridge &&
-         bridge.getValue() == StorageBridge::host_whole_to_compute_block;
-}
-
 static bool hasBridgeHaloFacts(DbAllocOp alloc) {
   if (!alloc)
     return false;
@@ -288,7 +276,8 @@ static bool hasBridgeHaloFacts(DbAllocOp alloc) {
 }
 
 static bool isHaloBackedHostBridge(DbAllocOp alloc) {
-  if (!isHostWholeToComputeBlockBridge(alloc) || !hasBridgeHaloFacts(alloc))
+  if (!DbUtils::isHostWholeToComputeBlockBridgeDb(alloc) ||
+      !hasBridgeHaloFacts(alloc))
     return false;
   std::optional<PartitionMode> mode = getPartitionMode(alloc.getOperation());
   return mode &&
@@ -322,8 +311,6 @@ mlir::carts::arts::toString(DistributedDbEligibilityRejectReason reason) {
     return "unsupported_guid_users";
   case DistributedDbEligibilityRejectReason::NonEdtAcquireUse:
     return "non_edt_acquire_use";
-  case DistributedDbEligibilityRejectReason::NoInternodeEdtUse:
-    return "no_internode_edt_use";
   case DistributedDbEligibilityRejectReason::PerBlockReplicated:
     return "per_block_replicated";
   }
@@ -368,8 +355,6 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc) {
 
   if (!facts.allHaveEdtAcquireUsers)
     return {false, DistributedDbEligibilityRejectReason::NonEdtAcquireUse};
-  if (!facts.hasInternodeEdtUse)
-    return {false, DistributedDbEligibilityRejectReason::NoInternodeEdtUse};
   if (facts.hasStencilReadInternodeUse) {
     /// A per-block single-writer stencil DB is distributable even though it is
     /// both stencil-read and written internode: the explicit halo exchange

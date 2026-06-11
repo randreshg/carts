@@ -573,7 +573,7 @@ bool DbUtils::isAllowedReadOnlyCoarseDep(Value dep, DbAllocOp alloc) {
          static_cast<bool>(acquire.getReplicatedReadAttr());
 }
 
-static bool isHostWholeToComputeBlockBridgeDb(DbAllocOp alloc) {
+bool DbUtils::isHostWholeToComputeBlockBridgeDb(DbAllocOp alloc) {
   if (!alloc)
     return false;
   auto bridge = alloc.getStorageBridgeAttr();
@@ -611,7 +611,7 @@ bool DbUtils::isHostWholeToComputeBlockBridgeMovement(EdtOp edt) {
       hasCoarseHost = true;
       continue;
     }
-    if (isHostWholeToComputeBlockBridgeDb(alloc) &&
+    if (DbUtils::isHostWholeToComputeBlockBridgeDb(alloc) &&
         partition == PartitionMode::block) {
       hasBlockBridge = true;
       continue;

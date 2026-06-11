@@ -907,13 +907,6 @@ ParseResult SdeMuAccessWindowOp::parse(OpAsmParser &parser,
 }
 
 LogicalResult SdeMuAccessWindowOp::verify() {
-  // A window describes a read XOR write access. In-place read/write access has
-  // no single canonical window.
-  if (getMode() == SdeAccessMode::readwrite)
-    return emitOpError("sde.mu_access_window: mode must be read or write; "
-                       "readwrite (in-place) is out of scope and must not be "
-                       "represented as a window");
-
   auto muType = dyn_cast<MemRefType>(getMu().getType());
   if (!muType)
     return emitOpError("sde.mu_access_window: mu operand must be a memref");

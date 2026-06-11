@@ -25,7 +25,6 @@ enum class DistributedDbEligibilityRejectReason {
   UnsupportedPtrUsers,
   UnsupportedGuidUsers,
   NonEdtAcquireUse,
-  NoInternodeEdtUse,
   /// Per-block all-gather replica: a block DB that must stay REPLICATED
   /// (every block on every node), not block-distributed. Distributing it would
   /// scatter the gathered blocks back across nodes and defeat the all-gather.

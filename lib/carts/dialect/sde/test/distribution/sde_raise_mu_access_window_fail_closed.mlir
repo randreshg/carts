@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,raise-to-mu-access-window,verify-sde-mu-access-window)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,raise-to-mu-access-window,verify-sde-mu-access-window)' 2>&1 | %FileCheck %s --implicit-check-not=sde.mu_access_window
 
 // Fail-closed / conservative: out-of-scope MUs get NO access window and the
 // pass mutates nothing (it only ever inserts windows). Chaining
@@ -6,13 +6,9 @@
 // not demand a window for an out-of-scope MU). Cases:
 //   * matmul classification is out of the elementwise/stencil scope (left flat),
 //   * a dynamic owner extent cannot be statically rank-expanded (left flat),
-//   * an in-place (read+write same MU) access is rank-expanded but window raising
-//     refuses to raise a clean single window for it (in-place is out of scope),
 //   * a multi-owner committed plan is left flat and skipped.
 //
 // No window op is emitted anywhere; the verifier passes (every MU is skipped).
-
-// CHECK-NOT: sde.mu_access_window
 
 // CHECK-LABEL: func.func @fail_closed_matmul
 func.func @fail_closed_matmul() {
@@ -47,27 +43,6 @@ func.func @fail_closed_dynamic(%n: index) {
     sde.cu_region <single> {
       scf.for %j = %c0 to %c64 step %c1 {
         memref.store %cst, %A[%i, %j] : memref<?x64xf32>
-    }
-      sde.yield
-    }
-  } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
-  return
-}
-
-// CHECK-LABEL: func.func @fail_closed_in_place
-func.func @fail_closed_in_place() {
-  %c0 = arith.constant 0 : index
-  %c1 = arith.constant 1 : index
-  %c64 = arith.constant 64 : index
-  %c128 = arith.constant 128 : index
-  %A = sde.mu_alloc : memref<128x64xf32>
-  sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
-  ^bb0(%i: index):
-    sde.cu_region <single> {
-      scf.for %j = %c0 to %c64 step %c1 {
-        %v = memref.load %A[%i, %j] : memref<128x64xf32>
-        %w = arith.addf %v, %v : f32
-        memref.store %w, %A[%i, %j] : memref<128x64xf32>
     }
       sde.yield
     }

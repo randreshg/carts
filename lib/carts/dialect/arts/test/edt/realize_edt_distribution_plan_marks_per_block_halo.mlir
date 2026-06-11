@@ -5,6 +5,9 @@
 // committed fact; it must not infer halo byte windows from stencil metadata.
 
 // CHECK-LABEL: func.func @marks_committed_per_block_halo
+// CHECK: arts.db_alloc
+// CHECK-SAME: perBlockSingleWriterStencil
+// CHECK-SAME: planHaloShape = [1]
 // CHECK: arts.db_acquire[<in>]
 // CHECK-NOT: haloViewDependency
 // CHECK: arts.db_acquire[<in>]
@@ -27,7 +30,7 @@ module {
     %c16 = arith.constant 16 : index
     %value = arith.constant 0.0 : f64
 
-    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c16] {planOwnerDims = [0], planPhysicalBlockShape = [16]} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c16] {planHaloShape = [1], planOwnerDims = [0], planPhysicalBlockShape = [16]} : (memref<?xi64>, memref<?xmemref<?xf64>>)
     %normal_guid, %normal_ptr = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] {depPattern = #arts.dep_pattern<stencil>, distribution_pattern = #arts.distribution_pattern<stencil>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
     %halo_guid, %halo_ptr = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] element_offsets[%c0] element_sizes[%c16] {depPattern = #arts.dep_pattern<stencil>, distribution_pattern = #arts.distribution_pattern<stencil>, stencil_max_offsets = [1], stencil_min_offsets = [-1], stencil_supported_block_halo} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
     %write_guid, %write_ptr = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] {depPattern = #arts.dep_pattern<stencil>, distribution_pattern = #arts.distribution_pattern<stencil>, stencil_max_offsets = [1], stencil_min_offsets = [-1], stencil_supported_block_halo} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
