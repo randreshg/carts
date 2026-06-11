@@ -70,7 +70,7 @@ std::unique_ptr<Pass> createSdeRedistributePass();
 
 // --- Dep passes (structural transforms) ---
 std::unique_ptr<Pass> createParallelizePass();
-std::unique_ptr<Pass> createPatternAnalysisPass();
+std::unique_ptr<Pass> createSdeLoopPatternFactsPass();
 std::unique_ptr<Pass>
 createLayoutAssignmentPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createLoopInterchangePass();

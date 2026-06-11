@@ -4,13 +4,13 @@
 // with nested-IV stencil metadata. SDE owns the layout and access-window facts;
 // later stages consume or reject those facts without repairing them.
 
-// CHECK-LABEL: // -----// IR Dump After PatternAnalysis (sde-pattern-analysis) //----- //
+// CHECK-LABEL: // -----// IR Dump After SdeLoopPatternFacts (sde-loop-pattern-facts) //----- //
 // CHECK: func.func @main
 // CHECK: sde.su_iterate (%c1, %c1) to (%c63, %c63) step (%c1, %c1) classification(<stencil>) {
 // Scalar body preserved:
 // CHECK: memref.load
 // CHECK: memref.store
-// Stencil access metadata stamped by PatternAnalysis:
+// Stencil access metadata stamped by SdeLoopPatternFacts:
 // CHECK: accessMaxOffsets = [1, 1]
 // CHECK-SAME: accessMinOffsets = [-1, -1]
 // CHECK-SAME: ownerDims = [0, 1]

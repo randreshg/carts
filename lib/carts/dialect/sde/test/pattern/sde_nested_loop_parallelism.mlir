@@ -5,7 +5,7 @@
 // SDE promotes generic affine-disjoint output dimensions, but leaves matmul to
 // its specialized physical plan.
 
-// CHECK-LABEL: // -----// IR Dump After PatternAnalysis
+// CHECK-LABEL: // -----// IR Dump After SdeLoopPatternFacts
 // CHECK-LABEL: func.func @nested_elementwise_3d
 // CHECK: sde.su_iterate (%c0, %c0, %c0) to (%c8, %c16, %c32) step (%c1, %c1, %c1) classification(<elementwise>)
 

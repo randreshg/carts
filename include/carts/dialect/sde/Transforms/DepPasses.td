@@ -66,29 +66,27 @@ def Parallelize : Pass<"sde-parallelize", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createParallelizePass()";
 }
 
-def PatternAnalysis
-    : Pass<"sde-pattern-analysis", "mlir::ModuleOp"> {
-  let summary = "Analyze and stamp approved SDE structured patterns";
+def SdeLoopPatternFacts
+    : Pass<"sde-loop-pattern-facts", "mlir::ModuleOp"> {
+  let summary = "Classify SDE loop patterns and stamp facts";
   let description = [{
     Uses SDE-owned loop/access analysis to identify approved structured pattern
-    families on eligible `sde.su_iterate` operations. This pass is the first
-    SDE pattern planning point after OpenMP-to-SDE conversion: later SDE
-    transforms consume these facts instead of rediscovering pattern legality.
+    families on eligible `sde.su_iterate` operations and stamps classification,
+    pattern, and access-summary facts.
 
-    PatternAnalysis stamps only SDE IR facts. It does not stamp target-specific
+    SdeLoopPatternFacts stamps only SDE IR facts. It does not stamp target-specific
     attributes and it does not cross the dialect boundary. Later conversion may
-    lower the final SDE plan, but raw pattern-analysis facts remain SDE
-    ownership.
+    lower the final SDE shape, but raw pattern facts remain SDE ownership.
 
     The current implementation stamps:
-    - `classification(<...>)` from the current SDE structured analysis
+    - `classification(<...>)` from the SDE loop/access summary
     - approved `pattern` values for uniform, stencil, wavefront, matmul,
       reduction, and elementwise-pipeline families
     - generic access/owner/footprint summaries for recognized ND neighborhood
       loops
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
-  let constructor = "mlir::carts::sde::createPatternAnalysisPass()";
+  let constructor = "mlir::carts::sde::createSdeLoopPatternFactsPass()";
 }
 
 def LayoutAssignment

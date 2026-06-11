@@ -172,7 +172,7 @@ the chosen realization.
    refinement passes so they consume or reject committed facts instead of
    recomputing owner dims, block shapes, or movement families.
 
-5. **12h** — Decouple semantic detection from structural rewriting in ARTS DB/EDT refinement. Move wavefront / Jacobi family detection into SDE (extend `PatternAnalysis` or add a later SDE wavefront-planning pass). Make ARTS passes consumers, not detectors. Enforces Invariant 5.
+5. **12h** — Decouple semantic detection from structural rewriting in ARTS DB/EDT refinement. Move wavefront / Jacobi family detection into SDE (extend `SdeLoopPatternFacts` or add a later SDE wavefront-planning pass). Keep ARTS DB/EDT refinement focused on authored facts. Enforces Invariant 5.
 
 Each sub-step must pass regression-guard against ALL samples and benchmarks in single-node and multinode.
 

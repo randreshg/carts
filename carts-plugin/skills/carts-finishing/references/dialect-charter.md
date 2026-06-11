@@ -143,8 +143,8 @@ These do not block correctness but should be cleaned up in Phase 9. Cite when de
 
 | # | Violation | Files | Fix |
 |---|---|---|---|
-| 1 | Wavefront family detection belongs in SDE, not ARTS (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Transforms/epoch/`, `lib/carts/dialect/arts/Transforms/db/` | Keep family + tile geometry in SDE; ARTS realizers consume already-authored structure. |
-| 2 | ARTS must not re-detect elementwise/stencil/matmul facts that SDE already proved (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/PatternAnalysis.cpp`, `lib/carts/dialect/arts/Transforms/DepStorageAssignment.cpp`, `lib/carts/dialect/arts/Transforms/db/` | Consume SDE facts instead of reclassifying source semantics. |
+| 1 | Wavefront family detection belongs in SDE, not ARTS (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/SdeLoopPatternFacts.cpp`, `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Transforms/epoch/`, `lib/carts/dialect/arts/Transforms/db/` | Keep family + tile geometry in SDE; ARTS realizers consume already-authored structure. |
+| 2 | Elementwise/stencil/matmul classification belongs in SDE-authored loop pattern facts (Invariant 5) | `lib/carts/dialect/sde/Transforms/state/SdeLoopPatternFacts.cpp`, `lib/carts/dialect/arts/Transforms/DepStorageAssignment.cpp`, `lib/carts/dialect/arts/Transforms/db/` | Use SDE-authored pattern facts in ARTS graph/object realization. |
 | 3 | ARTS epoch/EDT structure must follow authored SDE deps, not source-pattern rediscovery (Invariants 1 & 5) | `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`, `lib/carts/dialect/arts/Transforms/epoch/`, `lib/carts/dialect/arts/Transforms/edt/` | Enhance SDE dependency planning when source semantics are missing; keep ARTS structure realization mechanical. |
 | 4 | Historical docs disagreed about `arts.lowering_contract` ownership. | Archived planning notes under `.carts/sessions/...` | The live contract is in `docs/compiler/dialect-layering.md`: ARTS may carry abstract lowering contracts, but SDE must materialize source facts before ARTS. |
 
@@ -158,7 +158,7 @@ with explicit inputs/outputs over SDE facts rather than frontend carrier IR.
 Recommendation: defer extra interface work until benchmarks are green. (Effort
 if upgrading: 8-10h.)
 
-2. **Scope of `PatternAnalysis`.** Does it own ALL semantic pattern approval (incl. wavefront/Jacobi), or split later execution planning into a separate SDE wavefront pass? Recommendation: keep pattern approval centralized; otherwise ARTS keeps re-deriving and Invariant 5 stays broken.
+2. **Scope of `SdeLoopPatternFacts`.** Does it own ALL semantic pattern approval (incl. wavefront/Jacobi), or should later execution planning move to a separate SDE wavefront pass? Recommendation: keep pattern approval centralized until benchmarks are green.
 
 3. **Plug `ARTSCostModel` into live decision owners.** Do not resurrect retired monolithic partition/distribution heuristic passes; remaining thresholds belong in SDE planning or focused ARTS ownership/refinement according to the fact they decide. Effort 12–16h. Recommendation: defer until phase 8 is green; cost model only matters once structural plumbing is correct.
 
@@ -171,7 +171,7 @@ if upgrading: 8-10h.)
 
 | If X is… | It belongs in… |
 |---|---|
-| A loop classification (stencil, matmul, reduction, etc.) | SDE (`PatternAnalysis`) |
+| A loop classification (stencil, matmul, reduction, etc.) | SDE (`SdeLoopPatternFacts`) |
 | A reduction strategy choice (atomic / tree / accumulate) | SDE (`ReductionStrategy`) |
 | A scope choice (local vs distributed) | ARTS, using abstract-machine analysis |
 | A schedule choice (static / dynamic / guided) | SDE (`ScheduleRefinement`) |

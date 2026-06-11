@@ -11,7 +11,7 @@ dialect/                     MLIR dialects (one subdirectory per CARTS dialect)
       PolygeistToSde/        SdeInputInliner, SdeMemrefNormalization, SdeHandleDeps
     IR/                      SdeDialect.cpp, SdeOps.cpp
     Transforms/
-      state/                 PatternAnalysis, MemoryUnitRealization,
+      state/                 SdeLoopPatternFacts, MemoryUnitRealization,
                               ScalarForwarding
       dep/loop/              LoopInterchange, Tiling, IterationSpaceDecomposition
       dep/fusion/            ElementwiseFusion

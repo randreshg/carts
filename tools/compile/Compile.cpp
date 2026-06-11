@@ -278,7 +278,7 @@ static const std::array<llvm::StringLiteral, 30> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "SdeCuNormalization",
     "Parallelize",
-    "PatternAnalysis",
+    "SdeLoopPatternFacts",
     "LayoutAssignment",
     "LoopInterchange",
     "Tiling",
@@ -1135,10 +1135,9 @@ void buildSdePlanningPipeline(PassManager &pm,
   // SDE scheduling units before LayoutAssignment can choose block-native facts.
   pm.addPass(sde::createSdeCuNormalizationPass());
   pm.addPass(sde::createParallelizePass());
-  // SDE pattern analysis first stamps approved memref/ND access facts. Dep
-  // transforms then consume those SDE facts before effect passes make
-  // scheduling decisions.
-  pm.addPass(sde::createPatternAnalysisPass());
+  // SdeLoopPatternFacts stamps memref/ND pattern facts before dep/effect
+  // planning.
+  pm.addPass(sde::createSdeLoopPatternFactsPass());
   // Module-scoped per-array BLOCK layout assignment. Runs before
   // Tiling/Interchange split the parallel axes.
   pm.addPass(sde::createLayoutAssignmentPass(costModel));

@@ -95,7 +95,7 @@ mechanical SDE-to-ARTS boundary.
 ConvertOpenMPToSde
 SdeCuNormalization
 Parallelize
-PatternAnalysis
+SdeLoopPatternFacts
 LayoutAssignment
 LoopInterchange
 Tiling
@@ -285,7 +285,7 @@ VerifyLowered
 
 ## Ownership Notes
 
-- SDE inside `sde-planning` owns semantic decomposition, `PatternAnalysis`,
+- SDE inside `sde-planning` owns semantic decomposition, `SdeLoopPatternFacts`,
   state rewrites, dependency/effect proofs, sync rewrites, and physical
   MU/access-window layout policy.
 - `sde-to-arts` owns mechanical realization of committed SDE MU/CU/SU facts

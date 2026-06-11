@@ -1,7 +1,7 @@
 add_subdirectory(Verify)
 
 set(CARTS_SDE_TRANSFORMS_SOURCE_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/state/PatternAnalysis.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/state/SdeLoopPatternFacts.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/MemoryUnitRealization.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/RankExpandMu.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/CuNormalization.cpp"

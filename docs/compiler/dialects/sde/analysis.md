@@ -5,7 +5,7 @@ still visible.
 
 Owned analyses:
 
-- `PatternAnalysis`: classifies elementwise, reduction, matmul, stencil,
+- `SdeLoopPatternFacts`: classifies elementwise, reduction, matmul, stencil,
   wavefront, timestep, and unknown families.
 - Memref root/access analysis: records roots, ranks, access modes, affine or
   structured index maps, self-read status, and side effects.

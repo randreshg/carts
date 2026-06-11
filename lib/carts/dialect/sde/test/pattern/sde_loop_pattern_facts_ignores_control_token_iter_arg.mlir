@@ -5,7 +5,7 @@
 // into a reduction or a distributable result-producing task. The carrier is
 // rejected at the SDE-to-ARTS boundary until explicit control deps are authored.
 
-// CHECK-LABEL: // -----// IR Dump After PatternAnalysis (sde-pattern-analysis) //----- //
+// CHECK-LABEL: // -----// IR Dump After SdeLoopPatternFacts (sde-loop-pattern-facts) //----- //
 // CHECK: func.func @control_token_elementwise
 // CHECK: sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) iter_args
 // CHECK: pattern = #sde.pattern<uniform>

@@ -1,7 +1,7 @@
 # SDE Utils Headers
 
 Reusable SDE-only helper declarations belong here when they express source
-semantics, structured access interpretation, PatternAnalysis facts, MU/CU/SU
+semantics, structured access interpretation, SdeLoopPatternFacts facts, MU/CU/SU
 planning, or target-neutral scheduling intent.
 
 Current utility groups:

@@ -21,7 +21,7 @@ need to rediscover OpenMP intent or repair SDE layout promises.
 
 Important transform areas:
 
-- `state/` - representation changes, PatternAnalysis, MU materialization,
+- `state/` - representation changes, SdeLoopPatternFacts, MU realization,
   scalar forwarding.
 - `dep/` - structural and dependency transforms.
 - `effect/` - scheduling, distribution, fusion/vectorization decisions.

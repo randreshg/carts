@@ -47,7 +47,7 @@ CARTS is organized around three project dialect layers:
 
 - SDE (`sde`) - HPF-style `DISTRIBUTE`/`ALIGN`: source semantics, per-array
   block layouts from affine access relations, abstract communication-volume
-  cost, PatternAnalysis, and real source/SU/CU/MU loop/layout transformations.
+  cost, SdeLoopPatternFacts, and real source/SU/CU/MU loop/layout transformations.
   It names no collectives, DBs, EDTs, owner maps, routes, GUIDs, or runtime
   policy.
 - ARTS (`arts`) - the first isolation boundary: isolated codelets, explicit

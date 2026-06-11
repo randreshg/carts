@@ -39,7 +39,7 @@ The project is organized around three dialect layers:
 
 - `sde`: HPF-style `DISTRIBUTE`/`ALIGN`, source semantics, per-array block
   layouts from affine access relations, abstract communication-volume cost,
-  PatternAnalysis, and real source/SU/CU/MU loop/layout transformations. It
+  SdeLoopPatternFacts, and real source/SU/CU/MU loop/layout transformations. It
   names no collectives, DBs, EDTs, routes, GUIDs, or runtime policy.
 - `arts`: first isolation boundary, isolated codelets, explicit deps/params,
   token-local memref views, graph optimizations, mechanical representation of

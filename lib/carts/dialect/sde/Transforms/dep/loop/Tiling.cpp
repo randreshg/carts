@@ -681,8 +681,8 @@ buildStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
     if (ownerDims->size() > op.getLowerBounds().size())
       return std::nullopt;
   // The loop-indexed output helper proves the current SDE owner IV only. For
-  // multi-dimensional/component stencils the final ND owner plan still belongs
-  // to DistributionPlanning, which consumes the PatternAnalysis facts.
+  // multi-dimensional/component stencils, DistributionPlanning owns the final
+  // ND owner plan.
   if (op.getLowerBounds().size() != 1)
     return std::nullopt;
   if (sde::requiresNestedStencilOwnerPromotion(op))

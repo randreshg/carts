@@ -149,7 +149,7 @@ query utilities or pass-local walks instead of graph nodes.
 
 ### 4.1 SDE-backed source of truth
 
-- SDE `PatternAnalysis` classifies work families, access windows, reductions,
+- SDE `SdeLoopPatternFacts` classifies work families, access windows, reductions,
   and distribution intent while source semantics are still visible.
 - `DistributionPlanning` consumes those SDE facts and stamps the concrete
   SDE/ARTS facts that materialization uses.

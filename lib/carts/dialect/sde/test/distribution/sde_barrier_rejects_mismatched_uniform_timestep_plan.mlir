@@ -4,7 +4,7 @@
 // stamp an owner-tile plan when the committed write layout is single-owner; the
 // later owner-strip plan remains a real transformed fact.
 
-// CHECK-LABEL: // -----// IR Dump After PatternAnalysis (sde-pattern-analysis) //----- //
+// CHECK-LABEL: // -----// IR Dump After SdeLoopPatternFacts (sde-loop-pattern-facts) //----- //
 // CHECK: func.func @mismatched_uniform_adjacent
 // CHECK: sde.su_iterate (%c0, %c0) to (%c8, %c8) step (%c1, %c1) classification(<elementwise>)
 // CHECK: sde.su_iterate (%c0) to (%c8) step (%c1) classification(<elementwise>)

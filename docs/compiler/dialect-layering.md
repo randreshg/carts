@@ -182,7 +182,7 @@ scheduling facts as ARTS objects:
 
 ```text
 ConvertOpenMPToSde
-PatternAnalysis
+SdeLoopPatternFacts
 SDE transforms
 MemoryUnitRealization
 RaiseToMuAccessWindow

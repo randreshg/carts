@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// File: PatternAnalysis.cpp
+/// File: SdeLoopPatternFacts.cpp
 ///
 /// Identify memref-backed SDE patterns and stamp approved SDE facts.
 ///==========================================================================///
@@ -20,7 +20,7 @@
 #include <algorithm>
 
 namespace mlir::carts::sde {
-#define GEN_PASS_DEF_PATTERNANALYSIS
+#define GEN_PASS_DEF_SDELOOPPATTERNFACTS
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
 
@@ -1373,7 +1373,7 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
 /// SDE decides — pattern-free, from iterator types and affine access shapes —
 /// to tile the reduction axis of a matmul-class scheduling unit when its
 /// contraction-dim input is a sibling-computed distributed intermediate.
-/// Detection runs in PatternAnalysis, while the loop nest is still the
+/// Detection runs in SdeLoopPatternFacts, while the loop nest is still the
 /// canonical (2-parallel, 1-reduction, 3-dim) matmul (later loop
 /// tiling/interchange splits the parallel axes and breaks canonical recovery).
 /// It stamps the inert declarative facts `partialReductionDims` /
@@ -1417,9 +1417,9 @@ stampContractionTilingIntent(sde::SdeSuIterateOp op,
       buildI64ArrayAttr(op.getContext(), candidate->parallelLoopDims));
 }
 
-struct PatternAnalysisPass
-    : public sde::impl::PatternAnalysisBase<PatternAnalysisPass> {
-  using PatternAnalysisBase::PatternAnalysisBase;
+struct SdeLoopPatternFactsPass
+    : public sde::impl::SdeLoopPatternFactsBase<SdeLoopPatternFactsPass> {
+  using SdeLoopPatternFactsBase::SdeLoopPatternFactsBase;
 
   void runOnOperation() override {
     getOperation().walk([&](sde::SdeSuIterateOp op) {
@@ -1600,8 +1600,8 @@ struct PatternAnalysisPass
 
 namespace mlir::carts::sde {
 
-std::unique_ptr<Pass> createPatternAnalysisPass() {
-  return std::make_unique<PatternAnalysisPass>();
+std::unique_ptr<Pass> createSdeLoopPatternFactsPass() {
+  return std::make_unique<SdeLoopPatternFactsPass>();
 }
 
 } // namespace mlir::carts::sde

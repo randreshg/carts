@@ -46,7 +46,7 @@ a helper and choosing its canonical home.
 | Loop shape, IVs, trip counts, nearest loops, loop depth | `include/carts/utils/LoopUtils.h` |
 | Deferred op removal | `include/carts/utils/RemovalUtils.h` |
 | Shared ODS attribute enum across dialects | `include/carts/IR/CommonAttrs.td` |
-| SDE source semantics, HPF-style layout/alignment, affine access maps, PatternAnalysis, MU/CU/SU planning, real loop/layout facts | `include/carts/dialect/sde/Analysis` or `Utils` |
+| SDE source semantics, HPF-style layout/alignment, affine access maps, SdeLoopPatternFacts, MU/CU/SU planning, real loop/layout facts | `include/carts/dialect/sde/Analysis` or `Utils` |
 | ARTS codelet isolation, dep/param ABI, token-local views, collective/contraction/bridge/halo materialization | `include/carts/dialect/arts/Utils` |
 | ARTS DB/EDT/epoch objects, dependency slots, placement, ownership, owner maps, per-block DB realization, grouped CU/bridge execution | `include/carts/dialect/arts/Utils` or `Analysis` |
 | ARTS loop invariance, hoist legality, dominance | `include/carts/dialect/arts/Utils/LoopInvarianceUtils.h` |

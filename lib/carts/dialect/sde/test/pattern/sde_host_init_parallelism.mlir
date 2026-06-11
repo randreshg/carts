@@ -1,6 +1,6 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-parallelize)' \
 // RUN:   | %FileCheck %s --check-prefix=RAISE
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-parallelize,sde-pattern-analysis)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-parallelize,sde-loop-pattern-facts)' \
 // RUN:   | %FileCheck %s --check-prefix=PLAN
 
 module {
