@@ -109,6 +109,7 @@ def _apply_arts_transport_make_vars(
         conduit = os.environ.get("ARTS_GASNET_CONDUIT", "").strip()
         threadmode = os.environ.get("ARTS_GASNET_THREADMODE", "").strip()
         version = os.environ.get("ARTS_GASNET_VERSION", "").strip()
+        pmi_home = os.environ.get("ARTS_GASNET_PMI_HOME", "").strip()
 
         if no_bootstrap and not prefix:
             print_error(
@@ -140,6 +141,8 @@ def _apply_arts_transport_make_vars(
             make_vars.append(f"ARTS_GASNET_THREADMODE={threadmode}")
         if version:
             make_vars.append(f"ARTS_GASNET_VERSION={version}")
+        if pmi_home:
+            make_vars.append(f"ARTS_GASNET_PMI_HOME={pmi_home}")
     elif transport == ARTS_TRANSPORT_RSOCKET:
         console.print(
             f"Network: [{Colors.INFO}]rsocket RDMA (legacy fallback)[/{Colors.INFO}]"
