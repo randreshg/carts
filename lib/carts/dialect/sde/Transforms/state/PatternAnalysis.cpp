@@ -685,11 +685,22 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
     }
 
     std::optional<unsigned> storeDim;
+    std::optional<unsigned> outerDim;
     for (auto [dim, index] : llvm::enumerate(storeOp.getIndices())) {
+      if (stencilCoupledOwnerTile) {
+        SmallVector<Value, 1> outerOwners{outerIv};
+        if (sde::isExactOwnerIndex(index, outerOwners)) {
+          if (outerDim && *outerDim != dim) {
+            rejected = true;
+            return WalkResult::interrupt();
+          }
+          outerDim = static_cast<unsigned>(dim);
+        }
+      }
       SmallVector<Value, 1> innerOwners{innerIv};
       if (!sde::isExactOwnerIndex(index, innerOwners))
         continue;
-      if (dim == 0) {
+      if (dim == 0 && !stencilCoupledOwnerTile) {
         rejected = true;
         return WalkResult::interrupt();
       }
@@ -697,6 +708,10 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
       break;
     }
     if (!storeDim) {
+      rejected = true;
+      return WalkResult::interrupt();
+    }
+    if (stencilCoupledOwnerTile && (!outerDim || *outerDim == *storeDim)) {
       rejected = true;
       return WalkResult::interrupt();
     }
@@ -921,6 +936,56 @@ tryPromoteOpaqueElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op) {
   return promoteElementwiseInnerOwnerLoop(op, innerForChain.front());
 }
 
+static std::optional<bool>
+shouldKeepOuterLoopFirstForPromotion(sde::SdeSuIterateOp op,
+                                     scf::ForOp innerFor) {
+  if (!op || !innerFor || op.getBody().empty())
+    return std::nullopt;
+  Value outerIv = op.getBody().front().getArgument(0);
+  Value innerIv = innerFor.getInductionVar();
+  std::optional<unsigned> outerDim;
+  std::optional<unsigned> innerDim;
+  bool rejected = false;
+  op.getBody().walk([&](memref::StoreOp storeOp) {
+    if (rejected)
+      return WalkResult::interrupt();
+    Value root =
+        ::mlir::carts::ValueAnalysis::stripMemrefViewOps(storeOp.getMemref());
+    if (sde::isDefinedInside(op.getOperation(), root))
+      return WalkResult::advance();
+    auto type = dyn_cast<MemRefType>(root.getType());
+    if (!type || type.getRank() < 2)
+      return WalkResult::advance();
+
+    std::optional<unsigned> storeOuterDim;
+    std::optional<unsigned> storeInnerDim;
+    for (auto [dim, index] : llvm::enumerate(storeOp.getIndices())) {
+      SmallVector<Value, 1> outerOwners{outerIv};
+      SmallVector<Value, 1> innerOwners{innerIv};
+      if (sde::isExactOwnerIndex(index, outerOwners))
+        storeOuterDim = static_cast<unsigned>(dim);
+      if (sde::isExactOwnerIndex(index, innerOwners))
+        storeInnerDim = static_cast<unsigned>(dim);
+    }
+    if (!storeOuterDim || !storeInnerDim || *storeOuterDim == *storeInnerDim) {
+      rejected = true;
+      return WalkResult::interrupt();
+    }
+    if ((outerDim && *outerDim != *storeOuterDim) ||
+        (innerDim && *innerDim != *storeInnerDim)) {
+      rejected = true;
+      return WalkResult::interrupt();
+    }
+    outerDim = *storeOuterDim;
+    innerDim = *storeInnerDim;
+    return WalkResult::advance();
+  });
+
+  if (rejected || !outerDim || !innerDim)
+    return std::nullopt;
+  return *outerDim < *innerDim;
+}
+
 static sde::SdeSuIterateOp
 tryPromoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op,
                                     const sde::StructuredLoopSummary &summary) {
@@ -938,8 +1003,11 @@ tryPromoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op,
   bool outerFirst = false;
   if (Value writtenRoot = elementwiseExternalWrittenRoot(op))
     if (auto t = dyn_cast<MemRefType>(writtenRoot.getType()))
-      outerFirst = t.getRank() == 2 &&
-                   hasSiblingStencilConsumingWrittenRoot(op, writtenRoot);
+      if (t.getRank() == 2 &&
+          hasSiblingStencilConsumingWrittenRoot(op, writtenRoot))
+        outerFirst =
+            shouldKeepOuterLoopFirstForPromotion(op, innerForChain.front())
+                .value_or(true);
   return promoteElementwiseInnerOwnerLoop(op, innerForChain.front(),
                                           outerFirst);
 }

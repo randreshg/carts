@@ -53,6 +53,7 @@ ARTS_DEBUG_SETUP(convert_openmp_to_sde);
 
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 static llvm::Statistic numParallelConverted{
     "convert_openmp_to_sde", "NumParallelConverted",
@@ -966,25 +967,40 @@ static void sinkParallelPrivateScratch(ModuleOp module) {
     auto innerCu = dyn_cast<sde::SdeCuRegionOp>(&body.front());
     if (!innerCu)
       continue;
-    SmallVector<memref::AllocaOp> toSink;
+    SmallVector<SmallVector<Operation *, 4>> toSink;
     for (Operation &op : *parent) {
       auto alloca = dyn_cast<memref::AllocaOp>(&op);
-      if (!alloca || alloca->getNumOperands() != 0)
+      if (!alloca || alloca->getNumOperands() != 0 ||
+          !alloca->isBeforeInBlock(it))
         continue;
-      bool anyUse = false, allInside = true;
+      bool hasUseInside = false, allPrivate = true;
+      SmallVector<Operation *, 4> ops{alloca.getOperation()};
       for (Operation *user : alloca->getUsers()) {
-        anyUse = true;
         if (!it.getBody().isAncestor(user->getParentRegion())) {
-          allInside = false;
-          break;
+          auto initStore = dyn_cast<memref::StoreOp>(user);
+          if (!initStore || initStore.getMemref() != alloca.getResult() ||
+              initStore->getBlock() != parent ||
+              !initStore->isBeforeInBlock(it)) {
+            allPrivate = false;
+            break;
+          }
+          ops.push_back(initStore.getOperation());
+          continue;
         }
+        hasUseInside = true;
       }
-      if (anyUse && allInside)
-        toSink.push_back(alloca);
+      if (hasUseInside && allPrivate)
+        toSink.push_back(std::move(ops));
     }
     Block &dest = sde::ensureBlock(innerCu.getBody());
-    for (memref::AllocaOp alloca : toSink)
-      alloca->moveBefore(&dest, dest.begin());
+    for (SmallVector<Operation *, 4> &ops : toSink) {
+      llvm::sort(ops, [](Operation *lhs, Operation *rhs) {
+        return lhs->isBeforeInBlock(rhs);
+      });
+      Block::iterator insertPoint = dest.begin();
+      for (Operation *op : ops)
+        op->moveBefore(&dest, insertPoint);
+    }
   }
 }
 
