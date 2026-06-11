@@ -1,12 +1,12 @@
 ///==========================================================================///
-/// File: AtomicReductionMaterialization.cpp
+/// File: AtomicReductionRealization.cpp
 ///
-/// SDE-owned materialization of atomic reductions into explicit leaf CU work.
+/// SDE-owned realization of atomic reductions into explicit leaf CU work.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
 namespace mlir::carts::sde {
-#define GEN_PASS_DEF_SDEATOMICREDUCTIONMATERIALIZATION
+#define GEN_PASS_DEF_SDEATOMICREDUCTIONREALIZATION
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
 
@@ -29,10 +29,13 @@ struct AtomicReductionMatch {
   Value partial;
 };
 
-static bool isIntegerAdd(Operation *op) { return isa_and_nonnull<arith::AddIOp>(op); }
+static bool isIntegerAdd(Operation *op) {
+  return isa_and_nonnull<arith::AddIOp>(op);
+}
 
-static LogicalResult parseReductionKinds(
-    sde::SdeSuIterateOp op, SmallVectorImpl<sde::SdeReductionKind> &kinds) {
+static LogicalResult
+parseReductionKinds(sde::SdeSuIterateOp op,
+                    SmallVectorImpl<sde::SdeReductionKind> &kinds) {
   ArrayAttr kindsAttr = op.getReductionKindsAttr();
   if (!kindsAttr || kindsAttr.size() != op.getReductionAccumulators().size())
     return op.emitOpError()
@@ -67,13 +70,13 @@ matchAtomicAddStore(Value accumulator, memref::StoreOp store) {
 
   for (unsigned operandIdx = 0; operandIdx < combiner->getNumOperands();
        ++operandIdx) {
-    auto load = combiner->getOperand(operandIdx).getDefiningOp<memref::LoadOp>();
+    auto load =
+        combiner->getOperand(operandIdx).getDefiningOp<memref::LoadOp>();
     if (!load || !load.getResult().hasOneUse())
       continue;
-    if (!ValueAnalysis::sameDirectMemrefAccess(load.getMemref(),
-                                               load.getIndices(),
-                                               store.getMemref(),
-                                               store.getIndices()))
+    if (!ValueAnalysis::sameDirectMemrefAccess(
+            load.getMemref(), load.getIndices(), store.getMemref(),
+            store.getIndices()))
       continue;
 
     unsigned partialIdx = operandIdx == 0 ? 1 : 0;
@@ -84,12 +87,11 @@ matchAtomicAddStore(Value accumulator, memref::StoreOp store) {
   return std::nullopt;
 }
 
-static LogicalResult materializeAccumulatorAtomic(sde::SdeSuIterateOp op,
-                                                  Value accumulator,
-                                                  sde::SdeReductionKind kind) {
+static LogicalResult realizeAccumulatorAtomic(sde::SdeSuIterateOp op,
+                                              Value accumulator,
+                                              sde::SdeReductionKind kind) {
   if (kind != sde::SdeReductionKind::add)
-    return op.emitOpError()
-           << "cannot materialize non-add atomic reduction in SDE";
+    return op.emitOpError() << "cannot realize non-add atomic reduction in SDE";
 
   Block *computeBlock = sde::getSuIterateComputeBlock(op);
   if (!computeBlock)
@@ -111,11 +113,11 @@ static LogicalResult materializeAccumulatorAtomic(sde::SdeSuIterateOp op,
         matchAtomicAddStore(accumulator, store);
     if (!match)
       return store.emitOpError()
-             << "cannot materialize atomic reduction; every accumulator store "
+             << "cannot realize atomic reduction; every accumulator store "
                 "in the leaf CU must be a load/add/store update";
     if (!allIndicesAddressBase(store.getIndices()))
       return store.emitOpError()
-             << "cannot materialize indexed atomic reduction; SDE cu_atomic "
+             << "cannot realize indexed atomic reduction; SDE cu_atomic "
                 "currently addresses the base memref element";
     if (selected)
       return op.emitOpError()
@@ -148,9 +150,9 @@ static void clearConsumedReductionMetadata(sde::SdeSuIterateOp op) {
   op->removeAttr(op.getReductionStrategyAttrName());
 }
 
-struct SdeAtomicReductionMaterializationPass
-    : public sde::impl::SdeAtomicReductionMaterializationBase<
-          SdeAtomicReductionMaterializationPass> {
+struct SdeAtomicReductionRealizationPass
+    : public sde::impl::SdeAtomicReductionRealizationBase<
+          SdeAtomicReductionRealizationPass> {
   void runOnOperation() override {
     SmallVector<sde::SdeSuIterateOp, 8> loops;
     getOperation().walk([&](sde::SdeSuIterateOp op) { loops.push_back(op); });
@@ -174,7 +176,7 @@ struct SdeAtomicReductionMaterializationPass
 
       for (auto [accumulator, kind] :
            llvm::zip(op.getReductionAccumulators(), kinds)) {
-        if (failed(materializeAccumulatorAtomic(op, accumulator, kind))) {
+        if (failed(realizeAccumulatorAtomic(op, accumulator, kind))) {
           signalPassFailure();
           return;
         }
@@ -188,8 +190,8 @@ struct SdeAtomicReductionMaterializationPass
 
 namespace mlir::carts::sde {
 
-std::unique_ptr<Pass> createSdeAtomicReductionMaterializationPass() {
-  return std::make_unique<SdeAtomicReductionMaterializationPass>();
+std::unique_ptr<Pass> createSdeAtomicReductionRealizationPass() {
+  return std::make_unique<SdeAtomicReductionRealizationPass>();
 }
 
 } // namespace mlir::carts::sde

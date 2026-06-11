@@ -30,7 +30,7 @@ unless a second real consumer appears.
 | `buildLoopInvariantI1Not` | `DataPtrHoistingInternal.h` / `DataPtrHoistingSupport.cpp` | ARTS-RT data-pointer hoisting support, not generic loop invariance. |
 | `hoistInvariantOpsInLoop` | `lib/carts/dialect/arts/Transforms/db/Hoisting.cpp` | ARTS DB hoisting policy; keep pass-local until another ARTS transform needs identical behavior. |
 | `getForwardedMemrefAliasSource`, `getForwardedMemrefAliasResult` | `lib/carts/dialect/sde/Conversion/PolygeistToSde/MemrefNormalization.cpp` | SDE conversion-specific alias cleanup. Extract to SDE Analysis/Utils only with a second SDE consumer. |
-| `tryGetAffineExpr` | `lib/carts/dialect/sde/Analysis/StructuredOpAnalysis.cpp` | SDE structured analysis internals; keep in analysis until exported API is needed. |
+| `tryGetAffineExpr` | `lib/carts/dialect/sde/Analysis/SuLoopAccessAnalysis.cpp` | SDE SU loop-access analysis internals; keep in analysis until exported API is needed. |
 | `ensureBlock` | `include/carts/dialect/sde/Transforms/Passes.h` | SDE region-construction convenience used across SDE passes. If it grows, move to SDE Utils. |
 | `analyzeSingleDimBlockLoop` | ARTS block-loop strip-mining support | Coupled to block-loop strip-mining internals; not a generic loop helper. |
 
@@ -43,7 +43,7 @@ facts."
 
 High-value future audits:
 
-- SDE memref/access helpers in `PolygeistToSde` and `StructuredOpAnalysis`.
+- SDE memref/access helpers in `PolygeistToSde` and `SuLoopAccessAnalysis`.
 - ARTS-RT pointer/packing helpers in lowering and data-pointer hoisting.
 - ARTS DB loop/window helpers that may belong in ARTS Analysis instead of pass
   support files.

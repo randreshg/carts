@@ -18,8 +18,8 @@ namespace mlir::carts::sde {
 /// `indices` (offsets) and `sizes`. Missing trailing dims default to offset 0
 /// and the source dim size (DimOp for dynamic dims). Returns `source`
 /// directly when no slicing is requested.
-Value materializeDependView(OpBuilder &builder, Location loc, Value source,
-                            ArrayRef<Value> indices, ArrayRef<Value> sizes);
+Value realizeDependView(OpBuilder &builder, Location loc, Value source,
+                        ArrayRef<Value> indices, ArrayRef<Value> sizes);
 
 /// Clamp dependency indices to valid memref bounds [0, dimSize - 1].
 SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,

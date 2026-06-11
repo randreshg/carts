@@ -1824,8 +1824,8 @@ SdeMemrefNormalizationPass::transformPattern(AllocPattern &pattern,
   for (auto &dep : pattern.dependencies) {
     builder.setInsertionPoint(dep.taskOp);
 
-    Value depValue = sde::materializeDependView(
-        builder, dep.taskOp.getLoc(), ndAlloc, dep.indices, dep.sizes);
+    Value depValue = sde::realizeDependView(builder, dep.taskOp.getLoc(),
+                                            ndAlloc, dep.indices, dep.sizes);
 
     /// Update the task's depend_vars
     dep.taskOp.getDependVarsMutable()[dep.depVarIndex].set(depValue);
@@ -1948,7 +1948,7 @@ void SdeMemrefNormalizationPass::rewriteTracedMemref2PointerUses(
       continue;
 
     /// We currently rewrite root-equivalent aliases. Sliced memref-to-pointer
-    /// users need explicit subview materialization, which is a separate path.
+    /// users need explicit subview realization, which is a separate path.
     if (!traceResult->indices.empty()) {
       ARTS_DEBUG("  Skipping traced memref2pointer with non-empty indices");
       continue;
@@ -2058,7 +2058,7 @@ SdeMemrefNormalizationPass::transformSimpleWrapper(AllocPattern &pattern,
   for (auto &dep : pattern.dependencies) {
     builder.setInsertionPoint(dep.taskOp);
 
-    Value depValue = sde::materializeDependView(
+    Value depValue = sde::realizeDependView(
         builder, dep.taskOp.getLoc(), actualAlloc, dep.indices, dep.sizes);
 
     dep.taskOp.getDependVarsMutable()[dep.depVarIndex].set(depValue);

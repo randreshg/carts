@@ -13,7 +13,7 @@ namespace mlir::carts::sde {
 } // namespace mlir::carts::sde
 
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
-#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
@@ -407,8 +407,8 @@ static bool canPipelineThroughTokenLocalMemoryDeps(
   if (!hasSingleWriteReadIntermediate(predEffects, succEffects, intermediate))
     return false;
 
-  auto predSummary = sde::analyzeStructuredLoop(predecessor);
-  auto succSummary = sde::analyzeStructuredLoop(successor);
+  auto predSummary = sde::analyzeSuLoopAccesses(predecessor);
+  auto succSummary = sde::analyzeSuLoopAccesses(successor);
   if (!predSummary || !succSummary)
     return false;
   if (predSummary->nest.ivs.empty() || succSummary->nest.ivs.empty())

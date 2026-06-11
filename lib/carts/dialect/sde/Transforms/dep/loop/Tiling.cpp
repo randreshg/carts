@@ -3,7 +3,7 @@
 ///
 /// Pattern-driven memref tiling in SDE. The pass rewrites SDE scheduling units
 /// and their executable memref loop bodies so CU/SU/MU tiling intent is
-/// explicit before boundary materialization.
+/// explicit before boundary realization.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -14,7 +14,7 @@ namespace mlir::carts::sde {
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
-#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
@@ -421,7 +421,7 @@ static Value getExternalAccessRoot(sde::SdeSuIterateOp op, Value value) {
 
 static bool
 hasNonPointExternalSelfRead(sde::SdeSuIterateOp op,
-                            const sde::StructuredLoopSummary &summary) {
+                            const sde::SuLoopAccessSummary &summary) {
   for (const sde::MemrefAccessEntry &write : summary.writes) {
     Value writeRoot = getExternalAccessRoot(op, write.memref);
     if (!writeRoot)
@@ -441,15 +441,15 @@ static bool hasPromotedParallelOutputSchedule(sde::SdeSuIterateOp op) {
       op.getSteps().size() != scheduleRank)
     return false;
 
-  std::optional<sde::StructuredLoopSummary> summary =
-      sde::analyzeStructuredLoop(op);
+  std::optional<sde::SuLoopAccessSummary> summary =
+      sde::analyzeSuLoopAccesses(op);
   if (!summary || summary->iterTypes.size() < scheduleRank ||
       summary->nest.ivs.size() < scheduleRank)
     return false;
   for (unsigned dim = 0; dim < scheduleRank; ++dim)
     if (summary->iterTypes[dim] != utils::IteratorType::parallel)
       return false;
-  if (!sde::findCompatibleOutputLayoutPlan(*summary))
+  if (!sde::findCompatibleSuOutputLayoutPlan(*summary))
     return false;
   return !hasNonPointExternalSelfRead(op, *summary);
 }
@@ -460,8 +460,8 @@ buildPromotedMatmulPhysicalTilePlan(sde::SdeSuIterateOp op,
   if (!hasPromotedParallelOutputSchedule(op))
     return std::nullopt;
 
-  std::optional<sde::StructuredOutputLayoutPlan> outputPlan =
-      sde::findCompatibleOutputLayoutPlan(op);
+  std::optional<sde::SuOutputLayoutPlan> outputPlan =
+      sde::findCompatibleSuOutputLayoutPlan(op);
   if (!outputPlan || outputPlan->shape.size() < 2 ||
       outputPlan->loopDimToPhysicalDim.size() < op.getLowerBounds().size())
     return std::nullopt;
@@ -749,8 +749,8 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
       (sde::hasInPlaceSelfRead(effects) && !op.getInPlaceSafe()))
     return std::nullopt;
 
-  std::optional<sde::StructuredOutputLayoutPlan> outputPlan =
-      sde::findCompatibleOutputLayoutPlan(op);
+  std::optional<sde::SuOutputLayoutPlan> outputPlan =
+      sde::findCompatibleSuOutputLayoutPlan(op);
   if (!outputPlan || outputPlan->shape.empty())
     return std::nullopt;
 
@@ -1007,8 +1007,8 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
       op.getSteps().size() != numDims)
     return std::nullopt;
 
-  std::optional<sde::StructuredOutputLayoutPlan> outputPlan =
-      sde::findCompatibleOutputLayoutPlan(op);
+  std::optional<sde::SuOutputLayoutPlan> outputPlan =
+      sde::findCompatibleSuOutputLayoutPlan(op);
   if (!outputPlan || outputPlan->shape.empty() ||
       outputPlan->shape.size() != writeLayout->budgetBlockShape.size() ||
       outputPlan->physicalDimToLoopDim.size() != outputPlan->shape.size())

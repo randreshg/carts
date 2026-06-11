@@ -1,9 +1,9 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-memory-unit-materialization)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-memory-unit-realization)' 2>&1 | %FileCheck %s
 
 // When one producer CU yields multiple aliases for the same storage root, SDE
-// must materialize one MU identity for all source-visible aliases.
+// must realize one MU identity for all source-visible aliases.
 
-// CHECK-LABEL: func.func @cu_result_aliases_materialize_same_mu
+// CHECK-LABEL: func.func @cu_result_aliases_realize_same_mu
 // CHECK: %[[MU:.*]] = sde.mu_alloc : memref<1xi64>
 // CHECK: %[[CAST:.*]] = memref.cast %[[MU]] : memref<1xi64> to memref<?xi64>
 // CHECK: %[[PAIR:.*]]:2 = sde.cu_region <single> -> (memref<1xi64>, memref<?xi64>) {
@@ -14,7 +14,7 @@
 // CHECK: memref.load %[[MU]][%c0] : memref<1xi64>
 // CHECK-NOT: memref.load %[[PAIR]]#0
 
-func.func @cu_result_aliases_materialize_same_mu() {
+func.func @cu_result_aliases_realize_same_mu() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c8 = arith.constant 8 : index

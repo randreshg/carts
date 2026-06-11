@@ -8,7 +8,7 @@
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
-#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -51,7 +51,7 @@ static std::optional<LayoutGraphFact> findLayoutFact(SdeSuIterateOp su,
 }
 
 static const ArrayAccessProfile *
-findProfileForRoot(const ModuleAccessRelations &relations, Value root) {
+findProfileForRoot(const ModuleSuAccessRelations &relations, Value root) {
   auto direct = relations.profiles.find(root);
   if (direct != relations.profiles.end())
     return &direct->second;
@@ -264,7 +264,7 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
 
   // Module access relations are used only to classify the consumer access
   // family. Root-to-arrayId grounding is explicit SDE provenance.
-  ModuleAccessRelations relations = buildModuleAccessRelations(moduleOp);
+  ModuleSuAccessRelations relations = buildModuleSuAccessRelations(moduleOp);
   llvm::DenseMap<int64_t, Value> rootByArrayId;
   llvm::DenseSet<int64_t> conflictingRoots;
   auto recordRoot = [&](int64_t arrayId, Value root) {

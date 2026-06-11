@@ -18,7 +18,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
-#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
@@ -410,7 +410,7 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
       selectionCost = 0;
     // A full-rank writer feeding stencil readers is owned distributed state.
     // Replication would erase the SDE layout fact and force SDE/ARTS to
-    // repair state placement instead of materializing the communication edge.
+    // repair state placement instead of realizing the communication edge.
     if (preferFullWriterBlock &&
         candidate.kind == sde::ArrayLayoutKind::replicated)
       selectionCost = std::numeric_limits<int64_t>::max() / 4;
@@ -548,8 +548,8 @@ struct LayoutAssignmentPass
     Operation *moduleOp = getOperation();
 
     // PhaseA — module access relations.
-    sde::ModuleAccessRelations relations =
-        sde::buildModuleAccessRelations(moduleOp);
+    sde::ModuleSuAccessRelations relations =
+        sde::buildModuleSuAccessRelations(moduleOp);
     if (relations.profiles.empty())
       return;
 

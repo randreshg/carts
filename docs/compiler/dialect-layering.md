@@ -15,7 +15,7 @@ are not part of the durable docs tree.
 ## One-Line Rule
 
 SDE proves source semantics and transforms MU/CU/SU shape. ARTS consumes that
-shape as the first isolation boundary, materializes explicit deps and params,
+shape as the first isolation boundary, realizes explicit deps and params,
 and binds the resulting graph to abstract DB/EDT/epoch objects. `arts-rt`
 lowers the abstract machine shape to runtime-facing calls.
 
@@ -71,7 +71,7 @@ routes, current node/worker, ARTS runtime topology queries, depv layout, DB
 pointer layout, concrete EDT placement, or runtime API decisions.
 
 SDE also should not own the final EDT ABI. SDE authors the MU/CU/SU shape, then
-SDE-to-ARTS materialization creates isolated ARTS tasks and object facts from
+SDE-to-ARTS realization creates isolated ARTS tasks and object facts from
 that shape.
 
 The names are intentional:
@@ -89,7 +89,7 @@ The names are intentional:
 ## ARTS
 
 ARTS is the bridge between SDE semantic shape and runtime-independent ARTS
-object materialization.
+object realization.
 
 ARTS owns:
 
@@ -113,7 +113,7 @@ ARTS may contain operations such as:
   and access-window facts before acquires are finalized.
 - `arts.epoch_*`: abstract epoch grouping, waits, continuation, and CPS shape.
 - typed ARTS facts on EDTs, DBs, and epochs while those facts are being
-  materialized or checked.
+  realized or checked.
 - ARTS topology and placement queries selected after SDE has provided a
   logical work plan.
 - local `scf.for` control flow used to implement dispatch or task-local loops.
@@ -177,14 +177,14 @@ boundaries. ARTS is the verifier-enforced staging point that makes this true.
 
 The live implementation uses the direct SDE-to-ARTS spine. The canonical
 `sde-planning` stage performs OpenMP-to-SDE conversion and SDE-owned transforms,
-then `sde-to-arts` mechanically materializes committed SDE storage, access, and
+then `sde-to-arts` mechanically realizes committed SDE storage, access, and
 scheduling facts as ARTS objects:
 
 ```text
 ConvertOpenMPToSde
 PatternAnalysis
 SDE transforms
-MemoryUnitMaterialization
+MemoryUnitRealization
 RaiseToMuAccessWindow
 SdeStorageToArtsDb
 SdeAccessesToArtsDeps
@@ -203,7 +203,7 @@ The current boundary has one EDT-producing path:
 3. Remaining SDE work is invalid after `sde-to-arts`; `VerifySdeLowered` and
    `VerifyArtsObjectsOnly` reject it.
 
-`CreateDbs` materializes ARTS storage from the SDE structure it receives.
+`CreateDbs` realizes ARTS storage from the SDE structure it receives.
 It must not choose owner dims, tile geometry, dependency-window policy, or
 block-local coordinates by inspecting task bodies.
 
@@ -254,7 +254,7 @@ Tiling is not valid unless the MU, CU, and SU all agree.
 A blocked or sliced MU is not a drop-in replacement for the original whole
 memref. A local payload view uses coordinates relative to the slice, while the
 source program's memref indices are usually global element coordinates.
-Therefore SDE planning and SDE-to-ARTS materialization must do all pieces
+Therefore SDE planning and SDE-to-ARTS realization must do all pieces
 together:
 
 - choose the CU/SU tile and task schedule;
@@ -299,7 +299,7 @@ The capture rule is explicit:
 
 ## Migration Status
 
-The direct SDE-to-ARTS materialization path, ARTS EDT verification, and
+The direct SDE-to-ARTS realization path, ARTS EDT verification, and
 frontend-carrier raising/lowering removal is complete. Remaining work is narrower:
 finish token-local ARTS view rewrites for every supported benchmark, make DB
 creation consume already-authored ARTS facts, and preserve the
@@ -313,7 +313,7 @@ ARTS-RT lowers the chosen runtime API shape.
 - Decisions about source meaning, legality, reductions, chunking, data layout,
   and distribution intent live in SDE.
 - Isolation, token-local access rewriting, deps, params, DB/EDT/epoch object
-  materialization, and ARTS-machine binding live in `arts`.
+  realization, and ARTS-machine binding live in `arts`.
 - Runtime ABI mapping lives in `arts-rt`.
 - If a pass needs to recover source semantics from ARTS implementation loops,
   the required fact belongs in SDE instead.

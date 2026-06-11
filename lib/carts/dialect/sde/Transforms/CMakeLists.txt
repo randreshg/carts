@@ -2,7 +2,7 @@ add_subdirectory(Verify)
 
 set(CARTS_SDE_TRANSFORMS_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/state/PatternAnalysis.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/state/MemoryUnitMaterialization.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/state/MemoryUnitRealization.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/RankExpandMu.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/CuNormalization.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/ScalarBlockReduction.cpp"
@@ -20,7 +20,7 @@ set(CARTS_SDE_TRANSFORMS_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/dep/fusion/ElementwiseFusion.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/scheduling/ChunkOpt.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/scheduling/ReductionStrategy.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/effect/scheduling/AtomicReductionMaterialization.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/effect/scheduling/AtomicReductionRealization.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/scheduling/ScheduleRefinement.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/BarrierElimination.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/MuAccessWindowSyncOpt.cpp"

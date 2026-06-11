@@ -1,17 +1,17 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-memory-unit-materialization)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-memory-unit-realization)' 2>&1 | %FileCheck %s
 
 // Dynamic extents computed inside a producer CU cannot be hoisted above that CU.
-// SDE still owns the storage conversion: materialize an MU at the original
+// SDE still owns the storage conversion: realize an MU at the original
 // memref allocation site and yield it through the CU result.
 
-// CHECK-LABEL: func.func @dynamic_cu_result_root_materializes_inside_producer
+// CHECK-LABEL: func.func @dynamic_cu_result_root_realizes_inside_producer
 // CHECK: %[[A:.*]] = sde.cu_region <single> -> (memref<?xf32>) {
 // CHECK:   %[[MU:.*]] = sde.mu_alloc(%{{.*}}) {{.*}}arrayId = 0 : i64{{.*}} : memref<?xf32>
 // CHECK:   sde.yield %[[MU]] : memref<?xf32>
 // CHECK: sde.array_layout_root write %[[A]] : memref<?xf32> array_id(0)
-// CHECK-NOT: failed to materialize SDE memory unit
+// CHECK-NOT: failed to realize SDE memory unit
 
-func.func @dynamic_cu_result_root_materializes_inside_producer(%n: index) {
+func.func @dynamic_cu_result_root_realizes_inside_producer(%n: index) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c16 = arith.constant 16 : index

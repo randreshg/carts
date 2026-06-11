@@ -283,6 +283,7 @@ def SdeCuTaskOp
   let assemblyFormat = [{
     $body attr-dict
   }];
+  let hasVerifier = 1;
 }
 
 def SdeControlTokenOp
@@ -291,7 +292,7 @@ def SdeControlTokenOp
   let description = [{
     Produces an SDE-level completion token for task and wait control edges.
     The token is consumed by SDE synchronization surfaces such as
-    `sde.su_barrier` and is erased during boundary materialization after those
+    `sde.su_barrier` and is erased during boundary realization after those
     control edges have been consumed.
   }];
 
@@ -328,6 +329,7 @@ def SdeCuReduceOp
     `identity` `(` $identity `:` type($identity) `)`
     ($combiner^)? attr-dict `->` type($result)
   }];
+  let hasVerifier = 1;
 }
 
 def SdeCuAtomicOp
@@ -518,7 +520,7 @@ def SdeMuDepOp
     `sde.mu_token` (an MU access token).
 
     `sde.mu_dep` is an SDE-only declaration consumed by SDE-to-ARTS
-    conversion, which materializes concrete storage and access requests. It does
+    conversion, which realizes concrete storage and access requests. It does
     not survive the dialect boundary and must not be wired as a target
     dependency graph.
   }];
@@ -579,7 +581,7 @@ def SdeCuWorkOp
   let summary = "Isolated compute unit consumed by the SDE-to-ARTS conversion.";
   let description = [{
     The isolated compute-unit form consumed by direct SDE-to-ARTS dependency
-    materialization. Its only communication with the enclosing scope is through
+    realization. Its only communication with the enclosing scope is through
     `sde.mu_token` operands and explicit capture operands. Memref tokens pass
     mutable views directly and do not require yielded replacement values.
 

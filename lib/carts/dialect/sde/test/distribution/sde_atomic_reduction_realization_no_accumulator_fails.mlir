@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-atomic-reduction-materialization)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-atomic-reduction-realization)' 2>&1 | %FileCheck %s
 
 // CHECK: error: {{.*}}has atomic reduction strategy without reduction accumulators
 

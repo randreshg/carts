@@ -5,7 +5,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
-#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
@@ -57,7 +57,7 @@ static bool sameAccessRoot(Value lhs, Value rhs) {
   return lhsRoot && rhsRoot && lhsRoot == rhsRoot;
 }
 
-static bool hasSelfRead(const sde::StructuredLoopSummary &summary) {
+static bool hasSelfRead(const sde::SuLoopAccessSummary &summary) {
   for (const sde::MemrefAccessEntry &write : summary.writes)
     for (const sde::MemrefAccessEntry &read : summary.reads)
       if (sameAccessRoot(write.memref, read.memref))
@@ -66,7 +66,7 @@ static bool hasSelfRead(const sde::StructuredLoopSummary &summary) {
 }
 
 static bool
-hasOnlyPointInPlaceSelfReads(const sde::StructuredLoopSummary &summary) {
+hasOnlyPointInPlaceSelfReads(const sde::SuLoopAccessSummary &summary) {
   bool sawSelfRead = false;
   for (const sde::MemrefAccessEntry &read : summary.reads) {
     bool readsWrittenRoot = false;
@@ -148,7 +148,7 @@ static bool attrMatchesValues(ArrayAttr attr, ArrayRef<int64_t> values) {
 
 static bool
 explicitStencilContractMatches(sde::SdeSuIterateOp op,
-                               const sde::StructuredNeighborhoodInfo &info) {
+                               const sde::SuNeighborhoodAccessInfo &info) {
   if (!attrMatchesValues(op.getAccessMinOffsetsAttr(), info.minOffsets) ||
       !attrMatchesValues(op.getAccessMaxOffsetsAttr(), info.maxOffsets) ||
       !attrMatchesValues(op.getOwnerDimsAttr(), info.ownerDims) ||
@@ -160,7 +160,7 @@ explicitStencilContractMatches(sde::SdeSuIterateOp op,
   return true;
 }
 
-static unsigned countHaloDims(const sde::StructuredNeighborhoodInfo &info) {
+static unsigned countHaloDims(const sde::SuNeighborhoodAccessInfo &info) {
   unsigned count = 0;
   for (auto [minOffset, maxOffset] :
        llvm::zip(info.minOffsets, info.maxOffsets))
@@ -169,7 +169,7 @@ static unsigned countHaloDims(const sde::StructuredNeighborhoodInfo &info) {
   return count;
 }
 
-static bool hasHigherOrderHalo(const sde::StructuredNeighborhoodInfo &info) {
+static bool hasHigherOrderHalo(const sde::SuNeighborhoodAccessInfo &info) {
   for (auto [minOffset, maxOffset] :
        llvm::zip(info.minOffsets, info.maxOffsets))
     if (minOffset < -1 || maxOffset > 1)
@@ -177,8 +177,8 @@ static bool hasHigherOrderHalo(const sde::StructuredNeighborhoodInfo &info) {
   return false;
 }
 
-static bool isWavefront2D(const sde::StructuredLoopSummary &summary,
-                          const sde::StructuredNeighborhoodInfo &info) {
+static bool isWavefront2D(const sde::SuLoopAccessSummary &summary,
+                          const sde::SuNeighborhoodAccessInfo &info) {
   if (info.ownerDims.size() != 2 || !hasSelfRead(summary))
     return false;
 
@@ -215,7 +215,7 @@ static bool isWavefront2D(const sde::StructuredLoopSummary &summary,
 }
 
 static bool
-hasNonZeroHaloOnAllOwnerDims(const sde::StructuredNeighborhoodInfo &info) {
+hasNonZeroHaloOnAllOwnerDims(const sde::SuNeighborhoodAccessInfo &info) {
   if (info.ownerDims.empty() ||
       info.minOffsets.size() != info.maxOffsets.size())
     return false;
@@ -231,7 +231,7 @@ hasNonZeroHaloOnAllOwnerDims(const sde::StructuredNeighborhoodInfo &info) {
 
 static bool
 hasSingleExternalWriteRoot(sde::SdeSuIterateOp op,
-                           const sde::StructuredLoopSummary &summary) {
+                           const sde::SuLoopAccessSummary &summary) {
   Value selectedRoot;
   for (const sde::MemrefAccessEntry &write : summary.writes) {
     Value root = accessRoot(write.memref);
@@ -412,8 +412,8 @@ findPromotableInnerForPrefix(sde::SdeSuIterateOp owner, Block *computeBlock) {
 }
 
 static bool isSafeOutOfPlaceStencilPromotion(
-    sde::SdeSuIterateOp op, const sde::StructuredLoopSummary &summary,
-    const sde::StructuredNeighborhoodInfo &neighborhood,
+    sde::SdeSuIterateOp op, const sde::SuLoopAccessSummary &summary,
+    const sde::SuNeighborhoodAccessInfo &neighborhood,
     ArrayRef<scf::ForOp> innerForChain,
     bool requireExistingContractMatch = false) {
   auto reject = [&](StringRef reason) {
@@ -449,7 +449,7 @@ static bool isSafeOutOfPlaceStencilPromotion(
   if (requireExistingContractMatch &&
       !explicitStencilContractMatches(op, neighborhood))
     return reject("explicit stencil contract does not match recovered access");
-  if (!sde::findCompatibleOutputLayoutPlan(summary))
+  if (!sde::findCompatibleSuOutputLayoutPlan(summary))
     return reject("no compatible output layout plan");
   if (!hasSingleExternalWriteRoot(op, summary))
     return reject("writes do not have one external root");
@@ -576,7 +576,7 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op);
 
 static bool
 isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
-                                     const sde::StructuredLoopSummary &summary,
+                                     const sde::SuLoopAccessSummary &summary,
                                      ArrayRef<scf::ForOp> innerForChain) {
   if (!op || innerForChain.empty())
     return false;
@@ -998,7 +998,7 @@ shouldKeepOuterLoopFirstForPromotion(sde::SdeSuIterateOp op,
 
 static sde::SdeSuIterateOp
 tryPromoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op,
-                                    const sde::StructuredLoopSummary &summary) {
+                                    const sde::SuLoopAccessSummary &summary) {
   Block *computeBlock = sde::getSuIterateComputeBlock(op);
   SmallVector<scf::ForOp, 4> innerForChain =
       findPromotableInnerForChain(op, computeBlock);
@@ -1104,8 +1104,8 @@ promoteNestedParallelOwnerLoops(sde::SdeSuIterateOp op,
 }
 
 static sde::SdeSuIterateOp tryPromoteOutOfPlaceStencilOwnerLoop(
-    sde::SdeSuIterateOp op, const sde::StructuredLoopSummary &summary,
-    const sde::StructuredNeighborhoodInfo &neighborhood,
+    sde::SdeSuIterateOp op, const sde::SuLoopAccessSummary &summary,
+    const sde::SuNeighborhoodAccessInfo &neighborhood,
     bool requireExistingContractMatch = false) {
   Block *computeBlock = sde::getSuIterateComputeBlock(op);
   SmallVector<scf::ForOp, 4> innerForChain =
@@ -1119,7 +1119,7 @@ static sde::SdeSuIterateOp tryPromoteOutOfPlaceStencilOwnerLoop(
 
 static sde::SdeSuIterateOp
 tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
-                               const sde::StructuredLoopSummary &summary) {
+                               const sde::SuLoopAccessSummary &summary) {
   if (!op || op.getChunkSize() || op.getNumResults() != 0 ||
       !op.getReductionAccumulators().empty() || op.getReductionKindsAttr())
     return op;
@@ -1132,7 +1132,7 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
       summary.iterTypes.size() <= loopRank ||
       summary.nest.ivs.size() <= loopRank)
     return op;
-  // Matmul has specialized physical fact materialization. Generic prefix
+  // Matmul has specialized physical fact realization. Generic prefix
   // promotion would split output columns across owners without a matching
   // panel-reuse transform.
   if (summary.classification == sde::SdeStructuredClassification::matmul)
@@ -1170,7 +1170,7 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
 
   if (!promotedLoopBoundsAreRectangular(op, innerForPrefix))
     return op;
-  if (!sde::findCompatibleOutputLayoutPlan(summary))
+  if (!sde::findCompatibleSuOutputLayoutPlan(summary))
     return op;
 
   auto effects = collectStructuredDataMemoryEffects(op);
@@ -1193,9 +1193,9 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
 }
 
 static sde::SdePattern
-derivePattern(const sde::StructuredLoopSummary &summary,
+derivePattern(const sde::SuLoopAccessSummary &summary,
               sde::SdeStructuredClassification classification,
-              std::optional<sde::StructuredNeighborhoodInfo> neighborhood) {
+              std::optional<sde::SuNeighborhoodAccessInfo> neighborhood) {
   switch (classification) {
   case sde::SdeStructuredClassification::elementwise:
     return sde::SdePattern::uniform;
@@ -1229,7 +1229,7 @@ static void clearPartialReductionIntent(sde::SdeSuIterateOp op) {
 
 static void
 stampPartialReductionIntent(sde::SdeSuIterateOp op,
-                            const sde::StructuredLoopSummary &summary,
+                            const sde::SuLoopAccessSummary &summary,
                             sde::SdeStructuredClassification classification) {
   clearPartialReductionIntent(op);
 
@@ -1246,8 +1246,8 @@ stampPartialReductionIntent(sde::SdeSuIterateOp op,
   if (reductionDims.empty())
     return;
 
-  std::optional<sde::StructuredOutputLayoutPlan> outputPlan =
-      sde::findCompatibleOutputLayoutPlan(summary);
+  std::optional<sde::SuOutputLayoutPlan> outputPlan =
+      sde::findCompatibleSuOutputLayoutPlan(summary);
   if (!outputPlan)
     return;
 
@@ -1322,8 +1322,8 @@ static bool hasSiblingStencilConsumingWrittenRoot(sde::SdeSuIterateOp writer,
   scope->walk([&](sde::SdeSuIterateOp consumer) {
     if (found || consumer == writer)
       return;
-    std::optional<sde::StructuredLoopSummary> summary =
-        sde::analyzeStructuredLoop(consumer);
+    std::optional<sde::SuLoopAccessSummary> summary =
+        sde::analyzeSuLoopAccesses(consumer);
     if (!summary ||
         summary->classification != sde::SdeStructuredClassification::stencil)
       return;
@@ -1426,8 +1426,8 @@ struct PatternAnalysisPass
       if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
         return;
 
-      std::optional<sde::StructuredLoopSummary> summary =
-          sde::analyzeStructuredLoop(op);
+      std::optional<sde::SuLoopAccessSummary> summary =
+          sde::analyzeSuLoopAccesses(op);
       if (!summary) {
         sde::SdeSuIterateOp promoted =
             tryPromoteOpaqueElementwiseInnerOwnerLoop(op);
@@ -1483,7 +1483,7 @@ struct PatternAnalysisPass
                 tryPromoteNestedParallelPrefix(op, *summary);
             promoted != op) {
           op = promoted;
-          summary = sde::analyzeStructuredLoop(op);
+          summary = sde::analyzeSuLoopAccesses(op);
           if (!summary)
             return;
           classification = summary->classification;
@@ -1501,7 +1501,7 @@ struct PatternAnalysisPass
             tryPromoteElementwiseInnerOwnerLoop(op, *summary);
         if (promoted != op) {
           op = promoted;
-          summary = sde::analyzeStructuredLoop(op);
+          summary = sde::analyzeSuLoopAccesses(op);
           if (!summary)
             return;
           classification = summary->classification;
@@ -1513,9 +1513,9 @@ struct PatternAnalysisPass
         }
       }
 
-      std::optional<sde::StructuredNeighborhoodInfo> neighborhoodSummary;
+      std::optional<sde::SuNeighborhoodAccessInfo> neighborhoodSummary;
       if (classification == sde::SdeStructuredClassification::stencil) {
-        neighborhoodSummary = sde::extractNeighborhoodSummary(*summary);
+        neighborhoodSummary = sde::extractNeighborhoodAccessInfo(*summary);
         if (!neighborhoodSummary) {
           if (hasExplicitStencilFacts) {
             if (!op.getPatternAttr())
@@ -1531,7 +1531,7 @@ struct PatternAnalysisPass
             /*requireExistingContractMatch=*/hasExplicitStencilFacts);
         if (promoted != op) {
           op = promoted;
-          summary = sde::analyzeStructuredLoop(op);
+          summary = sde::analyzeSuLoopAccesses(op);
           if (!summary)
             return;
           classification = summary->classification;
@@ -1540,7 +1540,7 @@ struct PatternAnalysisPass
           op.setStructuredClassificationAttr(
               sde::SdeStructuredClassificationAttr::get(&getContext(),
                                                         classification));
-          neighborhoodSummary = sde::extractNeighborhoodSummary(*summary);
+          neighborhoodSummary = sde::extractNeighborhoodAccessInfo(*summary);
           if (!neighborhoodSummary)
             return;
         }

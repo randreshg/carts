@@ -56,9 +56,9 @@ def SdeDeadStateCleanupPass
                            "::mlir::func::FuncDialect"];
 }
 
-def MemoryUnitMaterialization
-    : Pass<"sde-memory-unit-materialization", "mlir::ModuleOp"> {
-  let summary = "Materialize SDE shared memrefs as memory units";
+def MemoryUnitRealization
+    : Pass<"sde-memory-unit-realization", "mlir::ModuleOp"> {
+  let summary = "Realize SDE shared memrefs as memory units";
   let description = [{
     Rewrites shared memref allocations used by SDE scheduling units into
     `sde.mu_alloc` storage before the dialect boundary. This pass is
@@ -78,7 +78,7 @@ def MemoryUnitMaterialization
                            "::mlir::memref::MemRefDialect",
                            "::mlir::polygeist::PolygeistDialect"];
   let constructor =
-      "mlir::carts::sde::createMemoryUnitMaterializationPass()";
+      "mlir::carts::sde::createMemoryUnitRealizationPass()";
 }
 
 def SdeRankExpandMu
@@ -196,7 +196,7 @@ def SdeRaiseToMuAccessWindow
     receives a writable halo dependency. The pass never mutates existing ops; it
     only inserts window facts.
 
-    Production SDE planning runs this after MU layout has been materialized and
+    Production SDE planning runs this after MU layout has been realized and
     rank-expanded, then verifies the raised windows before crossing into ARTS.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
@@ -218,7 +218,7 @@ def SdeCoarseAvoidance
         structure via the shared block-grid realize gate and rewriter — the
         committed plan is consumed VERBATIM, never re-authored;
       * every other coarse MU is left flat because SDE has not committed a
-        materializable single-owner grid for it.
+        realizable single-owner grid for it.
 
     The only hard failure is a committed plan that cannot be realized end to end:
     rather than leave a partial owner-dim promise, the pass fails closed with
@@ -255,7 +255,7 @@ def SdeRedistribute
     shared with `sde-layout-assignment`.
 
     Other layout disagreements remain broad mismatch evidence until SDE commits
-    enough target-layout structure to materialize them directly. This pass
+    enough target-layout structure to realize them directly. This pass
     introduces no `sde.mu_token`, slice,
     `sde.mu_dep`, owner map, DB, route, collective, or ARTS isolation concept.
 

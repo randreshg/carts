@@ -50,9 +50,9 @@ def ReductionStrategy : Pass<"reduction-strategy", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createReductionStrategyPass()";
 }
 
-def SdeAtomicReductionMaterialization
-    : Pass<"sde-atomic-reduction-materialization", "mlir::ModuleOp"> {
-  let summary = "Materialize SDE atomic reductions as explicit CU atomics";
+def SdeAtomicReductionRealization
+    : Pass<"sde-atomic-reduction-realization", "mlir::ModuleOp"> {
+  let summary = "Realize SDE atomic reductions as explicit CU atomics";
   let description = [{
     Consumes `reduction_strategy(<atomic>)` on eligible `sde.su_iterate`
     operations by rewriting the leaf-CU load/add/store update on the reduction
@@ -65,7 +65,7 @@ def SdeAtomicReductionMaterialization
                            "::mlir::arith::ArithDialect",
                            "::mlir::memref::MemRefDialect"];
   let constructor =
-      "mlir::carts::sde::createSdeAtomicReductionMaterializationPass()";
+      "mlir::carts::sde::createSdeAtomicReductionRealizationPass()";
 }
 
 def DistributionPlanning

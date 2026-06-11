@@ -24,7 +24,7 @@
 #include "polygeist/Dialect.h"
 
 namespace mlir::carts::sde {
-std::unique_ptr<Pass> createMemoryUnitMaterializationPass();
+std::unique_ptr<Pass> createMemoryUnitRealizationPass();
 } // namespace mlir::carts::sde
 
 namespace mlir::carts::sde {
@@ -60,7 +60,7 @@ std::unique_ptr<Pass> createSdeHandleDepsPass();
 
 // --- State passes (IR cleanup before planning) ---
 std::unique_ptr<Pass> createScalarForwardingPass();
-std::unique_ptr<Pass> createMemoryUnitMaterializationPass();
+std::unique_ptr<Pass> createMemoryUnitRealizationPass();
 std::unique_ptr<Pass> createSdeRankExpandMuPass();
 std::unique_ptr<Pass> createSdeCuNormalizationPass();
 std::unique_ptr<Pass> createSdeScalarBlockReductionPass();
@@ -84,7 +84,7 @@ createScheduleRefinementPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createChunkOptPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createReductionStrategyPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass> createSdeAtomicReductionMaterializationPass();
+std::unique_ptr<Pass> createSdeAtomicReductionRealizationPass();
 std::unique_ptr<Pass>
 createDistributionPlanningPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>

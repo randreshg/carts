@@ -1,16 +1,16 @@
 ///==========================================================================///
-/// File: MemoryUnitMaterialization.cpp
+/// File: MemoryUnitRealization.cpp
 ///
-/// Materialize SDE shared memrefs as SDE memory units.
+/// Realize SDE shared memrefs as SDE memory units.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
-#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 namespace mlir::carts::sde {
-#define GEN_PASS_DEF_MEMORYUNITMATERIALIZATION
+#define GEN_PASS_DEF_MEMORYUNITREALIZATION
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
 
@@ -34,7 +34,7 @@ static bool hasNestedMemrefElement(Value value) {
   return type && isa<MemRefType>(type.getElementType());
 }
 
-static bool isMuMaterializableAllocation(Value root) {
+static bool isMuRealizableAllocation(Value root) {
   if (!root || !isa<MemRefType>(root.getType()) || hasNestedMemrefElement(root))
     return false;
 
@@ -49,14 +49,14 @@ static bool isMuMaterializableAllocation(Value root) {
   return false;
 }
 
-static Value resolveMaterializableStorageRoot(Value root) {
+static Value resolveRealizableStorageRoot(Value root) {
   root = ValueAnalysis::stripMemrefViewOps(root);
   SmallVector<Value, 4> seen;
   while (root) {
     if (llvm::is_contained(seen, root))
       return Value();
     seen.push_back(root);
-    if (isMuMaterializableAllocation(root))
+    if (isMuRealizableAllocation(root))
       return root;
 
     auto result = dyn_cast<OpResult>(root);
@@ -138,7 +138,7 @@ getUnclassifiedOutputOnlyOwnerSlicePlan(sde::SdeSuIterateOp op) {
   return outputPlan;
 }
 
-static bool canMaterializePlannedOwnerSlices(sde::SdeSuIterateOp op) {
+static bool canRealizePlannedOwnerSlices(sde::SdeSuIterateOp op) {
   if (!hasPhysicalOwnerSlicePlan(op))
     return true;
 
@@ -163,17 +163,16 @@ static bool canMaterializePlannedOwnerSlices(sde::SdeSuIterateOp op) {
 
 static LogicalResult
 demoteUnsupportedPhysicalStoragePlan(sde::SdeSuIterateOp op) {
-  if (!op || !hasPhysicalOwnerSlicePlan(op) ||
-      canMaterializePlannedOwnerSlices(op))
+  if (!op || !hasPhysicalOwnerSlicePlan(op) || canRealizePlannedOwnerSlices(op))
     return success();
 
   if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
     return op.emitOpError()
            << "has a committed CU/MU physical storage plan that this pass "
-              "cannot materialize; refusing to demote or strip upstream "
+              "cannot realize; refusing to demote or strip upstream "
               "optimized layout evidence";
 
-  // Physical storage attrs are a promise that boundary lowering can materialize
+  // Physical storage attrs are a promise that boundary lowering can realize
   // token-local views. Keep logical scheduling intent, but do not export an
   // unsupported concrete storage layout to the residual raw bridge.
   op.removePhysicalOwnerDimsAttr();
@@ -185,7 +184,7 @@ demoteUnsupportedPhysicalStoragePlan(sde::SdeSuIterateOp op) {
 static void collectSchedulingUnitMemrefRoots(
     sde::SdeSuIterateOp op, SetVector<Value> &roots,
     DenseMap<Value, SetVector<Value>> &aliasesByRoot) {
-  if (!op || !canMaterializePlannedOwnerSlices(op))
+  if (!op || !canRealizePlannedOwnerSlices(op))
     return;
 
   bool collectWritesOnly =
@@ -213,8 +212,8 @@ static void collectSchedulingUnitMemrefRoots(
       return;
     if (isPrivateAllocationForSchedulingUnit(root, op))
       return;
-    Value storageRoot = resolveMaterializableStorageRoot(root);
-    if (isMuMaterializableAllocation(storageRoot)) {
+    Value storageRoot = resolveRealizableStorageRoot(root);
+    if (isMuRealizableAllocation(storageRoot)) {
       roots.insert(storageRoot);
       if (storageRoot != root) {
         aliasesByRoot[storageRoot].insert(root);
@@ -224,7 +223,7 @@ static void collectSchedulingUnitMemrefRoots(
         if (cu)
           for (Value sibling : cu->getResults())
             if (isa<MemRefType>(sibling.getType()) &&
-                resolveMaterializableStorageRoot(sibling) == storageRoot)
+                resolveRealizableStorageRoot(sibling) == storageRoot)
               aliasesByRoot[storageRoot].insert(sibling);
       }
     }
@@ -428,9 +427,8 @@ static FailureOr<Value> createMuAllocForRoot(Value root,
   return muAlloc.getMemref();
 }
 
-struct MemoryUnitMaterializationPass
-    : public sde::impl::MemoryUnitMaterializationBase<
-          MemoryUnitMaterializationPass> {
+struct MemoryUnitRealizationPass
+    : public sde::impl::MemoryUnitRealizationBase<MemoryUnitRealizationPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
@@ -451,7 +449,7 @@ struct MemoryUnitMaterializationPass
 
     PatternRewriter rewriter(module.getContext());
     for (Value root : roots) {
-      if (!isMuMaterializableAllocation(root))
+      if (!isMuRealizableAllocation(root))
         continue;
       std::optional<int64_t> arrayId =
           lookupCommittedArrayId(root, arrayIdByRoot);
@@ -466,7 +464,7 @@ struct MemoryUnitMaterializationPass
       }
       if (failed(createMuAllocForRoot(root, arrayId, aliases, rewriter))) {
         if (Operation *def = root.getDefiningOp())
-          def->emitError("failed to materialize SDE memory unit");
+          def->emitError("failed to realize SDE memory unit");
         signalPassFailure();
         return;
       }
@@ -478,8 +476,8 @@ struct MemoryUnitMaterializationPass
 
 namespace mlir::carts::sde {
 
-std::unique_ptr<Pass> createMemoryUnitMaterializationPass() {
-  return std::make_unique<MemoryUnitMaterializationPass>();
+std::unique_ptr<Pass> createMemoryUnitRealizationPass() {
+  return std::make_unique<MemoryUnitRealizationPass>();
 }
 
 } // namespace mlir::carts::sde

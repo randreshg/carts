@@ -1,6 +1,6 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-atomic-reduction-materialization)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-atomic-reduction-realization)' 2>&1 | %FileCheck %s
 
-// CHECK-LABEL: func.func @atomic_reduction_materializes_cu_atomic
+// CHECK-LABEL: func.func @atomic_reduction_realizes_cu_atomic
 // CHECK: sde.su_iterate
 // CHECK-NOT: reduction[
 // CHECK-NOT: reduction_strategy
@@ -8,7 +8,7 @@
 // CHECK: sde.cu_atomic <add>(%arg0, %{{.*}} : memref<1xi64>, i64)
 // CHECK-NOT: memref.store %{{.*}}, %arg0[%{{.*}}] : memref<1xi64>
 
-func.func @atomic_reduction_materializes_cu_atomic(
+func.func @atomic_reduction_realizes_cu_atomic(
     %sum: memref<1xi64>, %lhs: memref<?xi32>, %rhs: memref<?xi32>, %n: index) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index

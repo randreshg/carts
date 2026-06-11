@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from sde-planning --pipeline sde-planning --mlir-print-ir-after-all 2>&1 \
-// RUN:   | awk '/IR Dump After BarrierElimination/,/IR Dump After MemoryUnitMaterialization/' \
+// RUN:   | awk '/IR Dump After BarrierElimination/,/IR Dump After MemoryUnitRealization/' \
 // RUN:   | %FileCheck %s --check-prefix=SDE
 
 // Verify mixed barrier elimination with three loops under the

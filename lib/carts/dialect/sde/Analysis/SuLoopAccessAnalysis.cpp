@@ -1,10 +1,10 @@
 ///==========================================================================///
-/// File: StructuredOpAnalysis.cpp
+/// File: SuLoopAccessAnalysis.cpp
 ///
 /// Reusable structural analysis for SDE scheduling-unit loops.
 ///==========================================================================///
 
-#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 
@@ -544,7 +544,7 @@ computeIteratorTypes(unsigned numDims, ArrayRef<AffineMap> outputMaps,
 }
 
 // AffineDimOffset and extractDimOffset are defined below the anonymous
-// namespace as public functions declared in StructuredOpAnalysis.h.
+// namespace as public functions declared in SuLoopAccessAnalysis.h.
 
 static void appendNestedForIvs(Block &body, SmallVectorImpl<Value> &ivs) {
   llvm::SmallPtrSet<Value, 8> seen;
@@ -558,13 +558,13 @@ static void appendNestedForIvs(Block &body, SmallVectorImpl<Value> &ivs) {
   });
 }
 
-static std::optional<StructuredNeighborhoodInfo>
-extractNeighborhoodSummary(ArrayRef<MemrefAccessEntry> reads,
-                           unsigned numLoops) {
+static std::optional<SuNeighborhoodAccessInfo>
+extractNeighborhoodAccessInfo(ArrayRef<MemrefAccessEntry> reads,
+                              unsigned numLoops) {
   if (numLoops == 0)
     return std::nullopt;
 
-  StructuredNeighborhoodInfo info;
+  SuNeighborhoodAccessInfo info;
   info.minOffsets.assign(numLoops, 0);
   info.maxOffsets.assign(numLoops, 0);
   info.writeFootprint.assign(numLoops, 1);
@@ -888,7 +888,7 @@ bool isOwnerLocalPipelineReduction(SdeSuIterateOp iterOp) {
       !effects.writes.contains(outputPlan->root))
     return false;
 
-  // Owner-local pipeline reductions may be materialized with compute-block
+  // Owner-local pipeline reductions may be realized with compute-block
   // dependency views. Every external read therefore has to be provably inside
   // the same owner slice, not merely dependent on the owner IV. Triangular
   // self-Gram style kernels read both data[i, *] and data[j, *] for j > i;
@@ -938,7 +938,7 @@ bool hasDistinctExternalMatmulInputRoots(SdeSuIterateOp iterOp) {
     return inputRoots.size() >= 2;
   };
 
-  std::optional<StructuredLoopSummary> summary = analyzeStructuredLoop(iterOp);
+  std::optional<SuLoopAccessSummary> summary = analyzeSuLoopAccesses(iterOp);
   if (!summary)
     return hasDistinctExternalReadOnlyRoots();
 
@@ -999,7 +999,7 @@ bool hasDistinctExternalMatmulInputRoots(SdeSuIterateOp iterOp) {
 
 std::optional<ContractionTilingCandidate>
 findContractionTilingCandidate(SdeSuIterateOp iterOp) {
-  std::optional<StructuredLoopSummary> summary = analyzeStructuredLoop(iterOp);
+  std::optional<SuLoopAccessSummary> summary = analyzeSuLoopAccesses(iterOp);
   if (!summary)
     return std::nullopt;
   if (summary->classification != SdeStructuredClassification::matmul)
@@ -1126,10 +1126,10 @@ bool hasConstantOffsets(AffineMap map) {
   return false;
 }
 
-std::optional<StructuredLoopSummary>
-analyzeStructuredLoop(SdeSuIterateOp iterOp) {
+std::optional<SuLoopAccessSummary>
+analyzeSuLoopAccesses(SdeSuIterateOp iterOp) {
   MLIRContext *ctx = iterOp.getContext();
-  StructuredLoopSummary summary;
+  SuLoopAccessSummary summary;
   if (!collectPerfectNest(iterOp, summary.nest))
     return std::nullopt;
   if (!summary.nest.innermostBody || summary.nest.ivs.empty())
@@ -1190,18 +1190,18 @@ analyzeStructuredLoop(SdeSuIterateOp iterOp) {
   return summary;
 }
 
-std::optional<StructuredNeighborhoodInfo>
-extractNeighborhoodSummary(const StructuredLoopSummary &summary) {
-  return extractNeighborhoodSummary(summary.reads, summary.nest.ivs.size());
+std::optional<SuNeighborhoodAccessInfo>
+extractNeighborhoodAccessInfo(const SuLoopAccessSummary &summary) {
+  return extractNeighborhoodAccessInfo(summary.reads, summary.nest.ivs.size());
 }
 
-std::optional<StructuredOutputLayoutPlan>
-findCompatibleOutputLayoutPlan(const StructuredLoopSummary &summary) {
+std::optional<SuOutputLayoutPlan>
+findCompatibleSuOutputLayoutPlan(const SuLoopAccessSummary &summary) {
   if (!summary.nest.rootIterOp || summary.writes.empty() ||
       summary.nest.ivs.empty())
     return std::nullopt;
 
-  std::optional<StructuredOutputLayoutPlan> selected;
+  std::optional<SuOutputLayoutPlan> selected;
   Operation *rootOp = summary.nest.rootIterOp;
 
   for (const MemrefAccessEntry &write : summary.writes) {
@@ -1226,7 +1226,7 @@ findCompatibleOutputLayoutPlan(const StructuredLoopSummary &summary) {
     if (!maps)
       return std::nullopt;
 
-    StructuredOutputLayoutPlan candidate;
+    SuOutputLayoutPlan candidate;
     candidate.root = root;
     candidate.shape = std::move(*shape);
     candidate.loopDimToPhysicalDim = std::move(maps->first);
@@ -1246,12 +1246,12 @@ findCompatibleOutputLayoutPlan(const StructuredLoopSummary &summary) {
   return selected;
 }
 
-std::optional<StructuredOutputLayoutPlan>
-findCompatibleOutputLayoutPlan(SdeSuIterateOp op) {
-  std::optional<StructuredLoopSummary> summary = analyzeStructuredLoop(op);
+std::optional<SuOutputLayoutPlan>
+findCompatibleSuOutputLayoutPlan(SdeSuIterateOp op) {
+  std::optional<SuLoopAccessSummary> summary = analyzeSuLoopAccesses(op);
   if (!summary)
     return std::nullopt;
-  return findCompatibleOutputLayoutPlan(*summary);
+  return findCompatibleSuOutputLayoutPlan(*summary);
 }
 
 bool hasRealizableOwnerStripPlan(SdeSuIterateOp op) {
@@ -1282,8 +1282,7 @@ bool hasRealizableOwnerStripPlan(SdeSuIterateOp op) {
   // (2) Pre-stamp form: at least one parallel loop band maps 1:1 onto a static
   // output physical dimension; that band is the realizable owner strip. The
   // wider access footprint still has to be carried as read-only halo movement.
-  std::optional<StructuredOutputLayoutPlan> plan =
-      findCompatibleOutputLayoutPlan(op);
+  std::optional<SuOutputLayoutPlan> plan = findCompatibleSuOutputLayoutPlan(op);
   if (!plan)
     return false;
   for (unsigned loopDim = 0;
@@ -1338,7 +1337,7 @@ classifyPositionUse(AffineExpr result, ArrayRef<utils::IteratorType> iterTypes,
 }
 
 // Record one access entry's per-position uses into the array profile.
-static void recordAccessEntry(ModuleAccessRelations &relations,
+static void recordAccessEntry(ModuleSuAccessRelations &relations,
                               const MemrefAccessEntry &entry,
                               ArrayRef<utils::IteratorType> iterTypes,
                               unsigned suId, bool isWrite) {
@@ -1405,8 +1404,8 @@ static void recordAccessEntry(ModuleAccessRelations &relations,
 
 } // namespace
 
-ModuleAccessRelations buildModuleAccessRelations(Operation *moduleOp) {
-  ModuleAccessRelations relations;
+ModuleSuAccessRelations buildModuleSuAccessRelations(Operation *moduleOp) {
+  ModuleSuAccessRelations relations;
   if (!moduleOp)
     return relations;
 
@@ -1416,7 +1415,7 @@ ModuleAccessRelations buildModuleAccessRelations(Operation *moduleOp) {
       [&](SdeSuIterateOp op) { relations.schedulingUnits.push_back(op); });
 
   for (auto [suId, op] : llvm::enumerate(relations.schedulingUnits)) {
-    std::optional<StructuredLoopSummary> summary = analyzeStructuredLoop(op);
+    std::optional<SuLoopAccessSummary> summary = analyzeSuLoopAccesses(op);
     if (!summary)
       continue;
     for (const MemrefAccessEntry &write : summary->writes)

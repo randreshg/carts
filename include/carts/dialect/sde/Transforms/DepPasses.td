@@ -106,7 +106,7 @@ def LayoutAssignment
 
     Four phases:
     - PhaseA builds module-wide per-array access profiles
-      (`buildModuleAccessRelations`).
+      (`buildModuleSuAccessRelations`).
     - PhaseB enumerates candidate layouts per array (block-parallel owner-dim,
       block-contraction, replicated fallback).
     - PhaseC assigns one layout per array, seeding from the writer's owner dims

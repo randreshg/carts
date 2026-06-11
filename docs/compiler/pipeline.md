@@ -27,7 +27,7 @@ file stays limited to the live compiler pipeline.
 The JSON manifest includes both executable pipeline steps and dialect grouping
 metadata. `dialect_groups.canonical` names the groups implemented by the live
 stages. The compiler now runs through `sde -> arts -> arts-rt`: SDE performs
-source/layout transformations, `sde-to-arts` mechanically materializes
+source/layout transformations, `sde-to-arts` mechanically realizes
 committed storage/access/scheduling facts as ARTS objects, ARTS stages refine
 the object graph, and ARTS-RT lowers the chosen graph to runtime ABI shape.
 These group records are descriptive; only `pipeline`, `start_from`, and
@@ -106,7 +106,7 @@ ReductionStrategy
 DistributionPlanning
 IterationSpaceDecomposition
 BarrierElimination
-MemoryUnitMaterialization
+MemoryUnitRealization
 SdeCuNormalization
 VerifySdePhysicalConsistency
 SdeRankExpandMu
@@ -288,7 +288,7 @@ VerifyLowered
 - SDE inside `sde-planning` owns semantic decomposition, `PatternAnalysis`,
   state rewrites, dependency/effect proofs, sync rewrites, and physical
   MU/access-window layout policy.
-- `sde-to-arts` owns mechanical materialization of committed SDE MU/CU/SU facts
+- `sde-to-arts` owns mechanical realization of committed SDE MU/CU/SU facts
   into ARTS DB/acquire/EDT objects.
 - ARTS owns explicit deps, params, token-local views, DB/EDT/epoch
   orchestration, owner maps, grouped execution, and focused

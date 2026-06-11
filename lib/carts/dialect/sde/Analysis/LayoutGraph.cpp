@@ -290,7 +290,7 @@ SmallVector<LayoutGraphFact, 4> parseArrayLayoutFacts(ArrayAttr attr) {
 }
 
 llvm::MapVector<Value, int64_t>
-assignStableArrayIds(const ModuleAccessRelations &relations) {
+assignStableArrayIds(const ModuleSuAccessRelations &relations) {
   llvm::MapVector<Value, int64_t> ids;
   int64_t next = 0;
   for (const auto &kv : relations.profiles) {
@@ -412,7 +412,7 @@ AccessRelation makeAccessRelation(Value root, const MemrefAccessEntry &entry,
 }
 
 CuVertex makeCuVertex(unsigned cuId, SdeSuIterateOp op,
-                      const StructuredLoopSummary &summary) {
+                      const SuLoopAccessSummary &summary) {
   CuVertex vertex;
   vertex.id = cuId;
   vertex.op = op;
@@ -479,7 +479,7 @@ MuNet makeMuNet(unsigned muId, const CuMuMemoryUnit &memory,
 }
 
 LayoutGraph buildLayoutGraph(
-    const ModuleAccessRelations &relations,
+    const ModuleSuAccessRelations &relations,
     const llvm::MapVector<Value, AssignedArrayLayout> *assignedLayouts) {
   LayoutGraph graph;
 

@@ -16,7 +16,7 @@ namespace mlir::carts::sde {
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
-#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
@@ -346,9 +346,9 @@ collectRectangularWavefrontLoopNest(sde::SdeSuIterateOp op,
   return shape.lowerBounds.size() >= 2;
 }
 
-static std::optional<sde::StructuredNeighborhoodInfo>
+static std::optional<sde::SuNeighborhoodAccessInfo>
 getWavefrontNeighborhood(sde::SdeSuIterateOp op, unsigned rank) {
-  sde::StructuredNeighborhoodInfo info;
+  sde::SuNeighborhoodAccessInfo info;
 
   auto minOffsets = readI64ArrayAttr(op.getAccessMinOffsetsAttr());
   auto maxOffsets = readI64ArrayAttr(op.getAccessMaxOffsetsAttr());
@@ -356,12 +356,12 @@ getWavefrontNeighborhood(sde::SdeSuIterateOp op, unsigned rank) {
   if (!minOffsets || !maxOffsets || minOffsets->size() != rank ||
       maxOffsets->size() != rank || !writeFootprint ||
       writeFootprint->size() != rank) {
-    std::optional<sde::StructuredLoopSummary> summary =
-        sde::analyzeStructuredLoop(op);
+    std::optional<sde::SuLoopAccessSummary> summary =
+        sde::analyzeSuLoopAccesses(op);
     if (!summary)
       return std::nullopt;
-    std::optional<sde::StructuredNeighborhoodInfo> extracted =
-        sde::extractNeighborhoodSummary(*summary);
+    std::optional<sde::SuNeighborhoodAccessInfo> extracted =
+        sde::extractNeighborhoodAccessInfo(*summary);
     if (!extracted || extracted->minOffsets.size() != rank ||
         extracted->maxOffsets.size() != rank ||
         extracted->writeFootprint.size() != rank)
@@ -427,7 +427,7 @@ deriveLexicographicWaveCoefficients(ArrayRef<int64_t> minOffsets,
 
 struct WavefrontSkewPlan {
   RectangularWavefrontLoopNest shape;
-  sde::StructuredNeighborhoodInfo neighborhood;
+  sde::SuNeighborhoodAccessInfo neighborhood;
   StaticOutputStoragePlan outputStorage;
   SmallVector<int64_t, 4> waveCoefficients;
   int64_t targetComputeUnits = 1;
@@ -553,7 +553,7 @@ buildWavefrontSkewPlan(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
   if (!storePlan || storePlan->shape.size() < shape.lowerBounds.size())
     return std::nullopt;
 
-  std::optional<sde::StructuredNeighborhoodInfo> neighborhood =
+  std::optional<sde::SuNeighborhoodAccessInfo> neighborhood =
       getWavefrontNeighborhood(op, shape.lowerBounds.size());
   if (!neighborhood)
     return std::nullopt;
@@ -574,8 +574,8 @@ buildWavefrontSkewPlan(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
   return plan;
 }
 
-static sde::SdeSuIterateOp materializeWavefrontSkew(sde::SdeSuIterateOp op,
-                                                    WavefrontSkewPlan &plan) {
+static sde::SdeSuIterateOp realizeWavefrontSkew(sde::SdeSuIterateOp op,
+                                                WavefrontSkewPlan &plan) {
   OpBuilder builder(op);
   Location loc = op.getLoc();
   MLIRContext *ctx = op.getContext();
@@ -701,19 +701,18 @@ static sde::SdeSuIterateOp materializeWavefrontSkew(sde::SdeSuIterateOp op,
 }
 
 static std::optional<sde::SdeSuIterateOp>
-tryMaterializeWavefrontSkew(sde::SdeSuIterateOp op,
-                            sde::SDECostModel &costModel) {
+tryRealizeWavefrontSkew(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
   if (!op || op->getParentOfType<sde::SdeSuDistributeOp>())
     return std::nullopt;
   std::optional<WavefrontSkewPlan> plan = buildWavefrontSkewPlan(op, costModel);
   if (!plan)
     return std::nullopt;
-  return materializeWavefrontSkew(op, *plan);
+  return realizeWavefrontSkew(op, *plan);
 }
 
 static SmallVector<unsigned, 4>
 chooseMappedSdeOwnerLoopDims(sde::SdeSuIterateOp op,
-                             const sde::StructuredOutputLayoutPlan &plan) {
+                             const sde::SuOutputLayoutPlan &plan) {
   SmallVector<unsigned, 4> mappedLoopDims;
   mappedLoopDims.reserve(plan.loopDimToPhysicalDim.size());
   unsigned loopRank = op.getLowerBounds().size();
@@ -741,7 +740,7 @@ chooseMappedSdeOwnerLoopDims(sde::SdeSuIterateOp op,
 }
 
 static bool buildOwnerDimPlan(sde::SdeSuIterateOp op,
-                              const sde::StructuredOutputLayoutPlan &outputPlan,
+                              const sde::SuOutputLayoutPlan &outputPlan,
                               ArrayRef<unsigned> ownerLoopDims, int64_t workers,
                               SmallVectorImpl<int64_t> &ownerPhysicalDims,
                               SmallVectorImpl<int64_t> &physicalBlockShape,
@@ -1343,7 +1342,7 @@ static bool assignedWriteLayoutMatchesOwnerDims(sde::SdeSuIterateOp op,
 }
 
 static std::optional<SmallVector<int64_t, 4>>
-orderPhysicalOwnerDimsByLoop(const sde::StructuredOutputLayoutPlan &outputPlan,
+orderPhysicalOwnerDimsByLoop(const sde::SuOutputLayoutPlan &outputPlan,
                              ArrayRef<int64_t> layoutOwnerDims,
                              unsigned loopRank) {
   if (layoutOwnerDims.empty() || outputPlan.loopDimToPhysicalDim.empty())
@@ -1390,8 +1389,8 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
     return false;
 
   sde::LoopIndexedOutputPlan plan = *outputPlan;
-  if (std::optional<sde::StructuredOutputLayoutPlan> structuredPlan =
-          sde::findCompatibleOutputLayoutPlan(op)) {
+  if (std::optional<sde::SuOutputLayoutPlan> structuredPlan =
+          sde::findCompatibleSuOutputLayoutPlan(op)) {
     std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
         orderPhysicalOwnerDimsByLoop(*structuredPlan, writeLayout->ownerDims,
                                      op.getLowerBounds().size());
@@ -1433,7 +1432,7 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
 // writes a multi-owner-distributed data-parallel array, stamping identical
 // physicalOwnerDims + physicalBlockShape (+ logicalWorkerSlice) across all
 // writers of that array. That equality lets the per-timestep host bridge hoist
-// once and keeps iterative double-buffer stencils from materializing a coarse
+// once and keeps iterative double-buffer stencils from realizing a coarse
 // per-timestep copy. Runs first in the stamper dispatch and is the default for
 // the multi-owner data-parallel family (matmul/contraction excluded).
 // Realization is not gated on the loop step: the committed layout is the
@@ -1470,8 +1469,8 @@ static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
   // rather than stamping an unverifiable owner_tile plan.
   if (op.getLowerBounds().size() < writeLayout->ownerDims.size())
     return false;
-  std::optional<sde::StructuredOutputLayoutPlan> outputPlan =
-      sde::findCompatibleOutputLayoutPlan(op);
+  std::optional<sde::SuOutputLayoutPlan> outputPlan =
+      sde::findCompatibleSuOutputLayoutPlan(op);
   if (!outputPlan)
     return false;
   std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
@@ -1552,7 +1551,7 @@ alignLateOwnerPlanToExistingStep(sde::SdeSuIterateOp op,
   // owner plan late, the element-space block for each owner dimension must
   // match the already-realized owner-loop step. A coarser block would serialize
   // independent tiled loops behind one DB/MU; a finer block would describe
-  // slices the loop no longer materializes.
+  // slices the loop no longer realizes.
   for (auto [ownerSlot, ownerPhysicalDim] : llvm::enumerate(ownerDims)) {
     if (ownerPhysicalDim < 0 ||
         static_cast<size_t>(ownerPhysicalDim) >= physicalBlockShape.size())
@@ -1603,8 +1602,8 @@ physicalPlanMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
     return true;
 
   SmallVector<int64_t, 4> physicalDimToLoopDim(physicalBlockShape.size(), -1);
-  if (std::optional<sde::StructuredOutputLayoutPlan> layoutPlan =
-          sde::findCompatibleOutputLayoutPlan(op)) {
+  if (std::optional<sde::SuOutputLayoutPlan> layoutPlan =
+          sde::findCompatibleSuOutputLayoutPlan(op)) {
     for (auto [physicalDim, rawLoopDim] :
          llvm::enumerate(layoutPlan->physicalDimToLoopDim)) {
       if (physicalDim >= physicalDimToLoopDim.size())
@@ -1669,8 +1668,8 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
     return;
 
   if (isStencil) {
-    std::optional<sde::StructuredOutputLayoutPlan> outputPlan =
-        sde::findCompatibleOutputLayoutPlan(op);
+    std::optional<sde::SuOutputLayoutPlan> outputPlan =
+        sde::findCompatibleSuOutputLayoutPlan(op);
     if (outputPlan) {
       SmallVector<unsigned, 4> ownerLoopDims =
           chooseMappedSdeOwnerLoopDims(op, *outputPlan);
@@ -1680,7 +1679,7 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
       // One-dimensional halo stencils form a dependency pipeline between
       // neighboring owner blocks. Planning modestly more owner blocks than
       // logical worker capacity gives later scheduling enough ready tasks
-      // without flooding target materialization with tiny stencil slices.
+      // without flooding target realization with tiny stencil slices.
       if (ownerLoopDims.size() == 1)
         workers *= 2;
       SmallVector<int64_t, 4> ownerDims;
@@ -1691,7 +1690,7 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
         return;
 
       // Keep halo stencil DB/MU grain fine. Grouped halo compute needs
-      // lane-specific halo acquire materialization in ARTS, so SDE must not
+      // lane-specific halo acquire realization in ARTS, so SDE must not
       // satisfy a tile-byte floor by inflating the physical owner block here.
 
       if (isInPlaceSelfReadStencil(op) && !op.getInPlaceSafeAttr()) {
@@ -1740,7 +1739,7 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
     return;
 
   // Preserve fine DB/MU grain for stencil-like updates. Coarser halo compute
-  // grouping must be backed by explicit grouped halo materialization in ARTS.
+  // grouping must be backed by explicit grouped halo realization in ARTS.
 
   alignLateOwnerPlanToExistingStep(op, ownerDims, physicalBlockShape);
   (void)applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape);
@@ -2276,7 +2275,7 @@ struct DistributionPlanningPass
         continue;
       sde::SdeSuIterateOp op = original;
       if (std::optional<sde::SdeSuIterateOp> wavefront =
-              tryMaterializeWavefrontSkew(op, *costModel)) {
+              tryRealizeWavefrontSkew(op, *costModel)) {
         (void)*wavefront;
         continue;
       }

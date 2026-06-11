@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-memory-unit-materialization)' \
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-memory-unit-realization)' \
 // RUN:   | %FileCheck %s
 
 func.func @folds_mu_alloc_null_check() -> i1 {

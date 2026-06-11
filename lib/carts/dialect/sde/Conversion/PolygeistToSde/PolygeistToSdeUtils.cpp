@@ -11,8 +11,8 @@
 
 namespace mlir::carts::sde {
 
-Value materializeDependView(OpBuilder &builder, Location loc, Value source,
-                            ArrayRef<Value> indices, ArrayRef<Value> sizes) {
+Value realizeDependView(OpBuilder &builder, Location loc, Value source,
+                        ArrayRef<Value> indices, ArrayRef<Value> sizes) {
   if (indices.empty() && sizes.empty())
     return source;
 

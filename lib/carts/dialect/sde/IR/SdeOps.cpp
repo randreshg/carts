@@ -31,6 +31,23 @@ static bool isAllowedSuDistributeChild(Operation *op) {
   return sde::isSuOp(op) || isa<SdeRedistOp, SdeSuBarrierOp>(op);
 }
 
+static LogicalResult verifyCuContainsNoScheduling(Operation *cu) {
+  bool failed = false;
+  cu->walk([&](Operation *nested) {
+    if (nested == cu)
+      return WalkResult::advance();
+    if (!sde::isCuForbiddenSchedulingOp(nested))
+      return WalkResult::advance();
+    nested->emitOpError()
+        << "is nested inside an " << cu->getName().getStringRef()
+        << " body; compute units are executable leaves and SU scheduling must "
+           "be represented outside the CU";
+    failed = true;
+    return WalkResult::advance();
+  });
+  return failure(failed);
+}
+
 static std::optional<SdeAccessMode> modeForLayoutRole(LayoutGraphRole role) {
   switch (role) {
   case LayoutGraphRole::read:
@@ -236,23 +253,18 @@ LogicalResult SdeCuRegionOp::verify() {
              << "sde.yield operands require matching cu_region results";
   }
 
-  bool failed = false;
-  getBody().walk([&](Operation *nested) {
-    if (nested == getOperation())
-      return WalkResult::advance();
-    if (!sde::isCuForbiddenSchedulingOp(nested))
-      return WalkResult::advance();
-    nested->emitOpError()
-        << "is nested inside an sde.cu_region body; compute units are "
-           "executable leaves and SU scheduling must be represented outside "
-           "the CU";
-    failed = true;
-    return WalkResult::advance();
-  });
-  if (failed)
+  if (failed(verifyCuContainsNoScheduling(getOperation())))
     return failure();
 
   return success();
+}
+
+LogicalResult SdeCuTaskOp::verify() {
+  return verifyCuContainsNoScheduling(getOperation());
+}
+
+LogicalResult SdeCuReduceOp::verify() {
+  return verifyCuContainsNoScheduling(getOperation());
 }
 
 //===----------------------------------------------------------------------===//
@@ -1366,6 +1378,8 @@ LogicalResult SdeCuWorkOp::verify() {
   if (!yield.getValues().empty())
     return emitOpError()
            << "expects memref compute-unit yield to carry no values";
+  if (failed(verifyCuContainsNoScheduling(getOperation())))
+    return failure();
 
   // Best-effort check for conflicting modes on statically-overlapping slices
   // of the same source storage value. Non-constant slices are delegated to

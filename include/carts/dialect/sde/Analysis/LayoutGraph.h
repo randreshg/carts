@@ -12,7 +12,7 @@
 #ifndef CARTS_DIALECT_SDE_ANALYSIS_LAYOUTGRAPH_H
 #define CARTS_DIALECT_SDE_ANALYSIS_LAYOUTGRAPH_H
 
-#include "carts/dialect/sde/Analysis/StructuredOpAnalysis.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
@@ -173,7 +173,7 @@ SmallVector<LayoutGraphFact, 4> parseArrayLayoutFacts(ArrayAttr attr);
 /// realization) MUST use this one numbering so producer and consumer never
 /// drift.
 llvm::MapVector<Value, int64_t>
-assignStableArrayIds(const ModuleAccessRelations &relations);
+assignStableArrayIds(const ModuleSuAccessRelations &relations);
 SmallVector<CuMuHyperedgePressure, 4>
 collectCuMuHyperedgePressures(ArrayRef<LayoutGraphFact> facts);
 SmallVector<CuMuHyperedgePressure, 4>
@@ -189,7 +189,7 @@ LayoutGraphBalanceSummary summarizeLayoutGraphBalance(
 AccessRelation makeAccessRelation(Value root, const MemrefAccessEntry &entry,
                                   LayoutGraphAccessKind kind);
 CuVertex makeCuVertex(unsigned cuId, SdeSuIterateOp op,
-                      const StructuredLoopSummary &summary);
+                      const SuLoopAccessSummary &summary);
 MuNet makeMuNet(
     unsigned muId, const ArrayAccessProfile &profile,
     std::optional<AssignedArrayLayout> assignedLayout = std::nullopt);
@@ -200,7 +200,7 @@ MuNet makeMuNet(unsigned muId, const CuMuMemoryUnit &memory,
 /// Build the first neutral graph slice from existing module access facts.
 /// Current SDE code still stamps compatibility attrs separately; this helper
 /// lets new analysis and future payload writers consume the same typed model.
-LayoutGraph buildLayoutGraph(const ModuleAccessRelations &relations,
+LayoutGraph buildLayoutGraph(const ModuleSuAccessRelations &relations,
                              const llvm::MapVector<Value, AssignedArrayLayout>
                                  *assignedLayouts = nullptr);
 

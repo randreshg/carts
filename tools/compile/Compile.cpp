@@ -289,8 +289,8 @@ static const std::array<llvm::StringLiteral, 30> kSdePlanningPasses = {
     "DistributionPlanning",
     "IterationSpaceDecomposition",
     "BarrierElimination",
-    "MemoryUnitMaterialization",
-    "SdeAtomicReductionMaterialization",
+    "MemoryUnitRealization",
+    "SdeAtomicReductionRealization",
     "SdeCuNormalization",
     "VerifySdePhysicalConsistency",
     "SdeRankExpandMu",
@@ -391,7 +391,7 @@ static const std::array<llvm::StringLiteral, 6> kPostO3OptPasses = {
 static const std::array<llvm::StringLiteral, 16> kLLVMIREmissionPasses = {
     "CSE",
     "PolygeistCanonicalize",
-    "MaterializeArtsFunctionPointers",
+    "RealizeArtsFunctionPointers",
     "ConvertOpenMPToLLVM",
     "ArithExpandOps",
     "ConvertSCFToCF",
@@ -767,12 +767,12 @@ static LogicalResult promoteOutlinedEdtToLLVMFunc(func::FuncOp funcOp,
 
   mlir::Type resultType = LLVM::LLVMVoidType::get(ctx);
   if (funcType.getNumResults() > 1)
-    return funcOp.emitError("cannot materialize ARTS EDT function pointer for "
+    return funcOp.emitError("cannot realize ARTS EDT function pointer for "
                             "multi-result function");
   if (funcType.getNumResults() == 1) {
     resultType = funcType.getResult(0);
     if (!LLVM::isCompatibleType(resultType))
-      return funcOp.emitError("cannot materialize ARTS EDT function pointer "
+      return funcOp.emitError("cannot realize ARTS EDT function pointer "
                               "before LLVM conversion for result type ")
              << resultType;
   }
@@ -781,7 +781,7 @@ static LogicalResult promoteOutlinedEdtToLLVMFunc(func::FuncOp funcOp,
   inputTypes.reserve(funcType.getNumInputs());
   for (mlir::Type input : funcType.getInputs()) {
     if (!LLVM::isCompatibleType(input))
-      return funcOp.emitError("cannot materialize ARTS EDT function pointer "
+      return funcOp.emitError("cannot realize ARTS EDT function pointer "
                               "before LLVM conversion for argument type ")
              << input;
     inputTypes.push_back(input);
@@ -807,18 +807,17 @@ static LogicalResult promoteOutlinedEdtToLLVMFunc(func::FuncOp funcOp,
   return success();
 }
 
-struct MaterializeArtsFunctionPointersPass
-    : public PassWrapper<MaterializeArtsFunctionPointersPass,
+struct RealizeArtsFunctionPointersPass
+    : public PassWrapper<RealizeArtsFunctionPointersPass,
                          OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
-      MaterializeArtsFunctionPointersPass)
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RealizeArtsFunctionPointersPass)
 
   StringRef getArgument() const final {
-    return "carts-materialize-arts-function-pointers";
+    return "carts-realize-arts-function-pointers";
   }
 
   StringRef getDescription() const final {
-    return "Materialize ARTS EDT function pointer symbols before mixed "
+    return "Realize ARTS EDT function pointer symbols before mixed "
            "host-OpenMP LLVM emission";
   }
 
@@ -1152,8 +1151,8 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createDistributionPlanningPass(costModel));
   pm.addPass(sde::createIterationSpaceDecompositionPass());
   pm.addPass(sde::createBarrierEliminationPass(costModel));
-  pm.addPass(sde::createMemoryUnitMaterializationPass());
-  pm.addPass(sde::createSdeAtomicReductionMaterializationPass());
+  pm.addPass(sde::createMemoryUnitRealizationPass());
+  pm.addPass(sde::createSdeAtomicReductionRealizationPass());
   pm.addPass(sde::createSdeCuNormalizationPass());
   // Pre-window physical consistency gate: committed physical facts must agree
   // with arrayLayout and SU schedule BEFORE the rank-expand transform consumes
@@ -1178,7 +1177,7 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createVerifySdePass());
 }
 
-/// SDE-to-ARTS conversion. SDE owns transformed facts; ARTS materializes DB,
+/// SDE-to-ARTS conversion. SDE owns transformed facts; ARTS realizes DB,
 /// acquire, EDT, and control objects directly from those committed facts.
 void buildSdeToArtsPipeline(PassManager &pm) {
   pm.addPass(arts::createSdeStorageToArtsDbPass());
@@ -1282,7 +1281,7 @@ void buildPreLoweringPipeline(PassManager &pm) {
   pm.addPass(createLoopInvariantCodeMotionPass());
   /// Hoist loop-invariant DB/dep pointer loads before scalar replacement;
   /// buildArtsRtToLLVMPipeline runs hoisting again after ARTS-RT-to-LLVM
-  /// materializes new loads.
+  /// realizes new loads.
   pm.addPass(arts_rt::createDataPtrHoistingPass());
   addCanonicalizeAndCSE(pm);
   pm.addPass(arts_rt::createScalarReplacementPass());
@@ -1328,7 +1327,7 @@ void buildAdditionalOptPipeline(OpPassManager &optPM) {
 void buildLLVMIREmissionPipeline(PassManager &pm, bool convertOpenMP) {
   pm.addPass(createCSEPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(std::make_unique<MaterializeArtsFunctionPointersPass>());
+  pm.addPass(std::make_unique<RealizeArtsFunctionPointersPass>());
   if (convertOpenMP)
     pm.addPass(createConvertOpenMPToLLVMPass());
   pm.addPass(arith::createArithExpandOpsPass());

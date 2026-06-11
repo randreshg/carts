@@ -15,10 +15,10 @@ disagree.
 | Generic loop trip-count helpers | `include/carts/utils/LoopUtils.h` | `isInnermostLoop`, `getStaticTripCount` |
 | ARTS/ARTS-RT loop invariance and hoisting | `include/carts/dialect/arts/Utils/LoopInvarianceUtils.h` | `isLoopInvariant`, `findHoistTarget`, `allOperandsDominate`, `isSafeDivRemToHoist` |
 | Deferred removal | `include/carts/utils/RemovalUtils.h` | `markForRemoval`, `removeAllMarked` |
-| SDE access/planning facts | `include/carts/dialect/sde/Analysis` or `include/carts/dialect/sde/Utils` | `AffineAccessUtils`, `StructuredOpAnalysis`, `SDECostModel` |
+| SDE access/planning facts | `include/carts/dialect/sde/Analysis` or `include/carts/dialect/sde/Utils` | `AffineAccessUtils`, `SuLoopAccessAnalysis`, `SDECostModel` |
 | ARTS codelet ABI | `include/carts/dialect/arts/Utils` | `CodeletABIUtils` |
 | ARTS boundary proof logic | boundary conversion helper | `SdeToArts/TaskDepSliceUtils.*` |
-| SDE Polygeist input normalization helpers | `lib/carts/dialect/sde/Conversion/PolygeistToSde/PolygeistToSdeUtils.h` | `materializeDependView`, `clampDepIndices`, `isInsideOmpRegion`, `containsOmpOp` |
+| SDE Polygeist input normalization helpers | `lib/carts/dialect/sde/Conversion/PolygeistToSde/PolygeistToSdeUtils.h` | `realizeDependView`, `clampDepIndices`, `isInsideOmpRegion`, `containsOmpOp` |
 | ARTS DB mechanics | `include/carts/dialect/arts/Utils/DbUtils.h` | `traceToDbAlloc`, `getUnderlyingDb`, `getMemoryAccessInfo`, `isWriterMode` |
 | ARTS EDT mechanics | `include/carts/dialect/arts/Utils/EdtUtils.h` | `EdtEnvManager`, `isInsideEpoch`, `classifyEdtArgAccesses` |
 | ARTS loop structure, partition/block predicates, runtime topology, and source-location IDs | `include/carts/dialect/arts/Utils` | `LoopStructureUtils`, `BlockedAccessUtils`, `PartitionPredicates`, `RuntimeConfig`, `LocationMetadata` |
@@ -89,7 +89,7 @@ not loop-specific utilities.
   `include/carts/dialect/arts/Utils/LoopStructureUtils.h`.
 - ARTS/ARTS-RT loop-invariant and hoisting-safety helpers live in
   `include/carts/dialect/arts/Utils/LoopInvarianceUtils.h`.
-- SDE structured-access interpretation, such as row-major scalarized access
+- SDE SU loop-access interpretation, such as row-major scalarized access
   decomposition, lives in SDE Analysis/Utils.
 - ARTS DB-relative loop windows and ownership proofs belong in the pass that
   transforms them unless a second real owner justifies a focused ARTS utility.
@@ -123,7 +123,7 @@ include/carts/utils/OperationAttributes.h
 include/carts/utils/StencilAttributes.h
 include/carts/utils/ValueAnalysis.h
 include/carts/dialect/sde/Analysis/AffineAccessUtils.h
-include/carts/dialect/sde/Analysis/StructuredOpAnalysis.h
+include/carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h
 include/carts/dialect/sde/Utils/SDECostModel.h
 lib/carts/dialect/sde/Conversion/PolygeistToSde/PolygeistToSdeUtils.h
 include/carts/dialect/arts/Utils/CodeletABIUtils.h

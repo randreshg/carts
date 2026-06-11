@@ -5,13 +5,13 @@
 ```
 dialect/                     MLIR dialects (one subdirectory per CARTS dialect)
   sde/                       SDE dialect — source semantics
-    Analysis/                StructuredOpAnalysis (loop/access classification)
+    Analysis/                SuLoopAccessAnalysis (loop/access classification)
     Conversion/
       OmpToSde/              ConvertOpenMPToSde (OMP→SDE boundary)
       PolygeistToSde/        SdeInputInliner, SdeMemrefNormalization, SdeHandleDeps
     IR/                      SdeDialect.cpp, SdeOps.cpp
     Transforms/
-      state/                 PatternAnalysis, MemoryUnitMaterialization,
+      state/                 PatternAnalysis, MemoryUnitRealization,
                               ScalarForwarding
       dep/loop/              LoopInterchange, Tiling, IterationSpaceDecomposition
       dep/fusion/            ElementwiseFusion
