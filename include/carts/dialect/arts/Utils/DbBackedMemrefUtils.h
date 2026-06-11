@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: DbBackedMemrefUtils.h
 ///
-/// Helpers for materializing memref values backed by ARTS DB allocations.
+/// Helpers for building memref values backed by ARTS DB allocations.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_ARTS_UTILS_DBBACKEDMEMREFUTILS_H
@@ -17,24 +17,21 @@ namespace carts::arts {
 
 FailureOr<SmallVector<Value>>
 buildDbBackedMemrefElementSizes(OpBuilder &builder, Location loc,
-                                MemRefType memrefType,
-                                ValueRange dynamicSizes);
+                                MemRefType memrefType, ValueRange dynamicSizes);
 
-Value materializeDbInnerPayload(OpBuilder &builder, Location loc,
-                                Value sourcePtr);
+Value realizeDbInnerPayload(OpBuilder &builder, Location loc, Value sourcePtr);
 
 LogicalResult createCoarseDbBackedMemref(OpBuilder &builder, Location loc,
-                                          MemRefType memrefType,
-                                          ValueRange dynamicSizes,
-                                          Value &memref);
+                                         MemRefType memrefType,
+                                         ValueRange dynamicSizes,
+                                         Value &memref);
 
 LogicalResult createPlannedDbBackedMemref(OpBuilder &builder, Location loc,
-                                           MemRefType memrefType,
-                                           ValueRange dynamicSizes,
-                                           ArrayAttr ownerDims,
-                                           ArrayAttr blockShape,
-                                           ArrayAttr haloShape,
-                                           Value &memref);
+                                          MemRefType memrefType,
+                                          ValueRange dynamicSizes,
+                                          ArrayAttr ownerDims,
+                                          ArrayAttr blockShape,
+                                          ArrayAttr haloShape, Value &memref);
 
 } // namespace carts::arts
 } // namespace mlir

@@ -2,9 +2,9 @@
 // RUN:   | %FileCheck %s --implicit-check-not=sde.cu_region --implicit-check-not=arts.db_access_plan
 
 // Standalone CU outlining must not capture pointer-bearing global memrefs from
-// the parent block; rematerialize the global inside the EDT body.
+// the parent block; clone the read-only global inside the EDT body.
 
-// CHECK-LABEL: func.func @standalone_cu_rematerializes_global
+// CHECK-LABEL: func.func @standalone_cu_clones_readonly_global
 // CHECK: memref.get_global @timer
 // CHECK: arts.edt <sync>
 // CHECK-SAME: memref<?xmemref<?x?xf32>>
@@ -17,7 +17,7 @@
 module {
   memref.global "private" @timer : memref<1xf32> = dense<0.000000e+00>
 
-  func.func @standalone_cu_rematerializes_global() {
+  func.func @standalone_cu_clones_readonly_global() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index

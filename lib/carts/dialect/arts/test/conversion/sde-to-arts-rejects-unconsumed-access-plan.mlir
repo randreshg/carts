@@ -5,7 +5,7 @@
 // something the boundary may erase.
 
 // CHECK: error: {{.*}}arts.db_access_plan
-// CHECK-SAME: was not consumed during SDE access materialization into ARTS dependencies
+// CHECK-SAME: was not consumed during SDE access realization into ARTS dependencies
 
 func.func @unconsumed_access_plan() {
   %A = memref.alloc() : memref<4x256xf32>

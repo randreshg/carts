@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: SdeToArtsBoundary.cpp
 ///
-/// Direct SDE-to-ARTS boundary materialization.
+/// Direct SDE-to-ARTS boundary realization.
 ///==========================================================================///
 
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
@@ -297,7 +297,7 @@ static void eraseDeallocUsers(Value memref) {
 }
 
 static std::optional<SmallVector<Value>>
-getDynamicSizesForMaterializedTaskDepRoot(Operation *root) {
+getDynamicSizesForTaskDepRoot(Operation *root) {
   if (auto alloc = dyn_cast_or_null<memref::AllocOp>(root))
     return SmallVector<Value>(alloc.getDynamicSizes().begin(),
                               alloc.getDynamicSizes().end());
@@ -307,14 +307,14 @@ getDynamicSizesForMaterializedTaskDepRoot(Operation *root) {
   return std::nullopt;
 }
 
-static LogicalResult materializeTaskDepMemrefStorage(ModuleOp module) {
+static LogicalResult realizeTaskDepMemrefStorage(ModuleOp module) {
   SetVector<Value> roots;
   bool foundError = false;
   module.walk([&](sde::SdeMuDepOp dep) {
     Value root = ValueAnalysis::stripMemrefViewOps(dep.getSource());
     if (!root) {
       dep.emitOpError() << "has no traceable memref root for ARTS storage "
-                           "materialization";
+                           "realization";
       foundError = true;
       return;
     }
@@ -323,7 +323,7 @@ static LogicalResult materializeTaskDepMemrefStorage(ModuleOp module) {
     auto memrefType = dyn_cast<MemRefType>(root.getType());
     if (!memrefType) {
       dep.emitOpError() << "requires a memref source for ARTS storage "
-                           "materialization";
+                           "realization";
       foundError = true;
       return;
     }
@@ -334,11 +334,11 @@ static LogicalResult materializeTaskDepMemrefStorage(ModuleOp module) {
       return;
     }
     Operation *rootOp = root.getDefiningOp();
-    if (!getDynamicSizesForMaterializedTaskDepRoot(rootOp)) {
+    if (!getDynamicSizesForTaskDepRoot(rootOp)) {
       dep.emitOpError()
           << "references a memref root that direct SDE-to-ARTS task lowering "
-             "cannot materialize as an ARTS DB; SDE must expose a "
-             "materializable memref allocation or fail before this boundary";
+             "cannot realize as an ARTS DB; SDE must expose a "
+             "representable memref allocation or fail before this boundary";
       foundError = true;
       return;
     }
@@ -351,7 +351,7 @@ static LogicalResult materializeTaskDepMemrefStorage(ModuleOp module) {
     Operation *rootOp = root.getDefiningOp();
     auto memrefType = cast<MemRefType>(root.getType());
     std::optional<SmallVector<Value>> dynamicSizes =
-        getDynamicSizesForMaterializedTaskDepRoot(rootOp);
+        getDynamicSizesForTaskDepRoot(rootOp);
     if (!dynamicSizes)
       return failure();
 
@@ -361,7 +361,7 @@ static LogicalResult materializeTaskDepMemrefStorage(ModuleOp module) {
     if (failed(arts::createCoarseDbBackedMemref(
             builder, rootOp->getLoc(), memrefType, *dynamicSizes, replacement)))
       return rootOp->emitError()
-             << "could not materialize task dependency memref as an ARTS DB";
+             << "could not realize task dependency memref as an ARTS DB";
     if (replacement.getType() != memrefType)
       replacement = memref::CastOp::create(builder, rootOp->getLoc(),
                                            memrefType, replacement);
@@ -385,7 +385,7 @@ validateAndCollectHaloRedists(ModuleOp module,
     if (redist.getFamily() != sde::SdeMovementFamily::halo_like) {
       redist.emitOpError() << "direct SDE-to-ARTS lowering for movement family "
                            << stringifySdeMovementFamily(redist.getFamily())
-                           << " requires a real ARTS materialization";
+                           << " requires a real ARTS realization";
       foundError = true;
       return;
     }
@@ -400,7 +400,7 @@ validateAndCollectHaloRedists(ModuleOp module,
         redist.getSourceBlockShape() != redist.getTargetBlockShape()) {
       redist.emitOpError()
           << "commits halo movement whose source and target layouts differ; "
-             "direct ARTS halo materialization requires identical owner/block "
+             "direct ARTS halo realization requires identical owner/block "
              "geometry";
       foundError = true;
       return;
@@ -481,16 +481,16 @@ lowerMuAlloc(sde::SdeMuAllocOp op,
             builder, op.getLoc(), memrefType, op.getDynamicSizes(), ownerDims,
             blockShape, committedHaloShape, replacement)))
       return op.emitOpError()
-             << "could not materialize committed SDE block layout as ARTS DB";
+             << "could not realize committed SDE block layout as ARTS DB";
   } else if (committedHaloShape) {
     return op.emitOpError()
            << "commits halo movement but has no committed SDE access-window "
-              "layout for ARTS DB materialization";
+              "layout for ARTS DB realization";
   } else if (failed(arts::createCoarseDbBackedMemref(
                  builder, op.getLoc(), memrefType, op.getDynamicSizes(),
                  replacement))) {
     return op.emitOpError()
-           << "could not materialize unpartitioned SDE MU as ARTS DB";
+           << "could not realize unpartitioned SDE MU as ARTS DB";
   }
 
   if (replacement.getType() != memrefType)
@@ -506,7 +506,7 @@ lowerMuAlloc(sde::SdeMuAllocOp op,
     else if (window.getMode() == sde::SdeAccessMode::readwrite && haloShape) {
       return window.emitOpError()
              << "commits a writable halo dependency; SDE must split the read "
-                "halo and write access before ARTS materialization";
+                "halo and write access before ARTS realization";
     }
     FailureOr<ArtsMode> mode =
         convertAccessMode(window.getMode(), window.getOperation());
@@ -832,20 +832,20 @@ recordCoarseSuAccess(sde::SdeSuIterateOp source, Operation *site, Value memref,
       return success();
     return site->emitError()
            << "accesses external memref without ARTS DB-backed storage during "
-              "coarse SDE-to-ARTS SU materialization";
+              "coarse SDE-to-ARTS SU realization";
   }
 
   std::optional<arts::PartitionMode> partitionMode = alloc.getPartitionMode();
   if (!partitionMode || *partitionMode != arts::PartitionMode::coarse)
     return site->emitError()
            << "touches a non-coarse DB without committed SDE access windows; "
-              "refusing coarse SU materialization";
+              "refusing coarse SU realization";
   if (alloc.getPlanOwnerDimsAttr() || alloc.getPlanPhysicalBlockShapeAttr() ||
       alloc.getPlanLogicalWorkerSliceAttr() || alloc.getPlanHaloShapeAttr() ||
       alloc.getDistributedAttr())
     return site->emitError()
            << "touches a planned or distributed DB without committed SDE "
-              "access windows; refusing coarse SU materialization";
+              "access windows; refusing coarse SU realization";
 
   auto [it, inserted] = depIndex.try_emplace(alloc.getOperation(), deps.size());
   if (inserted) {
@@ -920,7 +920,7 @@ recordAccessPlanDependency(arts::DbAccessPlanOp plan,
   if (!alloc)
     return plan.emitOpError()
            << "does not reference an ARTS DB-backed MU after storage "
-              "materialization";
+              "realization";
 
   unsigned ownerDimCount = static_cast<unsigned>(plan.getOwnerDimCount());
   FailureOr<AccessPlanWindowFacts> facts =
@@ -930,7 +930,7 @@ recordAccessPlanDependency(arts::DbAccessPlanOp plan,
   if (plan.getHaloShapeAttr() && plan.getMode() != ArtsMode::in)
     return plan.emitOpError()
            << "commits a writable halo dependency; SDE must split the read "
-              "halo and write access before ARTS materialization";
+              "halo and write access before ARTS realization";
 
   auto [it, inserted] = depIndex.try_emplace(alloc.getOperation(), deps.size());
   if (inserted) {
@@ -975,7 +975,7 @@ recordCuAccessPlanDependency(arts::DbAccessPlanOp plan,
   if (!alloc)
     return plan.emitOpError()
            << "does not reference an ARTS DB-backed MU after storage "
-              "materialization";
+              "realization";
 
   unsigned ownerDimCount = static_cast<unsigned>(plan.getOwnerDimCount());
   FailureOr<AccessPlanWindowFacts> facts =
@@ -985,7 +985,7 @@ recordCuAccessPlanDependency(arts::DbAccessPlanOp plan,
   if (plan.getHaloShapeAttr() && plan.getMode() != ArtsMode::in)
     return plan.emitOpError()
            << "commits a writable halo dependency; SDE must split the read "
-              "halo and write access before ARTS materialization";
+              "halo and write access before ARTS realization";
 
   auto [it, inserted] = depIndex.try_emplace(alloc.getOperation(), deps.size());
   if (inserted) {
@@ -1300,7 +1300,7 @@ static bool isReadOnlyMemrefUseInside(Value source, Operation *scope) {
 }
 
 static LogicalResult
-collectRematerializableMemrefCaptures(sde::SdeCuRegionOp source,
+collectCloneableReadOnlyGlobalMemrefs(sde::SdeCuRegionOp source,
                                       const DenseSet<Value> &allowedDbHandles,
                                       SetVector<Value> &captures) {
   bool failed = false;
@@ -1316,7 +1316,7 @@ collectRematerializableMemrefCaptures(sde::SdeCuRegionOp source,
       if (operand.getDefiningOp<memref::GetGlobalOp>()) {
         if (!isReadOnlyMemrefUseInside(operand, source.getOperation())) {
           op->emitError()
-              << "writes or escapes a rematerialized memref.global inside a "
+              << "writes or escapes a cloned read-only memref.global inside a "
                  "standalone CU; mutable global state must be represented as "
                  "an explicit SDE/ARTS dependency";
           failed = true;
@@ -1379,7 +1379,7 @@ requireStaticPositiveIndex(Value value, Operation *context, StringRef name) {
       ValueAnalysis::stripNumericCasts(value));
   if (!folded || *folded <= 0) {
     context->emitError() << "requires static positive " << name
-                         << " for ARTS compact halo face materialization";
+                         << " for ARTS compact halo face realization";
     return failure();
   }
   return *folded;
@@ -1407,19 +1407,19 @@ static void attachStencilHaloAcquireFacts(sde::SdeSuIterateOp source,
 }
 
 static FailureOr<CompactHaloColumnPlan>
-materializeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
-                                  ArrayRef<int64_t> groupBlockCounts,
-                                  OpBuilder &builder, Location loc) {
+realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
+                              ArrayRef<int64_t> groupBlockCounts,
+                              OpBuilder &builder, Location loc) {
   if (dep.ownerDimCount != 2) {
     return source.emitOpError()
            << "commits a halo dependency whose owner rank is not supported by "
-              "ARTS compact 2D unit-halo face materialization; refusing a "
+              "ARTS compact 2D unit-halo face realization; refusing a "
               "full-block halo byte-window";
   }
   if (hasGroupedOwnerBlocks(groupBlockCounts)) {
     return source.emitOpError()
            << "commits grouped halo CUs, but ARTS compact halo face "
-              "materialization currently requires one CU per DB block; "
+              "realization currently requires one CU per DB block; "
               "refusing a full-block halo byte-window";
   }
 
@@ -1430,7 +1430,7 @@ materializeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
   if (haloRadii->size() != 2 || (*haloRadii)[0] != 1 || (*haloRadii)[1] != 1) {
     return source.emitOpError()
            << "commits a halo dependency outside the supported 2D unit-halo "
-              "shape; ARTS must materialize the exact halo graph instead of "
+              "shape; ARTS must realize the exact halo graph instead of "
               "widening to a full-block byte window";
   }
 
@@ -1438,7 +1438,7 @@ materializeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
       dep.alloc.getElementSizes().size() != 4) {
     return source.emitOpError()
            << "commits a rank shape that ARTS compact 2D unit-halo face "
-              "materialization cannot represent; refusing a full-block halo "
+              "realization cannot represent; refusing a full-block halo "
               "byte-window";
   }
 
@@ -1458,7 +1458,7 @@ materializeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
   if (!ownerDimsAttr || !physicalBlockShape ||
       physicalBlockShape->size() != dep.alloc.getElementSizes().size()) {
     return source.emitOpError()
-           << "requires committed DB owner/block facts to materialize compact "
+           << "requires committed DB owner/block facts to realize compact "
               "halo payload DBs; refusing a full-block halo byte-window";
   }
 
@@ -1552,12 +1552,12 @@ materializeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
 
   OpBuilder bodyBuilder(packEdt.getContext());
   bodyBuilder.setInsertionPointToStart(&packBlock);
-  Value sourcePayload = arts::materializeDbInnerPayload(
-      bodyBuilder, loc, packBlock.getArgument(0));
-  Value leftPayload = arts::materializeDbInnerPayload(bodyBuilder, loc,
-                                                      packBlock.getArgument(1));
-  Value rightPayload = arts::materializeDbInnerPayload(
-      bodyBuilder, loc, packBlock.getArgument(2));
+  Value sourcePayload =
+      arts::realizeDbInnerPayload(bodyBuilder, loc, packBlock.getArgument(0));
+  Value leftPayload =
+      arts::realizeDbInnerPayload(bodyBuilder, loc, packBlock.getArgument(1));
+  Value rightPayload =
+      arts::realizeDbInnerPayload(bodyBuilder, loc, packBlock.getArgument(2));
   Value rowLimit = packBlock.getArgument(paramOffset);
   Value colLimit = packBlock.getArgument(paramOffset + 1);
   Value lastCol = arith::SubIOp::create(bodyBuilder, loc, colLimit,
@@ -1709,7 +1709,7 @@ classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloPlanIndex,
   if (indices.size() != 4) {
     load.emitOpError()
         << "uses a rank shape unsupported by ARTS compact 2D unit-halo "
-           "materialization";
+           "realization";
     return failure();
   }
 
@@ -1744,7 +1744,7 @@ classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloPlanIndex,
         HaloLoadRewrite{haloPlanIndex, Halo2DFace::Center}};
   if (rowOffset != 0 && colOffset != 0) {
     load.emitOpError()
-        << "requires corner halo materialization, which ARTS has not "
+        << "requires corner halo realization, which ARTS has not "
            "committed; refusing a full-block halo byte-window";
     return failure();
   }
@@ -1762,7 +1762,7 @@ classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloPlanIndex,
         HaloLoadRewrite{haloPlanIndex, Halo2DFace::Right}};
 
   load.emitOpError()
-      << "requires non-unit halo materialization, which ARTS has not "
+      << "requires non-unit halo realization, which ARTS has not "
          "committed; refusing a full-block halo byte-window";
   return failure();
 }
@@ -1977,7 +1977,7 @@ rewriteOwnerIndicesToLocal(arts::EdtOp task, ArrayRef<Value> payloads,
     if (hasGroupedBlocks || payloadIt != payloadIndices.end()) {
       if (root != memref) {
         op->emitError()
-            << "grouped DB access through a memref view is not materialized; "
+            << "grouped DB access through a memref view is not realized; "
                "SDE-to-ARTS must rewrite the view or fail closed";
         return WalkResult::interrupt();
       }
@@ -2037,7 +2037,7 @@ static LogicalResult translateSdeAtomicsToArts(Region &region) {
   for (sde::SdeCuAtomicOp atomic : atomics) {
     if (atomic.getReductionKind() != sde::SdeReductionKind::add)
       return atomic.emitOpError()
-             << "cannot materialize non-add SDE atomic at the ARTS boundary";
+             << "cannot realize non-add SDE atomic at the ARTS boundary";
     OpBuilder builder(atomic);
     arts::AtomicAddOp::create(builder, atomic.getLoc(), atomic.getAddr(),
                               atomic.getValue());
@@ -2046,8 +2046,7 @@ static LogicalResult translateSdeAtomicsToArts(Region &region) {
   return success();
 }
 
-static LogicalResult
-materializeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
+static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   if (!source || source->getParentOfType<sde::SdeSuIterateOp>())
     return success();
 
@@ -2060,20 +2059,20 @@ materializeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
 
   if (source.getBody().empty())
     return source.emitOpError()
-           << "has no body during standalone CU access materialization";
+           << "has no body during standalone CU access realization";
   if (!source.getIterArgs().empty())
     return source.emitOpError()
            << "access-bearing standalone CU iter_args are not representable "
-              "as an ARTS EDT; materialize an explicit SDE dataflow first";
+              "as an ARTS EDT; realize an explicit SDE dataflow first";
   for (Type resultType : source.getResultTypes())
     if (!isScalarParamType(resultType))
       return source.emitOpError()
              << "access-bearing standalone CU non-scalar results require an "
-                "explicit SDE dataflow result before ARTS materialization";
+                "explicit SDE dataflow result before ARTS realization";
   Block &body = source.getBody().front();
   if (body.getNumArguments() != 0)
     return source.emitOpError()
-           << "has region arguments during standalone CU EDT materialization";
+           << "has region arguments during standalone CU EDT realization";
   OpBuilder builder(source.getContext());
 
   builder.setInsertionPoint(source);
@@ -2210,9 +2209,9 @@ materializeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   }
   for (CuResultPlan &result : resultPlans)
     allowedDbHandles.insert(result.writePtr);
-  SetVector<Value> rematerializableMemrefCaptures;
-  if (failed(collectRematerializableMemrefCaptures(
-          source, allowedDbHandles, rematerializableMemrefCaptures)))
+  SetVector<Value> cloneableReadOnlyGlobalMemrefs;
+  if (failed(collectCloneableReadOnlyGlobalMemrefs(
+          source, allowedDbHandles, cloneableReadOnlyGlobalMemrefs)))
     return failure();
 
   SmallVector<Value, 4> taskDeps;
@@ -2256,11 +2255,11 @@ materializeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
       (!yield || yield.getValues().size() != source.getNumResults()))
     return source.emitOpError()
            << "has mismatched yield/result count during standalone CU EDT "
-              "materialization";
+              "realization";
 
   OpBuilder bodyBuilder(task.getContext());
   bodyBuilder.setInsertionPointToStart(&taskBlock);
-  for (Value capture : rematerializableMemrefCaptures) {
+  for (Value capture : cloneableReadOnlyGlobalMemrefs) {
     Operation *def = capture.getDefiningOp();
     Operation *cloned = def->clone(mapper);
     bodyBuilder.insert(cloned);
@@ -2339,18 +2338,18 @@ convertCoarseSuIterate(sde::SdeSuIterateOp source,
   if (deps.empty())
     return source.emitOpError()
            << "has no DB-backed accesses for coarse SDE-to-ARTS SU "
-              "materialization";
+              "realization";
   if (source.getPhysicalOwnerDimsAttr() || source.getPhysicalBlockShapeAttr())
     return source.emitOpError()
            << "has committed physical partition facts but no access-window "
-              "dependencies; refusing coarse ARTS materialization";
+              "dependencies; refusing coarse ARTS realization";
   if (source.getLogicalWorkerSliceAttr() || source.getPhysicalHaloShapeAttr() ||
       source.getAccessMinOffsetsAttr() || source.getAccessMaxOffsetsAttr() ||
       source.getOwnerDimsAttr() || source.getSpatialDimsAttr() ||
       source.getWriteFootprintAttr() || source.getLayoutsDisagreeAttr())
     return source.emitOpError()
            << "has movement, halo, or physical scheduling facts without "
-              "committed access windows; refusing coarse ARTS materialization";
+              "committed access windows; refusing coarse ARTS realization";
 
   unsigned loopRank = source.getUpperBounds().size();
   if (source.getLowerBounds().size() != loopRank ||
@@ -2417,8 +2416,8 @@ convertCoarseSuIterate(sde::SdeSuIterateOp source,
   SmallVector<Value, 4> payloads;
   payloads.reserve(deps.size());
   for (auto [idx, dep] : llvm::enumerate(deps)) {
-    Value payload = arts::materializeDbInnerPayload(bodyBuilder, loc,
-                                                    taskBlock.getArgument(idx));
+    Value payload = arts::realizeDbInnerPayload(bodyBuilder, loc,
+                                                taskBlock.getArgument(idx));
     payloads.push_back(payload);
     mapper.map(dep.alloc.getPtr(), taskBlock.getArgument(idx));
   }
@@ -2605,10 +2604,10 @@ convertSuIterate(sde::SdeSuIterateOp source,
     if (dep.mode != ArtsMode::in)
       return source.emitOpError()
              << "commits a halo dependency that is not read-only; ARTS cannot "
-                "materialize a writable halo window";
+                "realize a writable halo window";
     FailureOr<CompactHaloColumnPlan> compactPlan =
-        materializeCompactHaloColumnPacks(source, dep, groupBlockCounts,
-                                          builder, loc);
+        realizeCompactHaloColumnPacks(source, dep, groupBlockCounts, builder,
+                                      loc);
     if (failed(compactPlan))
       return failure();
     compactColumnPlanByDepIndex[depIndex] =
@@ -2807,8 +2806,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
   OpBuilder bodyBuilder(task.getContext());
   bodyBuilder.setInsertionPointToStart(&taskBlock);
   for (auto [idx, dep] : llvm::enumerate(taskDeps)) {
-    Value payload = arts::materializeDbInnerPayload(bodyBuilder, loc,
-                                                    taskBlock.getArgument(idx));
+    Value payload = arts::realizeDbInnerPayload(bodyBuilder, loc,
+                                                taskBlock.getArgument(idx));
     payloads.push_back(payload);
   }
   for (auto [depIdx, dep] : llvm::enumerate(deps)) {
@@ -3005,7 +3004,7 @@ collectTaskDependencies(sde::SdeCuTaskOp source,
         if (!dep.getDep().use_empty()) {
           dep.emitOpError()
               << "result is consumed; SDE task dependencies must remain local "
-                 "declarations before ARTS materialization";
+                 "declarations before ARTS realization";
           return WalkResult::interrupt();
         }
         auto alloc = dyn_cast_or_null<arts::DbAllocOp>(
@@ -3013,7 +3012,7 @@ collectTaskDependencies(sde::SdeCuTaskOp source,
         if (!alloc) {
           dep.emitOpError()
               << "does not reference an ARTS DB-backed memref after storage "
-                 "materialization";
+                 "realization";
           return WalkResult::interrupt();
         }
         FailureOr<ArtsMode> mode = convertAccessMode(dep.getMode(), dep);
@@ -3101,8 +3100,8 @@ static LogicalResult convertCuTask(sde::SdeCuTaskOp source) {
   OpBuilder bodyBuilder(task.getContext());
   bodyBuilder.setInsertionPointToStart(&taskBlock);
   for (auto [idx, dep] : llvm::enumerate(deps)) {
-    Value payload = arts::materializeDbInnerPayload(bodyBuilder, loc,
-                                                    taskBlock.getArgument(idx));
+    Value payload = arts::realizeDbInnerPayload(bodyBuilder, loc,
+                                                taskBlock.getArgument(idx));
     mapper.map(dep.alloc.getPtr(), taskBlock.getArgument(idx));
     Value sourceMemref = dep.dep.getSource();
     mapper.map(sourceMemref, payload);
@@ -3229,7 +3228,7 @@ static LogicalResult rejectUnsupportedSdeCarriers(ModuleOp module) {
     if (isa<sde::SdeCuWorkOp>(op)) {
       op->emitError()
           << "direct SDE-to-ARTS lowering for this SDE carrier is not yet "
-             "implemented; add a real ARTS materialization";
+             "implemented; add a real ARTS realization";
       found = true;
     }
   });
@@ -3295,7 +3294,7 @@ struct SdeStorageToArtsDbPass
       }
     }
 
-    if (failed(materializeTaskDepMemrefStorage(module))) {
+    if (failed(realizeTaskDepMemrefStorage(module))) {
       signalPassFailure();
       return;
     }
@@ -3304,8 +3303,7 @@ struct SdeStorageToArtsDbPass
     module.walk(
         [&](sde::SdeMuAccessWindowOp op) { residualWindows.push_back(op); });
     for (sde::SdeMuAccessWindowOp window : residualWindows) {
-      window.emitOpError()
-          << "was not consumed during SDE storage materialization";
+      window.emitOpError() << "was not consumed during SDE storage realization";
       signalPassFailure();
       return;
     }
@@ -3347,7 +3345,7 @@ struct SdeAccessesToArtsDepsPass
         standaloneRegions.push_back(op);
     });
     for (sde::SdeCuRegionOp op : standaloneRegions)
-      if (failed(materializeStandaloneCuAccesses(op))) {
+      if (failed(realizeStandaloneCuAccesses(op))) {
         signalPassFailure();
         return;
       }
@@ -3385,7 +3383,7 @@ struct SdeAccessesToArtsDepsPass
     bool foundAccessPlan = false;
     module.walk([&](arts::DbAccessPlanOp op) {
       op.emitOpError()
-          << "was not consumed during SDE access materialization into ARTS "
+          << "was not consumed during SDE access realization into ARTS "
              "dependencies";
       foundAccessPlan = true;
     });
@@ -3460,7 +3458,7 @@ struct FinalizeSdeToArtsPass
     bool foundAccessPlan = false;
     module.walk([&](arts::DbAccessPlanOp op) {
       op.emitOpError()
-          << "remains after SDE access materialization into ARTS dependencies";
+          << "remains after SDE access realization into ARTS dependencies";
       foundAccessPlan = true;
     });
     if (foundAccessPlan) {

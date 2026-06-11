@@ -17,9 +17,10 @@ using namespace mlir::carts;
 using namespace mlir::carts::arts;
 
 FailureOr<SmallVector<Value>>
-mlir::carts::arts::buildDbBackedMemrefElementSizes(
-    OpBuilder &builder, Location loc, MemRefType memrefType,
-    ValueRange dynamicSizes) {
+mlir::carts::arts::buildDbBackedMemrefElementSizes(OpBuilder &builder,
+                                                   Location loc,
+                                                   MemRefType memrefType,
+                                                   ValueRange dynamicSizes) {
   SmallVector<Value> elementSizes;
   if (memrefType.getRank() == 0) {
     if (!dynamicSizes.empty())
@@ -45,9 +46,8 @@ mlir::carts::arts::buildDbBackedMemrefElementSizes(
   return elementSizes;
 }
 
-Value mlir::carts::arts::materializeDbInnerPayload(OpBuilder &builder,
-                                                   Location loc,
-                                                   Value sourcePtr) {
+Value mlir::carts::arts::realizeDbInnerPayload(OpBuilder &builder, Location loc,
+                                               Value sourcePtr) {
   unsigned rank = 1;
   if (auto ptrType = dyn_cast<MemRefType>(sourcePtr.getType()))
     rank = std::max<unsigned>(1, ptrType.getRank());
@@ -76,7 +76,7 @@ LogicalResult mlir::carts::arts::createCoarseDbBackedMemref(
       builder, loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
       memrefType.getElementType(), pointerType, std::move(sizes),
       std::move(*elementSizes), PartitionMode::coarse);
-  memref = materializeDbInnerPayload(builder, loc, dbAlloc.getPtr());
+  memref = realizeDbInnerPayload(builder, loc, dbAlloc.getPtr());
   return success();
 }
 
@@ -95,19 +95,19 @@ LogicalResult mlir::carts::arts::createPlannedDbBackedMemref(
     return failure();
 
   Value route = createCurrentNodeRoute(builder, loc);
-  auto dbAlloc = DbAllocOp::create(
-      builder, loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
-      memrefType.getElementType(),
-      SmallVector<Value>(physicalPlan->outerSizes.begin(),
-                         physicalPlan->outerSizes.end()),
-      SmallVector<Value>(physicalPlan->innerSizes.begin(),
-                         physicalPlan->innerSizes.end()),
-      physicalPlan->mode);
+  auto dbAlloc =
+      DbAllocOp::create(builder, loc, ArtsMode::inout, route, DbAllocType::heap,
+                        DbMode::write, memrefType.getElementType(),
+                        SmallVector<Value>(physicalPlan->outerSizes.begin(),
+                                           physicalPlan->outerSizes.end()),
+                        SmallVector<Value>(physicalPlan->innerSizes.begin(),
+                                           physicalPlan->innerSizes.end()),
+                        physicalPlan->mode);
   setPlanOwnerDimsAttr(dbAlloc.getOperation(), ownerDims);
   setPlanPhysicalBlockShapeAttr(dbAlloc.getOperation(), blockShape);
   if (haloShape)
     setPlanHaloShapeAttr(dbAlloc.getOperation(), haloShape);
 
-  memref = materializeDbInnerPayload(builder, loc, dbAlloc.getPtr());
+  memref = realizeDbInnerPayload(builder, loc, dbAlloc.getPtr());
   return success();
 }

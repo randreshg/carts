@@ -1,6 +1,6 @@
 // RUN: not %carts-compile %s --pipeline create-dbs --start-from create-dbs --arts-config %inputs_dir/arts_1t.cfg 2>&1 | %FileCheck %s
 
-// Read-only rematerialized globals can stay EDT-local. Mutable global state
+// Cloned read-only globals can stay EDT-local. Mutable global state
 // must not remain as raw memory inside an EDT.
 
 // CHECK: writes or escapes an EDT-local memref.global

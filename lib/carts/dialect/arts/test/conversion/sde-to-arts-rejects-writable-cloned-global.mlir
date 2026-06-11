@@ -1,14 +1,14 @@
 // RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-accesses-to-arts-deps)' 2>&1 | %FileCheck %s
 
-// A standalone CU may rematerialize read-only global loads inside an EDT, but
+// A standalone CU may clone read-only global loads inside an EDT, but
 // writable global state must be represented as an explicit dependency.
 
-// CHECK: writes or escapes a rematerialized memref.global inside a standalone CU
+// CHECK: writes or escapes a cloned read-only memref.global inside a standalone CU
 
 module {
   memref.global "private" @timer : memref<1xf32> = dense<0.000000e+00>
 
-  func.func @rejects_writable_rematerialized_global() {
+  func.func @rejects_writable_cloned_global() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index

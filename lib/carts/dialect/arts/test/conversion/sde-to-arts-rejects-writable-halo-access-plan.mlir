@@ -3,7 +3,7 @@
 // A halo access window is a read-side movement fact. If SDE has an in-place
 // update with halo reads, it must split read-halo and write windows before ARTS.
 
-// CHECK: commits a writable halo dependency; SDE must split the read halo and write access before ARTS materialization
+// CHECK: commits a writable halo dependency; SDE must split the read halo and write access before ARTS realization
 
 func.func @writable_halo_access_plan_rejected() {
   %c0 = arith.constant 0 : index
