@@ -5,7 +5,9 @@
 // CHECK: sde.su_iterate (%{{[^)]*}}, %{{[^)]*}}) to (%{{[^)]*}}, %{{[^)]*}}) step
 // CHECK-SAME: classification(<elementwise>)
 // CHECK: memref.alloca() : memref<f64>
-// CHECK: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref
+// CHECK: %{{.*}} = arith.index_cast %[[J_IV:arg[0-9]+]] : index to i64
+// CHECK: %{{.*}} = arith.index_cast %[[I_IV:arg[0-9]+]] : index to i64
+// CHECK: memref.store %{{.*}}, %arg0[%[[I_IV]], %[[J_IV]]] : memref
 // CHECK: } {arrayLayout =
 // CHECK-SAME: physicalBlockShape =
 // CHECK-SAME: physicalOwnerDims = [

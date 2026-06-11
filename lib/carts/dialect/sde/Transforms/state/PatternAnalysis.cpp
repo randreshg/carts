@@ -75,7 +75,14 @@ hasOnlyPointInPlaceSelfReads(const sde::StructuredLoopSummary &summary) {
       if (!sameAccessRoot(write.memref, read.memref))
         continue;
       readsWrittenRoot = true;
-      if (read.indexingMap == write.indexingMap)
+      if (read.indexingMap != write.indexingMap)
+        continue;
+      auto loadOp = dyn_cast_or_null<memref::LoadOp>(read.op);
+      auto storeOp = dyn_cast_or_null<memref::StoreOp>(write.op);
+      if (loadOp && storeOp &&
+          ValueAnalysis::sameDirectMemrefAccess(
+              loadOp.getMemref(), loadOp.getIndices(), storeOp.getMemref(),
+              storeOp.getIndices()))
         matchesWriteMap = true;
     }
     if (!readsWrittenRoot)
@@ -660,6 +667,9 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
   auto effects = sde::collectStructuredMemoryEffects(op.getBody());
   if (effects.hasUnknownEffects || effects.writes.empty())
     return false;
+  if (sde::hasInPlaceSelfRead(effects) &&
+      !hasOnlyPointInPlaceSelfReads(summary))
+    return false;
 
   std::optional<unsigned> promotedPhysicalDim;
   bool sawRankedMemrefWrite = false;
@@ -1170,6 +1180,15 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
       !hasOnlyPointInPlaceSelfReads(summary))
     return op;
 
+  if (summary.classification == sde::SdeStructuredClassification::elementwise &&
+      loopRank == 1 && promoteCount == 1) {
+    std::optional<bool> outerFirst =
+        shouldKeepOuterLoopFirstForPromotion(op, innerForPrefix.front());
+    if (outerFirst)
+      return promoteElementwiseInnerOwnerLoop(op, innerForPrefix.front(),
+                                              *outerFirst);
+  }
+
   return promoteNestedParallelOwnerLoops(op, innerForPrefix);
 }
 
@@ -1564,8 +1583,13 @@ struct PatternAnalysisPass
           derivePattern(*summary, classification, neighborhoodSummary)));
 
       auto memoryEffects = sde::collectStructuredMemoryEffects(op.getBody());
-      if (!memoryEffects.hasUnknownEffects && memoryEffects.allWritesAreRead())
-        op.setInPlaceSafeAttr(UnitAttr::get(op.getContext()));
+      if (!memoryEffects.hasUnknownEffects &&
+          sde::hasInPlaceSelfRead(memoryEffects)) {
+        if (hasOnlyPointInPlaceSelfReads(*summary))
+          op.setInPlaceSafeAttr(UnitAttr::get(op.getContext()));
+        else if (hasParallelLeafCu(op))
+          op.setInPlaceSharedStateAttr(UnitAttr::get(op.getContext()));
+      }
 
       ARTS_DEBUG("refreshed SDE pattern classification on su_iterate");
     });
