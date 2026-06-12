@@ -769,19 +769,18 @@ static Value ceilDivPositiveIndex(OpBuilder &builder, Location loc, Value value,
 }
 
 static FailureOr<int64_t>
-getAccessWindowElementBlockSize(sde::SdeSuIterateOp source,
-                                const DirectDepSpec &dep,
-                                unsigned physicalDim) {
+getAccessWindowPayloadExtent(sde::SdeSuIterateOp source,
+                             const DirectDepSpec &dep, unsigned physicalDim) {
   DbAllocOp alloc = dep.alloc;
   if (!alloc || physicalDim >= dep.validExtents.size())
     return source.emitOpError()
            << "access-window valid extent rank does not cover physical owner "
               "dimension";
 
-  int64_t blockSize = dep.validExtents[physicalDim];
-  if (blockSize <= 0)
+  int64_t payloadExtent = dep.validExtents[physicalDim];
+  if (payloadExtent <= 0)
     return source.emitOpError()
-           << "access-window block size must be positive for direct ARTS "
+           << "access-window payload extent must be positive for direct ARTS "
               "dispatch";
 
   unsigned payloadDim = dep.ownerDimCount + physicalDim;
@@ -792,12 +791,18 @@ getAccessWindowElementBlockSize(sde::SdeSuIterateOp source,
 
   std::optional<int64_t> dbPayloadExtent = ValueAnalysis::tryFoldConstantIndex(
       ValueAnalysis::stripNumericCasts(alloc.getElementSizes()[payloadDim]));
-  if (!dbPayloadExtent || *dbPayloadExtent != blockSize)
+  if (!dbPayloadExtent || *dbPayloadExtent != payloadExtent)
     return source.emitOpError()
            << "rank-expanded DB payload extent disagrees with SDE "
               "access-window block extent";
 
-  return blockSize;
+  return payloadExtent;
+}
+
+static bool usesRankExpandedOwnerCoordinates(ArrayRef<int64_t> ownerDims,
+                                             ArrayRef<int64_t> blockShape,
+                                             int64_t ownerBlockSize) {
+  return blockShape.size() > ownerDims.size() && ownerBlockSize == 1;
 }
 
 static std::optional<SmallVector<int64_t, 4>>
@@ -3451,27 +3456,33 @@ convertSuIterate(sde::SdeSuIterateOp source,
                << "dependency owner rank exceeds direct dispatch owner rank";
       for (unsigned slot = 0; slot < dep.ownerDimCount; ++slot) {
         unsigned physicalDim = ownerRouteping->loopDims[slot];
-        FailureOr<int64_t> depBlockSize =
-            getAccessWindowElementBlockSize(source, dep, physicalDim);
-        if (failed(depBlockSize))
+        FailureOr<int64_t> payloadExtent =
+            getAccessWindowPayloadExtent(source, dep, physicalDim);
+        if (failed(payloadExtent))
           return failure();
+        int64_t coordinateBlockSize =
+            usesRankExpandedOwnerCoordinates(*ownerDims, *blockShape,
+                                             ownerBlockSizes[slot])
+                ? ownerBlockSizes[slot]
+                : *payloadExtent;
         Value lower = source.getLowerBounds()[physicalDim];
         Value upper = source.getUpperBounds()[physicalDim];
         Value base = dispatchBases[slot];
-        Value depBlockSizeValue =
-            createConstantIndex(builder, loc, *depBlockSize);
+        Value coordinateBlockSizeValue =
+            createConstantIndex(builder, loc, coordinateBlockSize);
         Value groupSpan = createConstantIndex(builder, loc, workerSpans[slot]);
         Value groupEnd = arith::MinUIOp::create(
             builder, loc, arith::AddIOp::create(builder, loc, base, groupSpan),
             upper);
         Value beginDelta = arith::SubIOp::create(builder, loc, base, lower);
         Value endDelta = arith::SubIOp::create(builder, loc, groupEnd, lower);
-        Value rawOffset = *depBlockSize == ownerBlockSizes[slot]
-                              ? dispatchBlockOffsets[slot]
-                              : arith::DivUIOp::create(builder, loc, beginDelta,
-                                                       depBlockSizeValue);
-        Value rawEnd =
-            ceilDivPositiveIndex(builder, loc, endDelta, depBlockSizeValue);
+        Value rawOffset =
+            coordinateBlockSize == ownerBlockSizes[slot]
+                ? dispatchBlockOffsets[slot]
+                : arith::DivUIOp::create(builder, loc, beginDelta,
+                                         coordinateBlockSizeValue);
+        Value rawEnd = ceilDivPositiveIndex(builder, loc, endDelta,
+                                            coordinateBlockSizeValue);
         Value offset = rawOffset;
         if (dep.blockLo[slot] != 0) {
           Value windowLo = createConstantIndex(builder, loc, dep.blockLo[slot]);
@@ -3485,7 +3496,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
         sizes.push_back(arith::MinUIOp::create(builder, loc, remaining, count));
         offsets.push_back(offset);
         depGroupBlockCounts[slot] = std::max<int64_t>(
-            1, ceilDivPositiveI64(workerSpans[slot], *depBlockSize));
+            1, ceilDivPositiveI64(workerSpans[slot], coordinateBlockSize));
       }
     }
     bool requiresDbRef = dep.reduceScatter.has_value() ||

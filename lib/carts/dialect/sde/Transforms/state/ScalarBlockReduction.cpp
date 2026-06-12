@@ -3,39 +3,9 @@
 ///
 /// SDE-owned scalar block-reduction transformation.
 ///
-/// Before:
-///   sde.cu_region <single> {
-///     scf.for %i = %c0 to %n step %stride {
-///       %old = memref.load %sum[] : memref<f64>
-///       %v = memref.load %A[%i] : memref<?xf64>
-///       %next = arith.addf %old, %v : f64
-///       memref.store %next, %sum[] : memref<f64>
-///     }
-///   }
-///
-/// After:
-///   %partials = memref.alloc() : memref<blocks x accumulators x T>
-///   sde.su_iterate (%b) to (%blocks) step (%c1)
-///   classification(<elementwise>) {
-///     sde.cu_region <parallel> {
-///       scf.for %i = first_in_block(%b) to block_end(%b) step %stride {
-///         ... update local scalar accumulators ...
-///       }
-///       memref.store %local, %partials[%b, %slot]
-///     }
-///   } {physicalOwnerDims = [0], physicalBlockShape = [1, accumulators],
-///      logicalWorkerSlice = [1],
-///      iterationTopology = #sde.iteration_topology<owner_strip>}
-///   sde.cu_region <single> {
-///     scf.for %b = %c0 to %blocks step %c1 {
-///       ... combine partials into the original scalar accumulators ...
-///     }
-///   }
-///
-/// After MU rank expansion, transformed partials are emitted directly as
-/// expanded `sde.mu_alloc` roots. The leading grid dimension is the owner-block
-/// coordinate and the singleton owner tile dimension makes the committed grain
-/// structural for the verifier and downstream window raiser.
+/// Rewrites a single-CU scalar reduction loop into block-parallel partial
+/// producers plus a single-CU final combine. Rank-expanded inputs keep owner
+/// block coordinates explicit in the partial MU shape.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -65,7 +35,7 @@ using namespace mlir::carts;
 
 namespace {
 
-struct BlockPlan1D {
+struct BlockGeometry1D {
   Value root;
   MemRefType type;
   int64_t extent = 0;
@@ -83,7 +53,7 @@ struct AccumulatorUpdate {
 struct ReductionCandidate {
   scf::ForOp loop;
   SmallVector<AccumulatorUpdate, 4> accumulators;
-  BlockPlan1D plan;
+  BlockGeometry1D sourceGeometry;
   int64_t step = 0;
   int64_t partialSlots = 1;
   bool preserveFloatOrder = false;
@@ -172,14 +142,15 @@ static std::optional<SmallVector<int64_t, 2>> readI64Vector(ArrayAttr attr) {
   return out;
 }
 
-static std::optional<BlockPlan1D> findCommittedPlanForRoot(Value root) {
+static std::optional<BlockGeometry1D>
+findCommittedBlockGeometryForRoot(Value root) {
   root = ValueAnalysis::stripMemrefViewOps(root);
   if (!isSupportedStaticSourceMemref(root))
     return std::nullopt;
 
   auto type = cast<MemRefType>(root.getType());
   bool rankExpandedMu = type.getRank() == 2;
-  std::optional<BlockPlan1D> result;
+  std::optional<BlockGeometry1D> result;
   for (Operation *user : root.getUsers()) {
     if (!isa<memref::LoadOp, memref::StoreOp>(user))
       continue;
@@ -208,8 +179,8 @@ static std::optional<BlockPlan1D> findCommittedPlanForRoot(Value root) {
       continue;
     if (!rankExpandedMu && blockExtent > type.getDimSize(0))
       continue;
-    BlockPlan1D candidate{root,        type,       extent,
-                          blockExtent, blockCount, rankExpandedMu};
+    BlockGeometry1D candidate{root,        type,       extent,
+                              blockExtent, blockCount, rankExpandedMu};
     if (result) {
       if (result->extent != candidate.extent ||
           result->blockExtent != candidate.blockExtent ||
@@ -257,23 +228,24 @@ static bool validateLoopBody(ReductionCandidate &candidate) {
           rank0AccumulatorIndex(load.getMemRef(), candidate.accumulators))
         continue;
       Value root = ValueAnalysis::stripMemrefViewOps(load.getMemRef());
-      std::optional<BlockPlan1D> plan = findCommittedPlanForRoot(root);
-      if (!plan)
+      std::optional<BlockGeometry1D> geometry =
+          findCommittedBlockGeometryForRoot(root);
+      if (!geometry)
         return false;
-      if (candidate.plan.root) {
-        if (candidate.plan.extent != plan->extent ||
-            candidate.plan.blockExtent != plan->blockExtent ||
-            candidate.plan.blockCount != plan->blockCount)
+      if (candidate.sourceGeometry.root) {
+        if (candidate.sourceGeometry.extent != geometry->extent ||
+            candidate.sourceGeometry.blockExtent != geometry->blockExtent ||
+            candidate.sourceGeometry.blockCount != geometry->blockCount)
           return false;
       } else {
-        candidate.plan = *plan;
+        candidate.sourceGeometry = *geometry;
       }
       continue;
     }
     if (!isSupportedPureOp(&op))
       return false;
   }
-  return static_cast<bool>(candidate.plan.root);
+  return static_cast<bool>(candidate.sourceGeometry.root);
 }
 
 static bool isValueDefinedInsideCu(Value value, sde::SdeCuRegionOp cu,
@@ -303,6 +275,9 @@ static bool canHoistProducerOutsideParentCu(ReductionCandidate &candidate,
   auto valueCanHoist = [&](Value value) {
     return !isValueDefinedInsideCu(value, parentCu, candidate.loop);
   };
+  for (const AccumulatorUpdate &acc : candidate.accumulators)
+    if (!valueCanHoist(acc.memref))
+      return false;
   if (!valueCanHoist(candidate.loop.getLowerBound()) ||
       !valueCanHoist(candidate.loop.getUpperBound()) ||
       !valueCanHoist(candidate.loop.getStep()))
@@ -353,16 +328,16 @@ static std::optional<ReductionCandidate> matchReductionLoop(scf::ForOp loop) {
 
   if (!validateLoopBody(candidate))
     return std::nullopt;
-  if (upper > candidate.plan.extent)
+  if (upper > candidate.sourceGeometry.extent)
     return std::nullopt;
 
   bool hasFloat =
       llvm::any_of(candidate.accumulators,
                    [](const AccumulatorUpdate &acc) { return acc.isFloat; });
-  if (hasFloat && candidate.step < candidate.plan.blockExtent) {
+  if (hasFloat && candidate.step < candidate.sourceGeometry.blockExtent) {
     candidate.preserveFloatOrder = true;
     candidate.partialSlots =
-        ceilDiv(candidate.plan.blockExtent, candidate.step);
+        ceilDiv(candidate.sourceGeometry.blockExtent, candidate.step);
   }
 
   return candidate;
@@ -421,8 +396,8 @@ static MemRefType buildPartialType(MLIRContext *ctx,
                                    const ReductionCandidate &candidate) {
   Type elementType = candidate.accumulators.front().elementType;
   SmallVector<int64_t, 2> shape;
-  shape.push_back(candidate.plan.blockCount);
-  if (candidate.plan.rankExpandedMu)
+  shape.push_back(candidate.sourceGeometry.blockCount);
+  if (candidate.sourceGeometry.rankExpandedMu)
     shape.push_back(1);
   if (candidate.preserveFloatOrder) {
     shape.push_back(candidate.partialSlots);
@@ -483,7 +458,7 @@ static ArrayAttr buildPartialArrayLayout(MLIRContext *ctx, int64_t arrayId,
       buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate))));
   fields.push_back(builder.getNamedAttr(
       sde::AttrNames::LayoutGraph::MuBlockCount,
-      builder.getI64IntegerAttr(candidate.plan.blockCount)));
+      builder.getI64IntegerAttr(candidate.sourceGeometry.blockCount)));
   fields.push_back(builder.getNamedAttr(
       sde::AttrNames::LayoutGraph::Role,
       builder.getStringAttr(sde::AttrNames::LayoutGraphValues::RoleWrite)));
@@ -496,7 +471,7 @@ static SmallVector<Value, 4> partialIndices(const ReductionCandidate &candidate,
                                             unsigned accumulatorSlot) {
   SmallVector<Value, 4> indices;
   indices.push_back(blockIv);
-  if (candidate.plan.rankExpandedMu)
+  if (candidate.sourceGeometry.rankExpandedMu)
     indices.push_back(constantIndex(builder, loc, 0));
   if (candidate.preserveFloatOrder)
     indices.push_back(partialSlot);
@@ -589,14 +564,16 @@ static void createBlockSummingProducerBody(ReductionCandidate &candidate,
                 locals, builder, loc);
 }
 
-static void createProducer(ReductionCandidate &candidate, Value partial,
-                           std::optional<int64_t> partialArrayId,
-                           OpBuilder &builder) {
+static sde::SdeSuIterateOp createProducer(ReductionCandidate &candidate,
+                                          Value partial,
+                                          std::optional<int64_t> partialArrayId,
+                                          OpBuilder &builder) {
   MLIRContext *ctx = builder.getContext();
   Location loc = candidate.loop.getLoc();
   Value zero = constantIndex(builder, loc, 0);
   Value one = constantIndex(builder, loc, 1);
-  Value blockCount = constantIndex(builder, loc, candidate.plan.blockCount);
+  Value blockCount =
+      constantIndex(builder, loc, candidate.sourceGeometry.blockCount);
 
   auto su = sde::SdeSuIterateOp::create(
       builder, loc, /*resultTypes=*/TypeRange{}, ValueRange{zero},
@@ -646,10 +623,10 @@ static void createProducer(ReductionCandidate &candidate, Value partial,
 
   Value first =
       buildFirstIndexInBlock(builder, loc, blockIv, candidate.loop.getStep(),
-                             candidate.plan.blockExtent);
+                             candidate.sourceGeometry.blockExtent);
   Value end =
       buildBlockEnd(builder, loc, blockIv, candidate.loop.getUpperBound(),
-                    candidate.plan.blockExtent);
+                    candidate.sourceGeometry.blockExtent);
   if (candidate.preserveFloatOrder) {
     scf::ForOp slotLoop = createOrderPreservingProducerBody(
         candidate, partial, blockIv, first, end, builder, loc);
@@ -662,6 +639,7 @@ static void createProducer(ReductionCandidate &candidate, Value partial,
 
   builder.setInsertionPointToEnd(&suBody);
   sde::SdeYieldOp::create(builder, loc, ValueRange{});
+  return su;
 }
 
 static void createFinalCombine(ReductionCandidate &candidate, Value partial,
@@ -669,7 +647,8 @@ static void createFinalCombine(ReductionCandidate &candidate, Value partial,
   Location loc = candidate.loop.getLoc();
   Value zero = constantIndex(builder, loc, 0);
   Value one = constantIndex(builder, loc, 1);
-  Value blockCount = constantIndex(builder, loc, candidate.plan.blockCount);
+  Value blockCount =
+      constantIndex(builder, loc, candidate.sourceGeometry.blockCount);
   auto combine = scf::ForOp::create(builder, loc, zero, blockCount, one);
 
   builder.setInsertionPointToStart(combine.getBody());
@@ -698,6 +677,133 @@ static void createFinalCombine(ReductionCandidate &candidate, Value partial,
   builder.setInsertionPointAfter(combine);
 }
 
+static sde::SdeCuRegionOp createEmptySingleCuAfter(Operation *anchor,
+                                                   Location loc) {
+  OpBuilder builder(anchor);
+  builder.setInsertionPointAfter(anchor);
+  auto cu = sde::SdeCuRegionOp::create(
+      builder, loc, /*resultTypes=*/TypeRange{},
+      sde::SdeCuKindAttr::get(anchor->getContext(), sde::SdeCuKind::single),
+      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  Block &body = sde::ensureBlock(cu.getBody());
+  OpBuilder bodyBuilder(cu.getContext());
+  bodyBuilder.setInsertionPointToEnd(&body);
+  sde::SdeYieldOp::create(bodyBuilder, loc, ValueRange{});
+  return cu;
+}
+
+static bool hasWorkBeforeTerminator(sde::SdeCuRegionOp cu) {
+  if (!cu || cu.getBody().empty())
+    return false;
+  for (Operation &op : cu.getBody().front().without_terminator()) {
+    (void)op;
+    return true;
+  }
+  return false;
+}
+
+static bool isNestedUnder(Operation *op, Operation *container) {
+  for (Operation *cursor = op; cursor; cursor = cursor->getParentOp())
+    if (cursor == container)
+      return true;
+  return false;
+}
+
+static Value
+cloneExternalProducer(Value value, sde::SdeCuRegionOp source,
+                      const llvm::SmallPtrSetImpl<Operation *> &span,
+                      IRMapping &mapper, OpBuilder &builder) {
+  if (!value)
+    return {};
+  if (Value mapped = mapper.lookupOrNull(value))
+    return mapped;
+
+  Operation *def = value.getDefiningOp();
+  if (!def || !isNestedUnder(def, source.getOperation()) || span.contains(def))
+    return value;
+  if (!isSupportedPureOp(def) || def->getNumRegions() != 0 ||
+      def->getNumResults() == 0)
+    return {};
+
+  for (Value operand : def->getOperands()) {
+    Value mappedOperand =
+        cloneExternalProducer(operand, source, span, mapper, builder);
+    if (!mappedOperand)
+      return {};
+    if (mappedOperand != operand)
+      mapper.map(operand, mappedOperand);
+  }
+  Operation *cloned = builder.clone(*def, mapper);
+  return mapper.lookupOrNull(value) ? mapper.lookupOrNull(value)
+                                    : cloned->getResult(0);
+}
+
+static LogicalResult moveFollowingOpsToCu(Operation *anchor,
+                                          sde::SdeCuRegionOp source,
+                                          sde::SdeCuRegionOp target) {
+  SmallVector<Operation *, 8> span;
+  for (Operation *next = anchor->getNextNode();
+       next && !isa<sde::SdeYieldOp>(next); next = next->getNextNode())
+    span.push_back(next);
+  llvm::SmallPtrSet<Operation *, 32> spanSet;
+  for (Operation *op : span)
+    op->walk([&](Operation *nested) { spanSet.insert(nested); });
+
+  Block &targetBody = target.getBody().front();
+  Operation *targetYield = targetBody.getTerminator();
+  OpBuilder builder(target.getContext());
+  builder.setInsertionPoint(targetYield);
+  IRMapping mapper;
+  for (Operation *op : span) {
+    WalkResult result = op->walk([&](Operation *nested) {
+      for (OpOperand &operand : nested->getOpOperands()) {
+        Value mapped = cloneExternalProducer(operand.get(), source, spanSet,
+                                             mapper, builder);
+        if (mapped)
+          continue;
+        InFlightDiagnostic diag = nested->emitError()
+                                  << "uses non-cloneable CU-local value "
+                                     "across scalar block-reduction CU split: "
+                                  << operand.get();
+        if (Operation *def = operand.get().getDefiningOp())
+          diag << " defined by " << def->getName();
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (result.wasInterrupted())
+      return failure();
+  }
+
+  for (Operation *op : span)
+    op->moveBefore(targetYield);
+  for (Operation *op : span) {
+    op->walk([&](Operation *nested) {
+      for (OpOperand &operand : nested->getOpOperands()) {
+        if (Value mapped = mapper.lookupOrNull(operand.get()))
+          operand.set(mapped);
+      }
+    });
+  }
+  return success();
+}
+
+static sde::SdeCuRegionOp
+createFinalCombineCuAfter(Operation *anchor, ReductionCandidate &candidate,
+                          Value partial) {
+  sde::SdeCuRegionOp combineCu =
+      createEmptySingleCuAfter(anchor, candidate.loop.getLoc());
+  Block &body = combineCu.getBody().front();
+  body.getTerminator()->erase();
+
+  OpBuilder builder(combineCu.getContext());
+  builder.setInsertionPointToStart(&body);
+  createFinalCombine(candidate, partial, builder);
+  builder.setInsertionPointToEnd(&body);
+  sde::SdeYieldOp::create(builder, candidate.loop.getLoc(), ValueRange{});
+  return combineCu;
+}
+
 static LogicalResult rewriteReduction(ReductionCandidate candidate) {
   sde::SdeCuRegionOp parentCu =
       candidate.loop->getParentOfType<sde::SdeCuRegionOp>();
@@ -706,12 +812,13 @@ static LogicalResult rewriteReduction(ReductionCandidate candidate) {
 
   Location loc = candidate.loop.getLoc();
   OpBuilder outerBuilder(parentCu);
+  outerBuilder.setInsertionPointAfter(parentCu);
 
   MemRefType partialType =
       buildPartialType(outerBuilder.getContext(), candidate);
   Value partial;
   std::optional<int64_t> partialArrayId;
-  if (candidate.plan.rankExpandedMu) {
+  if (candidate.sourceGeometry.rankExpandedMu) {
     partialArrayId = nextInternalArrayId(parentCu.getOperation());
     auto partialAlloc =
         sde::SdeMuAllocOp::create(outerBuilder, loc, partialType, ValueRange{});
@@ -732,11 +839,21 @@ static LogicalResult rewriteReduction(ReductionCandidate candidate) {
     partial = allocCu.getResult(0);
     outerBuilder.setInsertionPointAfter(allocCu);
   }
-  createProducer(candidate, partial, partialArrayId, outerBuilder);
-
-  OpBuilder innerBuilder(candidate.loop);
-  createFinalCombine(candidate, partial, innerBuilder);
+  sde::SdeSuIterateOp producer =
+      createProducer(candidate, partial, partialArrayId, outerBuilder);
+  sde::SdeCuRegionOp combineCu =
+      createFinalCombineCuAfter(producer.getOperation(), candidate, partial);
+  sde::SdeCuRegionOp trailingCu;
+  if (Operation *next = candidate.loop->getNextNode())
+    if (!isa<sde::SdeYieldOp>(next)) {
+      trailingCu = createEmptySingleCuAfter(combineCu.getOperation(), loc);
+      if (failed(moveFollowingOpsToCu(candidate.loop.getOperation(), parentCu,
+                                      trailingCu)))
+        return failure();
+    }
   candidate.loop.erase();
+  if (!hasWorkBeforeTerminator(parentCu))
+    parentCu.erase();
   return success();
 }
 

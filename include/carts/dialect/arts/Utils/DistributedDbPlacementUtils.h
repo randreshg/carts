@@ -191,8 +191,8 @@ resolveArtsOwnerSlotMapping(ArrayRef<int64_t> ownerDims,
     seenLoop[loopDim] = 1;
 
     int64_t blockSize = 0;
-    if (blockShape.size() == loopRank &&
-        static_cast<size_t>(ownerDim) < blockShape.size()) {
+    if (static_cast<size_t>(ownerDim) < blockShape.size() &&
+        blockShape.size() >= loopRank) {
       blockSize = blockShape[ownerDim];
     } else if (blockShape.size() == ownerDims.size()) {
       blockSize = blockShape[rawSlot];
@@ -537,7 +537,7 @@ staticOwnerDimContiguousRoute(int64_t ownerLinear, int64_t ownerSpace,
 
 /// Proves that a rectangular DB-block range maps to one runtime owner under the
 /// derived owner route. This is a static legality proof for grouped writer
-/// CUs/EDTs; callers still materialize the real grouped acquire/EDT shape.
+/// CUs/EDTs; callers still build the real grouped acquire/EDT shape.
 inline bool
 isStaticDbOwnerBlockRangeRouteLocal(ArrayRef<int64_t> dbSizes,
                                     ArrayRef<int64_t> offsets,

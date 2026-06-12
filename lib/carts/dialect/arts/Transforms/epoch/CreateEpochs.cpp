@@ -112,6 +112,8 @@ static bool containsEdtLaunch(Operation *op) {
 static bool isMovableBarrierSegmentOp(Operation *op) {
   if (isa<DbAcquireOp>(op))
     return true;
+  if (isa<func::CallOp>(op))
+    return false;
 
   // Scalar SSA helpers that feed only moved EDTs must move with the EDTs when
   // the barrier segment is wrapped, otherwise the new epoch can be inserted
@@ -119,6 +121,32 @@ static bool isMovableBarrierSegmentOp(Operation *op) {
   // regionless, side-effect-free ops; memory reads/writes and nested control
   // remain outside unless they are already part of an EDT launch container.
   return op->getNumRegions() == 0 && isMemoryEffectFree(op);
+}
+
+static Block::iterator findBarrierSegmentBegin(BarrierOp barrier) {
+  Block *block = barrier->getBlock();
+  auto barrierIt = Block::iterator(barrier.getOperation());
+  auto segmentBegin = barrierIt;
+  bool sawEdtLaunch = false;
+
+  while (segmentBegin != block->begin()) {
+    auto prev = std::prev(segmentBegin);
+    if (isa<BarrierOp, EpochOp>(*prev))
+      break;
+
+    Operation *op = &*prev;
+    bool hasLaunch = containsEdtLaunch(op);
+    if (!hasLaunch && !isMovableBarrierSegmentOp(op)) {
+      if (!sawEdtLaunch)
+        return barrierIt;
+      break;
+    }
+
+    sawEdtLaunch |= hasLaunch;
+    segmentBegin = prev;
+  }
+
+  return segmentBegin;
 }
 
 static Operation *getAncestorInBlock(Operation *op, Block *block) {
@@ -185,13 +213,7 @@ static void processBarrierOp(BarrierOp barrier) {
   Operation *epochInsertionOp = nullptr;
 
   auto barrierIt = Block::iterator(barrier.getOperation());
-  auto segmentBegin = barrierIt;
-  while (segmentBegin != block->begin()) {
-    auto prev = std::prev(segmentBegin);
-    if (isa<BarrierOp, EpochOp>(*prev))
-      break;
-    segmentBegin = prev;
-  }
+  auto segmentBegin = findBarrierSegmentBegin(barrier);
 
   // First pass: collect ops containing an EDT launch (the primary movers).
   for (auto it = segmentBegin; it != barrierIt; ++it) {
