@@ -1,17 +1,18 @@
 // RUN: %carts-compile %s --pipeline post-db-refinement --start-from post-db-refinement --arts-config %inputs_dir/arts_1t.cfg | %FileCheck %s
 
-// Single-node runtime does not make an otherwise local block DB distributed.
-// ARTS needs positive distributed use or distribution facts before it marks
-// distributed ownership.
+// A supported block-grid DB is owner-routed ARTS storage.
 
-// CHECK-LABEL: func.func @single_node_local_block_db_stays_local
+// CHECK-LABEL: func.func @intranode_block_db_realizes_owner_route
 // CHECK: arts.db_alloc
-// CHECK-NOT: distributed
-// CHECK: arts.edt <task> <intranode>
+// CHECK-SAME: <block>
+// CHECK-SAME: distributed
+// CHECK-NOT: local_only
+// CHECK: arts.runtime_query <total_nodes>
+// CHECK: arts.edt <task> <internode> route(
 // CHECK: return
 
 module {
-  func.func @single_node_local_block_db_stays_local() {
+  func.func @intranode_block_db_realizes_owner_route() {
     %route = arith.constant -1 : i32
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index

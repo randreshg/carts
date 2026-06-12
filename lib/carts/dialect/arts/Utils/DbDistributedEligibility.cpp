@@ -281,12 +281,6 @@ static bool isHaloBackedHostBridge(DbAllocOp alloc) {
          (*mode == PartitionMode::block || *mode == PartitionMode::stencil);
 }
 
-static bool hasSingleNodeRuntime(DbAllocOp alloc) {
-  ModuleOp module = alloc ? alloc->getParentOfType<ModuleOp>() : ModuleOp();
-  std::optional<int64_t> totalNodes = getRuntimeTotalNodes(module);
-  return totalNodes && *totalNodes <= 1;
-}
-
 } // namespace
 
 const char *
@@ -315,8 +309,6 @@ mlir::carts::arts::toString(DistributedDbEligibilityRejectReason reason) {
     return "unsupported_guid_users";
   case DistributedDbEligibilityRejectReason::NonEdtAcquireUse:
     return "non_edt_acquire_use";
-  case DistributedDbEligibilityRejectReason::NoDistributedOwnerUse:
-    return "no_distributed_owner_use";
   case DistributedDbEligibilityRejectReason::PerBlockReplicated:
     return "per_block_replicated";
   }
@@ -382,10 +374,5 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc) {
     return {false,
             DistributedDbEligibilityRejectReason::StencilReadInternodeUse};
   }
-  if (!facts.hasInternodeWriteUse &&
-      !getEdtDistributionKind(alloc.getOperation()))
-    return {false, DistributedDbEligibilityRejectReason::NoDistributedOwnerUse};
-  if (hasSingleNodeRuntime(alloc))
-    return {true, DistributedDbEligibilityRejectReason::None};
   return {true, DistributedDbEligibilityRejectReason::None};
 }

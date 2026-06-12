@@ -14,7 +14,8 @@
 // CHECK: %[[COL_REMAIN:[A-Za-z0-9_]+]] = arith.subi %{{[A-Za-z0-9_]+}}, %[[COL_BLOCK]] : index
 // CHECK: %[[COL_GROUP:[A-Za-z0-9_]+]] = arith.minui %[[COL_REMAIN]], %{{[A-Za-z0-9_]+}} : index
 // CHECK: arts.db_acquire[<{{inout|out}}>] {{.*}} offsets[%[[ROW_BLOCK]], %[[COL_BLOCK]]], sizes[%[[ROW_GROUP]], %[[COL_GROUP]]]
-// CHECK: arts.edt <task> <intranode> route
+// CHECK: arts.runtime_query <total_nodes>
+// CHECK: arts.edt <task> <internode> route
 // CHECK: %[[INNER_BLOCK:[A-Za-z0-9_]+]] = arith.divui %{{[A-Za-z0-9_]+}}, %[[C512]] : index
 // CHECK: %[[LOCAL_BLOCK:[A-Za-z0-9_]+]] = arith.subi %[[INNER_BLOCK]], %arg{{[0-9]+}} : index
 // CHECK: arts.db_ref %arg{{[0-9]+}}[%[[LOCAL_BLOCK]], %{{[A-Za-z0-9_]+}}]

@@ -1,7 +1,7 @@
 // RUN: not %carts-compile %s --pass-pipeline='builtin.module(distributed-launch-consistency)' 2>&1 | %FileCheck %s
 
-// Localizing an EDT that also writes a distributed DB would be a fallback for
-// the write. The codelet must be split or sequenced instead.
+// Localizing an EDT that also writes a distributed DB violates committed
+// ownership. The codelet must be split or sequenced instead.
 
 // CHECK: mixes a local-only distributed dependency with a distributed writer
 

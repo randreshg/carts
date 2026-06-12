@@ -245,13 +245,7 @@ static LogicalResult verifyCdagAllocDirectUses(DbAllocOp alloc) {
 }
 
 static bool hasAllowedNonDistributedBlockLayoutEvidence(DbAllocOp alloc) {
-  if (alloc.getPerBlockReplicated().value_or(false))
-    return true;
-  DistributedDbEligibilityResult eligibility =
-      evaluateDistributedDbEligibility(alloc);
-  return !eligibility.eligible &&
-         eligibility.reason ==
-             DistributedDbEligibilityRejectReason::NoDistributedOwnerUse;
+  return alloc.getPerBlockReplicated().value_or(false);
 }
 
 /// (A) owner-route consistency + (B) distribution preservation.
@@ -259,10 +253,8 @@ static LogicalResult verifyCdagAlloc(DbAllocOp alloc) {
   bool distributed = hasDistributedDbAllocation(alloc.getOperation());
 
   /// (B) An SDE-partitioned MU carries a committed physical block layout. ARTS
-  /// must realize it as a distributed DB, or leave explicit evidence of an
-  /// intentional non-distributed home (a derived all-gather replica or an
-  /// allowed eligibility rejection). A committed block grid marked
-  /// `local_only` is not valid preservation evidence.
+  /// must realize it as a distributed DB or a derived all-gather replica.
+  /// A committed block grid marked `local_only` is not preservation evidence.
   bool hasNonDistributedEvidence =
       hasAllowedNonDistributedBlockLayoutEvidence(alloc);
   if (hasArtsDbPhysicalLayout(alloc.getOperation()) && !distributed &&

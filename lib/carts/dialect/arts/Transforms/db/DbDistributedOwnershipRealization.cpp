@@ -77,14 +77,12 @@ struct DbDistributedOwnershipRealizationPass
       } else {
         if (hasArtsDbPhysicalLayout(alloc.getOperation()) &&
             eligibility.reason !=
-                DistributedDbEligibilityRejectReason::PerBlockReplicated &&
-            eligibility.reason !=
-                DistributedDbEligibilityRejectReason::NoDistributedOwnerUse) {
+                DistributedDbEligibilityRejectReason::PerBlockReplicated) {
           alloc.emitOpError()
               << "carries a committed SDE block layout but is not eligible "
                  "for distributed DB realization ("
               << toString(eligibility.reason)
-              << "); ARTS must materialize explicit graph work or fail before "
+              << "); ARTS must create explicit graph work or fail before "
                  "distributed DB realization";
           failed = true;
           return;
