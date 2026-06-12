@@ -92,6 +92,8 @@ Match verification to the change:
 <!-- BEGIN SKILLS INVENTORY -->
 ## Available Skills
 
+Before editing CARTS sources, scan the Skills inventory below and read the SKILL.md for any whose description matches your task.
+
 ### Session lifecycle
 
 | Skill | Description | Path |
