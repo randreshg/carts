@@ -169,6 +169,7 @@ private:
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
   IdRegistry idRegistry;
+  bool hasFailure = false;
 };
 } // namespace
 
@@ -181,6 +182,11 @@ void DbLoweringPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 
   convertDbAllocOps();
+  if (hasFailure) {
+    AC = nullptr;
+    signalPassFailure();
+    return;
+  }
 
   RemovalUtils removalMgr;
   for (Operation *op : opsToRemove)
@@ -219,12 +225,12 @@ void DbLoweringPass::convertDbAllocOps() {
     }
 
     if (hasDistributedDbAllocation(oldOp.getOperation())) {
-      DbOwnerMapPlanFailure planFailure =
-          getDistributedDbOwnerMapPlanFailure(oldOp);
-      if (planFailure != DbOwnerMapPlanFailure::None) {
+      DbOwnerRouteFailure factsFailure =
+          getDistributedDbOwnerRouteFailure(oldOp);
+      if (factsFailure != DbOwnerRouteFailure::None) {
         oldOp.emitOpError()
-            << "cannot lower distributed DB with unverified owner-map plan: "
-            << toString(planFailure);
+            << "cannot lower distributed DB with invalid owner routing: "
+            << toString(factsFailure);
         signalPassFailure();
         return;
       }
@@ -253,19 +259,18 @@ void DbLoweringPass::convertDbAllocOps() {
         *partitionMode);
     ARTS_DEBUG("  - New DbAllocOp: " << newOp);
     copyArtsMetadataAttrs(oldOp.getOperation(), newOp.getOperation());
+    copyDistributionAttrs(oldOp.getOperation(), newOp.getOperation());
     if (auto bridge = oldOp.getStorageBridgeAttr())
       newOp.setStorageBridgeAttr(bridge);
-    if (auto ownerDims = getPlanOwnerDimsAttr(oldOp))
-      setPlanOwnerDimsAttr(newOp.getOperation(), ownerDims);
-    if (auto blockShape = getPlanPhysicalBlockShapeAttr(oldOp))
-      setPlanPhysicalBlockShapeAttr(newOp.getOperation(), blockShape);
-    if (auto workerSlice = getPlanLogicalWorkerSliceAttr(oldOp))
-      setPlanLogicalWorkerSliceAttr(newOp.getOperation(), workerSlice);
-    if (auto haloShape = getPlanHaloShapeAttr(oldOp))
-      setPlanHaloShapeAttr(newOp.getOperation(), haloShape);
-    copyDbOwnerMapAttrs(oldOp, newOp);
-    /// Preserve non-arts distributed ownership marker so ConvertArtsRtToLLVM
-    /// can route datablock reservation by node.
+    if (hasDistributedDbAllocation(oldOp.getOperation()) &&
+        !destDbOwnerRouteMatchesSourcePolicy(oldOp, newOp)) {
+      oldOp.emitOpError()
+          << "cannot derive lowered DB owner routes from destination DB grid "
+             "and source distribution kind";
+      signalPassFailure();
+      return;
+    }
+    /// Preserve ARTS distributed ownership for the ARTS runtime-init pass.
     if (hasDistributedDbAllocation(oldOp.getOperation()))
       setDistributedDbAllocation(newOp.getOperation(), /*enabled=*/true);
 
@@ -311,6 +316,8 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
       auto originalMemrefType = cast<MemRefType>(dbRefOp.getResult().getType());
       auto createCastedMemref = [&](Location loc) -> Value {
         Value llvmPtr = getLLVMPtr(newPtr, dbRefIndices, loc);
+        if (!llvmPtr)
+          return {};
         auto loadedLlvmPtr =
             AC->create<LLVM::LoadOp>(loc, llvmPtr.getType(), llvmPtr);
         return AC->create<polygeist::Pointer2MemrefOp>(loc, originalMemrefType,
@@ -324,6 +331,8 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
 
         if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
           Value castedMemref = createCastedMemref(loadOp.getLoc());
+          if (!castedMemref)
+            continue;
           SmallVector<Value> indices(loadOp.getIndices().begin(),
                                      loadOp.getIndices().end());
           auto dynLoad = AC->create<polygeist::DynLoadOp>(
@@ -333,6 +342,8 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
           opsToRemove.insert(loadOp);
         } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
           Value castedMemref = createCastedMemref(storeOp.getLoc());
+          if (!castedMemref)
+            continue;
           SmallVector<Value> indices(storeOp.getIndices().begin(),
                                      storeOp.getIndices().end());
           AC->create<polygeist::DynStoreOp>(
@@ -341,6 +352,8 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
           opsToRemove.insert(storeOp);
         } else {
           Value castedMemref = createCastedMemref(userOp->getLoc());
+          if (!castedMemref)
+            continue;
           dbRefUse.set(castedMemref);
         }
       }
@@ -351,6 +364,8 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
 
     if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
       Value llvmPtr = getLLVMPtr(newPtr, loadOp.getIndices(), loadOp.getLoc());
+      if (!llvmPtr)
+        continue;
       auto newLoad = AC->create<LLVM::LoadOp>(
           loadOp.getLoc(), loadOp.getResult().getType(), llvmPtr);
       loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
@@ -361,6 +376,8 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
     if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
       Value llvmPtr =
           getLLVMPtr(newPtr, storeOp.getIndices(), storeOp.getLoc());
+      if (!llvmPtr)
+        continue;
       AC->create<LLVM::StoreOp>(storeOp.getLoc(), storeOp.getValueToStore(),
                                 llvmPtr);
       opsToRemove.insert(storeOp);
@@ -470,6 +487,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
             cast<MemRefType>(dbRefOp.getResult().getType());
         auto createCastedMemref = [&](Location loc) -> Value {
           Value llvmPtr = getLLVMPtr(replacementBase, dbRefIndices, loc);
+          if (!llvmPtr)
+            return {};
           auto loadedLlvmPtr =
               AC->create<LLVM::LoadOp>(loc, llvmPtr.getType(), llvmPtr);
           return AC->create<polygeist::Pointer2MemrefOp>(
@@ -483,6 +502,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
 
           if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
             Value castedMemref = createCastedMemref(loadOp.getLoc());
+            if (!castedMemref)
+              continue;
             SmallVector<Value> loadIndices(loadOp.getIndices().begin(),
                                            loadOp.getIndices().end());
             auto dynLoad = AC->create<polygeist::DynLoadOp>(
@@ -492,6 +513,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
             opsToRemove.insert(loadOp);
           } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
             Value castedMemref = createCastedMemref(storeOp.getLoc());
+            if (!castedMemref)
+              continue;
             SmallVector<Value> storeIndices(storeOp.getIndices().begin(),
                                             storeOp.getIndices().end());
             AC->create<polygeist::DynStoreOp>(
@@ -500,6 +523,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
             opsToRemove.insert(storeOp);
           } else {
             Value castedMemref = createCastedMemref(userOp->getLoc());
+            if (!castedMemref)
+              continue;
             dbRefUse.set(castedMemref);
           }
         }
@@ -511,6 +536,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
       if (auto loadOp = dyn_cast<memref::LoadOp>(blockUserOp)) {
         Value llvmPtr =
             getLLVMPtr(replacementBase, loadOp.getIndices(), loadOp.getLoc());
+        if (!llvmPtr)
+          continue;
         auto newLoad = AC->create<LLVM::LoadOp>(
             loadOp.getLoc(), loadOp.getResult().getType(), llvmPtr);
         loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
@@ -521,6 +548,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
       if (auto storeOp = dyn_cast<memref::StoreOp>(blockUserOp)) {
         Value llvmPtr =
             getLLVMPtr(replacementBase, storeOp.getIndices(), storeOp.getLoc());
+        if (!llvmPtr)
+          continue;
         AC->create<LLVM::StoreOp>(storeOp.getLoc(), storeOp.getValueToStore(),
                                   llvmPtr);
         opsToRemove.insert(storeOp);
@@ -584,7 +613,10 @@ Value DbLoweringPass::getLLVMPtr(Value base, ValueRange opIndices,
                                  Location loc) {
   LayoutInfo layout = buildLayoutInfo(base);
   SmallVector<Value> indices(opIndices.begin(), opIndices.end());
-  return computeDbElementPointer(*AC, loc, base, indices, layout);
+  Value ptr = computeDbElementPointer(*AC, loc, base, indices, layout);
+  if (!ptr)
+    hasFailure = true;
+  return ptr;
 }
 
 ///===----------------------------------------------------------------------===///

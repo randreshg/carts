@@ -78,6 +78,10 @@ static bool isKnownMemoryAccess(Operation *op) {
   return info && (info->isLoad || info->isStore);
 }
 
+static bool isControlRegionBoundary(Operation *op) {
+  return op && op->getNumRegions() != 0 && !isa<scf::ForOp>(op);
+}
+
 static bool loopHasConflictingWrite(Operation *loadOp, scf::ForOp targetLoop,
                                     Value loadedRoot) {
   if (!loadedRoot)
@@ -137,8 +141,11 @@ static scf::ForOp findDataLoadHoistTarget(Operation *loadOp,
   for (Operation *parent = loadOp->getParentOp(); parent;
        parent = parent->getParentOp()) {
     auto loop = dyn_cast<scf::ForOp>(parent);
-    if (!loop)
+    if (!loop) {
+      if (isControlRegionBoundary(parent))
+        break;
       continue;
+    }
 
     Region &loopRegion = loop.getRegion();
     if (!allOperandsDefinedOutside(loadOp, loopRegion))
@@ -257,13 +264,12 @@ void DataPtrHoistingPass::runOnOperation() {
     for (auto &[loadOp, loop] : singleBlockDepLoads) {
       if (!loadOp || !loop)
         continue;
-      if (materializeSingleBlockBlockedDepView(loadOp, loop))
+      if (createSingleBlockBlockedDepView(loadOp, loop))
         singleBlockDepViews++;
     }
 
-    /// Hoist loop-invariant pointer materializations after the dep/db load
-    /// rewrites above so later stencil-specific rewrites see stable memref
-    /// views instead of loop-local pointer2memref rebuilds.
+    /// Hoist loop-invariant pointer views after the dep/db load rewrites above
+    /// so stencil-specific rewrites see stable memref views.
     SmallVector<std::pair<polygeist::Pointer2MemrefOp, scf::ForOp>>
         ptr2memrefToHoist;
     if (isEdt) {
@@ -308,7 +314,7 @@ void DataPtrHoistingPass::runOnOperation() {
         dataLoadsHoisted++;
     }
 
-    /// Materialize small invariant dep-pointer caches for loop-window stencil
+    /// Create small invariant dep-pointer caches for loop-window stencil
     /// accesses. This turns per-iteration dep loads into loop-invariant loads
     /// plus an in-loop pointer select. The rewrite is keyed to the nearest
     /// enclosing loop that carries the partitioned index; it does not require
@@ -329,13 +335,13 @@ void DataPtrHoistingPass::runOnOperation() {
     for (auto &[loadOp, loop] : cachedNeighborLoads) {
       if (!loadOp || !loop)
         continue;
-      if (materializeNeighborPtrCache(loadOp, loop))
+      if (createNeighborPtrCache(loadOp, loop))
         cachedNeighborPtrLoads++;
     }
 
     /// After invariant pointer views are exposed and neighbor caches are
-    /// materialized, split innermost stencil loops into boundary and interior
-    /// bands so the bulk interior avoids per-element pointer/index selection.
+    /// created, split innermost stencil loops into boundary and interior bands
+    /// so the bulk interior avoids per-element pointer/index selection.
     SmallVector<scf::ForOp> loopsToVersion;
     if (isEdt) {
       funcOp.walk([&](scf::ForOp loop) {

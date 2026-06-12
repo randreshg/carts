@@ -52,23 +52,24 @@ rg -n '^static .*\\(' lib/carts include/carts --glob '*.cpp' --glob '*.h'
 - ARTS codelet isolation, dependency/parameter graph structure, and mechanical
   representation of SDE-authored movement:
   `lib/carts/dialect/arts`.
-- ARTS DB/EDT/epoch/analysis, per-block single-writer DB realization, owner
-  maps, DB modes, and grouped compute/bridge/communication CUs:
+- ARTS DB/EDT/epoch/analysis, per-block single-writer DB realization,
+  distributed ownership, owner routes, DB modes, and grouped
+  compute/bridge/communication CUs:
   `lib/carts/dialect/arts`.
 - ARTS-RT runtime-shaped mechanical lowering:
   `lib/carts/dialect/arts-rt`.
 - Shared utilities: `include/carts/utils`, `lib/carts/utils`, or dialect-specific
   support utilities when the helper is not globally meaningful.
 
-## Layer Contract
+## Layer Invariants
 
 - A layer that has enough information to transform must transform, or fail
-  closed with evidence. Metadata-only contracts that rely on a later layer to
+  closed with evidence. Deferred metadata markers that rely on a later layer to
   repair semantics are review findings.
 - Downstream passes consume committed facts. Recomputing owner dims, block
-  shape, movement family, owner maps, DB grain, or runtime mode in a later
-  layer is a review finding unless the pass explicitly verifies and rejects an
-  invalid upstream plan.
+  shape, movement family, owner routes, DB grain, or runtime mode in a later
+  layer is a review finding unless the pass explicitly verifies and rejects
+  invalid upstream facts.
 - DB/MU grain and CU/bridge grain are separate. Review distributed changes for
   a two-level graph: fine enough MU/DB blocks for single-writer concurrency and
   grouped compute/bridge/communication CUs over block ranges.

@@ -3,7 +3,7 @@ name: carts-test
 description: Use when the user asks to test, run tests, validate, check, verify changes, run lit, or run a focused CARTS suite.
 user-invocable: true
 allowed-tools: Bash, Read, Grep, Glob
-argument-hint: [<test-file.mlir> | --suite contracts | --suite benchmarks | -v]
+argument-hint: [<test-file.mlir> | --suite all | --suite benchmarks | -v]
 ---
 
 # CARTS Test
@@ -13,7 +13,7 @@ Run the CARTS test suite. Run `dekk carts test --help` and `dekk carts lit --hel
 ## Common Commands
 
 ```bash
-dekk carts test                                     # Run contract tests
+dekk carts test                                     # Run default tests
 dekk carts test --suite all -v                      # All tests, verbose
 dekk carts test --suite benchmarks                  # Benchmark harness pytest suite
 dekk carts test --suite arts --filter halo          # ARTS runtime CTest subset

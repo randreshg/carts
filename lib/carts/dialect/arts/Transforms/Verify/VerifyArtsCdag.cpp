@@ -3,16 +3,19 @@
 ///
 /// Fail-closed verification of the ARTS canonical-owner DAG after CreateEpochs.
 /// Rejects (does not repair) IR where a distributed acquire lacks a committed
-/// DB mode, a distributed DB has inconsistent owner-map/placement facts, an
+/// DB mode, a distributed DB has inconsistent owner routing/placement, an
 /// SDE-partitioned MU was coarsened or localized, single-writer-multiple-reader
 /// is violated per DB block grain, or the EDT happens-before graph has a cycle.
 ///==========================================================================///
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/DbDistributedEligibility.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
+#include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #define GEN_PASS_DEF_VERIFYARTSCDAG
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
@@ -75,9 +78,8 @@ static void verifyCdagDistributedDbDeps(EdtOp edt, bool &failed) {
     diag.attachNote(alloc.getLoc())
         << "coarse DB allocation feeding the distributed task";
     diag.attachNote(edt.getLoc())
-        << "SDE must materialize block DB storage before ARTS "
-           "distributed execution; CreateDbs is only a coarse raw-memref "
-           "fallback";
+        << "SDE must realize block DB storage before ARTS distributed "
+           "execution; CreateDbs is only a coarse raw-memref bridge";
     failed = true;
   }
 }
@@ -100,7 +102,7 @@ static std::optional<std::string> blockKey(DbAcquireOp acquire) {
   return key;
 }
 
-struct PlannedDbUseSummary {
+struct CommittedDbUseSummary {
   bool sawEdtDependency = false;
   Operation *badUser = nullptr;
 };
@@ -167,9 +169,9 @@ static bool enqueueForwardedDbValues(Operation *user, Value value,
   return false;
 }
 
-static PlannedDbUseSummary summarizePlannedDbUses(Value source,
-                                                  bool stopAtAcquire = false) {
-  PlannedDbUseSummary summary;
+static CommittedDbUseSummary
+summarizeCommittedDbUses(Value source, bool stopAtAcquire = false) {
+  CommittedDbUseSummary summary;
   SmallVector<Value, 16> worklist;
   DenseSet<Value> visited;
   worklist.push_back(source);
@@ -205,12 +207,13 @@ static PlannedDbUseSummary summarizePlannedDbUses(Value source,
   return summary;
 }
 
-static PlannedDbUseSummary summarizeAcquireUses(DbAcquireOp acquire) {
-  PlannedDbUseSummary ptrSummary = summarizePlannedDbUses(acquire.getPtr());
+static CommittedDbUseSummary summarizeAcquireUses(DbAcquireOp acquire) {
+  CommittedDbUseSummary ptrSummary = summarizeCommittedDbUses(acquire.getPtr());
   if (ptrSummary.badUser)
     return ptrSummary;
   if (acquire.getGuid()) {
-    PlannedDbUseSummary guidSummary = summarizePlannedDbUses(acquire.getGuid());
+    CommittedDbUseSummary guidSummary =
+        summarizeCommittedDbUses(acquire.getGuid());
     ptrSummary.sawEdtDependency |= guidSummary.sawEdtDependency;
     if (guidSummary.badUser)
       ptrSummary.badUser = guidSummary.badUser;
@@ -219,19 +222,19 @@ static PlannedDbUseSummary summarizeAcquireUses(DbAcquireOp acquire) {
 }
 
 static LogicalResult verifyCdagAllocDirectUses(DbAllocOp alloc) {
-  if (!hasArtsDbPhysicalLayoutPlan(alloc.getOperation()))
+  if (!hasArtsDbPhysicalLayout(alloc.getOperation()))
     return success();
 
-  PlannedDbUseSummary ptrSummary =
-      summarizePlannedDbUses(alloc.getPtr(), /*stopAtAcquire=*/true);
+  CommittedDbUseSummary ptrSummary =
+      summarizeCommittedDbUses(alloc.getPtr(), /*stopAtAcquire=*/true);
   if (ptrSummary.badUser)
     return alloc.emitOpError()
            << "exposes a committed SDE block-layout DB through a direct "
               "non-EDT/non-cleanup use; ARTS must access committed DB state "
               "through explicit acquires and EDT dependencies";
 
-  PlannedDbUseSummary guidSummary =
-      summarizePlannedDbUses(alloc.getGuid(), /*stopAtAcquire=*/true);
+  CommittedDbUseSummary guidSummary =
+      summarizeCommittedDbUses(alloc.getGuid(), /*stopAtAcquire=*/true);
   if (guidSummary.badUser)
     return alloc.emitOpError()
            << "exposes a committed SDE block-layout DB GUID through a direct "
@@ -241,18 +244,28 @@ static LogicalResult verifyCdagAllocDirectUses(DbAllocOp alloc) {
   return success();
 }
 
-/// (A) owner-map/mode/placement consistency + (B) distribution preservation.
+static bool hasAllowedNonDistributedBlockLayoutEvidence(DbAllocOp alloc) {
+  if (alloc.getPerBlockReplicated().value_or(false))
+    return true;
+  DistributedDbEligibilityResult eligibility =
+      evaluateDistributedDbEligibility(alloc);
+  return !eligibility.eligible &&
+         eligibility.reason ==
+             DistributedDbEligibilityRejectReason::NoDistributedOwnerUse;
+}
+
+/// (A) owner-route consistency + (B) distribution preservation.
 static LogicalResult verifyCdagAlloc(DbAllocOp alloc) {
   bool distributed = hasDistributedDbAllocation(alloc.getOperation());
 
   /// (B) An SDE-partitioned MU carries a committed physical block layout. ARTS
   /// must realize it as a distributed DB, or leave explicit evidence of an
   /// intentional non-distributed home (a derived all-gather replica or an
-  /// allowed eligibility rejection). A committed plan stamped `local_only` is a
-  /// local fallback, not valid preservation evidence.
+  /// allowed eligibility rejection). A committed block grid marked
+  /// `local_only` is not valid preservation evidence.
   bool hasNonDistributedEvidence =
-      alloc.getPerBlockReplicated().value_or(false);
-  if (hasArtsDbPhysicalLayoutPlan(alloc.getOperation()) && !distributed &&
+      hasAllowedNonDistributedBlockLayoutEvidence(alloc);
+  if (hasArtsDbPhysicalLayout(alloc.getOperation()) && !distributed &&
       !hasNonDistributedEvidence)
     return alloc.emitOpError()
            << "carries a committed SDE block layout but is neither realized as "
@@ -262,30 +275,24 @@ static LogicalResult verifyCdagAlloc(DbAllocOp alloc) {
   if (!distributed)
     return success();
 
-  /// (A) A distributed DB must carry a self-consistent owner map and scattered
-  /// home. Surface the not-yet-realizable kinds with their precise reason.
-  DbOwnerMapPlanFailure failure = getDistributedDbOwnerMapPlanFailure(alloc);
-  if (failure == DbOwnerMapPlanFailure::UnsupportedOwnerMapKind) {
-    auto plan = getDbOwnerMapPlan(alloc);
-    return alloc.emitOpError() << ownerMapKindUnrealizableReason(
-               plan ? plan->kind : DbOwnerMapKind::owner_dim_grid);
-  }
-  if (failure != DbOwnerMapPlanFailure::None)
-    return alloc.emitOpError()
-           << "has inconsistent distributed owner-map/placement facts: "
-           << toString(failure);
+  /// (A) A distributed DB must have a derivable owner route.
+  DbOwnerRouteFailure failure = getDistributedDbOwnerRouteFailure(alloc);
+  if (failure != DbOwnerRouteFailure::None)
+    return alloc.emitOpError() << "has inconsistent distributed owner routing: "
+                               << toString(failure);
   return success();
 }
 
 static bool hasCleanupOnlyAcquireUses(DbAcquireOp acquire);
 
-static LogicalResult verifyCdagWriterLaunch(DbAcquireOp acquire) {
+static LogicalResult verifyCdagWriterLaunch(DbAcquireOp acquire,
+                                            bool requiresInterNodeRouting) {
   if (!isWriterAcquire(acquire))
     return success();
   DbAllocOp alloc = underlyingAlloc(acquire);
   if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
     return success();
-  PlannedDbUseSummary uses = summarizeAcquireUses(acquire);
+  CommittedDbUseSummary uses = summarizeAcquireUses(acquire);
   if (uses.badUser)
     return acquire.emitOpError()
            << "writes a distributed DB through a non-EDT/non-cleanup use; "
@@ -299,7 +306,8 @@ static LogicalResult verifyCdagWriterLaunch(DbAcquireOp acquire) {
               "ownership requires explicit owner-routed codelets";
   if (!edt)
     return success();
-  if (edt.getConcurrency() != EdtConcurrency::internode)
+  if (requiresInterNodeRouting &&
+      edt.getConcurrency() != EdtConcurrency::internode)
     return edt.emitOpError()
            << "writes a distributed DB from an intranode EDT after launch "
               "consistency; ARTS must promote and route owner-local writers";
@@ -342,15 +350,15 @@ static bool hasCleanupOnlyAcquireUses(DbAcquireOp acquire) {
          DbUtils::collectCleanupOnlyUseChain(acquire.getPtr(), cleanupOps);
 }
 
-static LogicalResult verifyCdagPlannedAcquireUser(DbAcquireOp acquire) {
+static LogicalResult verifyCdagCommittedAcquireUser(DbAcquireOp acquire) {
   DbAllocOp alloc = underlyingAlloc(acquire);
-  if (!alloc || !hasArtsDbPhysicalLayoutPlan(alloc.getOperation()))
+  if (!alloc || !hasArtsDbPhysicalLayout(alloc.getOperation()))
     return success();
-  PlannedDbUseSummary uses = summarizeAcquireUses(acquire);
+  CommittedDbUseSummary uses = summarizeAcquireUses(acquire);
   if (uses.badUser)
     return acquire.emitOpError()
            << "observes a committed SDE block-layout DB through a "
-              "non-EDT/non-cleanup use; ARTS must materialize host/final "
+              "non-EDT/non-cleanup use; ARTS must realize host/final "
               "observation as explicit EDT/gather work before ARTS-RT";
   auto [edt, blockArg] = EdtUtils::getBlockArgumentForAcquire(acquire);
   (void)blockArg;
@@ -360,7 +368,7 @@ static LogicalResult verifyCdagPlannedAcquireUser(DbAcquireOp acquire) {
     return success();
   return acquire.emitOpError()
          << "observes a committed SDE block-layout DB outside an ARTS EDT; "
-            "ARTS must materialize host/final observation as explicit "
+            "ARTS must realize host/final observation as explicit "
             "EDT/gather work before ARTS-RT";
 }
 
@@ -449,6 +457,7 @@ struct VerifyArtsCdagPass
     : public impl::VerifyArtsCdagBase<VerifyArtsCdagPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    bool requiresInterNodeRouting = requiresArtsInterNodeOwnerRouting(module);
     bool failed = false;
     if (mlir::failed(EdtUtils::verifyNoMixedRootDependencies(module)))
       failed = true;
@@ -463,9 +472,10 @@ struct VerifyArtsCdagPass
         failed = true;
       if (mlir::failed(verifyCdagAcquireWindow(acquire)))
         failed = true;
-      if (mlir::failed(verifyCdagPlannedAcquireUser(acquire)))
+      if (mlir::failed(verifyCdagCommittedAcquireUser(acquire)))
         failed = true;
-      if (mlir::failed(verifyCdagWriterLaunch(acquire)))
+      if (mlir::failed(
+              verifyCdagWriterLaunch(acquire, requiresInterNodeRouting)))
         failed = true;
     });
     module.walk([&](EdtOp edt) { verifyCdagDistributedDbDeps(edt, failed); });

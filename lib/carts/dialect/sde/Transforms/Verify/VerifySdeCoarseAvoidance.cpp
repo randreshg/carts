@@ -58,15 +58,13 @@ struct VerifySdeCoarseAvoidancePass
           // verify-sde-redistribute gates the redistribution structure itself.
           if (muHasRedist(mu))
             return;
-          sde::SdeSuIterateOp si = sde::findCommittedBlockPlanWriter(mu);
-
           // Block-partitioned: the grid is in the type. OK.
-          if (si && sde::recognizeExpandedBlockGridMu(si, muType))
+          if (sde::recognizeExpandedBlockGridMu(mu))
             return;
 
           // Avoidable coarse: in the realize scope but left flat.
           sde::MuPhysicalLayout plan;
-          if (sde::isBlockGridRealizable(si, muType, plan)) {
+          if (sde::isBlockGridRealizable(mu, plan)) {
             mu.emitOpError()
                 << "MU is in the block-grid realize scope but left coarse; "
                    "sde-coarse-avoidance must rank-expand the committed finest "

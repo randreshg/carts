@@ -19,7 +19,7 @@ Goal: classify the runtime failure before changing compiler code.
 
 Runtime fixes cannot compensate for wrong compiler shape. Use [[carts-vision]]
 to verify that SDE committed layout/tiling facts, ARTS committed
-collectives/bridges, and ARTS realized DB/EDT owner maps before changing
+collectives/bridges, and ARTS realized DB/EDT owner routes before changing
 ARTS-RT or runtime code.
 
 Use bundled helpers when they fit:
@@ -42,7 +42,7 @@ Read these before changing code:
    - `dekk carts build --arts` if the runtime may be stale; the production
      multinode transport is GASNet-EX, auto-downloaded+built (override with
      `ARTS_GASNET_CONDUIT`/`ARTS_GASNET_VERSION`, or `ARTS_GASNET_PREFIX` for a prebuilt GASNet)
-   - `dekk carts build --arts --no-rdma` only when reproducing a TCP fallback run
+   - `dekk carts build --arts --no-rdma` only when reproducing a TCP/debug transport run
    - `dekk carts build --arts --legacy-rsocket` only to reproduce the legacy rsocket path
 2. Classify the symptom.
    - crash / assertion / sanitizer

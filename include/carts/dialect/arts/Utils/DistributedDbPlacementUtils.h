@@ -3,7 +3,7 @@
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
-#include "carts/utils/ArrayAttrUtils.h"
+#include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
@@ -18,29 +18,51 @@
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <string>
 #include <tuple>
 
 namespace mlir::carts::arts {
 
-inline constexpr int32_t kDbOwnerMapVersion = 1;
+enum class DbOwnerRoutePolicy {
+  LinearModNodes,
+  OwnerDimContiguous,
+};
 
-struct DbOwnerMapPlan {
-  DbOwnerMapKind kind = DbOwnerMapKind::linear_mod_nodes;
+struct DbOwnerRouteFacts {
+  DbOwnerRoutePolicy policy = DbOwnerRoutePolicy::LinearModNodes;
   SmallVector<int64_t, 4> dims;
   SmallVector<int64_t, 4> blockShape;
 };
 
-enum class DbOwnerMapPlanFailure {
+inline std::optional<uint64_t> getDistributedDbRuntimeInitBaseId(DbAllocOp op) {
+  if (!op)
+    return std::nullopt;
+  if (int64_t artsId = getArtsId(op.getOperation()); artsId > 0)
+    return static_cast<uint64_t>(artsId);
+  if (auto createId =
+          op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsCreateId)) {
+    int64_t value = createId.getInt();
+    if (value > 0)
+      return static_cast<uint64_t>(value);
+  }
+  return std::nullopt;
+}
+
+inline std::optional<std::string>
+getDistributedDbRuntimeInitBaseName(DbAllocOp op) {
+  std::optional<uint64_t> baseId = getDistributedDbRuntimeInitBaseId(op);
+  if (!baseId)
+    return std::nullopt;
+  return "__carts_dist_alloc_" + std::to_string(*baseId);
+}
+
+enum class DbOwnerRouteFailure {
   None,
-  MissingOwnerMapPlan,
-  UnsupportedVersion,
-  MissingPreservedPlan,
+  UnrealizableDbGrid,
   LocalOnlyConflict,
-  RejectReasonConflict,
-  OwnerDimsDoNotPreservePlan,
-  BlockShapeDoesNotPreservePlan,
+  OwnerDimsDoNotMatchDbRank,
+  BlockShapeDoesNotMatchOwnerRank,
   OwnerDimsOutsideDbRank,
-  UnsupportedOwnerMapKind,
 };
 
 inline SmallVector<int64_t, 4> makeAllDbOwnerDims(unsigned rank) {
@@ -49,6 +71,13 @@ inline SmallVector<int64_t, 4> makeAllDbOwnerDims(unsigned rank) {
   for (unsigned i = 0; i < rank; ++i)
     dims.push_back(static_cast<int64_t>(i));
   return dims;
+}
+
+inline SmallVector<int64_t, 4> makeLeadingDbOwnerDims(unsigned dbRank,
+                                                      unsigned elementRank) {
+  if (dbRank == 0 || elementRank == 0)
+    return {};
+  return makeAllDbOwnerDims(std::min(dbRank, elementRank));
 }
 
 inline bool ownerDimsAddressDbRank(ArrayRef<int64_t> dims, unsigned rank) {
@@ -61,16 +90,13 @@ inline bool ownerDimsAddressDbRank(ArrayRef<int64_t> dims, unsigned rank) {
   return true;
 }
 
-/// Physical DB layout seed plan committed by SDE onto an op (db_alloc,
-/// edt, or epoch): the owner dims plus the per-block physical shape. This is
-/// the single reader for the seed-plan attrs; callers that previously re-read
-/// planOwnerDims / planPhysicalBlockShape inline route through here.
+/// Physical DB block layout recoverable from an ARTS DB allocation.
 struct ArtsDbPhysicalLayout {
   SmallVector<int64_t, 4> ownerDims;
   SmallVector<int64_t, 4> physicalBlockShape;
 };
 
-struct ArtsOwnerSlotPlan {
+struct ArtsOwnerSlotMapping {
   SmallVector<int64_t, 4> ownerDims;
   SmallVector<unsigned, 4> loopDims;
   SmallVector<int64_t, 4> blockSizes;
@@ -81,24 +107,36 @@ inline std::optional<ArtsDbPhysicalLayout>
 readArtsDbPhysicalLayout(Operation *op) {
   if (!op)
     return std::nullopt;
-  auto ownerDims = readI64ArrayAttr(getPlanOwnerDimsAttr(op));
-  auto blockShape = readI64ArrayAttr(getPlanPhysicalBlockShapeAttr(op));
-  if (!ownerDims || ownerDims->empty() || !blockShape || blockShape->empty())
+  auto alloc = dyn_cast<DbAllocOp>(op);
+  if (!alloc)
+    return std::nullopt;
+  auto partition = alloc.getPartitionMode();
+  if (!partition || !usesBlockLayout(*partition) || alloc.getSizes().empty() ||
+      alloc.getElementSizes().empty())
     return std::nullopt;
   ArtsDbPhysicalLayout layout;
-  layout.ownerDims.assign(ownerDims->begin(), ownerDims->end());
-  layout.physicalBlockShape.assign(blockShape->begin(), blockShape->end());
+  layout.ownerDims = makeLeadingDbOwnerDims(alloc.getSizes().size(),
+                                            alloc.getElementSizes().size());
+  if (layout.ownerDims.empty())
+    return std::nullopt;
+  for (Value elementSize : alloc.getElementSizes()) {
+    std::optional<int64_t> constant = ValueAnalysis::tryFoldConstantIndex(
+        ValueAnalysis::stripNumericCasts(elementSize));
+    if (!constant || *constant <= 0)
+      return std::nullopt;
+    layout.physicalBlockShape.push_back(*constant);
+  }
   return layout;
 }
 
-inline bool hasArtsDbPhysicalLayoutPlan(Operation *op) {
+inline bool hasArtsDbPhysicalLayout(Operation *op) {
   return readArtsDbPhysicalLayout(op).has_value();
 }
 
-inline FailureOr<ArtsOwnerSlotPlan>
-resolveArtsOwnerSlotPlan(ArrayRef<int64_t> ownerDims,
-                         ArrayRef<int64_t> blockShape, unsigned loopRank,
-                         Operation *context) {
+inline FailureOr<ArtsOwnerSlotMapping>
+resolveArtsOwnerSlotMapping(ArrayRef<int64_t> ownerDims,
+                            ArrayRef<int64_t> blockShape, unsigned loopRank,
+                            Operation *context) {
   if (ownerDims.empty()) {
     context->emitError()
         << "requires at least one committed physical owner dimension";
@@ -153,10 +191,11 @@ resolveArtsOwnerSlotPlan(ArrayRef<int64_t> ownerDims,
     seenLoop[loopDim] = 1;
 
     int64_t blockSize = 0;
-    if (blockShape.size() == ownerDims.size()) {
-      blockSize = blockShape[rawSlot];
-    } else if (static_cast<size_t>(ownerDim) < blockShape.size()) {
+    if (blockShape.size() == loopRank &&
+        static_cast<size_t>(ownerDim) < blockShape.size()) {
       blockSize = blockShape[ownerDim];
+    } else if (blockShape.size() == ownerDims.size()) {
+      blockSize = blockShape[rawSlot];
     } else {
       context->emitError()
           << "physicalOwnerDims must index physicalBlockShape dimensions";
@@ -175,42 +214,18 @@ resolveArtsOwnerSlotPlan(ArrayRef<int64_t> ownerDims,
     return std::get<0>(lhs) < std::get<0>(rhs);
   });
 
-  ArtsOwnerSlotPlan plan;
-  plan.ownerDims.reserve(slots.size());
-  plan.loopDims.reserve(slots.size());
-  plan.blockSizes.reserve(slots.size());
-  plan.rawSlots.reserve(slots.size());
+  ArtsOwnerSlotMapping mapping;
+  mapping.ownerDims.reserve(slots.size());
+  mapping.loopDims.reserve(slots.size());
+  mapping.blockSizes.reserve(slots.size());
+  mapping.rawSlots.reserve(slots.size());
   for (auto [ownerDim, loopDim, blockSize, rawSlot] : slots) {
-    plan.ownerDims.push_back(ownerDim);
-    plan.loopDims.push_back(loopDim);
-    plan.blockSizes.push_back(blockSize);
-    plan.rawSlots.push_back(rawSlot);
+    mapping.ownerDims.push_back(ownerDim);
+    mapping.loopDims.push_back(loopDim);
+    mapping.blockSizes.push_back(blockSize);
+    mapping.rawSlots.push_back(rawSlot);
   }
-  return plan;
-}
-
-/// DB block home/placement is read and written through the generated
-/// DbAllocOp accessors `getDbMemoryPlacement()` / `setDbMemoryPlacement(...)`.
-
-inline std::optional<DbOwnerMapPlan> getDbOwnerMapPlan(DbAllocOp alloc) {
-  if (!alloc)
-    return std::nullopt;
-  auto kindAttr = alloc.getOwnerMapKindAttr();
-  auto versionAttr = alloc.getOwnerMapVersionAttr();
-  auto dims = readI64ArrayAttr(alloc.getOwnerMapDimsAttr());
-  auto blockShape = readI64ArrayAttr(alloc.getOwnerBlockShapeAttr());
-  if (!kindAttr || !versionAttr || !dims || !blockShape)
-    return std::nullopt;
-
-  DbOwnerMapPlan plan;
-  plan.kind = kindAttr.getValue();
-  plan.dims.assign(dims->begin(), dims->end());
-  plan.blockShape.assign(blockShape->begin(), blockShape->end());
-  return plan;
-}
-
-inline bool hasCompleteDbOwnerMapPlan(DbAllocOp alloc) {
-  return getDbOwnerMapPlan(alloc).has_value();
+  return mapping;
 }
 
 inline bool sameI64Values(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
@@ -223,98 +238,57 @@ inline bool sameI64Values(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
 }
 
 inline std::optional<SmallVector<int64_t, 4>>
-getDbOwnerMapDimsFromPlan(DbAllocOp alloc) {
+getDbOwnerRouteDimsFromDbGrid(DbAllocOp alloc) {
   if (!alloc)
     return std::nullopt;
-
-  auto planOwnerDims = readI64ArrayAttr(getPlanOwnerDimsAttr(alloc));
-  if (!planOwnerDims || planOwnerDims->empty())
-    return std::nullopt;
-
   unsigned dbRank = alloc.getSizes().size();
-  if (dbRank == 0)
+  SmallVector<int64_t, 4> dims =
+      makeLeadingDbOwnerDims(dbRank, alloc.getElementSizes().size());
+  if (dims.empty())
     return std::nullopt;
-
-  /// Physical owner dims are projected into the runtime DB coordinate space.
-  /// When ARTS has lowered an N-D physical owner space to an N-D DB space, DB
-  /// dim i corresponds to owner slot i, not necessarily physical dim i. This
-  /// is what lets a non-leading physical owner dim such as [1] become DB-space
-  /// owner_map_dims [0] for a rank-1 runtime DB.
-  if (planOwnerDims->size() == dbRank) {
-    unsigned physicalRank = alloc.getElementSizes().size();
-    if (!ownerDimsAddressDbRank(*planOwnerDims, dbRank) &&
-        !ownerDimsAddressDbRank(*planOwnerDims, physicalRank))
-      return std::nullopt;
-    return makeAllDbOwnerDims(dbRank);
-  }
-
-  /// Some hand-authored ARTS tests and materialized DBs already describe a
-  /// higher-rank DB coordinate space directly. Keep accepting those when the
-  /// preserved plan dims are valid DB-space dims.
-  if (!ownerDimsAddressDbRank(*planOwnerDims, dbRank))
-    return std::nullopt;
-
-  SmallVector<int64_t, 4> dims;
-  dims.assign(planOwnerDims->begin(), planOwnerDims->end());
   return dims;
 }
 
 inline std::optional<SmallVector<int64_t, 4>>
-getDbOwnerBlockShapeFromPlan(DbAllocOp alloc) {
+getDbOwnerRouteBlockShapeFromDbGrid(DbAllocOp alloc) {
   if (!alloc)
     return std::nullopt;
-
-  auto planOwnerDims = readI64ArrayAttr(getPlanOwnerDimsAttr(alloc));
-  auto planBlockShape = readI64ArrayAttr(getPlanPhysicalBlockShapeAttr(alloc));
-  auto dbOwnerDims = getDbOwnerMapDimsFromPlan(alloc);
-  if (!planOwnerDims || planOwnerDims->empty() || !planBlockShape ||
-      planBlockShape->empty() || !dbOwnerDims || dbOwnerDims->empty())
+  auto dbOwnerDims = getDbOwnerRouteDimsFromDbGrid(alloc);
+  if (!dbOwnerDims || dbOwnerDims->empty())
     return std::nullopt;
-
-  /// Full physical block shape: project by the physical owner dims and retain
-  /// owner-slot order. For planOwnerDims [1] and planPhysicalBlockShape [8,
-  /// 16], the rank-1 DB owner block shape is [16].
-  if (planBlockShape->size() == alloc.getElementSizes().size()) {
-    SmallVector<int64_t, 4> identityOwnerDims =
-        makeAllDbOwnerDims(dbOwnerDims->size());
-    if (planBlockShape->size() == dbOwnerDims->size() &&
-        sameI64Values(*planOwnerDims, identityOwnerDims)) {
-      SmallVector<int64_t, 4> blockShape;
-      blockShape.assign(planBlockShape->begin(), planBlockShape->end());
-      return blockShape;
-    }
-
-    SmallVector<int64_t, 4> blockShape;
-    blockShape.reserve(planOwnerDims->size());
-    for (int64_t physicalDim : *planOwnerDims) {
-      if (physicalDim < 0 ||
-          static_cast<size_t>(physicalDim) >= planBlockShape->size())
-        return std::nullopt;
-      blockShape.push_back((*planBlockShape)[physicalDim]);
-    }
-    return blockShape;
+  SmallVector<int64_t, 4> blockShape;
+  blockShape.reserve(dbOwnerDims->size());
+  if (alloc.getElementSizes().size() < dbOwnerDims->size())
+    return std::nullopt;
+  for (unsigned slot = 0; slot < dbOwnerDims->size(); ++slot) {
+    std::optional<int64_t> value = ValueAnalysis::tryFoldConstantIndex(
+        ValueAnalysis::stripNumericCasts(alloc.getElementSizes()[slot]));
+    if (!value || *value <= 0)
+      return std::nullopt;
+    blockShape.push_back(*value);
   }
+  return blockShape;
+}
 
-  /// Already compacted to one block size per owner-map dimension.
-  if (planBlockShape->size() == dbOwnerDims->size()) {
-    SmallVector<int64_t, 4> blockShape;
-    blockShape.assign(planBlockShape->begin(), planBlockShape->end());
-    return blockShape;
+inline std::optional<SmallVector<int64_t, 4>>
+getDbOwnerRouteBlockShapeFromDbGrid(DbAllocOp alloc,
+                                    ArrayRef<int64_t> ownerDims) {
+  if (!alloc || ownerDims.empty())
+    return std::nullopt;
+  SmallVector<int64_t, 4> blockShape;
+  blockShape.reserve(ownerDims.size());
+  for (int64_t rawDim : ownerDims) {
+    if (rawDim < 0 ||
+        static_cast<unsigned>(rawDim) >= alloc.getElementSizes().size())
+      return std::nullopt;
+    std::optional<int64_t> value =
+        ValueAnalysis::tryFoldConstantIndex(ValueAnalysis::stripNumericCasts(
+            alloc.getElementSizes()[static_cast<unsigned>(rawDim)]));
+    if (!value || *value <= 0)
+      return std::nullopt;
+    blockShape.push_back(*value);
   }
-
-  /// DB-rank block shape: project by DB-space owner-map dims.
-  if (planBlockShape->size() == alloc.getSizes().size()) {
-    SmallVector<int64_t, 4> blockShape;
-    blockShape.reserve(dbOwnerDims->size());
-    for (int64_t dbDim : *dbOwnerDims) {
-      if (dbDim < 0 || static_cast<size_t>(dbDim) >= planBlockShape->size())
-        return std::nullopt;
-      blockShape.push_back((*planBlockShape)[dbDim]);
-    }
-    return blockShape;
-  }
-
-  return std::nullopt;
+  return blockShape;
 }
 
 inline Value createIndexConstant(OpBuilder &builder, Location loc,
@@ -350,9 +324,9 @@ inline Value castToI32(OpBuilder &builder, Location loc, Value value) {
   return {};
 }
 
-inline Value createOwnerMapLinearIndex(OpBuilder &builder, Location loc,
-                                       ArrayRef<Value> sizes,
-                                       ArrayRef<Value> indices) {
+inline Value createOwnerRouteLinearIndex(OpBuilder &builder, Location loc,
+                                         ArrayRef<Value> sizes,
+                                         ArrayRef<Value> indices) {
   if (indices.empty())
     return createIndexConstant(builder, loc, 0);
   if (sizes.size() < indices.size())
@@ -372,8 +346,8 @@ inline Value createOwnerMapLinearIndex(OpBuilder &builder, Location loc,
   return linear;
 }
 
-inline Value createOwnerMapTotalElements(OpBuilder &builder, Location loc,
-                                         ArrayRef<Value> sizes) {
+inline Value createOwnerRouteTotalElements(OpBuilder &builder, Location loc,
+                                           ArrayRef<Value> sizes) {
   Value total = createIndexConstant(builder, loc, 1);
   for (Value sizeValue : sizes) {
     Value size = castToIndex(builder, loc, sizeValue);
@@ -385,8 +359,9 @@ inline Value createOwnerMapTotalElements(OpBuilder &builder, Location loc,
 }
 
 inline SmallVector<Value, 4>
-createOwnerMapCoordsFromLinearIndex(OpBuilder &builder, Location loc,
-                                    ArrayRef<Value> sizes, Value linearIndex) {
+createOwnerRouteCoordsFromLinearIndex(OpBuilder &builder, Location loc,
+                                      ArrayRef<Value> sizes,
+                                      Value linearIndex) {
   SmallVector<Value, 4> coords;
   if (sizes.empty())
     return coords;
@@ -402,7 +377,7 @@ createOwnerMapCoordsFromLinearIndex(OpBuilder &builder, Location loc,
       break;
     }
 
-    Value stride = createOwnerMapTotalElements(
+    Value stride = createOwnerRouteTotalElements(
         builder, loc, ArrayRef<Value>(sizes).drop_front(i + 1));
     if (!stride)
       return {};
@@ -418,36 +393,36 @@ inline Value createDbOwnerRouteForCoords(OpBuilder &builder, Location loc,
                                          ArrayRef<Value> dbSizes,
                                          ArrayRef<Value> dbCoords,
                                          Value totalNodes,
-                                         const DbOwnerMapPlan &plan) {
+                                         const DbOwnerRouteFacts &facts) {
   Value totalNodesI32 = castToI32(builder, loc, totalNodes);
   if (!totalNodesI32)
     return {};
 
-  if (plan.kind == DbOwnerMapKind::linear_mod_nodes) {
-    Value linear = createOwnerMapLinearIndex(builder, loc, dbSizes, dbCoords);
+  if (facts.policy == DbOwnerRoutePolicy::LinearModNodes) {
+    Value linear = createOwnerRouteLinearIndex(builder, loc, dbSizes, dbCoords);
     Value linearI32 = castToI32(builder, loc, linear);
     if (!linearI32)
       return {};
     return arith::RemUIOp::create(builder, loc, linearI32, totalNodesI32);
   }
 
-  if (plan.kind != DbOwnerMapKind::owner_dim_contiguous ||
-      !ownerDimsAddressDbRank(plan.dims, dbSizes.size()) ||
+  if (facts.policy != DbOwnerRoutePolicy::OwnerDimContiguous ||
+      !ownerDimsAddressDbRank(facts.dims, dbSizes.size()) ||
       dbCoords.size() < dbSizes.size())
     return {};
 
   SmallVector<Value, 4> ownerSizes;
   SmallVector<Value, 4> ownerCoords;
-  ownerSizes.reserve(plan.dims.size());
-  ownerCoords.reserve(plan.dims.size());
-  for (int64_t dim : plan.dims) {
+  ownerSizes.reserve(facts.dims.size());
+  ownerCoords.reserve(facts.dims.size());
+  for (int64_t dim : facts.dims) {
     ownerSizes.push_back(dbSizes[dim]);
     ownerCoords.push_back(dbCoords[dim]);
   }
 
   Value ownerLinear =
-      createOwnerMapLinearIndex(builder, loc, ownerSizes, ownerCoords);
-  Value ownerSpace = createOwnerMapTotalElements(builder, loc, ownerSizes);
+      createOwnerRouteLinearIndex(builder, loc, ownerSizes, ownerCoords);
+  Value ownerSpace = createOwnerRouteTotalElements(builder, loc, ownerSizes);
   Value totalNodesIndex = castToIndex(builder, loc, totalNodesI32);
   if (!ownerLinear || !ownerSpace || !totalNodesIndex)
     return {};
@@ -461,8 +436,8 @@ inline Value createDbOwnerRouteForLinearIndex(OpBuilder &builder, Location loc,
                                               ArrayRef<Value> dbSizes,
                                               Value linearIndex,
                                               Value totalNodes,
-                                              const DbOwnerMapPlan &plan) {
-  if (plan.kind == DbOwnerMapKind::linear_mod_nodes) {
+                                              const DbOwnerRouteFacts &facts) {
+  if (facts.policy == DbOwnerRoutePolicy::LinearModNodes) {
     Value totalNodesI32 = castToI32(builder, loc, totalNodes);
     Value linearI32 = castToI32(builder, loc, linearIndex);
     if (!totalNodesI32 || !linearI32)
@@ -471,11 +446,11 @@ inline Value createDbOwnerRouteForLinearIndex(OpBuilder &builder, Location loc,
   }
 
   SmallVector<Value, 4> dbCoords =
-      createOwnerMapCoordsFromLinearIndex(builder, loc, dbSizes, linearIndex);
+      createOwnerRouteCoordsFromLinearIndex(builder, loc, dbSizes, linearIndex);
   if (dbCoords.size() != dbSizes.size())
     return {};
   return createDbOwnerRouteForCoords(builder, loc, dbSizes, dbCoords,
-                                     totalNodes, plan);
+                                     totalNodes, facts);
 }
 
 inline std::optional<SmallVector<int64_t, 4>>
@@ -561,13 +536,13 @@ staticOwnerDimContiguousRoute(int64_t ownerLinear, int64_t ownerSpace,
 }
 
 /// Proves that a rectangular DB-block range maps to one runtime owner under the
-/// committed owner-map plan. This is a static legality proof for grouped writer
+/// derived owner route. This is a static legality proof for grouped writer
 /// CUs/EDTs; callers still materialize the real grouped acquire/EDT shape.
-inline bool isStaticDbOwnerBlockRangeRouteLocal(ArrayRef<int64_t> dbSizes,
-                                                ArrayRef<int64_t> offsets,
-                                                ArrayRef<int64_t> sizes,
-                                                int64_t totalNodes,
-                                                const DbOwnerMapPlan &plan) {
+inline bool
+isStaticDbOwnerBlockRangeRouteLocal(ArrayRef<int64_t> dbSizes,
+                                    ArrayRef<int64_t> offsets,
+                                    ArrayRef<int64_t> sizes, int64_t totalNodes,
+                                    const DbOwnerRouteFacts &facts) {
   if (totalNodes <= 1)
     return true;
   if (dbSizes.empty() || offsets.size() != dbSizes.size() ||
@@ -579,17 +554,17 @@ inline bool isStaticDbOwnerBlockRangeRouteLocal(ArrayRef<int64_t> dbSizes,
       return false;
   }
 
-  if (plan.kind == DbOwnerMapKind::owner_dim_contiguous) {
-    if (!ownerDimsAddressDbRank(plan.dims, dbSizes.size()))
+  if (facts.policy == DbOwnerRoutePolicy::OwnerDimContiguous) {
+    if (!ownerDimsAddressDbRank(facts.dims, dbSizes.size()))
       return false;
 
     SmallVector<int64_t, 4> ownerSizes;
     SmallVector<int64_t, 4> firstCoords;
     SmallVector<int64_t, 4> lastCoords;
-    ownerSizes.reserve(plan.dims.size());
-    firstCoords.reserve(plan.dims.size());
-    lastCoords.reserve(plan.dims.size());
-    for (int64_t rawDim : plan.dims) {
+    ownerSizes.reserve(facts.dims.size());
+    firstCoords.reserve(facts.dims.size());
+    lastCoords.reserve(facts.dims.size());
+    for (int64_t rawDim : facts.dims) {
       unsigned dim = static_cast<unsigned>(rawDim);
       ownerSizes.push_back(dbSizes[dim]);
       firstCoords.push_back(offsets[dim]);
@@ -611,7 +586,7 @@ inline bool isStaticDbOwnerBlockRangeRouteLocal(ArrayRef<int64_t> dbSizes,
     return firstRoute && lastRoute && *firstRoute == *lastRoute;
   }
 
-  if (plan.kind == DbOwnerMapKind::linear_mod_nodes) {
+  if (facts.policy == DbOwnerRoutePolicy::LinearModNodes) {
     std::optional<SmallVector<int64_t, 4>> strides =
         staticRowMajorStrides(dbSizes);
     if (!strides)
@@ -628,7 +603,7 @@ inline bool isStaticDbOwnerBlockRangeRouteLocal(ArrayRef<int64_t> dbSizes,
 
 inline bool isStaticDbOwnerGroupedBlockScheduleRouteLocal(
     ArrayRef<int64_t> dbSizes, ArrayRef<int64_t> groupBlockCounts,
-    int64_t totalNodes, const DbOwnerMapPlan &plan) {
+    int64_t totalNodes, const DbOwnerRouteFacts &facts) {
   if (totalNodes <= 1)
     return true;
   if (dbSizes.empty() || groupBlockCounts.size() != dbSizes.size())
@@ -643,7 +618,7 @@ inline bool isStaticDbOwnerGroupedBlockScheduleRouteLocal(
   std::function<bool(unsigned)> visit = [&](unsigned dim) -> bool {
     if (dim == dbSizes.size())
       return isStaticDbOwnerBlockRangeRouteLocal(dbSizes, offsets, rangeSizes,
-                                                 totalNodes, plan);
+                                                 totalNodes, facts);
     int64_t groupCount = groupBlockCounts[dim];
     for (int64_t offset = 0; offset < dbSizes[dim]; offset += groupCount) {
       offsets[dim] = offset;
@@ -657,187 +632,144 @@ inline bool isStaticDbOwnerGroupedBlockScheduleRouteLocal(
   return visit(0);
 }
 
-inline bool ownerMapPreservesPlanOwnerDims(DbAllocOp alloc,
-                                           const DbOwnerMapPlan &plan) {
-  auto dbOwnerDims = getDbOwnerMapDimsFromPlan(alloc);
-  if (!dbOwnerDims)
+inline bool ownerRouteDimsMatchDbGrid(DbAllocOp alloc,
+                                      const DbOwnerRouteFacts &facts) {
+  if (!alloc || alloc.getSizes().empty())
     return false;
-  if (plan.kind == DbOwnerMapKind::linear_mod_nodes)
-    return ownerDimsAddressDbRank(plan.dims, alloc.getSizes().size());
-  return sameI64Values(plan.dims, *dbOwnerDims);
+  return ownerDimsAddressDbRank(facts.dims, alloc.getSizes().size());
 }
 
-inline bool ownerMapPreservesPlanBlockShape(DbAllocOp alloc,
-                                            const DbOwnerMapPlan &plan) {
-  auto dbOwnerBlockShape = getDbOwnerBlockShapeFromPlan(alloc);
-  return dbOwnerBlockShape &&
-         sameI64Values(plan.blockShape, *dbOwnerBlockShape);
-}
-
-inline DbOwnerMapPlanFailure
-getDistributedDbOwnerMapPlanFailure(DbAllocOp alloc) {
-  if (!alloc)
-    return DbOwnerMapPlanFailure::MissingOwnerMapPlan;
-
-  auto plan = getDbOwnerMapPlan(alloc);
-  if (!plan)
-    return DbOwnerMapPlanFailure::MissingOwnerMapPlan;
-
-  if (!alloc.getOwnerMapVersionAttr() ||
-      alloc.getOwnerMapVersionAttr().getInt() != kDbOwnerMapVersion)
-    return DbOwnerMapPlanFailure::UnsupportedVersion;
-
-  if (!getPlanOwnerDimsAttr(alloc.getOperation()) ||
-      !getPlanPhysicalBlockShapeAttr(alloc.getOperation()))
-    return DbOwnerMapPlanFailure::MissingPreservedPlan;
-
-  if (alloc.getLocalOnly().value_or(false))
-    return DbOwnerMapPlanFailure::LocalOnlyConflict;
-  if (alloc.getDistributedRejectReasonAttr())
-    return DbOwnerMapPlanFailure::RejectReasonConflict;
-
-  if (!ownerMapPreservesPlanOwnerDims(alloc, *plan))
-    return DbOwnerMapPlanFailure::OwnerDimsDoNotPreservePlan;
-  if (!ownerMapPreservesPlanBlockShape(alloc, *plan))
-    return DbOwnerMapPlanFailure::BlockShapeDoesNotPreservePlan;
-
-  switch (plan->kind) {
-  case DbOwnerMapKind::linear_mod_nodes:
-  case DbOwnerMapKind::owner_dim_contiguous:
-    if (!ownerDimsAddressDbRank(plan->dims, alloc.getSizes().size()))
-      return DbOwnerMapPlanFailure::OwnerDimsOutsideDbRank;
-    break;
-  case DbOwnerMapKind::owner_dim_grid:
-  case DbOwnerMapKind::explicit_rank_table:
-    return DbOwnerMapPlanFailure::UnsupportedOwnerMapKind;
-  }
-
-  return DbOwnerMapPlanFailure::None;
-}
-
-inline const char *toString(DbOwnerMapPlanFailure failure) {
-  switch (failure) {
-  case DbOwnerMapPlanFailure::None:
-    return "valid";
-  case DbOwnerMapPlanFailure::MissingOwnerMapPlan:
-    return "missing owner-map plan";
-  case DbOwnerMapPlanFailure::UnsupportedVersion:
-    return "unsupported owner-map version";
-  case DbOwnerMapPlanFailure::MissingPreservedPlan:
-    return "missing preserved owner dims or physical block shape";
-  case DbOwnerMapPlanFailure::LocalOnlyConflict:
-    return "distributed/local_only conflict";
-  case DbOwnerMapPlanFailure::RejectReasonConflict:
-    return "distributed reject-reason conflict";
-  case DbOwnerMapPlanFailure::OwnerDimsDoNotPreservePlan:
-    return "owner_map_dims do not preserve planOwnerDims";
-  case DbOwnerMapPlanFailure::BlockShapeDoesNotPreservePlan:
-    return "owner_block_shape does not preserve planPhysicalBlockShape";
-  case DbOwnerMapPlanFailure::OwnerDimsOutsideDbRank:
-    return "owner_map_dims outside DB rank";
-  case DbOwnerMapPlanFailure::UnsupportedOwnerMapKind:
-    return "unsupported owner-map kind";
-  }
-  return "unknown owner-map plan failure";
-}
-
-/// Precise reason a not-yet-realized owner-map kind fails closed. ARTS realizes
-/// owner maps only from committed facts; it does not invent a process grid or a
-/// per-block rank table when none is committed.
-inline const char *ownerMapKindUnrealizableReason(DbOwnerMapKind kind) {
-  switch (kind) {
-  case DbOwnerMapKind::owner_dim_grid:
-    return "uses owner_map_kind owner_dim_grid but carries no committed "
-           "process-grid shape to realize a grid route; ARTS does not invent "
-           "one";
-  case DbOwnerMapKind::explicit_rank_table:
-    return "uses owner_map_kind explicit_rank_table but carries no committed "
-           "per-block rank table to realize a table route; ARTS does not "
-           "invent one";
-  case DbOwnerMapKind::linear_mod_nodes:
-  case DbOwnerMapKind::owner_dim_contiguous:
-    return "owner-map kind is realizable";
-  }
-  return "unknown owner-map kind";
-}
-
-inline DbOwnerMapKind chooseDbOwnerMapKind(DbAllocOp alloc) {
-  if (auto kind = getEdtDistributionKind(alloc.getOperation());
-      kind && *kind == EdtDistributionKind::block_cyclic)
-    return DbOwnerMapKind::linear_mod_nodes;
-  return DbOwnerMapKind::owner_dim_contiguous;
-}
-
-/// Project the committed SDE DB seed plan into an owner-map plan without
-/// mutating IR. Bridge launch routing uses this transient plan before the ARTS
-/// owner-map realization pass stamps persistent owner_map_* attrs.
-inline std::optional<DbOwnerMapPlan>
-deriveDbOwnerMapPlanFromSeed(DbAllocOp alloc) {
-  if (!alloc)
-    return std::nullopt;
-
-  auto blockShape = readI64ArrayAttr(getPlanPhysicalBlockShapeAttr(alloc));
-  if (!blockShape || blockShape->empty())
-    return std::nullopt;
-
-  auto ownerBlockShape = getDbOwnerBlockShapeFromPlan(alloc);
-  if (!ownerBlockShape || ownerBlockShape->empty())
-    return std::nullopt;
-
-  SmallVector<int64_t, 4> ownerMapDims;
-  DbOwnerMapKind kind = chooseDbOwnerMapKind(alloc);
-  if (kind == DbOwnerMapKind::linear_mod_nodes) {
-    ownerMapDims = makeAllDbOwnerDims(alloc.getSizes().size());
-  } else {
-    auto dbOwnerDims = getDbOwnerMapDimsFromPlan(alloc);
-    if (!dbOwnerDims ||
-        !ownerDimsAddressDbRank(*dbOwnerDims, alloc.getSizes().size()))
-      return std::nullopt;
-    ownerMapDims.assign(dbOwnerDims->begin(), dbOwnerDims->end());
-  }
-
-  DbOwnerMapPlan plan;
-  plan.kind = kind;
-  plan.dims.assign(ownerMapDims.begin(), ownerMapDims.end());
-  plan.blockShape.assign(ownerBlockShape->begin(), ownerBlockShape->end());
-  return plan;
-}
-
-/// Realize the ARTS owner-map and scattered home of a distributed DB from the
-/// committed SDE seed plan. This is mechanical: owner dims and block
-/// shape are projected from the plan, never recomputed. Returns false (caller
-/// fails closed) when the plan cannot be projected into a usable owner map.
-inline bool realizeDbOwnerMapFromPlan(DbAllocOp alloc) {
-  if (!alloc)
+inline bool ownerRouteBlockShapeMatchesDbGrid(DbAllocOp alloc,
+                                              const DbOwnerRouteFacts &facts) {
+  if (!alloc || facts.blockShape.size() != facts.dims.size())
     return false;
-
-  std::optional<DbOwnerMapPlan> plan = deriveDbOwnerMapPlanFromSeed(alloc);
-  if (!plan)
+  if (alloc.getElementSizes().size() < facts.dims.size())
     return false;
-
-  MLIRContext *ctx = alloc.getContext();
-  alloc.setOwnerMapKindAttr(DbOwnerMapKindAttr::get(ctx, plan->kind));
-  alloc.setOwnerMapVersionAttr(
-      IntegerAttr::get(IntegerType::get(ctx, 32), kDbOwnerMapVersion));
-  alloc.setOwnerMapDimsAttr(buildI64ArrayAttr(ctx, plan->dims));
-  alloc.setOwnerBlockShapeAttr(buildI64ArrayAttr(ctx, plan->blockShape));
-  /// A realized owner map means the blocks are scattered across owner ranks;
-  /// record that home alongside the map so it is readable, not implicit.
-  alloc.setDbMemoryPlacement(DbMemoryPlacement::owner_scattered);
+  for (auto [ownerSlot, rawDim] : llvm::enumerate(facts.dims)) {
+    if (rawDim < 0 ||
+        static_cast<unsigned>(rawDim) >= alloc.getElementSizes().size())
+      return false;
+    std::optional<int64_t> value =
+        ValueAnalysis::tryFoldConstantIndex(ValueAnalysis::stripNumericCasts(
+            alloc.getElementSizes()[static_cast<unsigned>(rawDim)]));
+    if (!value || *value <= 0 || *value != facts.blockShape[ownerSlot])
+      return false;
+  }
   return true;
 }
 
-inline void copyDbOwnerMapAttrs(DbAllocOp source, DbAllocOp dest) {
+inline std::optional<DbOwnerRouteFacts>
+deriveDbOwnerRouteFactsFromDbGrid(DbAllocOp alloc);
+
+inline DbOwnerRouteFailure getDistributedDbOwnerRouteFailure(DbAllocOp alloc) {
+  if (!alloc)
+    return DbOwnerRouteFailure::UnrealizableDbGrid;
+
+  auto facts = deriveDbOwnerRouteFactsFromDbGrid(alloc);
+  if (!facts)
+    return DbOwnerRouteFailure::UnrealizableDbGrid;
+
+  if (alloc.getLocalOnly().value_or(false))
+    return DbOwnerRouteFailure::LocalOnlyConflict;
+  if (!ownerRouteDimsMatchDbGrid(alloc, *facts))
+    return DbOwnerRouteFailure::OwnerDimsDoNotMatchDbRank;
+  if (!ownerRouteBlockShapeMatchesDbGrid(alloc, *facts))
+    return DbOwnerRouteFailure::BlockShapeDoesNotMatchOwnerRank;
+
+  switch (facts->policy) {
+  case DbOwnerRoutePolicy::LinearModNodes:
+  case DbOwnerRoutePolicy::OwnerDimContiguous:
+    if (!ownerDimsAddressDbRank(facts->dims, alloc.getSizes().size()))
+      return DbOwnerRouteFailure::OwnerDimsOutsideDbRank;
+    break;
+  }
+
+  return DbOwnerRouteFailure::None;
+}
+
+inline const char *toString(DbOwnerRouteFailure failure) {
+  switch (failure) {
+  case DbOwnerRouteFailure::None:
+    return "valid";
+  case DbOwnerRouteFailure::UnrealizableDbGrid:
+    return "cannot derive owner route from DB block grid";
+  case DbOwnerRouteFailure::LocalOnlyConflict:
+    return "distributed/local_only conflict";
+  case DbOwnerRouteFailure::OwnerDimsDoNotMatchDbRank:
+    return "derived owner dimensions do not match the DB block grid";
+  case DbOwnerRouteFailure::BlockShapeDoesNotMatchOwnerRank:
+    return "derived owner block shape rank does not match owner dimensions";
+  case DbOwnerRouteFailure::OwnerDimsOutsideDbRank:
+    return "derived owner dimensions outside DB rank";
+  }
+  return "unknown owner-route failure";
+}
+
+inline DbOwnerRoutePolicy chooseDbOwnerRoutePolicy(DbAllocOp alloc) {
+  if (auto kind = getEdtDistributionKind(alloc.getOperation());
+      kind && *kind == EdtDistributionKind::block_cyclic)
+    return DbOwnerRoutePolicy::LinearModNodes;
+  return DbOwnerRoutePolicy::OwnerDimContiguous;
+}
+
+/// Project the DB block grid into owner-route facts without mutating IR.
+inline std::optional<DbOwnerRouteFacts>
+deriveDbOwnerRouteFactsFromDbGrid(DbAllocOp alloc, DbOwnerRoutePolicy policy) {
+  if (!alloc)
+    return std::nullopt;
+  std::optional<SmallVector<int64_t, 4>> ownerDims =
+      getDbOwnerRouteDimsFromDbGrid(alloc);
+  if (!ownerDims || ownerDims->empty() ||
+      !ownerDimsAddressDbRank(*ownerDims, alloc.getSizes().size()))
+    return std::nullopt;
+  switch (policy) {
+  case DbOwnerRoutePolicy::LinearModNodes:
+  case DbOwnerRoutePolicy::OwnerDimContiguous:
+    break;
+  }
+
+  auto ownerBlockShape = getDbOwnerRouteBlockShapeFromDbGrid(alloc, *ownerDims);
+  if (!ownerBlockShape || ownerBlockShape->empty())
+    return std::nullopt;
+
+  DbOwnerRouteFacts facts;
+  facts.policy = policy;
+  facts.dims.assign(ownerDims->begin(), ownerDims->end());
+  facts.blockShape.assign(ownerBlockShape->begin(), ownerBlockShape->end());
+  return facts;
+}
+
+inline std::optional<DbOwnerRouteFacts>
+deriveDbOwnerRouteFactsFromDbGrid(DbAllocOp alloc) {
+  if (!alloc)
+    return std::nullopt;
+  DbOwnerRoutePolicy policy = chooseDbOwnerRoutePolicy(alloc);
+  return deriveDbOwnerRouteFactsFromDbGrid(alloc, policy);
+}
+
+inline bool canDeriveDbOwnerRouteFromGrid(DbAllocOp alloc,
+                                          DbOwnerRoutePolicy policy) {
+  if (!alloc)
+    return false;
+
+  std::optional<DbOwnerRouteFacts> facts =
+      deriveDbOwnerRouteFactsFromDbGrid(alloc, policy);
+  return facts.has_value();
+}
+
+inline bool canDeriveDbOwnerRouteFromGrid(DbAllocOp alloc) {
+  return deriveDbOwnerRouteFactsFromDbGrid(alloc).has_value();
+}
+
+inline bool destDbOwnerRouteMatchesSourcePolicy(DbAllocOp source,
+                                                DbAllocOp dest) {
   if (!source || !dest)
-    return;
-  if (auto attr = source.getOwnerMapKindAttr())
-    dest.setOwnerMapKindAttr(attr);
-  if (auto attr = source.getOwnerMapVersionAttr())
-    dest.setOwnerMapVersionAttr(attr);
-  if (auto attr = source.getOwnerMapDimsAttr())
-    dest.setOwnerMapDimsAttr(attr);
-  if (auto attr = source.getOwnerBlockShapeAttr())
-    dest.setOwnerBlockShapeAttr(attr);
+    return false;
+  std::optional<DbOwnerRouteFacts> sourceFacts =
+      deriveDbOwnerRouteFactsFromDbGrid(source);
+  if (!sourceFacts)
+    return false;
+  return canDeriveDbOwnerRouteFromGrid(dest, sourceFacts->policy);
 }
 
 } // namespace mlir::carts::arts

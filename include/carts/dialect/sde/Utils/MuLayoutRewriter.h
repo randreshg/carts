@@ -11,8 +11,8 @@
 /// acquires, no db_refs, no EDT rebasing — a single flat expanded memref and
 /// in-place `memref.load`/`memref.store` rewrites.
 ///
-/// The rewriter performs a REAL transformation or fails closed; it never stamps
-/// a metadata promise for a later layer to repair.
+/// The rewriter either rewrites the MU into the committed physical shape or
+/// fails closed.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_SDE_UTILS_MULAYOUTREWRITER_H
@@ -35,17 +35,17 @@ namespace mlir::carts::sde {
 /// (grid prefix in owner order, then per-logical-dim tile coords).
 class MuAccessIndexer {
 public:
-  explicit MuAccessIndexer(const MuPhysicalLayout &plan) : plan(plan) {}
+  explicit MuAccessIndexer(const MuPhysicalLayout &layout) : layout(layout) {}
   virtual ~MuAccessIndexer() = default;
 
-  /// `logicalIndices.size()` must equal `plan.logicalRank()`. Returns
-  /// `plan.expandedRank()` indices.
+  /// `logicalIndices.size()` must equal `layout.logicalRank()`. Returns
+  /// `layout.expandedRank()` indices.
   virtual llvm::SmallVector<mlir::Value, 6>
   localize(mlir::ValueRange logicalIndices, mlir::OpBuilder &builder,
            mlir::Location loc) const = 0;
 
 protected:
-  const MuPhysicalLayout &plan;
+  const MuPhysicalLayout &layout;
 };
 
 /// HPF BLOCK div/mod localization: for owner dim with block extent B,
@@ -60,8 +60,7 @@ public:
 };
 
 /// Elementwise budget-reconciled tile: identical div/mod against the committed
-/// block extent. Distinct type so per-element window divergence can land later
-/// without changing the rewriter contract.
+/// block extent. Kept as a distinct mode so elementwise rules stay explicit.
 class MuElementWiseIndexer : public MuBlockIndexer {
 public:
   using MuBlockIndexer::MuBlockIndexer;
@@ -74,32 +73,49 @@ public:
   using MuBlockIndexer::MuBlockIndexer;
 };
 
-/// Factory for the mode-specific access indexer of a committed block-grid plan:
-/// stencil -> MuStencilIndexer, elementwise(/pipeline) -> MuElementWiseIndexer,
-/// otherwise MuBlockIndexer. Shared by rank expansion and coarse avoidance so
-/// both realize the same committed plan identically.
+/// Factory for the mode-specific access indexer of a committed block-grid
+/// layout: stencil -> MuStencilIndexer, elementwise(/pipeline) ->
+/// MuElementWiseIndexer, otherwise MuBlockIndexer. Shared by rank expansion and
+/// coarse avoidance so both realize the same committed layout identically.
 std::unique_ptr<MuAccessIndexer>
 makeMuAccessIndexer(SdeStructuredClassification cls,
-                    const MuPhysicalLayout &plan);
+                    const MuPhysicalLayout &layout);
+
+/// True when an SU classification can witness rank-expanded block-grid MU
+/// access windows. CUs with SDE reduction accumulators are excluded because
+/// their accumulator protocol is not a direct block write.
+bool supportsRankExpandedAccessWindows(SdeSuIterateOp si);
 
 /// The block-grid realize gate shared by rank expansion, coarse avoidance, and
 /// coarse-avoidance verification: true iff `si` is a committed, fully-static
-/// elementwise/stencil BLOCK plan (any number of owner dims) whose committed
+/// direct block-write BLOCK layout (any number of owner dims) whose committed
 /// `physicalOwnerDims`/`physicalBlockShape` resolve to a real grid (block count
-/// > 1 on at least one owner dim). It reads the committed plan VERBATIM — it
+/// > 1 on at least one owner dim). It reads the committed layout VERBATIM — it
 /// never recomputes owner dims or block shape — and fills `out` on success.
-/// Matmul, reduction, dynamic, and no-committed-plan MUs are out of scope
-/// (returns false; the caller leaves them conservative or diagnoses them).
+/// SDE accumulator reductions, dynamic, and no-committed-layout MUs are out of
+/// scope (returns false; the caller leaves them conservative or diagnoses
+/// them). Reduction-shaped CUs that write a block-indexed output with no SDE
+/// reduction accumulator can use the same block indexer as elementwise CUs.
 bool isBlockGridRealizable(SdeSuIterateOp si, mlir::MemRefType logicalType,
                            MuPhysicalLayout &out);
 
-/// Find the committed block-grid storage plan governing `muAlloc`: the nearest
-/// enclosing `su_iterate` of any store user that carries both
+struct CommittedMuBlockLayout {
+  SdeSuIterateOp writer;
+  MuPhysicalLayout layout;
+};
+
+std::optional<CommittedMuBlockLayout>
+findCommittedMuBlockLayout(SdeMuAllocOp muAlloc);
+
+bool isBlockGridRealizable(SdeMuAllocOp muAlloc, MuPhysicalLayout &out);
+
+/// Find the committed block-grid storage layout governing `muAlloc`: the
+/// nearest enclosing `su_iterate` of any store user that carries both
 /// `physicalOwnerDims` and `physicalBlockShape`. Reader layouts are consumers
 /// of storage and may require SDE movement; they must not choose or conflict
 /// with storage grain. Returns null when there is no such writer, or when
 /// distinct writers disagree on the committed owner-dims/block-shape.
-SdeSuIterateOp findCommittedBlockPlanWriter(SdeMuAllocOp muAlloc);
+SdeSuIterateOp findCommittedBlockLayoutWriter(SdeMuAllocOp muAlloc);
 
 /// True if `root` has a use a block-grid layout cannot localize — any user
 /// other than a direct `memref.load`/`store`/`dealloc`,
@@ -126,14 +142,17 @@ struct ExpandedBlockGridMu {
 };
 
 /// Recognize the expanded form (any number of owner dims): `physicalOwnerDims`
-/// has K entries, `muType.getRank() == physicalBlockShape.size() + K`, owner
-/// dims are unique, in `[0, logicalRank)`, and sorted ascending. Fills
-/// `blockExtents[i] = physicalBlockShape[ownerDims[i]]` and `gridCounts[i]`
-/// from the leading K dims of `muType`. Returns nullopt for flat / owner-length
-/// / rank-mismatch / missing-attr MUs (out of scope — conservative, not an
-/// error).
+/// has K entries, `muType.getRank() == physicalBlockShape.size() + K`, and
+/// owner dims are unique in `[0, logicalRank)`. Fills canonical ascending
+/// owner dims, `blockExtents[i] = physicalBlockShape[ownerDims[i]]`, and
+/// `gridCounts[i]` from the leading K dims of `muType`. Returns nullopt for
+/// flat / owner-length / rank-mismatch / missing-attr MUs (out of scope —
+/// conservative, not an error).
 std::optional<ExpandedBlockGridMu>
 recognizeExpandedBlockGridMu(SdeSuIterateOp si, mlir::MemRefType muType);
+
+std::optional<ExpandedBlockGridMu>
+recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc);
 
 /// Each grid count of a rank-expanded MU must be `ceilDiv(extent, block)` for
 /// an ACTUAL committed iteration extent on the writer `su_iterate`, read from
@@ -151,8 +170,8 @@ findOwnerIterationExtents(SdeSuIterateOp si,
 /// Applies a committed block-grid layout to one `sde.mu_alloc`.
 class MuLayoutRewriter {
 public:
-  MuLayoutRewriter(const MuPhysicalLayout &plan, MuAccessIndexer &indexer)
-      : plan(plan), indexer(indexer) {}
+  MuLayoutRewriter(const MuPhysicalLayout &layout, MuAccessIndexer &indexer)
+      : layout(layout), indexer(indexer) {}
 
   /// Rank-expand `muAlloc` and rewrite all of its uses. On success the original
   /// `mu_alloc` and its (now dead) load/store/dealloc users are erased and a
@@ -161,7 +180,7 @@ public:
   mlir::LogicalResult apply(SdeMuAllocOp muAlloc);
 
 private:
-  const MuPhysicalLayout &plan;
+  const MuPhysicalLayout &layout;
   MuAccessIndexer &indexer;
 };
 

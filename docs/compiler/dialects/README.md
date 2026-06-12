@@ -23,13 +23,13 @@ Polygeist -> sde -> arts -> arts-rt -> LLVM
 
 Analysis objects do not cross dialect boundaries as hidden side channels. If a
 later dialect needs a fact, the earlier dialect must either transform the IR so
-that the fact is already true, materialize the fact as ordinary IR, or fail
+that the fact is already true, represent the fact as ordinary IR, or fail
 closed before conversion.
 
 Examples:
 
 - SDE pattern facts become `sde.pattern`, owner dims, block shapes, token
-  windows, and reduction plans.
+  windows, and reduction facts.
 - ARTS capture and resource analysis become explicit deps, params, yielded
   values, token-local view operands, ARTS object attributes, dependency slots,
   DB layouts, and epoch/EDT structure.

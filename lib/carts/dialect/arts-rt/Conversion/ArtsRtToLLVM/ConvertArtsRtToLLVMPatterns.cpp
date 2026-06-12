@@ -12,9 +12,7 @@
 #include "carts/dialect/arts-rt/IR/RtDialect.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
-#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
-#include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/RuntimeConfig.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/utils/Utils.h"
@@ -30,8 +28,6 @@
 #include "polygeist/Ops.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
-
-#include <limits>
 
 #include "carts/utils/Debug.h"
 #include "llvm/ADT/Statistic.h"
@@ -435,12 +431,9 @@ struct DbAllocPattern : public ArtsRtToLLVMPattern<DbAllocOp> {
     DbLoweringInfo dbLowering = RtDbUtils::extractDbLoweringInfo(op);
     auto &dbSizes = dbLowering.sizes;
     bool isSingleElement = dbLowering.isSingleElement;
-    DbInterleavePlacement dbMemoryPlacement = getDbInterleavePlacement(
-        op, dbSizes, isSingleElement, distributedOwnership);
 
     if (distributedOwnership) {
-      if (failed(lowerDistributedRuntimeDbAlloc(
-              op, nextId, dbSizes, isSingleElement, guidMemref, dbMemref)))
+      if (failed(lowerDistributedRuntimeDbAlloc(op, guidMemref, dbMemref)))
         return failure();
       if (failed(linearizeRankedHandleUses(op.getGuid(), guidMemref, dbSizes,
                                            rewriter)) ||
@@ -465,8 +458,7 @@ struct DbAllocPattern : public ArtsRtToLLVMPattern<DbAllocOp> {
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
       createSingleDb(dbMemref, guidMemref, route, totalDbSize,
-                     nextId ? &nextId : nullptr, loc, distributedOwnership,
-                     /*createDb=*/true, DbInterleavePlacement::Default);
+                     nextId ? &nextId : nullptr, loc, /*createDb=*/true);
     } else {
       ARTS_DEBUG("Creating multi-dim DB");
       /// Compute total number of elements
@@ -481,8 +473,7 @@ struct DbAllocPattern : public ArtsRtToLLVMPattern<DbAllocOp> {
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
       createMultiDbs(dbMemref, guidMemref, dbSizes, route, totalDbSize,
-                     nextId ? &nextId : nullptr, loc, distributedOwnership,
-                     /*createDb=*/true, dbMemoryPlacement);
+                     nextId ? &nextId : nullptr, loc, /*createDb=*/true);
     }
 
     if (failed(linearizeRankedHandleUses(op.getGuid(), guidMemref, dbSizes,
@@ -497,38 +488,6 @@ struct DbAllocPattern : public ArtsRtToLLVMPattern<DbAllocOp> {
   }
 
 private:
-  /// Runtime backing-memory interleave strategy for a DB allocation (a
-  /// data-structure tuning decision), distinct from the dialect-level
-  /// arts::DbMemoryPlacement that records where blocks live across nodes.
-  enum class DbInterleavePlacement { Default, Interleaved };
-
-  std::optional<DbOwnerMapPlan> requireOwnerMapPlan(DbAllocOp op) const {
-    DbOwnerMapPlanFailure planFailure = getDistributedDbOwnerMapPlanFailure(op);
-    if (planFailure != DbOwnerMapPlanFailure::None) {
-      op.emitOpError()
-          << "distributed DB lowering requires a verified owner-map plan: "
-          << toString(planFailure);
-      return std::nullopt;
-    }
-
-    auto plan = getDbOwnerMapPlan(op);
-    if (!plan) {
-      op.emitOpError()
-          << "distributed DB lowering requires a verified owner-map plan";
-      return std::nullopt;
-    }
-    return plan;
-  }
-
-  Value computeOwnerRouteForLinearIndex(ArrayRef<Value> dbSizes,
-                                        Value linearIndex,
-                                        const DbOwnerMapPlan &plan,
-                                        Location loc) const {
-    return createDbOwnerRouteForLinearIndex(AC->getBuilder(), loc, dbSizes,
-                                            linearIndex, AC->getTotalNodes(loc),
-                                            plan);
-  }
-
   LogicalResult linearizeRankedHandleUses(Value original, Value flatMemref,
                                           ArrayRef<Value> dbSizes,
                                           PatternRewriter &rewriter) const {
@@ -598,17 +557,18 @@ private:
     return global;
   }
 
-  LogicalResult
-  lowerDistributedRuntimeDbAlloc(DbAllocOp op, std::optional<int64_t> nextId,
-                                 ArrayRef<Value> dbSizes, bool isSingleElement,
-                                 Value &guidMemref, Value &dbMemref) const {
-    uint64_t baseId = getArtsId(op);
-    if (baseId == 0)
-      baseId =
-          static_cast<uint64_t>(reinterpret_cast<uintptr_t>(op.getOperation()));
-    std::string baseName = "__carts_dist_alloc_" + std::to_string(baseId);
-    std::string guidHolderSymbol = baseName + "_guid_holder";
-    std::string ptrHolderSymbol = baseName + "_ptr_holder";
+  LogicalResult lowerDistributedRuntimeDbAlloc(DbAllocOp op, Value &guidMemref,
+                                               Value &dbMemref) const {
+    std::optional<std::string> baseName =
+        getDistributedDbRuntimeInitBaseName(op);
+    if (!baseName) {
+      op.emitOpError()
+          << "distributed DB allocation reached LLVM lowering without stable "
+             "arts.id or arts.create_id";
+      return failure();
+    }
+    std::string guidHolderSymbol = *baseName + "_guid_holder";
+    std::string ptrHolderSymbol = *baseName + "_ptr_holder";
     bool explicitSingleNode = false;
     bool hasExplicitNodeCount = false;
     if (const arts::RuntimeConfig *machine = AC->getRuntimeConfig()) {
@@ -624,11 +584,8 @@ private:
     }
     bool parallelInit = !explicitSingleNode;
     std::string nodeInitSymbol =
-        baseName + (parallelInit ? "_reserve_init" : "_init");
-    std::string workerInitSymbol = baseName + "_worker_init";
-    std::optional<DbOwnerMapPlan> ownerMap = requireOwnerMapPlan(op);
-    if (!ownerMap)
-      return failure();
+        *baseName + (parallelInit ? "_reserve_init" : "_init");
+    std::string workerInitSymbol = *baseName + "_worker_init";
 
     auto guidDynamicType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
     auto ptrDynamicType = MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
@@ -639,367 +596,20 @@ private:
 
     ModuleOp module = AC->getModule();
     func::FuncOp initFn = module.lookupSymbol<func::FuncOp>(nodeInitSymbol);
-    func::FuncOp workerInitFn;
     if (!initFn) {
-      OpBuilder::InsertionGuard IG(AC->getBuilder());
-      AC->setInsertionPoint(module);
-      initFn = AC->create<func::FuncOp>(op.getLoc(), nodeInitSymbol,
-                                        AC->InitPerNodeFn);
-      initFn.setPrivate();
-
-      Block *entry = initFn.addEntryBlock();
-      AC->setInsertionPointToStart(entry);
-
-      IRMapping mapper;
-      auto parentFn = op->getParentOfType<func::FuncOp>();
-      if (parentFn && parentFn.getNumArguments() > 0) {
-        if (parentFn.getNumArguments() != 2 || initFn.getNumArguments() != 3)
-          return failure();
-        mapper.map(parentFn.getArgument(0), initFn.getArgument(1));
-        mapper.map(parentFn.getArgument(1), initFn.getArgument(2));
-      }
-
-      llvm::SetVector<Value> valuesToClone;
-      llvm::DenseSet<Value> visited;
-      std::function<LogicalResult(Value)> collectDependencies =
-          [&](Value value) -> LogicalResult {
-        if (!value)
-          return failure();
-        if (!visited.insert(value).second || mapper.contains(value))
-          return success();
-
-        if (auto blockArg = dyn_cast<BlockArgument>(value))
-          return mapper.contains(blockArg) ? success() : failure();
-
-        Operation *defOp = value.getDefiningOp();
-        if (!defOp)
-          return failure();
-        for (Value operand : defOp->getOperands()) {
-          if (failed(collectDependencies(operand)))
-            return failure();
-        }
-        valuesToClone.insert(value);
-        return success();
-      };
-
-      for (Value size : dbSizes) {
-        if (failed(collectDependencies(size))) {
-          ARTS_WARN("Failed to collect distributed allocation size expression "
-                    "dependencies for "
-                    << op);
-          return failure();
-        }
-      }
-      for (Value size : op.getElementSizes()) {
-        if (failed(collectDependencies(size))) {
-          ARTS_WARN("Failed to collect distributed allocation element size "
-                    "expression dependencies for "
-                    << op);
-          return failure();
-        }
-      }
-
-      auto isRuntimeTopologyCall = [](Operation *cloneOp) {
-        if (auto queryOp = dyn_cast<RuntimeQueryOp>(cloneOp)) {
-          auto kind = queryOp.getKind();
-          return kind == RuntimeQueryKind::totalNodes ||
-                 kind == RuntimeQueryKind::totalWorkers;
-        }
-        auto callOp = dyn_cast<func::CallOp>(cloneOp);
-        if (!callOp)
-          return false;
-        auto callee = callOp.getCallee();
-        return callee == "artsGetTotalNodes" || callee == "artsGetTotalWorkers";
-      };
-
-      if (!ValueAnalysis::cloneValuesIntoRegion(
-              valuesToClone, &initFn.getBody(), mapper, AC->getBuilder(),
-              /*allowMemoryEffectFree=*/true, isRuntimeTopologyCall)) {
-        ARTS_WARN(
-            "Failed to clone distributed allocation size expressions into "
-            "init callback for "
-            << op);
+      op.emitOpError()
+          << "distributed DB allocation reached LLVM lowering without "
+             "pre-lowered runtime init callbacks";
+      return failure();
+    }
+    func::FuncOp workerInitFn;
+    if (parallelInit) {
+      workerInitFn = module.lookupSymbol<func::FuncOp>(workerInitSymbol);
+      if (!workerInitFn) {
+        op.emitOpError()
+            << "distributed DB allocation reached LLVM lowering without "
+               "pre-lowered worker init callback";
         return failure();
-      }
-
-      auto mapValue = [&](Value v) { return mapper.lookupOrNull(v); };
-
-      SmallVector<Value, 4> callbackDbSizes;
-      callbackDbSizes.reserve(dbSizes.size());
-      for (Value size : dbSizes) {
-        Value mapped = mapValue(size);
-        if (!mapped) {
-          ARTS_WARN("Missing mapped DbAlloc size value in distributed init for "
-                    << op);
-          return failure();
-        }
-        callbackDbSizes.push_back(mapped);
-      }
-
-      SmallVector<Value, 4> callbackElementSizes;
-      callbackElementSizes.reserve(op.getElementSizes().size());
-      for (Value size : op.getElementSizes()) {
-        Value mapped = mapValue(size);
-        if (!mapped) {
-          ARTS_WARN("Missing mapped DbAlloc element size value in distributed "
-                    "init for "
-                    << op);
-          return failure();
-        }
-        callbackElementSizes.push_back(mapped);
-      }
-
-      Value callbackTotalElems =
-          AC->computeTotalElements(callbackDbSizes, op.getLoc());
-      Value guidBuffer = AC->create<memref::AllocOp>(
-          op.getLoc(), guidDynamicType, ValueRange{callbackTotalElems});
-      Value ptrBuffer = AC->create<memref::AllocOp>(
-          op.getLoc(), ptrDynamicType, ValueRange{callbackTotalElems});
-
-      Value guidHolder = AC->create<memref::GetGlobalOp>(
-          op.getLoc(), guidHolderType, guidHolderSymbol);
-      Value ptrHolder = AC->create<memref::GetGlobalOp>(
-          op.getLoc(), ptrHolderType, ptrHolderSymbol);
-      Value zero = AC->createIndexConstant(0, op.getLoc());
-      AC->create<memref::StoreOp>(op.getLoc(), guidBuffer, guidHolder,
-                                  ValueRange{zero});
-      AC->create<memref::StoreOp>(op.getLoc(), ptrBuffer, ptrHolder,
-                                  ValueRange{zero});
-
-      Value callbackElementSize =
-          AC->computeElementTypeSize(op.getElementType(), op.getLoc());
-      Value callbackPayloadSize = AC->createIndexConstant(1, op.getLoc());
-      for (Value dim : callbackElementSizes) {
-        callbackPayloadSize =
-            AC->create<arith::MulIOp>(op.getLoc(), callbackPayloadSize, dim);
-      }
-      Value callbackTotalDbSize = AC->create<arith::MulIOp>(
-          op.getLoc(), callbackElementSize, callbackPayloadSize);
-      Value callbackRoute = AC->createIntConstant(0, AC->Int32, op.getLoc());
-      std::optional<int64_t> callbackNextId = nextId;
-      Value callbackNodeId = initFn.getArgument(0);
-
-      if (!parallelInit) {
-        if (isSingleElement) {
-          createSingleDb(
-              ptrBuffer, guidBuffer, callbackRoute, callbackTotalDbSize,
-              callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
-              /*distributedOwnership=*/true,
-              /*createDb=*/true, DbInterleavePlacement::Default,
-              callbackDbSizes,
-              /*indices=*/{}, std::nullopt, &*ownerMap, callbackNodeId);
-        } else {
-          createMultiDbs(ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
-                         callbackTotalDbSize,
-                         callbackNextId ? &callbackNextId : nullptr,
-                         op.getLoc(),
-                         /*distributedOwnership=*/true,
-                         /*createDb=*/true, DbInterleavePlacement::Default,
-                         &*ownerMap, callbackNodeId);
-        }
-        AC->create<func::ReturnOp>(op.getLoc());
-      } else {
-        /// Reserve deterministic GUIDs once per node; DB creation runs in
-        /// initPerWorker.
-        if (isSingleElement) {
-          createSingleDb(
-              ptrBuffer, guidBuffer, callbackRoute, callbackTotalDbSize,
-              callbackNextId ? &callbackNextId : nullptr, op.getLoc(),
-              /*distributedOwnership=*/true,
-              /*createDb=*/false, DbInterleavePlacement::Default,
-              callbackDbSizes,
-              /*indices=*/{}, std::nullopt, &*ownerMap);
-        } else {
-          createMultiDbs(
-              ptrBuffer, guidBuffer, callbackDbSizes, callbackRoute,
-              callbackTotalDbSize, callbackNextId ? &callbackNextId : nullptr,
-              op.getLoc(),
-              /*distributedOwnership=*/true,
-              /*createDb=*/false, DbInterleavePlacement::Default, &*ownerMap);
-        }
-        AC->create<func::ReturnOp>(op.getLoc());
-
-        workerInitFn = module.lookupSymbol<func::FuncOp>(workerInitSymbol);
-        if (!workerInitFn) {
-          AC->setInsertionPoint(module);
-          workerInitFn = AC->create<func::FuncOp>(op.getLoc(), workerInitSymbol,
-                                                  AC->InitPerWorkerFn);
-          workerInitFn.setPrivate();
-
-          Block *workerEntry = workerInitFn.addEntryBlock();
-          AC->setInsertionPointToStart(workerEntry);
-
-          IRMapping workerMapper;
-          if (parentFn && parentFn.getNumArguments() > 0) {
-            if (parentFn.getNumArguments() != 2 ||
-                workerInitFn.getNumArguments() != 4)
-              return failure();
-            workerMapper.map(parentFn.getArgument(0),
-                             workerInitFn.getArgument(2));
-            workerMapper.map(parentFn.getArgument(1),
-                             workerInitFn.getArgument(3));
-          }
-
-          llvm::SetVector<Value> workerValuesToClone;
-          llvm::DenseSet<Value> workerVisited;
-          std::function<LogicalResult(Value)> collectWorkerDependencies =
-              [&](Value value) -> LogicalResult {
-            if (!value)
-              return failure();
-            if (!workerVisited.insert(value).second ||
-                workerMapper.contains(value))
-              return success();
-
-            if (auto blockArg = dyn_cast<BlockArgument>(value))
-              return workerMapper.contains(blockArg) ? success() : failure();
-
-            Operation *defOp = value.getDefiningOp();
-            if (!defOp)
-              return failure();
-            for (Value operand : defOp->getOperands()) {
-              if (failed(collectWorkerDependencies(operand)))
-                return failure();
-            }
-            workerValuesToClone.insert(value);
-            return success();
-          };
-
-          for (Value size : dbSizes) {
-            if (failed(collectWorkerDependencies(size))) {
-              ARTS_WARN("Failed to collect distributed worker init size "
-                        "expression dependencies for "
-                        << op);
-              return failure();
-            }
-          }
-
-          for (Value size : op.getElementSizes()) {
-            if (failed(collectWorkerDependencies(size))) {
-              ARTS_WARN("Failed to collect distributed worker init element "
-                        "size expression dependencies for "
-                        << op);
-              return failure();
-            }
-          }
-
-          if (!ValueAnalysis::cloneValuesIntoRegion(
-                  workerValuesToClone, &workerInitFn.getBody(), workerMapper,
-                  AC->getBuilder(), /*allowMemoryEffectFree=*/true,
-                  isRuntimeTopologyCall)) {
-            ARTS_WARN("Failed to clone distributed allocation size "
-                      "expressions into worker init callback for "
-                      << op);
-            return failure();
-          }
-
-          auto mapWorkerValue = [&](Value v) {
-            return workerMapper.lookupOrNull(v);
-          };
-
-          SmallVector<Value, 4> workerDbSizes;
-          workerDbSizes.reserve(dbSizes.size());
-          for (Value size : dbSizes) {
-            Value mapped = mapWorkerValue(size);
-            if (!mapped) {
-              ARTS_WARN("Missing mapped DbAlloc size value in distributed "
-                        "worker init for "
-                        << op);
-              return failure();
-            }
-            workerDbSizes.push_back(mapped);
-          }
-
-          SmallVector<Value, 4> workerElementSizes;
-          workerElementSizes.reserve(op.getElementSizes().size());
-          for (Value size : op.getElementSizes()) {
-            Value mapped = mapWorkerValue(size);
-            if (!mapped) {
-              ARTS_WARN("Missing mapped DbAlloc element size value in "
-                        "distributed worker init for "
-                        << op);
-              return failure();
-            }
-            workerElementSizes.push_back(mapped);
-          }
-
-          Value workerGuidHolder = AC->create<memref::GetGlobalOp>(
-              op.getLoc(), guidHolderType, guidHolderSymbol);
-          Value workerPtrHolder = AC->create<memref::GetGlobalOp>(
-              op.getLoc(), ptrHolderType, ptrHolderSymbol);
-          Value zeroIdx = AC->createIndexConstant(0, op.getLoc());
-          Value workerGuidBuffer = AC->create<memref::LoadOp>(
-              op.getLoc(), workerGuidHolder, ValueRange{zeroIdx});
-          Value workerPtrBuffer = AC->create<memref::LoadOp>(
-              op.getLoc(), workerPtrHolder, ValueRange{zeroIdx});
-          Value workerTotalElems =
-              AC->computeTotalElements(workerDbSizes, op.getLoc());
-
-          Value workerElementSize =
-              AC->computeElementTypeSize(op.getElementType(), op.getLoc());
-          Value workerPayloadSize = AC->createIndexConstant(1, op.getLoc());
-          for (Value dim : workerElementSizes) {
-            workerPayloadSize =
-                AC->create<arith::MulIOp>(op.getLoc(), workerPayloadSize, dim);
-          }
-          Value workerTotalDbSize = AC->create<arith::MulIOp>(
-              op.getLoc(), workerElementSize, workerPayloadSize);
-
-          Value workerNodeId = workerInitFn.getArgument(0);
-          Value workerLocalId = workerInitFn.getArgument(1);
-          Value zeroI32 = AC->createIntConstant(0, AC->Int32, op.getLoc());
-          Value isPrimaryWorker = AC->create<arith::CmpIOp>(
-              op.getLoc(), arith::CmpIPredicate::eq, workerLocalId, zeroI32);
-          auto primaryWorkerIf =
-              AC->create<scf::IfOp>(op.getLoc(), isPrimaryWorker, false);
-          AC->setInsertionPointToStart(
-              &primaryWorkerIf.getThenRegion().front());
-          Value workerNodeIndex = AC->castToIndex(workerNodeId, op.getLoc());
-          if (ownerMap->kind == DbOwnerMapKind::linear_mod_nodes) {
-            Value workerTotalNodes =
-                AC->castToIndex(AC->getTotalNodes(op.getLoc()), op.getLoc());
-            auto workerLoop =
-                AC->create<scf::ForOp>(op.getLoc(), workerNodeIndex,
-                                       workerTotalElems, workerTotalNodes);
-            AC->setInsertionPointToStart(&workerLoop.getRegion().front());
-            Value linearIndex = workerLoop.getInductionVar();
-            Value reservedGuid = AC->create<memref::LoadOp>(
-                op.getLoc(), workerGuidBuffer, ValueRange{linearIndex});
-            createDbFromGuidAtIndex(workerPtrBuffer, reservedGuid, linearIndex,
-                                    workerTotalDbSize, callbackNextId,
-                                    op.getLoc(), DbInterleavePlacement::Default,
-                                    workerNodeId,
-                                    /*requireLocalOwner=*/true);
-            AC->setInsertionPointAfter(workerLoop);
-          } else {
-            auto lowerBound = AC->createIndexConstant(0, op.getLoc());
-            auto step = AC->createIndexConstant(1, op.getLoc());
-            auto workerLoop = AC->create<scf::ForOp>(op.getLoc(), lowerBound,
-                                                     workerTotalElems, step);
-            AC->setInsertionPointToStart(&workerLoop.getRegion().front());
-            Value linearIndex = workerLoop.getInductionVar();
-            Value ownerRoute = computeOwnerRouteForLinearIndex(
-                workerDbSizes, linearIndex, *ownerMap, op.getLoc());
-            if (!ownerRoute)
-              return failure();
-            Value workerRoute =
-                AC->castToInt(AC->Int32, workerNodeId, op.getLoc());
-            Value ownsBlock = AC->create<arith::CmpIOp>(
-                op.getLoc(), arith::CmpIPredicate::eq, ownerRoute, workerRoute);
-            auto ownerIf = AC->create<scf::IfOp>(op.getLoc(), ownsBlock, false);
-            AC->setInsertionPointToStart(&ownerIf.getThenRegion().front());
-            Value reservedGuid = AC->create<memref::LoadOp>(
-                op.getLoc(), workerGuidBuffer, ValueRange{linearIndex});
-            createDbFromGuidAtIndex(workerPtrBuffer, reservedGuid, linearIndex,
-                                    workerTotalDbSize, callbackNextId,
-                                    op.getLoc(), DbInterleavePlacement::Default,
-                                    ownerRoute,
-                                    /*requireLocalOwner=*/true);
-            AC->setInsertionPointAfter(ownerIf);
-            AC->setInsertionPointAfter(workerLoop);
-          }
-          AC->setInsertionPointAfter(primaryWorkerIf);
-          AC->create<func::ReturnOp>(op.getLoc());
-        }
       }
     }
 
@@ -1025,9 +635,7 @@ private:
 
   void createDbFromGuidAtIndex(Value dbMemref, Value guid, Value linearIndex,
                                Value elementSize, std::optional<int64_t> nextId,
-                               Location loc,
-                               DbInterleavePlacement memoryPlacement,
-                               Value hintRoute = {},
+                               Location loc, Value hintRoute = {},
                                bool requireLocalOwner = false) const {
     Value elemSize64 = AC->ensureI64(elementSize, loc);
 
@@ -1053,8 +661,6 @@ private:
     auto runtimeFn = types::ARTSRTL_arts_db_create_with_guid;
     if (requireLocalOwner) {
       runtimeFn = types::ARTSRTL_arts_db_create_with_guid_local;
-    } else if (memoryPlacement == DbInterleavePlacement::Interleaved) {
-      runtimeFn = types::ARTSRTL_arts_db_create_with_guid_interleaved;
     }
     auto dbCall =
         RCB.callOp(runtimeFn, {guid, elemSize64, dbType, nullData, hintMemref});
@@ -1065,13 +671,9 @@ private:
 
   void createSingleDb(
       Value dbMemref, Value guidMemref, Value route, Value elementSize,
-      std::optional<int64_t> *nextId, Location loc,
-      bool distributedOwnership = false, bool createDb = true,
-      DbInterleavePlacement memoryPlacement = DbInterleavePlacement::Default,
+      std::optional<int64_t> *nextId, Location loc, bool createDb = true,
       ArrayRef<Value> sizes = {}, ArrayRef<Value> indices = {},
-      std::optional<Value> linearIndexOverride = std::nullopt,
-      const DbOwnerMapPlan *ownerMap = nullptr,
-      Value localNodeForCreate = {}) const {
+      std::optional<Value> linearIndexOverride = std::nullopt) const {
     Value linearIndex;
     if (linearIndexOverride.has_value()) {
       linearIndex = *linearIndexOverride;
@@ -1081,21 +683,11 @@ private:
                         : AC->computeLinearIndex(sizes, indices, loc);
     }
 
-    Value reserveRoute = route;
-    if (distributedOwnership) {
-      if (!ownerMap)
-        return;
-      reserveRoute =
-          computeOwnerRouteForLinearIndex(sizes, linearIndex, *ownerMap, loc);
-      if (!reserveRoute)
-        return;
-    }
-
     /// Reserve GUID for the DB (v2: use ARTS_DB type for all datablocks)
     ArtsCodegen::RuntimeCallBuilder RCB(*AC, loc);
     Value dbTypeConst = AC->createIntConstant(ARTS_DB, AC->Int32, loc);
     auto guid =
-        RCB.call(types::ARTSRTL_arts_guid_reserve, {dbTypeConst, reserveRoute});
+        RCB.call(types::ARTSRTL_arts_guid_reserve, {dbTypeConst, route});
 
     /// Store reserved GUID in the linearized guid memref.
     AC->create<memref::StoreOp>(loc, guid, guidMemref, ValueRange{linearIndex});
@@ -1113,31 +705,16 @@ private:
       }
       auto createDbBody = [&]() {
         createDbFromGuidAtIndex(dbMemref, guid, linearIndex, elementSize,
-                                baseId, loc, memoryPlacement, reserveRoute,
-                                /*requireLocalOwner=*/distributedOwnership &&
-                                    static_cast<bool>(localNodeForCreate));
+                                baseId, loc, route);
       };
-      if (distributedOwnership && localNodeForCreate) {
-        Value localRoute = AC->castToInt(AC->Int32, localNodeForCreate, loc);
-        Value isLocal = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                                  reserveRoute, localRoute);
-        auto guard = AC->create<scf::IfOp>(loc, isLocal, false);
-        AC->setInsertionPointToStart(&guard.getThenRegion().front());
-        createDbBody();
-        AC->setInsertionPointAfter(guard);
-      } else {
-        createDbBody();
-      }
+      createDbBody();
     }
   }
 
-  void createMultiDbs(
-      Value dbMemref, Value guidMemref, ArrayRef<Value> sizes, Value route,
-      Value elementSize, std::optional<int64_t> *nextId, Location loc,
-      bool distributedOwnership = false, bool createDb = true,
-      DbInterleavePlacement memoryPlacement = DbInterleavePlacement::Default,
-      const DbOwnerMapPlan *ownerMap = nullptr,
-      Value localNodeForCreate = {}) const {
+  void createMultiDbs(Value dbMemref, Value guidMemref, ArrayRef<Value> sizes,
+                      Value route, Value elementSize,
+                      std::optional<int64_t> *nextId, Location loc,
+                      bool createDb = true) const {
     Value totalElems = AC->computeTotalElements(sizes, loc);
     /// Keep DB creation always linearized here. The dedicated GuidRangeCallOpt
     /// pass handles reserve->reserve_range promotion centrally after
@@ -1149,117 +726,9 @@ private:
     AC->setInsertionPointToStart(&loopBlock);
     Value linearIndex = linearLoop.getInductionVar();
     createSingleDb(dbMemref, guidMemref, route, elementSize, nextId, loc,
-                   distributedOwnership, createDb, memoryPlacement,
-                   /*sizes=*/sizes,
-                   /*indices=*/{}, /*linearIndexOverride=*/linearIndex,
-                   ownerMap, localNodeForCreate);
+                   createDb, /*sizes=*/sizes,
+                   /*indices=*/{}, /*linearIndexOverride=*/linearIndex);
     AC->setInsertionPointAfter(linearLoop);
-  }
-
-  DbInterleavePlacement
-  getDbInterleavePlacement(DbAllocOp op, ArrayRef<Value> dbSizes,
-                           bool isSingleElement,
-                           bool distributedOwnership) const {
-    if (distributedOwnership || isSingleElement)
-      return DbInterleavePlacement::Default;
-
-    auto depPattern = getDepPattern(op.getOperation());
-    bool hasBlockPlan =
-        static_cast<bool>(getPlanPhysicalBlockShapeAttr(op.getOperation()));
-    if (auto facts = getLoweringFacts(op.getPtr())) {
-      if (!depPattern && facts->pattern.depPattern)
-        depPattern = facts->pattern.depPattern;
-      hasBlockPlan = hasBlockPlan || !facts->spatial.blockShape.empty() ||
-                     !facts->spatial.staticBlockShape.empty();
-    }
-
-    if (depPattern && isUniformFamilyDepPattern(*depPattern) &&
-        hasMultipleRuntimeDbs(dbSizes)) {
-      if (isLargeUniformRuntimeDbAllocation(op, dbSizes))
-        return DbInterleavePlacement::Interleaved;
-    }
-
-    if (!depPattern || !isStencilHaloDepPattern(*depPattern))
-      return DbInterleavePlacement::Default;
-
-    if (!hasBlockPlan)
-      return DbInterleavePlacement::Default;
-
-    return hasMultipleRuntimeDbs(dbSizes) ? DbInterleavePlacement::Interleaved
-                                          : DbInterleavePlacement::Default;
-  }
-
-  static constexpr int64_t kLargeUniformInterleaveBytes =
-      16LL * 1024LL * 1024LL;
-
-  static bool isLargeUniformRuntimeDbAllocation(DbAllocOp op,
-                                                ArrayRef<Value> dbSizes) {
-    std::optional<int64_t> payloadBytes = getStaticPayloadBytes(op);
-    if (!payloadBytes)
-      return false;
-    if (*payloadBytes >= kLargeUniformInterleaveBytes)
-      return true;
-
-    std::optional<int64_t> runtimeDbCount = getStaticRuntimeDbCount(dbSizes);
-    if (!runtimeDbCount || *runtimeDbCount <= 1)
-      return false;
-    if (*payloadBytes > std::numeric_limits<int64_t>::max() / *runtimeDbCount)
-      return true;
-    return *payloadBytes * *runtimeDbCount >= kLargeUniformInterleaveBytes;
-  }
-
-  static std::optional<int64_t> getStaticElementTypeBytes(Type type) {
-    if (auto intTy = dyn_cast<IntegerType>(type))
-      return std::max<int64_t>(1, (intTy.getWidth() + 7) / 8);
-    if (auto floatTy = dyn_cast<FloatType>(type))
-      return std::max<int64_t>(1, (floatTy.getWidth() + 7) / 8);
-    if (isa<IndexType>(type))
-      return int64_t{8};
-    if (isa<LLVM::LLVMPointerType>(type))
-      return int64_t{8};
-    return std::nullopt;
-  }
-
-  static std::optional<int64_t> getStaticPayloadBytes(DbAllocOp op) {
-    std::optional<int64_t> elemBytes =
-        getStaticElementTypeBytes(op.getElementType());
-    if (!elemBytes)
-      return std::nullopt;
-
-    int64_t payloadBytes = *elemBytes;
-    for (Value dimValue : op.getElementSizes()) {
-      std::optional<int64_t> dim = getConstantIntValue(dimValue);
-      if (!dim || *dim <= 0)
-        return std::nullopt;
-      if (payloadBytes >
-          std::numeric_limits<int64_t>::max() / std::max<int64_t>(1, *dim))
-        return std::nullopt;
-      payloadBytes *= *dim;
-    }
-    return payloadBytes;
-  }
-
-  static bool hasMultipleRuntimeDbs(ArrayRef<Value> dbSizes) {
-    std::optional<int64_t> staticBlockCount = getStaticRuntimeDbCount(dbSizes);
-    if (!staticBlockCount)
-      return true;
-    return *staticBlockCount > 1;
-  }
-
-  static std::optional<int64_t>
-  getStaticRuntimeDbCount(ArrayRef<Value> dbSizes) {
-    int64_t staticBlockCount = 1;
-    for (Value size : dbSizes) {
-      std::optional<int64_t> constant = getConstantIntValue(size);
-      if (!constant)
-        return std::nullopt;
-      int64_t dim = *constant > 1 ? *constant : 1;
-      if (staticBlockCount >
-          std::numeric_limits<int64_t>::max() / std::max<int64_t>(1, dim))
-        return std::nullopt;
-      staticBlockCount *= dim;
-    }
-    return staticBlockCount;
   }
 };
 
@@ -1425,7 +894,7 @@ struct DbAcquirePattern : public ArtsRtToLLVMPattern<DbAcquireOp> {
       if (!op.getIndices().empty())
         return op.emitOpError(
             "cannot lower indexed acquire without source DB shape");
-      /// Fallback: just forward the source values
+      /// Single-DB acquire: forward the source values.
       rewriter.replaceOp(op, ValueRange{guidStorage, sourcePtr});
     }
 
@@ -1662,7 +1131,7 @@ struct UndefPattern : public ArtsRtToLLVMPattern<UndefOp> {
 };
 
 ///===----------------------------------------------------------------------===///
-/// Split Launch State Lowering Patterns (Structured Kernel Plan, Phase 2)
+/// Split Launch State Lowering Patterns (Structured Kernel State, Phase 2)
 ///===----------------------------------------------------------------------===///
 
 ///===----------------------------------------------------------------------===///

@@ -1,12 +1,11 @@
 ///==========================================================================///
 /// File: Redistribute.cpp
 ///
-/// SDE redistribution realization.
+/// SDE redistribution lowering.
 ///
-/// `sde-layout-assignment` records, on each accessing `sde.su_iterate`, the
-/// committed per-array home BLOCK layout (`arrayLayout`) plus a
-/// `layoutsDisagree` marker. This pass realizes each materializable
-/// disagreement as `sde.redist` and rejects the rest in SDE.
+/// `sde-layout-assignment` records temporary layout-disagreement markers on
+/// accessing `sde.su_iterate` ops. This pass consumes each marker into
+/// `sde.redist` structure, or rejects it in SDE.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/RedistributionEdges.h"
@@ -21,6 +20,8 @@ namespace mlir::carts::sde {
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 
 #include <memory>
 
@@ -28,6 +29,37 @@ using namespace mlir;
 using namespace mlir::carts;
 
 namespace {
+
+static bool
+removeRepresentedDisagreementIds(MLIRContext *ctx,
+                                 carts::sde::SdeSuIterateOp consumer,
+                                 ArrayRef<int64_t> representedIds) {
+  ArrayAttr disagree = consumer.getLayoutsDisagreeAttr();
+  if (!disagree || representedIds.empty())
+    return false;
+
+  llvm::DenseSet<int64_t> represented;
+  for (int64_t id : representedIds)
+    represented.insert(id);
+
+  SmallVector<Attribute, 4> remaining;
+  bool changed = false;
+  for (Attribute attr : disagree) {
+    auto idAttr = dyn_cast<IntegerAttr>(attr);
+    if (idAttr && represented.contains(idAttr.getInt())) {
+      changed = true;
+      continue;
+    }
+    remaining.push_back(attr);
+  }
+  if (!changed)
+    return false;
+  if (remaining.empty())
+    consumer->removeAttr(consumer.getLayoutsDisagreeAttrName());
+  else
+    consumer.setLayoutsDisagreeAttr(ArrayAttr::get(ctx, remaining));
+  return true;
+}
 
 /// True if `root` already carries a redistribution fact equal to `edge`
 /// (idempotence across re-runs and across consumers with the same target).
@@ -58,14 +90,16 @@ struct SdeRedistributePass
       failed = true;
     }
 
+    llvm::DenseMap<Operation *, SmallVector<int64_t, 4>> representedByConsumer;
     for (const carts::sde::RedistributionEdge &edge : committed.edges) {
+      carts::sde::SdeSuIterateOp consumer = edge.consumer;
+      representedByConsumer[consumer.getOperation()].push_back(edge.arrayId);
       if (alreadyRepresented(edge))
         continue;
       IntegerAttr costAttr;
       if (edge.commVolumeBytes > 0)
         costAttr =
             IntegerAttr::get(IntegerType::get(ctx, 64), edge.commVolumeBytes);
-      carts::sde::SdeSuIterateOp consumer = edge.consumer;
       OpBuilder builder(consumer);
       carts::sde::SdeRedistOp::create(
           builder, consumer.getLoc(), edge.root,
@@ -79,6 +113,10 @@ struct SdeRedistributePass
                                  : buildI64ArrayAttr(ctx, edge.haloShape),
           /*commVolumeBytes=*/costAttr);
     }
+
+    for (auto &entry : representedByConsumer)
+      removeRepresentedDisagreementIds(
+          ctx, cast<carts::sde::SdeSuIterateOp>(entry.first), entry.second);
 
     if (failed)
       signalPassFailure();

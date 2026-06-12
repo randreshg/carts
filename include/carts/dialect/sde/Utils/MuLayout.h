@@ -72,6 +72,11 @@ struct MuPhysicalLayout {
 /// as authored today) or owner-dim-length (one extent per owner dim).
 std::optional<MuPhysicalLayout>
 resolveMuPhysicalLayout(mlir::MemRefType logicalType,
+                        llvm::ArrayRef<int64_t> ownerDims,
+                        llvm::ArrayRef<int64_t> blockShape);
+
+std::optional<MuPhysicalLayout>
+resolveMuPhysicalLayout(mlir::MemRefType logicalType,
                         mlir::ArrayAttr physicalOwnerDims,
                         mlir::ArrayAttr physicalBlockShape);
 

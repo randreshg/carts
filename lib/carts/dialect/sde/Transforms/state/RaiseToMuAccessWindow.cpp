@@ -10,10 +10,11 @@
 /// (MU root, read/write mode), in the SAME block-grid coordinate system the
 /// carrier type already encodes.
 ///
-/// It is a pure ADDITIVE raiser: it reads the committed plan + expanded type
-/// VERBATIM (via the shared `planAccessWindows` query — it never recomputes
-/// owner dims or block shape), proves the structure against the writer
-/// su_iterate iteration domain, and inserts explicit window structure.
+/// It is a pure ADDITIVE raiser: it reads the committed layout shape and
+/// expanded type VERBATIM (via the shared `queryAccessWindows` query — it
+/// never recomputes owner dims or block shape), proves the structure against
+/// the writer su_iterate iteration domain, and inserts explicit window
+/// structure.
 /// Out-of-scope MUs/CU accesses (dynamic, matmul/reduction, multi-owner,
 /// unsupported use) are skipped conservatively — no window, no error, no
 /// existing op mutated. Same-CU in-place access gets a `readwrite` window
@@ -65,38 +66,38 @@ struct RaiseToMuAccessWindowPass
     module.walk([&](carts::sde::SdeMuAllocOp mu) { worklist.push_back(mu); });
 
     for (carts::sde::SdeMuAllocOp mu : worklist) {
-      llvm::SmallVector<carts::sde::RaisedWindowPlan, 4> plans =
-          carts::sde::planAccessWindows(mu);
-      if (plans.empty())
+      llvm::SmallVector<carts::sde::RaisedWindowSpec, 4> specs =
+          carts::sde::queryAccessWindows(mu);
+      if (specs.empty())
         continue; // out of scope -> conservative, no window
 
-      for (const carts::sde::RaisedWindowPlan &plan : plans) {
+      for (const carts::sde::RaisedWindowSpec &spec : specs) {
         // Find the earliest dominance-safe insertion point and detect an
         // already-raised window for this (MU, mode) so the pass is idempotent.
-        carts::sde::SdeCuRegionOp cu = plan.cu;
+        carts::sde::SdeCuRegionOp cu = spec.cu;
         Block &body = cu.getBody().front();
         bool exists = false;
         for (Operation &op : body) {
           if (auto win = dyn_cast<carts::sde::SdeMuAccessWindowOp>(op)) {
-            if (win.getMu() == plan.mu && win.getMode() == plan.mode)
+            if (win.getMu() == spec.mu && win.getMode() == spec.mode)
               exists = true;
           }
         }
-        Operation *insertBefore = findWindowInsertionPoint(cu, plan.mu);
+        Operation *insertBefore = findWindowInsertionPoint(cu, spec.mu);
         if (exists || !insertBefore)
           continue;
 
         OpBuilder builder(insertBefore);
         IntegerAttr arrayIdAttr;
-        if (plan.arrayId)
-          arrayIdAttr = builder.getI64IntegerAttr(*plan.arrayId);
+        if (spec.arrayId)
+          arrayIdAttr = builder.getI64IntegerAttr(*spec.arrayId);
         carts::sde::SdeMuAccessWindowOp::create(
-            builder, mu.getLoc(), plan.mu,
-            carts::sde::SdeAccessModeAttr::get(ctx, plan.mode), arrayIdAttr,
-            builder.getI64IntegerAttr(plan.ownerDimCount),
-            builder.getI64ArrayAttr(plan.blockLo),
-            builder.getI64ArrayAttr(plan.blockHi),
-            builder.getI64ArrayAttr(plan.validExtents));
+            builder, mu.getLoc(), spec.mu,
+            carts::sde::SdeAccessModeAttr::get(ctx, spec.mode), arrayIdAttr,
+            builder.getI64IntegerAttr(spec.ownerDimCount),
+            builder.getI64ArrayAttr(spec.blockLo),
+            builder.getI64ArrayAttr(spec.blockHi),
+            builder.getI64ArrayAttr(spec.validExtents));
       }
     }
   }

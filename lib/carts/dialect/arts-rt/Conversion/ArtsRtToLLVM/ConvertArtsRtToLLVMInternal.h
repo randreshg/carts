@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: ConvertArtsRtToLLVMInternal.h
 ///
-/// Local implementation contract for ConvertArtsRtToLLVM. This header is
+/// Local implementation boundary for ConvertArtsRtToLLVM. This header is
 /// intentionally private to the arts-rt-to-llvm implementation split and
 /// should not be used as shared compiler infrastructure.
 ///==========================================================================///

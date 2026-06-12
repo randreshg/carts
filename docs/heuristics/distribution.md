@@ -15,14 +15,14 @@ Related guide:
 - `docs/heuristics/partitioning.md`
 - `docs/compiler/pipeline.md`
 
-Transitional note:
+Architectural note:
 
-- This document still describes the current ARTS-side distribution machinery.
-- Architecturally, semantic distribution family, wavefront classification, and
-  cost-model-driven wavefront tile policy belong to SDE.
-- Any ARTS-side classification or attr stamping described below should be read
-  as current implementation debt, fallback behavior, or realized-fact
-  materialization after the SDE-to-ARTS boundary.
+- Semantic distribution family, wavefront classification, and cost-model-driven
+  wavefront tile policy belong to SDE.
+- ARTS consumes the SDE-authored shape and either realizes the corresponding
+  DB/EDT graph or rejects unsupported input with a precise diagnostic.
+- ARTS must not select distribution families, write promise attrs for later
+  repair, or reinterpret source-level loop semantics.
 
 ## 0. Motivation: Bridging AMT, OpenMP, and MPI
 
@@ -48,7 +48,7 @@ data placement decisions.
 automatically:
 
 1. **Distributes memory like MPI** — each node allocates only its portion of
-   data (via `DbOwnerMapRealizationPass` and round-robin route selection in
+   data (via `DbDistributedOwnershipRealizationPass` and round-robin route selection in
    `ConvertArtsRtToLLVM`). Memory capacity scales with node count.
 2. **Distributes computation like AMT** — tasks are routed to nodes based on
    data ownership, with work-stealing for dynamic load balancing. No manual
@@ -104,7 +104,7 @@ annotation level.
 | Cannon-style shifts | Feasible but complex | Not implemented (future) |
 | SUMMA-style broadcast panels | Feasible via events/active messages | Not implemented (future) |
 | 2.5D replication | Possible but high complexity | Runtime can create/read cached duplicates through DB frontiers; compiler-directed eager replication is not implemented |
-| Stencil halo | Strong | SDE stamps halo/window facts; ARTS/direct ARTS materialization must preserve token-local block/window views. The raw `create-dbs` bridge is coarse-only and rejects blocked/tiled physical layout attrs |
+| Stencil halo | Strong | SDE authors halo/window facts; the SDE-to-ARTS boundary must preserve token-local block/window views. The raw `create-dbs` bridge is coarse-only and rejects blocked/tiled physical layout attrs |
 
 ### 2.2 Why CARTS currently prefers 2D tiling over Cannon/SUMMA
 
@@ -119,7 +119,7 @@ Cannon and SUMMA remain viable future paths once collective-like orchestration i
 
 Current selection policy is implemented in SDE by
 `DistributionPlanning` (`lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`).
-ARTS consumes and materializes the selected distribution intent; it should not
+ARTS consumes and realizes the selected distribution intent; it should not
 recover source-level distribution policy after the SDE-to-ARTS boundary.
 
 Selection order matters:
@@ -151,8 +151,8 @@ query utilities or pass-local walks instead of graph nodes.
 
 - SDE `SdeLoopPatternFacts` classifies work families, access windows, reductions,
   and distribution intent while source semantics are still visible.
-- `DistributionPlanning` consumes those SDE facts and stamps the concrete
-  SDE/ARTS facts that materialization uses.
+- `DistributionPlanning` consumes those SDE facts and authors the concrete
+  SDE facts that the boundary conversion uses.
 - ARTS boundary verification validates concrete DB/EDT/epoch shape and should
   not recover semantic loop families from implementation loops.
 
@@ -167,13 +167,13 @@ Access and ownership queries are direct IR utilities:
 
 - `DbUtils` handles DB tracing, access modes, sizes, and cleanup-only chains.
 - `EdtUtils` maps acquires to EDT block arguments.
-- `DbDistributedEligibility` evaluates owner-map eligibility without a DB graph.
+- `DbDistributedEligibility` evaluates distributed ownership eligibility without a DB graph.
 
 ## 5. Pipeline Architecture
 
 Distribution is transformed inside `sde-planning`. `sde-to-arts` mechanically
-materializes committed SDE storage, access-window, scheduling, and control
-facts as ARTS DB/EDT objects. Later ARTS stages refine that object graph.
+converts committed SDE storage, access-window, scheduling, and control facts
+into ARTS DB/EDT objects. Later ARTS stages refine that object graph.
 `CreateDbs` consumes authored ARTS facts and must reject blocked/tiled raw
 memref work that SDE did not make real.
 
@@ -215,8 +215,8 @@ Goal:
 
 Current implementation:
 - `DbAllocOp` supports a `distributed` marker attribute.
-- Pass: `DbOwnerMapRealizationPass`
-  (`lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp`).
+- Pass: `DbDistributedOwnershipRealizationPass`
+  (`lib/carts/dialect/arts/Transforms/db/DbDistributedOwnershipRealization.cpp`).
 - Pipeline placement: ARTS DB refinement after SDE distribution planning
   (default-on for multinode in `carts-compile`).
 - Default distribution relies on SDE-authored work units and ARTS DB ownership
@@ -225,14 +225,13 @@ Current implementation:
   marked multi-DB allocations:
   - route = `linearIndex % artsGetTotalNodes()`
   - unmarked allocations keep the existing route behavior.
-- Boundary guard: after SDE-to-ARTS materialization, an `internode` task must
+- Boundary guard: after the SDE-to-ARTS boundary, an `internode` task must
   not depend on a coarse single-block aggregate user DB. This keeps distributed
   execution from silently scaling one large DB through remote task traffic.
-  SDE must materialize the block DB layout before ARTS binds routes.
+  SDE must make the block layout explicit before ARTS binds routes.
 - SDE-to-ARTS only binds DB-dependent codelets to `internode` placement when
-  the codelet carries generic tile owner/shape storage metadata. Distribution
-  intent without a materialized storage plan remains local until the SDE
-  MU/token path can create shaped DBs.
+  the codelet carries explicit tile owner/shape storage facts. Distribution
+  intent without shaped MU/token structure remains local or is rejected.
 
 Current eligibility policy is intentionally conservative:
 - allocation is host-level (outside `arts.edt`)
@@ -251,14 +250,15 @@ Current eligibility policy is intentionally conservative:
   DB as replicated and ARTS-RT can rely on runtime duplicate-frontier behavior
 
 Distributed init split is implemented:
-- `Codegen.cpp` generates a `distributed_db_init` callback that runs on ALL
-  nodes inside `initPerNode` and reserves a deterministic GUID sequence.
-- `Codegen.cpp` also generates `distributed_db_init_worker` in
-  `initPerWorker`; only the primary local worker performs DB creation, and only
-  for GUIDs whose rank matches the local node (`artsGuidGetRank(guid) == node`).
-- `ConvertArtsRtToLLVM.cpp` lowers marked multi-DB allocations with
-  `route = linearIndex % artsGetTotalNodes()`. Runtime DB creation remains
-  local-only via `artsDbCreateWithGuid(AndArtsId)` semantics.
+- `DbDistributedRuntimeInit` emits explicit `arts_rt` init callbacks before
+  LLVM conversion. The reserve callback runs from `initPerNode` and reserves a
+  deterministic GUID sequence using the ARTS-owned route expression.
+- `DbDistributedRuntimeInit` also emits the worker callback used from
+  `initPerWorker`; only the primary local worker performs owner-local DB
+  creation for blocks whose explicit route matches the local node.
+- `ConvertArtsRtToLLVM.cpp` lowers those `arts_rt.db_guid_reserve` and
+  `arts_rt.db_create_with_guid_local` ops mechanically. It does not derive
+  owner routes or synthesize distributed DB policy.
 - ARTS runtime replication is demand-driven: read-only dependency slots can
   carry `ARTS_DEP_FLAG_PREFER_DUPLICATE`, and the runtime tracks duplicate
   ranks through DB frontiers and invalidates/updates them on later writes. The
@@ -279,15 +279,15 @@ Future work:
 
 ## 7. IR Facts
 
-SDE distribution planning and direct ARTS materialization may stamp concrete
-ARTS object attrs:
+The SDE-to-ARTS boundary may carry explicit ARTS object attrs derived from
+committed SDE facts:
 
 - `distribution_kind` (`#arts.distribution_kind<...>`)
 - `distribution_pattern` (`#arts.distribution_pattern<...>`)
 - `distribution_version = 1`
 
 These attributes represent SDE-forwarded facts and ARTS machine-binding facts.
-They are not a fallback semantic classifier.
+They are not fallback semantic classifiers.
 
 ## 8. Loop Transform Compatibility (R8)
 
@@ -298,8 +298,8 @@ Current answer: **no for existing 1D outer-loop distribution path**.
 Reason:
 - The semantic work inside `sde-planning` mostly targets inner serial
   `scf.for` structure.
-- `sde-to-arts`, `sde-to-arts`, and later ARTS stages consume the
-  SDE-authored materialization facts and preserve concrete DB/EDT/epoch
+- `sde-to-arts` and later ARTS stages consume the SDE-authored boundary facts
+  and preserve concrete DB/EDT/epoch
   distribution facts.
 
 Pass-level summary (current behavior):
@@ -313,13 +313,13 @@ Future caveat:
 
 ## 9. Lowering Architecture
 
-The production lowering path materializes SDE plan data through ARTS codelets
+The production lowering path carries committed SDE facts through ARTS codelets
 and then ARTS DB/EDT/epoch objects. Strategy-specific helpers must consume
-explicit plan data rather than a late ARTS semantic loop carrier.
+explicit SDE/ARTS facts rather than a late ARTS semantic loop carrier.
 
 ### 9.1 Acquire rewriting helpers
 
-- DB acquire-window planning uses SDE-authored access windows and ARTS DB
+- DB acquire-window logic uses SDE-authored access windows and ARTS DB
   refinement validation.
 - Stencil and block windows should be explicit IR facts before ARTS
   lowering consumes them.
@@ -327,8 +327,8 @@ explicit plan data rather than a late ARTS semantic loop carrier.
 ### 9.2 Task loop lowering helpers
 
 - Dispatch and task-local `scf.for` loops are implementation control flow
-  generated by the materializer.
-- Reduction materialization consumes SDE reduction accumulators, kinds, and
+  generated by the boundary conversion.
+- Reduction realization consumes SDE reduction accumulators, kinds, and
   strategy; ARTS does not rediscover missing reduction semantics.
 
 ### 9.3 Partitioning integration for 2D owner hints
@@ -342,7 +342,7 @@ This coupling is what keeps data ownership and routed work aligned for
 
 Distribution selection now lives in SDE:
 - `DistributionPlanning` reads SDE pattern/effect facts and the SDE cost model.
-- It stamps `sde.su_distribute` or distribution attributes on eligible
+- It authors `sde.su_distribute` or distribution attributes on eligible
   `sde.su_iterate` operations.
 - ARTS carries the explicit codelet facts.
 - ARTS DB/EDT/epoch passes consume concrete distribution attrs and ownership
@@ -371,10 +371,10 @@ dekk carts compile gemm.mlir -O3 --arts-config arts.cfg --pipeline=sde-to-arts
 ```
 
 Expected checks:
-- SDE planning attrs are present before SDE-to-ARTS materialization when
+- SDE facts are present before the SDE-to-ARTS boundary when
   applicable.
 - ARTS `distribution_kind/pattern/version` attrs are present on concrete
-  DB/EDT/epoch objects after `sde-to-arts` when the plan needs them.
+  DB/EDT/epoch objects after `sde-to-arts` when the object graph needs them.
 - checksums unchanged for benchmark kernels
 - node/thread counters show non-zero work on remote nodes for distributed runs
 
@@ -382,13 +382,14 @@ Expected checks:
 
 Practical principles adopted from systems like Halide/Legion/Chapel/HPF/GSPMD/Charm++:
 
-- Separate policy from lowering: distribution plan first, IR rewrite second.
+- Keep policy and real IR shape in the owning layer; do not defer correctness
+  to a later lowering stage.
 - Keep strategy catalog extensible through enums + specialized lowerers.
 - Keep correctness independent from mapper choice; mapper changes should be performance policy.
 - Prefer analysis-backed decisions over pass-local ad-hoc classification.
 
 In CARTS, this maps to:
-- SDE-owned pattern/distribution planning first, with ARTS materialization
-  consuming that plan directly
-- specialized task/acquire materialization components for execution
+- SDE-owned pattern/distribution transforms first, with ARTS consuming those
+  facts directly
+- specialized task/acquire realization components for execution
 - DB/EDT analysis APIs as single pattern source of truth

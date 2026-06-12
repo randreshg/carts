@@ -30,7 +30,7 @@ High-value files by failure class.
 
 ## Distributed Ownership / Multi-Node
 
-- `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp`
+- `lib/carts/dialect/arts/Transforms/db/DbDistributedOwnershipRealization.cpp`
 - `lib/carts/codegen/Codegen.cpp`
 - `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/ConvertArtsRtToLLVM.cpp`
 

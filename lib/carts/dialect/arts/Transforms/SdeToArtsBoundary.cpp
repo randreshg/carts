@@ -37,11 +37,23 @@ using namespace mlir::carts::arts;
 
 namespace {
 
-struct HaloRedistPlan {
+struct HaloRedistFacts {
   ArrayAttr ownerDims;
   ArrayAttr blockShape;
   ArrayAttr haloShape;
 };
+
+struct ReduceScatterRedistFacts {
+  IntegerAttr arrayId;
+  ArrayAttr sourceOwnerDims;
+  ArrayAttr sourceBlockShape;
+  ArrayAttr targetOwnerDims;
+  ArrayAttr targetBlockShape;
+  IntegerAttr costBytes;
+};
+
+static bool containsDbAccessWindow(sde::SdeCuRegionOp source);
+static LogicalResult inlineSdeCuRegion(sde::SdeCuRegionOp op);
 
 static bool isScalarParamType(Type type) {
   return type.isIndex() || isa<IntegerType, FloatType>(type);
@@ -121,22 +133,10 @@ convertDistributionKind(sde::SdeDistributionKind kind, Operation *context) {
   return failure();
 }
 
-static FailureOr<ArtsPlanRepetitionStructure>
-convertRepetitionStructure(sde::SdeRepetitionStructure structure,
-                           Operation *context) {
-  switch (structure) {
-  case sde::SdeRepetitionStructure::none:
-    return ArtsPlanRepetitionStructure::none;
-  case sde::SdeRepetitionStructure::pair_step:
-    return ArtsPlanRepetitionStructure::pair_step;
-  case sde::SdeRepetitionStructure::k_step:
-    return ArtsPlanRepetitionStructure::k_step;
-  case sde::SdeRepetitionStructure::full_timestep:
-    return ArtsPlanRepetitionStructure::full_timestep;
-  }
-  context->emitError()
-      << "has unsupported SDE repetition structure at the SDE-to-ARTS boundary";
-  return failure();
+static bool hasCommittedPartialReductionFacts(sde::SdeSuIterateOp source) {
+  return source.getPartialReductionAttr() ||
+         source.getPartialReductionDimsAttr() ||
+         source.getPartialReductionOwnerDimsAttr();
 }
 
 static LogicalResult attachCommittedSdeFacts(sde::SdeSuIterateOp source,
@@ -157,37 +157,15 @@ static LogicalResult attachCommittedSdeFacts(sde::SdeSuIterateOp source,
       return failure();
     arts::setEdtDistributionKind(taskOp, *converted);
   }
-  if (auto topology = source.getIterationTopologyAttr())
-    arts::setPlanIterationTopologyAttr(
-        taskOp,
-        ArtsPlanIterationTopologyAttr::get(
-            ctx, static_cast<ArtsPlanIterationTopology>(topology.getValue())));
-  if (auto repetition = source.getRepetitionStructureAttr()) {
-    FailureOr<ArtsPlanRepetitionStructure> converted =
-        convertRepetitionStructure(repetition.getValue(),
-                                   source.getOperation());
-    if (failed(converted))
-      return failure();
-    arts::setPlanRepetitionStructureAttr(
-        taskOp, ArtsPlanRepetitionStructureAttr::get(ctx, *converted));
-  }
   if (auto strategy = source.getReductionStrategyAttr())
     task.setReductionStrategyAttr(ArtsReductionStrategyAttr::get(
         ctx, static_cast<ArtsReductionStrategy>(strategy.getValue())));
-  if (source.getPartialReductionAttr())
+  if (hasCommittedPartialReductionFacts(source))
     task.setPartialReductionAttr(UnitAttr::get(ctx));
   if (auto dims = source.getPartialReductionDimsAttr())
     task.setPartialReductionDimsAttr(dims);
   if (auto ownerDims = source.getPartialReductionOwnerDimsAttr())
     task.setPartialReductionOwnerDimsAttr(ownerDims);
-  if (auto ownerDims = source.getPhysicalOwnerDimsAttr())
-    arts::setPlanOwnerDimsAttr(taskOp, ownerDims);
-  if (auto blockShape = source.getPhysicalBlockShapeAttr())
-    arts::setPlanPhysicalBlockShapeAttr(taskOp, blockShape);
-  if (auto workerSlice = source.getLogicalWorkerSliceAttr())
-    arts::setPlanLogicalWorkerSliceAttr(taskOp, workerSlice);
-  if (auto haloShape = source.getPhysicalHaloShapeAttr())
-    arts::setPlanHaloShapeAttr(taskOp, haloShape);
   if (auto minOffsets = source.getAccessMinOffsetsAttr())
     task->setAttr(task.getStencilMinOffsetsAttrName(), minOffsets);
   if (auto maxOffsets = source.getAccessMaxOffsetsAttr())
@@ -306,7 +284,50 @@ getDynamicSizesForTaskDepRoot(Operation *root) {
   return std::nullopt;
 }
 
+static std::optional<SmallVector<Value>>
+getDynamicSizesForTaskDepRoot(Value root) {
+  if (!root)
+    return std::nullopt;
+  return getDynamicSizesForTaskDepRoot(root.getDefiningOp());
+}
+
+static LogicalResult exposeTaskDepMemrefRoots(ModuleOp module) {
+  SetVector<Operation *> regions;
+  bool foundError = false;
+  module.walk([&](sde::SdeMuDepOp dep) {
+    Value root = ValueAnalysis::stripMemrefViewOps(dep.getSource());
+    auto result = dyn_cast<OpResult>(root);
+    if (!result)
+      return;
+    auto cu = dyn_cast<sde::SdeCuRegionOp>(result.getOwner());
+    if (!cu)
+      return;
+    if (containsDbAccessWindow(cu)) {
+      dep.emitOpError()
+          << "uses storage yielded from a CU region that already contains ARTS "
+             "access windows; SDE must split the storage-producing region "
+             "before ARTS storage realization";
+      foundError = true;
+      return;
+    }
+    regions.insert(cu.getOperation());
+  });
+  if (foundError)
+    return failure();
+
+  for (Operation *op : regions) {
+    if (!op || !op->getBlock())
+      continue;
+    if (failed(inlineSdeCuRegion(cast<sde::SdeCuRegionOp>(op))))
+      return failure();
+  }
+  return success();
+}
+
 static LogicalResult realizeTaskDepMemrefStorage(ModuleOp module) {
+  if (failed(exposeTaskDepMemrefRoots(module)))
+    return failure();
+
   SetVector<Value> roots;
   bool foundError = false;
   module.walk([&](sde::SdeMuDepOp dep) {
@@ -332,8 +353,7 @@ static LogicalResult realizeTaskDepMemrefStorage(ModuleOp module) {
       foundError = true;
       return;
     }
-    Operation *rootOp = root.getDefiningOp();
-    if (!getDynamicSizesForTaskDepRoot(rootOp)) {
+    if (!getDynamicSizesForTaskDepRoot(root)) {
       dep.emitOpError()
           << "references a memref root that direct SDE-to-ARTS task lowering "
              "cannot realize as an ARTS DB; SDE must expose a "
@@ -350,7 +370,7 @@ static LogicalResult realizeTaskDepMemrefStorage(ModuleOp module) {
     Operation *rootOp = root.getDefiningOp();
     auto memrefType = cast<MemRefType>(root.getType());
     std::optional<SmallVector<Value>> dynamicSizes =
-        getDynamicSizesForTaskDepRoot(rootOp);
+        getDynamicSizesForTaskDepRoot(root);
     if (!dynamicSizes)
       return failure();
 
@@ -375,12 +395,36 @@ static LogicalResult realizeTaskDepMemrefStorage(ModuleOp module) {
 }
 
 static LogicalResult
-validateAndCollectHaloRedists(ModuleOp module,
-                              DenseMap<Value, HaloRedistPlan> &plans,
-                              SmallVectorImpl<sde::SdeRedistOp> &redists) {
+validateAndCollectStorageRedists(ModuleOp module,
+                                 DenseMap<Value, HaloRedistFacts> &haloFacts,
+                                 SmallVectorImpl<sde::SdeRedistOp> &redists) {
   bool foundError = false;
   module.walk([&](sde::SdeRedistOp redist) {
-    redists.push_back(redist);
+    if (redist.getFamily() == sde::SdeMovementFamily::reduce_scatter_like) {
+      if (!redist.getArrayIdAttr()) {
+        redist.emitOpError()
+            << "commits reduce_scatter_like movement without array_id";
+        foundError = true;
+        return;
+      }
+      if (redist.getHaloShapeAttr()) {
+        redist.emitOpError()
+            << "commits reduce_scatter_like movement with haloShape";
+        foundError = true;
+        return;
+      }
+      if (redist.getSourceOwnerDims() != redist.getTargetOwnerDims() ||
+          redist.getSourceBlockShape() != redist.getTargetBlockShape()) {
+        redist.emitOpError()
+            << "commits reduce_scatter_like movement whose source and target "
+               "layouts differ; ARTS reduction-edge realization consumes the "
+               "committed contraction layout verbatim";
+        foundError = true;
+        return;
+      }
+      return;
+    }
+
     if (redist.getFamily() != sde::SdeMovementFamily::halo_like) {
       redist.emitOpError() << "direct SDE-to-ARTS lowering for movement family "
                            << stringifySdeMovementFamily(redist.getFamily())
@@ -388,6 +432,7 @@ validateAndCollectHaloRedists(ModuleOp module,
       foundError = true;
       return;
     }
+    redists.push_back(redist);
 
     ArrayAttr haloShape = redist.getHaloShapeAttr();
     if (!haloShape) {
@@ -417,12 +462,12 @@ validateAndCollectHaloRedists(ModuleOp module,
       return;
     }
 
-    HaloRedistPlan plan{redist.getSourceOwnerDims(),
-                        redist.getSourceBlockShape(), haloShape};
-    auto [it, inserted] = plans.try_emplace(redist.getMu(), plan);
-    if (!inserted && (it->second.ownerDims != plan.ownerDims ||
-                      it->second.blockShape != plan.blockShape ||
-                      it->second.haloShape != plan.haloShape)) {
+    HaloRedistFacts facts{redist.getSourceOwnerDims(),
+                          redist.getSourceBlockShape(), haloShape};
+    auto [it, inserted] = haloFacts.try_emplace(redist.getMu(), facts);
+    if (!inserted && (it->second.ownerDims != facts.ownerDims ||
+                      it->second.blockShape != facts.blockShape ||
+                      it->second.haloShape != facts.haloShape)) {
       redist.emitOpError()
           << "conflicts with another committed halo movement for the same MU";
       foundError = true;
@@ -476,9 +521,9 @@ lowerMuAlloc(sde::SdeMuAllocOp op,
   OpBuilder builder(op);
   Value replacement;
   if (!committedWindows.empty()) {
-    if (failed(arts::createPlannedDbBackedMemref(
-            builder, op.getLoc(), memrefType, op.getDynamicSizes(), ownerDims,
-            blockShape, committedHaloShape, replacement)))
+    if (failed(arts::createBlockDbBackedMemref(builder, op.getLoc(), memrefType,
+                                               op.getDynamicSizes(), ownerDims,
+                                               blockShape, replacement)))
       return op.emitOpError()
              << "could not realize committed SDE block layout as ARTS DB";
   } else if (committedHaloShape) {
@@ -497,7 +542,7 @@ lowerMuAlloc(sde::SdeMuAllocOp op,
         memref::CastOp::create(builder, op.getLoc(), memrefType, replacement);
 
   for (sde::SdeMuAccessWindowOp window : committedWindows) {
-    OpBuilder planBuilder(window);
+    OpBuilder windowBuilder(window);
     ArrayAttr haloShape =
         getCommittedHaloShapeForWindow(window, committedHaloShape);
     if (window.getMode() == sde::SdeAccessMode::write)
@@ -511,10 +556,10 @@ lowerMuAlloc(sde::SdeMuAllocOp op,
         convertAccessMode(window.getMode(), window.getOperation());
     if (failed(mode))
       return failure();
-    arts::DbAccessPlanOp::create(
-        planBuilder, window.getLoc(), replacement,
+    arts::DbAccessWindowOp::create(
+        windowBuilder, window.getLoc(), replacement,
         ArtsModeAttr::get(op.getContext(), *mode), window.getArrayIdAttr(),
-        planBuilder.getI64IntegerAttr(
+        windowBuilder.getI64IntegerAttr(
             static_cast<int64_t>(window.getOwnerDimCount())),
         window.getBlockLo(), window.getBlockHi(), window.getValidExtents(),
         haloShape);
@@ -546,14 +591,16 @@ static ArrayAttr getCommittedHaloShapeForWindow(sde::SdeMuAccessWindowOp window,
   return {};
 }
 
-struct DirectDepPlan {
+struct DirectDepSpec {
   arts::DbAllocOp alloc;
   ArtsMode mode = ArtsMode::uninitialized;
+  IntegerAttr arrayId;
   unsigned ownerDimCount = 0;
   SmallVector<int64_t, 4> blockLo;
   SmallVector<int64_t, 4> blockHi;
   SmallVector<int64_t, 4> validExtents;
   ArrayAttr haloShape;
+  std::optional<ReduceScatterRedistFacts> reduceScatter;
 };
 
 enum class Halo2DFace {
@@ -564,14 +611,24 @@ enum class Halo2DFace {
   Right,
 };
 
-struct CompactHaloColumnPlan {
+struct CompactHaloColumnSpec {
   arts::DbAllocOp leftColumnDb;
   arts::DbAllocOp rightColumnDb;
   Value rowExtent;
   Value colExtent;
 };
 
-struct Halo2DTaskPlan {
+struct CompactHaloNdSideSpec {
+  SmallVector<int64_t, 4> sourceOffsets;
+  arts::DbAllocOp payloadDb;
+};
+
+struct CompactHaloNdSpec {
+  SmallVector<Value, 4> elementExtents;
+  SmallVector<CompactHaloNdSideSpec, 8> sides;
+};
+
+struct Halo2DTaskWork {
   unsigned centerTaskDepIndex = 0;
   unsigned topTaskDepIndex = 0;
   unsigned bottomTaskDepIndex = 0;
@@ -581,35 +638,110 @@ struct Halo2DTaskPlan {
   Value colExtent;
 };
 
+struct HaloNdTaskWork {
+  unsigned centerTaskDepIndex = 0;
+  SmallVector<Value, 4> elementExtents;
+  SmallVector<SmallVector<int64_t, 4>, 8> sideSourceOffsets;
+  SmallVector<unsigned, 8> sideTaskDepIndices;
+};
+
 struct HaloLoadRewrite {
-  unsigned haloPlanIndex = 0;
+  unsigned haloWorkIndex = 0;
   Halo2DFace face = Halo2DFace::Center;
 };
 
-static bool hasDistributedLaunchStoragePlan(ArrayRef<DirectDepPlan> deps) {
-  return llvm::any_of(deps, [](DirectDepPlan dep) {
-    return dep.alloc && hasArtsDbPhysicalLayoutPlan(dep.alloc.getOperation());
-  });
-}
-
-static bool hasDistributedWriterStoragePlan(ArrayRef<DirectDepPlan> deps) {
-  return llvm::any_of(deps, [](DirectDepPlan dep) {
-    return dep.alloc && arts::DbUtils::isWriterMode(dep.mode) &&
-           hasArtsDbPhysicalLayoutPlan(dep.alloc.getOperation());
-  });
-}
-
-struct WriterGroupingPlan {
-  SmallVector<int64_t, 4> dbSizes;
-  DbOwnerMapPlan ownerPlan;
+struct HaloNdLoadRewrite {
+  unsigned haloWorkIndex = 0;
 };
 
-static bool areWriterGroupsRouteLocal(ArrayRef<WriterGroupingPlan> writerPlans,
+static bool hasDistributedLaunchStorageFacts(ArrayRef<DirectDepSpec> deps) {
+  return llvm::any_of(deps, [](DirectDepSpec dep) {
+    return dep.alloc && hasArtsDbPhysicalLayout(dep.alloc.getOperation());
+  });
+}
+
+static bool hasDistributedWriterStorageFacts(ArrayRef<DirectDepSpec> deps) {
+  return llvm::any_of(deps, [](DirectDepSpec dep) {
+    return dep.alloc && arts::DbUtils::isWriterMode(dep.mode) &&
+           hasArtsDbPhysicalLayout(dep.alloc.getOperation());
+  });
+}
+
+static bool accessModeCovers(ArtsMode available, ArtsMode requested) {
+  if (requested == ArtsMode::uninitialized)
+    return true;
+  if (available == ArtsMode::inout)
+    return requested == ArtsMode::in || requested == ArtsMode::out ||
+           requested == ArtsMode::inout;
+  return available == requested;
+}
+
+static bool containsI64(ArrayRef<int64_t> values, int64_t needle) {
+  return llvm::is_contained(values, needle);
+}
+
+static FailureOr<ArrayAttr>
+buildPartialReductionDepResultDimMap(sde::SdeSuIterateOp source,
+                                     const DirectDepSpec &dep) {
+  MLIRContext *ctx = source.getContext();
+  auto emptyMap = [&]() -> ArrayAttr { return Builder(ctx).getArrayAttr({}); };
+  if (!hasCommittedPartialReductionFacts(source))
+    return emptyMap();
+
+  std::optional<SmallVector<int64_t, 4>> ownerDims =
+      readI64ArrayAttr(source.getPartialReductionOwnerDimsAttr());
+  std::optional<SmallVector<int64_t, 4>> reductionDims =
+      readI64ArrayAttr(source.getPartialReductionDimsAttr());
+  if (!ownerDims || ownerDims->empty() || !reductionDims ||
+      reductionDims->empty())
+    return source.emitOpError()
+           << "commits partial reduction without concrete owner/reduction dims";
+
+  if (dep.reduceScatter) {
+    if (dep.mode != ArtsMode::in)
+      return source.emitOpError()
+             << "matched reduce_scatter_like dependency is not read-only";
+    if (reductionDims->size() != 1)
+      return source.emitOpError() << "direct reduce_scatter_like ARTS map "
+                                     "currently requires exactly "
+                                     "one committed reduction-only dimension";
+    return buildI64ArrayAttr(ctx, SmallVector<int64_t, 1>{-1});
+  }
+
+  arts::DbAllocOp alloc = dep.alloc;
+  SmallVector<int64_t, 4> depOwnerDims = makeAllDbOwnerDims(dep.ownerDimCount);
+  if (dep.mode != ArtsMode::in) {
+    for (int64_t dim : *ownerDims)
+      if (!containsI64(depOwnerDims, dim))
+        return source.emitOpError()
+               << "partial-reduction result dependency does not cover all "
+                  "committed owner dims";
+    return buildI64ArrayAttr(ctx, *ownerDims);
+  }
+
+  if (depOwnerDims.empty())
+    return alloc.emitOpError() << "has no committed owner dims for "
+                                  "partial-reduction dependency map";
+
+  SmallVector<int64_t, 4> mappedDims;
+  for (int64_t dim : depOwnerDims)
+    if (containsI64(*ownerDims, dim))
+      mappedDims.push_back(dim);
+
+  return buildI64ArrayAttr(ctx, mappedDims);
+}
+
+struct WriterGroupingSpec {
+  SmallVector<int64_t, 4> dbSizes;
+  DbOwnerRouteFacts ownerFacts;
+};
+
+static bool areWriterGroupsRouteLocal(ArrayRef<WriterGroupingSpec> writerSpecs,
                                       ArrayRef<int64_t> counts,
                                       int64_t totalNodes) {
-  return llvm::all_of(writerPlans, [&](const WriterGroupingPlan &plan) {
+  return llvm::all_of(writerSpecs, [&](const WriterGroupingSpec &spec) {
     return isStaticDbOwnerGroupedBlockScheduleRouteLocal(
-        plan.dbSizes, counts, totalNodes, plan.ownerPlan);
+        spec.dbSizes, counts, totalNodes, spec.ownerFacts);
   });
 }
 
@@ -621,22 +753,69 @@ static int64_t saturatedMul(int64_t lhs, int64_t rhs) {
   return lhs * rhs;
 }
 
+static int64_t ceilDivPositiveI64(int64_t lhs, int64_t rhs) {
+  if (lhs <= 0 || rhs <= 0)
+    return 0;
+  return (lhs + rhs - 1) / rhs;
+}
+
+static Value ceilDivPositiveIndex(OpBuilder &builder, Location loc, Value value,
+                                  Value divisor) {
+  Value one = createOneIndex(builder, loc);
+  divisor = arith::MaxUIOp::create(builder, loc, divisor, one);
+  Value adjusted = arith::AddIOp::create(
+      builder, loc, value, arith::SubIOp::create(builder, loc, divisor, one));
+  return arith::DivUIOp::create(builder, loc, adjusted, divisor);
+}
+
+static FailureOr<int64_t>
+getAccessWindowElementBlockSize(sde::SdeSuIterateOp source,
+                                const DirectDepSpec &dep,
+                                unsigned physicalDim) {
+  DbAllocOp alloc = dep.alloc;
+  if (!alloc || physicalDim >= dep.validExtents.size())
+    return source.emitOpError()
+           << "access-window valid extent rank does not cover physical owner "
+              "dimension";
+
+  int64_t blockSize = dep.validExtents[physicalDim];
+  if (blockSize <= 0)
+    return source.emitOpError()
+           << "access-window block size must be positive for direct ARTS "
+              "dispatch";
+
+  unsigned payloadDim = dep.ownerDimCount + physicalDim;
+  if (payloadDim >= alloc.getElementSizes().size())
+    return source.emitOpError()
+           << "rank-expanded DB payload shape does not cover access-window "
+              "physical dimension";
+
+  std::optional<int64_t> dbPayloadExtent = ValueAnalysis::tryFoldConstantIndex(
+      ValueAnalysis::stripNumericCasts(alloc.getElementSizes()[payloadDim]));
+  if (!dbPayloadExtent || *dbPayloadExtent != blockSize)
+    return source.emitOpError()
+           << "rank-expanded DB payload extent disagrees with SDE "
+              "access-window block extent";
+
+  return blockSize;
+}
+
 static std::optional<SmallVector<int64_t, 4>>
-findLargestOwnerLocalGroupCounts(ArrayRef<WriterGroupingPlan> writerPlans,
+findLargestOwnerLocalGroupCounts(ArrayRef<WriterGroupingSpec> writerSpecs,
                                  ArrayRef<int64_t> requestedCounts,
                                  int64_t totalNodes) {
-  if (writerPlans.empty() || requestedCounts.empty())
+  if (writerSpecs.empty() || requestedCounts.empty())
     return std::nullopt;
-  if (areWriterGroupsRouteLocal(writerPlans, requestedCounts, totalNodes))
+  if (areWriterGroupsRouteLocal(writerSpecs, requestedCounts, totalNodes))
     return SmallVector<int64_t, 4>(requestedCounts.begin(),
                                    requestedCounts.end());
 
   SmallVector<int64_t, 4> upperCounts(requestedCounts.begin(),
                                       requestedCounts.end());
-  for (const WriterGroupingPlan &plan : writerPlans) {
-    if (plan.dbSizes.size() != upperCounts.size())
+  for (const WriterGroupingSpec &spec : writerSpecs) {
+    if (spec.dbSizes.size() != upperCounts.size())
       return std::nullopt;
-    for (auto &&[upper, dbSize] : llvm::zip_equal(upperCounts, plan.dbSizes))
+    for (auto &&[upper, dbSize] : llvm::zip_equal(upperCounts, spec.dbSizes))
       upper = std::min(upper, dbSize);
   }
 
@@ -653,7 +832,7 @@ findLargestOwnerLocalGroupCounts(ArrayRef<WriterGroupingPlan> writerPlans,
     if (saturatedMul(prefixScore, suffixMax[dim]) <= bestScore)
       return;
     if (dim == upperCounts.size()) {
-      if (!areWriterGroupsRouteLocal(writerPlans, current, totalNodes))
+      if (!areWriterGroupsRouteLocal(writerSpecs, current, totalNodes))
         return;
       if (prefixScore > bestScore) {
         bestScore = prefixScore;
@@ -673,7 +852,7 @@ findLargestOwnerLocalGroupCounts(ArrayRef<WriterGroupingPlan> writerPlans,
 }
 
 static LogicalResult ensureDistributedWriterOwnerLocalGroups(
-    sde::SdeSuIterateOp source, ArrayRef<DirectDepPlan> deps,
+    sde::SdeSuIterateOp source, ArrayRef<DirectDepSpec> deps,
     SmallVectorImpl<int64_t> &groupBlockCounts,
     SmallVectorImpl<int64_t> &workerSpans, ArrayRef<int64_t> ownerBlockSizes,
     int64_t totalNodes, bool &splitToOwnerLocalGroups) {
@@ -682,20 +861,19 @@ static LogicalResult ensureDistributedWriterOwnerLocalGroups(
       !llvm::any_of(groupBlockCounts, [](int64_t count) { return count > 1; }))
     return success();
 
-  SmallVector<WriterGroupingPlan, 4> writerPlans;
-  for (const DirectDepPlan &dep : deps) {
+  SmallVector<WriterGroupingSpec, 4> writerSpecs;
+  for (const DirectDepSpec &dep : deps) {
     arts::DbAllocOp alloc = dep.alloc;
     if (!alloc || !arts::DbUtils::isWriterMode(dep.mode) ||
-        !hasArtsDbPhysicalLayoutPlan(alloc.getOperation()))
+        !hasArtsDbPhysicalLayout(alloc.getOperation()))
       continue;
 
-    std::optional<DbOwnerMapPlan> ownerPlan =
-        deriveDbOwnerMapPlanFromSeed(alloc);
-    if (!ownerPlan)
+    std::optional<DbOwnerRouteFacts> ownerFacts =
+        deriveDbOwnerRouteFactsFromDbGrid(alloc);
+    if (!ownerFacts)
       return source.emitOpError()
              << "commits logicalWorkerSlice whose grouped distributed writer "
-                "range cannot be proven owner-local from committed DB "
-                "owner-map facts";
+                "range cannot be proven owner-local from the DB block grid";
 
     SmallVector<Value, 4> dbSizeValues(alloc.getSizes().begin(),
                                        alloc.getSizes().end());
@@ -707,16 +885,16 @@ static LogicalResult ensureDistributedWriterOwnerLocalGroups(
                 "range cannot be proven owner-local from static DB block-grid "
                 "facts";
 
-    writerPlans.push_back({*dbSizes, *ownerPlan});
+    writerSpecs.push_back({*dbSizes, *ownerFacts});
   }
 
   std::optional<SmallVector<int64_t, 4>> ownerLocalCounts =
-      findLargestOwnerLocalGroupCounts(writerPlans, groupBlockCounts,
+      findLargestOwnerLocalGroupCounts(writerSpecs, groupBlockCounts,
                                        totalNodes);
   if (!ownerLocalCounts)
     return source.emitOpError()
            << "cannot split grouped distributed writer into proven "
-              "owner-local block ranges from committed owner-map facts";
+              "owner-local block ranges from the DB block grid";
 
   if (sameI64Values(*ownerLocalCounts, groupBlockCounts))
     return success();
@@ -740,7 +918,7 @@ struct CoarseSuDependency {
   ArtsMode mode = ArtsMode::uninitialized;
 };
 
-struct DirectCuDepPlan {
+struct DirectCuDepSpec {
   arts::DbAllocOp alloc;
   ArtsMode mode = ArtsMode::uninitialized;
   unsigned ownerDimCount = 0;
@@ -751,49 +929,49 @@ struct DirectCuDepPlan {
   Value acquiredPtr;
 };
 
-struct CuResultPlan {
+struct CuResultSpec {
   arts::DbAllocOp alloc;
   Value writePtr;
   Value replacement;
 };
 
-static bool hasDistributedLaunchStoragePlan(ArrayRef<DirectCuDepPlan> deps) {
-  return llvm::any_of(deps, [](DirectCuDepPlan dep) {
-    return dep.alloc && hasArtsDbPhysicalLayoutPlan(dep.alloc.getOperation());
+static bool hasDistributedLaunchStorageFacts(ArrayRef<DirectCuDepSpec> deps) {
+  return llvm::any_of(deps, [](DirectCuDepSpec dep) {
+    return dep.alloc && hasArtsDbPhysicalLayout(dep.alloc.getOperation());
   });
 }
 
-struct AccessPlanWindowFacts {
+struct AccessWindowFacts {
   SmallVector<int64_t, 4> blockLo;
   SmallVector<int64_t, 4> blockHi;
   SmallVector<int64_t, 4> validExtents;
 };
 
-static FailureOr<AccessPlanWindowFacts>
-getAccessPlanWindowFacts(arts::DbAccessPlanOp plan, unsigned ownerDimCount) {
+static FailureOr<AccessWindowFacts>
+getAccessWindowFacts(arts::DbAccessWindowOp window, unsigned ownerDimCount) {
   std::optional<SmallVector<int64_t, 4>> blockLo =
-      readI64ArrayAttr(plan.getBlockLo());
+      readI64ArrayAttr(window.getBlockLo());
   std::optional<SmallVector<int64_t, 4>> blockHi =
-      readI64ArrayAttr(plan.getBlockHi());
+      readI64ArrayAttr(window.getBlockHi());
   std::optional<SmallVector<int64_t, 4>> validExtents =
-      readI64ArrayAttr(plan.getValidExtents());
+      readI64ArrayAttr(window.getValidExtents());
   if (!blockLo || !blockHi || !validExtents ||
       blockLo->size() != ownerDimCount || blockHi->size() != ownerDimCount) {
-    plan.emitOpError()
+    window.emitOpError()
         << "has access-window evidence inconsistent with ownerDimCount";
     return failure();
   }
   for (auto [lo, hi] : llvm::zip(*blockLo, *blockHi))
     if (hi <= lo) {
-      plan.emitOpError() << "has empty or inverted block window";
+      window.emitOpError() << "has empty or inverted block window";
       return failure();
     }
   for (int64_t extent : *validExtents)
     if (extent <= 0) {
-      plan.emitOpError() << "has non-positive valid extent";
+      window.emitOpError() << "has non-positive valid extent";
       return failure();
     }
-  return AccessPlanWindowFacts{
+  return AccessWindowFacts{
       SmallVector<int64_t, 4>(blockLo->begin(), blockLo->end()),
       SmallVector<int64_t, 4>(blockHi->begin(), blockHi->end()),
       SmallVector<int64_t, 4>(validExtents->begin(), validExtents->end())};
@@ -820,6 +998,103 @@ static arts::DbAllocOp resolveBoundaryDbAlloc(Value memref) {
   return resolveBoundaryDbAlloc(yield.getValues()[result.getResultNumber()]);
 }
 
+static FailureOr<ReduceScatterRedistFacts>
+buildReduceScatterRedistFacts(sde::SdeRedistOp redist) {
+  if (redist.getFamily() != sde::SdeMovementFamily::reduce_scatter_like)
+    return failure();
+  if (!redist.getArrayIdAttr())
+    return redist.emitOpError()
+           << "commits reduce_scatter_like movement without array_id";
+  if (redist.getSourceOwnerDims() != redist.getTargetOwnerDims() ||
+      redist.getSourceBlockShape() != redist.getTargetBlockShape())
+    return redist.emitOpError()
+           << "commits reduce_scatter_like movement whose source and target "
+              "layouts differ";
+
+  auto sourceOwnerDims = readI64ArrayAttr(redist.getSourceOwnerDims());
+  auto sourceBlockShape = readI64ArrayAttr(redist.getSourceBlockShape());
+  if (!sourceOwnerDims || !sourceBlockShape || sourceOwnerDims->empty() ||
+      sourceBlockShape->empty())
+    return redist.emitOpError()
+           << "commits reduce_scatter_like movement without concrete "
+              "owner/block geometry";
+
+  return ReduceScatterRedistFacts{
+      redist.getArrayIdAttr(),      redist.getSourceOwnerDims(),
+      redist.getSourceBlockShape(), redist.getTargetOwnerDims(),
+      redist.getTargetBlockShape(), redist.getCommVolumeBytesAttr()};
+}
+
+static LogicalResult collectPrecedingReduceScatterRedists(
+    sde::SdeSuIterateOp source,
+    DenseMap<Operation *, SmallVector<ReduceScatterRedistFacts, 2>>
+        &factsByAlloc,
+    SmallVectorImpl<sde::SdeRedistOp> &consumedRedists) {
+  for (Operation *op = source->getPrevNode(); op; op = op->getPrevNode()) {
+    auto redist = dyn_cast<sde::SdeRedistOp>(op);
+    if (!redist)
+      break;
+    if (redist.getFamily() != sde::SdeMovementFamily::reduce_scatter_like)
+      continue;
+    arts::DbAllocOp alloc = resolveBoundaryDbAlloc(redist.getMu());
+    if (!alloc)
+      return redist.emitOpError()
+             << "does not reference an ARTS DB-backed MU after storage "
+                "realization";
+    FailureOr<ReduceScatterRedistFacts> facts =
+        buildReduceScatterRedistFacts(redist);
+    if (failed(facts))
+      return failure();
+    factsByAlloc[alloc.getOperation()].push_back(*facts);
+    consumedRedists.push_back(redist);
+  }
+  return success();
+}
+
+static FailureOr<std::optional<ReduceScatterRedistFacts>>
+findMatchingReduceScatterFacts(
+    arts::DbAccessWindowOp window, arts::DbAllocOp alloc,
+    const DenseMap<Operation *, SmallVector<ReduceScatterRedistFacts, 2>>
+        &factsByAlloc) {
+  auto it = factsByAlloc.find(alloc.getOperation());
+  if (it == factsByAlloc.end())
+    return std::optional<ReduceScatterRedistFacts>{};
+
+  IntegerAttr windowArrayId = window.getArrayIdAttr();
+  if (!windowArrayId)
+    return window.emitOpError()
+           << "has no arrayId for a committed reduce_scatter_like movement";
+
+  std::optional<ReduceScatterRedistFacts> match;
+  for (const ReduceScatterRedistFacts &candidate : it->second) {
+    if (!candidate.arrayId ||
+        candidate.arrayId.getInt() != windowArrayId.getInt())
+      continue;
+    if (match)
+      return window.emitOpError()
+             << "matches multiple committed reduce_scatter_like movements";
+    match = candidate;
+  }
+
+  if (!match)
+    return std::optional<ReduceScatterRedistFacts>{};
+  if (window.getMode() != ArtsMode::in)
+    return window.emitOpError()
+           << "matches reduce_scatter_like movement but is not read-only";
+
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      readI64ArrayAttr(match->sourceBlockShape);
+  if (!blockShape ||
+      blockShape->size() != static_cast<size_t>(window.getOwnerDimCount()) +
+                                readI64ArrayAttr(window.getValidExtents())
+                                    .value_or(SmallVector<int64_t, 4>{})
+                                    .size())
+    return window.emitOpError()
+           << "has access-window rank incompatible with the committed "
+              "reduce_scatter_like block shape";
+  return match;
+}
+
 static LogicalResult
 recordCoarseSuAccess(sde::SdeSuIterateOp source, Operation *site, Value memref,
                      ArtsMode mode, DenseMap<Operation *, unsigned> &depIndex,
@@ -839,11 +1114,10 @@ recordCoarseSuAccess(sde::SdeSuIterateOp source, Operation *site, Value memref,
     return site->emitError()
            << "touches a non-coarse DB without committed SDE access windows; "
               "refusing coarse SU realization";
-  if (alloc.getPlanOwnerDimsAttr() || alloc.getPlanPhysicalBlockShapeAttr() ||
-      alloc.getPlanLogicalWorkerSliceAttr() || alloc.getPlanHaloShapeAttr() ||
+  if (hasArtsDbPhysicalLayout(alloc.getOperation()) ||
       alloc.getDistributedAttr())
     return site->emitError()
-           << "touches a planned or distributed DB without committed SDE "
+           << "touches a block-grid or distributed DB without committed SDE "
               "access windows; refusing coarse SU realization";
 
   auto [it, inserted] = depIndex.try_emplace(alloc.getOperation(), deps.size());
@@ -853,6 +1127,37 @@ recordCoarseSuAccess(sde::SdeSuIterateOp source, Operation *site, Value memref,
   }
   deps[it->second].mode = arts::combineAccessModes(deps[it->second].mode, mode);
   return success();
+}
+
+static LogicalResult
+verifyRawSuAccessCoveredByDep(sde::SdeSuIterateOp source, Operation *site,
+                              Value memref, ArtsMode mode,
+                              DenseMap<Operation *, unsigned> &depIndex,
+                              SmallVectorImpl<DirectDepSpec> &deps) {
+  arts::DbAllocOp alloc = resolveBoundaryDbAlloc(memref);
+  if (!alloc) {
+    Value root = ValueAnalysis::stripMemrefViewOps(memref);
+    if (root && isDefinedInside(root, source.getOperation()))
+      return success();
+    return site->emitError()
+           << "accesses external memref without ARTS DB-backed storage during "
+              "direct SDE-to-ARTS SU realization";
+  }
+
+  auto [it, inserted] = depIndex.try_emplace(alloc.getOperation(), deps.size());
+  if (!inserted) {
+    DirectDepSpec &dep = deps[it->second];
+    if (!accessModeCovers(dep.mode, mode))
+      return site->emitError()
+             << "raw access strengthens a committed SDE access-window "
+                "dependency; SDE must author the dependency mode before "
+                "direct ARTS lowering";
+    return success();
+  }
+
+  return site->emitError()
+         << "touches a DB without a committed SDE access-window dependency; "
+            "SDE must author the dependency before direct ARTS lowering";
 }
 
 static LogicalResult
@@ -893,6 +1198,46 @@ collectCoarseSuDependencies(sde::SdeSuIterateOp source,
   return result.wasInterrupted() ? failure() : success();
 }
 
+static LogicalResult
+verifyRawSuAccessesCoveredByDeps(sde::SdeSuIterateOp source,
+                                 DenseMap<Operation *, unsigned> &depIndex,
+                                 SmallVectorImpl<DirectDepSpec> &deps) {
+  if (deps.empty())
+    return success();
+  Block *computeBlock = sde::getSuIterateComputeBlock(source);
+  if (!computeBlock)
+    return source.emitOpError() << "has no computable body";
+
+  WalkResult result = computeBlock->walk([&](Operation *op) {
+    if (auto load = dyn_cast<memref::LoadOp>(op))
+      return failed(verifyRawSuAccessCoveredByDep(source, op, load.getMemref(),
+                                                  ArtsMode::in, depIndex, deps))
+                 ? WalkResult::interrupt()
+                 : WalkResult::advance();
+    if (auto store = dyn_cast<memref::StoreOp>(op))
+      return failed(verifyRawSuAccessCoveredByDep(
+                 source, op, store.getMemref(), ArtsMode::out, depIndex, deps))
+                 ? WalkResult::interrupt()
+                 : WalkResult::advance();
+    if (auto copy = dyn_cast<memref::CopyOp>(op)) {
+      if (failed(verifyRawSuAccessCoveredByDep(source, op, copy.getSource(),
+                                               ArtsMode::in, depIndex, deps)))
+        return WalkResult::interrupt();
+      if (failed(verifyRawSuAccessCoveredByDep(source, op, copy.getTarget(),
+                                               ArtsMode::out, depIndex, deps)))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    }
+    if (auto atomic = dyn_cast<sde::SdeCuAtomicOp>(op))
+      return failed(verifyRawSuAccessCoveredByDep(
+                 source, op, atomic.getAddr(), ArtsMode::inout, depIndex, deps))
+                 ? WalkResult::interrupt()
+                 : WalkResult::advance();
+    return WalkResult::advance();
+  });
+  return result.wasInterrupted() ? failure() : success();
+}
+
 static void collectTouchedDbAllocs(sde::SdeSuIterateOp source,
                                    DenseSet<Operation *> &touched) {
   source.getBody().walk([&](Operation *op) {
@@ -910,89 +1255,111 @@ static void collectTouchedDbAllocs(sde::SdeSuIterateOp source,
   });
 }
 
-static LogicalResult
-recordAccessPlanDependency(arts::DbAccessPlanOp plan,
-                           DenseMap<Operation *, unsigned> &depIndex,
-                           SmallVectorImpl<DirectDepPlan> &deps) {
+static LogicalResult recordAccessWindowDependency(
+    arts::DbAccessWindowOp window, DenseMap<Operation *, unsigned> &depIndex,
+    SmallVectorImpl<DirectDepSpec> &deps,
+    const DenseMap<Operation *, SmallVector<ReduceScatterRedistFacts, 2>>
+        &reduceScatterFactsByAlloc) {
   auto alloc = dyn_cast_or_null<arts::DbAllocOp>(
-      arts::DbUtils::getUnderlyingDbAlloc(plan.getMu()));
+      arts::DbUtils::getUnderlyingDbAlloc(window.getMu()));
   if (!alloc)
-    return plan.emitOpError()
+    return window.emitOpError()
            << "does not reference an ARTS DB-backed MU after storage "
               "realization";
 
-  unsigned ownerDimCount = static_cast<unsigned>(plan.getOwnerDimCount());
-  FailureOr<AccessPlanWindowFacts> facts =
-      getAccessPlanWindowFacts(plan, ownerDimCount);
+  unsigned ownerDimCount = static_cast<unsigned>(window.getOwnerDimCount());
+  FailureOr<AccessWindowFacts> facts =
+      getAccessWindowFacts(window, ownerDimCount);
   if (failed(facts))
     return failure();
-  if (plan.getHaloShapeAttr() && plan.getMode() != ArtsMode::in)
-    return plan.emitOpError()
+  if (window.getHaloShapeAttr() && window.getMode() != ArtsMode::in)
+    return window.emitOpError()
            << "commits a writable halo dependency; SDE must split the read "
               "halo and write access before ARTS realization";
+  FailureOr<std::optional<ReduceScatterRedistFacts>> reduceScatter =
+      findMatchingReduceScatterFacts(window, alloc, reduceScatterFactsByAlloc);
+  if (failed(reduceScatter))
+    return failure();
 
   auto [it, inserted] = depIndex.try_emplace(alloc.getOperation(), deps.size());
   if (inserted) {
     ArrayAttr haloShape;
-    if (plan.getMode() == ArtsMode::in)
-      haloShape = plan.getHaloShapeAttr();
-    deps.push_back(
-        {alloc, plan.getMode(), ownerDimCount,
-         SmallVector<int64_t, 4>(facts->blockLo.begin(), facts->blockLo.end()),
-         SmallVector<int64_t, 4>(facts->blockHi.begin(), facts->blockHi.end()),
-         SmallVector<int64_t, 4>(facts->validExtents.begin(),
-                                 facts->validExtents.end()),
-         haloShape});
+    if (window.getMode() == ArtsMode::in)
+      haloShape = window.getHaloShapeAttr();
+    DirectDepSpec dep;
+    dep.alloc = alloc;
+    dep.mode = window.getMode();
+    dep.arrayId = window.getArrayIdAttr();
+    dep.ownerDimCount = ownerDimCount;
+    dep.blockLo.assign(facts->blockLo.begin(), facts->blockLo.end());
+    dep.blockHi.assign(facts->blockHi.begin(), facts->blockHi.end());
+    dep.validExtents.assign(facts->validExtents.begin(),
+                            facts->validExtents.end());
+    dep.haloShape = haloShape;
+    dep.reduceScatter = *reduceScatter;
+    deps.push_back(std::move(dep));
     return success();
   }
 
-  DirectDepPlan &dep = deps[it->second];
+  DirectDepSpec &dep = deps[it->second];
   if (dep.ownerDimCount != ownerDimCount || dep.blockLo != facts->blockLo ||
       dep.blockHi != facts->blockHi || dep.validExtents != facts->validExtents)
-    return plan.emitOpError()
+    return window.emitOpError()
            << "commits access-window evidence that conflicts with another "
               "window for the same DB";
-  dep.mode = arts::combineAccessModes(dep.mode, plan.getMode());
-  if (plan.getMode() == ArtsMode::in) {
-    if (ArrayAttr haloShape = plan.getHaloShapeAttr()) {
+  dep.mode = arts::combineAccessModes(dep.mode, window.getMode());
+  if (window.getMode() == ArtsMode::in) {
+    if (ArrayAttr haloShape = window.getHaloShapeAttr()) {
       if (dep.haloShape && dep.haloShape != haloShape)
-        return plan.emitOpError()
+        return window.emitOpError()
                << "commits a halo shape that conflicts with another read "
                   "window for the same DB";
       dep.haloShape = haloShape;
     }
   }
+  if (reduceScatter->has_value()) {
+    if (dep.reduceScatter &&
+        (dep.reduceScatter->arrayId != (*reduceScatter)->arrayId ||
+         dep.reduceScatter->sourceOwnerDims !=
+             (*reduceScatter)->sourceOwnerDims ||
+         dep.reduceScatter->sourceBlockShape !=
+             (*reduceScatter)->sourceBlockShape))
+      return window.emitOpError()
+             << "commits reduce_scatter_like movement that conflicts with "
+                "another window for the same DB";
+    dep.reduceScatter = **reduceScatter;
+  }
   return success();
 }
 
 static LogicalResult
-recordCuAccessPlanDependency(arts::DbAccessPlanOp plan,
-                             DenseMap<Operation *, unsigned> &depIndex,
-                             SmallVectorImpl<DirectCuDepPlan> &deps) {
+recordCuAccessWindowDependency(arts::DbAccessWindowOp window,
+                               DenseMap<Operation *, unsigned> &depIndex,
+                               SmallVectorImpl<DirectCuDepSpec> &deps) {
   auto alloc = dyn_cast_or_null<arts::DbAllocOp>(
-      arts::DbUtils::getUnderlyingDbAlloc(plan.getMu()));
+      arts::DbUtils::getUnderlyingDbAlloc(window.getMu()));
   if (!alloc)
-    return plan.emitOpError()
+    return window.emitOpError()
            << "does not reference an ARTS DB-backed MU after storage "
               "realization";
 
-  unsigned ownerDimCount = static_cast<unsigned>(plan.getOwnerDimCount());
-  FailureOr<AccessPlanWindowFacts> facts =
-      getAccessPlanWindowFacts(plan, ownerDimCount);
+  unsigned ownerDimCount = static_cast<unsigned>(window.getOwnerDimCount());
+  FailureOr<AccessWindowFacts> facts =
+      getAccessWindowFacts(window, ownerDimCount);
   if (failed(facts))
     return failure();
-  if (plan.getHaloShapeAttr() && plan.getMode() != ArtsMode::in)
-    return plan.emitOpError()
+  if (window.getHaloShapeAttr() && window.getMode() != ArtsMode::in)
+    return window.emitOpError()
            << "commits a writable halo dependency; SDE must split the read "
               "halo and write access before ARTS realization";
 
   auto [it, inserted] = depIndex.try_emplace(alloc.getOperation(), deps.size());
   if (inserted) {
     ArrayAttr haloShape;
-    if (plan.getMode() == ArtsMode::in)
-      haloShape = plan.getHaloShapeAttr();
+    if (window.getMode() == ArtsMode::in)
+      haloShape = window.getHaloShapeAttr();
     deps.push_back(
-        {alloc, plan.getMode(), ownerDimCount,
+        {alloc, window.getMode(), ownerDimCount,
          SmallVector<int64_t, 4>(facts->blockLo.begin(), facts->blockLo.end()),
          SmallVector<int64_t, 4>(facts->blockHi.begin(), facts->blockHi.end()),
          SmallVector<int64_t, 4>(facts->validExtents.begin(),
@@ -1001,17 +1368,17 @@ recordCuAccessPlanDependency(arts::DbAccessPlanOp plan,
     return success();
   }
 
-  DirectCuDepPlan &dep = deps[it->second];
+  DirectCuDepSpec &dep = deps[it->second];
   if (dep.ownerDimCount != ownerDimCount || dep.blockLo != facts->blockLo ||
       dep.blockHi != facts->blockHi || dep.validExtents != facts->validExtents)
-    return plan.emitOpError()
+    return window.emitOpError()
            << "commits access-window evidence that conflicts with another "
               "window for the same DB in one CU";
-  dep.mode = arts::combineAccessModes(dep.mode, plan.getMode());
-  if (plan.getMode() == ArtsMode::in) {
-    if (ArrayAttr haloShape = plan.getHaloShapeAttr()) {
+  dep.mode = arts::combineAccessModes(dep.mode, window.getMode());
+  if (window.getMode() == ArtsMode::in) {
+    if (ArrayAttr haloShape = window.getHaloShapeAttr()) {
       if (dep.haloShape && dep.haloShape != haloShape)
-        return plan.emitOpError()
+        return window.emitOpError()
                << "commits a halo shape that conflicts with another read "
                   "window for the same DB in one CU";
       dep.haloShape = haloShape;
@@ -1022,49 +1389,57 @@ recordCuAccessPlanDependency(arts::DbAccessPlanOp plan,
 
 static LogicalResult
 collectSuDependencies(sde::SdeSuIterateOp source,
-                      SmallVectorImpl<DirectDepPlan> &deps,
-                      DenseSet<Operation *> &consumedCuLevelAccessPlans) {
+                      SmallVectorImpl<DirectDepSpec> &deps,
+                      DenseSet<Operation *> &consumedCuLevelAccessWindows,
+                      SmallVectorImpl<sde::SdeRedistOp> &consumedRedists) {
   DenseMap<Operation *, unsigned> depIndex;
   DenseSet<Operation *> touchedAllocs;
   collectTouchedDbAllocs(source, touchedAllocs);
+  DenseMap<Operation *, SmallVector<ReduceScatterRedistFacts, 2>>
+      reduceScatterFactsByAlloc;
+  if (failed(collectPrecedingReduceScatterRedists(
+          source, reduceScatterFactsByAlloc, consumedRedists)))
+    return failure();
 
-  auto consider = [&](arts::DbAccessPlanOp plan) -> WalkResult {
-    if (auto ownerSu = plan->getParentOfType<sde::SdeSuIterateOp>())
+  auto consider = [&](arts::DbAccessWindowOp window) -> WalkResult {
+    if (auto ownerSu = window->getParentOfType<sde::SdeSuIterateOp>())
       if (ownerSu != source)
         return WalkResult::advance();
-    Operation *alloc = arts::DbUtils::getUnderlyingDbAlloc(plan.getMu());
+    Operation *alloc = arts::DbUtils::getUnderlyingDbAlloc(window.getMu());
     if (!alloc || !touchedAllocs.contains(alloc))
       return WalkResult::advance();
-    if (failed(recordAccessPlanDependency(plan, depIndex, deps)))
+    if (failed(recordAccessWindowDependency(window, depIndex, deps,
+                                            reduceScatterFactsByAlloc)))
       return WalkResult::interrupt();
-    if (!plan->getParentOfType<sde::SdeSuIterateOp>())
-      consumedCuLevelAccessPlans.insert(plan.getOperation());
+    if (!window->getParentOfType<sde::SdeSuIterateOp>())
+      consumedCuLevelAccessWindows.insert(window.getOperation());
     return WalkResult::advance();
   };
 
   sde::SdeCuRegionOp parentCu = source->getParentOfType<sde::SdeCuRegionOp>();
   WalkResult result = parentCu ? parentCu.getBody().walk(consider)
                                : source.getBody().walk(consider);
-  return result.wasInterrupted() ? failure() : success();
+  if (result.wasInterrupted())
+    return failure();
+  return verifyRawSuAccessesCoveredByDeps(source, depIndex, deps);
 }
 
-static LogicalResult
-collectStandaloneCuDependencies(sde::SdeCuRegionOp source,
-                                SmallVectorImpl<DirectCuDepPlan> &deps,
-                                SmallVectorImpl<arts::DbAccessPlanOp> &plans) {
+static LogicalResult collectStandaloneCuDependencies(
+    sde::SdeCuRegionOp source, SmallVectorImpl<DirectCuDepSpec> &deps,
+    SmallVectorImpl<arts::DbAccessWindowOp> &windows) {
   DenseMap<Operation *, unsigned> depIndex;
-  WalkResult result = source.getBody().walk([&](arts::DbAccessPlanOp plan) {
-    plans.push_back(plan);
-    if (failed(recordCuAccessPlanDependency(plan, depIndex, deps)))
+  WalkResult result = source.getBody().walk([&](arts::DbAccessWindowOp window) {
+    windows.push_back(window);
+    if (failed(recordCuAccessWindowDependency(window, depIndex, deps)))
       return WalkResult::interrupt();
     return WalkResult::advance();
   });
   return result.wasInterrupted() ? failure() : success();
 }
 
-static bool containsDbAccessPlan(sde::SdeCuRegionOp source) {
+static bool containsDbAccessWindow(sde::SdeCuRegionOp source) {
   bool found = false;
-  source.getBody().walk([&](arts::DbAccessPlanOp) {
+  source.getBody().walk([&](arts::DbAccessWindowOp) {
     found = true;
     return WalkResult::interrupt();
   });
@@ -1127,7 +1502,7 @@ static LogicalResult collectExternalScalarCaptures(sde::SdeCuRegionOp source,
   };
 
   source.getBody().walk([&](Operation *op) {
-    if (isa<arts::DbAccessPlanOp, sde::SdeMuDepOp>(op))
+    if (isa<arts::DbAccessWindowOp, sde::SdeMuDepOp>(op))
       return;
     for (Value operand : op->getOperands())
       addIfExternalScalar(operand);
@@ -1204,7 +1579,7 @@ collectCloneableReadOnlyGlobalMemrefs(sde::SdeCuRegionOp source,
                                       SetVector<Value> &captures) {
   bool failed = false;
   source.getBody().walk([&](Operation *op) {
-    if (isa<arts::DbAccessPlanOp, sde::SdeYieldOp>(op))
+    if (isa<arts::DbAccessWindowOp, sde::SdeYieldOp>(op))
       return;
     for (Value operand : op->getOperands()) {
       if (!isa<MemRefType>(operand.getType()) ||
@@ -1305,8 +1680,8 @@ static void attachStencilHaloAcquireFacts(sde::SdeSuIterateOp source,
                    UnitAttr::get(source.getContext()));
 }
 
-static FailureOr<CompactHaloColumnPlan>
-realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
+static FailureOr<CompactHaloColumnSpec>
+realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
                               ArrayRef<int64_t> groupBlockCounts,
                               OpBuilder &builder, Location loc) {
   if (dep.ownerDimCount != 2) {
@@ -1349,16 +1724,14 @@ realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
   if (failed(rowExtentStatic) || failed(colExtentStatic))
     return failure();
 
-  ArrayAttr ownerDimsAttr = getPlanOwnerDimsAttr(dep.alloc.getOperation());
-  ArrayAttr physicalBlockShapeAttr =
-      getPlanPhysicalBlockShapeAttr(dep.alloc.getOperation());
-  std::optional<SmallVector<int64_t, 4>> physicalBlockShape =
-      readI64ArrayAttr(physicalBlockShapeAttr);
-  if (!ownerDimsAttr || !physicalBlockShape ||
-      physicalBlockShape->size() != dep.alloc.getElementSizes().size()) {
-    return source.emitOpError()
-           << "requires committed DB owner/block facts to realize compact "
-              "halo payload DBs; refusing a full-block halo byte-window";
+  SmallVector<int64_t, 4> physicalBlockShape;
+  physicalBlockShape.reserve(dep.alloc.getElementSizes().size());
+  for (Value size : dep.alloc.getElementSizes()) {
+    FailureOr<int64_t> constant = requireStaticPositiveIndex(
+        size, source.getOperation(), "compact halo block extent");
+    if (failed(constant))
+      return failure();
+    physicalBlockShape.push_back(*constant);
   }
 
   MLIRContext *ctx = source.getContext();
@@ -1369,10 +1742,10 @@ realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
   Value colExtent = dep.alloc.getElementSizes()[3];
   SmallVector<Value, 4> compactElementSizes{one, one, rowExtent,
                                             createOneIndex(builder, loc)};
-  SmallVector<int64_t, 4> compactPhysicalBlockShape(*physicalBlockShape);
+  SmallVector<int64_t, 4> compactPhysicalBlockShape(physicalBlockShape);
   compactPhysicalBlockShape[3] = 1;
 
-  auto createCompactDb = [&]() -> arts::DbAllocOp {
+  auto createCompactDb = [&]() -> FailureOr<arts::DbAllocOp> {
     auto db = arts::DbAllocOp::create(
         builder, loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
         dep.alloc.getElementType(),
@@ -1382,20 +1755,26 @@ realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
                            compactElementSizes.end()),
         PartitionMode::block);
     db.setCompactHaloPayloadAttr(UnitAttr::get(ctx));
-    setPlanOwnerDimsAttr(db.getOperation(), ownerDimsAttr);
-    setPlanPhysicalBlockShapeAttr(
-        db.getOperation(),
-        Builder(ctx).getI64ArrayAttr(compactPhysicalBlockShape));
     copyDistributionAttrs(dep.alloc.getOperation(), db.getOperation());
-    copyDbOwnerMapAttrs(dep.alloc, db);
+    if (hasDistributedDbAllocation(dep.alloc.getOperation()) &&
+        !destDbOwnerRouteMatchesSourcePolicy(dep.alloc, db))
+      return db.emitOpError()
+             << "cannot derive compact halo owner routes from destination DB "
+                "grid and source distribution kind";
     return db;
   };
 
-  CompactHaloColumnPlan plan;
-  plan.leftColumnDb = createCompactDb();
-  plan.rightColumnDb = createCompactDb();
-  plan.rowExtent = rowExtent;
-  plan.colExtent = colExtent;
+  CompactHaloColumnSpec spec;
+  FailureOr<arts::DbAllocOp> leftColumnDb = createCompactDb();
+  if (failed(leftColumnDb))
+    return failure();
+  FailureOr<arts::DbAllocOp> rightColumnDb = createCompactDb();
+  if (failed(rightColumnDb))
+    return failure();
+  spec.leftColumnDb = *leftColumnDb;
+  spec.rightColumnDb = *rightColumnDb;
+  spec.rowExtent = rowExtent;
+  spec.colExtent = colExtent;
 
   auto outer = scf::ForOp::create(builder, loc, zero, dep.alloc.getSizes()[0],
                                   createOneIndex(builder, loc));
@@ -1418,16 +1797,16 @@ realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
       SmallVector<Value>{});
   sourceAcquire.setPreserveAccessMode();
   auto leftAcquire = arts::DbAcquireOp::create(
-      builder, loc, ArtsMode::out, plan.leftColumnDb.getGuid(),
-      plan.leftColumnDb.getPtr(),
+      builder, loc, ArtsMode::out, spec.leftColumnDb.getGuid(),
+      spec.leftColumnDb.getPtr(),
       std::optional<arts::PartitionMode>(arts::PartitionMode::block),
       SmallVector<Value>{}, blockOffsets, blockSizes, SmallVector<Value>{},
       SmallVector<Value>{}, SmallVector<Value>{}, Value{}, SmallVector<Value>{},
       SmallVector<Value>{});
   leftAcquire.setPreserveAccessMode();
   auto rightAcquire = arts::DbAcquireOp::create(
-      builder, loc, ArtsMode::out, plan.rightColumnDb.getGuid(),
-      plan.rightColumnDb.getPtr(),
+      builder, loc, ArtsMode::out, spec.rightColumnDb.getGuid(),
+      spec.rightColumnDb.getPtr(),
       std::optional<arts::PartitionMode>(arts::PartitionMode::block),
       SmallVector<Value>{}, blockOffsets, blockSizes, SmallVector<Value>{},
       SmallVector<Value>{}, SmallVector<Value>{}, Value{}, SmallVector<Value>{},
@@ -1487,13 +1866,13 @@ realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepPlan dep,
   arts::YieldOp::create(bodyBuilder, loc);
 
   builder.setInsertionPointAfter(outer);
-  return plan;
+  return spec;
 }
 
 static arts::DbAcquireOp
-create2DUnitRowHaloAcquire(sde::SdeSuIterateOp source, DirectDepPlan dep,
+create2DUnitRowHaloAcquire(sde::SdeSuIterateOp source, DirectDepSpec dep,
                            ArrayRef<Value> currentBlockOffsets,
-                           CompactHaloColumnPlan plan, bool topFace,
+                           CompactHaloColumnSpec spec, bool topFace,
                            SmallVectorImpl<Value> &dbOffsets,
                            OpBuilder &builder, Location loc) {
   Value zero = createZeroIndex(builder, loc);
@@ -1509,7 +1888,7 @@ create2DUnitRowHaloAcquire(sde::SdeSuIterateOp source, DirectDepPlan dep,
     Value shifted = arith::SubIOp::create(builder, loc, blockI, one);
     sourceI = arith::SelectOp::create(builder, loc, canShift, shifted, zero);
     boundsValid = canShift;
-    elementRowOffset = arith::SubIOp::create(builder, loc, plan.rowExtent, one);
+    elementRowOffset = arith::SubIOp::create(builder, loc, spec.rowExtent, one);
   } else {
     sourceI = arith::AddIOp::create(builder, loc, blockI, one);
     boundsValid = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult,
@@ -1527,7 +1906,7 @@ create2DUnitRowHaloAcquire(sde::SdeSuIterateOp source, DirectDepPlan dep,
       elementRowOffset, createZeroIndex(builder, loc)};
   SmallVector<Value> elementSizes{createOneIndex(builder, loc),
                                   createOneIndex(builder, loc),
-                                  createOneIndex(builder, loc), plan.colExtent};
+                                  createOneIndex(builder, loc), spec.colExtent};
   auto acquire = arts::DbAcquireOp::create(
       builder, loc, ArtsMode::in, dep.alloc.getGuid(), dep.alloc.getPtr(),
       std::optional<arts::PartitionMode>(arts::PartitionMode::block),
@@ -1543,8 +1922,8 @@ create2DUnitRowHaloAcquire(sde::SdeSuIterateOp source, DirectDepPlan dep,
 }
 
 static arts::DbAcquireOp create2DUnitCompactColumnAcquire(
-    DirectDepPlan dep, ArrayRef<Value> currentBlockOffsets,
-    CompactHaloColumnPlan plan, bool leftFace,
+    DirectDepSpec dep, ArrayRef<Value> currentBlockOffsets,
+    CompactHaloColumnSpec spec, bool leftFace,
     SmallVectorImpl<Value> &dbOffsets, OpBuilder &builder, Location loc) {
   Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
@@ -1559,14 +1938,14 @@ static arts::DbAcquireOp create2DUnitCompactColumnAcquire(
     Value shifted = arith::SubIOp::create(builder, loc, blockJ, one);
     sourceJ = arith::SelectOp::create(builder, loc, canShift, shifted, zero);
     boundsValid = canShift;
-    compactDb = plan.rightColumnDb;
+    compactDb = spec.rightColumnDb;
   } else {
     sourceJ = arith::AddIOp::create(builder, loc, blockJ, one);
     boundsValid = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult,
                                         sourceJ, dep.alloc.getSizes()[1]);
     sourceJ =
         arith::SelectOp::create(builder, loc, boundsValid, sourceJ, blockJ);
-    compactDb = plan.leftColumnDb;
+    compactDb = spec.leftColumnDb;
   }
 
   SmallVector<Value> offsets{blockI, sourceJ};
@@ -1574,6 +1953,322 @@ static arts::DbAcquireOp create2DUnitCompactColumnAcquire(
   dbOffsets.assign(offsets.begin(), offsets.end());
   auto acquire = arts::DbAcquireOp::create(
       builder, loc, ArtsMode::in, compactDb.getGuid(), compactDb.getPtr(),
+      std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+      SmallVector<Value>{}, offsets, sizes, SmallVector<Value>{},
+      SmallVector<Value>{}, SmallVector<Value>{}, boundsValid,
+      SmallVector<Value>{}, SmallVector<Value>{});
+  acquire.setPreserveAccessMode();
+  return acquire;
+}
+
+static void enumerateUnitHaloSourceOffsets(
+    unsigned rank, SmallVectorImpl<SmallVector<int64_t, 4>> &offsets) {
+  SmallVector<int64_t, 4> current(rank, 0);
+  std::function<void(unsigned, bool)> visit = [&](unsigned dim, bool nonzero) {
+    if (dim == rank) {
+      if (nonzero)
+        offsets.push_back(current);
+      return;
+    }
+    for (int64_t value : {-1, 0, 1}) {
+      current[dim] = value;
+      visit(dim + 1, nonzero || value != 0);
+    }
+  };
+  visit(/*dim=*/0, /*nonzero=*/false);
+}
+
+static SmallVector<Value, 4>
+buildRankExpandedElementIndices(OpBuilder &builder, Location loc,
+                                ArrayRef<Value> elementIndices) {
+  SmallVector<Value, 4> indices;
+  indices.reserve(elementIndices.size() * 2);
+  for (unsigned idx = 0; idx < elementIndices.size(); ++idx)
+    indices.push_back(createZeroIndex(builder, loc));
+  indices.append(elementIndices.begin(), elementIndices.end());
+  return indices;
+}
+
+static void emitCompactHaloCopy(OpBuilder &builder, Location loc,
+                                ArrayRef<int64_t> sourceOffsets,
+                                ArrayRef<Value> elementExtents,
+                                Value sourcePayload, Value compactPayload) {
+  unsigned rank = sourceOffsets.size();
+  SmallVector<Value, 4> loopIvs(rank);
+
+  std::function<void(unsigned)> emitAtDim = [&](unsigned dim) {
+    if (dim == rank) {
+      SmallVector<Value, 4> sourceElementIndices;
+      SmallVector<Value, 4> compactElementIndices;
+      sourceElementIndices.reserve(rank);
+      compactElementIndices.reserve(rank);
+      for (unsigned slot = 0; slot < rank; ++slot) {
+        if (sourceOffsets[slot] == 0) {
+          sourceElementIndices.push_back(loopIvs[slot]);
+          compactElementIndices.push_back(loopIvs[slot]);
+          continue;
+        }
+        Value compactCoord = createZeroIndex(builder, loc);
+        compactElementIndices.push_back(compactCoord);
+        if (sourceOffsets[slot] > 0) {
+          sourceElementIndices.push_back(createZeroIndex(builder, loc));
+          continue;
+        }
+        Value last = arith::SubIOp::create(builder, loc, elementExtents[slot],
+                                           createOneIndex(builder, loc));
+        sourceElementIndices.push_back(last);
+      }
+      Value value = memref::LoadOp::create(
+          builder, loc, sourcePayload,
+          buildRankExpandedElementIndices(builder, loc, sourceElementIndices));
+      memref::StoreOp::create(
+          builder, loc, value, compactPayload,
+          buildRankExpandedElementIndices(builder, loc, compactElementIndices));
+      return;
+    }
+
+    if (sourceOffsets[dim] != 0) {
+      emitAtDim(dim + 1);
+      return;
+    }
+
+    auto loop =
+        scf::ForOp::create(builder, loc, createZeroIndex(builder, loc),
+                           elementExtents[dim], createOneIndex(builder, loc));
+    builder.setInsertionPointToStart(loop.getBody());
+    loopIvs[dim] = loop.getInductionVar();
+    emitAtDim(dim + 1);
+  };
+
+  emitAtDim(/*dim=*/0);
+}
+
+static FailureOr<CompactHaloNdSpec>
+realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
+                          ArrayRef<int64_t> groupBlockCounts,
+                          OpBuilder &builder, Location loc) {
+  unsigned ownerDimCount = dep.ownerDimCount;
+  if (ownerDimCount < 3) {
+    return source.emitOpError()
+           << "requires the 2D halo realization path for owner rank "
+           << ownerDimCount;
+  }
+  if (ownerDimCount > 3) {
+    return source.emitOpError()
+           << "commits a halo dependency whose owner rank exceeds the "
+              "implemented ARTS compact N-D unit-halo realization; refusing a "
+              "full-block halo byte-window";
+  }
+  if (hasGroupedOwnerBlocks(groupBlockCounts)) {
+    return source.emitOpError()
+           << "commits grouped halo CUs, but ARTS compact N-D halo "
+              "realization currently requires one CU per DB block; refusing a "
+              "full-block halo byte-window";
+  }
+
+  FailureOr<SmallVector<int64_t, 4>> haloRadii = getOwnerHaloRadii(
+      dep.haloShape, dep.ownerDimCount, source.getOperation());
+  if (failed(haloRadii))
+    return failure();
+  if (llvm::any_of(*haloRadii, [](int64_t radius) { return radius != 1; })) {
+    return source.emitOpError()
+           << "commits a halo dependency outside the supported unit-halo "
+              "shape; ARTS must realize the exact halo graph instead of "
+              "widening to a full-block byte window";
+  }
+
+  if (dep.alloc.getSizes().size() != ownerDimCount ||
+      dep.alloc.getElementSizes().size() != ownerDimCount * 2) {
+    return source.emitOpError()
+           << "commits a rank shape that ARTS compact N-D unit-halo "
+              "realization cannot represent; refusing a full-block halo "
+              "byte-window";
+  }
+
+  SmallVector<Value, 4> elementExtents;
+  elementExtents.reserve(ownerDimCount);
+  for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+    FailureOr<int64_t> extent = requireStaticPositiveIndex(
+        dep.alloc.getElementSizes()[ownerDimCount + slot],
+        source.getOperation(), "halo element extent");
+    if (failed(extent))
+      return failure();
+    elementExtents.push_back(dep.alloc.getElementSizes()[ownerDimCount + slot]);
+  }
+
+  SmallVector<int64_t, 4> physicalBlockShape;
+  physicalBlockShape.reserve(dep.alloc.getElementSizes().size());
+  for (Value size : dep.alloc.getElementSizes()) {
+    FailureOr<int64_t> constant = requireStaticPositiveIndex(
+        size, source.getOperation(), "compact halo block extent");
+    if (failed(constant))
+      return failure();
+    physicalBlockShape.push_back(*constant);
+  }
+
+  SmallVector<SmallVector<int64_t, 4>, 8> sideOffsets;
+  enumerateUnitHaloSourceOffsets(ownerDimCount, sideOffsets);
+
+  MLIRContext *ctx = source.getContext();
+  Value zero = createZeroIndex(builder, loc);
+  Value one = createOneIndex(builder, loc);
+  Value route = arts::createCurrentNodeRoute(builder, loc);
+
+  CompactHaloNdSpec spec;
+  spec.elementExtents.assign(elementExtents.begin(), elementExtents.end());
+  spec.sides.reserve(sideOffsets.size());
+
+  for (ArrayRef<int64_t> sideOffset : sideOffsets) {
+    SmallVector<Value> compactElementSizes;
+    compactElementSizes.reserve(ownerDimCount * 2);
+    for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+      compactElementSizes.push_back(one);
+    for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+      compactElementSizes.push_back(sideOffset[slot] == 0 ? elementExtents[slot]
+                                                          : one);
+
+    SmallVector<int64_t, 4> compactPhysicalBlockShape(physicalBlockShape);
+    for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+      if (sideOffset[slot] != 0)
+        compactPhysicalBlockShape[ownerDimCount + slot] = 1;
+
+    auto payloadDb = arts::DbAllocOp::create(
+        builder, loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
+        dep.alloc.getElementType(),
+        SmallVector<Value>(dep.alloc.getSizes().begin(),
+                           dep.alloc.getSizes().end()),
+        SmallVector<Value>(compactElementSizes.begin(),
+                           compactElementSizes.end()),
+        PartitionMode::block);
+    payloadDb.setCompactHaloPayloadAttr(UnitAttr::get(ctx));
+    copyDistributionAttrs(dep.alloc.getOperation(), payloadDb.getOperation());
+    if (hasDistributedDbAllocation(dep.alloc.getOperation()) &&
+        !destDbOwnerRouteMatchesSourcePolicy(dep.alloc, payloadDb))
+      return payloadDb.emitOpError()
+             << "cannot derive compact halo owner routes from destination DB "
+                "grid and source distribution kind";
+    spec.sides.push_back(
+        {SmallVector<int64_t, 4>(sideOffset.begin(), sideOffset.end()),
+         payloadDb});
+  }
+
+  for (CompactHaloNdSideSpec &side : spec.sides) {
+    SmallVector<Value> blockOffsets;
+    blockOffsets.reserve(ownerDimCount);
+    scf::ForOp outerLoop;
+    for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+      auto loop =
+          scf::ForOp::create(builder, loc, zero, dep.alloc.getSizes()[slot],
+                             createOneIndex(builder, loc));
+      if (!outerLoop)
+        outerLoop = loop;
+      blockOffsets.push_back(loop.getInductionVar());
+      builder.setInsertionPointToStart(loop.getBody());
+    }
+
+    SmallVector<Value> blockSizes(ownerDimCount, one);
+    auto sourceAcquire = arts::DbAcquireOp::create(
+        builder, loc, ArtsMode::in, dep.alloc.getGuid(), dep.alloc.getPtr(),
+        std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+        SmallVector<Value>{},
+        SmallVector<Value>(blockOffsets.begin(), blockOffsets.end()),
+        blockSizes, SmallVector<Value>{}, SmallVector<Value>{},
+        SmallVector<Value>{}, Value{}, SmallVector<Value>{},
+        SmallVector<Value>{});
+    sourceAcquire.setPreserveAccessMode();
+    auto payloadAcquire = arts::DbAcquireOp::create(
+        builder, loc, ArtsMode::out, side.payloadDb.getGuid(),
+        side.payloadDb.getPtr(),
+        std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+        SmallVector<Value>{},
+        SmallVector<Value>(blockOffsets.begin(), blockOffsets.end()),
+        blockSizes, SmallVector<Value>{}, SmallVector<Value>{},
+        SmallVector<Value>{}, Value{}, SmallVector<Value>{},
+        SmallVector<Value>{});
+    payloadAcquire.setPreserveAccessMode();
+
+    SmallVector<Value, 4> packDeps{sourceAcquire.getPtr(),
+                                   payloadAcquire.getPtr()};
+    SmallVector<Value, 4> packParams(elementExtents.begin(),
+                                     elementExtents.end());
+    auto packEdt = arts::EdtOp::create(
+        builder, loc, arts::EdtType::task, arts::EdtConcurrency::intranode,
+        arts::createCurrentNodeRoute(builder, loc), packDeps, packParams);
+    packEdt.setCompactHaloPackAttr(UnitAttr::get(ctx));
+
+    Block &packBlock = packEdt.getBody().front();
+    for (Value depValue : packDeps)
+      packBlock.addArgument(depValue.getType(), loc);
+    unsigned paramOffset = packBlock.getNumArguments();
+    for (Value param : packParams)
+      packBlock.addArgument(param.getType(), loc);
+
+    OpBuilder bodyBuilder(packEdt.getContext());
+    bodyBuilder.setInsertionPointToStart(&packBlock);
+    Value sourcePayload =
+        arts::realizeDbInnerPayload(bodyBuilder, loc, packBlock.getArgument(0));
+    Value compactPayload =
+        arts::realizeDbInnerPayload(bodyBuilder, loc, packBlock.getArgument(1));
+    SmallVector<Value, 4> bodyElementExtents;
+    bodyElementExtents.reserve(ownerDimCount);
+    for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+      bodyElementExtents.push_back(packBlock.getArgument(paramOffset + slot));
+    emitCompactHaloCopy(bodyBuilder, loc, side.sourceOffsets,
+                        bodyElementExtents, sourcePayload, compactPayload);
+    bodyBuilder.setInsertionPointToEnd(&packBlock);
+    arts::YieldOp::create(bodyBuilder, loc);
+
+    builder.setInsertionPointAfter(outerLoop);
+  }
+
+  return spec;
+}
+
+static arts::DbAcquireOp createNdCompactHaloAcquire(
+    DirectDepSpec dep, ArrayRef<Value> currentBlockOffsets,
+    CompactHaloNdSideSpec side, SmallVectorImpl<Value> &dbOffsets,
+    OpBuilder &builder, Location loc) {
+  Value one = createOneIndex(builder, loc);
+  Value boundsValid = {};
+  auto appendBounds = [&](Value condition) {
+    boundsValid = boundsValid ? arith::AndIOp::create(builder, loc, boundsValid,
+                                                      condition)
+                              : condition;
+  };
+
+  SmallVector<Value> offsets;
+  offsets.reserve(currentBlockOffsets.size());
+  for (auto [slot, sourceOffset] : llvm::enumerate(side.sourceOffsets)) {
+    Value current = currentBlockOffsets[slot];
+    if (sourceOffset < 0) {
+      Value canShift = arith::CmpIOp::create(
+          builder, loc, arith::CmpIPredicate::uge, current, one);
+      Value shifted = arith::SubIOp::create(builder, loc, current, one);
+      offsets.push_back(
+          arith::SelectOp::create(builder, loc, canShift, shifted, current));
+      appendBounds(canShift);
+      continue;
+    }
+    if (sourceOffset > 0) {
+      Value shifted = arith::AddIOp::create(builder, loc, current, one);
+      Value canShift =
+          arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult,
+                                shifted, dep.alloc.getSizes()[slot]);
+      offsets.push_back(
+          arith::SelectOp::create(builder, loc, canShift, shifted, current));
+      appendBounds(canShift);
+      continue;
+    }
+    offsets.push_back(current);
+  }
+
+  if (!boundsValid)
+    boundsValid = arith::ConstantIntOp::create(builder, loc, 1, 1);
+  dbOffsets.assign(offsets.begin(), offsets.end());
+  SmallVector<Value> sizes(currentBlockOffsets.size(), one);
+  auto acquire = arts::DbAcquireOp::create(
+      builder, loc, ArtsMode::in, side.payloadDb.getGuid(),
+      side.payloadDb.getPtr(),
       std::optional<arts::PartitionMode>(arts::PartitionMode::block),
       SmallVector<Value>{}, offsets, sizes, SmallVector<Value>{},
       SmallVector<Value>{}, SmallVector<Value>{}, boundsValid,
@@ -1602,8 +2297,8 @@ static Value getCommonDivRemSource(Value divValue, Value remValue,
 }
 
 static FailureOr<std::optional<HaloLoadRewrite>>
-classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloPlanIndex,
-                       const Halo2DTaskPlan &plan, Value rowIv, Value colIv) {
+classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
+                       const Halo2DTaskWork &work, Value rowIv, Value colIv) {
   OperandRange indices = load.getIndices();
   if (indices.size() != 4) {
     load.emitOpError()
@@ -1612,8 +2307,8 @@ classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloPlanIndex,
     return failure();
   }
 
-  Value rowExpr = getCommonDivRemSource(indices[0], indices[2], plan.rowExtent);
-  Value colExpr = getCommonDivRemSource(indices[1], indices[3], plan.colExtent);
+  Value rowExpr = getCommonDivRemSource(indices[0], indices[2], work.rowExtent);
+  Value colExpr = getCommonDivRemSource(indices[1], indices[3], work.colExtent);
   if (!rowExpr || !colExpr) {
     load.emitOpError()
         << "does not expose div/rem rank-expanded indices required for ARTS "
@@ -1640,7 +2335,7 @@ classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloPlanIndex,
   int64_t colOffset = *col.offset;
   if (rowOffset == 0 && colOffset == 0)
     return std::optional<HaloLoadRewrite>{
-        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Center}};
+        HaloLoadRewrite{haloWorkIndex, Halo2DFace::Center}};
   if (rowOffset != 0 && colOffset != 0) {
     load.emitOpError()
         << "requires corner halo realization, which ARTS has not "
@@ -1649,21 +2344,68 @@ classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloPlanIndex,
   }
   if (rowOffset == -1 && colOffset == 0)
     return std::optional<HaloLoadRewrite>{
-        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Top}};
+        HaloLoadRewrite{haloWorkIndex, Halo2DFace::Top}};
   if (rowOffset == 1 && colOffset == 0)
     return std::optional<HaloLoadRewrite>{
-        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Bottom}};
+        HaloLoadRewrite{haloWorkIndex, Halo2DFace::Bottom}};
   if (rowOffset == 0 && colOffset == -1)
     return std::optional<HaloLoadRewrite>{
-        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Left}};
+        HaloLoadRewrite{haloWorkIndex, Halo2DFace::Left}};
   if (rowOffset == 0 && colOffset == 1)
     return std::optional<HaloLoadRewrite>{
-        HaloLoadRewrite{haloPlanIndex, Halo2DFace::Right}};
+        HaloLoadRewrite{haloWorkIndex, Halo2DFace::Right}};
 
   load.emitOpError()
       << "requires non-unit halo realization, which ARTS has not "
          "committed; refusing a full-block halo byte-window";
   return failure();
+}
+
+static FailureOr<std::optional<HaloNdLoadRewrite>>
+classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
+                       const HaloNdTaskWork &work,
+                       ArrayRef<Value> ownerLoopIvs) {
+  unsigned rank = ownerLoopIvs.size();
+  OperandRange indices = load.getIndices();
+  if (indices.size() != rank * 2 || work.elementExtents.size() != rank) {
+    load.emitOpError()
+        << "uses a rank shape unsupported by ARTS compact N-D unit-halo "
+           "realization";
+    return failure();
+  }
+
+  bool hasHaloOffset = false;
+  for (unsigned slot = 0; slot < rank; ++slot) {
+    Value expr = getCommonDivRemSource(indices[slot], indices[rank + slot],
+                                       work.elementExtents[slot]);
+    if (!expr) {
+      load.emitOpError()
+          << "does not expose div/rem rank-expanded indices required for ARTS "
+             "compact N-D unit-halo load rewriting";
+      return failure();
+    }
+    ValueAnalysis::IndexExpr analyzed =
+        ValueAnalysis::analyzeIndexExpr(expr, ownerLoopIvs[slot]);
+    if (!analyzed.dependsOnIV || !analyzed.multiplier ||
+        *analyzed.multiplier != 1 || !analyzed.offset) {
+      load.emitOpError()
+          << "does not expose affine unit-neighborhood indices required for "
+             "ARTS compact N-D unit-halo load rewriting";
+      return failure();
+    }
+    int64_t offset = *analyzed.offset;
+    if (offset < -1 || offset > 1) {
+      load.emitOpError()
+          << "requires non-unit halo realization, which ARTS has not "
+             "committed; refusing a full-block halo byte-window";
+      return failure();
+    }
+    hasHaloOffset |= offset != 0;
+  }
+
+  if (!hasHaloOffset)
+    return std::optional<HaloNdLoadRewrite>{};
+  return std::optional<HaloNdLoadRewrite>{HaloNdLoadRewrite{haloWorkIndex}};
 }
 
 static SmallVector<Value, 4> buildRankExpandedElementIndices(OpBuilder &builder,
@@ -1674,10 +2416,11 @@ static SmallVector<Value, 4> buildRankExpandedElementIndices(OpBuilder &builder,
                                createZeroIndex(builder, loc), row, col};
 }
 
+template <typename RewriteT>
 static LogicalResult recordClonedHaloLoadRewrites(
     Operation *original, Operation *cloned,
-    const DenseMap<Operation *, HaloLoadRewrite> &originalRewrites,
-    DenseMap<Operation *, HaloLoadRewrite> &clonedRewrites) {
+    const DenseMap<Operation *, RewriteT> &originalRewrites,
+    DenseMap<Operation *, RewriteT> &clonedRewrites) {
   auto recordIfMapped = [&](Operation *originalLoad, Operation *clonedLoad) {
     auto it = originalRewrites.find(originalLoad);
     if (it != originalRewrites.end())
@@ -1711,7 +2454,7 @@ static LogicalResult recordClonedHaloLoadRewrites(
 
 static LogicalResult rewriteCloned2DUnitHaloLoads(
     arts::EdtOp task, const DenseMap<Operation *, HaloLoadRewrite> &rewrites,
-    ArrayRef<Halo2DTaskPlan> haloPlans, ArrayRef<Value> payloads,
+    ArrayRef<Halo2DTaskWork> haloWorks, ArrayRef<Value> payloads,
     ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs) {
   OpBuilder builder(task.getContext());
 
@@ -1720,9 +2463,9 @@ static LogicalResult rewriteCloned2DUnitHaloLoads(
     if (!load)
       continue;
     const HaloLoadRewrite &rewrite = entry.second;
-    if (rewrite.haloPlanIndex >= haloPlans.size())
+    if (rewrite.haloWorkIndex >= haloWorks.size())
       return task.emitOpError() << "has stale compact halo load rewrite state";
-    const Halo2DTaskPlan &plan = haloPlans[rewrite.haloPlanIndex];
+    const Halo2DTaskWork &work = haloWorks[rewrite.haloWorkIndex];
     auto requirePayload = [&](unsigned index) -> FailureOr<Value> {
       if (index >= payloads.size() || index >= depBlockOffsetArgs.size() ||
           depBlockOffsetArgs[index].size() != 2) {
@@ -1732,7 +2475,7 @@ static LogicalResult rewriteCloned2DUnitHaloLoads(
       return payloads[index];
     };
 
-    FailureOr<Value> centerPayload = requirePayload(plan.centerTaskDepIndex);
+    FailureOr<Value> centerPayload = requirePayload(work.centerTaskDepIndex);
     if (failed(centerPayload))
       return failure();
     OperandRange indices = load.getIndices();
@@ -1751,30 +2494,30 @@ static LogicalResult rewriteCloned2DUnitHaloLoads(
     }
 
     unsigned ownerSlot = 0;
-    unsigned faceDepIndex = plan.topTaskDepIndex;
+    unsigned faceDepIndex = work.topTaskDepIndex;
     SmallVector<Value, 4> faceIndices;
     switch (rewrite.face) {
     case Halo2DFace::Top:
       ownerSlot = 0;
-      faceDepIndex = plan.topTaskDepIndex;
+      faceDepIndex = work.topTaskDepIndex;
       faceIndices = buildRankExpandedElementIndices(
           builder, loc, createZeroIndex(builder, loc), elemCol);
       break;
     case Halo2DFace::Bottom:
       ownerSlot = 0;
-      faceDepIndex = plan.bottomTaskDepIndex;
+      faceDepIndex = work.bottomTaskDepIndex;
       faceIndices = buildRankExpandedElementIndices(
           builder, loc, createZeroIndex(builder, loc), elemCol);
       break;
     case Halo2DFace::Left:
       ownerSlot = 1;
-      faceDepIndex = plan.leftTaskDepIndex;
+      faceDepIndex = work.leftTaskDepIndex;
       faceIndices = buildRankExpandedElementIndices(
           builder, loc, elemRow, createZeroIndex(builder, loc));
       break;
     case Halo2DFace::Right:
       ownerSlot = 1;
-      faceDepIndex = plan.rightTaskDepIndex;
+      faceDepIndex = work.rightTaskDepIndex;
       faceIndices = buildRankExpandedElementIndices(
           builder, loc, elemRow, createZeroIndex(builder, loc));
       break;
@@ -1786,7 +2529,7 @@ static LogicalResult rewriteCloned2DUnitHaloLoads(
     if (failed(facePayload))
       return failure();
 
-    Value centerBlock = depBlockOffsetArgs[plan.centerTaskDepIndex][ownerSlot];
+    Value centerBlock = depBlockOffsetArgs[work.centerTaskDepIndex][ownerSlot];
     Value crossesBlock =
         arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
                               indices[ownerSlot], centerBlock);
@@ -1813,34 +2556,143 @@ static LogicalResult rewriteCloned2DUnitHaloLoads(
   return success();
 }
 
-static LogicalResult
-rewriteOwnerIndicesToLocal(arts::EdtOp task, ArrayRef<Value> payloads,
-                           ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs,
-                           ArrayRef<bool> depRequiresDbRef,
-                           ArrayRef<int64_t> groupBlockCounts,
-                           unsigned ownerDimCount) {
-  if (ownerDimCount == 0)
-    return success();
+static LogicalResult rewriteClonedNdUnitHaloLoads(
+    arts::EdtOp task, const DenseMap<Operation *, HaloNdLoadRewrite> &rewrites,
+    ArrayRef<HaloNdTaskWork> haloWorks, ArrayRef<Value> payloads,
+    ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs) {
+  OpBuilder builder(task.getContext());
+
+  auto andValues = [&](Location loc, Value lhs, Value rhs) -> Value {
+    return lhs ? arith::AndIOp::create(builder, loc, lhs, rhs).getResult()
+               : rhs;
+  };
+
+  for (const auto &entry : rewrites) {
+    auto load = dyn_cast_or_null<memref::LoadOp>(entry.first);
+    if (!load)
+      continue;
+    const HaloNdLoadRewrite &rewrite = entry.second;
+    if (rewrite.haloWorkIndex >= haloWorks.size())
+      return task.emitOpError() << "has stale compact halo load rewrite state";
+    const HaloNdTaskWork &work = haloWorks[rewrite.haloWorkIndex];
+    unsigned rank = work.elementExtents.size();
+    OperandRange indices = load.getIndices();
+    if (indices.size() != rank * 2)
+      return load.emitOpError() << "has unsupported compact halo rank after "
+                                   "cloning";
+
+    auto requirePayload = [&](unsigned index) -> FailureOr<Value> {
+      if (index >= payloads.size() || index >= depBlockOffsetArgs.size() ||
+          depBlockOffsetArgs[index].size() != rank) {
+        task.emitOpError() << "has inconsistent compact halo dependency state";
+        return failure();
+      }
+      return payloads[index];
+    };
+
+    FailureOr<Value> centerPayload = requirePayload(work.centerTaskDepIndex);
+    if (failed(centerPayload))
+      return failure();
+
+    Location loc = load.getLoc();
+    builder.setInsertionPoint(load);
+    SmallVector<Value, 4> centerElementIndices;
+    centerElementIndices.reserve(rank);
+    for (unsigned slot = 0; slot < rank; ++slot)
+      centerElementIndices.push_back(indices[rank + slot]);
+    Value replacement = memref::LoadOp::create(
+        builder, loc, *centerPayload,
+        buildRankExpandedElementIndices(builder, loc, centerElementIndices));
+
+    if (work.sideSourceOffsets.size() != work.sideTaskDepIndices.size())
+      return task.emitOpError() << "has inconsistent compact halo side state";
+
+    ArrayRef<Value> centerBlockOffsets =
+        depBlockOffsetArgs[work.centerTaskDepIndex];
+    for (auto [sideOffsets, sideDepIndex] :
+         llvm::zip_equal(work.sideSourceOffsets, work.sideTaskDepIndices)) {
+      FailureOr<Value> sidePayload = requirePayload(sideDepIndex);
+      if (failed(sidePayload))
+        return failure();
+      ArrayRef<Value> sideBlockOffsets = depBlockOffsetArgs[sideDepIndex];
+
+      Value condition;
+      for (unsigned slot = 0; slot < rank; ++slot) {
+        Value centerBlock = centerBlockOffsets[slot];
+        if (sideOffsets[slot] == 0) {
+          Value sameBlock =
+              arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
+                                    indices[slot], centerBlock);
+          condition = andValues(loc, condition, sameBlock);
+          continue;
+        }
+
+        Value crossesBlock = arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::ne, indices[slot], centerBlock);
+        Value matchesSide =
+            arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
+                                  indices[slot], sideBlockOffsets[slot]);
+        condition = andValues(loc, condition, crossesBlock);
+        condition = andValues(loc, condition, matchesSide);
+      }
+
+      SmallVector<Value, 4> sideElementIndices;
+      sideElementIndices.reserve(rank);
+      for (unsigned slot = 0; slot < rank; ++slot)
+        sideElementIndices.push_back(sideOffsets[slot] == 0
+                                         ? indices[rank + slot]
+                                         : createZeroIndex(builder, loc));
+
+      auto ifOp = scf::IfOp::create(builder, loc, load.getType(), condition,
+                                    /*withElseRegion=*/true);
+      builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      Value sideValue = memref::LoadOp::create(
+          builder, loc, *sidePayload,
+          buildRankExpandedElementIndices(builder, loc, sideElementIndices));
+      scf::YieldOp::create(builder, loc, ValueRange{sideValue});
+
+      builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
+      scf::YieldOp::create(builder, loc, ValueRange{replacement});
+      replacement = ifOp.getResult(0);
+      builder.setInsertionPointAfter(ifOp);
+    }
+
+    load.replaceAllUsesWith(replacement);
+    load.erase();
+  }
+
+  return success();
+}
+
+static LogicalResult rewriteOwnerIndicesToLocal(
+    arts::EdtOp task, ArrayRef<Value> payloads,
+    ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs,
+    ArrayRef<bool> depRequiresDbRef, ArrayRef<unsigned> depOwnerDimCounts,
+    ArrayRef<SmallVector<int64_t, 4>> depGroupBlockCounts) {
   if (payloads.size() != depBlockOffsetArgs.size() ||
       payloads.size() != depRequiresDbRef.size() ||
-      groupBlockCounts.size() != ownerDimCount)
-    return task.emitOpError() << "has inconsistent owner grouping metadata";
-  for (ArrayRef<Value> offsets : depBlockOffsetArgs)
-    if (offsets.size() != ownerDimCount)
+      payloads.size() != depOwnerDimCounts.size() ||
+      payloads.size() != depGroupBlockCounts.size())
+    return task.emitOpError() << "has inconsistent owner grouping facts";
+  for (auto [offsets, ownerDimCount, groupCounts] : llvm::zip_equal(
+           depBlockOffsetArgs, depOwnerDimCounts, depGroupBlockCounts))
+    if (offsets.size() != ownerDimCount || groupCounts.size() != ownerDimCount)
       return task.emitOpError() << "has inconsistent dependency block offsets";
 
-  bool hasGroupedBlocks =
-      llvm::any_of(groupBlockCounts, [](int64_t count) { return count > 1; });
+  auto depHasGroupedBlocks = [&](unsigned depIdx) {
+    return llvm::any_of(depGroupBlockCounts[depIdx],
+                        [](int64_t count) { return count > 1; });
+  };
 
-  DenseMap<Value, unsigned> payloadIndices;
+  DenseMap<Value, unsigned> payloadToDepIndex;
   DenseMap<Value, Value> payloadSources;
   for (auto [idx, payload] : llvm::enumerate(payloads)) {
-    if (!hasGroupedBlocks && !depRequiresDbRef[idx])
-      continue;
-    auto [it, inserted] = payloadIndices.try_emplace(payload, idx);
+    auto [it, inserted] = payloadToDepIndex.try_emplace(payload, idx);
     if (!inserted)
       return task.emitOpError()
              << "has duplicate dependency payload during owner-index rewrite";
+    if (!depHasGroupedBlocks(idx) && !depRequiresDbRef[idx])
+      continue;
     auto ref = payload.getDefiningOp<arts::DbRefOp>();
     if (!ref)
       return task.emitOpError()
@@ -1848,23 +2700,16 @@ rewriteOwnerIndicesToLocal(arts::EdtOp task, ArrayRef<Value> payloads,
     payloadSources[payload] = ref.getSource();
   }
 
-  if (hasGroupedBlocks) {
-    for (Value payload : payloads) {
-      if (payloadSources.contains(payload))
-        continue;
-      auto ref = payload.getDefiningOp<arts::DbRefOp>();
-      if (!ref)
-        return task.emitOpError()
-               << "cannot group owner blocks without a DB-ref payload";
-      payloadSources[payload] = ref.getSource();
-    }
-  }
-
   OpBuilder builder(task.getContext());
   auto rewriteAccess = [&](Operation *op, Value memref,
                            MutableOperandRange indices) -> WalkResult {
     Value root = ValueAnalysis::stripMemrefViewOps(memref);
-    if (!llvm::is_contained(payloads, root))
+    auto depIt = payloadToDepIndex.find(root);
+    if (depIt == payloadToDepIndex.end())
+      return WalkResult::advance();
+    unsigned depIdx = depIt->second;
+    unsigned ownerDimCount = depOwnerDimCounts[depIdx];
+    if (ownerDimCount == 0)
       return WalkResult::advance();
     if (indices.size() < ownerDimCount) {
       op->emitError() << "rank-expanded DB payload access has fewer indices "
@@ -1872,8 +2717,7 @@ rewriteOwnerIndicesToLocal(arts::EdtOp task, ArrayRef<Value> payloads,
       return WalkResult::interrupt();
     }
     builder.setInsertionPoint(op);
-    auto payloadIt = payloadIndices.find(root);
-    if (hasGroupedBlocks || payloadIt != payloadIndices.end()) {
+    if (depHasGroupedBlocks(depIdx) || depRequiresDbRef[depIdx]) {
       if (root != memref) {
         op->emitError()
             << "grouped DB access through a memref view is not realized; "
@@ -1885,8 +2729,6 @@ rewriteOwnerIndicesToLocal(arts::EdtOp task, ArrayRef<Value> payloads,
         op->emitError() << "has no grouped dependency source";
         return WalkResult::interrupt();
       }
-      unsigned depIdx =
-          payloadIt == payloadIndices.end() ? 0 : payloadIt->second;
       ArrayRef<Value> blockOffsets = depBlockOffsetArgs[depIdx];
       SmallVector<Value, 4> localBlockIndices;
       localBlockIndices.reserve(ownerDimCount);
@@ -1949,11 +2791,11 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   if (!source || source->getParentOfType<sde::SdeSuIterateOp>())
     return success();
 
-  SmallVector<DirectCuDepPlan, 4> deps;
-  SmallVector<arts::DbAccessPlanOp, 4> plans;
-  if (failed(collectStandaloneCuDependencies(source, deps, plans)))
+  SmallVector<DirectCuDepSpec, 4> deps;
+  SmallVector<arts::DbAccessWindowOp, 4> windows;
+  if (failed(collectStandaloneCuDependencies(source, deps, windows)))
     return failure();
-  if (plans.empty())
+  if (windows.empty())
     return success();
 
   if (source.getBody().empty())
@@ -1977,7 +2819,7 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   builder.setInsertionPoint(source);
   Location loc = source.getLoc();
   arts::ArtsLaunchPolicy standaloneLaunch;
-  if (hasDistributedLaunchStoragePlan(deps)) {
+  if (hasDistributedLaunchStorageFacts(deps)) {
     Value zero = createZeroIndex(builder, loc);
     standaloneLaunch = arts::resolveArtsOrdinalLaunchPolicy(
         source->getParentOfType<ModuleOp>(), zero, builder, loc);
@@ -1986,7 +2828,7 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
                               ? standaloneLaunch.route
                               : arts::createCurrentNodeRoute(builder, loc);
 
-  for (DirectCuDepPlan &dep : deps) {
+  for (DirectCuDepSpec &dep : deps) {
     SmallVector<Value> offsets;
     SmallVector<Value> sizes;
     offsets.reserve(dep.ownerDimCount);
@@ -2013,8 +2855,8 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     dep.acquiredPtr = acquire.getPtr();
   }
 
-  SmallVector<CuResultPlan, 4> resultPlans;
-  resultPlans.reserve(source.getNumResults());
+  SmallVector<CuResultSpec, 4> resultSpecs;
+  resultSpecs.reserve(source.getNumResults());
   for (Type resultType : source.getResultTypes()) {
     Value one = createOneIndex(builder, loc);
     Type payloadType = arts::getElementMemRefType(resultType, 1);
@@ -2031,11 +2873,11 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
         SmallVector<Value>{}, Value{}, SmallVector<Value>{},
         SmallVector<Value>{});
     writeAcquire.setPreserveAccessMode();
-    resultPlans.push_back({resultDb, writeAcquire.getPtr(), Value{}});
+    resultSpecs.push_back({resultDb, writeAcquire.getPtr(), Value{}});
   }
 
-  DenseMap<Operation *, DirectCuDepPlan *> depsByAlloc;
-  for (DirectCuDepPlan &dep : deps)
+  DenseMap<Operation *, DirectCuDepSpec *> depsByAlloc;
+  for (DirectCuDepSpec &dep : deps)
     depsByAlloc[dep.alloc.getOperation()] = &dep;
 
   auto rewriteAccess = [&](Operation *op, Value memref,
@@ -2045,7 +2887,7 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     if (it == depsByAlloc.end())
       return WalkResult::advance();
 
-    DirectCuDepPlan &dep = *it->second;
+    DirectCuDepSpec &dep = *it->second;
     if (indices.size() < dep.ownerDimCount) {
       op->emitError() << "rank-expanded DB payload access has fewer indices "
                          "than committed owner dimensions";
@@ -2088,12 +2930,12 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   if (rewriteResult.wasInterrupted())
     return failure();
 
-  for (arts::DbAccessPlanOp plan : plans)
-    if (plan && plan->getBlock())
-      plan.erase();
+  for (arts::DbAccessWindowOp window : windows)
+    if (window && window->getBlock())
+      window.erase();
 
   Operation *terminator = body.getTerminator();
-  for (DirectCuDepPlan &dep : deps) {
+  for (DirectCuDepSpec &dep : deps) {
     builder.setInsertionPoint(terminator ? terminator : &body.back());
     arts::DbReleaseOp::create(builder, loc, dep.acquiredPtr);
   }
@@ -2102,11 +2944,11 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   if (failed(collectExternalScalarCaptures(source, scalarCaptures)))
     return failure();
   DenseSet<Value> allowedDbHandles;
-  for (DirectCuDepPlan &dep : deps) {
+  for (DirectCuDepSpec &dep : deps) {
     allowedDbHandles.insert(dep.acquiredPtr);
     allowedDbHandles.insert(dep.alloc.getPtr());
   }
-  for (CuResultPlan &result : resultPlans)
+  for (CuResultSpec &result : resultSpecs)
     allowedDbHandles.insert(result.writePtr);
   SetVector<Value> cloneableReadOnlyGlobalMemrefs;
   if (failed(collectCloneableReadOnlyGlobalMemrefs(
@@ -2114,10 +2956,10 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     return failure();
 
   SmallVector<Value, 4> taskDeps;
-  taskDeps.reserve(deps.size() + resultPlans.size());
-  for (DirectCuDepPlan &dep : deps)
+  taskDeps.reserve(deps.size() + resultSpecs.size());
+  for (DirectCuDepSpec &dep : deps)
     taskDeps.push_back(dep.acquiredPtr);
-  for (CuResultPlan &result : resultPlans)
+  for (CuResultSpec &result : resultSpecs)
     taskDeps.push_back(result.writePtr);
 
   SmallVector<Value, 8> taskParams(scalarCaptures.begin(),
@@ -2144,7 +2986,7 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     mapper.map(dep.alloc.getPtr(), depArg);
   }
   unsigned resultDepBase = deps.size();
-  for (auto [idx, result] : llvm::enumerate(resultPlans))
+  for (auto [idx, result] : llvm::enumerate(resultSpecs))
     mapper.map(result.writePtr, taskBlock.getArgument(resultDepBase + idx));
   for (auto [idx, param] : llvm::enumerate(taskParams))
     mapper.map(param, taskBlock.getArgument(paramOffset + idx));
@@ -2165,14 +3007,14 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     mapper.map(capture, cloned->getResult(0));
   }
   for (Operation &nested : body) {
-    if (isa<arts::DbAccessPlanOp, sde::SdeYieldOp>(&nested))
+    if (isa<arts::DbAccessWindowOp, sde::SdeYieldOp>(&nested))
       continue;
     bodyBuilder.insert(nested.clone(mapper));
   }
   if (failed(translateSdeAtomicsToArts(task.getBody())))
     return failure();
   bodyBuilder.setInsertionPointToEnd(&taskBlock);
-  for (auto [idx, result] : llvm::enumerate(resultPlans)) {
+  for (auto [idx, result] : llvm::enumerate(resultSpecs)) {
     Value zero = createZeroIndex(bodyBuilder, loc);
     Value payload =
         arts::DbRefOp::create(bodyBuilder, loc,
@@ -2188,7 +3030,7 @@ static LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   arts::YieldOp::create(bodyBuilder, loc);
 
   builder.setInsertionPointAfter(task);
-  for (auto [idx, result] : llvm::enumerate(resultPlans)) {
+  for (auto [idx, result] : llvm::enumerate(resultSpecs)) {
     Value zero = createZeroIndex(builder, loc);
     Value one = createOneIndex(builder, loc);
     auto readAcquire = arts::DbAcquireOp::create(
@@ -2362,7 +3204,7 @@ convertCoarseSuIterate(sde::SdeSuIterateOp source,
   if (!computeBlock)
     return source.emitOpError() << "has no computable body";
   for (Operation &nested : computeBlock->without_terminator()) {
-    if (isa<arts::DbAccessPlanOp>(&nested))
+    if (isa<arts::DbAccessWindowOp>(&nested))
       continue;
     bodyBuilder.insert(nested.clone(mapper));
   }
@@ -2387,16 +3229,22 @@ convertCoarseSuIterate(sde::SdeSuIterateOp source,
 
 static LogicalResult
 convertSuIterate(sde::SdeSuIterateOp source,
-                 DenseSet<Operation *> &consumedCuLevelAccessPlans) {
+                 DenseSet<Operation *> &consumedCuLevelAccessWindows,
+                 SmallVectorImpl<sde::SdeRedistOp> &consumedRedists) {
   if (source.getNumResults() != 0 || !source.getReductionAccumulators().empty())
     return source.emitOpError()
            << "direct SDE-to-ARTS lowering requires reduction/result facts to "
               "be authored as explicit SDE-to-ARTS reduction operations";
 
-  SmallVector<DirectDepPlan, 4> deps;
-  if (failed(collectSuDependencies(source, deps, consumedCuLevelAccessPlans)))
+  SmallVector<DirectDepSpec, 4> deps;
+  if (failed(collectSuDependencies(source, deps, consumedCuLevelAccessWindows,
+                                   consumedRedists)))
     return failure();
   if (deps.empty()) {
+    if (hasCommittedPartialReductionFacts(source))
+      return source.emitOpError()
+             << "commits partial-reduction facts without SDE access windows; "
+                "SDE must expose block dependencies before ARTS lowering";
     SmallVector<CoarseSuDependency, 4> coarseDeps;
     if (failed(collectCoarseSuDependencies(source, coarseDeps)))
       return failure();
@@ -2418,20 +3266,21 @@ convertSuIterate(sde::SdeSuIterateOp source,
       source.getBody().front().getNumArguments() < loopRank)
     return source.emitOpError() << "has inconsistent loop bounds";
 
-  FailureOr<ArtsOwnerSlotPlan> ownerPlan = resolveArtsOwnerSlotPlan(
+  FailureOr<ArtsOwnerSlotMapping> ownerRouteping = resolveArtsOwnerSlotMapping(
       *ownerDims, *blockShape, loopRank, source.getOperation());
-  if (failed(ownerPlan))
+  if (failed(ownerRouteping))
     return failure();
 
-  ArrayRef<int64_t> ownerSlotDims = ownerPlan->ownerDims;
+  ArrayRef<int64_t> ownerSlotDims = ownerRouteping->ownerDims;
   unsigned ownerDimCount = ownerSlotDims.size();
-  for (DirectDepPlan &dep : deps)
-    if (dep.ownerDimCount != ownerDimCount)
+  for (DirectDepSpec &dep : deps)
+    if (dep.ownerDimCount > ownerDimCount && !dep.reduceScatter)
       return source.emitOpError()
-             << "dependency owner-dim count does not match physicalOwnerDims";
+             << "dependency owner-dim count cannot be represented by "
+                "physicalOwnerDims";
 
-  SmallVector<int64_t, 4> ownerBlockSizes(ownerPlan->blockSizes.begin(),
-                                          ownerPlan->blockSizes.end());
+  SmallVector<int64_t, 4> ownerBlockSizes(ownerRouteping->blockSizes.begin(),
+                                          ownerRouteping->blockSizes.end());
 
   SmallVector<int64_t, 4> workerSpans(ownerBlockSizes.begin(),
                                       ownerBlockSizes.end());
@@ -2442,10 +3291,10 @@ convertSuIterate(sde::SdeSuIterateOp source,
              << "commits logicalWorkerSlice whose rank does not match the "
                 "iteration or owner rank";
     for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-      unsigned physicalDim = ownerPlan->loopDims[slot];
+      unsigned physicalDim = ownerRouteping->loopDims[slot];
       int64_t span = workerSlice->size() == loopRank
                          ? (*workerSlice)[physicalDim]
-                         : (*workerSlice)[ownerPlan->rawSlots[slot]];
+                         : (*workerSlice)[ownerRouteping->rawSlots[slot]];
       int64_t blockSize = ownerBlockSizes[slot];
       if (span <= 0 || span < blockSize || span % blockSize != 0)
         return source.emitOpError()
@@ -2457,7 +3306,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
   }
 
   bool splitToOwnerLocalGroups = false;
-  if (hasDistributedWriterStoragePlan(deps)) {
+  if (hasDistributedWriterStorageFacts(deps)) {
     std::optional<int64_t> totalNodes =
         arts::getRuntimeTotalNodes(source->getParentOfType<ModuleOp>());
     if (!totalNodes)
@@ -2470,21 +3319,6 @@ convertSuIterate(sde::SdeSuIterateOp source,
       return failure();
   }
 
-  SmallVector<int64_t, 4> effectiveLogicalWorkerSlice;
-  if (auto workerSlice = readI64ArrayAttr(source.getLogicalWorkerSliceAttr())) {
-    effectiveLogicalWorkerSlice.assign(workerSlice->begin(),
-                                       workerSlice->end());
-    if (effectiveLogicalWorkerSlice.size() == loopRank) {
-      for (unsigned slot = 0; slot < ownerDimCount; ++slot)
-        effectiveLogicalWorkerSlice[ownerPlan->loopDims[slot]] =
-            workerSpans[slot];
-    } else if (effectiveLogicalWorkerSlice.size() == ownerDimCount) {
-      for (unsigned slot = 0; slot < ownerDimCount; ++slot)
-        effectiveLogicalWorkerSlice[ownerPlan->rawSlots[slot]] =
-            workerSpans[slot];
-    }
-  }
-
   SetVector<Value> scalarCaptures;
   if (failed(collectExternalScalarCaptures(source, scalarCaptures)))
     return failure();
@@ -2495,8 +3329,10 @@ convertSuIterate(sde::SdeSuIterateOp source,
   if (!computeBlock)
     return source.emitOpError() << "has no computable body";
 
-  SmallVector<CompactHaloColumnPlan, 4> compactHaloColumnPlans;
-  DenseMap<unsigned, unsigned> compactColumnPlanByDepIndex;
+  SmallVector<CompactHaloColumnSpec, 4> compactHaloColumnSpecs;
+  DenseMap<unsigned, unsigned> compactColumnSpecByDepIndex;
+  SmallVector<CompactHaloNdSpec, 4> compactHaloNdSpecs;
+  DenseMap<unsigned, unsigned> compactNdSpecByDepIndex;
   for (auto [depIndex, dep] : llvm::enumerate(deps)) {
     if (!dep.haloShape)
       continue;
@@ -2504,16 +3340,26 @@ convertSuIterate(sde::SdeSuIterateOp source,
       return source.emitOpError()
              << "commits a halo dependency that is not read-only; ARTS cannot "
                 "realize a writable halo window";
-    FailureOr<CompactHaloColumnPlan> compactPlan =
-        realizeCompactHaloColumnPacks(source, dep, groupBlockCounts, builder,
-                                      loc);
-    if (failed(compactPlan))
+    if (dep.ownerDimCount == 2) {
+      FailureOr<CompactHaloColumnSpec> compactSpec =
+          realizeCompactHaloColumnPacks(source, dep, groupBlockCounts, builder,
+                                        loc);
+      if (failed(compactSpec))
+        return failure();
+      compactColumnSpecByDepIndex[depIndex] =
+          static_cast<unsigned>(compactHaloColumnSpecs.size());
+      compactHaloColumnSpecs.push_back(*compactSpec);
+      continue;
+    }
+    FailureOr<CompactHaloNdSpec> compactSpec =
+        realizeCompactHaloNdPacks(source, dep, groupBlockCounts, builder, loc);
+    if (failed(compactSpec))
       return failure();
-    compactColumnPlanByDepIndex[depIndex] =
-        static_cast<unsigned>(compactHaloColumnPlans.size());
-    compactHaloColumnPlans.push_back(*compactPlan);
+    compactNdSpecByDepIndex[depIndex] =
+        static_cast<unsigned>(compactHaloNdSpecs.size());
+    compactHaloNdSpecs.push_back(*compactSpec);
   }
-  if (!compactHaloColumnPlans.empty()) {
+  if (!compactHaloColumnSpecs.empty() || !compactHaloNdSpecs.empty()) {
     auto reason = arts::ArtsBarrierReasonAttr::get(
         source.getContext(), arts::ArtsBarrierReason::required_memory);
     arts::BarrierOp::create(builder, loc, reason);
@@ -2523,7 +3369,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
   SmallVector<Value, 4> dispatchBlockOffsets;
   scf::ForOp dispatchRoot;
   for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-    unsigned physicalDim = ownerPlan->loopDims[slot];
+    unsigned physicalDim = ownerRouteping->loopDims[slot];
     Value step = createConstantIndex(builder, loc, workerSpans[slot]);
     auto loop =
         scf::ForOp::create(builder, loc, source.getLowerBounds()[physicalDim],
@@ -2535,7 +3381,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
   }
 
   for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-    unsigned physicalDim = ownerPlan->loopDims[slot];
+    unsigned physicalDim = ownerRouteping->loopDims[slot];
     Value base = dispatchBases[slot];
     Value lower = source.getLowerBounds()[physicalDim];
     Value delta = arith::SubIOp::create(builder, loc, base, lower);
@@ -2544,48 +3390,113 @@ convertSuIterate(sde::SdeSuIterateOp source,
         arith::DivUIOp::create(builder, loc, delta, blockSize));
   }
 
+  unsigned ndHaloSideCount = 0;
+  for (const CompactHaloNdSpec &spec : compactHaloNdSpecs)
+    ndHaloSideCount += spec.sides.size();
   SmallVector<Value, 4> taskDeps;
-  taskDeps.reserve(deps.size() + compactHaloColumnPlans.size() * 4);
+  taskDeps.reserve(deps.size() + compactHaloColumnSpecs.size() * 4 +
+                   ndHaloSideCount);
+  SmallVector<Attribute, 4> partialReductionDepResultDimMaps;
+  const bool hasPartialReduction = hasCommittedPartialReductionFacts(source);
+  if (hasPartialReduction)
+    partialReductionDepResultDimMaps.reserve(taskDeps.capacity());
   SmallVector<SmallVector<Value, 4>> depBlockOffsets;
   SmallVector<bool> depRequiresDbRef;
+  SmallVector<unsigned, 4> taskDepOwnerDimCounts;
+  SmallVector<SmallVector<int64_t, 4>> taskDepGroupBlockCounts;
   SmallVector<unsigned, 4> primaryTaskDepForDep(deps.size(), 0);
-  SmallVector<Halo2DTaskPlan, 4> haloTaskPlans;
-  DenseMap<unsigned, unsigned> haloTaskPlanByDepIndex;
+  SmallVector<Halo2DTaskWork, 4> haloTaskWorks;
+  DenseMap<unsigned, unsigned> haloTaskWorkByDepIndex;
+  SmallVector<HaloNdTaskWork, 4> haloNdTaskWorks;
+  DenseMap<unsigned, unsigned> haloNdTaskWorkByDepIndex;
   depBlockOffsets.reserve(taskDeps.capacity());
   depRequiresDbRef.reserve(taskDeps.capacity());
+  taskDepOwnerDimCounts.reserve(taskDeps.capacity());
+  taskDepGroupBlockCounts.reserve(taskDeps.capacity());
 
   auto appendTaskDep = [&](Value depPtr, ArrayRef<Value> blockOffsets,
-                           bool requiresDbRef) -> unsigned {
+                           bool requiresDbRef, unsigned depOwnerDimCount,
+                           ArrayRef<int64_t> depGroupBlockCounts,
+                           ArrayAttr depResultDimMap) -> unsigned {
     unsigned taskDepIndex = static_cast<unsigned>(taskDeps.size());
     taskDeps.push_back(depPtr);
+    if (hasPartialReduction)
+      partialReductionDepResultDimMaps.push_back(
+          depResultDimMap ? depResultDimMap
+                          : Builder(source.getContext()).getArrayAttr({}));
     depBlockOffsets.push_back(
         SmallVector<Value, 4>(blockOffsets.begin(), blockOffsets.end()));
     depRequiresDbRef.push_back(requiresDbRef);
+    taskDepOwnerDimCounts.push_back(depOwnerDimCount);
+    taskDepGroupBlockCounts.push_back(SmallVector<int64_t, 4>(
+        depGroupBlockCounts.begin(), depGroupBlockCounts.end()));
     return taskDepIndex;
   };
 
   for (auto [depIndex, dep] : llvm::enumerate(deps)) {
-    SmallVector<Value> offsets(dispatchBlockOffsets.begin(),
-                               dispatchBlockOffsets.end());
+    SmallVector<Value> offsets;
     SmallVector<Value> sizes;
-    sizes.reserve(ownerDimCount);
-    for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-      Value remaining = arith::SubIOp::create(
-          builder, loc, dep.alloc.getSizes()[slot], dispatchBlockOffsets[slot]);
-      sizes.push_back(arith::MinUIOp::create(
-          builder, loc, remaining,
-          createConstantIndex(builder, loc, groupBlockCounts[slot])));
+    SmallVector<int64_t, 4> depGroupBlockCounts(dep.ownerDimCount, 1);
+    offsets.reserve(dep.ownerDimCount);
+    sizes.reserve(dep.ownerDimCount);
+
+    if (dep.reduceScatter) {
+      for (unsigned slot = 0; slot < dep.ownerDimCount; ++slot) {
+        offsets.push_back(createZeroIndex(builder, loc));
+        sizes.push_back(dep.alloc.getSizes()[slot]);
+      }
+    } else {
+      if (dep.ownerDimCount > dispatchBlockOffsets.size())
+        return source.emitOpError()
+               << "dependency owner rank exceeds direct dispatch owner rank";
+      for (unsigned slot = 0; slot < dep.ownerDimCount; ++slot) {
+        unsigned physicalDim = ownerRouteping->loopDims[slot];
+        FailureOr<int64_t> depBlockSize =
+            getAccessWindowElementBlockSize(source, dep, physicalDim);
+        if (failed(depBlockSize))
+          return failure();
+        Value lower = source.getLowerBounds()[physicalDim];
+        Value upper = source.getUpperBounds()[physicalDim];
+        Value base = dispatchBases[slot];
+        Value depBlockSizeValue =
+            createConstantIndex(builder, loc, *depBlockSize);
+        Value groupSpan = createConstantIndex(builder, loc, workerSpans[slot]);
+        Value groupEnd = arith::MinUIOp::create(
+            builder, loc, arith::AddIOp::create(builder, loc, base, groupSpan),
+            upper);
+        Value beginDelta = arith::SubIOp::create(builder, loc, base, lower);
+        Value endDelta = arith::SubIOp::create(builder, loc, groupEnd, lower);
+        Value rawOffset = *depBlockSize == ownerBlockSizes[slot]
+                              ? dispatchBlockOffsets[slot]
+                              : arith::DivUIOp::create(builder, loc, beginDelta,
+                                                       depBlockSizeValue);
+        Value rawEnd =
+            ceilDivPositiveIndex(builder, loc, endDelta, depBlockSizeValue);
+        Value offset = rawOffset;
+        if (dep.blockLo[slot] != 0) {
+          Value windowLo = createConstantIndex(builder, loc, dep.blockLo[slot]);
+          offset = arith::MaxUIOp::create(builder, loc, rawOffset, windowLo);
+        }
+        Value windowHi = createConstantIndex(builder, loc, dep.blockHi[slot]);
+        Value end = arith::MinUIOp::create(builder, loc, rawEnd, windowHi);
+        Value remaining = arith::SubIOp::create(
+            builder, loc, dep.alloc.getSizes()[slot], offset);
+        Value count = arith::SubIOp::create(builder, loc, end, offset);
+        sizes.push_back(arith::MinUIOp::create(builder, loc, remaining, count));
+        offsets.push_back(offset);
+        depGroupBlockCounts[slot] = std::max<int64_t>(
+            1, ceilDivPositiveI64(workerSpans[slot], *depBlockSize));
+      }
     }
+    bool requiresDbRef = dep.reduceScatter.has_value() ||
+                         llvm::any_of(depGroupBlockCounts,
+                                      [](int64_t count) { return count > 1; });
+    FailureOr<ArrayAttr> depResultDimMap =
+        buildPartialReductionDepResultDimMap(source, dep);
+    if (failed(depResultDimMap))
+      return failure();
 
     if (dep.haloShape) {
-      auto planIt = compactColumnPlanByDepIndex.find(depIndex);
-      if (planIt == compactColumnPlanByDepIndex.end())
-        return source.emitOpError()
-               << "lost compact halo payload state for committed halo "
-                  "dependency";
-      const CompactHaloColumnPlan &compactPlan =
-          compactHaloColumnPlans[planIt->second];
-
       auto centerAcquire = arts::DbAcquireOp::create(
           builder, loc, dep.mode, dep.alloc.getGuid(), dep.alloc.getPtr(),
           std::optional<arts::PartitionMode>(arts::PartitionMode::block),
@@ -2593,49 +3504,95 @@ convertSuIterate(sde::SdeSuIterateOp source,
           SmallVector<Value>{}, SmallVector<Value>{}, Value{},
           SmallVector<Value>{}, SmallVector<Value>{});
       centerAcquire.setPreserveAccessMode();
-      unsigned centerTaskDep = appendTaskDep(centerAcquire.getPtr(), offsets,
-                                             /*requiresDbRef=*/false);
+      unsigned centerTaskDep = appendTaskDep(
+          centerAcquire.getPtr(), offsets, requiresDbRef, dep.ownerDimCount,
+          depGroupBlockCounts, *depResultDimMap);
       primaryTaskDepForDep[depIndex] = centerTaskDep;
 
-      SmallVector<Value, 4> topOffsets;
-      auto topAcquire = create2DUnitRowHaloAcquire(
-          source, dep, dispatchBlockOffsets, compactPlan, /*topFace=*/true,
-          topOffsets, builder, loc);
-      unsigned topTaskDep = appendTaskDep(topAcquire.getPtr(), topOffsets,
-                                          /*requiresDbRef=*/false);
+      if (dep.ownerDimCount == 2) {
+        auto specIt = compactColumnSpecByDepIndex.find(depIndex);
+        if (specIt == compactColumnSpecByDepIndex.end())
+          return source.emitOpError()
+                 << "lost compact halo payload state for committed halo "
+                    "dependency";
+        const CompactHaloColumnSpec &compactSpec =
+            compactHaloColumnSpecs[specIt->second];
 
-      SmallVector<Value, 4> bottomOffsets;
-      auto bottomAcquire = create2DUnitRowHaloAcquire(
-          source, dep, dispatchBlockOffsets, compactPlan, /*topFace=*/false,
-          bottomOffsets, builder, loc);
-      unsigned bottomTaskDep = appendTaskDep(
-          bottomAcquire.getPtr(), bottomOffsets, /*requiresDbRef=*/false);
+        SmallVector<Value, 4> topOffsets;
+        auto topAcquire = create2DUnitRowHaloAcquire(
+            source, dep, dispatchBlockOffsets, compactSpec, /*topFace=*/true,
+            topOffsets, builder, loc);
+        unsigned topTaskDep = appendTaskDep(
+            topAcquire.getPtr(), topOffsets,
+            /*requiresDbRef=*/false, dep.ownerDimCount,
+            SmallVector<int64_t, 4>(dep.ownerDimCount, 1), ArrayAttr{});
 
-      SmallVector<Value, 4> leftOffsets;
-      auto leftAcquire = create2DUnitCompactColumnAcquire(
-          dep, dispatchBlockOffsets, compactPlan, /*leftFace=*/true,
-          leftOffsets, builder, loc);
-      unsigned leftTaskDep = appendTaskDep(leftAcquire.getPtr(), leftOffsets,
-                                           /*requiresDbRef=*/false);
+        SmallVector<Value, 4> bottomOffsets;
+        auto bottomAcquire = create2DUnitRowHaloAcquire(
+            source, dep, dispatchBlockOffsets, compactSpec, /*topFace=*/false,
+            bottomOffsets, builder, loc);
+        unsigned bottomTaskDep = appendTaskDep(
+            bottomAcquire.getPtr(), bottomOffsets, /*requiresDbRef=*/false,
+            dep.ownerDimCount, SmallVector<int64_t, 4>(dep.ownerDimCount, 1),
+            ArrayAttr{});
 
-      SmallVector<Value, 4> rightOffsets;
-      auto rightAcquire = create2DUnitCompactColumnAcquire(
-          dep, dispatchBlockOffsets, compactPlan, /*leftFace=*/false,
-          rightOffsets, builder, loc);
-      unsigned rightTaskDep = appendTaskDep(rightAcquire.getPtr(), rightOffsets,
-                                            /*requiresDbRef=*/false);
+        SmallVector<Value, 4> leftOffsets;
+        auto leftAcquire = create2DUnitCompactColumnAcquire(
+            dep, dispatchBlockOffsets, compactSpec, /*leftFace=*/true,
+            leftOffsets, builder, loc);
+        unsigned leftTaskDep = appendTaskDep(
+            leftAcquire.getPtr(), leftOffsets,
+            /*requiresDbRef=*/false, dep.ownerDimCount,
+            SmallVector<int64_t, 4>(dep.ownerDimCount, 1), ArrayAttr{});
 
-      Halo2DTaskPlan haloTaskPlan;
-      haloTaskPlan.centerTaskDepIndex = centerTaskDep;
-      haloTaskPlan.topTaskDepIndex = topTaskDep;
-      haloTaskPlan.bottomTaskDepIndex = bottomTaskDep;
-      haloTaskPlan.leftTaskDepIndex = leftTaskDep;
-      haloTaskPlan.rightTaskDepIndex = rightTaskDep;
-      haloTaskPlan.rowExtent = compactPlan.rowExtent;
-      haloTaskPlan.colExtent = compactPlan.colExtent;
-      haloTaskPlanByDepIndex[depIndex] =
-          static_cast<unsigned>(haloTaskPlans.size());
-      haloTaskPlans.push_back(haloTaskPlan);
+        SmallVector<Value, 4> rightOffsets;
+        auto rightAcquire = create2DUnitCompactColumnAcquire(
+            dep, dispatchBlockOffsets, compactSpec, /*leftFace=*/false,
+            rightOffsets, builder, loc);
+        unsigned rightTaskDep = appendTaskDep(
+            rightAcquire.getPtr(), rightOffsets,
+            /*requiresDbRef=*/false, dep.ownerDimCount,
+            SmallVector<int64_t, 4>(dep.ownerDimCount, 1), ArrayAttr{});
+
+        Halo2DTaskWork haloTaskWork;
+        haloTaskWork.centerTaskDepIndex = centerTaskDep;
+        haloTaskWork.topTaskDepIndex = topTaskDep;
+        haloTaskWork.bottomTaskDepIndex = bottomTaskDep;
+        haloTaskWork.leftTaskDepIndex = leftTaskDep;
+        haloTaskWork.rightTaskDepIndex = rightTaskDep;
+        haloTaskWork.rowExtent = compactSpec.rowExtent;
+        haloTaskWork.colExtent = compactSpec.colExtent;
+        haloTaskWorkByDepIndex[depIndex] =
+            static_cast<unsigned>(haloTaskWorks.size());
+        haloTaskWorks.push_back(haloTaskWork);
+        continue;
+      }
+
+      auto specIt = compactNdSpecByDepIndex.find(depIndex);
+      if (specIt == compactNdSpecByDepIndex.end())
+        return source.emitOpError()
+               << "lost compact N-D halo payload state for committed halo "
+                  "dependency";
+      const CompactHaloNdSpec &compactSpec = compactHaloNdSpecs[specIt->second];
+      HaloNdTaskWork haloTaskWork;
+      haloTaskWork.centerTaskDepIndex = centerTaskDep;
+      haloTaskWork.elementExtents.assign(compactSpec.elementExtents.begin(),
+                                         compactSpec.elementExtents.end());
+      SmallVector<int64_t, 4> singleBlockCounts(dep.ownerDimCount, 1);
+      for (const CompactHaloNdSideSpec &side : compactSpec.sides) {
+        SmallVector<Value, 4> sideOffsets;
+        auto sideAcquire = createNdCompactHaloAcquire(
+            dep, dispatchBlockOffsets, side, sideOffsets, builder, loc);
+        unsigned sideTaskDep =
+            appendTaskDep(sideAcquire.getPtr(), sideOffsets,
+                          /*requiresDbRef=*/false, dep.ownerDimCount,
+                          singleBlockCounts, ArrayAttr{});
+        haloTaskWork.sideSourceOffsets.push_back(side.sourceOffsets);
+        haloTaskWork.sideTaskDepIndices.push_back(sideTaskDep);
+      }
+      haloNdTaskWorkByDepIndex[depIndex] =
+          static_cast<unsigned>(haloNdTaskWorks.size());
+      haloNdTaskWorks.push_back(std::move(haloTaskWork));
       continue;
     }
 
@@ -2646,8 +3603,11 @@ convertSuIterate(sde::SdeSuIterateOp source,
         SmallVector<Value>{}, SmallVector<Value>{}, Value{},
         SmallVector<Value>{}, SmallVector<Value>{});
     acquire.setPreserveAccessMode();
+    if (dep.reduceScatter)
+      acquire.setReplicatedReadAttr(UnitAttr::get(source.getContext()));
     primaryTaskDepForDep[depIndex] =
-        appendTaskDep(acquire.getPtr(), offsets, /*requiresDbRef=*/false);
+        appendTaskDep(acquire.getPtr(), offsets, requiresDbRef,
+                      dep.ownerDimCount, depGroupBlockCounts, *depResultDimMap);
   }
 
   SmallVector<Value, 8> taskParams;
@@ -2677,7 +3637,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
 
   arts::ArtsLaunchPolicy launch = arts::resolveArtsLaunchPolicy(
       source->getParentOfType<ModuleOp>(), dispatchRoot,
-      hasDistributedLaunchStoragePlan(deps), builder, loc);
+      hasDistributedLaunchStorageFacts(deps), builder, loc);
   Value route =
       launch.route ? launch.route : arts::createCurrentNodeRoute(builder, loc);
   auto task =
@@ -2685,10 +3645,14 @@ convertSuIterate(sde::SdeSuIterateOp source,
                           route, taskDeps, taskParams);
   if (failed(attachCommittedSdeFacts(source, task)))
     return failure();
-  if (!effectiveLogicalWorkerSlice.empty())
-    arts::setPlanLogicalWorkerSliceAttr(
-        task.getOperation(),
-        buildI64ArrayAttr(source.getContext(), effectiveLogicalWorkerSlice));
+  if (hasPartialReduction) {
+    if (partialReductionDepResultDimMaps.size() != taskDeps.size())
+      return source.emitOpError()
+             << "lost partial-reduction dependency/result mapping while "
+                "building ARTS task dependencies";
+    task.setPartialReductionDepResultDimMapsAttr(
+        builder.getArrayAttr(partialReductionDepResultDimMaps));
+  }
   if (splitToOwnerLocalGroups)
     task.setOwnerLocalWriterSplitAttr(UnitAttr::get(source.getContext()));
 
@@ -2725,7 +3689,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
     if (!alloc)
       return;
     auto it = llvm::find_if(
-        deps, [&](const DirectDepPlan &dep) { return dep.alloc == alloc; });
+        deps, [&](const DirectDepSpec &dep) { return dep.alloc == alloc; });
     if (it == deps.end())
       return;
     unsigned depIdx = static_cast<unsigned>(std::distance(deps.begin(), it));
@@ -2746,40 +3710,41 @@ convertSuIterate(sde::SdeSuIterateOp source,
   taskDepBlockOffsetArgs.reserve(depBlockOffsets.size());
   for (unsigned depIdx = 0; depIdx < depBlockOffsets.size(); ++depIdx) {
     SmallVector<Value, 4> offsets;
-    offsets.reserve(ownerDimCount);
-    for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+    unsigned depOwnerDimCount = taskDepOwnerDimCounts[depIdx];
+    offsets.reserve(depOwnerDimCount);
+    for (unsigned slot = 0; slot < depOwnerDimCount; ++slot) {
       unsigned paramIndex = depBlockOffsetParamIndices[depIdx][slot];
       offsets.push_back(taskBlock.getArgument(paramOffset + paramIndex));
     }
     taskDepBlockOffsetArgs.push_back(std::move(offsets));
   }
 
-  WalkResult accessPlanMapResult =
-      source.getBody().walk([&](arts::DbAccessPlanOp plan) {
+  WalkResult accessWindowMapResult =
+      source.getBody().walk([&](arts::DbAccessWindowOp window) {
         auto alloc = dyn_cast_or_null<arts::DbAllocOp>(
-            arts::DbUtils::getUnderlyingDbAlloc(plan.getMu()));
+            arts::DbUtils::getUnderlyingDbAlloc(window.getMu()));
         if (!alloc) {
-          plan.emitOpError() << "lost backing DB allocation during direct "
-                                "SDE-to-ARTS lowering";
+          window.emitOpError() << "lost backing DB allocation during direct "
+                                  "SDE-to-ARTS lowering";
           return WalkResult::interrupt();
         }
         auto it = llvm::find_if(
-            deps, [&](const DirectDepPlan &dep) { return dep.alloc == alloc; });
+            deps, [&](const DirectDepSpec &dep) { return dep.alloc == alloc; });
         if (it == deps.end()) {
-          plan.emitOpError() << "has no matching direct ARTS dependency";
+          window.emitOpError() << "has no matching direct ARTS dependency";
           return WalkResult::interrupt();
         }
         unsigned depIdx =
             static_cast<unsigned>(std::distance(deps.begin(), it));
-        mapper.map(plan.getMu(), payloads[primaryTaskDepForDep[depIdx]]);
+        mapper.map(window.getMu(), payloads[primaryTaskDepForDep[depIdx]]);
         return WalkResult::advance();
       });
-  if (accessPlanMapResult.wasInterrupted())
+  if (accessWindowMapResult.wasInterrupted())
     return failure();
 
   DenseMap<Operation *, HaloLoadRewrite> originalHaloLoadRewrites;
-  if (!haloTaskPlans.empty()) {
-    if (ownerDimCount != 2 || ownerPlan->loopDims.size() != 2)
+  if (!haloTaskWorks.empty()) {
+    if (ownerDimCount != 2 || ownerRouteping->loopDims.size() != 2)
       return source.emitOpError() << "commits a halo dependency whose owner "
                                      "rank is not supported by "
                                      "ARTS compact 2D unit-halo load rewriting";
@@ -2788,15 +3753,15 @@ convertSuIterate(sde::SdeSuIterateOp source,
           arts::DbAllocOp alloc = resolveBoundaryDbAlloc(load.getMemref());
           if (!alloc)
             return WalkResult::advance();
-          auto depIt = llvm::find_if(deps, [&](const DirectDepPlan &dep) {
+          auto depIt = llvm::find_if(deps, [&](const DirectDepSpec &dep) {
             return dep.alloc == alloc;
           });
           if (depIt == deps.end())
             return WalkResult::advance();
           unsigned depIdx =
               static_cast<unsigned>(std::distance(deps.begin(), depIt));
-          auto haloIt = haloTaskPlanByDepIndex.find(depIdx);
-          if (haloIt == haloTaskPlanByDepIndex.end())
+          auto haloIt = haloTaskWorkByDepIndex.find(depIdx);
+          if (haloIt == haloTaskWorkByDepIndex.end())
             return WalkResult::advance();
 
           SmallVector<Value, 4> loopIvs;
@@ -2814,7 +3779,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
           Value colIv = loopIvs[0];
           FailureOr<std::optional<HaloLoadRewrite>> rewrite =
               classify2DUnitHaloLoad(load, haloIt->second,
-                                     haloTaskPlans[haloIt->second], rowIv,
+                                     haloTaskWorks[haloIt->second], rowIv,
                                      colIv);
           if (failed(rewrite))
             return WalkResult::interrupt();
@@ -2826,14 +3791,62 @@ convertSuIterate(sde::SdeSuIterateOp source,
       return failure();
   }
 
+  DenseMap<Operation *, HaloNdLoadRewrite> originalHaloNdLoadRewrites;
+  if (!haloNdTaskWorks.empty()) {
+    WalkResult classifyResult =
+        computeBlock->walk([&](memref::LoadOp load) {
+          arts::DbAllocOp alloc = resolveBoundaryDbAlloc(load.getMemref());
+          if (!alloc)
+            return WalkResult::advance();
+          auto depIt = llvm::find_if(deps, [&](const DirectDepSpec &dep) {
+            return dep.alloc == alloc;
+          });
+          if (depIt == deps.end())
+            return WalkResult::advance();
+          unsigned depIdx =
+              static_cast<unsigned>(std::distance(deps.begin(), depIt));
+          auto haloIt = haloNdTaskWorkByDepIndex.find(depIdx);
+          if (haloIt == haloNdTaskWorkByDepIndex.end())
+            return WalkResult::advance();
+
+          const HaloNdTaskWork &work = haloNdTaskWorks[haloIt->second];
+          unsigned rank = work.elementExtents.size();
+          SmallVector<Value, 4> loopIvs;
+          for (Operation *parent = load->getParentOp(); parent;
+               parent = parent->getParentOp())
+            if (auto loop = dyn_cast<scf::ForOp>(parent))
+              loopIvs.push_back(loop.getInductionVar());
+          if (loopIvs.size() < rank) {
+            load.emitOpError()
+                << "is not nested in the N-D compute loops required for ARTS "
+                   "compact unit-halo load rewriting";
+            return WalkResult::interrupt();
+          }
+
+          SmallVector<Value, 4> ownerLoopIvs;
+          ownerLoopIvs.reserve(rank);
+          for (unsigned slot = 0; slot < rank; ++slot)
+            ownerLoopIvs.push_back(loopIvs[rank - 1 - slot]);
+          FailureOr<std::optional<HaloNdLoadRewrite>> rewrite =
+              classifyNdUnitHaloLoad(load, haloIt->second, work, ownerLoopIvs);
+          if (failed(rewrite))
+            return WalkResult::interrupt();
+          if (rewrite->has_value())
+            originalHaloNdLoadRewrites[load.getOperation()] = **rewrite;
+          return WalkResult::advance();
+        });
+    if (classifyResult.wasInterrupted())
+      return failure();
+  }
+
   for (unsigned dim = 0; dim < loopRank; ++dim) {
-    auto ownerIt = llvm::find(ownerPlan->loopDims, dim);
+    auto ownerIt = llvm::find(ownerRouteping->loopDims, dim);
     Value lower;
     Value upper = remapOrSelf(mapper, source.getUpperBounds()[dim]);
     Value step = remapOrSelf(mapper, source.getSteps()[dim]);
-    if (ownerIt != ownerPlan->loopDims.end()) {
+    if (ownerIt != ownerRouteping->loopDims.end()) {
       unsigned slot = static_cast<unsigned>(
-          std::distance(ownerPlan->loopDims.begin(), ownerIt));
+          std::distance(ownerRouteping->loopDims.begin(), ownerIt));
       lower = mapper.lookup(dispatchBases[slot]);
       Value localEnd = arith::AddIOp::create(
           bodyBuilder, loc, lower,
@@ -2849,8 +3862,9 @@ convertSuIterate(sde::SdeSuIterateOp source,
   }
 
   DenseMap<Operation *, HaloLoadRewrite> clonedHaloLoadRewrites;
+  DenseMap<Operation *, HaloNdLoadRewrite> clonedHaloNdLoadRewrites;
   for (Operation &nested : computeBlock->without_terminator()) {
-    if (isa<arts::DbAccessPlanOp>(&nested))
+    if (isa<arts::DbAccessWindowOp>(&nested))
       continue;
     Operation *cloned = nested.clone(mapper);
     bodyBuilder.insert(cloned);
@@ -2859,17 +3873,26 @@ convertSuIterate(sde::SdeSuIterateOp source,
                                               originalHaloLoadRewrites,
                                               clonedHaloLoadRewrites)))
         return failure();
+    if (!originalHaloNdLoadRewrites.empty())
+      if (failed(recordClonedHaloLoadRewrites(&nested, cloned,
+                                              originalHaloNdLoadRewrites,
+                                              clonedHaloNdLoadRewrites)))
+        return failure();
   }
 
   if (failed(rewriteCloned2DUnitHaloLoads(task, clonedHaloLoadRewrites,
-                                          haloTaskPlans, payloads,
+                                          haloTaskWorks, payloads,
+                                          taskDepBlockOffsetArgs)))
+    return failure();
+  if (failed(rewriteClonedNdUnitHaloLoads(task, clonedHaloNdLoadRewrites,
+                                          haloNdTaskWorks, payloads,
                                           taskDepBlockOffsetArgs)))
     return failure();
   if (failed(translateSdeAtomicsToArts(task.getBody())))
     return failure();
   if (failed(rewriteOwnerIndicesToLocal(task, payloads, taskDepBlockOffsetArgs,
-                                        depRequiresDbRef, groupBlockCounts,
-                                        ownerDimCount)))
+                                        depRequiresDbRef, taskDepOwnerDimCounts,
+                                        taskDepGroupBlockCounts)))
     return failure();
   bodyBuilder.setInsertionPointToEnd(&taskBlock);
   arts::YieldOp::create(bodyBuilder, loc);
@@ -2887,7 +3910,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
   return success();
 }
 
-struct TaskDepPlan {
+struct TaskDepSpec {
   sde::SdeMuDepOp dep;
   arts::DbAllocOp alloc;
   ArtsMode mode = ArtsMode::uninitialized;
@@ -2897,7 +3920,7 @@ struct TaskDepPlan {
 
 static LogicalResult
 collectTaskDependencies(sde::SdeCuTaskOp source,
-                        SmallVectorImpl<TaskDepPlan> &deps) {
+                        SmallVectorImpl<TaskDepSpec> &deps) {
   WalkResult result =
       source.getBody().walk([&](sde::SdeMuDepOp dep) {
         if (!dep.getDep().use_empty()) {
@@ -2928,7 +3951,7 @@ collectTaskDependencies(sde::SdeCuTaskOp source,
 }
 
 static LogicalResult convertCuTask(sde::SdeCuTaskOp source) {
-  SmallVector<TaskDepPlan, 4> deps;
+  SmallVector<TaskDepSpec, 4> deps;
   if (failed(collectTaskDependencies(source, deps)))
     return failure();
 
@@ -2940,7 +3963,7 @@ static LogicalResult convertCuTask(sde::SdeCuTaskOp source) {
   OpBuilder builder(source);
   SmallVector<Value, 4> taskDeps;
   taskDeps.reserve(deps.size());
-  for (TaskDepPlan &dep : deps) {
+  for (TaskDepSpec &dep : deps) {
     SmallVector<Value> offsets;
     SmallVector<Value> sizes;
     buildWholeDbAcquireWindow(builder, loc, dep.alloc, offsets, sizes);
@@ -2969,7 +3992,7 @@ static LogicalResult convertCuTask(sde::SdeCuTaskOp source) {
       return;
     taskParams.push_back(value);
   };
-  for (TaskDepPlan &dep : deps) {
+  for (TaskDepSpec &dep : deps) {
     for (Value size : dep.alloc.getSizes())
       appendParamIfMissing(size);
     for (Value elementSize : dep.alloc.getElementSizes())
@@ -3150,9 +4173,10 @@ struct SdeStorageToArtsDbPass
     : public arts::impl::SdeStorageToArtsDbBase<SdeStorageToArtsDbPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    DenseMap<Value, HaloRedistPlan> haloPlansByMu;
+    DenseMap<Value, HaloRedistFacts> haloFactsByMu;
     SmallVector<sde::SdeRedistOp> redists;
-    if (failed(validateAndCollectHaloRedists(module, haloPlansByMu, redists))) {
+    if (failed(
+            validateAndCollectStorageRedists(module, haloFactsByMu, redists))) {
       signalPassFailure();
       return;
     }
@@ -3184,8 +4208,8 @@ struct SdeStorageToArtsDbPass
               ? ArrayRef<sde::SdeMuAccessWindowOp>()
               : ArrayRef<sde::SdeMuAccessWindowOp>(it->second);
       ArrayAttr haloShape;
-      auto haloIt = haloPlansByMu.find(op.getMemref());
-      if (haloIt != haloPlansByMu.end())
+      auto haloIt = haloFactsByMu.find(op.getMemref());
+      if (haloIt != haloFactsByMu.end())
         haloShape = haloIt->second.haloShape;
       if (failed(lowerMuAlloc(op, windows, haloShape))) {
         signalPassFailure();
@@ -3232,7 +4256,7 @@ struct SdeAccessesToArtsDepsPass
         standaloneRegions.push_back(op);
     });
     for (sde::SdeCuRegionOp op : standaloneRegions)
-      if (op && op->getBlock() && !containsDbAccessPlan(op))
+      if (op && op->getBlock() && !containsDbAccessWindow(op))
         if (failed(inlineSdeCuRegion(op))) {
           signalPassFailure();
           return;
@@ -3261,15 +4285,20 @@ struct SdeAccessesToArtsDepsPass
 
     SmallVector<sde::SdeSuIterateOp> iterates;
     module.walk([&](sde::SdeSuIterateOp op) { iterates.push_back(op); });
-    DenseSet<Operation *> consumedCuLevelAccessPlans;
+    DenseSet<Operation *> consumedCuLevelAccessWindows;
+    SmallVector<sde::SdeRedistOp> consumedRedists;
     for (sde::SdeSuIterateOp op : iterates)
-      if (failed(convertSuIterate(op, consumedCuLevelAccessPlans))) {
+      if (failed(convertSuIterate(op, consumedCuLevelAccessWindows,
+                                  consumedRedists))) {
         signalPassFailure();
         return;
       }
-    for (Operation *op : consumedCuLevelAccessPlans)
+    for (Operation *op : consumedCuLevelAccessWindows)
       if (op && op->getBlock())
         op->erase();
+    for (sde::SdeRedistOp redist : consumedRedists)
+      if (redist && redist->getBlock())
+        redist.erase();
 
     SmallVector<sde::SdeCuTaskOp> tasks;
     module.walk([&](sde::SdeCuTaskOp op) { tasks.push_back(op); });
@@ -3279,14 +4308,14 @@ struct SdeAccessesToArtsDepsPass
         return;
       }
 
-    bool foundAccessPlan = false;
-    module.walk([&](arts::DbAccessPlanOp op) {
+    bool foundAccessWindow = false;
+    module.walk([&](arts::DbAccessWindowOp op) {
       op.emitOpError()
           << "was not consumed during SDE access realization into ARTS "
              "dependencies";
-      foundAccessPlan = true;
+      foundAccessWindow = true;
     });
-    if (foundAccessPlan) {
+    if (foundAccessWindow) {
       signalPassFailure();
       return;
     }
@@ -3354,13 +4383,13 @@ struct FinalizeSdeToArtsPass
 
     eraseDbBackedMemrefDeallocs(module);
 
-    bool foundAccessPlan = false;
-    module.walk([&](arts::DbAccessPlanOp op) {
+    bool foundAccessWindow = false;
+    module.walk([&](arts::DbAccessWindowOp op) {
       op.emitOpError()
           << "remains after SDE access realization into ARTS dependencies";
-      foundAccessPlan = true;
+      foundAccessWindow = true;
     });
-    if (foundAccessPlan) {
+    if (foundAccessWindow) {
       signalPassFailure();
       return;
     }

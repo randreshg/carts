@@ -26,12 +26,11 @@ LogicalResult createCoarseDbBackedMemref(OpBuilder &builder, Location loc,
                                          ValueRange dynamicSizes,
                                          Value &memref);
 
-LogicalResult createPlannedDbBackedMemref(OpBuilder &builder, Location loc,
-                                          MemRefType memrefType,
-                                          ValueRange dynamicSizes,
-                                          ArrayAttr ownerDims,
-                                          ArrayAttr blockShape,
-                                          ArrayAttr haloShape, Value &memref);
+LogicalResult createBlockDbBackedMemref(OpBuilder &builder, Location loc,
+                                        MemRefType memrefType,
+                                        ValueRange dynamicSizes,
+                                        ArrayAttr ownerDims,
+                                        ArrayAttr blockShape, Value &memref);
 
 } // namespace carts::arts
 } // namespace mlir

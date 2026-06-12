@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: SdeLoopPatternFacts.cpp
 ///
-/// Identify memref-backed SDE patterns and stamp approved SDE facts.
+/// Identify memref-backed SDE patterns and commit approved SDE facts.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
@@ -25,7 +25,7 @@ namespace mlir::carts::sde {
 } // namespace mlir::carts::sde
 
 #include "carts/utils/Debug.h"
-ARTS_DEBUG_SETUP(semantic_contracts);
+ARTS_DEBUG_SETUP(sde_loop_pattern_facts);
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -147,8 +147,8 @@ static bool attrMatchesValues(ArrayAttr attr, ArrayRef<int64_t> values) {
 }
 
 static bool
-explicitStencilContractMatches(sde::SdeSuIterateOp op,
-                               const sde::SuNeighborhoodAccessInfo &info) {
+explicitStencilFactsMatch(sde::SdeSuIterateOp op,
+                          const sde::SuNeighborhoodAccessInfo &info) {
   if (!attrMatchesValues(op.getAccessMinOffsetsAttr(), info.minOffsets) ||
       !attrMatchesValues(op.getAccessMaxOffsetsAttr(), info.maxOffsets) ||
       !attrMatchesValues(op.getOwnerDimsAttr(), info.ownerDims) ||
@@ -415,7 +415,7 @@ static bool isSafeOutOfPlaceStencilPromotion(
     sde::SdeSuIterateOp op, const sde::SuLoopAccessSummary &summary,
     const sde::SuNeighborhoodAccessInfo &neighborhood,
     ArrayRef<scf::ForOp> innerForChain,
-    bool requireExistingContractMatch = false) {
+    bool requireExistingStencilFactsMatch = false) {
   auto reject = [&](StringRef reason) {
     ARTS_DEBUG("skipped out-of-place stencil promotion: " << reason);
     return false;
@@ -446,11 +446,11 @@ static bool isSafeOutOfPlaceStencilPromotion(
       neighborhood.spatialDims.size() < promotedRank ||
       !hasNonZeroHaloOnAllOwnerDims(neighborhood))
     return reject("neighborhood does not cover all promoted owner dims");
-  if (requireExistingContractMatch &&
-      !explicitStencilContractMatches(op, neighborhood))
-    return reject("explicit stencil contract does not match recovered access");
-  if (!sde::findCompatibleSuOutputLayoutPlan(summary))
-    return reject("no compatible output layout plan");
+  if (requireExistingStencilFactsMatch &&
+      !explicitStencilFactsMatch(op, neighborhood))
+    return reject("explicit stencil facts do not match recovered access");
+  if (!sde::findCompatibleSuOutputLayoutFacts(summary))
+    return reject("no compatible output layout facts");
   if (!hasSingleExternalWriteRoot(op, summary))
     return reject("writes do not have one external root");
 
@@ -517,7 +517,7 @@ static bool promotedLoopBoundsAreRectangular(sde::SdeSuIterateOp op,
   return true;
 }
 
-static void removeStaleShapePlanAttrs(sde::SdeSuIterateOp op) {
+static void removeStaleShapeAttrs(sde::SdeSuIterateOp op) {
   op.removePhysicalOwnerDimsAttr();
   op.removePhysicalBlockShapeAttr();
   op.removeLogicalWorkerSliceAttr();
@@ -747,7 +747,7 @@ promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor,
   // (outer, inner) so the promoted owner-dim ORDER matches a sibling stencil
   // that already iterates (outer, inner): without it the elementwise copy's
   // per-dep owner dims lower to the reversed array order ([1,0] vs the
-  // stencil's [0,1]) and hasSameHostBridgePlan rejects the host-bridge hoist.
+  // stencil's [0,1]) and the host-bridge compatibility check rejects the hoist.
   // Used for the stencil-coupled double-buffer copy (SDE-5 reconciliation).
   SmallVector<Value, 2> lowerBounds =
       outerFirst ? SmallVector<Value, 2>{op.getLowerBounds().front(),
@@ -782,7 +782,7 @@ promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor,
       op.getInPlaceSharedStateAttr(), op.getArrayLayoutAttr(),
       op.getLayoutsDisagreeAttr(), op.getCommVolumeBytesAttr());
   newOp->setAttrs(sde::getRewrittenAttrs(op));
-  removeStaleShapePlanAttrs(newOp);
+  removeStaleShapeAttrs(newOp);
 
   Block &newBody = sde::ensureBlock(newOp.getBody());
   while (newBody.getNumArguments() < 2)
@@ -1056,7 +1056,7 @@ promoteNestedParallelOwnerLoops(sde::SdeSuIterateOp op,
       op.getInPlaceSharedStateAttr(), op.getArrayLayoutAttr(),
       op.getLayoutsDisagreeAttr(), op.getCommVolumeBytesAttr());
   newOp->setAttrs(sde::getRewrittenAttrs(op));
-  removeStaleShapePlanAttrs(newOp);
+  removeStaleShapeAttrs(newOp);
 
   Block &newBody = sde::ensureBlock(newOp.getBody());
   while (newBody.getNumArguments() < lowerBounds.size())
@@ -1106,13 +1106,13 @@ promoteNestedParallelOwnerLoops(sde::SdeSuIterateOp op,
 static sde::SdeSuIterateOp tryPromoteOutOfPlaceStencilOwnerLoop(
     sde::SdeSuIterateOp op, const sde::SuLoopAccessSummary &summary,
     const sde::SuNeighborhoodAccessInfo &neighborhood,
-    bool requireExistingContractMatch = false) {
+    bool requireExistingStencilFactsMatch = false) {
   Block *computeBlock = sde::getSuIterateComputeBlock(op);
   SmallVector<scf::ForOp, 4> innerForChain =
       findPromotableInnerForChain(op, computeBlock);
   if (!isSafeOutOfPlaceStencilPromotion(op, summary, neighborhood,
                                         innerForChain,
-                                        requireExistingContractMatch))
+                                        requireExistingStencilFactsMatch))
     return op;
   return promoteNestedParallelOwnerLoops(op, innerForChain);
 }
@@ -1131,11 +1131,6 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
       op.getSteps().size() != loopRank ||
       summary.iterTypes.size() <= loopRank ||
       summary.nest.ivs.size() <= loopRank)
-    return op;
-  // Matmul has specialized physical fact realization. Generic prefix
-  // promotion would split output columns across owners without a matching
-  // panel-reuse transform.
-  if (summary.classification == sde::SdeStructuredClassification::matmul)
     return op;
   if (op.getBody().front().getNumArguments() < loopRank)
     return op;
@@ -1170,7 +1165,7 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
 
   if (!promotedLoopBoundsAreRectangular(op, innerForPrefix))
     return op;
-  if (!sde::findCompatibleSuOutputLayoutPlan(summary))
+  if (!sde::findCompatibleSuOutputLayoutFacts(summary))
     return op;
 
   auto effects = collectStructuredDataMemoryEffects(op);
@@ -1221,17 +1216,17 @@ derivePattern(const sde::SuLoopAccessSummary &summary,
   return sde::SdePattern::stencil_tiling_nd;
 }
 
-static void clearPartialReductionIntent(sde::SdeSuIterateOp op) {
+static void clearPartialReductionFacts(sde::SdeSuIterateOp op) {
   op->removeAttr(op.getPartialReductionAttrName());
   op->removeAttr(op.getPartialReductionDimsAttrName());
   op->removeAttr(op.getPartialReductionOwnerDimsAttrName());
 }
 
 static void
-stampPartialReductionIntent(sde::SdeSuIterateOp op,
+commitPartialReductionFacts(sde::SdeSuIterateOp op,
                             const sde::SuLoopAccessSummary &summary,
                             sde::SdeStructuredClassification classification) {
-  clearPartialReductionIntent(op);
+  clearPartialReductionFacts(op);
 
   if (classification != sde::SdeStructuredClassification::elementwise_pipeline)
     return;
@@ -1246,14 +1241,14 @@ stampPartialReductionIntent(sde::SdeSuIterateOp op,
   if (reductionDims.empty())
     return;
 
-  std::optional<sde::SuOutputLayoutPlan> outputPlan =
-      sde::findCompatibleSuOutputLayoutPlan(summary);
-  if (!outputPlan)
+  std::optional<sde::SuOutputLayoutFacts> outputLayout =
+      sde::findCompatibleSuOutputLayoutFacts(summary);
+  if (!outputLayout)
     return;
 
   SmallVector<int64_t, 4> ownerDims;
   for (auto [physicalDim, loopDim] :
-       llvm::enumerate(outputPlan->physicalDimToLoopDim)) {
+       llvm::enumerate(outputLayout->physicalDimToLoopDim)) {
     if (loopDim < 0 || static_cast<size_t>(loopDim) >= summary.iterTypes.size())
       continue;
     if (summary.iterTypes[loopDim] == utils::IteratorType::parallel)
@@ -1368,7 +1363,7 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
   return ambiguous ? Value() : root;
 }
 
-/// Contraction tiling as SDE intent.
+/// Contraction tiling as SDE facts.
 ///
 /// SDE decides — pattern-free, from iterator types and affine access shapes —
 /// to tile the reduction axis of a matmul-class scheduling unit when its
@@ -1376,10 +1371,11 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
 /// Detection runs in SdeLoopPatternFacts, while the loop nest is still the
 /// canonical (2-parallel, 1-reduction, 3-dim) matmul (later loop
 /// tiling/interchange splits the parallel axes and breaks canonical recovery).
-/// It stamps the inert declarative facts `partialReductionDims` /
+/// It commits the typed SDE facts `partialReductionDims` /
 /// `partialReductionOwnerDims`: the reduction axis and the parallel owner
-/// axes. DistributionPlanning later keeps or drops those facts once a physical
-/// owner-block plan exists. The combine kind is sum, left implicit: it is
+/// axes. Downstream SDE transforms must either consume those facts into
+/// physical owner-block structure before ARTS conversion or clear/reject them.
+/// The combine kind is sum, left implicit: it is
 /// unambiguous from the matmul pattern + the named reduction axis, and the
 /// su_iterate `reductionKinds` carrier is tied to `reductionAccumulators`
 /// (wrong vehicle for a matmul contraction without an accumulator carrier).
@@ -1393,7 +1389,7 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
 /// only host inputs, intermediates consumed on a parallel owner axis, self-Gram
 /// shapes without distinct lhs/rhs roots, and stencils do not satisfy it.
 static void
-stampContractionTilingIntent(sde::SdeSuIterateOp op,
+commitContractionTilingFacts(sde::SdeSuIterateOp op,
                              sde::SdeStructuredClassification classification) {
   if (classification != sde::SdeStructuredClassification::matmul)
     return;
@@ -1445,7 +1441,7 @@ struct SdeLoopPatternFactsPass
 
       op->removeAttr(op.getInPlaceSafeAttrName());
       op->removeAttr(op.getInPlaceSharedStateAttrName());
-      clearPartialReductionIntent(op);
+      clearPartialReductionFacts(op);
 
       sde::SdeStructuredClassification classification = summary->classification;
       bool hasExplicitStencilFacts = false;
@@ -1455,8 +1451,8 @@ struct SdeLoopPatternFactsPass
               sde::SdeStructuredClassification::stencil &&
           op.getAccessMinOffsetsAttr() && op.getAccessMaxOffsetsAttr() &&
           op.getOwnerDimsAttr() && op.getWriteFootprintAttr()) {
-        // An explicit SDE stencil stamp carries semantic intent plus the
-        // neighborhood contract. Do not let a later scalar-shape refresh
+        // Explicit SDE stencil facts carry the neighborhood shape. Do not let
+        // a later scalar-shape refresh
         // rediscover a different family and lose the authored stencil meaning.
         classification = *existingClassification;
         hasExplicitStencilFacts = true;
@@ -1473,7 +1469,7 @@ struct SdeLoopPatternFactsPass
                  *existingClassification !=
                      sde::SdeStructuredClassification::reduction &&
                  op.getReductionAccumulators().empty()) {
-        // Loop strip-mining preserves the original contract even when the
+        // Loop strip-mining preserves the original classification even when the
         // tiled body looks reduction-shaped after block-local rewriting.
         classification = *existingClassification;
       }
@@ -1493,8 +1489,8 @@ struct SdeLoopPatternFactsPass
       op.setStructuredClassificationAttr(
           sde::SdeStructuredClassificationAttr::get(&getContext(),
                                                     classification));
-      stampPartialReductionIntent(op, *summary, classification);
-      stampContractionTilingIntent(op, classification);
+      commitPartialReductionFacts(op, *summary, classification);
+      commitContractionTilingFacts(op, classification);
 
       if (classification == sde::SdeStructuredClassification::elementwise) {
         sde::SdeSuIterateOp promoted =
@@ -1528,7 +1524,7 @@ struct SdeLoopPatternFactsPass
 
         sde::SdeSuIterateOp promoted = tryPromoteOutOfPlaceStencilOwnerLoop(
             op, *summary, *neighborhoodSummary,
-            /*requireExistingContractMatch=*/hasExplicitStencilFacts);
+            /*requireExistingStencilFactsMatch=*/hasExplicitStencilFacts);
         if (promoted != op) {
           op = promoted;
           summary = sde::analyzeSuLoopAccesses(op);
@@ -1574,7 +1570,7 @@ struct SdeLoopPatternFactsPass
             op.setInPlaceSharedStateAttr(UnitAttr::get(op.getContext()));
         }
 
-        ARTS_DEBUG("stamped generic SDE pattern facts on su_iterate");
+        ARTS_DEBUG("committed generic SDE pattern facts on su_iterate");
         return;
       }
 

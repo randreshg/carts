@@ -9,16 +9,16 @@
 ///   * if it is already rank-expanded (the block grid is in the memref type),
 ///     the maximum legal independent MU blocks are already exposed — skip;
 ///   * else if it carries a committed, fully-static elementwise/stencil BLOCK
-///     plan over any number of owner dims that proves a real grid, realize that
-///     finest grain as structure (the same gate + rewriter rank expansion uses,
-///     consuming the committed plan verbatim);
+///     layout over any number of owner dims that proves a real grid, realize
+///     that finest grain as structure (the same gate + rewriter rank expansion
+///     uses, consuming the committed facts verbatim);
 ///   * else leave it flat. Whether a flat MU is an avoidable bug or a
 ///   legitimate
 ///     last resort (dynamic / in-place / reduction / matmul / aliasing) is
 ///     diagnosed by `verify-sde-coarse-avoidance`, which fails closed with a
 ///     reason rather than letting coarse pass silently.
 ///
-/// The only hard failure here is a committed plan that cannot be realized
+/// The only hard failure here is a committed layout that cannot be realized
 /// end to end: rather than leave a partial owner-dim promise, the pass fails
 /// closed with evidence.
 ///
@@ -62,27 +62,28 @@ struct SdeCoarseAvoidancePass
       if (!logicalType)
         continue;
 
-      carts::sde::SdeSuIterateOp si =
-          carts::sde::findCommittedBlockPlanWriter(mu);
-
       // Already block-partitioned: the grain is in the type, max legal blocks
       // are exposed.
-      if (si && carts::sde::recognizeExpandedBlockGridMu(si, logicalType))
+      if (carts::sde::recognizeExpandedBlockGridMu(mu))
         continue;
 
       // Best effort: realize the committed finest grain as structure.
       // Out-of-scope (coarse) MUs are left flat for verify-sde-coarse-avoidance
       // to diagnose.
-      carts::sde::MuPhysicalLayout plan;
-      if (!carts::sde::isBlockGridRealizable(si, logicalType, plan))
+      carts::sde::MuPhysicalLayout layout;
+      std::optional<carts::sde::CommittedMuBlockLayout> committed =
+          carts::sde::findCommittedMuBlockLayout(mu);
+      if (!committed ||
+          !carts::sde::supportsRankExpandedAccessWindows(committed->writer) ||
+          !carts::sde::isBlockGridRealizable(mu, layout))
         continue;
 
       std::unique_ptr<carts::sde::MuAccessIndexer> indexer =
-          carts::sde::makeMuAccessIndexer(*si.getStructuredClassification(),
-                                          plan);
-      carts::sde::MuLayoutRewriter rewriter(plan, *indexer);
+          carts::sde::makeMuAccessIndexer(
+              *committed->writer.getStructuredClassification(), layout);
+      carts::sde::MuLayoutRewriter rewriter(layout, *indexer);
       if (mlir::failed(rewriter.apply(mu))) {
-        // The committed plan cannot be realized end to end. Fail closed with
+        // The committed layout cannot be realized end to end. Fail closed with
         // evidence rather than emit a partial owner-dim promise.
         mu.emitOpError()
             << "committed block-grid layout cannot be realized as a "

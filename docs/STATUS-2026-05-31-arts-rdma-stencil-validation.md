@@ -7,7 +7,7 @@
 ## Summary
 
 The latest validated CARTS/ARTS state fixes the two-node Jacobi stencil
-failure. The compiler now materializes per-block halo exchange inside the
+failure. The compiler now realizes per-block halo exchange inside the
 timestep phases before stencil compute, and ARTS RDMA now uses stable eager
 connections by default for multinode halo traffic.
 
@@ -90,7 +90,7 @@ The current implementation follows the intended layering:
 - SDE remains layout and graph planning only.
 - ARTS carries explicit codelet deps and collective intent.
 - ARTS realizes the per-block single-writer DB substrate and halo exchange.
-- ARTS-RT lowers the already materialized EDT/DB/epoch shape to runtime calls.
+- ARTS-RT lowers the already realized EDT/DB/epoch shape to runtime calls.
 
 The validated Jacobi path uses distributed per-block DBs with one writer per
 block and nearest-neighbor RO reads for halo exchange. DB grain and CU grain

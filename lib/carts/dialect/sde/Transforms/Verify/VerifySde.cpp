@@ -5,7 +5,7 @@
 /// Effect over MU/CU/SU. By the boundary the IR must already be the target
 /// shape, and this pass fails closed when it is not. It enforces three rules,
 /// reading only current IR and local op structure (no metadata, no downstream
-/// contract):
+/// promise):
 ///
 ///   No consumed dependency graph. SDE carries no generic token/dataflow
 ///     dependency graph; ordering edges are derived in ARTS after codelet

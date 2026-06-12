@@ -13,8 +13,7 @@
 // ARTS-LABEL: func.func @sde_to_arts_production_carrier
 // ARTS: arts.db_alloc
 // ARTS-SAME: <block>
-// ARTS-SAME: planOwnerDims = [0]
-// ARTS-SAME: planPhysicalBlockShape = [1, 256]
+// ARTS-SAME: elementSizes
 // ARTS: arts.db_acquire
 // ARTS-SAME: partitioning(<block>)
 // ARTS: arts.edt

@@ -27,14 +27,14 @@ Look for:
 - ARTS representation of SDE movement structure and storage views
 - writable task acquires that should preserve owner hints
 - `DbAllocOp` instances marked `distributed`
-- cases where SDE distribution planning should have produced distributed ARTS
-  DB/EDT contracts but did not
+- cases where SDE distribution transforms should have produced distributed ARTS
+  DB/EDT facts but did not
 
 ## 3. Ownership Eligibility Questions
 
 - Is the allocation host-level, not inside `arts.edt`?
 - Does it have multiple DB blocks?
-- Is the shape supported for owner-map realization?
+- Is the shape supported for distributed ownership realization?
 - Are handle users restricted to allowed DB dependency flow?
 - Is there at least one internode writer?
 - Is the case rejected because it is read-only stencil-style internode use?
@@ -43,7 +43,7 @@ Look for:
 - Are compute/bridge/communication CUs grouped over block ranges for read-only
   or copy-like edges?
 - Is any layer recomputing owner dims, block shape, movement family, owner
-  maps, or runtime mode instead of consuming committed upstream facts?
+  routes, or runtime mode instead of consuming committed upstream facts?
 
 ## 4. Runtime Checks
 

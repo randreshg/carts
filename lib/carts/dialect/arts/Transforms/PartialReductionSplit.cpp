@@ -104,6 +104,27 @@ static int64_t ceilDivPositiveI64(int64_t lhs, int64_t rhs) {
   return (lhs + rhs - 1) / rhs;
 }
 
+static LogicalResult inferResultElementCount(EdtOp edt, SplitFacts &facts) {
+  if (facts.resultDepIndex >= edt.getDependencies().size())
+    return failure();
+  auto acquire =
+      edt.getDependencies()[facts.resultDepIndex].getDefiningOp<DbAcquireOp>();
+  if (!acquire)
+    return failure();
+  auto alloc = dyn_cast_or_null<DbAllocOp>(
+      DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
+  if (!alloc || alloc.getElementSizes().empty())
+    return failure();
+  std::optional<int64_t> elementCount = ValueAnalysis::tryFoldConstantIndex(
+      ValueAnalysis::stripNumericCasts(alloc.getElementSizes().front()));
+  if (!elementCount || *elementCount <= 0)
+    return edt.emitOpError()
+           << "partial-reduction split requires a static result element "
+              "count from the result dependency DB";
+  facts.resultElementCount = *elementCount;
+  return success();
+}
+
 static void clearSplitAttrs(EdtOp edt) {
   edt->removeAttr(edt.getPartialReductionSplitRequiredAttrName());
   edt->removeAttr(edt.getPartialReductionSplitDimsAttrName());
@@ -112,7 +133,7 @@ static void clearSplitAttrs(EdtOp edt) {
   edt->removeAttr(edt.getPartialReductionSplitTargetWorkerCountAttrName());
 }
 
-static void stampEffectiveSplitAttrs(EdtOp edt, const SplitFacts &facts) {
+static void recordEffectiveSplitAttrs(EdtOp edt, const SplitFacts &facts) {
   MLIRContext *ctx = edt.getContext();
   auto i64 = IntegerType::get(ctx, 64);
   edt.setPartialReductionSplitFactorAttr(
@@ -151,7 +172,7 @@ static bool reconcileSplitTopology(EdtOp edt, SplitFacts &facts,
   if (requestedFactor < facts.splitFactor)
     facts.splitFactor = requestedFactor;
   facts.targetWorkerCount = effectiveTarget;
-  stampEffectiveSplitAttrs(edt, facts);
+  recordEffectiveSplitAttrs(edt, facts);
   return true;
 }
 
@@ -419,33 +440,37 @@ static LogicalResult validateSplitFacts(EdtOp edt, SplitFacts &facts) {
                                 "supported scalar floating add reduction loop";
   facts.reduction = *reduction;
 
-  if (auto workerSlice =
-          readI64ArrayAttr(getPlanLogicalWorkerSliceAttr(edt.getOperation()))) {
-    if (!workerSlice->empty()) {
-      if ((*workerSlice)[0] <= 0)
-        return edt.emitOpError() << "partial-reduction split requires a "
-                                    "positive rank-1 result tile length";
-      facts.resultElementCount = (*workerSlice)[0];
-    }
-  }
+  if (failed(inferResultElementCount(edt, facts)))
+    return failure();
 
   return success();
 }
 
-static void copySplitEdtAttrs(EdtOp source, EdtOp dest) {
-  StringAttr operandSegments =
-      EdtOp::getOperandSegmentSizesAttrName(source->getName());
-  for (NamedAttribute attr : source->getAttrs()) {
-    if (attr.getName() == operandSegments)
-      continue;
-    if (attr.getName().getValue() == source.getConcurrencyAttrName())
-      continue;
-    if (attr.getName().getValue() ==
-        source.getPartialReductionSplitRequiredAttrName())
-      continue;
-    dest->setAttr(attr.getName(), attr.getValue());
-  }
-  dest->removeAttr(dest.getPartialReductionSplitRequiredAttrName());
+static void copySplitEdtFacts(EdtOp source, EdtOp dest) {
+  MLIRContext *ctx = dest.getContext();
+  if (source.getInPlaceSafeAttr())
+    dest.setInPlaceSafeAttr(UnitAttr::get(ctx));
+  if (source.getInPlaceSharedStateAttr())
+    dest.setInPlaceSharedStateAttr(UnitAttr::get(ctx));
+  if (auto attr = source.getVectorizeWidthAttr())
+    dest.setVectorizeWidthAttr(attr);
+  if (auto attr = source.getUnrollFactorAttr())
+    dest.setUnrollFactorAttr(attr);
+  if (auto attr = source.getInterleaveCountAttr())
+    dest.setInterleaveCountAttr(attr);
+  if (auto attr = source.getDepPatternAttr())
+    dest.setDepPatternAttr(attr);
+  inheritDistributionAttrs(source.getOperation(), dest.getOperation());
+  if (auto attr = source.getReductionStrategyAttr())
+    dest.setReductionStrategyAttr(attr);
+  if (source.getPartialReductionAttr())
+    dest.setPartialReductionAttr(UnitAttr::get(ctx));
+  if (auto attr = source.getPartialReductionDimsAttr())
+    dest.setPartialReductionDimsAttr(attr);
+  if (auto attr = source.getPartialReductionOwnerDimsAttr())
+    dest.setPartialReductionOwnerDimsAttr(attr);
+  if (auto attr = source.getPartialReductionDepResultDimMapsAttr())
+    dest.setPartialReductionDepResultDimMapsAttr(attr);
 }
 
 static void addEdtBlockArguments(EdtOp edt, ValueRange deps, ValueRange params,
@@ -571,28 +596,19 @@ static DbAcquireOp createPartialTileAcquire(OpBuilder &builder, Location loc,
                            resultDepType, ownerIndex, tileIndex);
 }
 
-static DbAllocOp createReductionBufferDb(OpBuilder &builder, Location loc,
-                                         Value route, Value ownerCount,
-                                         Value tileCount, Value elementCount,
-                                         int64_t resultElementCount,
-                                         Type scalarType, bool distributed) {
+static FailureOr<DbAllocOp>
+createReductionBufferDb(OpBuilder &builder, Location loc, Value route,
+                        Value ownerCount, Value tileCount, Value elementCount,
+                        Type scalarType, bool distributed) {
   auto db = DbAllocOp::create(
       builder, loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
       scalarType, SmallVector<Value>{ownerCount, tileCount},
       SmallVector<Value>{elementCount}, PartitionMode::block);
-  db->setAttr(db.getPlanOwnerDimsAttrName(), buildI64ArrayAttr(db, {0}));
-  db->setAttr(db.getPlanPhysicalBlockShapeAttrName(),
-              buildI64ArrayAttr(db, {resultElementCount}));
-  db->setAttr(db.getPlanLogicalWorkerSliceAttrName(),
-              buildI64ArrayAttr(db, {resultElementCount}));
   db.setDepPatternAttr(
       ArtsDepPatternAttr::get(db.getContext(), ArtsDepPattern::reduction));
   markReductionSplitDistribution(db.getOperation(), distributed);
   if (distributed) {
-    setDistributedDbAllocation(db.getOperation(), /*enabled=*/true);
-    realizeDbOwnerMapFromPlan(db);
     db.removeLocalOnlyAttr();
-    db.removeDistributedRejectReasonAttr();
   }
   return db;
 }
@@ -796,17 +812,22 @@ static LogicalResult splitReductionFacts(EdtOp edt, SplitFacts &facts) {
   Value splitFactor = createConstantIndex(builder, loc, facts.splitFactor);
   Value resultElementCount =
       createConstantIndex(builder, loc, facts.resultElementCount);
-  DbAllocOp partialDb = createReductionBufferDb(
+  FailureOr<DbAllocOp> partialDbOr = createReductionBufferDb(
       builder, loc, route, ownerCount, splitFactor, resultElementCount,
-      facts.resultElementCount, scalarType, distributedTopology);
+      scalarType, distributedTopology);
+  if (failed(partialDbOr))
+    return failure();
+  DbAllocOp partialDb = *partialDbOr;
   SmallVector<std::pair<DbAllocOp, int64_t>, 4> intermediateLevels;
   for (int64_t currentCount = facts.splitFactor; currentCount > 2;) {
     int64_t nextCount = (currentCount + 1) / 2;
     Value nextCountValue = createConstantIndex(builder, loc, nextCount);
-    DbAllocOp nextDb = createReductionBufferDb(
+    FailureOr<DbAllocOp> nextDbOr = createReductionBufferDb(
         builder, loc, route, ownerCount, nextCountValue, resultElementCount,
-        facts.resultElementCount, scalarType, distributedTopology);
-    intermediateLevels.push_back({nextDb, nextCount});
+        scalarType, distributedTopology);
+    if (failed(nextDbOr))
+      return failure();
+    intermediateLevels.push_back({*nextDbOr, nextCount});
     currentCount = nextCount;
   }
 
@@ -847,7 +868,7 @@ static LogicalResult splitReductionFacts(EdtOp edt, SplitFacts &facts) {
             : edt.getRoute();
     auto splitEdt = EdtOp::create(builder, loc, edt.getType(), splitConcurrency,
                                   splitRoute, splitDeps, splitParams);
-    copySplitEdtAttrs(edt, splitEdt);
+    copySplitEdtFacts(edt, splitEdt);
     markReductionSplitDistribution(splitEdt.getOperation(),
                                    distributedTopology);
     addEdtBlockArguments(splitEdt, splitDeps, splitParams, loc);
@@ -911,8 +932,8 @@ struct PartialReductionSplitPass
       SplitFacts facts;
       if (failed(validateSplitFacts(edt, facts)) ||
           failed(splitReductionFacts(edt, facts))) {
-        edt.emitError() << "failed to split partial-reduction facts; leaving "
-                           "partialReductionSplitRequired for ARTS-RT guard";
+        edt.emitError()
+            << "failed to rewrite partial-reduction into DB/EDT structure";
         signalPassFailure();
         return;
       }

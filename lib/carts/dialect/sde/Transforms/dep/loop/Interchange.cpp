@@ -795,7 +795,7 @@ static bool isSameIndexPair(ValueRange indices, Value first, Value second) {
          isSameValue(indices[1], second);
 }
 
-static void stampRowOwnerPlan(sde::SdeSuIterateOp op, MemRefType outputType) {
+static void commitRowOwnerShape(sde::SdeSuIterateOp op, MemRefType outputType) {
   if (!op || !outputType || outputType.getRank() < 2 ||
       !outputType.hasStaticShape())
     return;
@@ -810,6 +810,7 @@ static void stampRowOwnerPlan(sde::SdeSuIterateOp op, MemRefType outputType) {
   op.setLogicalWorkerSliceAttr(buildI64ArrayAttr(op.getContext(), blockShape));
   op.setIterationTopologyAttr(sde::SdeIterationTopologyAttr::get(
       op.getContext(), sde::SdeIterationTopology::owner_strip));
+  sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
 }
 
 static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
@@ -952,7 +953,7 @@ static bool splitSymmetricSelfGramStores(sde::SdeSuIterateOp op, Block &body) {
   lowerStore.erase();
   diagonalStore.erase();
   createSymmetricMirrorLoop(op, output, diagonalValue);
-  stampRowOwnerPlan(op, outputType);
+  commitRowOwnerShape(op, outputType);
   ARTS_INFO("LoopInterchange: split symmetric self-Gram lower-triangle store");
   return true;
 }

@@ -425,9 +425,9 @@ def SdeSuIterateOp
     // op builder stays additive: existing create() sites that stop at
     // inPlaceSharedState keep compiling. ---
     // Per-array BLOCK layout authored by the `sde-layout-assignment` pass. Pure
-    // DATA-LAYOUT intent in the spirit of HPF DISTRIBUTE/ALIGN: for every array
+    // DATA-LAYOUT structure in the spirit of HPF DISTRIBUTE/ALIGN: for every array
     // root this scheduling unit accesses (writer AND readers — the key
-    // generalization over the output-only physical owner plan), a dictionary
+    // generalization over output-only physical owner layout), a dictionary
     // entry records the chosen BLOCK layout. Each entry is a DictionaryAttr
     // with keys:
     //   - `arrayId`    (I64): a module-stable id joining the same array root
@@ -446,12 +446,12 @@ def SdeSuIterateOp
     // placement, communication primitive, or split factor. ARTS consumes these
     // facts on explicit codelet deps; ARTS realizes target objects later.
     OptionalAttr<ArrayAttr>:$arrayLayout,
-    // Per-edge geometric layouts-disagree marker. An ArrayAttr of the
+    // Temporary per-edge geometric layouts-disagree marker. An ArrayAttr of the
     // `arrayId`s (I64) whose chosen layout on this scheduling unit is a pure
     // GEOMETRIC mismatch against the array's home/writer layout (e.g. an input
     // read on a non-owner-aligned window, or a contraction-dim read of a
-    // row-block intermediate). Records WHERE a redistribution edge exists, as
-    // geometry only and does not pick a concrete remedy.
+    // row-block intermediate). `sde-redistribute` must consume it into
+    // `sde.redist` structure or reject it before ARTS.
     OptionalAttr<ArrayAttr>:$layoutsDisagree,
     // Abstract communication-volume estimate (bytes) for this scheduling unit
     // under the chosen layouts. Advisory only.
@@ -683,8 +683,9 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
     same-block `sde.mu_alloc` it names, one per (MU root, access mode). The `mu`
     operand is the rank-expanded `sde.mu_alloc` result (visible because
     `sde.cu_region` is NOT `IsolatedFromAbove`). It names no collective, DB,
-    EDT, owner map, route, GUID, or runtime policy — it is a pure SDE structural
-    fact, consumed (not reinterpreted) by mechanical SDE-to-ARTS lowering.
+    EDT, runtime ownership route, GUID, or runtime policy — it is a pure SDE
+    structural fact, consumed (not reinterpreted) by mechanical SDE-to-ARTS
+    lowering.
 
     Attributes (block-grid coordinates, all static `I64 ArrayAttr`):
       - `mode`          : SdeAccessMode, `read`, `write`, or `readwrite`.
@@ -707,10 +708,10 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
     For a ceil/partial last block the per-block valid extent is uniform
     `blockExtent`; the partial last-block extent is derivable by a consumer from
     the writer `sde.su_iterate` iteration domain (the committed source of truth),
-    not recomputed here. Stencil halo growth is NOT encoded (deferred to a later
-    halo-redistribution transform); `validExtents` is the in-tile extent.
+    not recomputed here. Stencil halo growth is outside this access-window fact;
+    SDE redistribution must represent halo movement before the boundary.
 
-    Production SDE planning emits this carrier for in-scope block-grid MUs
+    Production SDE shaping emits this carrier for in-scope block-grid MUs
     before SDE-to-ARTS conversion consumes it.
   }];
 
@@ -740,23 +741,21 @@ def SdeRedistOp : CartsSde_Op<"redist", [
   let description = [{
     Makes an array's redistribution edge explicit SDE structure. For one array
     root whose committed home (writer) BLOCK layout differs from a consumer's
-    required layout (the geometric `layoutsDisagree` edge `sde-layout-assignment`
-    records), `sde.redist` commits the concrete source layout, target layout, and
-    geometric movement family, derived VERBATIM from the committed `arrayLayout`
-    facts — never re-deriving owner dims, block shape, or the family.
+    required layout, `sde.redist` commits the concrete source layout, target
+    layout, and geometric movement family, derived VERBATIM from the committed
+    `arrayLayout` facts — never re-deriving owner dims, block shape, or the
+    family.
 
     It names a GEOMETRIC movement family only (`broadcast_like`,
     `all_gather_like`, `all_to_all_like`, `reduce_scatter_like`,
     `allreduce_like`, `halo_like`, `phase_redist`). It names no collective,
-    transport algorithm, DB, EDT, owner map, route, GUID, or runtime policy:
+    transport algorithm, DB, EDT, runtime ownership route, GUID, or runtime policy:
     like `sde.mu_dep`/`sde.mu_access_window` it is consumed by
     SDE-to-ARTS lowering and does NOT survive the dialect boundary.
 
     Attributes (element-space geometry, all static `I64 ArrayAttr`):
       - `family`            : the geometric movement family.
-      - `arrayId`           : committed SDE array identity for `mu`; the value
-                              must match the `layoutsDisagree` entry this
-                              movement represents.
+      - `arrayId`           : committed SDE array identity for `mu`.
       - `sourceOwnerDims`/`sourceBlockShape` : the home (writer) layout. Empty
                               `sourceOwnerDims` with a full-extent block means a
                               replicated source.
@@ -773,7 +772,7 @@ def SdeRedistOp : CartsSde_Op<"redist", [
     block-argument memref); `sde.cu_region`/`su_iterate` are not
     `IsolatedFromAbove`, so it is visible at the redistribution site.
 
-    Production SDE planning emits this carrier for representable movement edges
+    Production SDE shaping emits this carrier for representable movement edges
     before SDE-to-ARTS conversion consumes it.
   }];
 
@@ -803,7 +802,7 @@ def SdeMuDataOp : CartsSde_Op<"mu_data", [Pure]> {
     of inheriting Polygeist `memref.alloca` for OMP-shared variables.
     Produced by `ConvertOpenMPToSde` for every variable named by an OMP
     `shared(...)` clause (or otherwise shared across tasks), consumed by SDE
-    MU/token compute-unit planning.
+    MU/token compute-unit shaping.
   }];
 
   let arguments = (ins

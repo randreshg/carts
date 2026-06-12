@@ -2,7 +2,7 @@
 /// File: ElementwiseFusion.cpp
 ///
 /// Fuse consecutive sibling SDE elementwise scheduling units before boundary
-/// materialization.
+/// conversion.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -172,6 +172,73 @@ static void applyMergedLayoutAttrs(sde::SdeSuIterateOp fused,
     fused->removeAttr(fused.getLayoutsDisagreeAttrName());
   else
     fused.setLayoutsDisagreeAttr(builder.getArrayAttr(disagreeAttrs));
+}
+
+static std::optional<sde::SdeAccessMode>
+modeForRole(sde::LayoutGraphRole role) {
+  switch (role) {
+  case sde::LayoutGraphRole::read:
+    return sde::SdeAccessMode::read;
+  case sde::LayoutGraphRole::write:
+    return sde::SdeAccessMode::write;
+  default:
+    return std::nullopt;
+  }
+}
+
+static void insertMergedLayoutRoots(sde::SdeSuIterateOp fused,
+                                    MutableArrayRef<ElementwiseStage> stages,
+                                    IRRewriter &rewriter) {
+  ArrayAttr layout = fused.getArrayLayoutAttr();
+  if (!layout)
+    return;
+
+  struct RootKey {
+    int64_t arrayId = -1;
+    sde::SdeAccessMode mode = sde::SdeAccessMode::read;
+  };
+  SmallVector<RootKey, 4> needed;
+  for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
+    std::optional<sde::SdeAccessMode> mode = modeForRole(fact.role);
+    if (mode && fact.id >= 0)
+      needed.push_back({fact.id, *mode});
+  }
+  if (needed.empty())
+    return;
+
+  Block &body = sde::ensureBlock(fused.getBody());
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointToStart(&body);
+
+  for (RootKey key : needed) {
+    bool alreadyPresent = false;
+    for (auto existing : body.getOps<sde::SdeArrayLayoutRootOp>()) {
+      if (static_cast<int64_t>(existing.getArrayId()) == key.arrayId &&
+          existing.getMode() == key.mode) {
+        alreadyPresent = true;
+        break;
+      }
+    }
+    if (alreadyPresent)
+      continue;
+
+    for (ElementwiseStage &stage : stages) {
+      bool inserted = false;
+      for (auto root :
+           stage.op.getBody().front().getOps<sde::SdeArrayLayoutRootOp>()) {
+        if (static_cast<int64_t>(root.getArrayId()) != key.arrayId ||
+            root.getMode() != key.mode)
+          continue;
+        sde::SdeArrayLayoutRootOp::create(rewriter, root.getLoc(),
+                                          root.getRoot(), root.getModeAttr(),
+                                          root.getArrayIdAttr());
+        inserted = true;
+        break;
+      }
+      if (inserted)
+        break;
+    }
+  }
 }
 
 static sde::SdeSuIterateOp getStageSuIterate(Operation *op) {
@@ -501,9 +568,19 @@ static sde::SdeSuIterateOp fuseStages(MutableArrayRef<ElementwiseStage> stages,
       dst.addArgument(arg.getType(), loc);
   }
 
-  // Create inner cu_region <parallel> wrapper to match the per-stage structure.
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(&dst);
+  insertMergedLayoutRoots(fused, stages, rewriter);
+  Operation *lastRoot = nullptr;
+  for (Operation &op : dst) {
+    if (!isa<sde::SdeArrayLayoutRootOp>(op))
+      break;
+    lastRoot = &op;
+  }
+  if (lastRoot)
+    rewriter.setInsertionPointAfter(lastRoot);
+  else
+    rewriter.setInsertionPointToStart(&dst);
   auto innerCuRegion = sde::SdeCuRegionOp::create(
       rewriter, loc, /*resultTypes=*/TypeRange{},
       sde::SdeCuKindAttr::get(rewriter.getContext(), sde::SdeCuKind::parallel),

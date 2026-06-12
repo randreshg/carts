@@ -77,9 +77,9 @@ struct StructuredMemoryEffectSummary {
 };
 
 /// SDE-owned proof that a scheduling unit writes an external memref through the
-/// owner induction variable. This is a semantic distribution fact;
-/// later layers may materialize it as a concrete storage layout.
-struct LoopIndexedOutputPlan {
+/// owner induction variable. SDE transforms use it to rewrite concrete
+/// layout/tiling shape or fail closed.
+struct LoopIndexedOutputShape {
   Value root;
   SmallVector<int64_t, 4> shape;
   /// Ordered map from owner loop slot to physical memref dimension.
@@ -376,8 +376,8 @@ inline bool allRootAccessesStayWithinOwnerSlice(SdeSuIterateOp op, Value root) {
   return allRootAccessesStayWithinOwnerSlice(op, root, firstDim);
 }
 
-inline std::optional<LoopIndexedOutputPlan>
-findLoopIndexedOutputPlan(SdeSuIterateOp op) {
+inline std::optional<LoopIndexedOutputShape>
+findLoopIndexedOutputShape(SdeSuIterateOp op) {
   if (op.getBody().empty())
     return std::nullopt;
 
@@ -387,7 +387,7 @@ findLoopIndexedOutputPlan(SdeSuIterateOp op) {
     return std::nullopt;
   Block *computeBlock = getSuIterateComputeBlock(op);
 
-  std::optional<LoopIndexedOutputPlan> selectedPlan;
+  std::optional<LoopIndexedOutputShape> selectedShape;
   auto visitStore = [&](memref::StoreOp storeOp) {
     Value memref = storeOp.getMemref();
     Value base = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(memref);
@@ -418,8 +418,8 @@ findLoopIndexedOutputPlan(SdeSuIterateOp op) {
       shape.push_back(dim);
     }
 
-    selectedPlan = LoopIndexedOutputPlan{base, std::move(shape),
-                                         SmallVector<int64_t, 4>{0}};
+    selectedShape = LoopIndexedOutputShape{base, std::move(shape),
+                                           SmallVector<int64_t, 4>{0}};
     return WalkResult::interrupt();
   };
 
@@ -429,16 +429,16 @@ findLoopIndexedOutputPlan(SdeSuIterateOp op) {
       break;
   }
 
-  return selectedPlan;
+  return selectedShape;
 }
 
-/// Recover an owner-indexed output plan for direct memref loops whose owner IV
-/// maps to any physical output dimension. Unlike findLoopIndexedOutputPlan,
+/// Recover an owner-indexed output shape for direct memref loops whose owner IV
+/// maps to any physical output dimension. Unlike findLoopIndexedOutputShape,
 /// this validates all external memref stores in the compute block and rejects
 /// mixed output shapes or mixed owner dimensions. That makes it suitable for
-/// authoring concrete layout plans from imperfect stencil/update nests.
-inline std::optional<LoopIndexedOutputPlan>
-findConsistentLoopIndexedOutputPlanWithOwnerDims(SdeSuIterateOp op) {
+/// authoring concrete layout shape from imperfect stencil/update nests.
+inline std::optional<LoopIndexedOutputShape>
+findConsistentLoopIndexedOutputShapeWithOwnerDims(SdeSuIterateOp op) {
   if (op.getBody().empty())
     return std::nullopt;
 
@@ -451,7 +451,7 @@ findConsistentLoopIndexedOutputPlanWithOwnerDims(SdeSuIterateOp op) {
     return std::nullopt;
 
   bool rejected = false;
-  std::optional<LoopIndexedOutputPlan> selectedPlan;
+  std::optional<LoopIndexedOutputShape> selectedShape;
   auto visitStore = [&](memref::StoreOp storeOp) {
     Value base =
         ::mlir::carts::ValueAnalysis::stripMemrefViewOps(storeOp.getMemref());
@@ -483,15 +483,15 @@ findConsistentLoopIndexedOutputPlanWithOwnerDims(SdeSuIterateOp op) {
       shape.push_back(dim);
     }
 
-    LoopIndexedOutputPlan candidate{base, std::move(shape),
-                                    std::move(ownerPhysicalDims)};
-    if (!selectedPlan) {
-      selectedPlan = std::move(candidate);
+    LoopIndexedOutputShape candidate{base, std::move(shape),
+                                     std::move(ownerPhysicalDims)};
+    if (!selectedShape) {
+      selectedShape = std::move(candidate);
       return WalkResult::advance();
     }
 
-    if (candidate.shape != selectedPlan->shape ||
-        candidate.ownerPhysicalDims != selectedPlan->ownerPhysicalDims) {
+    if (candidate.shape != selectedShape->shape ||
+        candidate.ownerPhysicalDims != selectedShape->ownerPhysicalDims) {
       rejected = true;
       return WalkResult::interrupt();
     }
@@ -506,7 +506,7 @@ findConsistentLoopIndexedOutputPlanWithOwnerDims(SdeSuIterateOp op) {
 
   if (rejected)
     return std::nullopt;
-  return selectedPlan;
+  return selectedShape;
 }
 
 inline StructuredMemoryEffectSummary

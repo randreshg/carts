@@ -24,6 +24,7 @@
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -137,7 +138,7 @@ static bool isReductionPosition(const sde::ArrayAccessProfile &profile,
 }
 
 // Node-agnostic DB/MU block-byte budget: block count grows with problem size,
-// not node/worker count (N enters only in the runtime owner map, block % N).
+// not node/worker count. Runtime ownership routing is derived later in ARTS.
 static constexpr int64_t kTargetBlockBytes = 2 * 1024 * 1024;
 
 // Owner-block shape sized so each block's footprint nears kTargetBlockBytes.
@@ -201,7 +202,7 @@ makeReplicatedCandidate(const sde::ArrayAccessProfile &profile) {
 // Enumerate candidate layouts for one array, pattern-free.
 //
 // `contractionPosition`, when set, is the physical position on which some
-// sibling consumer contracts this array (from findContractionTilingCandidate +
+// sibling consumer reduces this array (from findContractionTilingCandidate +
 // isSiblingDistributedIntermediate). It is the explicit BlockContraction input:
 // a sibling-distributed intermediate consumed on its contraction axis gets a
 // contraction-axis owner candidate even though its own writer indexes it in
@@ -245,7 +246,7 @@ enumerateCandidates(const sde::ArrayAccessProfile &profile,
         profile, {static_cast<int64_t>(*contractionPosition)},
         sde::ArrayLayoutKind::blockContraction));
   } else if (profile.hasWriter) {
-    // Generic contraction fallback: a reduction-indexed position with no
+    // Generic contraction candidate: a reduction-indexed position with no
     // parallel writer owner.
     for (unsigned pos = 0; pos < profile.rank; ++pos) {
       if (isParallelOwnerPosition(profile, pos))
@@ -258,7 +259,7 @@ enumerateCandidates(const sde::ArrayAccessProfile &profile,
     }
   }
 
-  // Replicated / host-whole: always available as the highest-cost fallback.
+  // Replicated / host-whole: always available as the highest-cost candidate.
   candidates.push_back(makeReplicatedCandidate(profile));
   return candidates;
 }
@@ -370,8 +371,8 @@ struct ChosenLayout {
 // PhaseC: pick the minimum-cost candidate. Greedy seed = the writer's owner
 // dims (owner-computes) is naturally expressed because the BlockParallel
 // candidate is built from the writer's parallel-indexed positions; the cost
-// model then confirms it against readers, and Replicated is the fallback only
-// when block layouts cost more (e.g. every consumer disagrees and the array is
+// model then confirms it against readers, and Replicated is selected only when
+// block layouts cost more (e.g. every consumer disagrees and the array is
 // tiny).
 //
 // When `contractionPosition` is set the array is a sibling-distributed
@@ -403,7 +404,7 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
     // parallel-j read while silently forcing the k-contraction to gather across
     // owners. Discount the contraction candidate's own contraction edge for the
     // SELECTION so the home layout matches the contraction-tiling decision; the
-    // stamped commVolumeBytes still reports the real abstract estimate.
+    // committed commVolumeBytes still reports the real abstract estimate.
     int64_t selectionCost = cost;
     if (preferContraction &&
         candidate.kind == sde::ArrayLayoutKind::blockContraction)
@@ -444,7 +445,7 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
 }
 
 //===----------------------------------------------------------------------===//
-// PhaseD — stamp
+// PhaseD — commit per-SU layout facts
 //===----------------------------------------------------------------------===//
 
 static StringRef layoutKindString(sde::ArrayLayoutKind kind) {
@@ -485,12 +486,10 @@ static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
           staticShape, layout.ownerPositions, layout.blockShape))));
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::CommVolumeBytes,
                                   b.getI64IntegerAttr(edgeCommBytes)));
-  // Node-agnostic budget grain, emitted alongside the abstract grain as part of
-  // the N-node-general migration. BudgetBlockShape is consumed downstream by
-  // SDE loop tiling and distribution planning to seed the physical tile block
-  // shape; BudgetMuBlockCount is emitted for completeness but not yet read. For
-  // block layouts only — replicated/contraction keep the abstract grain
-  // mirrored so the field is always present.
+  // Node-agnostic budget grain consumed by SDE loop tiling and distribution
+  // transforms to seed the physical tile block shape. For block layouts only;
+  // replicated/contraction keep the abstract grain mirrored so the field is
+  // always present.
   SmallVector<int64_t, 4> budgetShape(layout.blockShape.begin(),
                                       layout.blockShape.end());
   if (layout.kind == sde::ArrayLayoutKind::blockParallel &&
@@ -499,10 +498,6 @@ static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
         staticShape, elemBytes, layout.ownerPositions, kTargetBlockBytes);
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::BudgetBlockShape,
                                   buildI64ArrayAttr(ctx, budgetShape)));
-  fields.push_back(
-      b.getNamedAttr(sde::AttrNames::LayoutGraph::BudgetMuBlockCount,
-                     b.getI64IntegerAttr(computeMuBlockCount(
-                         staticShape, layout.ownerPositions, budgetShape))));
   return b.getDictionaryAttr(fields);
 }
 
@@ -539,8 +534,8 @@ struct LayoutAssignmentPass
   void runOnOperation() override {
     // Layout assignment is only meaningful when there is more than one logical
     // worker to distribute across. With no cost model (textual pass pipeline)
-    // or a single worker, mirror the physical stampers and do nothing — keeping
-    // single-worker IR untouched.
+    // or a single worker, mirror the physical-layout committers and do nothing
+    // — keeping single-worker IR untouched.
     if (!costModel || costModel->getLogicalWorkerCapacity() <= 1)
       return;
 
@@ -554,7 +549,7 @@ struct LayoutAssignmentPass
       return;
 
     // Explicit BlockContraction input (PhaseB): per array root, the physical
-    // position on which a SIBLING consumer contracts it. Built from
+    // position through which a SIBLING consumer reduces it. Built from
     // findContractionTilingCandidate, gated on the contraction input being a
     // sibling-distributed intermediate written by a different scheduling unit.
     // This is the same gate the contraction-tiling intent uses. The contraction
@@ -586,20 +581,21 @@ struct LayoutAssignmentPass
     llvm::MapVector<Value, int64_t> arrayIds =
         sde::assignStableArrayIds(relations);
 
-    // Accumulate per-SU stamps before applying so each su_iterate gets one
-    // combined `arrayLayout` array of all its accessed roots.
+    // Accumulate per-SU layout updates before applying so each su_iterate gets
+    // one combined `arrayLayout` array of all its accessed roots.
     struct RootProvenance {
       Value root;
       int64_t arrayId = -1;
       sde::SdeAccessMode mode = sde::SdeAccessMode::read;
     };
-    struct SchedulingUnitStamp {
+    struct SchedulingUnitLayoutUpdate {
       SmallVector<DictionaryAttr, 4> entries;
       SmallVector<int64_t, 2> disagree;
       SmallVector<RootProvenance, 4> roots;
       int64_t commVolumeBytes = 0;
     };
-    SmallVector<SchedulingUnitStamp> stamps(relations.schedulingUnits.size());
+    SmallVector<SchedulingUnitLayoutUpdate> updates(
+        relations.schedulingUnits.size());
 
     for (auto &kv : relations.profiles) {
       const sde::ArrayAccessProfile &profile = kv.second;
@@ -607,7 +603,7 @@ struct LayoutAssignmentPass
         continue;
       // Only assign layouts to arrays with at least one block-distributable
       // access; arrays read only as scalars/broadcasts get the replicated
-      // fallback but no disagree edges.
+      // candidate but no disagree edges.
       int64_t arrayId = arrayIds.lookup(profile.root);
 
       // PhaseB + PhaseC.
@@ -621,9 +617,9 @@ struct LayoutAssignmentPass
       ChosenLayout chosen = assignLayout(profile, contractionPosition,
                                          preserveFullWriterOwnerTile);
 
-      // PhaseD — stamp on EVERY scheduling unit that accesses this root (writer
-      // AND readers — the input generalization), keyed by arrayId so the future
-      // integration step can join them.
+      // PhaseD — commit on EVERY scheduling unit that accesses this root
+      // (writer AND readers — the input generalization), keyed by arrayId so
+      // later SDE transforms can join them.
       llvm::SmallDenseSet<unsigned, 4> accessors;
       for (const auto &posUses : profile.positionUses)
         for (const sde::ArrayPositionUse &use : posUses)
@@ -634,7 +630,7 @@ struct LayoutAssignmentPass
         edgeBytesByReader[suId] += edgeBytes;
 
       for (unsigned suId : accessors) {
-        if (suId >= stamps.size())
+        if (suId >= updates.size())
           continue;
         bool isWrite = schedulingUnitWritesRoot(profile, suId);
         int64_t edgeBytes = edgeBytesByReader.lookup(suId);
@@ -643,31 +639,32 @@ struct LayoutAssignmentPass
             isWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
                     : sde::AttrNames::LayoutGraphValues::RoleRead,
             edgeBytes, std::max<int64_t>(1, elementBytes(profile.root)));
-        stamps[suId].entries.push_back(entry);
-        stamps[suId].roots.push_back(
+        updates[suId].entries.push_back(entry);
+        updates[suId].roots.push_back(
             {profile.root, arrayId,
              isWrite ? sde::SdeAccessMode::write : sde::SdeAccessMode::read});
-        stamps[suId].commVolumeBytes += edgeBytes;
+        updates[suId].commVolumeBytes += edgeBytes;
         if (edgeBytes > 0 && profile.hasWriter)
-          stamps[suId].disagree.push_back(arrayId);
+          updates[suId].disagree.push_back(arrayId);
       }
     }
 
-    // Apply accumulated stamps.
+    // Apply accumulated layout updates.
     for (auto [suId, op] : llvm::enumerate(relations.schedulingUnits)) {
-      SchedulingUnitStamp &stamp = stamps[suId];
-      if (stamp.entries.empty())
+      SchedulingUnitLayoutUpdate &update = updates[suId];
+      if (update.entries.empty())
         continue;
-      SmallVector<Attribute, 4> entryAttrs(stamp.entries.begin(),
-                                           stamp.entries.end());
+      SmallVector<Attribute, 4> entryAttrs(update.entries.begin(),
+                                           update.entries.end());
       op.setArrayLayoutAttr(ArrayAttr::get(ctx, entryAttrs));
-      if (!stamp.disagree.empty())
-        op.setLayoutsDisagreeAttr(buildI64ArrayAttr(ctx, stamp.disagree));
+      sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
+      if (!update.disagree.empty())
+        op.setLayoutsDisagreeAttr(buildI64ArrayAttr(ctx, update.disagree));
       op.setCommVolumeBytesAttr(
-          IntegerAttr::get(IntegerType::get(ctx, 64), stamp.commVolumeBytes));
+          IntegerAttr::get(IntegerType::get(ctx, 64), update.commVolumeBytes));
 
       OpBuilder builder(&op.getBody().front(), op.getBody().front().begin());
-      for (const RootProvenance &root : stamp.roots) {
+      for (const RootProvenance &root : update.roots) {
         bool exists = false;
         for (sde::SdeArrayLayoutRootOp existing :
              op.getBody().front().getOps<sde::SdeArrayLayoutRootOp>()) {

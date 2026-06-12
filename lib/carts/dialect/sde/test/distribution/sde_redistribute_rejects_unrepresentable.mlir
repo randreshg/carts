@@ -1,6 +1,7 @@
 // RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
 
-// Non-reduction layout mismatches remain broad evidence until SDE commits a
+// Non-reduction layout mismatches fail closed until SDE commits a real
+// redistribution transform for that geometry.
 // CHECK: error: {{.*}}redistribution edge
 
 func.func @unrepresentable(%T: memref<256x256xf32>,

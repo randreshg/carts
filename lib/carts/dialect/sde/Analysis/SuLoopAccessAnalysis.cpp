@@ -877,15 +877,15 @@ bool isOwnerLocalPipelineReduction(SdeSuIterateOp iterOp) {
   if (iterOp.getLowerBounds().size() != 1)
     return false;
 
-  std::optional<LoopIndexedOutputPlan> outputPlan =
-      findLoopIndexedOutputPlan(iterOp);
-  if (!outputPlan || outputPlan->ownerPhysicalDims.empty())
+  std::optional<LoopIndexedOutputShape> outputShape =
+      findLoopIndexedOutputShape(iterOp);
+  if (!outputShape || outputShape->ownerPhysicalDims.empty())
     return false;
 
   StructuredMemoryEffectSummary effects =
       collectStructuredMemoryEffects(iterOp.getBody());
   if (effects.hasUnknownEffects || effects.writes.empty() ||
-      !effects.writes.contains(outputPlan->root))
+      !effects.writes.contains(outputShape->root))
     return false;
 
   // Owner-local pipeline reductions may be realized with compute-block
@@ -898,10 +898,10 @@ bool isOwnerLocalPipelineReduction(SdeSuIterateOp iterOp) {
     if (isDefinedInside(iterOp.getOperation(), read))
       continue;
     if (!hasAnyExactOwnerSliceAccess(iterOp, read,
-                                     outputPlan->ownerPhysicalDims))
+                                     outputShape->ownerPhysicalDims))
       continue;
     if (!allRootAccessesStayWithinOwnerSlice(iterOp, read,
-                                             outputPlan->ownerPhysicalDims))
+                                             outputShape->ownerPhysicalDims))
       return false;
   }
 
@@ -911,7 +911,7 @@ bool isOwnerLocalPipelineReduction(SdeSuIterateOp iterOp) {
     if (!effects.reads.contains(written))
       continue;
     if (!allRootAccessesStayWithinOwnerSlice(iterOp, written,
-                                             outputPlan->ownerPhysicalDims))
+                                             outputShape->ownerPhysicalDims))
       return false;
   }
 
@@ -1195,13 +1195,13 @@ extractNeighborhoodAccessInfo(const SuLoopAccessSummary &summary) {
   return extractNeighborhoodAccessInfo(summary.reads, summary.nest.ivs.size());
 }
 
-std::optional<SuOutputLayoutPlan>
-findCompatibleSuOutputLayoutPlan(const SuLoopAccessSummary &summary) {
+std::optional<SuOutputLayoutFacts>
+findCompatibleSuOutputLayoutFacts(const SuLoopAccessSummary &summary) {
   if (!summary.nest.rootIterOp || summary.writes.empty() ||
       summary.nest.ivs.empty())
     return std::nullopt;
 
-  std::optional<SuOutputLayoutPlan> selected;
+  std::optional<SuOutputLayoutFacts> selected;
   Operation *rootOp = summary.nest.rootIterOp;
 
   for (const MemrefAccessEntry &write : summary.writes) {
@@ -1226,7 +1226,7 @@ findCompatibleSuOutputLayoutPlan(const SuLoopAccessSummary &summary) {
     if (!maps)
       return std::nullopt;
 
-    SuOutputLayoutPlan candidate;
+    SuOutputLayoutFacts candidate;
     candidate.root = root;
     candidate.shape = std::move(*shape);
     candidate.loopDimToPhysicalDim = std::move(maps->first);
@@ -1246,17 +1246,17 @@ findCompatibleSuOutputLayoutPlan(const SuLoopAccessSummary &summary) {
   return selected;
 }
 
-std::optional<SuOutputLayoutPlan>
-findCompatibleSuOutputLayoutPlan(SdeSuIterateOp op) {
+std::optional<SuOutputLayoutFacts>
+findCompatibleSuOutputLayoutFacts(SdeSuIterateOp op) {
   std::optional<SuLoopAccessSummary> summary = analyzeSuLoopAccesses(op);
   if (!summary)
     return std::nullopt;
-  return findCompatibleSuOutputLayoutPlan(*summary);
+  return findCompatibleSuOutputLayoutFacts(*summary);
 }
 
-bool hasRealizableOwnerStripPlan(SdeSuIterateOp op) {
+bool hasRealizableOwnerStrip(SdeSuIterateOp op) {
   // Restricted to inPlaceSafe (proven point-local self-read) stencils so it
-  // never reinterprets a Gauss-Seidel / inPlaceSharedState owner contract.
+  // never reinterprets a Gauss-Seidel / inPlaceSharedState owner shape.
   if (!op.getInPlaceSafe())
     return false;
   auto classification = op.getStructuredClassification();
@@ -1268,7 +1268,7 @@ bool hasRealizableOwnerStripPlan(SdeSuIterateOp op) {
   if (loopRank == 0)
     return false;
 
-  // (1) Realized form: an owner strip/tile physical plan has already been
+  // (1) Realized form: an owner strip/tile physical layout has already been
   // committed whose owner dimensions fit within the realized loop rank. After
   // tiling the loop carries inner element loops, so the access-derived layout
   // recovery below no longer matches; the committed owner-dim count is the
@@ -1279,18 +1279,19 @@ bool hasRealizableOwnerStripPlan(SdeSuIterateOp op) {
       return true;
   }
 
-  // (2) Pre-stamp form: at least one parallel loop band maps 1:1 onto a static
+  // (2) Pre-fact form: at least one parallel loop band maps 1:1 onto a static
   // output physical dimension; that band is the realizable owner strip. The
   // wider access footprint still has to be carried as read-only halo movement.
-  std::optional<SuOutputLayoutPlan> plan = findCompatibleSuOutputLayoutPlan(op);
-  if (!plan)
+  std::optional<SuOutputLayoutFacts> layoutFacts =
+      findCompatibleSuOutputLayoutFacts(op);
+  if (!layoutFacts)
     return false;
   for (unsigned loopDim = 0;
-       loopDim < loopRank && loopDim < plan->loopDimToPhysicalDim.size();
+       loopDim < loopRank && loopDim < layoutFacts->loopDimToPhysicalDim.size();
        ++loopDim) {
-    int64_t physicalDim = plan->loopDimToPhysicalDim[loopDim];
+    int64_t physicalDim = layoutFacts->loopDimToPhysicalDim[loopDim];
     if (physicalDim >= 0 &&
-        static_cast<size_t>(physicalDim) < plan->shape.size())
+        static_cast<size_t>(physicalDim) < layoutFacts->shape.size())
       return true;
   }
   return false;

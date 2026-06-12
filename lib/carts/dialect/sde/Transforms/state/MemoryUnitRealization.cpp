@@ -37,6 +37,8 @@ static bool hasNestedMemrefElement(Value value) {
 static bool isMuRealizableAllocation(Value root) {
   if (!root || !isa<MemRefType>(root.getType()) || hasNestedMemrefElement(root))
     return false;
+  if (cast<MemRefType>(root.getType()).getRank() == 0)
+    return false;
 
   Operation *def = root.getDefiningOp();
   if (!def)
@@ -93,7 +95,7 @@ static bool isPrivateAllocationForSchedulingUnit(Value root,
   return sawUse;
 }
 
-static bool hasPhysicalOwnerSlicePlan(sde::SdeSuIterateOp op) {
+static bool hasPhysicalOwnerSliceLayout(sde::SdeSuIterateOp op) {
   return op.getPhysicalBlockShapeAttr() || op.getPhysicalOwnerDimsAttr();
 }
 
@@ -102,18 +104,18 @@ static bool hasSameI64Values(ArrayAttr attr, ArrayRef<int64_t> values) {
   return attrValues && ArrayRef<int64_t>(*attrValues) == values;
 }
 
-static std::optional<sde::LoopIndexedOutputPlan>
-getUnclassifiedOutputOnlyOwnerSlicePlan(sde::SdeSuIterateOp op) {
-  if (!op || !hasPhysicalOwnerSlicePlan(op) ||
+static std::optional<sde::LoopIndexedOutputShape>
+getUnclassifiedOutputOnlyOwnerSliceLayout(sde::SdeSuIterateOp op) {
+  if (!op || !hasPhysicalOwnerSliceLayout(op) ||
       op.getStructuredClassificationAttr())
     return std::nullopt;
 
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op);
-  if (!outputPlan || outputPlan->ownerPhysicalDims.empty())
+  std::optional<sde::LoopIndexedOutputShape> outputShape =
+      sde::findConsistentLoopIndexedOutputShapeWithOwnerDims(op);
+  if (!outputShape || outputShape->ownerPhysicalDims.empty())
     return std::nullopt;
   if (!hasSameI64Values(op.getPhysicalOwnerDimsAttr(),
-                        outputPlan->ownerPhysicalDims))
+                        outputShape->ownerPhysicalDims))
     return std::nullopt;
 
   sde::StructuredMemoryEffectSummary effects =
@@ -135,16 +137,16 @@ getUnclassifiedOutputOnlyOwnerSlicePlan(sde::SdeSuIterateOp op) {
       return std::nullopt;
   }
 
-  return outputPlan;
+  return outputShape;
 }
 
-static bool canRealizePlannedOwnerSlices(sde::SdeSuIterateOp op) {
-  if (!hasPhysicalOwnerSlicePlan(op))
+static bool canRealizeCommittedOwnerSlices(sde::SdeSuIterateOp op) {
+  if (!hasPhysicalOwnerSliceLayout(op))
     return true;
 
   auto classification = op.getStructuredClassification();
   if (!classification)
-    return getUnclassifiedOutputOnlyOwnerSlicePlan(op).has_value();
+    return getUnclassifiedOutputOnlyOwnerSliceLayout(op).has_value();
 
   switch (*classification) {
   case sde::SdeStructuredClassification::matmul:
@@ -154,42 +156,33 @@ static bool canRealizePlannedOwnerSlices(sde::SdeSuIterateOp op) {
     return true;
   case sde::SdeStructuredClassification::reduction:
     return op.getReductionAccumulators().empty() &&
-           (sde::findLoopIndexedOutputPlan(op).has_value() ||
-            sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op)
+           (sde::findLoopIndexedOutputShape(op).has_value() ||
+            sde::findConsistentLoopIndexedOutputShapeWithOwnerDims(op)
                 .has_value());
   }
   return false;
 }
 
 static LogicalResult
-demoteUnsupportedPhysicalStoragePlan(sde::SdeSuIterateOp op) {
-  if (!op || !hasPhysicalOwnerSlicePlan(op) || canRealizePlannedOwnerSlices(op))
+rejectUnsupportedPhysicalStorageLayout(sde::SdeSuIterateOp op) {
+  if (!op || !hasPhysicalOwnerSliceLayout(op) ||
+      canRealizeCommittedOwnerSlices(op))
     return success();
 
-  if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
-    return op.emitOpError()
-           << "has a committed CU/MU physical storage plan that this pass "
-              "cannot realize; refusing to demote or strip upstream "
-              "optimized layout evidence";
-
-  // Physical storage attrs are a promise that boundary lowering can realize
-  // token-local views. Keep logical scheduling intent, but do not export an
-  // unsupported concrete storage layout to the residual raw bridge.
-  op.removePhysicalOwnerDimsAttr();
-  op.removePhysicalBlockShapeAttr();
-  op.removePhysicalHaloShapeAttr();
-  return success();
+  return op.emitOpError()
+         << "has committed physical storage layout facts that this pass cannot "
+            "realize; refusing to strip layout evidence";
 }
 
 static void collectSchedulingUnitMemrefRoots(
     sde::SdeSuIterateOp op, SetVector<Value> &roots,
     DenseMap<Value, SetVector<Value>> &aliasesByRoot) {
-  if (!op || !canRealizePlannedOwnerSlices(op))
+  if (!op || !canRealizeCommittedOwnerSlices(op))
     return;
 
   bool collectWritesOnly =
       !op.getStructuredClassificationAttr() &&
-      getUnclassifiedOutputOnlyOwnerSlicePlan(op).has_value();
+      getUnclassifiedOutputOnlyOwnerSliceLayout(op).has_value();
 
   op.getBody().walk([&](Operation *nested) {
     Value memref;
@@ -434,12 +427,13 @@ struct MemoryUnitRealizationPass
 
     SetVector<Value> roots;
     DenseMap<Value, SetVector<Value>> aliasesByRoot;
-    bool failedDemotion = false;
+    bool failedUnsupportedLayout = false;
     module.walk([&](sde::SdeSuIterateOp op) {
       collectSchedulingUnitMemrefRoots(op, roots, aliasesByRoot);
-      failedDemotion |= failed(demoteUnsupportedPhysicalStoragePlan(op));
+      failedUnsupportedLayout |=
+          failed(rejectUnsupportedPhysicalStorageLayout(op));
     });
-    if (failedDemotion) {
+    if (failedUnsupportedLayout) {
       signalPassFailure();
       return;
     }

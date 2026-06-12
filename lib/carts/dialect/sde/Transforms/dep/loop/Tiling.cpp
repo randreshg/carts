@@ -206,15 +206,15 @@ static int64_t chooseStaticMatmulTile(int64_t extent, int64_t participants,
   return std::clamp<int64_t>(preferred, 1, extent);
 }
 
-struct DirectMatmulTilePlan {
-  sde::LoopIndexedOutputPlan output;
+struct DirectMatmulTileShape {
+  sde::LoopIndexedOutputShape output;
   int64_t rowTile = 1;
   int64_t columnTile = 1;
   Value rowTileValue;
   Value columnTileValue;
 };
 
-struct PhysicalTilePlan {
+struct PhysicalTileShape {
   SmallVector<int64_t, 4> ownerPhysicalDims;
   SmallVector<int64_t, 4> blockShape;
   SmallVector<int64_t, 4> logicalWorkerSlice;
@@ -224,18 +224,21 @@ struct PhysicalTilePlan {
 };
 
 static std::optional<int64_t> getPositiveConstantIndex(Value value);
+static std::optional<sde::LayoutGraphFact>
+selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
+                                  bool allowSingleOwnerDim);
 
-static std::optional<DirectMatmulTilePlan>
-buildDirectMatmulTilePlan(OpBuilder &builder, Location loc,
-                          sde::SdeSuIterateOp op,
-                          sde::SDECostModel &costModel) {
+static std::optional<DirectMatmulTileShape>
+buildDirectMatmulTileShape(OpBuilder &builder, Location loc,
+                           sde::SdeSuIterateOp op,
+                           sde::SDECostModel &costModel) {
   if (op.getLowerBounds().size() != 1)
     return std::nullopt;
   if (!sde::hasDistinctExternalMatmulInputRoots(op))
     return std::nullopt;
 
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findLoopIndexedOutputPlan(op);
+  std::optional<sde::LoopIndexedOutputShape> outputPlan =
+      sde::findLoopIndexedOutputShape(op);
   if (!outputPlan || outputPlan->shape.size() < 2)
     return std::nullopt;
 
@@ -250,7 +253,7 @@ buildDirectMatmulTilePlan(OpBuilder &builder, Location loc,
   int64_t minIterations =
       std::max<int64_t>(1, costModel.getMinIterationsPerWorker());
 
-  DirectMatmulTilePlan plan;
+  DirectMatmulTileShape plan;
   plan.output = std::move(*outputPlan);
   /// Keep the SDE-owned row dimension exposed to the worker distributor.
   /// The column tile is an inner locality tile; row tiling must not collapse
@@ -380,8 +383,8 @@ static bool isDirectMemoryMatmulCandidate(sde::SdeSuIterateOp op, Block &body) {
       op.getReductionAccumulators().size() != 0)
     return false;
 
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findLoopIndexedOutputPlan(op);
+  std::optional<sde::LoopIndexedOutputShape> outputPlan =
+      sde::findLoopIndexedOutputShape(op);
   if (!outputPlan || outputPlan->shape.size() < 2)
     return false;
 
@@ -449,24 +452,24 @@ static bool hasPromotedParallelOutputSchedule(sde::SdeSuIterateOp op) {
   for (unsigned dim = 0; dim < scheduleRank; ++dim)
     if (summary->iterTypes[dim] != utils::IteratorType::parallel)
       return false;
-  if (!sde::findCompatibleSuOutputLayoutPlan(*summary))
+  if (!sde::findCompatibleSuOutputLayoutFacts(*summary))
     return false;
   return !hasNonPointExternalSelfRead(op, *summary);
 }
 
-static std::optional<PhysicalTilePlan>
-buildPromotedMatmulPhysicalTilePlan(sde::SdeSuIterateOp op,
-                                    sde::SDECostModel &costModel) {
+static std::optional<PhysicalTileShape>
+buildPromotedMatmulPhysicalTileShape(sde::SdeSuIterateOp op,
+                                     sde::SDECostModel &costModel) {
   if (!hasPromotedParallelOutputSchedule(op))
     return std::nullopt;
 
-  std::optional<sde::SuOutputLayoutPlan> outputPlan =
-      sde::findCompatibleSuOutputLayoutPlan(op);
+  std::optional<sde::SuOutputLayoutFacts> outputPlan =
+      sde::findCompatibleSuOutputLayoutFacts(op);
   if (!outputPlan || outputPlan->shape.size() < 2 ||
       outputPlan->loopDimToPhysicalDim.size() < op.getLowerBounds().size())
     return std::nullopt;
 
-  PhysicalTilePlan plan;
+  PhysicalTileShape plan;
   unsigned scheduleRank = op.getLowerBounds().size();
   for (unsigned loopDim = 0; loopDim < scheduleRank; ++loopDim) {
     int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
@@ -496,6 +499,25 @@ buildPromotedMatmulPhysicalTilePlan(sde::SdeSuIterateOp op,
   for (auto [slot, physicalDim] : llvm::enumerate(plan.ownerPhysicalDims))
     plan.blockShape[physicalDim] =
         sde::ceilDivPositive(outputPlan->shape[physicalDim], workerGrid[slot]);
+
+  if (std::optional<sde::LayoutGraphFact> writeLayout =
+          selectSingleBudgetWriteLayoutFact(op,
+                                            /*allowSingleOwnerDim=*/true)) {
+    if (writeLayout->budgetBlockShape.size() != plan.blockShape.size())
+      return std::nullopt;
+    for (int64_t physicalDim : writeLayout->ownerDims) {
+      if (!llvm::is_contained(plan.ownerPhysicalDims, physicalDim))
+        return std::nullopt;
+      if (physicalDim < 0 ||
+          static_cast<size_t>(physicalDim) >= plan.blockShape.size())
+        return std::nullopt;
+      int64_t budget = writeLayout->budgetBlockShape[physicalDim];
+      if (budget <= 0)
+        return std::nullopt;
+      plan.blockShape[physicalDim] =
+          std::min<int64_t>(plan.blockShape[physicalDim], budget);
+    }
+  }
 
   plan.tileIterations.assign(scheduleRank, 1);
   for (unsigned loopDim = 0; loopDim < scheduleRank; ++loopDim) {
@@ -671,9 +693,9 @@ static void applyStencilTileGuardsToStaticPlan(
     tile = std::min<int64_t>(tile, cacheLineTile);
 }
 
-static std::optional<PhysicalTilePlan>
-buildStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
-                             ArrayRef<int64_t> tileIterations) {
+static std::optional<PhysicalTileShape>
+buildStencilPhysicalTileShape(sde::SdeSuIterateOp op,
+                              ArrayRef<int64_t> tileIterations) {
   if (op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr() ||
       op.getInPlaceSharedStateAttr())
     return std::nullopt;
@@ -696,15 +718,15 @@ buildStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
       (sde::hasInPlaceSelfRead(effects) && !ownerLocalPipeline))
     return std::nullopt;
 
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findLoopIndexedOutputPlan(op);
+  std::optional<sde::LoopIndexedOutputShape> outputPlan =
+      sde::findLoopIndexedOutputShape(op);
   if (!outputPlan || outputPlan->shape.empty() ||
       outputPlan->ownerPhysicalDims.empty())
     return std::nullopt;
   if (outputPlan->ownerPhysicalDims.size() > tileIterations.size())
     return std::nullopt;
 
-  PhysicalTilePlan plan;
+  PhysicalTileShape plan;
   plan.ownerPhysicalDims.assign(outputPlan->ownerPhysicalDims.begin(),
                                 outputPlan->ownerPhysicalDims.end());
   plan.blockShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
@@ -724,9 +746,9 @@ buildStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
   return plan;
 }
 
-static std::optional<PhysicalTilePlan>
-buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
-                               sde::SDECostModel &costModel) {
+static std::optional<PhysicalTileShape>
+buildNdStencilPhysicalTileShape(sde::SdeSuIterateOp op,
+                                sde::SDECostModel &costModel) {
   // Accept loop rank >= 1: a 1-D parallel band over a multi-dim access
   // footprint (point-local stencil) realizes a 1-D owner strip; the wider
   // access footprint must be carried as read-only halo movement along that
@@ -749,8 +771,8 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
       (sde::hasInPlaceSelfRead(effects) && !op.getInPlaceSafe()))
     return std::nullopt;
 
-  std::optional<sde::SuOutputLayoutPlan> outputPlan =
-      sde::findCompatibleSuOutputLayoutPlan(op);
+  std::optional<sde::SuOutputLayoutFacts> outputPlan =
+      sde::findCompatibleSuOutputLayoutFacts(op);
   if (!outputPlan || outputPlan->shape.empty())
     return std::nullopt;
 
@@ -761,7 +783,7 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
       minOffsets->size() != maxOffsets->size())
     return std::nullopt;
 
-  PhysicalTilePlan plan;
+  PhysicalTileShape plan;
   plan.blockShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
   plan.tileIterations.assign(outputPlan->shape.begin(),
                              outputPlan->shape.end());
@@ -829,8 +851,8 @@ buildNdStencilPhysicalTilePlan(sde::SdeSuIterateOp op,
   return plan;
 }
 
-static void stampPhysicalTilePlan(sde::SdeSuIterateOp op,
-                                  const PhysicalTilePlan &plan) {
+static void commitPhysicalTileShape(sde::SdeSuIterateOp op,
+                                    const PhysicalTileShape &plan) {
   op.setPhysicalOwnerDimsAttr(
       buildI64ArrayAttr(op.getContext(), plan.ownerPhysicalDims));
   op.setPhysicalBlockShapeAttr(
@@ -846,6 +868,7 @@ static void stampPhysicalTilePlan(sde::SdeSuIterateOp op,
         buildI64ArrayAttr(op.getContext(), plan.haloShape));
   op.setIterationTopologyAttr(
       sde::SdeIterationTopologyAttr::get(op.getContext(), plan.topology));
+  sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
 }
 
 static std::optional<int64_t> getPositiveConstantIndex(Value value) {
@@ -989,7 +1012,7 @@ static bool allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
   return sawExternalStore && !rejected;
 }
 
-static std::optional<PhysicalTilePlan>
+static std::optional<PhysicalTileShape>
 buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
                                          sde::SDECostModel &costModel) {
   if (!isBudgetReconciledTileCandidate(op))
@@ -1007,8 +1030,8 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
       op.getSteps().size() != numDims)
     return std::nullopt;
 
-  std::optional<sde::SuOutputLayoutPlan> outputPlan =
-      sde::findCompatibleSuOutputLayoutPlan(op);
+  std::optional<sde::SuOutputLayoutFacts> outputPlan =
+      sde::findCompatibleSuOutputLayoutFacts(op);
   if (!outputPlan || outputPlan->shape.empty() ||
       outputPlan->shape.size() != writeLayout->budgetBlockShape.size() ||
       outputPlan->physicalDimToLoopDim.size() != outputPlan->shape.size())
@@ -1033,7 +1056,7 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
   if (!allExternalStoresCoverOwnerDims(op, orderedOwnerPhysicalDims))
     return std::nullopt;
 
-  PhysicalTilePlan plan;
+  PhysicalTileShape plan;
   plan.ownerPhysicalDims.assign(orderedOwnerPhysicalDims.begin(),
                                 orderedOwnerPhysicalDims.end());
   plan.blockShape.assign(writeLayout->budgetBlockShape.begin(),
@@ -1156,6 +1179,7 @@ alignExistingStaticPhysicalPlanToSteps(sde::SdeSuIterateOp op,
                                       tiledSteps, parallelMask))
     op.setLogicalWorkerSliceAttr(
         buildI64ArrayAttr(op.getContext(), *workerSlice));
+  sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
 }
 
 static bool isTilingCandidate(sde::SdeSuIterateOp op, Block &body) {
@@ -1248,6 +1272,30 @@ static bool stripMineLoop(scf::ForOp loop, Value tileIterations) {
   return true;
 }
 
+static Value buildAlignedTileLowerBound(OpBuilder &builder, Location loc,
+                                        Value lowerBound, Value tileStep) {
+  if (!lowerBound || !tileStep)
+    return lowerBound;
+
+  int64_t lb = 0;
+  int64_t step = 0;
+  if (::mlir::carts::ValueAnalysis::getConstantIndex(lowerBound, lb) &&
+      ::mlir::carts::ValueAnalysis::getConstantIndex(tileStep, step) &&
+      step > 0) {
+    int64_t aligned =
+        lb >= 0 ? (lb / step) * step : -llvm::divideCeil(-lb, step) * step;
+    return createConstantIndex(builder, loc, aligned);
+  }
+
+  return lowerBound;
+}
+
+static bool shouldAlignOuterTileGrid(bool alignTileGrid,
+                                     ArrayRef<bool> parallelMask,
+                                     unsigned dim) {
+  return alignTileGrid && dim < parallelMask.size() && parallelMask[dim];
+}
+
 static unsigned stripMineDirectMatmulColumnLoops(Block &body, Value outputRoot,
                                                  Value ownerIv,
                                                  Value columnTileIterations) {
@@ -1264,8 +1312,8 @@ static unsigned stripMineDirectMatmulColumnLoops(Block &body, Value outputRoot,
   return tiled;
 }
 
-static void stampDirectMatmulTilePlan(sde::SdeSuIterateOp op,
-                                      const DirectMatmulTilePlan &plan) {
+static void commitDirectMatmulTileShape(sde::SdeSuIterateOp op,
+                                        const DirectMatmulTileShape &plan) {
   SmallVector<int64_t, 4> blockShape = plan.output.shape;
   if (blockShape.empty())
     return;
@@ -1279,6 +1327,7 @@ static void stampDirectMatmulTilePlan(sde::SdeSuIterateOp op,
   op.setLogicalWorkerSliceAttr(buildI64ArrayAttr(op.getContext(), blockShape));
   op.setIterationTopologyAttr(sde::SdeIterationTopologyAttr::get(
       op.getContext(), sde::SdeIterationTopology::owner_strip));
+  sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
 }
 
 struct TilingPass : public sde::impl::TilingBase<TilingPass> {
@@ -1309,12 +1358,12 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       Location loc = op.getLoc();
       unsigned numDims = op.getLowerBounds().size();
       bool directMatmul = false;
-      std::optional<DirectMatmulTilePlan> directMatmulPlan;
+      std::optional<DirectMatmulTileShape> directMatmulShape;
       if (op.getStructuredClassification() ==
           sde::SdeStructuredClassification::matmul) {
-        directMatmulPlan =
-            buildDirectMatmulTilePlan(rewriter, loc, op, *costModel);
-        if (directMatmulPlan) {
+        directMatmulShape =
+            buildDirectMatmulTileShape(rewriter, loc, op, *costModel);
+        if (directMatmulShape) {
           directMatmul = true;
         } else if (!hasPromotedParallelOutputSchedule(op)) {
           continue;
@@ -1324,23 +1373,23 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       // Determine which dims are parallel (should tile) vs reduction (skip).
       SmallVector<bool> parallelMask = getParallelDimMask(op);
 
-      std::optional<PhysicalTilePlan> physicalTilePlan;
+      std::optional<PhysicalTileShape> physicalTileShape;
       if (!directMatmul) {
         if (op.getStructuredClassification() ==
             sde::SdeStructuredClassification::matmul)
-          physicalTilePlan =
-              buildPromotedMatmulPhysicalTilePlan(op, *costModel);
-        if (!physicalTilePlan)
-          physicalTilePlan =
+          physicalTileShape =
+              buildPromotedMatmulPhysicalTileShape(op, *costModel);
+        if (!physicalTileShape)
+          physicalTileShape =
               buildBudgetReconciledElementwiseTilePlan(op, *costModel);
       }
 
       // Compute per-dim tile iterations.
       SmallVector<Value> perDimTileIter;
       if (directMatmul) {
-        perDimTileIter.push_back(directMatmulPlan->rowTileValue);
-      } else if (physicalTilePlan) {
-        for (int64_t tile : physicalTilePlan->tileIterations)
+        perDimTileIter.push_back(directMatmulShape->rowTileValue);
+      } else if (physicalTileShape) {
+        for (int64_t tile : physicalTileShape->tileIterations)
           perDimTileIter.push_back(createConstantIndex(rewriter, loc, tile));
       } else if (numDims == 1) {
         // 1-D fast path: preserves existing static trip count optimization.
@@ -1377,25 +1426,25 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           continue;
       }
 
-      if (!physicalTilePlan)
-        physicalTilePlan = buildNdStencilPhysicalTilePlan(op, *costModel);
-      if (physicalTilePlan) {
+      if (!physicalTileShape)
+        physicalTileShape = buildNdStencilPhysicalTileShape(op, *costModel);
+      if (physicalTileShape) {
         perDimTileIter.clear();
-        for (int64_t tile : physicalTilePlan->tileIterations)
+        for (int64_t tile : physicalTileShape->tileIterations)
           perDimTileIter.push_back(createConstantIndex(rewriter, loc, tile));
       }
 
-      if (!physicalTilePlan && !directMatmul &&
+      if (!physicalTileShape && !directMatmul &&
           sde::isOwnerLocalPipelineReduction(op)) {
         if (auto staticTileIterations =
                 computeStaticTileIterations(op, *costModel))
-          physicalTilePlan =
-              buildStencilPhysicalTilePlan(op, *staticTileIterations);
+          physicalTileShape =
+              buildStencilPhysicalTileShape(op, *staticTileIterations);
       }
 
       // For stencils, enforce halo-aware minimum tile size per dimension.
-      if (!physicalTilePlan && op.getStructuredClassification() ==
-                                   sde::SdeStructuredClassification::stencil) {
+      if (!physicalTileShape && op.getStructuredClassification() ==
+                                    sde::SdeStructuredClassification::stencil) {
         SmallVector<int64_t> halos = getStencilHaloWidths(op);
         for (unsigned d = 0; d < numDims && d < halos.size(); ++d) {
           Value haloVal = createConstantIndex(rewriter, loc, halos[d]);
@@ -1461,20 +1510,31 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
                           oldCuRegion.getNumResults() != 0))
         continue;
 
-      if (!physicalTilePlan && !directMatmul &&
+      if (!physicalTileShape && !directMatmul &&
           op.getStructuredClassification() ==
               sde::SdeStructuredClassification::stencil) {
         if (auto staticTileIterations =
                 computeStaticTileIterations(op, *costModel)) {
           applyStencilTileGuardsToStaticPlan(op, *staticTileIterations, numDims,
                                              *costModel);
-          physicalTilePlan =
-              buildStencilPhysicalTilePlan(op, *staticTileIterations);
+          physicalTileShape =
+              buildStencilPhysicalTileShape(op, *staticTileIterations);
         }
       }
 
+      SmallVector<Value> outerLowerBounds;
+      outerLowerBounds.reserve(numDims);
+      bool alignTileGrid = physicalTileShape.has_value() || directMatmul;
+      for (unsigned d = 0; d < numDims; ++d) {
+        Value lower = op.getLowerBounds()[d];
+        if (shouldAlignOuterTileGrid(alignTileGrid, parallelMask, d))
+          lower =
+              buildAlignedTileLowerBound(rewriter, loc, lower, tiledSteps[d]);
+        outerLowerBounds.push_back(lower);
+      }
+
       auto newOp = sde::SdeSuIterateOp::create(
-          rewriter, loc, /*resultTypes=*/TypeRange{}, op.getLowerBounds(),
+          rewriter, loc, /*resultTypes=*/TypeRange{}, outerLowerBounds,
           op.getUpperBounds(), ValueRange{tiledSteps}, op.getScheduleAttr(),
           op.getChunkSize(), op.getNowaitAttr(), op.getReductionAccumulators(),
           op.getReductionKindsAttr(), op.getReductionStrategyAttr(),
@@ -1491,10 +1551,10 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           op.getInPlaceSharedStateAttr(), op.getArrayLayoutAttr(),
           op.getLayoutsDisagreeAttr(), op.getCommVolumeBytesAttr());
       newOp->setAttrs(sde::getRewrittenAttrs(op));
-      if (!physicalTilePlan && !directMatmul)
+      if (!physicalTileShape && !directMatmul)
         alignExistingStaticPhysicalPlanToSteps(newOp, tiledSteps, parallelMask);
-      if (physicalTilePlan)
-        stampPhysicalTilePlan(newOp, *physicalTilePlan);
+      if (physicalTileShape)
+        commitPhysicalTileShape(newOp, *physicalTileShape);
 
       Block &newBody = sde::ensureBlock(newOp.getBody());
       for (unsigned d = newBody.getNumArguments(); d < numDims; ++d)
@@ -1528,10 +1588,14 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
         }
         Value tileLimit =
             arith::AddIOp::create(rewriter, loc, tileBase, tiledSteps[d]);
+        Value tileLower = tileBase;
+        if (shouldAlignOuterTileGrid(alignTileGrid, parallelMask, d))
+          tileLower = arith::MaxUIOp::create(rewriter, loc, tileBase,
+                                             op.getLowerBounds()[d]);
         Value tileUpper = arith::MinUIOp::create(rewriter, loc, tileLimit,
                                                  op.getUpperBounds()[d]);
         Value originalStep = op.getSteps()[d];
-        auto tileLoop = scf::ForOp::create(rewriter, loc, tileBase, tileUpper,
+        auto tileLoop = scf::ForOp::create(rewriter, loc, tileLower, tileUpper,
                                            originalStep);
         tileLoops.push_back(tileLoop);
         mapper.map(srcBody.getArgument(d), tileLoop.getInductionVar());
@@ -1542,16 +1606,16 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
 
       if (directMatmul && !tileLoops.empty()) {
         Value outputRoot =
-            mapper.lookupOrDefault(directMatmulPlan->output.root);
+            mapper.lookupOrDefault(directMatmulShape->output.root);
         Value ownerIv = mapper.lookupOrDefault(srcBody.getArgument(0));
         unsigned tiledColumns = stripMineDirectMatmulColumnLoops(
             *tileLoops.back().getBody(), outputRoot, ownerIv,
-            directMatmulPlan->columnTileValue);
+            directMatmulShape->columnTileValue);
         if (tiledColumns == 0) {
           rewriter.eraseOp(newOp);
           continue;
         }
-        stampDirectMatmulTilePlan(newOp, *directMatmulPlan);
+        commitDirectMatmulTileShape(newOp, *directMatmulShape);
       }
 
       rewriter.setInsertionPointToEnd(&newCuBody);

@@ -1,6 +1,6 @@
 ---
 name: carts-distributed-triage
-description: Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work materialization, or uneven remote work distribution.
+description: Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work realization, or uneven remote work distribution.
 user-invocable: true
 allowed-tools: Bash, Read, Write, Grep, Glob, Agent
 argument-hint: [<input-file | benchmark-path>]
@@ -12,8 +12,8 @@ Goal: determine whether a multi-node failure comes from ownership marking, lower
 
 Layer rule: diagnose the first layer where the committed fact is wrong, then fix
 that layer with a real transformation. SDE owns layout and source/SU/CU/MU
-rewrites; ARTS owns collective/bridge/contraction materialization; ARTS owns
-per-block single-writer DB/EDT/owner-map realization and grouped
+rewrites; ARTS owns collective/bridge/contraction realization; ARTS owns
+per-block single-writer DB/EDT/distributed ownership realization and grouped
 compute/bridge/communication CUs; ARTS-RT lowers mechanically. Do not repair a
 bad SDE layout in SDE/ARTS, and do not repair missing ARTS collective intent
 in ARTS-RT.
@@ -50,7 +50,7 @@ Read these before patching anything:
    - ARTS represents already-transformed SDE movement structure when a
      distributed edge requires communication
    - `distributed` marker present on eligible `DbAllocOp`
-   - SDE/ARTS materialized structure is present when required
+   - SDE/ARTS realized structure is present when required
    - DB/MU block grain and grouped CU/bridge grain are both sane; tiny DBs with
      one EDT each and coarse DBs that serialize independent writers are both
      failures to investigate
@@ -78,7 +78,7 @@ dekk carts benchmarks run polybench/2mm \
 ## Key Files
 
 - `docs/heuristics/distribution.md`
-- `lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp`
+- `lib/carts/dialect/arts/Transforms/db/DbDistributedOwnershipRealization.cpp`
 - `lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp`
 - `lib/carts/dialect/arts-rt/Conversion/ArtsRtToLLVM/ConvertArtsRtToLLVM.cpp`
 - `lib/carts/codegen/Codegen.cpp`

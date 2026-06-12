@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: SDECostModel.h
 ///
-/// Target-agnostic planning model for SDE optimization decisions.
+/// Target-agnostic cost model for SDE optimization decisions.
 /// The dialect boundary provides a concrete implementation. SDE passes see
 /// ONLY this interface, never target object types.
 ///
@@ -57,7 +57,7 @@ public:
   virtual int getVectorWidth() const = 0;
   virtual int64_t getL2CacheSize() const = 0;
 
-  // --- Vector planning policy ---
+  // --- Vector transform policy ---
   virtual int getVectorWidthForElementBits(unsigned elementBits) const {
     int baseWidth = std::max(1, getVectorWidth());
     if (elementBits == 0)
@@ -118,16 +118,16 @@ public:
 
   virtual int64_t getOwnerLocalPipelineTargetTaskWaves() const {
     // Owner-local pipelines already perform multiple local stages per owner
-    // slice. Additional launch waves increase downstream materialization
+    // slice. Additional launch waves increase downstream realization
     // pressure without exposing more machine concurrency: a single wave still
     // provides one task per logical worker when the owner domain is large
     // enough.
     return 1;
   }
 
-  // Per-tile output-payload floor for distributed plans. 0 disables the floor;
-  // a positive value asks distribution writers to grow tiles (and shrink the
-  // worker grid) until each owner tile carries at least this many bytes of
+  // Per-tile output-payload floor for distributed layouts. 0 disables the
+  // floor; a positive value asks distribution writers to grow tiles (and shrink
+  // the worker grid) until each owner tile carries at least this many bytes of
   // output. The unit is bytes on the output element type so SDE can reason
   // about both numeric (f32/f64) and packed-vector workloads uniformly.
   virtual int64_t getMinDistributedTileBytes() const { return 0; }

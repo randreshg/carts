@@ -53,11 +53,6 @@ LayoutInfo mlir::carts::arts_rt::buildLayoutInfo(Value source) {
     }
   }
 
-  if (info.sizes.empty()) {
-    SmallVector<Value> sizes = RtDbUtils::getSizesFromDb(source);
-    info.sizes.assign(sizes.begin(), sizes.end());
-  }
-
   info.outerRank = static_cast<unsigned>(info.sizes.size());
   info.innerRank = static_cast<unsigned>(info.elementSizes.size());
   return info;
@@ -70,11 +65,11 @@ Value mlir::carts::arts_rt::computeDbElementPointer(ArtsCodegen &AC,
   if (indices.empty())
     return AC.castToLLVMPtr(base, loc);
 
-  SmallVector<Value> fallbackSizes;
   ArrayRef<Value> sizes = layout.sizes;
   if (sizes.empty()) {
-    fallbackSizes = RtDbUtils::getSizesFromDb(base);
-    sizes = fallbackSizes;
+    emitError(loc) << "DB element pointer lowering requires committed DB "
+                      "layout sizes on the lowered DB handle";
+    return {};
   }
 
   SmallVector<Value> strides = AC.computeStridesFromSizes(sizes, loc);

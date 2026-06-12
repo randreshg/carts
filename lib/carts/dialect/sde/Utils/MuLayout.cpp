@@ -19,18 +19,11 @@ static int64_t ceilDivPositive(int64_t value, int64_t divisor) {
 }
 
 std::optional<MuPhysicalLayout>
-resolveMuPhysicalLayout(MemRefType logicalType, ArrayAttr physicalOwnerDims,
-                        ArrayAttr physicalBlockShape) {
+resolveMuPhysicalLayout(MemRefType logicalType, ArrayRef<int64_t> ownerVals,
+                        ArrayRef<int64_t> blockVals) {
   if (!logicalType || !logicalType.hasStaticShape())
     return std::nullopt;
-  if (!physicalOwnerDims || !physicalBlockShape)
-    return std::nullopt;
-
-  std::optional<SmallVector<int64_t, 4>> ownerVals =
-      ::mlir::carts::readI64ArrayAttr(physicalOwnerDims);
-  std::optional<SmallVector<int64_t, 4>> blockVals =
-      ::mlir::carts::readI64ArrayAttr(physicalBlockShape);
-  if (!ownerVals || !blockVals || ownerVals->empty())
+  if (ownerVals.empty() || blockVals.empty())
     return std::nullopt;
 
   ArrayRef<int64_t> shape = logicalType.getShape();
@@ -42,7 +35,7 @@ resolveMuPhysicalLayout(MemRefType logicalType, ArrayAttr physicalOwnerDims,
   // Owner dims: in range, unique, ascending position is not required by the
   // attr but each must be a distinct valid dim.
   llvm::SmallVector<bool, 4> isOwner(rank, false);
-  for (int64_t od : *ownerVals) {
+  for (int64_t od : ownerVals) {
     if (od < 0 || static_cast<unsigned>(od) >= rank)
       return std::nullopt;
     if (isOwner[od])
@@ -55,21 +48,21 @@ resolveMuPhysicalLayout(MemRefType logicalType, ArrayAttr physicalOwnerDims,
   // non-owner dims, the authored form) or owner-dim-length.
   auto blockExtentForOwner = [&](unsigned ownerSlot,
                                  unsigned dim) -> std::optional<int64_t> {
-    if (blockVals->size() == rank)
-      return (*blockVals)[dim];
-    if (blockVals->size() == plan.ownerDims.size())
-      return (*blockVals)[ownerSlot];
+    if (blockVals.size() == rank)
+      return blockVals[dim];
+    if (blockVals.size() == plan.ownerDims.size())
+      return blockVals[ownerSlot];
     return std::nullopt;
   };
 
   // Rank-length block shape must equal the full extent on every non-owner dim
   // (a block that tiles a non-owner dim is not the single-owner normal form).
-  if (blockVals->size() == rank) {
+  if (blockVals.size() == rank) {
     for (unsigned d = 0; d < rank; ++d) {
-      if (!isOwner[d] && (*blockVals)[d] != shape[d])
+      if (!isOwner[d] && blockVals[d] != shape[d])
         return std::nullopt;
     }
-  } else if (blockVals->size() != plan.ownerDims.size()) {
+  } else if (blockVals.size() != plan.ownerDims.size()) {
     return std::nullopt;
   }
 
@@ -112,6 +105,21 @@ resolveMuPhysicalLayout(MemRefType logicalType, ArrayAttr physicalOwnerDims,
   }
 
   return plan;
+}
+
+std::optional<MuPhysicalLayout>
+resolveMuPhysicalLayout(MemRefType logicalType, ArrayAttr physicalOwnerDims,
+                        ArrayAttr physicalBlockShape) {
+  if (!physicalOwnerDims || !physicalBlockShape)
+    return std::nullopt;
+
+  std::optional<SmallVector<int64_t, 4>> ownerVals =
+      ::mlir::carts::readI64ArrayAttr(physicalOwnerDims);
+  std::optional<SmallVector<int64_t, 4>> blockVals =
+      ::mlir::carts::readI64ArrayAttr(physicalBlockShape);
+  if (!ownerVals || !blockVals)
+    return std::nullopt;
+  return resolveMuPhysicalLayout(logicalType, *ownerVals, *blockVals);
 }
 
 MemRefType buildExpandedMuType(MemRefType logicalType,

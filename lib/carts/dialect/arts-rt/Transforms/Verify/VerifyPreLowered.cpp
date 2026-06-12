@@ -16,7 +16,9 @@
 #include "carts/dialect/arts-rt/Transforms/Passes.h"
 #include "carts/dialect/arts-rt/Utils/RtDbUtils.h"
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
+#include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 namespace mlir::carts::arts_rt {
 #define GEN_PASS_DEF_VERIFYPRELOWERED
 #include "carts/dialect/arts-rt/Transforms/Passes.h.inc"
@@ -31,8 +33,9 @@ namespace {
 struct VerifyPreLoweredPass
     : public arts_rt::impl::VerifyPreLoweredBase<VerifyPreLoweredPass> {
   void runOnOperation() override {
+    ModuleOp module = getOperation();
     bool found = false;
-    getOperation().walk([&](Operation *op) {
+    module.walk([&](Operation *op) {
       if (isa<arts::EdtOp, arts::EpochOp>(op)) {
         op->emitError(
             "high-level scheduler op survived past pre-lowering step");
@@ -44,6 +47,37 @@ struct VerifyPreLoweredPass
           alloc.emitOpError()
               << "missing required partition_mode before ABI lowering";
           found = true;
+        }
+        if (hasDistributedDbAllocation(alloc.getOperation())) {
+          std::optional<int64_t> totalNodes =
+              arts::getRuntimeTotalNodes(module);
+          bool singleNode = totalNodes && *totalNodes <= 1;
+          std::optional<std::string> baseName =
+              getDistributedDbRuntimeInitBaseName(alloc);
+          if (!baseName) {
+            alloc.emitOpError()
+                << "distributed DB reached ABI lowering without stable "
+                   "arts.id or arts.create_id";
+            found = true;
+            return;
+          }
+          std::string nodeInitSymbol =
+              *baseName + (singleNode ? "_init" : "_reserve_init");
+          if (!module.lookupSymbol<func::FuncOp>(nodeInitSymbol)) {
+            alloc.emitOpError()
+                << "distributed DB reached ABI lowering without pre-lowered "
+                   "runtime init callback";
+            found = true;
+          }
+          if (!singleNode) {
+            std::string workerInitSymbol = *baseName + "_worker_init";
+            if (!module.lookupSymbol<func::FuncOp>(workerInitSymbol)) {
+              alloc.emitOpError()
+                  << "distributed DB reached ABI lowering without pre-lowered "
+                     "worker init callback";
+              found = true;
+            }
+          }
         }
         return;
       }

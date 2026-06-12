@@ -68,17 +68,18 @@ def Parallelize : Pass<"sde-parallelize", "mlir::ModuleOp"> {
 
 def SdeLoopPatternFacts
     : Pass<"sde-loop-pattern-facts", "mlir::ModuleOp"> {
-  let summary = "Classify SDE loop patterns and stamp facts";
+  let summary = "Classify SDE loop patterns and commit SDE facts";
   let description = [{
     Uses SDE-owned loop/access analysis to identify approved structured pattern
-    families on eligible `sde.su_iterate` operations and stamps classification,
+    families on eligible `sde.su_iterate` operations and commits classification,
     pattern, and access-summary facts.
 
-    SdeLoopPatternFacts stamps only SDE IR facts. It does not stamp target-specific
-    attributes and it does not cross the dialect boundary. Later conversion may
-    lower the final SDE shape, but raw pattern facts remain SDE ownership.
+    SdeLoopPatternFacts writes only SDE IR facts. It does not write
+    target-specific attributes and it does not cross the dialect boundary. Later
+    conversion may lower the final SDE shape, but raw pattern facts remain SDE
+    ownership.
 
-    The current implementation stamps:
+    The current implementation commits:
     - `classification(<...>)` from the SDE loop/access summary
     - approved `pattern` values for uniform, stencil, wavefront, matmul,
       reduction, and elementwise-pipeline families
@@ -106,19 +107,19 @@ def LayoutAssignment
     - PhaseA builds module-wide per-array access profiles
       (`buildModuleSuAccessRelations`).
     - PhaseB enumerates candidate layouts per array (block-parallel owner-dim,
-      block-contraction, replicated fallback).
+      block-contraction, replicated layout).
     - PhaseC assigns one layout per array, seeding from the writer's owner dims
       (owner-computes) and minimizing total abstract `commVolumeBytes`.
-    - PhaseD stamps the chosen layout as the `arrayLayout` attr on BOTH the
+    - PhaseD writes the chosen layout as the `arrayLayout` attr on BOTH the
       writer and every reader scheduling unit (the key generalization to
       INPUTS), plus a per-edge `layoutsDisagree` geometric mismatch marker and
       an abstract `commVolumeBytes`.
 
-    The attrs are planning inputs, not decorative breadcrumbs: SDE distribution
-    planning consumes the abstract communication volume when choosing
-    concurrency-preserving block shapes. Later planning uses the carried
-    layout facts to select concrete storage and communication carriers without
-    moving target policy into SDE.
+    These attrs are SDE layout facts, not decorative breadcrumbs: SDE
+    distribution consumes the abstract communication volume when choosing
+    concurrency-preserving block shapes. Later SDE passes use the carried layout
+    facts to select concrete storage and movement carriers without moving target
+    policy into SDE.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createLayoutAssignmentPass()";

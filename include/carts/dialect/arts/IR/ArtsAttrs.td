@@ -110,57 +110,6 @@ def StorageBridge : Arts_I32Enum<"StorageBridge", "ARTS storage-bridge tag", [
 /// Enum attribute for storage-bridge tags on `arts.db_alloc`.
 def StorageBridgeAttr : Arts_I32EnumAttr<"storage_bridge", StorageBridge>;
 
-/// DB owner-map policy carried on distributed `arts.db_alloc` operations.
-/// ARTS owns this because DB homes, writer routes, and GUID reservation are
-/// runtime-realization facts, not SDE layout facts.
-def DbOwnerMapKind
-    : Arts_I32Enum<"DbOwnerMapKind", "distributed DB owner-map kind", [
-      I32EnumAttrCase<"linear_mod_nodes", 0, "linear_mod_nodes">,
-      I32EnumAttrCase<"owner_dim_contiguous", 1, "owner_dim_contiguous">,
-      I32EnumAttrCase<"owner_dim_grid", 2, "owner_dim_grid">,
-      I32EnumAttrCase<"explicit_rank_table", 3, "explicit_rank_table">
-    ]>;
-def DbOwnerMapKindAttr
-    : Arts_I32EnumAttr<"owner_map_kind", DbOwnerMapKind>;
-
-/// Where the blocks of a DB physically live. ARTS owns this because DB homes are
-/// a runtime-realization fact projected from committed owner dims, not an
-/// SDE layout fact.
-///   - node_local:          all blocks stay on the creating node (the
-///                          conservative coarse raw-memref bridge home).
-///   - owner_scattered:     blocks are scattered across owner ranks per the
-///                          owner map (the realized distributed home).
-///   - per_block_replicated: every block is resident on every node (the
-///                          all-gather replica home).
-def DbMemoryPlacement
-    : Arts_I32Enum<"DbMemoryPlacement", "distributed DB memory placement", [
-      I32EnumAttrCase<"node_local", 0, "node_local">,
-      I32EnumAttrCase<"owner_scattered", 1, "owner_scattered">,
-      I32EnumAttrCase<"per_block_replicated", 2, "per_block_replicated">
-    ]>;
-def DbMemoryPlacementAttr
-    : Arts_I32EnumAttr<"db_memory_placement", DbMemoryPlacement>;
-
-def ArtsPlanIterationTopology
-    : Arts_I32Enum<"ArtsPlanIterationTopology",
-                   "ARTS physical iteration topology",
-                   CartsIterationTopologyCases>;
-def ArtsPlanIterationTopologyAttr
-    : Arts_I32EnumAttr<"plan_iteration_topology",
-                       ArtsPlanIterationTopology>;
-
-def ArtsPlanRepetitionStructure
-    : Arts_I32Enum<"ArtsPlanRepetitionStructure",
-                   "ARTS repeated-wave structure", [
-      I32EnumAttrCase<"none", 0, "none">,
-      I32EnumAttrCase<"pair_step", 1, "pair_step">,
-      I32EnumAttrCase<"k_step", 2, "k_step">,
-      I32EnumAttrCase<"full_timestep", 3, "full_timestep">
-    ]>;
-def ArtsPlanRepetitionStructureAttr
-    : Arts_I32EnumAttr<"plan_repetition_structure",
-                       ArtsPlanRepetitionStructure>;
-
 def ArtsReductionStrategy
     : Arts_I32Enum<"ArtsReductionStrategy",
                    "ARTS reduction execution strategy",
@@ -214,7 +163,7 @@ def PartitionMode
 /// Enum attribute for DB partition modes
 def PartitionModeAttr : Arts_I32EnumAttr<"partition_mode", PartitionMode>;
 
-/// Distribution strategy carried by SDE-authored ARTS materialization plans.
+/// Distribution strategy carried by SDE-authored ARTS distribution facts.
 def EdtDistributionKind
     : Arts_I32Enum<"EdtDistributionKind", "EDT distribution strategy kind", [
       I32EnumAttrCase<"block", 0, "block">,
@@ -277,7 +226,7 @@ def PreserveAccessModeAttr : AttrDef<ArtsDialect, "PreserveAccessMode"> {
 }
 
 /// Marker on DbAcquireOp to preserve an explicit dependency edge.
-/// This is set for acquires materialized from explicit SDE task dependencies
+/// This is set for acquires created from explicit SDE task dependencies
 /// whose EDT dependency must not be DCE'd away just because the local
 /// pointer/block argument is otherwise unused.
 def PreserveDepEdgeAttr : AttrDef<ArtsDialect, "PreserveDepEdge"> {

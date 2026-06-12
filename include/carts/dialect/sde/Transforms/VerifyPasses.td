@@ -18,7 +18,7 @@ def VerifySdePhysicalConsistency
   let description = [{
     Checks that `physicalOwnerDims` and `physicalBlockShape` are well formed,
     match the realized SU rank, and do not coarsen past SDE's array-layout
-    budget grain. It stamps nothing.
+    budget grain. It writes nothing.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];
@@ -34,8 +34,8 @@ def VerifySdeMuLayout : Pass<"verify-sde-mu-layout", "mlir::ModuleOp"> {
         rank-expanded block-grid MU, and
       * `ownerDims == recover(structure)` — the owner dim recovered purely from
         a converted MU's expanded memref type equals the committed
-        `physicalOwnerDims` (the structure/committed-plan round-trip proof).
-    Conservative (flat) MUs and out-of-scope plans are skipped.
+        `physicalOwnerDims` (the structure/committed-layout round-trip proof).
+    Conservative (flat) MUs and out-of-scope layouts are skipped.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];
@@ -130,23 +130,12 @@ def VerifySdeCoarseAvoidance
 
 def VerifySdeRedistribute
     : Pass<"verify-sde-redistribute", "mlir::ModuleOp"> {
-  let summary = "Fail closed unless layout-disagreement edges are redistributed";
+  let summary = "Fail closed unless redistribution is explicit SDE structure";
   let description = [{
-    Companion of `sde-redistribute` — the fail-closed gate that keeps a committed
-    redistribution edge from being dropped or invented:
-
-      * COMPLETENESS: every committed `layoutsDisagree` edge is either
-        represented by a matching `sde.redist` op or is an edge that is not
-        representable and was left coarse — both are errors, so a movement edge
-        never silently vanishes (a coarse fallback the ARTS CDAG cannot split).
-      * GROUNDING: every `sde.redist` op must match a committed redistribution
-        edge re-derived independently from the `arrayLayout`/`layoutsDisagree`
-        facts — for the representable reduction edge that means source == target
-        == the committed home and the family is the consumer's grounded
-        reduction — so no endpoint or family is invented.
-
-    It reads the committed facts verbatim through the shared `assignStableArrayIds`
-    numbering; it never recomputes owner dims, block shape, or the family.
+    Companion of `sde-redistribute` after that pass has consumed temporary
+    layout-disagreement markers. It rejects residual `layoutsDisagree` attrs and
+    validates each explicit `sde.redist` geometry locally before the ARTS
+    boundary consumes it.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];
@@ -176,8 +165,8 @@ def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
     It deliberately does NOT require CU `IsolatedFromAbove`, an `sde.mu_token`,
     a slice op, or any specific access-window carrier; isolation is a ARTS
     concern and access windows are raised later by RaiseToMuAccessWindow. The
-    pass reads only current IR and local op structure; it stamps no metadata
-    and branches on no downstream contract.
+    pass reads only current IR and local op structure; it writes no metadata
+    and branches on no downstream promise.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createVerifySdePass()";

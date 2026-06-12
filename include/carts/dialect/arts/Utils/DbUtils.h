@@ -146,9 +146,9 @@ public:
   static bool isSmallCoarseUserDataDb(
       DbAllocOp alloc, int64_t maxElements = kSmallCoarseReadOnlyElementLimit);
 
-  /// Return true when distributed ownership rejected this allocation and it
-  /// therefore cannot be used as the storage anchor for an internode launch.
-  static bool isRejectedForDistributedOwnership(DbAllocOp alloc);
+  /// Return true when current DB facts cannot support distributed ownership and
+  /// therefore cannot anchor an internode launch.
+  static bool cannotUseDistributedOwnership(DbAllocOp alloc);
 
   /// Return true when a dependency is a small read-only coarse DB that is cheap
   /// enough to transport to an internode task without forcing local placement.
@@ -277,7 +277,7 @@ public:
 
   /// Overlay a normalized owner-space prefix onto an existing DB-space slice
   /// without collapsing the source DB rank. This keeps untouched owner slots at
-  /// their current range (or full-range fallback) while replacing the leading
+  /// their current range (or full-range) while replacing the leading
   /// normalized slots produced by convertElementSliceToBlockSlice().
   static void mergeNormalizedBlockSlice(
       OpBuilder &builder, Location loc, ValueRange existingOffsets,

@@ -40,6 +40,7 @@
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
@@ -51,6 +52,7 @@ namespace mlir::carts::sde {
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -443,6 +445,51 @@ partialPhysicalBlockShape(const ReductionCandidate &candidate) {
   return shape;
 }
 
+static int64_t nextInternalArrayId(Operation *anchor) {
+  Operation *scope = anchor;
+  if (ModuleOp module = anchor->getParentOfType<ModuleOp>())
+    scope = module.getOperation();
+
+  int64_t maxId = -1;
+  auto record = [&](IntegerAttr attr) {
+    if (attr)
+      maxId = std::max(maxId, attr.getInt());
+  };
+  scope->walk([&](sde::SdeArrayLayoutRootOp root) {
+    maxId = std::max<int64_t>(maxId, root.getArrayId());
+  });
+  scope->walk([&](sde::SdeMuAllocOp alloc) { record(alloc.getArrayIdAttr()); });
+  scope->walk(
+      [&](sde::SdeMuAccessWindowOp win) { record(win.getArrayIdAttr()); });
+  scope->walk(
+      [&](sde::SdeRedistOp redist) { record(redist.getArrayIdAttr()); });
+  return maxId + 1;
+}
+
+static ArrayAttr buildPartialArrayLayout(MLIRContext *ctx, int64_t arrayId,
+                                         const ReductionCandidate &candidate) {
+  Builder builder(ctx);
+  SmallVector<NamedAttribute, 6> fields;
+  fields.push_back(builder.getNamedAttr(sde::AttrNames::LayoutGraph::ArrayId,
+                                        builder.getI64IntegerAttr(arrayId)));
+  fields.push_back(builder.getNamedAttr(
+      sde::AttrNames::LayoutGraph::Kind,
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::BlockParallel)));
+  fields.push_back(
+      builder.getNamedAttr(sde::AttrNames::LayoutGraph::OwnerDims,
+                           buildI64ArrayAttr(ctx, SmallVector<int64_t, 1>{0})));
+  fields.push_back(builder.getNamedAttr(
+      sde::AttrNames::LayoutGraph::BlockShape,
+      buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate))));
+  fields.push_back(builder.getNamedAttr(
+      sde::AttrNames::LayoutGraph::MuBlockCount,
+      builder.getI64IntegerAttr(candidate.plan.blockCount)));
+  fields.push_back(builder.getNamedAttr(
+      sde::AttrNames::LayoutGraph::Role,
+      builder.getStringAttr(sde::AttrNames::LayoutGraphValues::RoleWrite)));
+  return builder.getArrayAttr({builder.getDictionaryAttr(fields)});
+}
+
 static SmallVector<Value, 4> partialIndices(const ReductionCandidate &candidate,
                                             OpBuilder &builder, Location loc,
                                             Value blockIv, Value partialSlot,
@@ -543,6 +590,7 @@ static void createBlockSummingProducerBody(ReductionCandidate &candidate,
 }
 
 static void createProducer(ReductionCandidate &candidate, Value partial,
+                           std::optional<int64_t> partialArrayId,
                            OpBuilder &builder) {
   MLIRContext *ctx = builder.getContext();
   Location loc = candidate.loop.getLoc();
@@ -566,16 +614,16 @@ static void createProducer(ReductionCandidate &candidate, Value partial,
       /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
       /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
       /*writeFootprint=*/nullptr, buildI64ArrayAttr(ctx, {0}),
-      candidate.plan.rankExpandedMu
-          ? buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate))
-          : buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate)),
+      buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate)),
       buildI64ArrayAttr(ctx, {1}),
       /*physicalHaloShape=*/nullptr,
       sde::SdeIterationTopologyAttr::get(
           ctx, sde::SdeIterationTopology::owner_strip),
       /*repetitionStructure=*/nullptr, /*asyncStrategy=*/nullptr,
       /*distributionKind=*/nullptr, /*inPlaceSafe=*/nullptr,
-      /*inPlaceSharedState=*/nullptr, /*arrayLayout=*/nullptr,
+      /*inPlaceSharedState=*/nullptr,
+      partialArrayId ? buildPartialArrayLayout(ctx, *partialArrayId, candidate)
+                     : ArrayAttr{},
       /*layoutsDisagree=*/nullptr, /*commVolumeBytes=*/nullptr);
 
   Block &suBody = sde::ensureBlock(su.getBody());
@@ -584,6 +632,11 @@ static void createProducer(ReductionCandidate &candidate, Value partial,
   Value blockIv = suBody.getArgument(0);
 
   builder.setInsertionPointToStart(&suBody);
+  if (partialArrayId)
+    sde::SdeArrayLayoutRootOp::create(
+        builder, loc, partial,
+        sde::SdeAccessModeAttr::get(ctx, sde::SdeAccessMode::write),
+        builder.getI64IntegerAttr(*partialArrayId));
   auto cu = sde::SdeCuRegionOp::create(
       builder, loc, /*resultTypes=*/TypeRange{},
       sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
@@ -657,10 +710,14 @@ static LogicalResult rewriteReduction(ReductionCandidate candidate) {
   MemRefType partialType =
       buildPartialType(outerBuilder.getContext(), candidate);
   Value partial;
+  std::optional<int64_t> partialArrayId;
   if (candidate.plan.rankExpandedMu) {
-    partial =
-        sde::SdeMuAllocOp::create(outerBuilder, loc, partialType, ValueRange{})
-            .getMemref();
+    partialArrayId = nextInternalArrayId(parentCu.getOperation());
+    auto partialAlloc =
+        sde::SdeMuAllocOp::create(outerBuilder, loc, partialType, ValueRange{});
+    partialAlloc.setArrayIdAttr(
+        outerBuilder.getI64IntegerAttr(*partialArrayId));
+    partial = partialAlloc.getMemref();
   } else {
     auto allocCu = sde::SdeCuRegionOp::create(
         outerBuilder, loc, TypeRange{partialType},
@@ -675,7 +732,7 @@ static LogicalResult rewriteReduction(ReductionCandidate candidate) {
     partial = allocCu.getResult(0);
     outerBuilder.setInsertionPointAfter(allocCu);
   }
-  createProducer(candidate, partial, outerBuilder);
+  createProducer(candidate, partial, partialArrayId, outerBuilder);
 
   OpBuilder innerBuilder(candidate.loop);
   createFinalCombine(candidate, partial, innerBuilder);

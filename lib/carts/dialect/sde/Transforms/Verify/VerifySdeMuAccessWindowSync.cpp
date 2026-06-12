@@ -30,7 +30,7 @@
 /// structure.
 ///
 /// Distinct from effect-based barrier elimination: that decides removal from
-/// structured memory effects and rewrites/stamps the barrier; this proves
+/// structured memory effects and rewrites the barrier; this proves
 /// justification from raised block-grid window facts and changes nothing. The
 /// removal counterpart of this verdict is `sde-mu-access-window-sync-opt`,
 /// which shares the same classifier and erases the barriers proven REDUNDANT.

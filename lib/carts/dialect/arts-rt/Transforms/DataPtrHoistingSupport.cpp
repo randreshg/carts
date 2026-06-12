@@ -440,7 +440,7 @@ Value buildGuardedDepPtrLoad(OpBuilder &builder, Location loc, DepGepOp depGep,
   return ifOp.getResult(0);
 }
 
-bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
+bool createBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   auto depGep = loadOp.getAddr().getDefiningOp<DepGepOp>();
   if (!depGep)
     return false;
@@ -789,8 +789,7 @@ Value stripInvariantZeroFallback(Value value, scf::ForOp loop) {
   return value;
 }
 
-bool materializeSingleBlockBlockedDepView(LLVM::LoadOp loadOp,
-                                          scf::ForOp loop) {
+bool createSingleBlockBlockedDepView(LLVM::LoadOp loadOp, scf::ForOp loop) {
   auto depGep = loadOp.getAddr().getDefiningOp<DepGepOp>();
   if (!depGep)
     return false;
@@ -1083,11 +1082,11 @@ std::optional<LoopWindowAccessPattern> matchLoopWindowAccess(Operation *op,
       return pattern;
     }
 
-    /// Generic fallback: when the access memref itself is already invariant
-    /// across the loop, version the boundary index math even if pointer
-    /// selection was resolved earlier. This keeps loop-window versioning
-    /// useful after pointer hoisting/caching and avoids baking benchmark-
-    /// specific assumptions into lowering.
+    /// Generic structural case: when the access memref itself is already
+    /// invariant across the loop, version the boundary index math even if
+    /// pointer selection was resolved earlier. This keeps loop-window
+    /// versioning useful after pointer hoisting/caching and avoids baking
+    /// benchmark- specific assumptions into lowering.
     if (!isLoopInvariant(loop, memInfo.memref))
       continue;
     return pattern;
@@ -1284,7 +1283,7 @@ bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses) {
   return true;
 }
 
-bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
+bool createNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   auto depGep = loadOp.getAddr().getDefiningOp<DepGepOp>();
   if (!depGep)
     return false;
@@ -1309,7 +1308,7 @@ bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
   NeighborCarryIndexPattern pattern;
   if (!matchNeighborCarryIndex(indices.back(), loop, pattern) ||
       (!pattern.aboveCond && !pattern.belowCond))
-    return materializeBlockedNeighborPtrCache(loadOp, loop);
+    return createBlockedNeighborPtrCache(loadOp, loop);
 
   Location loc = loadOp.getLoc();
   OpBuilder beforeLoop(loop);
@@ -1375,16 +1374,19 @@ bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop) {
 }
 
 /// Find the highest loop that can legally hoist a pure, operand-only op.
-/// This complements load hoisting for materializations like
-/// polygeist.pointer2memref whose sole source pointer has already been hoisted
-/// or was defined outside the loop nest to begin with.
+/// This complements load hoisting for pointer-view ops like
+/// polygeist.pointer2memref whose source pointer has already been hoisted or
+/// was defined outside the loop nest to begin with.
 scf::ForOp findInvariantOpHoistTarget(Operation *op, DominanceInfo &domInfo) {
   scf::ForOp target = nullptr;
   for (Operation *parent = op->getParentOp(); parent;
        parent = parent->getParentOp()) {
     auto loop = dyn_cast<scf::ForOp>(parent);
-    if (!loop)
+    if (!loop) {
+      if (parent->getNumRegions() != 0)
+        break;
       continue;
+    }
     Region &loopRegion = loop.getRegion();
     if (!allOperandsDefinedOutside(op, loopRegion))
       break;

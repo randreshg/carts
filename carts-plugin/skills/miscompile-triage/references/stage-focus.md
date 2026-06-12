@@ -4,7 +4,7 @@ Use this as a starting point for pipeline bisection.
 
 | Symptom | First Stages to Inspect |
 |---|---|
-| OpenMP structure missing or wrong task boundaries | `sde-planning` (SDE sub-passes), `sde-to-arts`, `sde-to-arts`, `edt-transforms` |
+| OpenMP structure missing or wrong task boundaries | `sde-planning` (SDE sub-passes), `sde-to-arts`, `edt-dep-realization`, `edt-local-cleanup` |
 | Wrong loop shape or reordered access pattern | `sde-planning` (inspect SDE sub-passes such as `LoopInterchange`, `DistributionPlanning`, etc. via `--arts-debug`) |
 | DB count, acquire mode, or DB shape wrong | `sde-to-arts`, `create-dbs`, `db-opt` |
 | Work chunks or distribution attrs look wrong | `sde-planning`, `sde-to-arts`, `post-db-refinement` |
@@ -15,8 +15,8 @@ If you do not know where to begin, dump:
 
 1. `sde-planning`
 2. `sde-to-arts`
-3. `sde-to-arts`
-4. `edt-transforms`
+3. `edt-dep-realization`
+4. `edt-local-cleanup`
 5. `create-dbs`
 6. `db-opt`
 7. `post-db-refinement`

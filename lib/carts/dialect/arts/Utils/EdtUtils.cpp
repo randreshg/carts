@@ -6,6 +6,7 @@
 
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -131,7 +132,7 @@ static bool acquireHasSubpartitionEntry(DbAcquireOp acquire) {
   return false;
 }
 
-static bool acquireCarriesPlannedSubpartitionEvidence(DbAcquireOp acquire) {
+static bool acquireCarriesSubpartitionEvidence(DbAcquireOp acquire) {
   if (!acquire)
     return false;
 
@@ -152,18 +153,12 @@ static bool acquireCarriesPlannedSubpartitionEvidence(DbAcquireOp acquire) {
 
   Operation *root = DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr());
   auto alloc = dyn_cast_or_null<DbAllocOp>(root);
-  return alloc &&
-         (alloc.getDistributedAttr() || alloc.getOwnerMapKindAttr() ||
-          alloc.getOwnerMapVersionAttr() || alloc.getOwnerMapDimsAttr() ||
-          alloc.getOwnerBlockShapeAttr() || alloc.getPlanOwnerDimsAttr() ||
-          alloc.getPlanPhysicalBlockShapeAttr() ||
-          alloc.getPlanHaloShapeAttr() ||
-          alloc.getPlanIterationTopologyAttr() ||
-          alloc.getPlanRepetitionStructureAttr() ||
-          alloc.getPerBlockReplicatedAttr() ||
-          alloc.getPerBlockSingleWriterStencilAttr() ||
-          alloc.getStencilOwnerDimsAttr() ||
-          alloc.getStencilSupportedBlockHaloAttr());
+  return alloc && (alloc.getDistributedAttr() ||
+                   hasArtsDbPhysicalLayout(alloc.getOperation()) ||
+                   alloc.getPerBlockReplicatedAttr() ||
+                   alloc.getPerBlockSingleWriterStencilAttr() ||
+                   alloc.getStencilOwnerDimsAttr() ||
+                   alloc.getStencilSupportedBlockHaloAttr());
 }
 
 struct RootDepGroup {
@@ -197,7 +192,7 @@ LogicalResult EdtUtils::verifyNoMixedRootDependencies(ModuleOp module) {
       group.hasSubpartition |= acquireHasSubpartitionEntry(acquire);
       group.hasProtectedSubpartition |=
           acquireHasSubpartitionEntry(acquire) &&
-          acquireCarriesPlannedSubpartitionEvidence(acquire);
+          acquireCarriesSubpartitionEvidence(acquire);
     }
 
     for (auto &entry : byRoot) {
@@ -208,7 +203,7 @@ LogicalResult EdtUtils::verifyNoMixedRootDependencies(ModuleOp module) {
         continue;
       edt.emitOpError(
           "carries both a coarse and a subpartitioned acquire of the same "
-          "root datablock without planned-block evidence; ARTS cannot realize "
+          "root datablock without block-grid evidence; ARTS cannot realize "
           "a mixed dependency grain. Commit a single dependency grain "
           "upstream (SDE).");
       sawViolation = true;

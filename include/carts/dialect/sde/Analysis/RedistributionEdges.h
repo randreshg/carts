@@ -1,18 +1,12 @@
 ///==========================================================================///
 /// File: RedistributionEdges.h
 ///
-/// Committed SDE redistribution-edge analysis.
+/// Committed SDE redistribution-edge query.
 ///
-/// `sde-layout-assignment` records, per accessing `sde.su_iterate`, the chosen
-/// per-array home BLOCK layout (`arrayLayout`) and a metadata-only
-/// `layoutsDisagree` marker naming array roots whose consumer access does not
-/// align with that home. This analysis resolves every such committed edge into
-/// a concrete redistribution fact — source = the committed home layout, family
-/// = the consumer's grounded access kind, target = determined by the family
-/// relative to the home — or, when no legal family applies, a fail-closed
-/// failure with evidence. It is the single source of truth shared by
-/// `sde-redistribute` (which emits `sde.redist`) and `verify-sde-redistribute`
-/// (which checks the edges are faithfully represented). It reads committed
+/// `sde-layout-assignment` records temporary `layoutsDisagree` markers on
+/// accessing `sde.su_iterate` ops. This query resolves each marker into a
+/// concrete redistribution fact that `sde-redistribute` consumes into
+/// `sde.redist`, or a fail-closed failure with evidence. It reads committed
 /// facts verbatim and never recomputes owner dims, block shape, or family.
 ///==========================================================================///
 
@@ -71,6 +65,11 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp);
 /// source
 /// + target geometry). Shared idempotence/grounding predicate.
 bool redistMatchesEdge(SdeRedistOp redist, const RedistributionEdge &edge);
+
+/// True iff an already-emitted `sde.redist` is grounded in committed SDE
+/// writer layout/provenance. Does not require the temporary `layoutsDisagree`
+/// marker to still be present.
+bool redistGroundedInCommittedLayout(SdeRedistOp redist, std::string &reason);
 
 } // namespace mlir::carts::sde
 

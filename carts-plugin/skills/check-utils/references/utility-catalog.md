@@ -22,7 +22,7 @@ disagree.
 | ARTS DB mechanics | `include/carts/dialect/arts/Utils/DbUtils.h` | `traceToDbAlloc`, `getUnderlyingDb`, `getMemoryAccessInfo`, `isWriterMode` |
 | ARTS EDT mechanics | `include/carts/dialect/arts/Utils/EdtUtils.h` | `EdtEnvManager`, `isInsideEpoch`, `classifyEdtArgAccesses` |
 | ARTS loop structure, partition/block predicates, runtime topology, and source-location IDs | `include/carts/dialect/arts/Utils` | `LoopStructureUtils`, `BlockedAccessUtils`, `PartitionPredicates`, `RuntimeConfig`, `LocationMetadata` |
-| ARTS DB/ownership queries | `include/carts/dialect/arts/Utils` | `DbUtils`, `DbDistributedEligibility`, `DbLayoutPlanUtils`, `LoweringFactUtils` |
+| ARTS DB/ownership queries | `include/carts/dialect/arts/Utils` | `DbUtils`, `DbDistributedEligibility`, `DbLayoutFactsUtils`, `LoweringFactUtils` |
 | ARTS-RT runtime ABI | `include/carts/dialect/arts-rt/Utils` | `IdRegistry`, `RuntimeCallUtils`, `RtDbUtils` |
 
 Do not create new files such as `LoopIVUtils`, `DbHelperUtils`, or
@@ -108,7 +108,7 @@ op.getStencilMaxOffsetsAttrName()
 
 Use `include/carts/utils/OperationAttributes.h` only for remaining shared or
 transitional ARTS metadata that is not yet an ODS attr. See
-`include/carts/utils/StencilAttributes.h` for ARTS stencil contract helpers,
+`include/carts/utils/StencilAttributes.h` for ARTS stencil attribute helpers,
 and `include/carts/utils/ArrayAttrUtils.h` for dialect-neutral i64 array
 attribute builders/readers.
 

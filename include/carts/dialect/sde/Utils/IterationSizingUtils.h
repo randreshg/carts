@@ -54,11 +54,11 @@ long double estimateStencilExpandedTileRatio(ArrayRef<int64_t> extents,
 
 /// Owned byte footprint of a single physical tile. Returns 0 if any shape
 /// dimension is non-positive or `elemBytes <= 0`. Multiplication saturates at
-/// int64_t max so callers can compare against planning floors safely.
+/// int64_t max so callers can compare against transform floors safely.
 int64_t tilePayloadBytes(ArrayRef<int64_t> physicalBlockShape,
                          int64_t elemBytes);
 
-/// Coarsen `workers` (downward, halving) until the resulting plan's owned
+/// Coarsen `workers` (downward, halving) until the resulting tile's owned
 /// tile payload reaches `minTileBytes`, but never below `minWorkers`.
 /// `rebuild` is invoked with each candidate worker count and must populate
 /// `candidateShape` from scratch (returning true on success). Returns the final

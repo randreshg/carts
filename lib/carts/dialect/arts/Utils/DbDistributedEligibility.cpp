@@ -39,13 +39,12 @@ static bool hasMultipleAllocationBlocks(DbAllocOp alloc) {
 static bool hasSupportedAllocationShape(DbAllocOp alloc) {
   /// Distributed ownership currently targets ranked memref allocations.
   /// Keep scalars local to avoid over-marking small or temporary DBs. Rank-1
-  /// vectors are eligible only when SDE authored an explicit block plan;
+  /// vectors are eligible only when the DB already has block-grid structure;
   /// otherwise a large vector still looks like an undifferentiated aggregate.
   if (alloc.getElementSizes().empty())
     return false;
   if (alloc.getElementSizes().size() == 1 &&
-      (!getPlanOwnerDimsAttr(alloc.getOperation()) ||
-       !getPlanPhysicalBlockShapeAttr(alloc.getOperation())))
+      !hasArtsDbPhysicalLayout(alloc.getOperation()))
     return false;
 
   auto isPositiveOrDynamic = [](Value value) -> bool {
@@ -65,15 +64,15 @@ static bool hasSupportedAllocationShape(DbAllocOp alloc) {
   return true;
 }
 
-static bool hasOwnerMapSeedPlan(DbAllocOp alloc) {
-  return hasArtsDbPhysicalLayoutPlan(alloc.getOperation());
+static bool hasDbGridForOwnerRoute(DbAllocOp alloc) {
+  return hasArtsDbPhysicalLayout(alloc.getOperation());
 }
 
-static bool hasSupportedOwnerMapSeedPlan(DbAllocOp alloc) {
-  if (!hasArtsDbPhysicalLayoutPlan(alloc.getOperation()))
+static bool hasSupportedDbGridForOwnerRoute(DbAllocOp alloc) {
+  if (!hasArtsDbPhysicalLayout(alloc.getOperation()))
     return false;
 
-  auto ownerBlockShape = getDbOwnerBlockShapeFromPlan(alloc);
+  auto ownerBlockShape = getDbOwnerRouteBlockShapeFromDbGrid(alloc);
   if (!ownerBlockShape || ownerBlockShape->empty())
     return false;
 
@@ -81,7 +80,7 @@ static bool hasSupportedOwnerMapSeedPlan(DbAllocOp alloc) {
       kind && *kind == EdtDistributionKind::block_cyclic)
     return !alloc.getSizes().empty();
 
-  auto dbOwnerDims = getDbOwnerMapDimsFromPlan(alloc);
+  auto dbOwnerDims = getDbOwnerRouteDimsFromDbGrid(alloc);
   return dbOwnerDims &&
          ownerDimsAddressDbRank(*dbOwnerDims, alloc.getSizes().size());
 }
@@ -199,7 +198,7 @@ struct EligibilityFacts {
   bool allHaveEdtAcquireUsers = true;
   /// True only when every internode read-only stencil acquire of |alloc|
   /// carries the `replicatedRead` storage-view marker authored by ARTS
-  /// storage planning. This is the facts that says "the codelet wants
+  /// storage analysis. This is the fact that says "the codelet wants
   /// the full DB replicated", not just "the access happens to be RO".
   bool allInternodeStencilReadsAreReplicated = true;
 };
@@ -241,7 +240,7 @@ collectEligibilityFacts(DbAllocOp alloc) {
 
     bool internode = edt && edt.getConcurrency() == EdtConcurrency::internode;
     /// Bridge-fill EDTs (carrying the `storageBridgeCopy` marker) are
-    /// orchestration machinery that materializes the host->compute bridge,
+    /// orchestration machinery that realizes the host->compute bridge,
     /// not user computation. Their writes must not block the halo-backed
     /// bridge eligibility path; otherwise every bridged stencil DB looks
     /// "internode-written" before the user codelet ever runs.
@@ -270,8 +269,6 @@ static bool hasReadOnlyAfterInitAttr(DbAllocOp alloc) {
 static bool hasBridgeHaloFacts(DbAllocOp alloc) {
   if (!alloc)
     return false;
-  if (getPlanHaloShapeAttr(alloc.getOperation()))
-    return true;
   return alloc->hasAttr(alloc.getStencilSupportedBlockHaloAttrName());
 }
 
@@ -282,6 +279,12 @@ static bool isHaloBackedHostBridge(DbAllocOp alloc) {
   std::optional<PartitionMode> mode = getPartitionMode(alloc.getOperation());
   return mode &&
          (*mode == PartitionMode::block || *mode == PartitionMode::stencil);
+}
+
+static bool hasSingleNodeRuntime(DbAllocOp alloc) {
+  ModuleOp module = alloc ? alloc->getParentOfType<ModuleOp>() : ModuleOp();
+  std::optional<int64_t> totalNodes = getRuntimeTotalNodes(module);
+  return totalNodes && *totalNodes <= 1;
 }
 
 } // namespace
@@ -299,10 +302,11 @@ mlir::carts::arts::toString(DistributedDbEligibilityRejectReason reason) {
     return "single_block";
   case DistributedDbEligibilityRejectReason::UnsupportedShape:
     return "unsupported_shape";
-  case DistributedDbEligibilityRejectReason::MissingOwnerMapPlan:
-    return "missing_owner_map_plan";
-  case DistributedDbEligibilityRejectReason::UnsupportedOwnerMapShape:
-    return "unsupported_owner_map_shape";
+  case DistributedDbEligibilityRejectReason::MissingPhysicalDbLayout:
+    return "missing_physical_db_layout";
+  case DistributedDbEligibilityRejectReason::
+      UnsupportedPhysicalDbLayoutForOwnerRoute:
+    return "unsupported_physical_db_layout_for_owner_route";
   case DistributedDbEligibilityRejectReason::StencilReadInternodeUse:
     return "stencil_read_internode_use";
   case DistributedDbEligibilityRejectReason::UnsupportedPtrUsers:
@@ -311,6 +315,8 @@ mlir::carts::arts::toString(DistributedDbEligibilityRejectReason reason) {
     return "unsupported_guid_users";
   case DistributedDbEligibilityRejectReason::NonEdtAcquireUse:
     return "non_edt_acquire_use";
+  case DistributedDbEligibilityRejectReason::NoDistributedOwnerUse:
+    return "no_distributed_owner_use";
   case DistributedDbEligibilityRejectReason::PerBlockReplicated:
     return "per_block_replicated";
   }
@@ -336,11 +342,12 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc) {
     return {false, DistributedDbEligibilityRejectReason::SingleBlock};
   if (!hasSupportedAllocationShape(alloc))
     return {false, DistributedDbEligibilityRejectReason::UnsupportedShape};
-  if (!hasOwnerMapSeedPlan(alloc))
-    return {false, DistributedDbEligibilityRejectReason::MissingOwnerMapPlan};
-  if (!hasSupportedOwnerMapSeedPlan(alloc))
+  if (!hasDbGridForOwnerRoute(alloc))
     return {false,
-            DistributedDbEligibilityRejectReason::UnsupportedOwnerMapShape};
+            DistributedDbEligibilityRejectReason::MissingPhysicalDbLayout};
+  if (!hasSupportedDbGridForOwnerRoute(alloc))
+    return {false, DistributedDbEligibilityRejectReason::
+                       UnsupportedPhysicalDbLayoutForOwnerRoute};
   if (!hasOnlyAllowedHandleUsers(alloc.getPtr()))
     return {false, DistributedDbEligibilityRejectReason::UnsupportedPtrUsers};
   if (!hasOnlyAllowedHandleUsers(alloc.getGuid()))
@@ -361,7 +368,7 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc) {
     /// keeps one writer frontier per block.
     if (alloc.getPerBlockSingleWriterStencil().value_or(false))
       return {true, DistributedDbEligibilityRejectReason::None};
-    /// ARTS storage planning marks acquires with `replicatedRead` when the
+    /// ARTS storage analysis marks acquires with `replicatedRead` when the
     /// codelet wants the whole DB on every node. Without that marker, the
     /// codelet asked for a block view and ARTS must not unilaterally replicate.
     bool readOnly =
@@ -375,5 +382,10 @@ mlir::carts::arts::evaluateDistributedDbEligibility(DbAllocOp alloc) {
     return {false,
             DistributedDbEligibilityRejectReason::StencilReadInternodeUse};
   }
+  if (!facts.hasInternodeWriteUse &&
+      !getEdtDistributionKind(alloc.getOperation()))
+    return {false, DistributedDbEligibilityRejectReason::NoDistributedOwnerUse};
+  if (hasSingleNodeRuntime(alloc))
+    return {true, DistributedDbEligibilityRejectReason::None};
   return {true, DistributedDbEligibilityRejectReason::None};
 }

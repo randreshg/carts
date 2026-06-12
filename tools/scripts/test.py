@@ -94,7 +94,7 @@ def _resolve_lit_targets(config: CartsConfig, suite: str) -> List[Path]:
 
     if suite in ("benchmarks", "benchmark"):
         return [carts_dir / SUBMODULE_BENCHMARKS / "tests"]
-    if suite in ("contracts", "pass"):
+    if suite == "pass":
         test_paths = [p for p in pass_test_dirs if p.is_dir()]
     elif suite == "e2e":
         test_paths = [p for p in e2e_test_dirs if p.is_dir()]
@@ -102,7 +102,7 @@ def _resolve_lit_targets(config: CartsConfig, suite: str) -> List[Path]:
         test_paths = [p for p in pass_test_dirs + e2e_test_dirs if p.is_dir()]
     else:
         print_error(f"Unknown test suite '{suite}'")
-        print_info("Available suites: pass, e2e, all, contracts, benchmarks, arts")
+        print_info("Available suites: pass, e2e, all, benchmarks, arts")
         raise Exit(1)
 
     if not test_paths:

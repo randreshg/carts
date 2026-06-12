@@ -150,9 +150,6 @@ static LayoutGraphFact parseLayoutCommon(DictionaryAttr dict) {
   fact.budgetBlockShape =
       getI64Array(dict, AttrNames::LayoutGraph::BudgetBlockShape);
   if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::LayoutGraph::BudgetMuBlockCount))
-    fact.budgetMuBlockCount = std::max<int64_t>(1, *value);
-  if (std::optional<int64_t> value =
           getI64(dict, AttrNames::LayoutGraph::MuBlockCount))
     fact.muBlockCount = std::max<int64_t>(1, *value);
   if (std::optional<int64_t> value =
@@ -454,7 +451,7 @@ MuNet makeMuNet(unsigned muId, const ArrayAccessProfile &profile,
 }
 
 MuNet makeMuNet(unsigned muId, const CuMuMemoryUnit &memory,
-                std::optional<CuMuPartitionPlan> partitionPlan,
+                std::optional<CuMuPartitionChoice> partitionChoice,
                 std::optional<ArrayLayoutKind> layoutKind) {
   MuNet net;
   net.id = muId;
@@ -469,11 +466,11 @@ MuNet makeMuNet(unsigned muId, const CuMuMemoryUnit &memory,
   else if (!net.ownerDims.empty())
     net.layoutKind = ArrayLayoutKind::blockParallel;
 
-  if (partitionPlan) {
-    net.blockShape.assign(partitionPlan->physicalBlockShape.begin(),
-                          partitionPlan->physicalBlockShape.end());
-    net.tilePayloadBytes = partitionPlan->tilePayloadBytes;
-    net.muBlockCount = std::max<int64_t>(1, partitionPlan->computeUnits);
+  if (partitionChoice) {
+    net.blockShape.assign(partitionChoice->physicalBlockShape.begin(),
+                          partitionChoice->physicalBlockShape.end());
+    net.tilePayloadBytes = partitionChoice->tilePayloadBytes;
+    net.muBlockCount = std::max<int64_t>(1, partitionChoice->computeUnits);
   }
   return net;
 }

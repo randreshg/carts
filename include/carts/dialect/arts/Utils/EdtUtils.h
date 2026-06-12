@@ -77,9 +77,8 @@ public:
                                   SmallVectorImpl<bool> &writes);
 
   /// Fail closed when any EDT mixes a coarse and a subpartitioned acquire of
-  /// the same root DB without planned-block evidence. ARTS cannot realize a
-  /// mixed dependency grain; the single grain must be committed upstream.
-  /// Planned/preserved subpartition shapes are accepted unchanged.
+  /// the same root DB without block-grid evidence. ARTS cannot realize a mixed
+  /// dependency grain; the single grain must be committed upstream.
   static LogicalResult verifyNoMixedRootDependencies(ModuleOp module);
 
   /// Return true when an alloca initialization store can be cloned into an EDT

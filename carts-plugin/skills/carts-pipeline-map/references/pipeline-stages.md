@@ -42,12 +42,12 @@ you are specifically fixing outdated docs.
 - `sde-input-normalization` includes `ScalarForwarding`,
   `SdeMemrefNormalization`, and `SdeHandleDeps`.
 - `sde-planning` owns OpenMP-to-SDE conversion, pattern/distribution/reduction
-  planning, iteration-space decomposition, and MU materialization intent.
-- `sde-to-arts` owns mechanical SDE-to-ARTS DB/acquire/EDT materialization and
+  transforms, iteration-space decomposition, and MU realization intent.
+- `sde-to-arts` owns mechanical SDE-to-ARTS DB/acquire/EDT realization and
   rejects any surviving SDE operation.
 - `edt-dep-realization` realizes EDT distribution deps and verifies the ARTS
   object boundary.
-- `post-db-refinement` runs DB/EDT refinements and contract validation after
+- `post-db-refinement` runs DB/EDT refinements and validation after
   DB mode tightening.
 - `pre-lowering` lowers ARTS DB/EDT/epoch objects to ARTS-RT-shaped operations and
   verifies the result with `VerifyPreLowered`.

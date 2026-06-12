@@ -219,7 +219,7 @@ matchScratchCandidate(DbAllocOp alloc, DominanceInfo &domInfo) {
       return std::nullopt;
 
     auto mode = getPartitionMode(acquire.getOperation());
-    if (mode && requiresWorkerBoundsPlanning(*mode))
+    if (mode && usesWorkerBounds(*mode))
       return std::nullopt;
 
     auto [edt, blockArg] = EdtUtils::getBlockArgumentForAcquire(acquire);

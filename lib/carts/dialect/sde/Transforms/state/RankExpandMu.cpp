@@ -5,26 +5,26 @@
 ///
 /// Replaces the attribute-only block/owner grain with readable IR structure:
 /// for every `sde.mu_alloc` governed by a committed elementwise/stencil BLOCK
-/// plan with any number of owner dims, this pass rank-expands the result memref
-/// so
+/// layout with any number of owner dims, this pass rank-expands the result
+/// memref so
 /// the block grid is part of the type, and rewrites every CU `memref.load`/
 /// `memref.store` into the physical `[block, intra-block, ...]` coordinate
 /// system via the `MuLayoutRewriter`/`MuAccessIndexer` library.
 ///
-/// This is a REAL transformation, not a metadata promise:
+/// This is a real transformation:
 ///   * a converted MU carries its grain structurally (no owner-dim attr on the
 ///     mu_alloc; owner dims are `recover(structure)`); multi-owner owner-tile
-///     plans expand to a `[grid..., tile...]` form, with grid dims in canonical
-///     ascending owner order,
-///   * matmul / reduction / in-place / dynamic plans are left in conservative
-///     flat form (or fail closed) — never papered over with an op-attribute
-///     promise or a compatibility attr.
+///     layouts expand to a `[grid..., tile...]` form, with grid dims in
+///     canonical ascending owner order,
+///   * accumulator-reduction / in-place / dynamic cases stay in flat form or
+///     fail closed; this pass does not add compatibility attrs.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_SDERANKEXPANDMU
@@ -44,15 +44,6 @@ namespace {
 // Shared helpers keep the block-grid realize gate and index localization
 // identical across rank expansion, coarse avoidance, and verification.
 
-static ArrayAttr buildCanonicalOwnerDimsAttr(MLIRContext *ctx,
-                                             ArrayRef<unsigned> ownerDims) {
-  SmallVector<int64_t, 4> values;
-  values.reserve(ownerDims.size());
-  for (unsigned dim : ownerDims)
-    values.push_back(static_cast<int64_t>(dim));
-  return Builder(ctx).getI64ArrayAttr(values);
-}
-
 struct SdeRankExpandMuPass
     : public carts::sde::impl::SdeRankExpandMuBase<SdeRankExpandMuPass> {
   void runOnOperation() override {
@@ -67,20 +58,21 @@ struct SdeRankExpandMuPass
       if (!logicalType || !logicalType.hasStaticShape())
         continue; // dynamic / non-memref -> conservative
 
-      carts::sde::SdeSuIterateOp si =
-          carts::sde::findCommittedBlockPlanWriter(mu);
-      carts::sde::MuPhysicalLayout plan;
-      if (!carts::sde::isBlockGridRealizable(si, logicalType, plan))
+      std::optional<carts::sde::CommittedMuBlockLayout> committed =
+          carts::sde::findCommittedMuBlockLayout(mu);
+      if (!committed ||
+          !carts::sde::supportsRankExpandedAccessWindows(committed->writer))
         continue; // out of scope -> leave flat, add NO attrs
 
       std::unique_ptr<carts::sde::MuAccessIndexer> indexer =
-          carts::sde::makeMuAccessIndexer(*si.getStructuredClassification(),
-                                          plan);
-      carts::sde::MuLayoutRewriter rewriter(plan, *indexer);
+          carts::sde::makeMuAccessIndexer(
+              *committed->writer.getStructuredClassification(),
+              committed->layout);
+      carts::sde::MuLayoutRewriter rewriter(committed->layout, *indexer);
       if (mlir::failed(rewriter.apply(mu))) {
-        // The plan committed a distributed/block-shaped result this pass cannot
-        // realize end to end. Fail closed with evidence rather than emit a
-        // partial promise.
+        // The committed facts require a distributed/block-shaped result this
+        // pass cannot realize end to end. Fail closed with evidence rather than
+        // emit a partial promise.
         mu.emitOpError()
             << "committed block-grid layout cannot be realized as a "
                "rank-expanded MU (unsupported use of the MU root); refusing to "
@@ -88,8 +80,8 @@ struct SdeRankExpandMuPass
         failed = true;
         continue;
       }
-      si.setPhysicalOwnerDimsAttr(
-          buildCanonicalOwnerDimsAttr(module.getContext(), plan.ownerDims));
+      carts::sde::reconcileArrayLayoutWithCommittedPhysicalShape(
+          committed->writer);
     }
 
     if (failed)

@@ -66,7 +66,7 @@ def _check_rdma_provider_deps() -> None:
 
 
 # ARTS multinode transport kinds. GASNet-EX is the production default on
-# Linux; rsocket is an explicit legacy fallback only; TCP is the debug escape.
+# Linux; rsocket is an explicit legacy transport; TCP is the debug escape.
 ARTS_TRANSPORT_GASNET = "gasnet"
 ARTS_TRANSPORT_RSOCKET = "rsocket"
 ARTS_TRANSPORT_TCP = "tcp"
@@ -79,7 +79,7 @@ def _select_arts_transport(config, rdma: Optional[bool], legacy_rsocket: bool) -
     TCP/debug escape and wins; --legacy-rsocket selects the legacy rsocket data
     plane; otherwise the production accelerated transport is GASNet-EX, which is
     the Linux default and is also selected by an explicit --rdma. macOS developer
-    builds fall back to TCP unless an accelerated transport is requested.
+    builds use TCP unless an accelerated transport is requested.
     """
     if rdma is False:
         if legacy_rsocket:
@@ -145,7 +145,7 @@ def _apply_arts_transport_make_vars(
             make_vars.append(f"ARTS_GASNET_PMI_HOME={pmi_home}")
     elif transport == ARTS_TRANSPORT_RSOCKET:
         console.print(
-            f"Network: [{Colors.INFO}]rsocket RDMA (legacy fallback)[/{Colors.INFO}]"
+            f"Network: [{Colors.INFO}]rsocket RDMA (legacy transport)[/{Colors.INFO}]"
         )
         _check_rdma_provider_deps()
         make_vars.extend(["ARTS_USE_GASNET=OFF", "ARTS_USE_RDMA=ON"])

@@ -8,8 +8,8 @@
   - `scripts/` - Python CLI subcommands/helpers used through `dekk carts`
   - `compile/` - C++ compilation driver (`carts-compile`)
 - `tests/` - Test suites
-  - `contracts/` - Pipeline regression tests (MLIR + FileCheck)
-  - `examples/` - End-to-end C/C++ tests
+  - `cli/`, `boundaries/`, `attrs/`, `inputs/` - top-level lit fixtures and
+    shared configs
 - `docker/` - Container workflows
 - `external/` - Dependencies (ARTS, Polygeist, LLVM)
 
@@ -25,7 +25,7 @@ dekk carts install --wrap              # Also generate the optional project-loca
 dekk carts build                       # Build CARTS
 dekk carts build --clean               # Clean build
 dekk carts build --arts                # ARTS release, GASNet-EX (v4 production default)
-dekk carts build --arts --no-rdma      # ARTS release, TCP fallback
+dekk carts build --arts --no-rdma      # ARTS release, TCP/debug transport
 dekk carts build --arts --debug 0      # ARTS errors only
 dekk carts build --arts --debug 1      # ARTS warnings
 dekk carts build --arts --debug 2      # ARTS info
@@ -35,7 +35,6 @@ dekk carts build --arts --debug 3      # Build ARTS with full debug logging
 dekk carts compile simple.cpp -o simple # Full compilation pipeline
 dekk carts test                        # Run all tests
 dekk carts lit lib/carts/dialect/arts/test/<file>.mlir # Run focused lit regressions
-dekk carts lit --suite contracts       # Run the maintained contracts suite
 
 # Formatting
 dekk carts format                      # Format tracked C/C++/TableGen files
@@ -135,11 +134,12 @@ Follow LLVM conventions:
 - Environment configuration lives in `.dekk.toml` at the repo root
 - Run `dekk carts doctor` to diagnose environment issues
 - ARTS builds default to GASNet-EX for multinode runs (auto-bootstrapped, the
-  Linux default). `--legacy-rsocket` selects the RDMA/RoCE rsocket fallback,
+  Linux default). `--legacy-rsocket` selects the RDMA/RoCE rsocket transport,
   which requires `librdmacm`, UCX, and libfabric development files; keep its
   profile bounded unless you are explicitly triaging a provider issue:
   `port_count=1`, `sender_threads=1`, `receiver_threads=1`, accept-thread on,
   serialized active connects, and close-after-send. Use
-  `dekk carts build --arts --no-rdma` for non-RDMA systems or TCP fallback
+  `dekk carts build --arts --no-rdma` for non-RDMA systems or TCP/debug
+  transport
   experiments. Benchmark single-node configs still use TCP and do not request
   distributed DB ownership.

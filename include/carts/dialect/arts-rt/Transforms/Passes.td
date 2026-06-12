@@ -212,7 +212,7 @@ def AttachFastMathOnEdt
     : Pass<"arts-attach-fastmath-on-edt", "mlir::ModuleOp"> {
   let summary = "Attach LLVM fastmath flags to FP ops inside EDT functions";
   let description = [{
-    Walks every `llvm.func` whose symbol starts with `__arts_edt_` and stamps
+    Walks every `llvm.func` whose symbol starts with `__arts_edt_` and attaches
     `fastmath<reassoc, contract>` on contained `llvm.fmul`, `llvm.fadd`,
     `llvm.fsub`, `llvm.fdiv`, `llvm.fneg`, and `llvm.frem` ops that do not
     already carry a non-none fastmath attribute. `reassoc` lets the LLVM

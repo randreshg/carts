@@ -507,36 +507,6 @@ static bool canUseUnorderedLocalWrite(DbAcquireOp acquire, EdtOp edtOp,
   return hasTrustedPartitionedWriteFacts(acquire);
 }
 
-static bool canUsePlannedCoarseUnorderedOutWrite(DbAcquireOp acquire,
-                                                 EdtOp edtOp, ModuleOp module,
-                                                 bool payloadMayRead) {
-  if (!acquire || !edtOp)
-    return false;
-  if (acquire.getMode() != ArtsMode::out &&
-      acquire.getMode() != ArtsMode::inout)
-    return false;
-  if (edtOp.getConcurrency() != EdtConcurrency::intranode)
-    return false;
-  auto totalNodes = arts::getRuntimeTotalNodes(module);
-  if (!totalNodes || *totalNodes != 1)
-    return false;
-  std::optional<PartitionMode> partitionMode = acquire.getPartitionMode();
-  if (!partitionMode || *partitionMode != PartitionMode::coarse)
-    return false;
-  auto alloc = dyn_cast_or_null<DbAllocOp>(
-      DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
-  if (!alloc || !alloc.getLocalOnly().value_or(false))
-    return false;
-  if (!edtOp.getPlanLogicalWorkerSliceAttr() ||
-      !edtOp.getPlanIterationTopologyAttr())
-    return false;
-
-  if (acquire.getMode() == ArtsMode::inout && payloadMayRead)
-    return false;
-
-  return true;
-}
-
 static bool isInPlaceSafeUnorderedPattern(ArtsDepPattern pattern) {
   switch (pattern) {
   case ArtsDepPattern::matmul:
@@ -555,6 +525,37 @@ static bool isInPlaceSafeUnorderedPattern(ArtsDepPattern pattern) {
     return false;
   }
   return false;
+}
+
+static bool canUseSingleNodeCoarseUnorderedOutWrite(DbAcquireOp acquire,
+                                                    EdtOp edtOp,
+                                                    ModuleOp module,
+                                                    bool payloadMayRead) {
+  if (!acquire || !edtOp)
+    return false;
+  if (acquire.getMode() != ArtsMode::out &&
+      acquire.getMode() != ArtsMode::inout)
+    return false;
+  if (edtOp.getConcurrency() != EdtConcurrency::intranode)
+    return false;
+  auto totalNodes = arts::getRuntimeTotalNodes(module);
+  if (!totalNodes || *totalNodes != 1)
+    return false;
+  std::optional<PartitionMode> partitionMode = acquire.getPartitionMode();
+  if (!partitionMode || *partitionMode != PartitionMode::coarse)
+    return false;
+  auto alloc = dyn_cast_or_null<DbAllocOp>(
+      DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
+  if (!alloc || !alloc.getLocalOnly().value_or(false))
+    return false;
+  auto depPattern = getDepPattern(edtOp.getOperation());
+  if (!depPattern || !isInPlaceSafeUnorderedPattern(*depPattern))
+    return false;
+
+  if (acquire.getMode() == ArtsMode::inout && payloadMayRead)
+    return false;
+
+  return true;
 }
 
 static std::optional<unsigned> getDependencyIndex(EdtOp edtOp,
@@ -612,8 +613,8 @@ static RuntimeDbMode selectRuntimeDbModeVerdict(DbAcquireOp acquire,
   std::optional<unsigned> depIndex = getDependencyIndex(edtOp, acquire);
 
   if (canUseUnorderedLocalWrite(acquire, edtOp, module) ||
-      canUsePlannedCoarseUnorderedOutWrite(acquire, edtOp, module,
-                                           payloadMayRead) ||
+      canUseSingleNodeCoarseUnorderedOutWrite(acquire, edtOp, module,
+                                              payloadMayRead) ||
       (depIndex && canUseInPlaceSafeCoarseUnorderedWrite(acquire, edtOp, module,
                                                          *depIndex)))
     return RuntimeDbMode::rw;
@@ -748,7 +749,7 @@ struct DbModeTighteningPass
   void inferDbStorageTypes();
 
   /// Runtime dependency DB mode verdict annotations
-  bool stampRuntimeDbModeVerdicts();
+  bool commitRuntimeDbModeVerdicts();
 
 private:
   ModuleOp module;
@@ -768,7 +769,7 @@ void DbModeTighteningPass::runOnOperation() {
   inferDbStorageTypes();
 
   (void)changed;
-  (void)stampRuntimeDbModeVerdicts();
+  (void)commitRuntimeDbModeVerdicts();
 
   ARTS_INFO_FOOTER(DbModeTighteningPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -1008,13 +1009,13 @@ void DbModeTighteningPass::inferDbStorageTypes() {
 }
 
 ///===----------------------------------------------------------------------===///
-/// Stamp runtime dependency DB mode verdicts.
+/// Commit runtime dependency DB mode verdicts.
 /// The ARTS layer owns policy decisions that can select unordered local
 /// DB_MODE_RW. ARTS-RT lowering consumes this attr mechanically and no longer
 /// re-discovers policy from dependency pattern/body facts.
 ///===----------------------------------------------------------------------===///
-bool DbModeTighteningPass::stampRuntimeDbModeVerdicts() {
-  ARTS_DEBUG_HEADER(StampRuntimeDBModeVerdicts);
+bool DbModeTighteningPass::commitRuntimeDbModeVerdicts() {
+  ARTS_DEBUG_HEADER(CommitRuntimeDBModeVerdicts);
   bool changed = false;
 
   module.walk([&](func::FuncOp func) {
@@ -1034,7 +1035,7 @@ bool DbModeTighteningPass::stampRuntimeDbModeVerdicts() {
     });
   });
 
-  ARTS_DEBUG_FOOTER(StampRuntimeDBModeVerdicts);
+  ARTS_DEBUG_FOOTER(CommitRuntimeDBModeVerdicts);
   return changed;
 }
 

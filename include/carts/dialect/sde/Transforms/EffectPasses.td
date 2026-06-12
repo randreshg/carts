@@ -86,15 +86,15 @@ def DistributionPlanning
 
 def BarrierElimination
     : Pass<"barrier-elimination", "mlir::ModuleOp"> {
-  let summary = "Remove redundant SDE barriers and stamp timestep stages";
+  let summary = "Remove redundant SDE barriers and commit timestep stages";
   let description = [{
     Analyzes read and write sets of consecutive sde.su_iterate operations
     separated by sde.su_barrier ops. When the write-set of the predecessor
     loop is provably disjoint from the read/write set of the successor loop,
     the pass erases the barrier in SDE. Required timestep barriers remain in
-    SDE as explicit stage boundaries and the recognized timestep pair is
-    stamped with its repeated/alternating repetition structure and
-    `advance_stage` async strategy.
+    SDE as explicit stage boundaries and the recognized timestep pair receives
+    its repeated/alternating repetition structure and `advance_stage` async
+    strategy.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect",
@@ -107,7 +107,7 @@ def MuAccessWindowSyncOpt
   let summary = "Remove SU barriers proven redundant by MU access windows";
   let description = [{
     The transform counterpart of `verify-sde-mu-access-window-sync`. After
-    `raise-to-mu-access-window` has stamped per-CU `sde.mu_access_window` facts,
+    `raise-to-mu-access-window` has committed per-CU `sde.mu_access_window` facts,
     each surviving `sde.su_barrier` separates a before phase and an after phase
     whose block-grid windows (`[blockLo, blockHi)` per owner dim) reveal whether
     the barrier orders a real dependency. Reading the shared `classifyBarrierSync`

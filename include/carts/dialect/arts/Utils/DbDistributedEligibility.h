@@ -19,12 +19,13 @@ enum class DistributedDbEligibilityRejectReason {
   GlobalAllocType,
   SingleBlock,
   UnsupportedShape,
-  MissingOwnerMapPlan,
-  UnsupportedOwnerMapShape,
+  MissingPhysicalDbLayout,
+  UnsupportedPhysicalDbLayoutForOwnerRoute,
   StencilReadInternodeUse,
   UnsupportedPtrUsers,
   UnsupportedGuidUsers,
   NonEdtAcquireUse,
+  NoDistributedOwnerUse,
   /// Per-block all-gather replica: a block DB that must stay REPLICATED
   /// (every block on every node), not block-distributed. Distributing it would
   /// scatter the gathered blocks back across nodes and defeat the all-gather.
@@ -35,7 +36,7 @@ struct DistributedDbEligibilityResult {
   bool eligible = false;
   DistributedDbEligibilityRejectReason reason =
       DistributedDbEligibilityRejectReason::None;
-  /// When set, the pass should stamp this distribution kind on the alloc op.
+  /// Optional distribution kind selected by the current DB/acquire facts.
   std::optional<EdtDistributionKind> distributionKind = std::nullopt;
 };
 

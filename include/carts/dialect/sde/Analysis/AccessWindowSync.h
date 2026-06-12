@@ -5,10 +5,10 @@
 ///
 /// A `sde.su_barrier` is the last-resort global ordering point between the CU
 /// phase immediately before it and the CU phase immediately after it. Once
-/// `raise-to-mu-access-window` has stamped per-CU `sde.mu_access_window` facts,
-/// whether that barrier orders a real dependency is a structural fact, not a
-/// guess: it can be read off the block-grid windows (`[blockLo, blockHi)` per
-/// owner dim) the two phases touch.
+/// `raise-to-mu-access-window` has committed per-CU `sde.mu_access_window`
+/// facts, whether that barrier orders a real dependency is a structural fact,
+/// not a guess: it can be read off the block-grid windows (`[blockLo, blockHi)`
+/// per owner dim) the two phases touch.
 ///
 /// This analysis is the single source of truth shared by the
 /// `sde-mu-access-window-sync-opt` transform (which removes barriers it proves

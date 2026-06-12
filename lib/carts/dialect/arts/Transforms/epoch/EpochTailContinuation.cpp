@@ -59,7 +59,7 @@ struct DbCapture {
   SmallVector<Value> bodyRefIndices;
 };
 
-struct TailPlan {
+struct TailWork {
   Operation *frontier = nullptr;
   func::ReturnOp returnOp;
   SmallVector<Operation *, 8> tailOps;
@@ -139,7 +139,7 @@ static bool containsEpochFrontier(Operation *op) {
   return found;
 }
 
-static LogicalResult collectFinalTail(func::FuncOp func, TailPlan &plan) {
+static LogicalResult collectFinalTail(func::FuncOp func, TailWork &work) {
   if (func.getSymName() != "main")
     return failure();
   if (func.getBody().empty() || !llvm::hasSingleElement(func.getBody()))
@@ -152,23 +152,23 @@ static LogicalResult collectFinalTail(func::FuncOp func, TailPlan &plan) {
   auto returnOp = dyn_cast<func::ReturnOp>(entry.back());
   if (!returnOp)
     return failure();
-  plan.returnOp = returnOp;
+  work.returnOp = returnOp;
 
   SmallVector<Operation *, 8> reversedTail;
   auto it = Block::iterator(returnOp.getOperation());
   while (it != entry.begin()) {
     --it;
     if (containsAsyncFrontier(&*it)) {
-      plan.frontier = &*it;
+      work.frontier = &*it;
       break;
     }
     reversedTail.push_back(&*it);
   }
 
-  if (!plan.frontier || reversedTail.empty())
+  if (!work.frontier || reversedTail.empty())
     return failure();
 
-  plan.tailOps.assign(reversedTail.rbegin(), reversedTail.rend());
+  work.tailOps.assign(reversedTail.rbegin(), reversedTail.rend());
   return success();
 }
 
@@ -324,45 +324,45 @@ static LogicalResult inlineProvenTrueIf(scf::IfOp ifOp) {
   return success();
 }
 
-static LogicalResult exposeFinalNestedEpoch(func::FuncOp func, TailPlan &plan) {
-  if (!plan.frontier)
+static LogicalResult exposeFinalNestedEpoch(func::FuncOp func, TailWork &work) {
+  if (!work.frontier)
     return failure();
-  if (isa<EpochOp>(plan.frontier))
+  if (isa<EpochOp>(work.frontier))
     return success();
-  if (!containsEpochFrontier(plan.frontier))
+  if (!containsEpochFrontier(work.frontier))
     return failure();
 
   for (unsigned depth = 0; depth < 16; ++depth) {
-    if (isa<EpochOp>(plan.frontier))
+    if (isa<EpochOp>(work.frontier))
       return success();
 
-    if (auto loop = dyn_cast<scf::ForOp>(plan.frontier)) {
+    if (auto loop = dyn_cast<scf::ForOp>(work.frontier)) {
       if (failed(peelFinalIteration(loop)))
         return failure();
-    } else if (auto ifOp = dyn_cast<scf::IfOp>(plan.frontier)) {
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(work.frontier)) {
       if (failed(inlineProvenTrueIf(ifOp)))
         return failure();
     } else {
       return failure();
     }
 
-    TailPlan refreshed;
+    TailWork refreshed;
     if (failed(collectFinalTail(func, refreshed)))
       return failure();
-    plan = std::move(refreshed);
+    work = std::move(refreshed);
   }
 
-  return isa_and_nonnull<EpochOp>(plan.frontier) ? success() : failure();
+  return isa_and_nonnull<EpochOp>(work.frontier) ? success() : failure();
 }
 
-static LogicalResult validateTailIsolation(TailPlan &plan) {
-  llvm::DenseSet<Operation *> tailSet(plan.tailOps.begin(), plan.tailOps.end());
+static LogicalResult validateTailIsolation(TailWork &work) {
+  llvm::DenseSet<Operation *> tailSet(work.tailOps.begin(), work.tailOps.end());
 
-  for (Value operand : plan.returnOp.getOperands())
+  for (Value operand : work.returnOp.getOperands())
     if (isDefinedInside(operand, tailSet))
       return failure();
 
-  for (Operation *top : plan.tailOps) {
+  for (Operation *top : work.tailOps) {
     WalkResult result = top->walk([&](Operation *nested) {
       for (Value result : nested->getResults()) {
         for (Operation *user : result.getUsers()) {
@@ -420,10 +420,10 @@ static bool canEraseDeadExternalStackStore(memref::StoreOp store) {
   return true;
 }
 
-static void pruneDeadExternalStackStores(TailPlan &plan) {
+static void pruneDeadExternalStackStores(TailWork &work) {
   SmallVector<Operation *, 8> pruned;
-  pruned.reserve(plan.tailOps.size());
-  for (Operation *op : plan.tailOps) {
+  pruned.reserve(work.tailOps.size());
+  for (Operation *op : work.tailOps) {
     auto store = dyn_cast<memref::StoreOp>(op);
     if (store && canEraseDeadExternalStackStore(store)) {
       store.erase();
@@ -431,7 +431,7 @@ static void pruneDeadExternalStackStores(TailPlan &plan) {
     }
     pruned.push_back(op);
   }
-  plan.tailOps = std::move(pruned);
+  work.tailOps = std::move(pruned);
 }
 
 static bool
@@ -478,14 +478,14 @@ canRematerializeExternalStackAlloca(Value memref,
   return true;
 }
 
-static LogicalResult classifyCaptures(TailPlan &plan) {
-  llvm::DenseSet<Operation *> tailSet(plan.tailOps.begin(), plan.tailOps.end());
-  auto func = plan.frontier->getParentOfType<func::FuncOp>();
+static LogicalResult classifyCaptures(TailWork &work) {
+  llvm::DenseSet<Operation *> tailSet(work.tailOps.begin(), work.tailOps.end());
+  auto func = work.frontier->getParentOfType<func::FuncOp>();
   if (!func)
     return failure();
   DominanceInfo domInfo(func);
 
-  for (Operation *top : plan.tailOps) {
+  for (Operation *top : work.tailOps) {
     WalkResult result = top->walk([&](Operation *nested) {
       for (Value operand : nested->getOperands()) {
         if (isDefinedInside(operand, tailSet))
@@ -494,7 +494,7 @@ static LogicalResult classifyCaptures(TailPlan &plan) {
         Type type = operand.getType();
         if (type.isIntOrIndexOrFloat()) {
           if (!isConstantLike(operand))
-            plan.scalarParams.insert(operand);
+            work.scalarParams.insert(operand);
           continue;
         }
 
@@ -502,13 +502,13 @@ static LogicalResult classifyCaptures(TailPlan &plan) {
           if (isExternalStackAlloca(operand)) {
             if (canRematerializeExternalStackAlloca(operand, tailSet,
                                                     domInfo)) {
-              plan.rematerializedCaptures.insert(operand);
+              work.rematerializedCaptures.insert(operand);
               continue;
             }
             return WalkResult::interrupt();
           }
           if (operand.getDefiningOp<DbRefOp>()) {
-            plan.dbCaptures.insert(operand);
+            work.dbCaptures.insert(operand);
             continue;
           }
           return WalkResult::interrupt();
@@ -517,7 +517,7 @@ static LogicalResult classifyCaptures(TailPlan &plan) {
         if (isImplicitNonMemrefCaptureAllowed(operand))
           continue;
         if (isRematerializableNonMemrefCapture(operand)) {
-          plan.rematerializedCaptures.insert(operand);
+          work.rematerializedCaptures.insert(operand);
           continue;
         }
 
@@ -604,21 +604,21 @@ static void replaceUsesInMovedOp(Operation *op,
   }
 }
 
-static LogicalResult outlineTail(TailPlan &plan) {
-  pruneDeadExternalStackStores(plan);
-  if (plan.tailOps.empty())
+static LogicalResult outlineTail(TailWork &work) {
+  pruneDeadExternalStackStores(work);
+  if (work.tailOps.empty())
     return failure();
-  if (failed(validateTailIsolation(plan)))
+  if (failed(validateTailIsolation(work)))
     return failure();
-  if (failed(classifyCaptures(plan)))
+  if (failed(classifyCaptures(work)))
     return failure();
 
-  Location loc = plan.frontier->getLoc();
-  OpBuilder builder(plan.tailOps.front());
+  Location loc = work.frontier->getLoc();
+  OpBuilder builder(work.tailOps.front());
 
   SmallVector<DbCapture> dbCaptures;
   SmallVector<Value> deps;
-  for (Value capture : plan.dbCaptures) {
+  for (Value capture : work.dbCaptures) {
     FailureOr<DbCapture> dbCapture =
         createDbCaptureAcquire(builder, loc, capture);
     if (failed(dbCapture))
@@ -627,7 +627,7 @@ static LogicalResult outlineTail(TailPlan &plan) {
     dbCaptures.push_back(*dbCapture);
   }
 
-  SmallVector<Value> params(plan.scalarParams.begin(), plan.scalarParams.end());
+  SmallVector<Value> params(work.scalarParams.begin(), work.scalarParams.end());
   auto continuation =
       EdtOp::create(builder, loc, EdtType::task, EdtConcurrency::intranode,
                     ValueRange(deps), ValueRange(params));
@@ -643,7 +643,7 @@ static LogicalResult outlineTail(TailPlan &plan) {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&body);
     IRMapping rematMapping;
-    for (Value capture : plan.rematerializedCaptures) {
+    for (Value capture : work.rematerializedCaptures) {
       Operation *def = capture.getDefiningOp();
       if (!def)
         return failure();
@@ -669,7 +669,7 @@ static LogicalResult outlineTail(TailPlan &plan) {
   for (auto [index, param] : llvm::enumerate(params))
     mapping[param] = body.getArgument(paramBase + index);
 
-  for (Operation *op : plan.tailOps) {
+  for (Operation *op : work.tailOps) {
     replaceUsesInMovedOp(op, mapping);
     op->moveBefore(&body, body.end());
   }
@@ -692,14 +692,14 @@ struct EpochTailContinuationPass
     module.walk([&](func::FuncOp func) { funcs.push_back(func); });
 
     for (func::FuncOp func : funcs) {
-      TailPlan plan;
-      if (failed(collectFinalTail(func, plan)))
+      TailWork work;
+      if (failed(collectFinalTail(func, work)))
         continue;
-      if (failed(exposeFinalNestedEpoch(func, plan))) {
+      if (failed(exposeFinalNestedEpoch(func, work))) {
         ++numContinuationsSkipped;
         continue;
       }
-      if (failed(outlineTail(plan))) {
+      if (failed(outlineTail(work))) {
         ++numContinuationsSkipped;
         continue;
       }

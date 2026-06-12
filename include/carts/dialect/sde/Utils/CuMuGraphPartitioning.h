@@ -70,7 +70,7 @@ struct CuMuComputeUnitTarget {
   double taskSyncCost = 0.0;
   double dataAccessCost = 1.0;
   /// Optional exact-CU block weights. If the count does not match a candidate
-  /// plan, the scorer derives weights from that candidate's block geometry.
+  /// choice, the scorer derives weights from that candidate's block geometry.
   ArrayRef<int64_t> cuWorkWeights;
 };
 
@@ -80,7 +80,7 @@ struct CuMuComputeUnitTarget {
 struct CuMuPartitionObjective {
   int64_t targetTileBytes = 0;
   /// Allowed work imbalance when locally refining typed CU/MU hypergraph
-  /// assignments. This stays abstract SDE planning state.
+  /// assignments. This stays abstract SDE scoring state.
   double workImbalanceTolerance = 0.10;
   /// Relative pressure for lambda-minus-one remote-MU fanout in the typed
   /// hypergraph refinement objective.
@@ -89,7 +89,7 @@ struct CuMuPartitionObjective {
 
 /// Selected partition. The physical block shape defines MU block granularity;
 /// `computeUnits` is the number of CU vertices implied by that block shape.
-struct CuMuPartitionPlan {
+struct CuMuPartitionChoice {
   int64_t computeUnits = 1;
   int64_t exposedParallelism = 1;
   int64_t tilePayloadBytes = 0;
@@ -121,7 +121,7 @@ int64_t inferCuCountFromMuPartition(ArrayRef<int64_t> shape,
 /// Choose the best CU/MU partition among source-level CU counts selected from
 /// the halving spine plus bounded divisor and remote-fanout-adjacent samples.
 /// `rebuild` maps a candidate CU count to its MU block shape.
-std::optional<CuMuPartitionPlan> chooseCuMuGraphPartition(
+std::optional<CuMuPartitionChoice> chooseCuMuGraphPartition(
     const CuMuMemoryUnit &memory, const CuMuComputeUnitTarget &compute,
     const CuMuPartitionObjective &objective,
     ArrayRef<int64_t> initialPhysicalBlockShape,

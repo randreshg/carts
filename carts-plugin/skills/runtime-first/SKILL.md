@@ -1,6 +1,6 @@
 ---
 name: carts-runtime-first
-description: Use after runtime triage shows the compiler must match an ARTS runtime contract for EDTs, DBs, epochs, dependencies, or distributed execution.
+description: Use after runtime triage shows the compiler must match an ARTS runtime invariant for EDTs, DBs, epochs, dependencies, or distributed execution.
 user-invocable: true
 allowed-tools: Bash, Read, Write, Grep, Glob, Agent
 argument-hint: [<benchmark-name | bug-description>]
@@ -9,12 +9,12 @@ argument-hint: [<benchmark-name | bug-description>]
 # Runtime-First Development
 
 Goal: never guess what the compiler should generate. Instead, understand the
-runtime contract, write the correct code by hand, prove it works, then teach the
+runtime invariant, write the correct code by hand, prove it works, then teach the
 compiler to emit that exact pattern.
 
-Runtime contracts inform ARTS realization and ARTS-RT lowering. They do not move
+Runtime invariants inform ARTS realization and ARTS-RT lowering. They do not move
 source layout/distribution policy out of SDE or collective/bridge
-materialization out of ARTS. Use [[carts-vision]] when deciding the fix layer.
+realization out of ARTS. Use [[carts-vision]] when deciding the fix layer.
 
 ## Methodology
 
@@ -25,12 +25,12 @@ materialization out of ARTS. Use [[carts-vision]] when deciding the fix layer.
    - `external/arts/include/artsEdtFunctions.h` — EDT creation/signaling
    - `external/arts/include/artsDbFunctions.h` — DB alloc/acquire/put/destroy
    - `external/arts/examples/cpu/` — working examples (especially `cps_chain.c`)
-2. Identify the runtime contract for the feature in question:
+2. Identify the runtime invariant for the feature in question:
    - How are DBs passed between EDTs? (answer: via depv, never raw pointers in paramv)
    - How are EDTs chained? (answer: satisfaction of deps triggers execution)
    - How do epochs work? (answer: artsInitializeAndStartEpoch, edts register, epoch completes when all finish)
    - How does CPS work? (answer: continuation EDT created with deps, signaled when predecessor finishes)
-3. Document the runtime contract in a reference file.
+3. Document the runtime invariant in a reference file.
 
 ### Phase 2 — Write Correct Code by Hand
 
@@ -80,7 +80,7 @@ materialization out of ARTS. Use [[carts-vision]] when deciding the fix layer.
 
 1. The fix should make the compiler generate code that matches the hand-written
    pattern — not "something that works differently."
-2. Modify the owning layer: ARTS for DB/EDT/owner-map realization, ARTS-RT for
+2. Modify the owning layer: ARTS for DB/EDT/distributed ownership realization, ARTS-RT for
    mechanical runtime calls, ARTS for collective/bridge structure, or SDE for
    source/layout facts.
 3. Re-compile the benchmark and verify the output matches the hand-written code
@@ -123,4 +123,4 @@ These are NON-NEGOTIABLE constraints from the ARTS distributed runtime:
 - Do NOT clone DbAllocOp inside outlined EDT functions — creates duplicate DBs
 - Do NOT skip dependency edges for "convenience" — the runtime needs them for scheduling
 - Do NOT assume single-node execution — always design for distributed
-- Do NOT guess the runtime contract — read the examples and headers first
+- Do NOT guess the runtime invariant — read the examples and headers first

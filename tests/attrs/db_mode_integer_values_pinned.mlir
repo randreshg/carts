@@ -7,7 +7,7 @@
 // COM: Runtime ABI alignment - the integer values in ArtsAttrs.td for the
 // COM: `DbMode` enum must remain 1 and 2 so dependency lowering can forward
 // COM: them to the ARTS runtime without an extra translation table. Adding a
-// COM: case or renumbering breaks this contract; this fixture pins the print
+// COM: case or renumbering breaks this ABI fixture; this fixture pins the print
 // COM: surface so any silent reshuffle of the enum is caught at lit time.
 
 // CHECK-LABEL: func.func @db_mode_read_write_roundtrip

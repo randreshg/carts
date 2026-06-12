@@ -10,11 +10,8 @@
 // leak into ARTS-RT silently.
 //
 // Note: `arts.db_alloc` and `arts.db_acquire` intentionally survive this
-// stage. They carry DB metadata (planOwnerDims, planPhysicalBlockShape,
-// arts.create_id, etc.) into `arts-rt-to-llvm`, which is the dialect frontier
-// where DB ops are finally rewritten to runtime calls. Asserting their
-// absence here would contradict the live `db-lowering` boundary invariant (see
-// lib/carts/dialect/arts-rt/test/lowering/db_lowering_preserves_plan_attrs.mlir).
+// stage. They carry DB ownership, runtime mode, and `arts.create_id` facts into
+// `arts-rt-to-llvm`, where DB ops are rewritten to runtime calls.
 
 // CHECK-LABEL: func.func @arts_to_arts_rt_boundary
 // CHECK: arts_rt.edt_create

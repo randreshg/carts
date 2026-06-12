@@ -19,15 +19,15 @@ Goal: find the first stage where CARTS stops being semantically equivalent to th
 
 The first bad stage is not automatically the fix stage. Use [[carts-vision]]
 to attribute the wrong committed fact: SDE fixes source/layout/tiling facts,
-ARTS fixes graph/contraction materialization, ARTS fixes
-DB/EDT/owner-map realization and grouped execution, and ARTS-RT fixes only
+ARTS fixes graph/contraction realization, ARTS fixes
+DB/EDT/distributed ownership realization and grouped execution, and ARTS-RT fixes only
 mechanical lowering.
 
 Use bundled helpers when they fit:
 - `scripts/prepare-c-inputs.sh` — produce sequential and OpenMP MLIR from a C/C++ source
 - `scripts/dump-focus-stages.sh` — materialize the highest-value stage dumps into one directory
 - `scripts/collect-diagnose.sh` — capture `--diagnose` JSON plus the pipeline manifest
-- `scripts/find-semantic-codepaths.sh` — grep the main semantic-contract codepaths
+- `scripts/find-semantic-codepaths.sh` — grep the main semantic fact codepaths
 
 Read these before guessing:
 - `references/stage-focus.md`
@@ -49,9 +49,10 @@ Read these before guessing:
    - Use `dekk carts pipeline --json` for the stage list.
    - Use `dekk carts compile <file>.mlir --pipeline=<stage>` and `--all-pipelines -o DIR/`.
    - Focus on: `sde-planning` -> `sde-to-arts` -> `sde-to-arts` -> `edt-transforms` -> `create-dbs` -> `db-opt` -> `post-db-refinement` -> `pre-lowering`.
-5. Inspect semantic contracts before low-level codegen.
+5. Inspect semantic facts before low-level codegen.
    - `dekk carts compile <file> --diagnose --diagnose-output diag.json -O3`
-   - Check `LoweringContractInfo`, `distribution_*`, partition modes, full-range vs coarse, and `preserve_access_mode`.
+   - Check lowering facts, `distribution_*`, partition modes, full-range vs
+     coarse, and `preserve_access_mode`.
    - Check whether downstream layers are consuming committed facts or
      recomputing source semantics, owner dims, movement family, storage
      grain, or runtime policy.

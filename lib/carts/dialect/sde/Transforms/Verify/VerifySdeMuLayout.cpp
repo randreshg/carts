@@ -10,11 +10,11 @@
 ///        logical-rank handle onto a converted block-grid MU.
 ///
 ///   R2 — `ownerDims == recover(structure)`. For every converted MU governed by
-///        a committed single-owner BLOCK plan, the owner dim recovered purely
+///        committed single-owner BLOCK facts, the owner dim recovered purely
 ///        from the expanded memref type must equal the committed
 ///        `physicalOwnerDims`.
 ///
-/// Conservative (flat) MUs and out-of-scope plans are skipped, never rejected.
+/// Conservative (flat) MUs and out-of-scope cases are skipped, never rejected.
 ///==========================================================================///
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -51,9 +51,9 @@ struct VerifySdeMuLayoutPass
       if (!muType)
         return;
       const int64_t muRank = muType.getRank();
-      sde::SdeSuIterateOp si = sde::findCommittedBlockPlanWriter(mu);
+      sde::SdeSuIterateOp si = sde::findCommittedBlockLayoutWriter(mu);
       std::optional<sde::ExpandedBlockGridMu> expanded =
-          sde::recognizeExpandedBlockGridMu(si, muType);
+          sde::recognizeExpandedBlockGridMu(mu);
 
       // R1: access soundness against the MU.
       for (Operation *user : mu.getMemref().getUsers()) {

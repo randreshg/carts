@@ -13,12 +13,12 @@ point.
 ## Compiler Areas
 
 - SDE distribution planning.
-- Codelet materialization through `sde-to-arts` and `sde-to-arts`; any
+- Codelet realization through `sde-to-arts` and `sde-to-arts`; any
   surviving SDE operation is a boundary failure.
 - ARTS DB refinement.
 - Distributed DB ownership.
 - Post-DB refinement.
-- Pre-lowering and runtime route materialization.
+- Pre-lowering and runtime route realization.
 
 ## Discipline
 

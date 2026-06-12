@@ -21,10 +21,10 @@ parameters:
 ## Architecture Conventions (MANDATORY)
 
 **Layer-owned transformation** — do the real transformation in the owning
-dialect. Do not add metadata-only promises for another pass to repair later.
+dialect. Do not add deferred metadata markers for another pass to repair later.
 If the layer cannot safely transform, fail closed with a verifier or explicit
 reject reason. SDE commits real layout/loop/source facts; ARTS commits
-collective/bridge/contraction structure; ARTS realizes DB/EDT/owner-map and
+collective/bridge/contraction structure; ARTS realizes DB/EDT/owner-route and
 grouped CU/bridge execution; ARTS-RT lowers mechanically.
 
 **Committed facts** — downstream passes may verify, consume, realize, or reject
@@ -41,7 +41,7 @@ analysis managers. Do not add broad graph/node abstractions for facts that are
 already explicit in ARTS IR; transform the owning structure directly or fail
 closed.
 
-**Operation contracts and attribute names** — Put local operation structure,
+**Operation invariants and attribute names** — Put local operation structure,
 region/body legality, traits, interfaces, and CARTS IR attrs in the owning
 TableGen/ODS definition first. Use generated op verifiers and ODS accessors
 such as `op.getStencilMinOffsetsAttrName()`. Use `AttrNames::Operation` only
@@ -76,7 +76,8 @@ for larger utility moves.
    generated declarations unless the pass needs temporary non-TableGen state
 3. Register in pipeline at appropriate stage in `tools/compile/Compile.cpp`
 4. Add lit test in the co-located `test/` directory (`lib/carts/dialect/{sde,arts,arts,arts-rt}/test/`)
-5. `dekk carts format` then `dekk carts test --suite contracts`
+5. `dekk carts format` then run the focused lit test and
+   `dekk carts test --suite all -v` when the blast radius is broad
 
 ## Thread Safety
 

@@ -703,7 +703,7 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
 
   if (explicitParams.size() > unpackedParams.size())
     return edtOp.emitOpError()
-           << "explicit EDT params were not materialized in the parameter pack";
+           << "explicit EDT params are missing from the parameter pack";
   for (auto [index, param] : llvm::enumerate(explicitParams)) {
     unsigned argIndex = originalDeps.size() + static_cast<unsigned>(index);
     if (argIndex >= edtBlock.getNumArguments())

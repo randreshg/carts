@@ -17,7 +17,7 @@ Emitted facts:
 
 - runtime-call hoisting candidates;
 - scalar replacement candidates;
-- alias/noalias metadata plans;
+- alias/noalias metadata candidates;
 - pointer and depv locality facts;
 - diagnostics when runtime ABI overhead is the remaining bottleneck.
 

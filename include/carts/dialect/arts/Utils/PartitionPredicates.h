@@ -19,9 +19,9 @@ inline bool usesBlockLayout(PartitionMode m) {
   return m == PartitionMode::block || m == PartitionMode::stencil;
 }
 
-/// Returns true for partition modes that require worker bounds planning.
+/// Returns true for partition modes that use explicit worker bounds.
 /// All modes except coarse need partition offsets/sizes.
-inline bool requiresWorkerBoundsPlanning(PartitionMode m) {
+inline bool usesWorkerBounds(PartitionMode m) {
   return m != PartitionMode::coarse;
 }
 

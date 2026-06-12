@@ -139,7 +139,7 @@ VerifyArtsObjectsOnly
 ### `edt-dep-realization`
 
 ```text
-RealizeEdtDistributionPlan
+RealizeEdtDistribution
 VerifySdeLowered
 VerifyArtsObjectsOnly
 ```
@@ -179,7 +179,7 @@ Mem2Reg
 
 ```text
 DbModeTightening
-DbOwnerMapRealization
+DbDistributedOwnershipRealization
 EdtDeadDepElimination
 DbConsolidateStencilHalos
 DbStorageBridgeCopyPlacement
@@ -291,7 +291,7 @@ VerifyLowered
 - `sde-to-arts` owns mechanical realization of committed SDE MU/CU/SU facts
   into ARTS DB/acquire/EDT objects.
 - ARTS owns explicit deps, params, token-local views, DB/EDT/epoch
-  orchestration, owner maps, grouped execution, and focused
+  orchestration, owner routes, grouped execution, and focused
   realization/refinement passes over already emitted ARTS facts (source:
   `lib/carts/dialect/arts/`).
 - `CreateDbs` consumes ARTS facts; it must not choose blocked/tiled raw-memref

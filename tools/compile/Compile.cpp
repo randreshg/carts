@@ -159,14 +159,14 @@ static cl::opt<bool> RuntimeStaticWorkers(
              "worker count when the module embeds a valid ARTS config"),
     cl::init(false));
 
-/// Output-tile byte floor for distributed plans. When > 0, distribution
+/// Output-tile byte floor for distributed layouts. When > 0, distribution
 /// writers coarsen the per-EDT output tile until it carries at least this
 /// many bytes; reduces remote DB-acquire round-trips on RTT-bound multinode
-/// runs at the cost of per-node load-balance slack. 0 (default) preserves
-/// the prior fine-grained plan.
+/// runs at the cost of per-node load-balance slack. 0 (default) preserves the
+/// fine-grained block shape selected by SDE.
 static cl::opt<int64_t> MinDistributedTileBytes(
     "min-distributed-tile-bytes",
-    cl::desc("Per-EDT output-tile byte floor for SDE distribution planning; "
+    cl::desc("Per-EDT output-tile byte floor for SDE distribution transforms; "
              "0 disables (default)."),
     cl::init(0));
 
@@ -309,7 +309,7 @@ static const std::array<llvm::StringLiteral, 4> kSdeToArtsPasses = {
     "SdeStorageToArtsDb", "SdeAccessesToArtsDeps", "FinalizeSdeToArts",
     "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 3> kEdtDepRealizationPasses = {
-    "RealizeEdtDistributionPlan", "VerifySdeLowered", "VerifyArtsObjectsOnly"};
+    "RealizeEdtDistribution", "VerifySdeLowered", "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 6> kEdtLocalCleanupPasses = {
     "EdtAllocaSinking", "EdtInlineNoDepTasks", "ArtsDeadCodeElimination",
     "SymbolDCE",        "CSE(arts.edt)",       "EdtPtrRematerialization"};
@@ -320,7 +320,6 @@ static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
     "DbModeTightening", "PolygeistCanonicalize", "CSE(arts.edt)", "Mem2Reg"};
 static const std::array<llvm::StringLiteral, 13> kPostDbRefinementPasses = {
     "DbModeTightening",
-    "DbOwnerMapRealization",
     "EdtDeadDepElimination",
     "DbConsolidateStencilHalos",
     "DbStorageBridgeCopyPlacement",
@@ -329,6 +328,7 @@ static const std::array<llvm::StringLiteral, 13> kPostDbRefinementPasses = {
     "PartialReductionSplit",
     "BlockContractionSplit",
     "DbScratchElimination",
+    "DbDistributedOwnershipRealization",
     "PolygeistCanonicalize",
     "CSE(arts.edt)",
     "DistributedLaunchConsistency"};
@@ -343,11 +343,12 @@ static const std::array<llvm::StringLiteral, 7> kEpochsPasses = {
     "PolygeistCanonicalize",
     "DbCommitDistributedDeps (conditional)",
     "VerifyArtsCdag"};
-static const std::array<llvm::StringLiteral, 22> kPreLoweringPasses = {
+static const std::array<llvm::StringLiteral, 23> kPreLoweringPasses = {
     "EdtAllocaSinking",
     "PolygeistCanonicalize",
     "CSE(arts.edt)",
     "DbLowering",
+    "DbDistributedRuntimeInit",
     "PolygeistCanonicalize",
     "CSE(arts.edt)",
     "EdtLowering",
@@ -672,7 +673,8 @@ void registerDialects(DialectRegistry &registry) {
   registerPartialReductionSplit();
   registerBlockContractionSplit();
   registerDistributedLaunchConsistency();
-  registerRealizeEdtDistributionPlan();
+  registerRealizeEdtDistribution();
+  registerDbDistributedRuntimeInit();
   registerEpochTailContinuation();
   registerVerifyArtsCdag();
   registerDbCommitDistributedDeps();
@@ -1135,8 +1137,8 @@ void buildSdePlanningPipeline(PassManager &pm,
   // SDE scheduling units before LayoutAssignment can choose block-native facts.
   pm.addPass(sde::createSdeCuNormalizationPass());
   pm.addPass(sde::createParallelizePass());
-  // SdeLoopPatternFacts stamps memref/ND pattern facts before dep/effect
-  // planning.
+  // SdeLoopPatternFacts commits memref/ND pattern facts before dep/effect
+  // transforms query them.
   pm.addPass(sde::createSdeLoopPatternFactsPass());
   // Module-scoped per-array BLOCK layout assignment. Runs before
   // Tiling/Interchange split the parallel axes.
@@ -1187,7 +1189,7 @@ void buildSdeToArtsPipeline(PassManager &pm) {
 
 /// EDT dependency realization over direct SDE-to-ARTS objects.
 void buildEdtDepRealizationPipeline(PassManager &pm) {
-  pm.addPass(arts::createRealizeEdtDistributionPlanPass());
+  pm.addPass(arts::createRealizeEdtDistributionPass());
   pm.addPass(sde::createVerifySdeLoweredPass());
   pm.addPass(arts::createVerifyArtsObjectsOnlyPass());
 }
@@ -1225,7 +1227,6 @@ void buildPostDbRefinementPipeline(PassManager &pm) {
   /// shaping. Mode tightening must run before EDT transforms so affinity and
   /// reduction analysis see accurate writer/reader modes.
   pm.addPass(arts::createDbModeTighteningPass());
-  pm.addPass(arts::createDbOwnerMapRealizationPass());
   pm.addPass(arts::createEdtDeadDepEliminationPass());
   /// Re-run DB-local refinement after EDT dep pruning so cleanup-only acquires
   /// and now-unreachable DB roots are removed in the DB layer.
@@ -1236,6 +1237,7 @@ void buildPostDbRefinementPipeline(PassManager &pm) {
   pm.addPass(arts::createPartialReductionSplitPass());
   pm.addPass(arts::createBlockContractionSplitPass());
   pm.addPass(arts::createDbScratchEliminationPass());
+  pm.addPass(arts::createDbDistributedOwnershipRealizationPass());
   addCanonicalizeAndEdtLocalCSE(pm);
   pm.addPass(arts::createDistributedLaunchConsistencyPass());
 }
@@ -1273,6 +1275,7 @@ void buildPreLoweringPipeline(PassManager &pm) {
   pm.addPass(arts::createEdtAllocaSinkingPass());
   addCanonicalizeAndEdtLocalCSE(pm);
   pm.addPass(arts_rt::createDbLoweringPass(ArtsIdStride));
+  pm.addPass(arts::createDbDistributedRuntimeInitPass());
   addCanonicalizeAndEdtLocalCSE(pm);
   pm.addPass(arts_rt::createEdtLoweringPass(ArtsIdStride));
   addCanonicalizeAndCSE(pm);

@@ -111,13 +111,13 @@ static bool hasLayoutSensitiveMemrefSignature(func::CallOp call,
 /// Nested-memref helpers are the exception: SdeMemrefNormalization changes
 /// the storage layout of those values, so the helper body must be visible in
 /// the caller before that pass runs. Otherwise the call boundary would retain
-/// the stale pre-raise type/layout contract.
+/// the stale pre-raise type/layout expectation.
 ///
 /// The same reasoning applies to plain memref helper functions that survive
-/// into physical storage planning. Once a caller-side allocation is promoted to
-/// a blocked or stencil-aware layout, a remaining full-view helper call would
-/// otherwise force coarse fallback because the callee still expects the
-/// original contiguous memref contract.
+/// until physical storage transforms. Once a caller-side allocation is promoted
+/// to a blocked or stencil-aware layout, a remaining full-view helper call
+/// would otherwise force conservative coarse handling because the callee still
+/// expects the original contiguous memref shape.
 static bool shouldInlineCall(func::CallOp call,
                              CallableOpInterface callableOp) {
   auto funcOp = dyn_cast_or_null<func::FuncOp>(callableOp.getOperation());
@@ -142,7 +142,7 @@ static bool shouldInlineCall(func::CallOp call,
 
   if (containsSequentialLoopLikeOp(funcOp)) {
     ARTS_INFO("Skipping sequential loop helper " << funcOp.getSymName()
-                                                 << " to preserve materialized"
+                                                 << " to preserve rewritten"
                                                  << " memory semantics");
     return false;
   }
@@ -150,8 +150,8 @@ static bool shouldInlineCall(func::CallOp call,
   return true;
 }
 
-/// Conservative fallback for calls inside OMP regions. Generic MLIR inlining
-/// can assert here because the OMP dialect does not register a
+/// Conservative inlining path for calls inside OMP regions. Generic MLIR
+/// inlining can assert here because the OMP dialect does not register a
 /// DialectInlinerInterface. For single-block func.func callees we can inline by
 /// cloning the body and remapping the return operands directly.
 static LogicalResult inlineSingleBlockFuncCallInOmp(func::CallOp call,
@@ -304,7 +304,7 @@ struct SdeInputInlinerPass
 
         /// Generic MLIR inlining into OMP regions can assert because the OMP
         /// dialect does not register a DialectInlinerInterface. Use the
-        /// conservative single-block fallback there instead.
+        /// single-block inlining path there instead.
         if (sde::isInsideOmpRegion(call)) {
           if (auto funcOp = dyn_cast<func::FuncOp>(callableOp.getOperation())) {
             if (succeeded(inlineSingleBlockFuncCallInOmp(call, funcOp))) {

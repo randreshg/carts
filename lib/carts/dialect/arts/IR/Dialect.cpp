@@ -437,9 +437,7 @@ void EpochOp::build(OpBuilder &builder, OperationState &state, Type epochGuid) {
   build(builder, state, epochGuid, ArtsDepPatternAttr{},
         EdtDistributionKindAttr{}, EdtDistributionPatternAttr{}, IntegerAttr{},
         IntegerAttr{}, ArrayAttr{}, ArrayAttr{}, ArrayAttr{}, ArrayAttr{},
-        ArrayAttr{}, UnitAttr{}, ArrayAttr{}, ArrayAttr{}, ArrayAttr{},
-        ArrayAttr{}, ArtsPlanIterationTopologyAttr{},
-        ArtsPlanRepetitionStructureAttr{});
+        ArrayAttr{}, UnitAttr{});
 }
 
 /// Helper to compute GUID type from sizes
@@ -587,47 +585,34 @@ LogicalResult DbAllocOp::verify() {
   if (!getDistributed().value_or(false))
     return success();
 
-  auto plan = getDbOwnerMapPlan(*this);
-  if (!plan)
+  auto facts = deriveDbOwnerRouteFactsFromDbGrid(*this);
+  if (!facts)
     return emitOpError()
-           << "with distributed ownership requires owner_map_kind, "
-              "owner_map_version, owner_map_dims, and owner_block_shape";
-
-  auto version = getOwnerMapVersionAttr();
-  if (!version || version.getInt() != kDbOwnerMapVersion)
-    return emitOpError() << "has unsupported owner_map_version";
+           << "with distributed ownership requires a concrete DB block grid "
+              "that can answer owner-route queries";
 
   if (getLocalOnly().value_or(false))
     return emitOpError() << "cannot be both distributed and local_only";
-  if (getDistributedRejectReasonAttr())
+  if (!ownerRouteDimsMatchDbGrid(*this, *facts))
     return emitOpError()
-           << "cannot be both distributed and rejected for distributed "
-              "ownership";
+           << "derived owner dimensions must address the distributed DB block "
+              "grid";
+  if (!ownerRouteBlockShapeMatchesDbGrid(*this, *facts))
+    return emitOpError()
+           << "derived owner block shape must match the DB element block "
+              "shape for owner dimensions";
 
-  if (!ownerMapPreservesPlanOwnerDims(*this, *plan))
-    return emitOpError()
-           << "owner_map_dims must preserve planOwnerDims for distributed "
-              "ownership";
-  if (!ownerMapPreservesPlanBlockShape(*this, *plan))
-    return emitOpError()
-           << "owner_block_shape must preserve planPhysicalBlockShape for "
-              "distributed ownership";
-
-  switch (plan->kind) {
-  case DbOwnerMapKind::linear_mod_nodes:
-    if (!ownerDimsAddressDbRank(plan->dims, getSizes().size()))
+  switch (facts->policy) {
+  case DbOwnerRoutePolicy::LinearModNodes:
+    if (!ownerDimsAddressDbRank(facts->dims, getSizes().size()))
       return emitOpError()
-             << "linear_mod_nodes owner_map_dims must address DB dimensions";
+             << "linear owner-route dimensions must address DB dimensions";
     break;
-  case DbOwnerMapKind::owner_dim_contiguous:
-    if (!ownerDimsAddressDbRank(plan->dims, getSizes().size()))
+  case DbOwnerRoutePolicy::OwnerDimContiguous:
+    if (!ownerDimsAddressDbRank(facts->dims, getSizes().size()))
       return emitOpError()
-             << "owner_dim_contiguous owner_map_dims must address DB "
-                "dimensions";
+             << "contiguous owner-route dimensions must address DB dimensions";
     break;
-  case DbOwnerMapKind::owner_dim_grid:
-  case DbOwnerMapKind::explicit_rank_table:
-    return emitOpError() << ownerMapKindUnrealizableReason(plan->kind);
   }
   return success();
 }

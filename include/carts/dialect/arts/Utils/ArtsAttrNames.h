@@ -50,7 +50,7 @@ inline constexpr llvm::StringLiteral OutlinedFunc = "arts.outlined_func";
 /// consumer.
 namespace Semantic {
 
-/// Marker stamped on dependency sources whose dependency window can be
+/// Marker recorded on dependency sources whose dependency window can be
 /// narrowed.
 inline constexpr llvm::StringLiteral NarrowableDep = "narrowable_dep";
 

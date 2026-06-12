@@ -30,8 +30,8 @@ The skill suite is organized around the compiler workflow:
 - Foundation: command policy, live pipeline/dialect maps, utility checks, and
   final simplification.
 - Build/test: compiler builds, lit/e2e verification, test creation, and review.
-- Compiler development: pass placement, runtime-first lowering, and contract
-  refreshes, anchored by the `carts-vision` layer/value-optimization spine.
+- Compiler development: pass placement and runtime-first lowering, anchored by
+  the `carts-vision` layer/value-optimization spine.
 - Debug/triage: compiler failures, miscompiles, runtime failures, stage diffs,
   reproducers, stale analyses, and distributed behavior.
 - Performance/distributed: benchmarks, benchmark triage, multinode examples,

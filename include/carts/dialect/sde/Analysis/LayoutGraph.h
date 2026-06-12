@@ -46,8 +46,8 @@ enum class LayoutGraphRole {
 struct LayoutGraphProvenance {
   std::string producerLayer = "sde";
   unsigned schemaVersion = kLayoutGraphSchemaVersion;
-  std::string planId;
-  std::string sourcePlanId;
+  std::string factId;
+  std::string sourceFactId;
   bool committed = false;
 };
 
@@ -116,7 +116,7 @@ struct LayoutGraph {
 };
 
 /// Typed view of the compatibility string attrs that existing passes still
-/// stamp today.
+/// write while the query model is being consolidated.
 struct LayoutGraphFact {
   int64_t id = -1;
   LayoutGraphRole role = LayoutGraphRole::unknown;
@@ -127,13 +127,12 @@ struct LayoutGraphFact {
   // target block-byte budget, not of node/worker count). Empty/1 on facts that
   // predate the N-node migration or carry no budget grain.
   SmallVector<int64_t, 4> budgetBlockShape;
-  int64_t budgetMuBlockCount = 1;
   int64_t muBlockCount = 1;
   int64_t commVolumeBytes = 0;
 };
 
-/// Runtime-neutral graph balance summary. The score fields are abstract
-/// planning signals only: they name no storage object, route, rank, task, or
+/// Runtime-neutral graph balance summary. The score fields are abstract SDE
+/// evidence only: they name no storage object, route, rank, task, or
 /// communication operation.
 struct LayoutGraphBalanceOptions {
   int64_t targetCuPartitions = 0;
@@ -166,7 +165,7 @@ std::optional<LayoutGraphFact> parseArrayLayoutFact(DictionaryAttr dict);
 SmallVector<LayoutGraphFact, 4> parseArrayLayoutFacts(ArrayAttr attr);
 
 /// Reproduce the module-stable `arrayId` numbering that `sde-layout-assignment`
-/// stamps into the per-array layout facts: every array root in
+/// writes into the per-array layout facts: every array root in
 /// `relations.profiles` gets an incrementing id in MapVector insertion order,
 /// skipping rank-0 / empty-shape profiles. Any consumer that joins an
 /// `arrayLayout` `arrayId` back to its array root (e.g. redistribution
@@ -193,12 +192,13 @@ CuVertex makeCuVertex(unsigned cuId, SdeSuIterateOp op,
 MuNet makeMuNet(
     unsigned muId, const ArrayAccessProfile &profile,
     std::optional<AssignedArrayLayout> assignedLayout = std::nullopt);
-MuNet makeMuNet(unsigned muId, const CuMuMemoryUnit &memory,
-                std::optional<CuMuPartitionPlan> partitionPlan = std::nullopt,
-                std::optional<ArrayLayoutKind> layoutKind = std::nullopt);
+MuNet makeMuNet(
+    unsigned muId, const CuMuMemoryUnit &memory,
+    std::optional<CuMuPartitionChoice> partitionChoice = std::nullopt,
+    std::optional<ArrayLayoutKind> layoutKind = std::nullopt);
 
 /// Build the first neutral graph slice from existing module access facts.
-/// Current SDE code still stamps compatibility attrs separately; this helper
+/// Current SDE code still writes compatibility attrs separately; this helper
 /// lets new analysis and future payload writers consume the same typed model.
 LayoutGraph buildLayoutGraph(const ModuleSuAccessRelations &relations,
                              const llvm::MapVector<Value, AssignedArrayLayout>

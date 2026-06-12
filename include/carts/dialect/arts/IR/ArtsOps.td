@@ -135,21 +135,7 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<ArrayAttr>:$stencil_owner_dims,
     OptionalAttr<ArrayAttr>:$stencil_write_footprint,
     OptionalAttr<UnitAttr>:$stencil_supported_block_halo,
-    OptionalAttr<ArrayAttr>:$planOwnerDims,
-    OptionalAttr<ArrayAttr>:$planPhysicalBlockShape,
-    OptionalAttr<ArrayAttr>:$planLogicalWorkerSlice,
-    OptionalAttr<ArrayAttr>:$planHaloShape,
-    OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
-    OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure,
     OptionalAttr<StorageBridgeAttr>:$storage_bridge,
-    OptionalAttr<DbOwnerMapKindAttr>:$owner_map_kind,
-    OptionalAttr<I32Attr>:$owner_map_version,
-    OptionalAttr<ArrayAttr>:$owner_map_dims,
-    OptionalAttr<ArrayAttr>:$owner_block_shape,
-    // Where this DB's blocks physically live. The block grain itself is the DB
-    // shape (`sizes` = block grid, `elementSizes`/`owner_block_shape` =
-    // per-block extent); this records the realized home of that grain.
-    OptionalAttr<DbMemoryPlacementAttr>:$db_memory_placement,
     OptionalAttr<UnitAttr>:$local_only,
     OptionalAttr<UnitAttr>:$read_only_after_init,
     // Per-block all-gather replica: every block stays local on every node.
@@ -158,8 +144,7 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<UnitAttr>:$perBlockSingleWriterStencil,
     // Compact face DB used to move non-contiguous stencil halo slices without
     // widening the halo to the source block.
-    OptionalAttr<UnitAttr>:$compact_halo_payload,
-    OptionalAttr<StrAttr>:$distributed_reject_reason
+    OptionalAttr<UnitAttr>:$compact_halo_payload
   );
   let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
   let assemblyFormat = [{
@@ -228,12 +213,12 @@ def DbAllocOp : Arts_Op<"db_alloc",
   }];
 }
 
-def DbAccessPlanOp : Arts_Op<"db_access_plan", [MemoryEffects<[MemWrite]>]> {
-  let summary = "Boundary-local DB access plan consumed into acquires";
+def DbAccessWindowOp : Arts_Op<"db_access_window", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Boundary-local DB access window consumed into acquires";
   let description = [{
-    Carries one committed SDE MU access window after MU storage has been
-    materialized as an ARTS DB-backed memref and before EDT dependency
-    materialization creates the corresponding `arts.db_acquire`.
+    Carries one committed SDE MU access window after MU storage has become an
+    ARTS DB-backed memref and before EDT dependency realization creates the
+    corresponding `arts.db_acquire`.
 
     The op is a short-lived boundary carrier in the direct SDE-to-ARTS stage. It
     preserves committed block-grid window facts so the acquire pass does not
@@ -660,15 +645,9 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<ArrayAttr>:$stencil_owner_dims,
     OptionalAttr<ArrayAttr>:$stencil_write_footprint,
     OptionalAttr<UnitAttr>:$stencil_supported_block_halo,
-    OptionalAttr<ArrayAttr>:$planOwnerDims,
-    OptionalAttr<ArrayAttr>:$planPhysicalBlockShape,
-    OptionalAttr<ArrayAttr>:$planLogicalWorkerSlice,
-    OptionalAttr<ArrayAttr>:$planHaloShape,
     // Grouped writer EDT split to owner-local block ranges; DB/MU grain stays
     // fixed by committed SDE facts.
     OptionalAttr<UnitAttr>:$ownerLocalWriterSplit,
-    OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
-    OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure,
     OptionalAttr<ArtsReductionStrategyAttr>:$reductionStrategy,
     UnitAttr:$partialReduction,
     OptionalAttr<ArrayAttr>:$partialReductionDims,
@@ -751,13 +730,7 @@ def EpochOp
     OptionalAttr<ArrayAttr>:$stencil_spatial_dims,
     OptionalAttr<ArrayAttr>:$stencil_owner_dims,
     OptionalAttr<ArrayAttr>:$stencil_write_footprint,
-    OptionalAttr<UnitAttr>:$stencil_supported_block_halo,
-    OptionalAttr<ArrayAttr>:$planOwnerDims,
-    OptionalAttr<ArrayAttr>:$planPhysicalBlockShape,
-    OptionalAttr<ArrayAttr>:$planLogicalWorkerSlice,
-    OptionalAttr<ArrayAttr>:$planHaloShape,
-    OptionalAttr<ArtsPlanIterationTopologyAttr>:$planIterationTopology,
-    OptionalAttr<ArtsPlanRepetitionStructureAttr>:$planRepetitionStructure
+    OptionalAttr<UnitAttr>:$stencil_supported_block_halo
   );
   let regions = (region SizedRegion<1> : $body);
   let results = (outs I64 : $epochGuid);
@@ -830,7 +803,7 @@ def RuntimeQueryOp : Arts_Op<"runtime_query", [Pure]> {
     - `total_nodes`: Total number of nodes available.
     - `current_worker`: ID of the current worker executing this operation.
     - `current_node`: ID of the current node executing this operation.
-    All runtime query results are `i32`; materializers cast to `index` when
+    All runtime query results are `i32`; lowering code casts to `index` when
     using a topology value as loop control.
   }];
   let arguments = (ins RuntimeQueryKindAttr:$kind);

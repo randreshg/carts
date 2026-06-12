@@ -29,6 +29,11 @@ inline bool hasArtsInterNodeRuntime(ModuleOp module) {
   return totalNodes && *totalNodes > 1;
 }
 
+inline bool requiresArtsInterNodeOwnerRouting(ModuleOp module) {
+  std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
+  return !totalNodes || *totalNodes > 1;
+}
+
 inline ArtsLaunchPolicy resolveArtsOrdinalLaunchPolicy(ModuleOp module,
                                                        Value ordinal,
                                                        OpBuilder &builder,
@@ -49,11 +54,11 @@ inline ArtsLaunchPolicy resolveArtsOrdinalLaunchPolicy(ModuleOp module,
 
 inline ArtsLaunchPolicy
 resolveArtsLaunchPolicy(ModuleOp module, scf::ForOp dispatchLoop,
-                        bool hasDistributedLaunchStoragePlan,
+                        bool hasDistributedLaunchStorageFacts,
                         OpBuilder &builder, Location loc) {
   ArtsLaunchPolicy policy;
   if (!module || !hasArtsInterNodeRuntime(module) ||
-      !hasDistributedLaunchStoragePlan || !dispatchLoop)
+      !hasDistributedLaunchStorageFacts || !dispatchLoop)
     return policy;
 
   policy.concurrency = EdtConcurrency::internode;

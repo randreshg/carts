@@ -13,7 +13,7 @@ for the actual extraction patch.
 - `lib/` headers are pass-private implementation details.
 - Multi-consumer utility headers belong in the parallel `include/carts/...` path.
 - `*Internal.h` belongs under `lib/` when it serves one pass family.
-- Cross-dialect public contracts need an owning public include path.
+- Cross-dialect public invariants need an owning public include path.
 - Do not expose a header just to avoid deleting duplicated pass-local helpers.
 
 ## Procedure
@@ -39,7 +39,7 @@ for the actual extraction patch.
 | one pass family | yes | no | `lib/carts/.../Transforms/<area>/` |
 | multiple `.cpp` | no | no | parallel `include/carts/<dialect-or-utils>/...` |
 | multiple dialects | no | yes | public owner in `include/carts/...` |
-| generated or ODS contract, including reusable op-shape validation | no | maybe | owning dialect `include/carts/.../IR` |
+| generated or ODS invariant, including reusable op-shape validation | no | maybe | owning dialect `include/carts/.../IR` |
 
 ## Required Answer
 

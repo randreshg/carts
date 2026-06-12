@@ -6,6 +6,7 @@
 
 #include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/StencilAttributes.h"
 #include "carts/utils/Utils.h"
@@ -44,19 +45,22 @@ readConstantIndexValues(ValueRange values) {
   return result;
 }
 
-static void mergePlanSpatialAttrs(Operation *op, LoweringFactInfo &info) {
+static void mergeDbGridSpatialFacts(Operation *op, LoweringFactInfo &info) {
   if (!op || !info.hasDistributionFacts())
     return;
 
+  std::optional<ArtsDbPhysicalLayout> layout = readArtsDbPhysicalLayout(op);
+  if (!layout)
+    return;
+
   if (info.spatial.ownerDims.empty())
-    if (auto ownerDims = readI64ArrayAttr(getPlanOwnerDimsAttr(op)))
-      info.spatial.ownerDims.assign(ownerDims->begin(), ownerDims->end());
+    info.spatial.ownerDims.assign(layout->ownerDims.begin(),
+                                  layout->ownerDims.end());
 
   if (info.spatial.staticBlockShape.empty() &&
       info.spatial.blockShape.empty()) {
-    if (auto blockShape = readI64ArrayAttr(getPlanPhysicalBlockShapeAttr(op)))
-      info.spatial.staticBlockShape.assign(blockShape->begin(),
-                                           blockShape->end());
+    info.spatial.staticBlockShape.assign(layout->physicalBlockShape.begin(),
+                                         layout->physicalBlockShape.end());
   }
 }
 
@@ -117,8 +121,8 @@ bool LoweringFactInfo::usesStencilDistribution() const {
 bool LoweringFactInfo::hasExplicitStencilFacts() const {
   /// A dep pattern alone is not enough to treat the IR as carrying
   /// authoritative stencil facts. Consumers may only rely on explicit stencil
-  /// semantics once the pattern pipeline or post-DB materialization has
-  /// attached concrete ownership / halo / block-shape information.
+  /// semantics once the pattern pipeline or post-DB refinement has attached
+  /// concrete ownership / halo / block-shape information.
   if (!isStencilFamily())
     return false;
   return hasOwnerDims() || !spatial.stencilIndependentDims.empty() ||
@@ -254,7 +258,7 @@ mlir::carts::arts::getSemanticFacts(Operation *op) {
       isStencilFamilyDepPattern(*info.pattern.depPattern);
   info.analysis.narrowableDep =
       op->hasAttr(::mlir::carts::arts::AttrNames::Semantic::NarrowableDep);
-  mergePlanSpatialAttrs(op, info);
+  mergeDbGridSpatialFacts(op, info);
   if (info.empty())
     return std::nullopt;
   return info;

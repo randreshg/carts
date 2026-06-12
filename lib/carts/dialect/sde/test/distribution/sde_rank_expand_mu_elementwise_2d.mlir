@@ -1,7 +1,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout)' 2>&1 | %FileCheck %s
 
-// Structural carrier: a committed single-contiguous-owner elementwise BLOCK
-// plan (physicalOwnerDims=[0], physicalBlockShape=[16,64]) rank-expands the
+// Structural carrier: committed single-contiguous-owner elementwise BLOCK facts
+// (physicalOwnerDims=[0], physicalBlockShape=[16,64]) rank-expand the
 // written sde.mu_alloc result memref so the block grid is the leading dim of
 // the TYPE, and rewrites the CU store into the physical [block, intra-block,
 // ...] coordinate system via div/mod localization. The chained
@@ -29,6 +29,7 @@ func.func @rank_expand_elementwise_2d() {
   %C = sde.mu_alloc : memref<128x64xf32>
   sde.su_iterate (%c0) to (%c128) step (%c1) classification(<elementwise>) {
   ^bb0(%i: index):
+    sde.array_layout_root write %C : memref<128x64xf32> array_id(0)
     sde.cu_region <single> {
       scf.for %j = %c0 to %c64 step %c1 {
         %v = memref.load %A[%i, %j] : memref<128x64xf32>
@@ -36,6 +37,6 @@ func.func @rank_expand_elementwise_2d() {
     }
       sde.yield
     }
-  } {physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
+  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [16, 64], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0], role = "write"}], physicalOwnerDims = [0], physicalBlockShape = [16, 64]}
   return
 }

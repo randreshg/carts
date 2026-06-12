@@ -270,7 +270,7 @@ struct TaskDependSpec {
 };
 
 /// OpenMP task-depend lowering ingests normalized memref values and may reuse
-/// already-materialized SDE dependency carriers in SDE-native tests.
+/// existing SDE dependency carriers in SDE-native tests.
 static std::optional<OmpDependSlice>
 extractDependSlice(Value depVar, OpBuilder &builder, Location loc) {
   // Path 1: SDE dependency carrier.
@@ -298,7 +298,7 @@ extractDependSlice(Value depVar, OpBuilder &builder, Location loc) {
 
   // Path 3: polygeist.subindex — common for task depend(element) after C
   // lowering. Preserve the base source plus element offset so SDE can identify
-  // source task-dependency patterns before boundary materialization.
+  // source task-dependency patterns before ARTS boundary lowering.
   if (auto subIndexOp = depVar.getDefiningOp<polygeist::SubIndexOp>()) {
     OmpDependSlice slice;
     slice.source = subIndexOp.getSource();

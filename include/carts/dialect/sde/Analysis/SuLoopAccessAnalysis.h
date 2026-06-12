@@ -64,7 +64,7 @@ struct SuNeighborhoodAccessInfo {
   SmallVector<int64_t, 4> writeFootprint;
 };
 
-struct SuOutputLayoutPlan {
+struct SuOutputLayoutFacts {
   Value root;
   SmallVector<int64_t, 4> shape;
   SmallVector<int64_t, 4> loopDimToPhysicalDim;
@@ -84,22 +84,22 @@ extractNeighborhoodAccessInfo(const SuLoopAccessSummary &summary);
 /// Recover a static write-backed output layout with a loop-dim to physical-dim
 /// map. Returns nullopt when external writes disagree or the layout is not
 /// statically shapeable.
-std::optional<SuOutputLayoutPlan>
-findCompatibleSuOutputLayoutPlan(const SuLoopAccessSummary &summary);
+std::optional<SuOutputLayoutFacts>
+findCompatibleSuOutputLayoutFacts(const SuLoopAccessSummary &summary);
 
 /// Convenience wrapper around analyzeSuLoopAccesses + output layout recovery.
-std::optional<SuOutputLayoutPlan>
-findCompatibleSuOutputLayoutPlan(SdeSuIterateOp op);
+std::optional<SuOutputLayoutFacts>
+findCompatibleSuOutputLayoutFacts(SdeSuIterateOp op);
 
 /// Return true when a point-local (`inPlaceSafe`) stencil whose access
 /// footprint spans more physical dimensions than the realized loop rank can
 /// still be realized as a `<= loopRank` owner strip: its parallel loop band
 /// maps onto a compatible static output layout. In that case the wide
-/// `ownerDims` footprint is not an unrealizable N-D owner *contract* — the
+/// `ownerDims` footprint is not an unrealizable N-D owner shape — the
 /// remaining cross-owner neighbor reads must be carried as a read-only halo
 /// along the strip. Used to distinguish this realizable case from a genuine
-/// nested-owner contract that must fail closed.
-bool hasRealizableOwnerStripPlan(SdeSuIterateOp op);
+/// nested-owner shape that must fail closed.
+bool hasRealizableOwnerStrip(SdeSuIterateOp op);
 
 /// Return true when a one-dimensional apparent reduction is only reducing
 /// within the owner-local output slice. These loops can use elementwise
@@ -231,7 +231,7 @@ enum class ArrayLayoutKind {
   /// Block-distributed on a contraction (reduction) position — a sibling matmul
   /// intermediate consumed on its contraction axis.
   blockContraction,
-  /// Replicated / host-whole — highest-cost fallback.
+  /// Replicated / host-whole — highest-cost candidate.
   replicated,
 };
 

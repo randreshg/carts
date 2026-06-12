@@ -41,12 +41,6 @@ using namespace llvm;
 /// (`distribution_kind`, `distribution_pattern`, `distribution_version`,
 /// `depPattern`) by ArtsDistributedOpInterface; their attr names are
 /// obtained from the implementing op rather than via raw strings.
-// `distributed_reject_reason` is an ODS-declared OptionalAttr<StrAttr> on
-// arts.db_alloc (stamped by DbOwnerMapRealizationPass); consumers must use
-// the generated getDistributedRejectReasonAttr() /
-// setDistributedRejectReason(StringRef) /
-// removeDistributedRejectReasonAttr() accessors.
-
 // `local_only` and `read_only_after_init` are ODS-declared UnitAttrs on
 // arts.db_alloc (set by DbModeTighteningPass); consumers must use the
 // generated getLocalOnly()/setLocalOnly(...)/removeLocalOnlyAttr() and the
@@ -59,149 +53,6 @@ using namespace llvm;
 } // namespace Operation
 
 } // namespace AttrNames
-
-inline ArrayAttr getPlanOwnerDimsAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanOwnerDimsAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanOwnerDimsAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanOwnerDimsAttr();
-  return nullptr;
-}
-
-inline ArrayAttr getPlanPhysicalBlockShapeAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanPhysicalBlockShapeAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanPhysicalBlockShapeAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanPhysicalBlockShapeAttr();
-  return nullptr;
-}
-
-inline ArrayAttr getPlanLogicalWorkerSliceAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanLogicalWorkerSliceAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanLogicalWorkerSliceAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanLogicalWorkerSliceAttr();
-  return nullptr;
-}
-
-inline ArrayAttr getPlanHaloShapeAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanHaloShapeAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanHaloShapeAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanHaloShapeAttr();
-  return nullptr;
-}
-
-inline ArtsPlanIterationTopologyAttr
-getPlanIterationTopologyAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanIterationTopologyAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanIterationTopologyAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanIterationTopologyAttr();
-  return nullptr;
-}
-
-inline ArtsPlanRepetitionStructureAttr
-getPlanRepetitionStructureAttr(Operation *op) {
-  if (!op)
-    return nullptr;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    return edtOp.getPlanRepetitionStructureAttr();
-  if (auto epochOp = dyn_cast<EpochOp>(op))
-    return epochOp.getPlanRepetitionStructureAttr();
-  if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    return dbAllocOp.getPlanRepetitionStructureAttr();
-  return nullptr;
-}
-
-inline void setPlanOwnerDimsAttr(Operation *op, ArrayAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanOwnerDimsAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanOwnerDimsAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanOwnerDimsAttr(attr);
-}
-
-inline void setPlanPhysicalBlockShapeAttr(Operation *op, ArrayAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanPhysicalBlockShapeAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanPhysicalBlockShapeAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanPhysicalBlockShapeAttr(attr);
-}
-
-inline void setPlanLogicalWorkerSliceAttr(Operation *op, ArrayAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanLogicalWorkerSliceAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanLogicalWorkerSliceAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanLogicalWorkerSliceAttr(attr);
-}
-
-inline void setPlanHaloShapeAttr(Operation *op, ArrayAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanHaloShapeAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanHaloShapeAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanHaloShapeAttr(attr);
-}
-
-inline void setPlanIterationTopologyAttr(Operation *op,
-                                         ArtsPlanIterationTopologyAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanIterationTopologyAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanIterationTopologyAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanIterationTopologyAttr(attr);
-}
-
-inline void
-setPlanRepetitionStructureAttr(Operation *op,
-                               ArtsPlanRepetitionStructureAttr attr) {
-  if (!op || !attr)
-    return;
-  if (auto edtOp = dyn_cast<EdtOp>(op))
-    edtOp.setPlanRepetitionStructureAttr(attr);
-  else if (auto epochOp = dyn_cast<EpochOp>(op))
-    epochOp.setPlanRepetitionStructureAttr(attr);
-  else if (auto dbAllocOp = dyn_cast<DbAllocOp>(op))
-    dbAllocOp.setPlanRepetitionStructureAttr(attr);
-}
 
 inline std::optional<StringRef> getRuntimeConfigPath(ModuleOp module) {
   if (!module)
@@ -630,7 +481,7 @@ inline void copyPatternAttrs(Operation *source, Operation *dest) {
 
 /// Use only when the destination preserves the same loop semantics/identity as
 /// the source. Structural rewrites that create a new iteration space should
-/// restamp the specific attrs they still mean instead of cloning all metadata.
+/// write the specific attrs they still mean instead of cloning all attrs.
 inline void copyArtsMetadataAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;
@@ -647,9 +498,9 @@ inline void copyArtsMetadataAttrs(Operation *source, Operation *dest) {
 }
 
 /// Copy only the semantic fact attrs that specialized pattern detection
-/// stamps before DB values exist. Structural rewrites should use this helper
+/// records before DB values exist. Structural rewrites should use this helper
 /// when they want to preserve pattern meaning without also copying unrelated
-/// ids or bookkeeping metadata.
+/// ids or bookkeeping attrs.
 inline void copySemanticFactAttrs(Operation *source, Operation *dest) {
   if (!source || !dest)
     return;

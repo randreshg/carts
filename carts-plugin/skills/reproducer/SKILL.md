@@ -24,7 +24,6 @@ the reduction.
 Use bundled helpers when they fit:
 - `scripts/snapshot-stage.sh` — capture a specific stage dump to a file
 - `scripts/find-related-tests.sh` — search existing regressions before inventing a new one
-- `scripts/scaffold-contract-test.sh` — create a lit test skeleton for a stage-boundary contract
 - `scripts/list-stage-boundaries.sh` — print the canonical stage list from the CLI
 
 Read these while shrinking a case:
@@ -36,7 +35,7 @@ Read these while shrinking a case:
 
 - C/C++ reproducer: use when the frontend or OpenMP lowering matters
 - MLIR reproducer: use when the failing stage is already known
-- `lib/carts/dialect/{sde,core,rt}/test/*.mlir`: use for compiler IR contracts
+- `lib/carts/dialect/{sde,arts,arts-rt}/test/*.mlir`: use for compiler IR regressions
 - `samples/*`: use for end-to-end runtime behavior
 
 ## Reduction Order
@@ -54,11 +53,11 @@ Read these while shrinking a case:
 4. Preserve semantic markers.
    - SDE layout/alignment/tiling facts and in-place safety facts
    - ARTS storage views, owner dims, collectives, bridges, and codelet deps
-   - ARTS owner maps, DB/EDT graph facts, DB modes, and grouped CUs
+   - ARTS owner routes, DB/EDT graph facts, DB modes, and grouped CUs
    - dep patterns
    - `distribution_*`
    - partition modes / full-range behavior
-   - metadata and contract attributes
+  - metadata attributes only when they are live input facts for the failing stage
    - separate DB/MU grain from CU/bridge grouping
 5. End in a checked-in regression test whenever possible.
 

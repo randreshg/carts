@@ -29,10 +29,10 @@ static bool isInsideHostOpenMPIsland(Operation *op) {
 
 // The "no internode task depends on a coarse aggregate DB" invariant is
 // verified in VerifyArtsCdag: it must run AFTER
-// DbOwnerMapRealization realizes owner maps and DistributedLaunchConsistency
-// localizes host-bridge EDTs to intranode, which only happen in
-// post-db-refinement. Checking it here (end of sde-to-arts) would reject
-// bridges that are legitimately localized downstream.
+// Distributed ownership realization marks distributed DB homes and
+// DistributedLaunchConsistency localizes host-bridge EDTs to intranode, which
+// only happen in post-db-refinement. Checking it here (end of sde-to-arts)
+// would reject bridges that are legitimately localized downstream.
 
 static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
   auto *sdeDialect =
@@ -59,7 +59,7 @@ static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
         return;
       op->emitError()
           << "scf.parallel remains after the SDE-to-ARTS boundary; "
-             "parallel work must be materialized as ARTS objects or marked as "
+             "parallel work must be converted to ARTS objects or marked as "
              "an explicit host OpenMP island";
       found = true;
     }

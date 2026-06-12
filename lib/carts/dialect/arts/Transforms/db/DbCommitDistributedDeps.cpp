@@ -3,7 +3,7 @@
 ///
 /// Commits runtime DB mode and stencil halo diagnostics on distributed DB
 /// acquires. ARTS-RT still requires explicit element/byte windows for halo
-/// transport; halo_slice alone is not a lowering contract.
+/// transport; halo_slice alone is not lowering authority.
 ///==========================================================================///
 
 #define GEN_PASS_DEF_DBCOMMITDISTRIBUTEDDEPS

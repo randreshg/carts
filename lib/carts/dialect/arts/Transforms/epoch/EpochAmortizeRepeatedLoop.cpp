@@ -1,17 +1,17 @@
 ///==========================================================================///
 /// File: EpochAmortizeRepeatedLoop.cpp
 ///
-/// Hoist a committed repeated-timestep epoch out of its repeat loop and wrap
-/// EDT bodies in inner repeat loops. The legality of repeating across
-/// timesteps is a committed SDE plan fact (full_timestep repetition over a
-/// stable owner topology with no halo widening); this pass realizes that fact
-/// and does not re-derive it.
+/// Hoist a repeated uniform epoch out of its repeat loop and wrap EDT bodies in
+/// inner repeat loops when the current ARTS graph has stable block deps.
 ///==========================================================================///
 
 #define GEN_PASS_DEF_EPOCHAMORTIZEREPEATEDLOOP
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
@@ -94,36 +94,22 @@ static bool isAmortizableTailOp(Operation *op, Value loopIv) {
   return false;
 }
 
-static bool isStableRepeatTopology(Operation *op) {
-  auto topology = getPlanIterationTopologyAttr(op);
-  return topology &&
-         (topology.getValue() == ArtsPlanIterationTopology::owner_strip ||
-          topology.getValue() == ArtsPlanIterationTopology::owner_tile);
-}
-
-static bool hasNoPlannedHaloWidening(Operation *op) {
-  ArrayAttr haloShape = getPlanHaloShapeAttr(op);
-  if (!haloShape)
-    return true;
-
-  std::optional<SmallVector<int64_t, 4>> haloExtents =
-      readI64ArrayAttr(haloShape);
-  if (!haloExtents)
-    return false;
-  return llvm::all_of(*haloExtents, [](int64_t extent) { return extent == 0; });
-}
-
-/// Committed SDE authorization for repeating an epoch across timesteps: a
-/// uniform-family dependence over a stable owner topology with full-timestep
-/// repetition and no planned halo widening. SDE records these only after it
-/// proves the cross-timestep exchange is legal; ARTS realizes that proof.
-static bool epochHasRepeatStableUniformPlan(EpochOp epochOp) {
+static bool epochHasStableUniformBlockDeps(EpochOp epochOp) {
   Operation *op = epochOp.getOperation();
   auto depPattern = getDepPattern(op);
-  auto repetition = getPlanRepetitionStructureAttr(op);
-  return depPattern && isUniformFamilyDepPattern(*depPattern) && repetition &&
-         repetition.getValue() == ArtsPlanRepetitionStructure::full_timestep &&
-         isStableRepeatTopology(op) && hasNoPlannedHaloWidening(op);
+  if (!depPattern || !isUniformFamilyDepPattern(*depPattern))
+    return false;
+
+  bool sawBlockDep = false;
+  bool sawHaloDep = false;
+  epochOp.walk([&](DbAcquireOp acquire) {
+    if (auto facts = resolveAcquireFacts(acquire))
+      sawHaloDep |= facts->isStencilFamily() || facts->supportsBlockHalo();
+    auto alloc = dyn_cast_or_null<DbAllocOp>(
+        DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
+    sawBlockDep |= alloc && hasArtsDbPhysicalLayout(alloc.getOperation());
+  });
+  return sawBlockDep && !sawHaloDep;
 }
 
 bool canWrapEdtBodyWithRepeatLoop(EdtOp edt) {
@@ -268,7 +254,7 @@ bool tryAmortizeRepeatedEpochLoop(EpochOp epochOp) {
       return false;
   }
 
-  if (!epochHasRepeatStableUniformPlan(epochOp))
+  if (!epochHasStableUniformBlockDeps(epochOp))
     return false;
 
   SmallVector<EdtOp> edts;

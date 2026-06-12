@@ -5,7 +5,7 @@ ARTS optimizations refine abstract ARTS objects and orchestration mechanics.
 Owned optimizations:
 
 - DB mode tightening;
-- DB acquire/window refinement from explicit plan facts;
+- DB acquire/window refinement from explicit layout and movement facts;
 - EDT structural optimization;
 - EDT pointer rematerialization;
 - dependency-slot localization;

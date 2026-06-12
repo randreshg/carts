@@ -15,7 +15,7 @@ analysis, or test belongs.
   transformations needed to make those facts true. It names no collective,
   DB, EDT, route, GUID, or runtime policy.
 - ARTS owns isolated tasks with explicit deps/params, DB/EDT/epoch
-  orchestration, analyses, placement, distributed ownership, owner maps,
+  orchestration, analyses, placement, distributed ownership, owner routes,
   per-block single-writer DB realization, and grouped
   compute/bridge/communication CUs. It consumes committed SDE layout,
   access-window, and movement structure; it does not choose distribution
@@ -36,8 +36,8 @@ analysis, or test belongs.
 2. Find creation sites with `rg "OpName|op mnemonic" include lib tools docs`.
 3. Check where it is transformed, verified, and erased or lowered.
 4. Confirm stage ownership with [[carts-pipeline-map]] and the live compiler.
-5. State the dialect contract and what that dialect must not own.
-6. State the op's TableGen traits, interfaces, and op-verifier contract before
+5. State the dialect invariants and what that dialect must not own.
+6. State the op's TableGen traits, interfaces, and op-verifier rules before
    assigning validation to a pass.
 7. Add tests in the owning dialect test directory.
 8. For duplicated attribute enums or convert-only boundaries, invoke

@@ -18,9 +18,10 @@ stencil, or fine-grained allocation without collapsing the allocation itself.
 Distributed DB ownership is not selected by a DB graph or cached analysis layer.
 SDE and ARTS author the layout and movement facts while structured information
 is still available. ARTS then consumes those committed facts and either realizes
-owner maps mechanically or rejects the allocation with a precise reason.
+distributed ownership mechanically or rejects the allocation with a precise
+reason.
 
-The owner-map pass uses direct IR queries over `arts.db_alloc`,
+The owner-route pass uses direct IR queries over `arts.db_alloc`,
 `arts.db_acquire`, and their consuming `arts.edt` operations. It does not build
 cached graph nodes, analysis managers, or heuristic decision caches.
 
@@ -37,8 +38,8 @@ The relevant stages are:
 - `create-dbs`: consumes ARTS storage facts and must reject tiled/block raw
   accesses that SDE did not rewrite.
 - `db-opt`: tightens DB modes from actual uses.
-- `post-db-refinement`: realizes owner maps, consolidates committed stencil
-  halo windows, removes cleanup-only DB chains, and materializes ARTS-level
+- `post-db-refinement`: realizes distributed ownership, consolidates committed
+  stencil halo windows, removes cleanup-only DB chains, and realizes ARTS-level
   reduction/matmul continuation structure from ARTS-authored facts.
 
 ## Current Utilities
@@ -49,9 +50,9 @@ Use narrow utilities instead of cached analysis graphs:
   slice conversion.
 - `EdtUtils`: EDT dependency/block-argument queries.
 - `StringUtils`: direct string-memref discovery.
-- `DbDistributedEligibility`: direct owner-map eligibility query used by
-  `DbOwnerMapRealization`.
+- `DbDistributedEligibility`: direct distributed ownership eligibility query used by
+  `DbDistributedOwnershipRealization`.
 
 If a pass has enough information to transform, it should transform in its owning
-layer. If it does not, it should fail closed rather than stamp metadata for a
+layer. If it does not, it should fail closed rather than leave metadata for a
 later layer to repair.

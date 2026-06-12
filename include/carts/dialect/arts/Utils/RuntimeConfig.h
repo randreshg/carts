@@ -45,7 +45,7 @@ public:
   /// Optional compiler scheduling floor for SDE task grain.
   int getMinIterationsPerWorker() const { return minIterationsPerWorker; }
 
-  /// Optional output-tile byte floor for distributed plans (0 = disabled).
+  /// Optional output-tile byte floor for distributed layouts (0 = disabled).
   /// Compiler tools may inject this from a CLI flag before passes run; the
   /// arts.cfg parser also accepts `min_distributed_tile_bytes = N`.
   int64_t getMinDistributedTileBytes() const { return minDistributedTileBytes; }

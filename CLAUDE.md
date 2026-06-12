@@ -28,7 +28,7 @@ runtime.
   transport is GASNet-EX, auto-downloaded and built from its release tarball with
   the conduit auto-detected (override via `ARTS_GASNET_CONDUIT` /
   `ARTS_GASNET_VERSION`, or set `ARTS_GASNET_PREFIX` to use a prebuilt GASNet).
-- `dekk carts build --arts --no-rdma` - rebuild ARTS runtime for TCP fallback.
+- `dekk carts build --arts --no-rdma` - rebuild ARTS runtime for TCP/debug transport.
 - `dekk carts build --arts --legacy-rsocket` - rebuild ARTS on the legacy rsocket
   RDMA data plane.
 - `dekk carts compile <file> -O3` - compile C/C++ to an ARTS executable.
@@ -48,14 +48,14 @@ CARTS is organized around three project dialect layers:
 - SDE (`sde`) - HPF-style `DISTRIBUTE`/`ALIGN`: source semantics, per-array
   block layouts from affine access relations, abstract communication-volume
   cost, SdeLoopPatternFacts, and real source/SU/CU/MU loop/layout transformations.
-  It names no collectives, DBs, EDTs, owner maps, routes, GUIDs, or runtime
+  It names no collectives, DBs, EDTs, owner routes, GUIDs, or runtime
   policy.
 - ARTS (`arts`) - the first isolation boundary: isolated codelets, explicit
   deps/params, token-local memref views, graph optimizations, and mechanical
   representation of SDE-authored movement structure. It also owns abstract DB,
   EDT, epoch, dependency-slot, placement, per-block single-writer DB
-  realization, owner maps, DB modes, and grouped compute/bridge/communication
-  CUs.
+  realization, distributed ownership, DB modes, and grouped
+  compute/bridge/communication CUs.
 - ARTS-RT (`arts_rt`) - runtime ABI, packing, pointer lowering, and
   LLVM-facing cleanup. It mechanically lowers ARTS facts and does not infer
   scheduling, ownership, partition, or collective policy.
@@ -66,30 +66,32 @@ skills disagree with the compiler, the live compiler manifest wins.
 ## Engineering Standard
 
 - Prefer production fixes over band-aids. Understand the root cause, the
-  owning dialect, and the runtime/compiler contract before patching symptoms.
+  owning dialect, and the required runtime/compiler invariant before patching
+  symptoms.
 - Before changing compiler IR, state the function and limits of the affected
   dialect layer. SDE owns data layout and the real loop/source transformations
   that make it true; ARTS owns isolated codelet graph structure, mechanical
-  movement representation, DB/EDT/owner-map realization, and grouped execution;
+  movement representation, DB/EDT distributed ownership realization, and grouped
+  execution;
   ARTS-RT owns lowering-ready runtime shape.
-- Do not hide correctness behind later cleanup passes, metadata-only promises,
+- Do not hide correctness behind later cleanup passes, deferred metadata markers,
   incidental pass order, fixture churn, or duplicated local helpers. If the
   owning layer cannot safely transform, fail closed with evidence.
-- Preserve committed upstream plans. Later layers may verify, consume, realize,
+- Preserve committed upstream facts. Later layers may verify, consume, realize,
   or reject them; they must not recompute block shape, owner dims, collective
-  family, owner maps, DB grain, or runtime mode.
+  family, distributed ownership, DB grain, or runtime mode.
 - Keep DB grain separate from CU/bridge grain. Production distributed shape is a
   two-level graph: MU/DB blocks fine enough for single-writer concurrency, plus
   grouped compute/bridge/communication CUs for read-only or copy-like edges.
 - Value optimization spans state, dependencies, effects, compute, memory, and
-  sync. Optimize by changing real IR shape in the owning layer, not by stamping
+  sync. Optimize by changing real IR shape in the owning layer, not by writing
   a promise for ARTS-RT or the runtime to reinterpret later.
 - Use hypergraph partitioning as CU grouping/partition evidence over committed
-  MU facts, not as benchmark-specific owner-dim, owner-map, or storage-grain
+  MU facts, not as benchmark-specific owner-dim, owner-route, or storage-grain
   repair.
 - Passes, operations, attributes, dialect-owned IR metadata, and local op
-  validation contracts must be declared through the owning TableGen/ODS files
-  first. Use op verifiers for operation region/body legality before assigning
+  validation rules must be declared through the owning TableGen/ODS files first.
+  Use op verifiers for operation region/body legality before assigning
   validation to aggregate passes. C++ code should consume generated
   declarations/accessors instead of adding manual pass/attribute surfaces.
 - Before adding a helper to a pass, use `carts-check-utils`. Reusable helpers
@@ -135,7 +137,7 @@ Match verification to the change:
 | `carts-commit` | Use when staging CARTS changes, choosing a commit message scope, committing, pushing, or handing a patch to review. | `carts-plugin/skills/carts-commit/SKILL.md` |
 | `carts-review` | Use before committing CARTS changes, during PR review, after substantial compiler/runtime edits, or when checking conventions, missing tests, fixture refreshes, or regression risk. | `carts-plugin/skills/carts-review/SKILL.md` |
 | `carts-simplify` | Use as the final simplification gate before committing or finishing CARTS work: reduce patch complexity, remove accidental changes, confirm utility-placement decisions already made by carts-check-utils, and enforce .carts artifact discipline. | `carts-plugin/skills/carts-simplify/SKILL.md` |
-| `carts-finishing` | Use when advancing, continuing, or finishing CARTS work; choosing the next fix; asking where a fix belongs; applying regression guards; or referencing the carts-finishing plan. | `carts-plugin/skills/carts-finishing/SKILL.md` |
+| `carts-finishing` | Use when advancing or finishing active CARTS compiler/runtime work, choosing the next fix, applying regression guards, or deciding where a fix belongs. | `carts-plugin/skills/carts-finishing/SKILL.md` |
 
 ### Discovery + placement
 
@@ -157,7 +159,6 @@ Match verification to the change:
 | `carts-cli` | Use when asking about CARTS commands, environment setup, wrappers, compile flags, pipeline inspection, examples, benchmarks, generated skills, or how to run project lifecycle tasks. | `carts-plugin/skills/carts-cli/SKILL.md` |
 | `test` | Use when the user asks to test, run tests, validate, check, verify changes, run lit, or run a focused CARTS suite. | `carts-plugin/skills/test/SKILL.md` |
 | `create-test` | Use when adding a new lit test, creating regression tests, writing multi-stage boundary tests, or choosing CARTS test placement and RUN lines. | `carts-plugin/skills/create-test/SKILL.md` |
-| `contract-refresh` | Use when contract tests fail due to legitimate IR changes, after refactoring passes, or when git status shows stale Output/ fixtures. | `carts-plugin/skills/contract-refresh/SKILL.md` |
 | `carts-local-examples` | Use when listing, running, fixing, sweeping, or validating CARTS local sample programs, examples runner behavior, or e2e compile-and-run tests. | `carts-plugin/skills/carts-local-examples/SKILL.md` |
 | `carts-multinode-examples` | Use when the user asks how to compile or run CARTS examples on multiple nodes, including ARTS configs, launchers, SSH, or Slurm. Use carts-distributed-triage for failures. | `carts-plugin/skills/carts-multinode-examples/SKILL.md` |
 | `benchmark` | Use when the user asks to list, build, run, or compare CARTS benchmarks. Use carts-benchmark-triage for failing, timing out, or suspicious benchmark results. | `carts-plugin/skills/benchmark/SKILL.md` |
@@ -170,13 +171,13 @@ Match verification to the change:
 | `analysis-triage` | Use when behavior depends on pass order, stale facts, or metadata inconsistency across staged CARTS pipelines. | `carts-plugin/skills/analysis-triage/SKILL.md` |
 | `miscompile-triage` | Use when a program compiles but produces wrong output, checksum mismatches, phase-equivalence failures, or suspicious partitioning/distribution decisions. | `carts-plugin/skills/miscompile-triage/SKILL.md` |
 | `runtime-triage` | Use when compilation succeeds but the generated ARTS executable hangs, deadlocks, crashes, stalls, or reports anomalous runtime counters. | `carts-plugin/skills/runtime-triage/SKILL.md` |
-| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work materialization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
+| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work realization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
 | `benchmark-triage` | Use when a benchmark fails, times out, produces wrong checksums, shows suspicious speedups, or needs pass-by-pass/runtime diagnosis. | `carts-plugin/skills/benchmark-triage/SKILL.md` |
 | `heuristic-explain` | Use when a benchmark or test has unexpected partitioning, wrong distribution mode, or heuristic drift in ARTS DB/EDT placement decisions. | `carts-plugin/skills/heuristic-explain/SKILL.md` |
 | `reproducer` | Use when a large failing program, benchmark, or stage dump needs to become a minimal C, MLIR, or lit reproducer. | `carts-plugin/skills/reproducer/SKILL.md` |
 | `stage-diff` | Use when debugging miscompiles, verifying pass correctness, comparing MLIR between pipeline stages, or finding where semantics diverge. | `carts-plugin/skills/stage-diff/SKILL.md` |
 | `dialect-trace` | Use when debugging lowering paths, understanding operation placement across SDE/ARTS/ARTS-RT, or verifying dialect boundary invariants. | `carts-plugin/skills/dialect-trace/SKILL.md` |
-| `runtime-first` | Use after runtime triage shows the compiler must match an ARTS runtime contract for EDTs, DBs, epochs, dependencies, or distributed execution. | `carts-plugin/skills/runtime-first/SKILL.md` |
+| `runtime-first` | Use after runtime triage shows the compiler must match an ARTS runtime invariant for EDTs, DBs, epochs, dependencies, or distributed execution. | `carts-plugin/skills/runtime-first/SKILL.md` |
 
 ### Authoring + maintenance
 

@@ -26,10 +26,10 @@
 /// Responsibility split:
 /// - SDE chooses structured patterns, task grain, owner dimensions, physical
 ///   block shapes, and task element slices.
-/// - The target SDE path emits explicit storage and codelet deps/params
-///   that materialize to DB/EDT ops before this raw bridge.
-/// - CreateDbs materializes only remaining coarse raw EDT memref captures into
-///   ARTS DB ops. Tiled/block-local access rewriting is an SDE
+/// - The target SDE path emits explicit storage and codelet deps/params that
+///   lower to DB/EDT ops before this raw path.
+/// - CreateDbs lowers only remaining coarse raw EDT memref captures into ARTS
+///   DB ops. Tiled/block-local access rewriting is an SDE
 ///   responsibility and must not be rediscovered here.
 ///
 /// CreateDbs must not rediscover SDE partition policy. Its
@@ -39,7 +39,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
-#include "carts/dialect/arts/Utils/DbLayoutPlanUtils.h"
+#include "carts/dialect/arts/Utils/DbLayoutFactsUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -89,9 +89,6 @@ static llvm::Statistic numPrivateEdtAllocsSkipped{
 static llvm::Statistic numEdtAccessModesInferred{
     "create_dbs", "NumEdtAccessModesInferred",
     "Number of EDT/memref pairs that required inferred access modes"};
-static llvm::Statistic numMemrefsDefaultedToInOut{
-    "create_dbs", "NumMemrefsDefaultedToInOut",
-    "Number of memrefs defaulted to inout because no access evidence existed"};
 static llvm::Statistic numDbAcquireGroupsCreated{
     "create_dbs", "NumDbAcquireGroupsCreated",
     "Number of DbAcquireOp groups created for EDT dependencies"};
@@ -167,9 +164,8 @@ static bool isReadOnlyEdtLocalGlobal(Value source, EdtOp edt) {
   return true;
 }
 
-static Value materializeMemrefAsType(Value value, Type targetType,
-                                     Operation *insertBefore,
-                                     OpBuilder &builder) {
+static Value adaptMemrefToType(Value value, Type targetType,
+                               Operation *insertBefore, OpBuilder &builder) {
   if (!value || value.getType() == targetType)
     return value;
   if (!isa<MemRefType>(value.getType()) || !isa<MemRefType>(targetType))
@@ -219,7 +215,7 @@ static LogicalResult rewriteCoarseRawAccess(Operation *op, Value expectedRoot,
                                             Value dbPtr, OpBuilder &builder) {
   if (isa<polygeist::SubIndexOp>(op)) {
     return op->emitError(
-        "raw memref subindex reached ARTS DB materialization; SDE must "
+        "raw memref subindex reached ARTS DB lowering; SDE must "
         "rewrite tiled or sliced memory views before ARTS conversion");
   }
 
@@ -227,15 +223,15 @@ static LogicalResult rewriteCoarseRawAccess(Operation *op, Value expectedRoot,
   if (!access) {
     if (isa<memref::CopyOp>(op)) {
       return op->emitError(
-          "raw memref copy reached ARTS DB materialization; SDE must "
-          "materialize explicit storage copies before ARTS conversion");
+          "raw memref copy reached ARTS DB lowering; SDE must "
+          "lower explicit storage copies before ARTS conversion");
     }
     return success();
   }
 
   if (expectedRoot && access->memref != expectedRoot) {
     return op->emitError(
-        "raw memref view/alias access reached ARTS DB materialization; "
+        "raw memref view/alias access reached ARTS DB lowering; "
         "SDE must rewrite accesses to codelet-local memref views before "
         "ARTS "
         "conversion");
@@ -243,11 +239,11 @@ static LogicalResult rewriteCoarseRawAccess(Operation *op, Value expectedRoot,
 
   Value dbView = createCoarseDbRef(dbPtr, op, builder);
   Value typedView =
-      materializeMemrefAsType(dbView, access->memref.getType(), op, builder);
+      adaptMemrefToType(dbView, access->memref.getType(), op, builder);
   if (!typedView) {
     return op->emitError(
         "cannot type the coarse DB view for raw memref access; SDE "
-        "must materialize an explicit codelet-local view");
+        "must lower an explicit codelet-local view");
   }
 
   bool replaced = false;
@@ -292,8 +288,8 @@ private:
   DenseMap<EdtOp, SetVector<Value>> edtExternalValues;
 
   void collectMemrefs();
-  void reconcileExternalDepAccessModes();
-  void ensureInitializedAccessModes();
+  LogicalResult reconcileRawMemrefAccessModes();
+  LogicalResult requireInitializedAccessModes();
   void createDbAllocOps();
   void lowerEdtExternalDependencies();
   void cleanupAndFinalize();
@@ -309,7 +305,7 @@ private:
   void rewriteOpsToUseDbAcquire(EdtOp edt, SmallVector<Operation *> &operations,
                                 Operation *rawAlloc, Value localAcquireView);
   void rewriteUsesInParentEdt(MemrefInfo &memrefInfo);
-  Operation *findPhysicalLayoutPlanSource(Operation *alloc);
+  Operation *findPhysicalLayoutFactsSource(Operation *alloc);
   void rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc);
 };
 } // namespace
@@ -334,8 +330,11 @@ void CreateDbsPass::runOnOperation() {
   ARTS_DEBUG(" - Found " << memrefInfo.size() << " memrefs used in EDTs");
 
   /// Phase 2: Reconcile raw external memref access modes.
-  reconcileExternalDepAccessModes();
-  ensureInitializedAccessModes();
+  if (failed(reconcileRawMemrefAccessModes()) ||
+      failed(requireInitializedAccessModes())) {
+    signalPassFailure();
+    return;
+  }
 
   /// Phase 3: Create DbAlloc operations.
   ARTS_INFO("Phase 3: Creating DbAlloc operations for " << memrefInfo.size()
@@ -353,10 +352,12 @@ void CreateDbsPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-void CreateDbsPass::reconcileExternalDepAccessModes() {
+LogicalResult CreateDbsPass::reconcileRawMemrefAccessModes() {
+  bool failed = false;
+
   /// For each EDT with external dependencies, infer conservative access modes
-  /// from concrete memory uses when no explicit SDE materialized acquire is
-  /// already present.
+  /// from concrete memory uses when no explicit SDE-authored acquire is already
+  /// present.
   for (auto &edtEntry : edtExternalValues) {
     EdtOp edt = edtEntry.first;
     SetVector<Value> &externalDeps = edtEntry.second;
@@ -370,35 +371,53 @@ void CreateDbsPass::reconcileExternalDepAccessModes() {
 
       MemrefInfo &info = memrefInfo[underlyingOp];
       ArtsMode inferredMode = DbUtils::inferEdtAccessMode(underlyingOp, edt);
-      if (inferredMode == ArtsMode::uninitialized)
-        inferredMode = ArtsMode::inout;
+      if (inferredMode == ArtsMode::uninitialized) {
+        edt.emitOpError()
+            << "cannot infer access mode for raw external memref dependency; "
+               "SDE must lower an explicit DB dependency or expose concrete "
+               "load/store/copy uses before CreateDbs";
+        failed = true;
+        continue;
+      }
 
       ARTS_DEBUG(" - Memref "
                  << *underlyingOp
-                 << " used in EDT without explicit SDE acquire metadata, "
+                 << " used in EDT without explicit SDE-authored acquire, "
                     "inferred mode="
                  << inferredMode);
       info.accessMode = combineAccessModes(info.accessMode, inferredMode);
       ++numEdtAccessModesInferred;
     }
   }
+
+  for (auto &entry : memrefInfo) {
+    MemrefInfo &info = entry.second;
+    if (!info.parentEdt)
+      continue;
+    ArtsMode parentMode =
+        DbUtils::inferEdtAccessMode(entry.first, info.parentEdt);
+    if (parentMode != ArtsMode::uninitialized)
+      info.accessMode = combineAccessModes(info.accessMode, parentMode);
+  }
+
+  return failure(failed);
 }
 
-void CreateDbsPass::ensureInitializedAccessModes() {
-  /// Any memref that still has no mode evidence falls back to inout to preserve
-  /// dependency correctness.
+LogicalResult CreateDbsPass::requireInitializedAccessModes() {
+  /// Any memref that still has no mode evidence is malformed for this raw path.
+  bool failed = false;
   for (auto &entry : memrefInfo) {
     MemrefInfo &info = entry.second;
     if (info.accessMode != ArtsMode::uninitialized)
       continue;
 
-    ARTS_DEBUG(" - Memref "
-               << *entry.first
-               << " has no explicit access metadata, defaulting to inout "
-                  "mode");
-    info.accessMode = ArtsMode::inout;
-    ++numMemrefsDefaultedToInOut;
+    entry.first->emitError()
+        << "raw memref reached CreateDbs without access-mode evidence; "
+           "SDE must lower explicit DB dependencies or leave concrete "
+           "load/store/copy uses that ARTS can classify";
+    failed = true;
   }
+  return failure(failed);
 }
 
 void CreateDbsPass::lowerEdtExternalDependencies() {
@@ -429,11 +448,11 @@ void CreateDbsPass::projectSemanticAttrsToDbValue(Operation *sourceOp,
   transferOperationFacts(sourceOp, targetOp);
 }
 
-Operation *CreateDbsPass::findPhysicalLayoutPlanSource(Operation *alloc) {
+Operation *CreateDbsPass::findPhysicalLayoutFactsSource(Operation *alloc) {
   if (!alloc || alloc->getNumResults() == 0)
     return nullptr;
 
-  auto compatiblePlanTarget = [&](Operation *candidate) {
+  auto compatibleFactsTarget = [&](Operation *candidate) {
     auto memRefType = dyn_cast<MemRefType>(alloc->getResult(0).getType());
     if (!memRefType || memRefType.getRank() == 0)
       return false;
@@ -465,16 +484,11 @@ Operation *CreateDbsPass::findPhysicalLayoutPlanSource(Operation *alloc) {
     return true;
   };
 
-  auto equivalentPlan = [](Operation *lhs, Operation *rhs) {
-    // DB physical layout identity is storage grain: owner dims, block shape,
-    // halo, and topology. Logical worker slice is CU grouping evidence and may
-    // differ across codelets that share the same block DBs.
-    return getPlanOwnerDimsAttr(lhs) == getPlanOwnerDimsAttr(rhs) &&
-           getPlanPhysicalBlockShapeAttr(lhs) ==
-               getPlanPhysicalBlockShapeAttr(rhs) &&
-           getPlanHaloShapeAttr(lhs) == getPlanHaloShapeAttr(rhs) &&
-           getPlanIterationTopologyAttr(lhs) ==
-               getPlanIterationTopologyAttr(rhs);
+  auto equivalentLayout = [](Operation *lhs, Operation *rhs) {
+    std::optional<ArtsDbPhysicalLayout> left = readArtsDbPhysicalLayout(lhs);
+    std::optional<ArtsDbPhysicalLayout> right = readArtsDbPhysicalLayout(rhs);
+    return left && right && sameI64Values(left->ownerDims, right->ownerDims) &&
+           sameI64Values(left->physicalBlockShape, right->physicalBlockShape);
   };
 
   auto writesAlloc = [&](Operation *root) {
@@ -501,9 +515,9 @@ Operation *CreateDbsPass::findPhysicalLayoutPlanSource(Operation *alloc) {
   module.walk([&](Operation *candidate) {
     if (!candidate || candidate == alloc)
       return WalkResult::advance();
-    if (!hasPhysicalDbLayoutPlan(candidate))
+    if (!hasPhysicalDbLayoutFacts(candidate))
       return WalkResult::advance();
-    if (!compatiblePlanTarget(candidate))
+    if (!compatibleFactsTarget(candidate))
       return WalkResult::advance();
     if (!writesAlloc(candidate))
       return WalkResult::advance();
@@ -516,13 +530,12 @@ Operation *CreateDbsPass::findPhysicalLayoutPlanSource(Operation *alloc) {
 
   Operation *selected = candidates.front();
   for (Operation *candidate : ArrayRef<Operation *>(candidates).drop_front()) {
-    if (equivalentPlan(selected, candidate))
+    if (equivalentLayout(selected, candidate))
       continue;
     InFlightDiagnostic diag = alloc->emitError(
-        "conflicting SDE-authored physical DB layout plans for "
-        "one allocation");
-    diag.attachNote(selected->getLoc()) << "first layout plan source";
-    diag.attachNote(candidate->getLoc()) << "conflicting layout plan source";
+        "conflicting physical DB block layouts for one allocation");
+    diag.attachNote(selected->getLoc()) << "first layout source";
+    diag.attachNote(candidate->getLoc()) << "conflicting layout source";
     signalPassFailure();
     return nullptr;
   }
@@ -598,7 +611,7 @@ void CreateDbsPass::collectMemrefs() {
         if (isa<DbAllocOp>(underlyingOp))
           continue;
 
-        /// EDT-local scratch and read-only rematerialized globals are private
+        /// EDT-local scratch and read-only recreated globals are private
         /// runtime plumbing, not shared raw memrefs that need DB conversion.
         if (underlyingOp->getParentOfType<EdtOp>() == edt) {
           if (isa<memref::AllocaOp>(underlyingOp))
@@ -608,8 +621,8 @@ void CreateDbsPass::collectMemrefs() {
               continue;
             op->emitError()
                 << "writes or escapes an EDT-local memref.global; mutable "
-                   "global state used by EDTs must be materialized as an "
-                   "explicit DB dependency before CreateDbs";
+                   "global state used by EDTs must be lowered as an explicit "
+                   "DB dependency before CreateDbs";
             signalPassFailure();
             return;
           }
@@ -705,7 +718,7 @@ void CreateDbsPass::createDbAllocOps() {
     const unsigned rank = std::max<unsigned>(1, memRefType.getRank());
 
     /// Build the original logical allocation extents. These are the source
-    /// extents for any SDE-authored physical layout plan.
+    /// extents for raw-memref bridge DBs.
     logicalElementSizes.reserve(rank);
     for (unsigned i = 0; i < rank; ++i) {
       if (!isRankZero && memRefType.isDynamicDim(i)) {
@@ -720,17 +733,17 @@ void CreateDbsPass::createDbAllocOps() {
     }
 
     /// Coarse is the only raw-memref bridge left in ARTS. If SDE authored a
-    /// physical block layout, the corresponding storage/codelet materializer
-    /// must have already rewritten the accesses before this pass.
+    /// physical block layout, the corresponding storage/codelet lowering must
+    /// have already rewritten the accesses before this pass.
     sizes.push_back(createOp<arith::ConstantIndexOp>(*builder, loc, 1));
     elementSizes.assign(logicalElementSizes.begin(), logicalElementSizes.end());
 
-    if (Operation *planSource = findPhysicalLayoutPlanSource(alloc)) {
+    if (Operation *factsSource = findPhysicalLayoutFactsSource(alloc)) {
       InFlightDiagnostic diag = alloc->emitError(
-          "SDE-authored physical DB layout reached CreateDbs as a raw "
-          "memref; SDE must materialize storage and codelet-local "
-          "access rewrites before ARTS conversion");
-      diag.attachNote(planSource->getLoc()) << "layout plan source";
+          "physical DB block layout reached CreateDbs as a raw "
+          "memref; SDE must lower storage and codelet-local access rewrites "
+          "before ARTS conversion");
+      diag.attachNote(factsSource->getLoc()) << "layout source";
       signalPassFailure();
       return;
     }
@@ -739,16 +752,12 @@ void CreateDbsPass::createDbAllocOps() {
 
     /// Create the db_alloc operation
     /// DBs without an explicit route stay on the creating node. Lowering
-    /// materializes this sentinel into the runtime hint instead of pinning the
+    /// converts this sentinel into the runtime hint instead of pinning the
     /// allocation to rank 0.
     auto route = createCurrentNodeRoute(*builder, loc);
     auto dbAllocOp = createOp<DbAllocOp>(*builder, loc, mode, route, allocType,
                                          dbMode, elementType, sizes,
                                          elementSizes, PartitionMode::coarse);
-    /// The raw-memref bridge is conservative: its blocks stay on the creating
-    /// node. Record that home explicitly so the coarse placement is readable
-    /// rather than implied by the absence of an owner map.
-    dbAllocOp.setDbMemoryPlacement(DbMemoryPlacement::node_local);
     ++numDbAllocsCreated;
 
     projectSemanticAttrsToDbValue(alloc, dbAllocOp.getOperation());
@@ -778,7 +787,7 @@ void CreateDbsPass::createDbAllocOps() {
       rewriteUsesEverywhere(alloc, dbAllocOp);
 
       /// EDT uses are rewritten only after a matching db_acquire has been
-      /// materialized in createDbAcquireOps. Rewriting them here would capture
+      /// created in createDbAcquireOps. Rewriting them here would capture
       /// the allocation DB pointer directly inside the task body.
     }
   }
@@ -930,7 +939,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
 
   /// Accumulate dependency operands to set on the EDT. SDE-to-ARTS lowering
   /// may have already wired DB-backed dependencies before this pass; preserve
-  /// those while appending dependencies that this raw bridge materializes from
+  /// those while appending dependencies that this raw bridge creates from
   /// ordinary memrefs.
   SmallVector<Value> dependencyOperands(edt.getDependencies().begin(),
                                         edt.getDependencies().end());
@@ -1018,9 +1027,15 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
 
     ArtsMode acquireMode = DbUtils::inferEdtAccessMode(underlyingOp, edt);
     if (acquireMode == ArtsMode::uninitialized) {
-      acquireMode = (info.accessMode == ArtsMode::uninitialized)
-                        ? ArtsMode::inout
-                        : info.accessMode;
+      if (info.accessMode == ArtsMode::uninitialized) {
+        edt.emitOpError()
+            << "cannot infer acquire mode for raw external memref dependency; "
+               "SDE must lower an explicit DB dependency or expose concrete "
+               "load/store/copy uses before CreateDbs";
+        signalPassFailure();
+        return;
+      }
+      acquireMode = info.accessMode;
     }
 
     Value acqGuid = sourceGuid;
@@ -1211,10 +1226,10 @@ void CreateDbsPass::rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc) {
   if (!hasHostUses)
     return;
 
-  auto materializeCoarseView = [&](Type targetType,
-                                   Operation *insertBefore) -> Value {
+  auto buildCoarseView = [&](Type targetType,
+                             Operation *insertBefore) -> Value {
     Value view = createCoarseDbRef(dbAlloc.getPtr(), insertBefore, *builder);
-    return materializeMemrefAsType(view, targetType, insertBefore, *builder);
+    return adaptMemrefToType(view, targetType, insertBefore, *builder);
   };
 
   std::function<void(Value, Value)> rewriteForwardedUses =
@@ -1235,12 +1250,12 @@ void CreateDbsPass::rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc) {
 
           Value baseReplacement = replacementValue;
           if (!baseReplacement)
-            baseReplacement = materializeCoarseView(oldValue.getType(), user);
+            baseReplacement = buildCoarseView(oldValue.getType(), user);
           if (!baseReplacement)
             continue;
 
           if (isForwardingMemrefAliasOp(user, oldValue)) {
-            Value mappedSource = materializeMemrefAsType(
+            Value mappedSource = adaptMemrefToType(
                 baseReplacement, oldValue.getType(), user, *builder);
             if (!mappedSource)
               continue;
@@ -1261,7 +1276,7 @@ void CreateDbsPass::rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc) {
             continue;
           }
 
-          Value typedReplacement = materializeMemrefAsType(
+          Value typedReplacement = adaptMemrefToType(
               baseReplacement, oldValue.getType(), user, *builder);
           if (!typedReplacement)
             continue;

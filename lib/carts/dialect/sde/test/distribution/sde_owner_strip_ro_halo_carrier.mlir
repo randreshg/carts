@@ -85,6 +85,7 @@ func.func @in_place_gauss_seidel_gets_readwrite_window() {
   %A = sde.mu_alloc : memref<8x8x64xf32>
   sde.su_iterate (%c0) to (%c64) step (%c1) classification(<stencil>) {
   ^bb0(%k: index):
+    sde.array_layout_root write %A : memref<8x8x64xf32> array_id(4)
     sde.cu_region <single> {
       %kp1 = arith.addi %k, %c1 : index
       scf.for %i = %c0 to %c8 step %c1 {
@@ -95,6 +96,6 @@ func.func @in_place_gauss_seidel_gets_readwrite_window() {
     }
       sde.yield
     }
-  } {physicalOwnerDims = [2], physicalBlockShape = [8, 8, 4], physicalHaloShape = [1], accessMinOffsets = [-1], accessMaxOffsets = [1]}
+  } {arrayLayout = [{arrayId = 4 : i64, blockShape = [8, 8, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 16 : i64, ownerDims = [2], role = "write"}], physicalOwnerDims = [2], physicalBlockShape = [8, 8, 4], physicalHaloShape = [1], accessMinOffsets = [-1], accessMaxOffsets = [1]}
   return
 }

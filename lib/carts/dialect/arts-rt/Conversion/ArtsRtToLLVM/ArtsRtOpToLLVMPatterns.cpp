@@ -109,6 +109,46 @@ struct WaitOnEpochPattern : public ArtsRtToLLVMPattern<WaitOnEpochOp> {
 /// Dependency Patterns
 ///===----------------------------------------------------------------------===///
 
+struct DbGuidReservePattern : public ArtsRtToLLVMPattern<DbGuidReserveOp> {
+  using ArtsRtToLLVMPattern::ArtsRtToLLVMPattern;
+
+  LogicalResult matchAndRewrite(DbGuidReserveOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering DbGuidReserve Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    ArtsCodegen::RuntimeCallBuilder RCB(*AC, op.getLoc());
+    Value guid = RCB.call(types::ARTSRTL_arts_guid_reserve,
+                          {op.getDbType(), op.getRoute()});
+    rewriter.replaceOp(op, guid);
+    ++numDbOpsConverted;
+    return success();
+  }
+};
+
+template <typename OpTy, types::RuntimeFunction RuntimeFn>
+struct DbCreateWithGuidPattern : public ArtsRtToLLVMPattern<OpTy> {
+  using ArtsRtToLLVMPattern<OpTy>::ArtsRtToLLVMPattern;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering DbCreateWithGuid Op " << op);
+    ArtsCodegen::RewriterGuard RG(*this->AC, rewriter);
+    Location loc = op.getLoc();
+    Value hintMemref =
+        buildArtsHintMemref(this->AC, op.getRoute(), op.getArtsId(), loc);
+    Value nullPtr =
+        this->AC->template create<LLVM::ZeroOp>(loc, this->AC->llvmPtr);
+    Value nullData = this->AC->template create<polygeist::Pointer2MemrefOp>(
+        loc, this->AC->VoidPtr, nullPtr);
+    ArtsCodegen::RuntimeCallBuilder RCB(*this->AC, loc);
+    auto dbCall = RCB.callOp(RuntimeFn, {op.getGuid(), op.getByteSize(),
+                                         op.getDbType(), nullData, hintMemref});
+    rewriter.replaceOp(op, dbCall.getResult(0));
+    ++numDbOpsConverted;
+    return success();
+  }
+};
+
 static Value getDepEntryFieldPtr(ArtsCodegen *AC, Value depEntryPtr,
                                  unsigned field, Location loc) {
   auto c0 = AC->createIntConstant(0, AC->Int64, loc);
@@ -245,12 +285,8 @@ private:
     if (!facts ||
         !(facts->isStencilFamily() || facts->usesStencilDistribution()))
       return globalCoords;
-    if (facts->spatial.minOffsets.empty()) {
-      if (facts->spatial.centerOffset)
-        return inferSymmetricStencilCenterCoords(*facts->spatial.centerOffset,
-                                                 dbInfo, loc);
+    if (facts->spatial.minOffsets.empty())
       return globalCoords;
-    }
 
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
                                        facts->spatial.minOffsets.size());
@@ -278,30 +314,6 @@ private:
       sizeMinusOne = AC->create<arith::MaxSIOp>(loc, sizeMinusOne, zero);
       Value localCoord =
           AC->create<arith::MinSIOp>(loc, nonNegative, sizeMinusOne);
-      Value globalCoord = AC->create<arith::AddIOp>(
-          loc, AC->castToIndex(dbInfo.offsets[i], loc), localCoord);
-      globalCoords.push_back(globalCoord);
-    }
-
-    return globalCoords;
-  }
-
-  SmallVector<Value, 4> inferSymmetricStencilCenterCoords(
-      int64_t centerOffset, const DbLoweringInfo &dbInfo, Location loc) const {
-    SmallVector<Value, 4> globalCoords;
-    if (centerOffset < 0 || dbInfo.sizes.empty())
-      return globalCoords;
-
-    Value zero = AC->createIndexConstant(0, loc);
-    Value one = AC->createIndexConstant(1, loc);
-    Value center = AC->createIndexConstant(centerOffset, loc);
-
-    globalCoords.reserve(dbInfo.sizes.size());
-    for (unsigned i = 0; i < dbInfo.sizes.size(); ++i) {
-      Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
-      Value sizeMinusOne = AC->create<arith::SubIOp>(loc, dimSize, one);
-      sizeMinusOne = AC->create<arith::MaxSIOp>(loc, sizeMinusOne, zero);
-      Value localCoord = AC->create<arith::MinSIOp>(loc, center, sizeMinusOne);
       Value globalCoord = AC->create<arith::AddIOp>(
           loc, AC->castToIndex(dbInfo.offsets[i], loc), localCoord);
       globalCoords.push_back(globalCoord);
@@ -471,12 +483,8 @@ private:
     if (!facts ||
         !(facts->isStencilFamily() || facts->usesStencilDistribution()))
       return nullptr;
-    if (facts->spatial.minOffsets.empty()) {
-      if (facts->spatial.centerOffset)
-        return inferSymmetricStencilCenterLinear(*facts->spatial.centerOffset,
-                                                 dbInfo, allocSizes, loc);
+    if (facts->spatial.minOffsets.empty())
       return nullptr;
-    }
 
     unsigned rank = std::min<unsigned>(dbInfo.sizes.size(),
                                        facts->spatial.minOffsets.size());
@@ -510,33 +518,6 @@ private:
 
     Value localLinearIndex = AC->computeLinearIndex(
         ArrayRef<Value>(dbInfo.sizes).take_front(rank), localCoords, loc);
-
-    return localLinearToGlobalLinear(localLinearIndex, dbInfo, allocSizes, loc);
-  }
-
-  Value inferSymmetricStencilCenterLinear(int64_t centerOffset,
-                                          const DbLoweringInfo &dbInfo,
-                                          ArrayRef<Value> allocSizes,
-                                          Location loc) const {
-    if (centerOffset < 0 || dbInfo.sizes.empty())
-      return nullptr;
-
-    Value zero = AC->createIndexConstant(0, loc);
-    Value one = AC->createIndexConstant(1, loc);
-    Value center = AC->createIndexConstant(centerOffset, loc);
-
-    SmallVector<Value, 4> localCoords;
-    localCoords.reserve(dbInfo.sizes.size());
-    for (unsigned i = 0; i < dbInfo.sizes.size(); ++i) {
-      Value dimSize = AC->castToIndex(dbInfo.sizes[i], loc);
-      Value sizeMinusOne = AC->create<arith::SubIOp>(loc, dimSize, one);
-      sizeMinusOne = AC->create<arith::MaxSIOp>(loc, sizeMinusOne, zero);
-      localCoords.push_back(
-          AC->create<arith::MinSIOp>(loc, center, sizeMinusOne));
-    }
-
-    Value localLinearIndex =
-        AC->computeLinearIndex(dbInfo.sizes, localCoords, loc);
 
     return localLinearToGlobalLinear(localLinearIndex, dbInfo, allocSizes, loc);
   }
@@ -583,9 +564,9 @@ private:
       /// blocks. Use the acquire's stencil facts to identify the owned
       /// center block and downgrade only the non-center entries to read-only.
       ///
-      /// Prefer the full lowering facts so boundary-clamped windows keep
-      /// the correct owned-center block. stencil_center_offset is only a
-      /// symmetric-radius fallback when richer facts data is unavailable.
+      /// Require full lowering facts so boundary-clamped windows keep the
+      /// correct owned-center block. ARTS-RT does not invent a symmetric center
+      /// from incomplete stencil facts.
       int32_t writeMode = static_cast<int32_t>(DbMode::write);
       bool writerMode = acquireMode && *acquireMode == writeMode;
       auto partitionMode = dbAcquireOp.getPartitionMode();
@@ -605,7 +586,7 @@ private:
     } else {
       emitError(loc)
           << "cannot recover DB acquire provenance for dependency GUID; "
-             "refusing single-element DB shape fallback";
+             "refusing to infer a single-element DB shape";
       return failure();
     }
 
@@ -740,7 +721,7 @@ private:
     if (!acquireMode)
       return emitError(loc)
              << "arts_rt.rec_dep requires an explicit acquire mode for every "
-                "datablock; refusing write-mode fallback";
+                "datablock; refusing to infer write mode";
     FailureOr<DepDbInfo> maybeDepInfo =
         extractDbInfoForDeps(dbGuid, acquireMode, loc);
     if (failed(maybeDepInfo))
@@ -829,7 +810,7 @@ private:
     Value normalizedByteSize = ValueAnalysis::stripNumericCasts(byteSizeI64);
     /// byte_size == 0 is the cross-pass sentinel for "no partial slice".
     /// Respect it both when the zero is constant and when it only becomes
-    /// known after runtime guards (whole-block or center-block fallback).
+    /// known after runtime guards (whole-block or center-block case).
     if (ValueAnalysis::isZeroConstant(normalizedByteSize)) {
       emitWholeDbDep();
       return success();
@@ -884,7 +865,7 @@ private:
     if (!acquireMode)
       return emitError(loc)
              << "arts_rt.rec_dep requires an explicit acquire mode for every "
-                "datablock; refusing write-mode fallback";
+                "datablock; refusing to infer write mode";
     int32_t modeInt = *acquireMode;
     Value modeValue = AC->createIntConstant(modeInt, AC->Int32, loc);
 
@@ -943,8 +924,7 @@ private:
     if (hasPartialSlice && modeInt != readMode && !isCenterBlock)
       return emitError(loc)
              << "write-mode dependency carries a committed byte window but has "
-                "no center-block semantics; refusing whole-DB widening "
-                "fallback";
+                "no center-block semantics; refusing to widen it to a whole DB";
     Value byteOffsetI64 =
         hasPartialSlice ? AC->ensureI64(effectiveByteOffset, loc) : nullptr;
     Value byteSizeI64 =
@@ -1369,6 +1349,15 @@ namespace mlir::carts::arts_rt::convert_arts_rt_to_llvm {
 void populateArtsRtOpToLLVMPatterns(RewritePatternSet &patterns,
                                     ArtsCodegen *AC) {
   MLIRContext *context = patterns.getContext();
+
+  /// DB runtime-call patterns
+  patterns.add<
+      DbGuidReservePattern,
+      DbCreateWithGuidPattern<DbCreateWithGuidOp,
+                              types::ARTSRTL_arts_db_create_with_guid>,
+      DbCreateWithGuidPattern<DbCreateWithGuidLocalOp,
+                              types::ARTSRTL_arts_db_create_with_guid_local>>(
+      context, AC);
 
   /// Epoch patterns
   patterns.add<CreateEpochPattern, WaitOnEpochPattern>(context, AC);

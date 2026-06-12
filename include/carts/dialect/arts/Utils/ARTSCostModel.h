@@ -6,7 +6,7 @@
 /// ARTS runtime to expose total logical worker capacity and abstract locality
 /// groups. SDE uses those values only for source-level grain and task-wave
 /// decisions; ARTS still owns DB ownership, EDT placement, routes, and runtime
-/// memory-model choices after ARTS materialization.
+/// memory-model choices after ARTS realization.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_ARTS_ANALYSIS_ARTSCOSTMODEL_H
@@ -26,7 +26,7 @@ class ARTSCostModel : public carts::sde::SDECostModel {
 public:
   explicit ARTSCostModel(const RuntimeConfig &am) : machine(am) {}
 
-  // --- Task lifecycle (generic worker-level planning costs) ---
+  // --- Task lifecycle (generic worker-level transform costs) ---
   double getTaskCreationCost() const override { return 1800.0; }
   double getTaskSyncCost() const override { return 3000.0; }
 

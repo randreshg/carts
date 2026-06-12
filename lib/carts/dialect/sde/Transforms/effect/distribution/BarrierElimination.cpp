@@ -170,7 +170,7 @@ static bool isWavefrontFrontierStage(sde::SdeSuIterateOp op) {
   return family && *family == sde::SdePattern::wavefront_2d;
 }
 
-static void stampRepeatedTimestepPlan(sde::SdeSuIterateOp op) {
+static void commitRepeatedTimestepStage(sde::SdeSuIterateOp op) {
   if (!op)
     return;
   if (!op.getRepetitionStructureAttr())
@@ -477,12 +477,11 @@ static bool isTimestepInterstitialOp(Operation *op) {
   return !sde::hasUnmodeledMemoryEffect(op);
 }
 
-static void stampAlternatingBufferTimestepPlan(sde::SdeSuIterateOp predecessor,
-                                               sde::SdeSuIterateOp successor,
-                                               bool predecessorIsStencil,
-                                               bool successorIsStencil) {
-  stampRepeatedTimestepPlan(predecessor);
-  stampRepeatedTimestepPlan(successor);
+static void commitAlternatingBufferTimestepStages(
+    sde::SdeSuIterateOp predecessor, sde::SdeSuIterateOp successor,
+    bool predecessorIsStencil, bool successorIsStencil) {
+  commitRepeatedTimestepStage(predecessor);
+  commitRepeatedTimestepStage(successor);
   if (predecessorIsStencil)
     predecessor.setPatternAttr(sde::SdePatternAttr::get(
         predecessor.getContext(), sde::SdePattern::alternating_buffer_stencil));
@@ -491,7 +490,7 @@ static void stampAlternatingBufferTimestepPlan(sde::SdeSuIterateOp predecessor,
         successor.getContext(), sde::SdePattern::alternating_buffer_stencil));
 }
 
-static bool stampTimestepPlanIfRecognized(
+static bool commitTimestepStagesIfRecognized(
     sde::SdeSuIterateOp predecessor, sde::SdeSuIterateOp successor,
     const sde::StructuredMemoryEffectSummary &predEffects,
     const sde::StructuredMemoryEffectSummary &succEffects,
@@ -509,8 +508,8 @@ static bool stampTimestepPlanIfRecognized(
       allowUniformUniformPlan &&
       writesIntersectReads(predEffects, succEffects) &&
       haveCompatiblePhysicalTimestepPlan(predecessor, successor)) {
-    stampRepeatedTimestepPlan(predecessor);
-    stampRepeatedTimestepPlan(successor);
+    commitRepeatedTimestepStage(predecessor);
+    commitRepeatedTimestepStage(successor);
     return true;
   }
 
@@ -523,23 +522,23 @@ static bool stampTimestepPlanIfRecognized(
 
   if (predStencil && succStencil && compatibleIterationPlan &&
       allowStencilStencilPlan) {
-    stampRepeatedTimestepPlan(predecessor);
-    stampRepeatedTimestepPlan(successor);
+    commitRepeatedTimestepStage(predecessor);
+    commitRepeatedTimestepStage(successor);
     return true;
   }
 
   if (((predStencil && succUniform) || (predUniform && succStencil)) &&
       (compatibleIterationPlan ||
        haveSameStaticWrittenShape(predEffects, succEffects))) {
-    stampAlternatingBufferTimestepPlan(predecessor, successor, predStencil,
-                                       succStencil);
+    commitAlternatingBufferTimestepStages(predecessor, successor, predStencil,
+                                          succStencil);
     return true;
   }
 
   return false;
 }
 
-static bool stampAdjacentTimestepPair(Operation *predOp, Operation *succOp) {
+static bool commitAdjacentTimestepPair(Operation *predOp, Operation *succOp) {
   sde::SdeSuIterateOp predecessor = findSuIterate(predOp);
   sde::SdeSuIterateOp successor = findSuIterate(succOp);
   if (!predecessor || !successor)
@@ -552,20 +551,20 @@ static bool stampAdjacentTimestepPair(Operation *predOp, Operation *succOp) {
       sde::collectStructuredMemoryEffects(predecessor.getOperation());
   auto succEffects =
       sde::collectStructuredMemoryEffects(successor.getOperation());
-  return stampTimestepPlanIfRecognized(predecessor, successor, predEffects,
-                                       succEffects,
-                                       /*allowStencilStencilPlan=*/true,
-                                       /*allowUniformUniformPlan=*/false);
+  return commitTimestepStagesIfRecognized(predecessor, successor, predEffects,
+                                          succEffects,
+                                          /*allowStencilStencilPlan=*/true,
+                                          /*allowUniformUniformPlan=*/false);
 }
 
-static unsigned stampAdjacentTimestepPairsInLoop(scf::ForOp loop) {
+static unsigned commitAdjacentTimestepPairsInLoop(scf::ForOp loop) {
   Operation *previousStage = nullptr;
-  unsigned stamped = 0;
+  unsigned committed = 0;
 
   for (Operation &op : loop.getBody()->without_terminator()) {
     if (findSuIterate(&op)) {
-      if (previousStage && stampAdjacentTimestepPair(previousStage, &op))
-        ++stamped;
+      if (previousStage && commitAdjacentTimestepPair(previousStage, &op))
+        ++committed;
       previousStage = &op;
       continue;
     }
@@ -576,7 +575,7 @@ static unsigned stampAdjacentTimestepPairsInLoop(scf::ForOp loop) {
     previousStage = nullptr;
   }
 
-  return stamped;
+  return committed;
 }
 
 struct BarrierEliminationPass
@@ -586,7 +585,7 @@ struct BarrierEliminationPass
 
   void runOnOperation() override {
     int eliminated = 0;
-    unsigned timestepPairsStamped = 0;
+    unsigned timestepPairsCommitted = 0;
     SmallVector<sde::SdeSuBarrierOp, 8> redundantBarriers;
 
     getOperation().walk([&](sde::SdeSuBarrierOp barrier) {
@@ -668,11 +667,11 @@ struct BarrierEliminationPass
         return;
       }
 
-      if (stampTimestepPlanIfRecognized(predecessor, successor, predEffects,
-                                        succEffects,
-                                        /*allowStencilStencilPlan=*/true,
-                                        /*allowUniformUniformPlan=*/true)) {
-        ++timestepPairsStamped;
+      if (commitTimestepStagesIfRecognized(predecessor, successor, predEffects,
+                                           succEffects,
+                                           /*allowStencilStencilPlan=*/true,
+                                           /*allowUniformUniformPlan=*/true)) {
+        ++timestepPairsCommitted;
         setBarrierReason(barrier,
                          sde::SdeBarrierReason::timestep_stage_boundary);
         return;
@@ -682,15 +681,15 @@ struct BarrierEliminationPass
     });
 
     getOperation().walk([&](scf::ForOp loop) {
-      timestepPairsStamped += stampAdjacentTimestepPairsInLoop(loop);
+      timestepPairsCommitted += commitAdjacentTimestepPairsInLoop(loop);
     });
 
     for (sde::SdeSuBarrierOp barrier : redundantBarriers)
       barrier.erase();
 
     ARTS_INFO("BarrierElimination: eliminated " << eliminated << " barrier(s)");
-    ARTS_INFO("BarrierElimination: stamped " << timestepPairsStamped
-                                             << " timestep pair(s)");
+    ARTS_INFO("BarrierElimination: committed " << timestepPairsCommitted
+                                               << " timestep pair(s)");
   }
 
 private:

@@ -36,7 +36,8 @@ std::unique_ptr<Pass> createFinalizeSdeToArtsPass();
 std::unique_ptr<Pass> createCreateDbsPass();
 std::unique_ptr<Pass> createDbModeTighteningPass(bool forceInout = false);
 std::unique_ptr<Pass> createDbScratchEliminationPass();
-std::unique_ptr<Pass> createDbOwnerMapRealizationPass();
+std::unique_ptr<Pass> createDbDistributedOwnershipRealizationPass();
+std::unique_ptr<Pass> createDbDistributedRuntimeInitPass();
 std::unique_ptr<Pass> createDbCommitDistributedDepsPass();
 std::unique_ptr<Pass> createDbConsolidateStencilHalosPass();
 std::unique_ptr<Pass> createDbStorageBridgeCopyPlacementPass();
@@ -45,9 +46,9 @@ std::unique_ptr<Pass> createDbDeadRootEliminationPass();
 std::unique_ptr<Pass> createPartialReductionSplitPass();
 std::unique_ptr<Pass> createBlockContractionSplitPass();
 std::unique_ptr<Pass> createDistributedLaunchConsistencyPass();
-/// Author the EDT distribution plan (family, version, block-halo capability)
+/// Realize EDT distribution facts (family, version, block-halo capability)
 /// from the committed dep pattern and access-window facts.
-std::unique_ptr<Pass> createRealizeEdtDistributionPlanPass();
+std::unique_ptr<Pass> createRealizeEdtDistributionPass();
 std::unique_ptr<Pass> createCreateEpochsPass();
 
 /// EDT-local cleanup and ARTS object refinement passes.

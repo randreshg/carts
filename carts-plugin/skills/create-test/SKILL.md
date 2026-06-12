@@ -3,11 +3,11 @@ name: carts-create-test
 description: Use when adding a new lit test, creating regression tests, writing multi-stage boundary tests, or choosing CARTS test placement and RUN lines.
 user-invocable: true
 allowed-tools: Read, Grep, Glob, Bash, Write, Edit, Agent
-argument-hint: [contract <stage> | integration <name> | boundary <stage1> <stage2>]
+argument-hint: [stage <stage> | integration <name> | boundary <stage1> <stage2>]
 parameters:
   - name: test_type
     type: str
-    gather: "Type of test: 'contract' (single stage), 'boundary' (multi-stage), or 'integration' (end-to-end C)"
+    gather: "Type of test: 'stage' (single stage), 'boundary' (multi-stage), or 'integration' (end-to-end C)"
   - name: pipeline_stage
     type: str
     gather: "Primary pipeline stage to test (e.g., post-db-refinement, pre-lowering)"
@@ -27,7 +27,7 @@ parameters:
 | CLI flags | `tests/cli/` | Infrastructure |
 | End-to-end | `samples/` | Integration |
 
-## Contract Test Template (Single Stage)
+## Stage Regression Template
 
 ```mlir
 // RUN: %carts-compile %s --O3 --arts-config %S/../inputs/arts_1t.cfg \
@@ -94,7 +94,7 @@ Examples:
    `arts.distribution_kind` attributes in test IR
 6. **Use shared inputs** when possible — check `tests/inputs/` first
 7. **Assert the owning layer** — tests should prove SDE transforms layout, ARTS
-   materializes collectives/bridges, ARTS realizes DB/EDT/owner maps, or ARTS-RT
+   realizes collectives/bridges, ARTS realizes DB/EDT/owner routes, or ARTS-RT
    lowers mechanically.
 8. **Avoid benchmark identity** — preserve structural facts, not benchmark
    names. Boundary tests should prove downstream consumption of committed facts,
@@ -104,7 +104,7 @@ Examples:
 
 When the user asks to create a test:
 
-1. Determine test type (contract vs boundary vs integration)
+1. Determine test type (stage vs boundary vs integration)
 2. Identify the pipeline stage(s) to test
 3. Choose the correct directory based on the stage/dialect table
 4. Select the appropriate config file

@@ -5,9 +5,8 @@
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
-#include "carts/dialect/arts/Utils/DbLayoutPlanUtils.h"
+#include "carts/dialect/arts/Utils/DbLayoutFactsUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
-#include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -80,34 +79,29 @@ LogicalResult mlir::carts::arts::createCoarseDbBackedMemref(
   return success();
 }
 
-LogicalResult mlir::carts::arts::createPlannedDbBackedMemref(
+LogicalResult mlir::carts::arts::createBlockDbBackedMemref(
     OpBuilder &builder, Location loc, MemRefType memrefType,
     ValueRange dynamicSizes, ArrayAttr ownerDims, ArrayAttr blockShape,
-    ArrayAttr haloShape, Value &memref) {
+    Value &memref) {
   FailureOr<SmallVector<Value>> elementSizes =
       buildDbBackedMemrefElementSizes(builder, loc, memrefType, dynamicSizes);
   if (failed(elementSizes))
     return failure();
 
-  FailureOr<DbPhysicalLayoutPlan> physicalPlan = resolvePhysicalDbLayoutPlan(
+  FailureOr<DbPhysicalLayoutFacts> physicalFacts = resolvePhysicalDbLayoutFacts(
       ownerDims, blockShape, *elementSizes, builder, loc);
-  if (failed(physicalPlan))
+  if (failed(physicalFacts))
     return failure();
 
   Value route = createCurrentNodeRoute(builder, loc);
   auto dbAlloc =
       DbAllocOp::create(builder, loc, ArtsMode::inout, route, DbAllocType::heap,
                         DbMode::write, memrefType.getElementType(),
-                        SmallVector<Value>(physicalPlan->outerSizes.begin(),
-                                           physicalPlan->outerSizes.end()),
-                        SmallVector<Value>(physicalPlan->innerSizes.begin(),
-                                           physicalPlan->innerSizes.end()),
-                        physicalPlan->mode);
-  setPlanOwnerDimsAttr(dbAlloc.getOperation(), ownerDims);
-  setPlanPhysicalBlockShapeAttr(dbAlloc.getOperation(), blockShape);
-  if (haloShape)
-    setPlanHaloShapeAttr(dbAlloc.getOperation(), haloShape);
-
+                        SmallVector<Value>(physicalFacts->outerSizes.begin(),
+                                           physicalFacts->outerSizes.end()),
+                        SmallVector<Value>(physicalFacts->innerSizes.begin(),
+                                           physicalFacts->innerSizes.end()),
+                        physicalFacts->mode);
   memref = realizeDbInnerPayload(builder, loc, dbAlloc.getPtr());
   return success();
 }

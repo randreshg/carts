@@ -59,13 +59,13 @@ conditionally when requested.
 |---|-------|-----------------|
 | 1 | sde-input-normalization | Are Polygeist shapes and OpenMP deps normalized for SDE? |
 | 2 | initial-cleanup | Is dead code removed? |
-| 3 | sde-planning | Did OMP become the right SDE plan? |
+| 3 | sde-planning | Did OMP become the right SDE fact shape? |
 | 4 | sde-to-arts | Are SDE codelets isolated with explicit ARTS deps/params? |
-| 5 | sde-to-arts | Did ARTS materialize the intended ARTS DB/acquire/EDT objects? |
-| 6 | edt-transforms | Is EDT structure optimized? |
+| 5 | edt-dep-realization | Did ARTS realize the intended ARTS DB/acquire/EDT objects? |
+| 6 | edt-local-cleanup | Is EDT structure optimized? |
 | 7 | create-dbs | Are coarse raw DataBlock allocations created only where allowed? |
 | 8 | db-opt | Are DB access modes correct? |
-| 9 | post-db-refinement | Are contracts validated and DB/EDT refinements correct? |
+| 9 | post-db-refinement | Are DB/EDT refinements and validation correct? |
 | 10 | late-concurrency-cleanup | Is hoisting/sinking correct? |
 | 11 | epochs | Are epochs created correctly? |
 | 12 | pre-lowering | Are EDTs/DBs/epochs lowered to RT calls? |
@@ -74,10 +74,10 @@ conditionally when requested.
 Expected fact evolution:
 
 - `sde-planning`: real SDE source/layout/alignment/tiling facts appear.
-- `sde-to-arts` / `sde-to-arts`: ARTS materializes explicit deps,
+- `sde-to-arts` / `sde-to-arts`: ARTS realizes explicit deps,
   storage views, collectives, bridges, contractions, reductions, and halos.
 - `edt-transforms` through `post-db-refinement`: ARTS realizes DB/EDT owner
-  graphs, owner maps, DB modes, and grouped compute/bridge/communication CUs.
+  graphs, owner routes, DB modes, and grouped compute/bridge/communication CUs.
 - `pre-lowering` / `arts-rt-to-llvm`: ARTS-RT mechanically lowers the chosen
   ARTS facts.
 
@@ -86,7 +86,7 @@ Expected fact evolution:
 | Symptom | Start Checking At |
 |---------|------------------|
 | Wrong array values | sde-to-arts (5), create-dbs (7), db-opt (8), then post-db-refinement (9) |
-| Missing parallelism | sde-planning (3), sde-to-arts (4), sde-to-arts (5), then edt-transforms (6) |
+| Missing parallelism | sde-planning (3), sde-to-arts (4), edt-dep-realization (5), then edt-local-cleanup (6) |
 | Deadlock/hang | epochs (11), then pre-lowering (12) |
 | Wrong loop bounds | sde-planning (3), then late-concurrency-cleanup (10) |
 | Missing DB | sde-to-arts (5), create-dbs (7), then db-opt (8) |

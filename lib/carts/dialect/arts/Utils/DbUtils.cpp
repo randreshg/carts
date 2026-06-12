@@ -5,6 +5,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DbDistributedEligibility.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
@@ -550,11 +551,12 @@ bool DbUtils::isSmallCoarseUserDataDb(DbAllocOp alloc, int64_t maxElements) {
   return elementCount && *elementCount <= maxElements;
 }
 
-bool DbUtils::isRejectedForDistributedOwnership(DbAllocOp alloc) {
+bool DbUtils::cannotUseDistributedOwnership(DbAllocOp alloc) {
   if (!alloc || hasDistributedDbAllocation(alloc.getOperation()))
     return false;
-  return alloc.getDistributedRejectReasonAttr() ||
-         alloc.getLocalOnly().value_or(false);
+  if (alloc.getLocalOnly().value_or(false))
+    return true;
+  return !evaluateDistributedDbEligibility(alloc).eligible;
 }
 
 bool DbUtils::isAllowedSmallReadOnlyCoarseDep(Value dep, DbAllocOp alloc) {
@@ -583,9 +585,7 @@ bool DbUtils::isHostWholeToComputeBlockBridgeDb(DbAllocOp alloc) {
 
 bool DbUtils::isHostWholeToComputeBlockBridgeMovement(EdtOp edt) {
   if (!edt || !edt.getStorageBridgeCopyAttr() ||
-      edt.getDependencies().size() != 2 || edt.getDepPatternAttr() ||
-      getPlanOwnerDimsAttr(edt.getOperation()) ||
-      getPlanPhysicalBlockShapeAttr(edt.getOperation()))
+      edt.getDependencies().size() != 2 || edt.getDepPatternAttr())
     return false;
 
   bool hasCoarseHost = false;
@@ -602,8 +602,8 @@ bool DbUtils::isHostWholeToComputeBlockBridgeMovement(EdtOp edt) {
     // single_block-rejected A) with no replicatedRead cannot be delivered to a
     // remote node, so an <internode> bridge over it dereferences a NULL dep on
     // the non-owning rank. Excluding it here lets DistributedLaunchConsistency
-    // localize the bridge to <intranode>+current-node, where each node
-    // materializes the block from its own local host copy.
+    // localize the bridge to <intranode>+current-node, where each node creates
+    // the block from its own local host copy.
     if (DbUtils::isCoarseUserDataDb(alloc) && partition &&
         *partition == PartitionMode::coarse &&
         (!alloc.getLocalOnly().value_or(false) ||
@@ -623,7 +623,7 @@ bool DbUtils::isHostWholeToComputeBlockBridgeMovement(EdtOp edt) {
 
 bool DbUtils::requiresLocalLaunchForDistributedDep(Value dep) {
   auto alloc = dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
-  if (!DbUtils::isRejectedForDistributedOwnership(alloc))
+  if (!DbUtils::cannotUseDistributedOwnership(alloc))
     return false;
   return !DbUtils::isAllowedReadOnlyCoarseDep(dep, alloc);
 }

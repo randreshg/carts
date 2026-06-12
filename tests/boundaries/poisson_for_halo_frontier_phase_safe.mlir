@@ -7,7 +7,6 @@
 // RUN:   > %t.dir/poisson-for.pre-lowering.mlir
 // RUN: %FileCheck %s --check-prefix=RT --implicit-check-not='host_whole' \
 // RUN:   --implicit-check-not='local_only' \
-// RUN:   --implicit-check-not='distributed_reject_reason' \
 // RUN:   --implicit-check-not='arts.db_alloc{{.*}}<coarse>{{.*}}elementType(f64)' \
 // RUN:   --implicit-check-not='byte_sizes({{.*}}%c8192' \
 // RUN:   --implicit-check-not='element_sizes[%c1, %c1, %c32, %c32]{{.*}}haloViewDependency' \
@@ -16,7 +15,6 @@
 // RT keeps Poisson state in block DBs and lowers the stencil frontier with
 // explicit row-face halo byte windows plus compact column payload deps.
 // RT-DAG: arts.db_alloc{{.*}}<block>{{.*}}elementSizes[%c1, %c1, %c32, %c32]
-// RT-DAG: arts.db_alloc{{.*}}planHaloShape = [1, 1, 0, 0]
 // RT: arts.db_acquire[<in>]{{.*}}element_offsets[%c0, %c0, %c31, %c0] element_sizes[%c1, %c1, %c1, %c32]{{.*}}haloViewDependency
 // RT: arts.db_acquire[<in>]{{.*}}element_offsets[%c0, %c0, %c0, %c0] element_sizes[%c1, %c1, %c1, %c32]{{.*}}haloViewDependency
 // RT: arts_rt.edt_param_pack

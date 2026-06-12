@@ -13,11 +13,11 @@ Owned optimizations:
 - iteration-space decomposition;
 - barrier elimination and timestep stage-boundary planning;
 - reduction strategy selection;
-- memory-unit materialization.
+- memory-unit realization.
 
 Rules:
 
-- Do not materialize ARTS worker counts, routes, nodes, or runtime calls.
+- Do not emit ARTS worker counts, routes, nodes, or runtime calls.
 - Do not tile only CU/SU loops without matching MU token and access rewrites.
 - Do not use benchmark-specific constants.
 - Do not keep frontend carrier paths once memref MU/token coverage exists.

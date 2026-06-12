@@ -1408,8 +1408,8 @@ def _compile_all_pipelines(
       - Per-stage MLIR is placed in the phase its output IR belongs to
         (see ``_stage_phase_map``).
       - Per-pass dumps are placed by an execution-order cursor that flips on
-        boundary passes (see ``_phase_flip_passes``). SDE planning feeds
-        direct ARTS materialization.
+        boundary passes (see ``_phase_flip_passes``). SDE planning feeds the
+        direct ARTS boundary conversion.
 
     For ``.mlir`` input the ``1_polygeist/`` phase is skipped (caller already
     has the pre-ARTS MLIR on disk).

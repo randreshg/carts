@@ -455,23 +455,23 @@ refineCuMuAssignment(const CuMuTypedHypergraph &graph,
 }
 
 static double scoreRemoteFanout(const CuMuMemoryUnit &memory,
-                                CuMuPartitionPlan &plan,
+                                CuMuPartitionChoice &choice,
                                 const CuMuPartitionObjective &objective,
                                 double syncCost, double dataCost) {
   if (!memory.typedHypergraph.vertices.empty() &&
       !memory.typedHypergraph.nets.empty()) {
-    plan.vertexToPart = buildContiguousCuPartAssignment(
+    choice.vertexToPart = buildContiguousCuPartAssignment(
         memory.typedHypergraph.vertices.size(),
-        static_cast<unsigned>(std::max<int64_t>(1, plan.computeUnits)));
-    plan.vertexToPart = refineCuMuAssignment(memory.typedHypergraph,
-                                             plan.vertexToPart, objective);
+        static_cast<unsigned>(std::max<int64_t>(1, choice.computeUnits)));
+    choice.vertexToPart = refineCuMuAssignment(memory.typedHypergraph,
+                                               choice.vertexToPart, objective);
     int64_t cutBytes = computeCuMuHypergraphCutBytes(memory.typedHypergraph,
-                                                     plan.vertexToPart);
+                                                     choice.vertexToPart);
     if (cutBytes <= 0)
       return 0.0;
     double packets =
         static_cast<double>(cutBytes) /
-        static_cast<double>(std::max<int64_t>(1, plan.tilePayloadBytes));
+        static_cast<double>(std::max<int64_t>(1, choice.tilePayloadBytes));
     return packets *
            (syncCost + dataCost * std::max(0.0, objective.remoteFanoutWeight));
   }
@@ -479,7 +479,7 @@ static double scoreRemoteFanout(const CuMuMemoryUnit &memory,
   if (memory.hyperedges.empty())
     return 0.0;
 
-  int64_t tileBytes = std::max<int64_t>(1, plan.tilePayloadBytes);
+  int64_t tileBytes = std::max<int64_t>(1, choice.tilePayloadBytes);
   int64_t defaultBytes =
       memory.abstractCommVolumeBytes > 0
           ? ceilDivPositive(memory.abstractCommVolumeBytes,
@@ -495,7 +495,7 @@ static double scoreRemoteFanout(const CuMuMemoryUnit &memory,
     double packets = static_cast<double>(std::max<int64_t>(1, trafficBytes)) /
                      static_cast<double>(tileBytes);
     double remoteCuts = static_cast<double>(std::min<int64_t>(
-        remoteFanout, std::max<int64_t>(0, plan.computeUnits - 1)));
+        remoteFanout, std::max<int64_t>(0, choice.computeUnits - 1)));
     score += remoteCuts * (syncCost + packets * dataCost);
   }
   return score;
@@ -504,36 +504,37 @@ static double scoreRemoteFanout(const CuMuMemoryUnit &memory,
 static double scoreCuMuPartition(const CuMuMemoryUnit &memory,
                                  const CuMuComputeUnitTarget &compute,
                                  const CuMuPartitionObjective &objective,
-                                 CuMuPartitionPlan &plan) {
+                                 CuMuPartitionChoice &choice) {
   double taskCost = std::max(0.0, compute.taskCreationCost);
   double syncCost = std::max(0.0, compute.taskSyncCost);
   double dataCost = std::max(1.0, compute.dataAccessCost);
   double logicalWorkers =
       static_cast<double>(std::max<int64_t>(1, compute.logicalWorkerCapacity));
   double exposed = static_cast<double>(std::max<int64_t>(
-      1, std::min(plan.computeUnits, compute.logicalWorkerCapacity)));
+      1, std::min(choice.computeUnits, compute.logicalWorkerCapacity)));
 
-  double score = static_cast<double>(plan.computeUnits) * taskCost;
+  double score = static_cast<double>(choice.computeUnits) * taskCost;
 
   SmallVector<int64_t, 16> candidateWorkWeights;
   ArrayRef<int64_t> workWeights = compute.cuWorkWeights;
-  if (static_cast<int64_t>(workWeights.size()) != plan.computeUnits) {
+  if (static_cast<int64_t>(workWeights.size()) != choice.computeUnits) {
     candidateWorkWeights = buildOwnerBlockWorkWeights(
-        memory.shape, memory.ownerPhysicalDims, plan.physicalBlockShape);
+        memory.shape, memory.ownerPhysicalDims, choice.physicalBlockShape);
     workWeights = candidateWorkWeights;
   }
 
   WeightedCuEstimate work =
-      estimateWeightedCuWork(workWeights, plan.computeUnits);
-  plan.maxCuWorkWeight = work.maxPartitionWeight;
-  plan.workImbalance = work.imbalance;
+      estimateWeightedCuWork(workWeights, choice.computeUnits);
+  choice.maxCuWorkWeight = work.maxPartitionWeight;
+  choice.workImbalance = work.imbalance;
   if (!workWeights.empty()) {
     score += work.imbalance * static_cast<double>(work.totalWeight) *
              (taskCost + dataCost);
   }
 
-  // Concurrency is the first-order objective. A plan that cannot expose enough
-  // independent CUs to fill the platform is dominated unless no candidate can.
+  // Concurrency is the first-order objective. A choice that cannot expose
+  // enough independent CUs to fill the platform is dominated unless no
+  // candidate can.
   double missingParallelism = std::max(0.0, logicalWorkers - exposed);
   score += missingParallelism * (taskCost + syncCost + dataCost) * 64.0;
 
@@ -543,32 +544,32 @@ static double scoreCuMuPartition(const CuMuMemoryUnit &memory,
   // target object.
   bool hasCommunication = memory.abstractCommVolumeBytes > 0;
   if (hasCommunication) {
-    score += static_cast<double>(plan.computeUnits) * syncCost;
+    score += static_cast<double>(choice.computeUnits) * syncCost;
 
-    int64_t tileBytes = std::max<int64_t>(1, plan.tilePayloadBytes);
+    int64_t tileBytes = std::max<int64_t>(1, choice.tilePayloadBytes);
     double packets = static_cast<double>(memory.abstractCommVolumeBytes) /
                      static_cast<double>(tileBytes);
     score += packets * dataCost;
   }
 
-  plan.remoteFanoutScore =
-      scoreRemoteFanout(memory, plan, objective, syncCost, dataCost);
-  score += plan.remoteFanoutScore;
+  choice.remoteFanoutScore =
+      scoreRemoteFanout(memory, choice, objective, syncCost, dataCost);
+  score += choice.remoteFanoutScore;
 
   if (objective.targetTileBytes > 0 &&
-      plan.tilePayloadBytes < objective.targetTileBytes) {
-    double shortfall =
-        static_cast<double>(objective.targetTileBytes - plan.tilePayloadBytes) /
-        static_cast<double>(objective.targetTileBytes);
+      choice.tilePayloadBytes < objective.targetTileBytes) {
+    double shortfall = static_cast<double>(objective.targetTileBytes -
+                                           choice.tilePayloadBytes) /
+                       static_cast<double>(objective.targetTileBytes);
     double pressure = hasCommunication ? 16.0 : 4.0;
-    score += shortfall * pressure * static_cast<double>(plan.computeUnits) *
+    score += shortfall * pressure * static_cast<double>(choice.computeUnits) *
              (taskCost + syncCost + dataCost);
   }
 
   return score;
 }
 
-std::optional<CuMuPartitionPlan> chooseCuMuGraphPartition(
+std::optional<CuMuPartitionChoice> chooseCuMuGraphPartition(
     const CuMuMemoryUnit &memory, const CuMuComputeUnitTarget &compute,
     const CuMuPartitionObjective &objective,
     ArrayRef<int64_t> initialPhysicalBlockShape,
@@ -581,7 +582,7 @@ std::optional<CuMuPartitionPlan> chooseCuMuGraphPartition(
       memory.elementBytes <= 0 || initialPhysicalBlockShape.empty())
     return std::nullopt;
 
-  std::optional<CuMuPartitionPlan> best;
+  std::optional<CuMuPartitionChoice> best;
   SmallVector<int64_t, 16> candidateUnits = enumerateCandidateComputeUnits(
       requested, floor, std::max<int64_t>(1, compute.logicalWorkerCapacity),
       memory.hyperedges);
@@ -595,17 +596,17 @@ std::optional<CuMuPartitionPlan> chooseCuMuGraphPartition(
     int64_t actualUnits = inferCuCountFromMuPartition(
         memory.shape, memory.ownerPhysicalDims, candidateShape);
     if (actualUnits > 0) {
-      CuMuPartitionPlan plan;
-      plan.computeUnits = actualUnits;
-      plan.exposedParallelism = std::min<int64_t>(
+      CuMuPartitionChoice choice;
+      choice.computeUnits = actualUnits;
+      choice.exposedParallelism = std::min<int64_t>(
           actualUnits, std::max<int64_t>(1, compute.logicalWorkerCapacity));
-      plan.tilePayloadBytes =
+      choice.tilePayloadBytes =
           tilePayloadBytes(candidateShape, memory.elementBytes);
-      plan.physicalBlockShape.assign(candidateShape.begin(),
-                                     candidateShape.end());
-      plan.score = scoreCuMuPartition(memory, compute, objective, plan);
-      if (!best || plan.score < best->score)
-        best = std::move(plan);
+      choice.physicalBlockShape.assign(candidateShape.begin(),
+                                       candidateShape.end());
+      choice.score = scoreCuMuPartition(memory, compute, objective, choice);
+      if (!best || choice.score < best->score)
+        best = std::move(choice);
     }
   }
 

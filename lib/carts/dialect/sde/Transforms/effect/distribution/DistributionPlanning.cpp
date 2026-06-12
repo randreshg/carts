@@ -1,11 +1,11 @@
 ///==========================================================================///
 /// File: DistributionPlanning.cpp
 ///
-/// SDE distribution planning. This pass keeps distribution intent on the SDE
+/// SDE distribution transform. This pass keeps distribution intent on the SDE
 /// side of the boundary by wrapping eligible `sde.su_iterate` operations in
 /// `sde.su_distribute`; it uses SDE pattern/effect facts plus abstract worker
 /// capacity/locality. Concrete storage ownership, task placement, routes, and
-/// target memory-model choices remain boundary decisions.
+/// target memory-model choices remain ARTS/ARTS-RT decisions.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -49,29 +49,28 @@ using namespace mlir::carts;
 
 namespace {
 
-struct PlannedDistribution {
+struct DistributionRewrite {
   sde::SdeSuIterateOp op;
   sde::SdeDistributionKind kind = sde::SdeDistributionKind::blocked;
 };
 
 static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs);
 static void
-alignLateOwnerPlanToExistingStep(sde::SdeSuIterateOp op,
-                                 ArrayRef<int64_t> ownerPhysicalDims,
-                                 MutableArrayRef<int64_t> physicalBlockShape);
-static bool
-applyPhysicalPlanIfRealized(sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
-                            ArrayRef<int64_t> physicalBlockShape,
-                            ArrayRef<int64_t> haloShape = {},
-                            ArrayRef<int64_t> logicalWorkerSlice = {});
+alignLateOwnerShapeToExistingStep(sde::SdeSuIterateOp op,
+                                  ArrayRef<int64_t> ownerPhysicalDims,
+                                  MutableArrayRef<int64_t> physicalBlockShape);
+static bool applyPhysicalLayoutIfRealized(
+    sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
+    ArrayRef<int64_t> physicalBlockShape, ArrayRef<int64_t> haloShape = {},
+    ArrayRef<int64_t> logicalWorkerSlice = {});
 static SmallVector<int64_t, 4> buildLogicalWorkerSliceOrPhysical(
     sde::SdeSuIterateOp op, ArrayRef<int64_t> shape,
     ArrayRef<int64_t> ownerDims, ArrayRef<int64_t> physicalBlockShape,
     int64_t targetComputeUnits, ArrayRef<int64_t> haloShape = {});
 static bool
-physicalPlanMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
-                                     ArrayRef<int64_t> ownerDims,
-                                     ArrayRef<int64_t> physicalBlockShape);
+physicalLayoutMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
+                                       ArrayRef<int64_t> ownerDims,
+                                       ArrayRef<int64_t> physicalBlockShape);
 static std::optional<int64_t> getPositiveConstantIndex(Value value);
 
 static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
@@ -79,15 +78,15 @@ static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
                                     costModel.getInterLocalityTaskWaves());
 }
 
-// Worker target for the stencil physical-plan stamper. Caps at logical
-// worker capacity because stencil halo ownership is currently planned as a
-// single-locality layout fact. Inter-locality expansion belongs after the
-// dialect boundary has a concrete halo-realization path.
+// Worker target for the stencil physical-layout committer. Caps at logical
+// worker capacity because stencil halo ownership is currently a single-locality
+// layout fact. Inter-locality expansion belongs after the dialect boundary has
+// a concrete halo path.
 static int64_t getStencilWorkerTarget(sde::SDECostModel &costModel) {
   return costModel.getLogicalWorkerCapacity();
 }
 
-// Element-byte width derived from the output plan's underlying memref. Returns
+// Element-byte width derived from the output facts' underlying memref. Returns
 // 0 for non-numeric types or shapeless roots; callers should treat 0 as
 // "cannot reason about tile bytes" and skip the floor.
 static int64_t outputElementBytes(Value root) {
@@ -102,12 +101,12 @@ static int64_t outputElementBytes(Value root) {
   return llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
 }
 
-struct StaticOutputStoragePlan {
+struct StaticOutputStorageFacts {
   Value root;
   SmallVector<int64_t, 4> shape;
 };
 
-static std::optional<StaticOutputStoragePlan>
+static std::optional<StaticOutputStorageFacts>
 findSingleExternalStoreShape(sde::SdeSuIterateOp op) {
   if (!op)
     return std::nullopt;
@@ -116,7 +115,7 @@ findSingleExternalStoreShape(sde::SdeSuIterateOp op) {
   if (!computeBlock)
     return std::nullopt;
 
-  std::optional<StaticOutputStoragePlan> selected;
+  std::optional<StaticOutputStorageFacts> selected;
   bool rejected = false;
   auto visitStore = [&](memref::StoreOp storeOp) {
     Value root =
@@ -141,7 +140,7 @@ findSingleExternalStoreShape(sde::SdeSuIterateOp op) {
     }
 
     if (!selected) {
-      selected = StaticOutputStoragePlan{root, std::move(shape)};
+      selected = StaticOutputStorageFacts{root, std::move(shape)};
       return WalkResult::advance();
     }
 
@@ -428,7 +427,7 @@ deriveLexicographicWaveCoefficients(ArrayRef<int64_t> minOffsets,
 struct WavefrontSkewPlan {
   RectangularWavefrontLoopNest shape;
   sde::SuNeighborhoodAccessInfo neighborhood;
-  StaticOutputStoragePlan outputStorage;
+  StaticOutputStorageFacts outputStorage;
   SmallVector<int64_t, 4> waveCoefficients;
   int64_t targetComputeUnits = 1;
 };
@@ -548,7 +547,7 @@ buildWavefrontSkewPlan(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
   if (!collectRectangularWavefrontLoopNest(op, shape))
     return std::nullopt;
 
-  std::optional<StaticOutputStoragePlan> storePlan =
+  std::optional<StaticOutputStorageFacts> storePlan =
       findSingleExternalStoreShape(op);
   if (!storePlan || storePlan->shape.size() < shape.lowerBounds.size())
     return std::nullopt;
@@ -712,7 +711,7 @@ tryRealizeWavefrontSkew(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
 
 static SmallVector<unsigned, 4>
 chooseMappedSdeOwnerLoopDims(sde::SdeSuIterateOp op,
-                             const sde::SuOutputLayoutPlan &plan) {
+                             const sde::SuOutputLayoutFacts &plan) {
   SmallVector<unsigned, 4> mappedLoopDims;
   mappedLoopDims.reserve(plan.loopDimToPhysicalDim.size());
   unsigned loopRank = op.getLowerBounds().size();
@@ -740,7 +739,7 @@ chooseMappedSdeOwnerLoopDims(sde::SdeSuIterateOp op,
 }
 
 static bool buildOwnerDimPlan(sde::SdeSuIterateOp op,
-                              const sde::SuOutputLayoutPlan &outputPlan,
+                              const sde::SuOutputLayoutFacts &outputPlan,
                               ArrayRef<unsigned> ownerLoopDims, int64_t workers,
                               SmallVectorImpl<int64_t> &ownerPhysicalDims,
                               SmallVectorImpl<int64_t> &physicalBlockShape,
@@ -779,7 +778,7 @@ static bool buildOwnerDimPlan(sde::SdeSuIterateOp op,
   return true;
 }
 
-static bool buildOwnerDimPlan(const sde::LoopIndexedOutputPlan &outputPlan,
+static bool buildOwnerDimPlan(const sde::LoopIndexedOutputShape &outputPlan,
                               int64_t workers,
                               SmallVectorImpl<int64_t> &ownerPhysicalDims,
                               SmallVectorImpl<int64_t> &physicalBlockShape) {
@@ -848,7 +847,7 @@ static int64_t chooseNeutralCuGroupSize(int64_t cuCount, int64_t tileBytes,
 static int64_t chooseLogicalTargetForTileFloor(
     ArrayRef<int64_t> shape, ArrayRef<int64_t> ownerPhysicalDims,
     ArrayRef<int64_t> physicalBlockShape, int64_t elemBytes,
-    sde::SDECostModel &costModel, int64_t fallbackComputeUnits) {
+    sde::SDECostModel &costModel, int64_t currentComputeUnits) {
   int64_t cuCount = sde::inferCuCountFromMuPartition(shape, ownerPhysicalDims,
                                                      physicalBlockShape);
   int64_t tileBytes = sde::tilePayloadBytes(physicalBlockShape, elemBytes);
@@ -857,8 +856,8 @@ static int64_t chooseLogicalTargetForTileFloor(
       costModel.getMinDistributedTileBytes(),
       std::max<int64_t>(1, costModel.getLogicalWorkerCapacity()));
   if (groupSize <= 1)
-    return fallbackComputeUnits;
-  return std::min<int64_t>(std::max<int64_t>(1, fallbackComputeUnits),
+    return currentComputeUnits;
+  return std::min<int64_t>(std::max<int64_t>(1, currentComputeUnits),
                            sde::ceilDivPositive(cuCount, groupSize));
 }
 
@@ -933,7 +932,7 @@ buildCuMuComputeTarget(sde::SDECostModel &costModel, int64_t workers,
   return target;
 }
 
-static std::optional<sde::CuMuPartitionPlan> chooseCuMuTileFloorPlan(
+static std::optional<sde::CuMuPartitionChoice> chooseCuMuTileFloorPlan(
     ArrayRef<int64_t> shape, ArrayRef<int64_t> ownerPhysicalDims,
     int64_t elemBytes, int64_t abstractCommVolumeBytes,
     sde::SDECostModel &costModel, int64_t workers,
@@ -961,7 +960,7 @@ static std::optional<sde::CuMuPartitionPlan> chooseCuMuTileFloorPlan(
 }
 
 static int64_t coarsenLoopIndexedOwnerPlanToTileFloor(
-    const sde::LoopIndexedOutputPlan &outputPlan, sde::SDECostModel &costModel,
+    const sde::LoopIndexedOutputShape &outputPlan, sde::SDECostModel &costModel,
     int64_t workers, int64_t abstractCommVolumeBytes,
     ArrayRef<sde::CuMuHyperedgePressure> hyperedges,
     SmallVectorImpl<int64_t> &ownerPhysicalDims,
@@ -981,7 +980,7 @@ static int64_t coarsenLoopIndexedOwnerPlanToTileFloor(
     return true;
   };
 
-  std::optional<sde::CuMuPartitionPlan> selected =
+  std::optional<sde::CuMuPartitionChoice> selected =
       chooseCuMuTileFloorPlan(outputPlan.shape, outputPlan.ownerPhysicalDims,
                               elemBytes, abstractCommVolumeBytes, costModel,
                               workers, physicalBlockShape, hyperedges, rebuild);
@@ -993,7 +992,7 @@ static int64_t coarsenLoopIndexedOwnerPlanToTileFloor(
                            outputPlan.ownerPhysicalDims.end());
   // The selected plan is a CU grouping target, not permission to inflate the
   // committed DB/MU block shape. SDE preserves the physical grain and projects
-  // this lower compute-unit target into logicalWorkerSlice at the stamping
+  // this lower compute-unit target into logicalWorkerSlice when committing
   // site.
   return selected->computeUnits;
 }
@@ -1015,10 +1014,10 @@ coarsenExistingLoopIndexedOwnerPlanToTileFloor(sde::SdeSuIterateOp op,
       *classification == sde::SdeStructuredClassification::stencil)
     return;
 
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op);
+  std::optional<sde::LoopIndexedOutputShape> outputPlan =
+      sde::findConsistentLoopIndexedOutputShapeWithOwnerDims(op);
   if (!outputPlan)
-    outputPlan = sde::findLoopIndexedOutputPlan(op);
+    outputPlan = sde::findLoopIndexedOutputShape(op);
   if (!outputPlan || outputPlan->shape.empty())
     return;
 
@@ -1030,7 +1029,7 @@ coarsenExistingLoopIndexedOwnerPlanToTileFloor(sde::SdeSuIterateOp op,
       blockShape->size() != outputPlan->shape.size())
     return;
 
-  sde::LoopIndexedOutputPlan plan = *outputPlan;
+  sde::LoopIndexedOutputShape plan = *outputPlan;
   plan.ownerPhysicalDims.assign(ownerDims->begin(), ownerDims->end());
   int64_t workers = sde::inferCuCountFromMuPartition(
       plan.shape, plan.ownerPhysicalDims, *blockShape);
@@ -1052,7 +1051,7 @@ coarsenExistingLoopIndexedOwnerPlanToTileFloor(sde::SdeSuIterateOp op,
   if (coarsenedWorkers >= workers)
     return;
 
-  alignLateOwnerPlanToExistingStep(op, coarsenedOwnerDims, physicalBlockShape);
+  alignLateOwnerShapeToExistingStep(op, coarsenedOwnerDims, physicalBlockShape);
   SmallVector<int64_t, 4> logicalWorkerSlice =
       buildLogicalWorkerSliceOrPhysical(op, plan.shape, coarsenedOwnerDims,
                                         physicalBlockShape, coarsenedWorkers);
@@ -1062,6 +1061,7 @@ coarsenExistingLoopIndexedOwnerPlanToTileFloor(sde::SdeSuIterateOp op,
       buildI64ArrayAttr(op.getContext(), physicalBlockShape));
   op.setLogicalWorkerSliceAttr(
       buildI64ArrayAttr(op.getContext(), logicalWorkerSlice));
+  sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
 }
 
 static SmallVector<Value, 4>
@@ -1125,7 +1125,7 @@ static bool allRootAccessesStayWithinOwnerTile(sde::SdeSuIterateOp op,
   return !result.wasInterrupted() && sawRootAccess;
 }
 
-static std::optional<sde::LoopIndexedOutputPlan>
+static std::optional<sde::LoopIndexedOutputShape>
 findConsistentMultiOwnerOutputPlan(sde::SdeSuIterateOp op) {
   if (!op || op.getBody().empty())
     return std::nullopt;
@@ -1139,7 +1139,7 @@ findConsistentMultiOwnerOutputPlan(sde::SdeSuIterateOp op) {
     return std::nullopt;
 
   bool rejected = false;
-  std::optional<sde::LoopIndexedOutputPlan> selectedPlan;
+  std::optional<sde::LoopIndexedOutputShape> selectedPlan;
   auto visitStore = [&](memref::StoreOp storeOp) {
     Value base =
         ::mlir::carts::ValueAnalysis::stripMemrefViewOps(storeOp.getMemref());
@@ -1171,8 +1171,8 @@ findConsistentMultiOwnerOutputPlan(sde::SdeSuIterateOp op) {
       shape.push_back(dim);
     }
 
-    sde::LoopIndexedOutputPlan candidate{base, std::move(shape),
-                                         std::move(*ownerPhysicalDims)};
+    sde::LoopIndexedOutputShape candidate{base, std::move(shape),
+                                          std::move(*ownerPhysicalDims)};
     if (!selectedPlan) {
       selectedPlan = std::move(candidate);
       return WalkResult::advance();
@@ -1204,6 +1204,9 @@ static void applyPhysicalPlan(sde::SdeSuIterateOp op,
                               ArrayRef<int64_t> physicalBlockShape,
                               ArrayRef<int64_t> haloShape = {},
                               ArrayRef<int64_t> logicalWorkerSlice = {}) {
+  sde::rewriteWriterArrayLayoutToPhysicalShape(op, ownerDims,
+                                               physicalBlockShape);
+
   op.setPhysicalOwnerDimsAttr(buildI64ArrayAttr(op.getContext(), ownerDims));
   op.setPhysicalBlockShapeAttr(
       buildI64ArrayAttr(op.getContext(), physicalBlockShape));
@@ -1244,7 +1247,7 @@ static SmallVector<int64_t, 4> buildLogicalWorkerSliceOrPhysical(
   return logicalWorkerSlice;
 }
 
-static bool hasPhysicalLayoutPlan(sde::SdeSuIterateOp op) {
+static bool hasCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
   auto ownerDims = readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
   auto blockShape = readI64ArrayAttr(op.getPhysicalBlockShapeAttr());
   return ownerDims && !ownerDims->empty() && blockShape && !blockShape->empty();
@@ -1335,14 +1338,14 @@ static bool assignedWriteLayoutMatchesOwnerDims(sde::SdeSuIterateOp op,
     return false;
   SmallVector<int64_t, 4> layoutDims(writeLayout->ownerDims.begin(),
                                      writeLayout->ownerDims.end());
-  SmallVector<int64_t, 4> plannedDims(ownerDims.begin(), ownerDims.end());
+  SmallVector<int64_t, 4> committedDims(ownerDims.begin(), ownerDims.end());
   llvm::sort(layoutDims);
-  llvm::sort(plannedDims);
-  return llvm::equal(layoutDims, plannedDims);
+  llvm::sort(committedDims);
+  return llvm::equal(layoutDims, committedDims);
 }
 
 static std::optional<SmallVector<int64_t, 4>>
-orderPhysicalOwnerDimsByLoop(const sde::SuOutputLayoutPlan &outputPlan,
+orderPhysicalOwnerDimsByLoop(const sde::SuOutputLayoutFacts &outputPlan,
                              ArrayRef<int64_t> layoutOwnerDims,
                              unsigned loopRank) {
   if (layoutOwnerDims.empty() || outputPlan.loopDimToPhysicalDim.empty())
@@ -1366,9 +1369,10 @@ orderPhysicalOwnerDimsByLoop(const sde::SuOutputLayoutPlan &outputPlan,
   return orderedOwnerDims;
 }
 
-static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
-                                                sde::SDECostModel &costModel) {
-  if (!op || hasPhysicalLayoutPlan(op))
+static bool
+commitPhysicalLayoutFromAssignedLayout(sde::SdeSuIterateOp op,
+                                       sde::SDECostModel &costModel) {
+  if (!op || hasCommittedPhysicalLayout(op))
     return false;
 
   auto classification = op.getStructuredClassification();
@@ -1381,16 +1385,16 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
   if (!writeLayout)
     return false;
 
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op);
+  std::optional<sde::LoopIndexedOutputShape> outputPlan =
+      sde::findConsistentLoopIndexedOutputShapeWithOwnerDims(op);
   if (!outputPlan)
-    outputPlan = sde::findLoopIndexedOutputPlan(op);
+    outputPlan = sde::findLoopIndexedOutputShape(op);
   if (!outputPlan || outputPlan->shape.empty())
     return false;
 
-  sde::LoopIndexedOutputPlan plan = *outputPlan;
-  if (std::optional<sde::SuOutputLayoutPlan> structuredPlan =
-          sde::findCompatibleSuOutputLayoutPlan(op)) {
+  sde::LoopIndexedOutputShape plan = *outputPlan;
+  if (std::optional<sde::SuOutputLayoutFacts> structuredPlan =
+          sde::findCompatibleSuOutputLayoutFacts(op)) {
     std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
         orderPhysicalOwnerDimsByLoop(*structuredPlan, writeLayout->ownerDims,
                                      op.getLowerBounds().size());
@@ -1420,26 +1424,26 @@ static bool stampPhysicalPlanFromAssignedLayout(sde::SdeSuIterateOp op,
     logicalTarget = chooseLogicalTargetForTileFloor(
         plan.shape, ownerDims, physicalBlockShape, elemBytes, costModel,
         logicalTarget);
-  alignLateOwnerPlanToExistingStep(op, ownerDims, physicalBlockShape);
+  alignLateOwnerShapeToExistingStep(op, ownerDims, physicalBlockShape);
   SmallVector<int64_t, 4> logicalWorkerSlice =
       buildLogicalWorkerSliceOrPhysical(op, plan.shape, ownerDims,
                                         physicalBlockShape, logicalTarget);
-  return applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape,
-                                     /*haloShape=*/{}, logicalWorkerSlice);
+  return applyPhysicalLayoutIfRealized(op, ownerDims, physicalBlockShape,
+                                       /*haloShape=*/{}, logicalWorkerSlice);
 }
 
 // Consume the one committed node-agnostic budget layout for every SU that
-// writes a multi-owner-distributed data-parallel array, stamping identical
+// writes a multi-owner-distributed data-parallel array, committing identical
 // physicalOwnerDims + physicalBlockShape (+ logicalWorkerSlice) across all
 // writers of that array. That equality lets the per-timestep host bridge hoist
 // once and keeps iterative double-buffer stencils from realizing a coarse
-// per-timestep copy. Runs first in the stamper dispatch and is the default for
-// the multi-owner data-parallel family (matmul/contraction excluded).
-// Realization is not gated on the loop step: the committed layout is the
-// authority and the iteration-space decomposition re-tiles to the block.
-static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
-                                      sde::SDECostModel &costModel) {
-  if (!op || hasPhysicalLayoutPlan(op))
+// per-timestep copy. Runs first in the layout commit dispatch and is the
+// default for the multi-owner data-parallel family (matmul/contraction
+// excluded). Realization is not gated on the loop step: the committed layout is
+// the authority and the iteration-space decomposition re-tiles to the block.
+static bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
+                                         sde::SDECostModel &costModel) {
+  if (!op || hasCommittedPhysicalLayout(op))
     return false;
   // Matmul/contraction keeps its dedicated contraction-tiling plan: its CU-task
   // grain is the reduction-aware worker grain, not the data-parallel block
@@ -1465,12 +1469,12 @@ static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
     return false;
   // owner_tile needs one realized SDE loop dimension per owner dim. A 1-D loop
   // (e.g. a residual/reduction loop over the same array) that did not get
-  // promoted cannot carry a multi-owner tile; leave it to the pattern stampers
-  // rather than stamping an unverifiable owner_tile plan.
+  // promoted cannot carry a multi-owner tile; leave it to the pattern
+  // committers rather than committing unverifiable owner_tile facts.
   if (op.getLowerBounds().size() < writeLayout->ownerDims.size())
     return false;
-  std::optional<sde::SuOutputLayoutPlan> outputPlan =
-      sde::findCompatibleSuOutputLayoutPlan(op);
+  std::optional<sde::SuOutputLayoutFacts> outputPlan =
+      sde::findCompatibleSuOutputLayoutFacts(op);
   if (!outputPlan)
     return false;
   std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
@@ -1511,7 +1515,7 @@ static bool stampBudgetReconciledPlan(sde::SdeSuIterateOp op,
   return true;
 }
 
-static bool mayRefineExistingPhysicalLayoutPlan(sde::SdeSuIterateOp op) {
+static bool mayRefineCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
   if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
     return false;
   if (op.getDistributionKindAttr() ||
@@ -1540,15 +1544,15 @@ static std::optional<int64_t> getPositiveConstantIndex(Value value) {
 }
 
 static void
-alignLateOwnerPlanToExistingStep(sde::SdeSuIterateOp op,
-                                 ArrayRef<int64_t> ownerDims,
-                                 MutableArrayRef<int64_t> physicalBlockShape) {
+alignLateOwnerShapeToExistingStep(sde::SdeSuIterateOp op,
+                                  ArrayRef<int64_t> ownerDims,
+                                  MutableArrayRef<int64_t> physicalBlockShape) {
   if (ownerDims.empty() || op.getSteps().empty() ||
       ownerDims.size() > op.getSteps().size())
     return;
 
-  // DistributionPlanning runs after SDE loop tiling. When it authors a physical
-  // owner plan late, the element-space block for each owner dimension must
+  // DistributionPlanning runs after SDE loop tiling. When it authors physical
+  // owner layout late, the element-space block for each owner dimension must
   // match the already-realized owner-loop step. A coarser block would serialize
   // independent tiled loops behind one DB/MU; a finer block would describe
   // slices the loop no longer realizes.
@@ -1587,9 +1591,9 @@ physicalPlanMatchesOwnerStepOrder(sde::SdeSuIterateOp op,
 }
 
 static bool
-physicalPlanMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
-                                     ArrayRef<int64_t> ownerDims,
-                                     ArrayRef<int64_t> physicalBlockShape) {
+physicalLayoutMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
+                                       ArrayRef<int64_t> ownerDims,
+                                       ArrayRef<int64_t> physicalBlockShape) {
   if (!op || ownerDims.empty() || physicalBlockShape.empty() ||
       op.getSteps().empty())
     return false;
@@ -1602,8 +1606,8 @@ physicalPlanMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
     return true;
 
   SmallVector<int64_t, 4> physicalDimToLoopDim(physicalBlockShape.size(), -1);
-  if (std::optional<sde::SuOutputLayoutPlan> layoutPlan =
-          sde::findCompatibleSuOutputLayoutPlan(op)) {
+  if (std::optional<sde::SuOutputLayoutFacts> layoutPlan =
+          sde::findCompatibleSuOutputLayoutFacts(op)) {
     for (auto [physicalDim, rawLoopDim] :
          llvm::enumerate(layoutPlan->physicalDimToLoopDim)) {
       if (physicalDim >= physicalDimToLoopDim.size())
@@ -1632,20 +1636,20 @@ physicalPlanMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
   return true;
 }
 
-static bool applyPhysicalPlanIfRealized(sde::SdeSuIterateOp op,
-                                        ArrayRef<int64_t> ownerDims,
-                                        ArrayRef<int64_t> physicalBlockShape,
-                                        ArrayRef<int64_t> haloShape,
-                                        ArrayRef<int64_t> logicalWorkerSlice) {
-  if (!physicalPlanMatchesRealizedLoopSteps(op, ownerDims, physicalBlockShape))
+static bool applyPhysicalLayoutIfRealized(
+    sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
+    ArrayRef<int64_t> physicalBlockShape, ArrayRef<int64_t> haloShape,
+    ArrayRef<int64_t> logicalWorkerSlice) {
+  if (!physicalLayoutMatchesRealizedLoopSteps(op, ownerDims,
+                                              physicalBlockShape))
     return false;
   applyPhysicalPlan(op, ownerDims, physicalBlockShape, haloShape,
                     logicalWorkerSlice);
   return true;
 }
 
-static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
-                                     sde::SDECostModel &costModel) {
+static void commitStencilPhysicalLayout(sde::SdeSuIterateOp op,
+                                        sde::SDECostModel &costModel) {
   if ((op.getPhysicalOwnerDimsAttr() && op.getPhysicalBlockShapeAttr()) ||
       costModel.getLogicalWorkerCapacity() <= 1)
     return;
@@ -1657,19 +1661,19 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
   if (classification && !isStencil)
     return;
   if (isStencil && sde::requiresNestedStencilOwnerPromotion(op) &&
-      !sde::hasRealizableOwnerStripPlan(op))
+      !sde::hasRealizableOwnerStrip(op))
     return;
 
   /// First-dimension unclassified loops are owned by the uniform/matmul
   /// planners below. This secondary owner-dim path handles imperfect local
   /// stencil/update nests whose owner IV indexes a later physical output
   /// dimension.
-  if (!isStencil && sde::findLoopIndexedOutputPlan(op))
+  if (!isStencil && sde::findLoopIndexedOutputShape(op))
     return;
 
   if (isStencil) {
-    std::optional<sde::SuOutputLayoutPlan> outputPlan =
-        sde::findCompatibleSuOutputLayoutPlan(op);
+    std::optional<sde::SuOutputLayoutFacts> outputPlan =
+        sde::findCompatibleSuOutputLayoutFacts(op);
     if (outputPlan) {
       SmallVector<unsigned, 4> ownerLoopDims =
           chooseMappedSdeOwnerLoopDims(op, *outputPlan);
@@ -1707,14 +1711,14 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
         }
       }
 
-      (void)applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape,
-                                        haloShape);
+      (void)applyPhysicalLayoutIfRealized(op, ownerDims, physicalBlockShape,
+                                          haloShape);
       return;
     }
   }
 
-  std::optional<sde::LoopIndexedOutputPlan> secondaryPlan =
-      sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op);
+  std::optional<sde::LoopIndexedOutputShape> secondaryPlan =
+      sde::findConsistentLoopIndexedOutputShapeWithOwnerDims(op);
   if (!secondaryPlan || secondaryPlan->ownerPhysicalDims.size() != 1)
     return;
 
@@ -1741,12 +1745,12 @@ static void stampStencilPhysicalPlan(sde::SdeSuIterateOp op,
   // Preserve fine DB/MU grain for stencil-like updates. Coarser halo compute
   // grouping must be backed by explicit grouped halo realization in ARTS.
 
-  alignLateOwnerPlanToExistingStep(op, ownerDims, physicalBlockShape);
-  (void)applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape);
+  alignLateOwnerShapeToExistingStep(op, ownerDims, physicalBlockShape);
+  (void)applyPhysicalLayoutIfRealized(op, ownerDims, physicalBlockShape);
 }
 
-static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
-                                     sde::SDECostModel &costModel) {
+static void commitUniformPhysicalLayout(sde::SdeSuIterateOp op,
+                                        sde::SDECostModel &costModel) {
   if ((op.getPhysicalOwnerDimsAttr() && op.getPhysicalBlockShapeAttr()) ||
       costModel.getLogicalWorkerCapacity() <= 1)
     return;
@@ -1759,19 +1763,19 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
         !sde::isOwnerLocalPipelineReduction(op))
       return;
   }
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findLoopIndexedOutputPlan(op);
-  bool usedConsistentOwnerFallback = false;
+  std::optional<sde::LoopIndexedOutputShape> outputPlan =
+      sde::findLoopIndexedOutputShape(op);
+  bool usedConsistentOwnerQuery = false;
   if (!outputPlan) {
     if (classification &&
         *classification != sde::SdeStructuredClassification::elementwise &&
         *classification !=
             sde::SdeStructuredClassification::elementwise_pipeline)
       return;
-    outputPlan = sde::findConsistentLoopIndexedOutputPlanWithOwnerDims(op);
+    outputPlan = sde::findConsistentLoopIndexedOutputShapeWithOwnerDims(op);
     if (outputPlan && outputPlan->ownerPhysicalDims.size() != 1)
       outputPlan.reset();
-    usedConsistentOwnerFallback = outputPlan.has_value();
+    usedConsistentOwnerQuery = outputPlan.has_value();
   }
   if (!outputPlan || outputPlan->shape.empty() ||
       outputPlan->ownerPhysicalDims.empty())
@@ -1781,7 +1785,7 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
       (*classification == sde::SdeStructuredClassification::elementwise ||
        *classification ==
            sde::SdeStructuredClassification::elementwise_pipeline)) {
-    std::optional<sde::LoopIndexedOutputPlan> multiOwnerPlan =
+    std::optional<sde::LoopIndexedOutputShape> multiOwnerPlan =
         findConsistentMultiOwnerOutputPlan(op);
     if (multiOwnerPlan && multiOwnerPlan->ownerPhysicalDims.size() >= 2 &&
         assignedWriteLayoutMatchesOwnerDims(
@@ -1816,7 +1820,8 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
                 *multiOwnerPlan, costModel, workers,
                 readAbstractCommVolumeBytes(op),
                 collectAbstractMuHyperedges(op), ownerDims, physicalBlockShape);
-            alignLateOwnerPlanToExistingStep(op, ownerDims, physicalBlockShape);
+            alignLateOwnerShapeToExistingStep(op, ownerDims,
+                                              physicalBlockShape);
             logicalTarget = std::min<int64_t>(
                 logicalTarget,
                 std::max<int64_t>(1, costModel.getLogicalWorkerCapacity()));
@@ -1824,9 +1829,9 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
                 buildLogicalWorkerSliceOrPhysical(op, multiOwnerPlan->shape,
                                                   ownerDims, physicalBlockShape,
                                                   logicalTarget);
-            if (applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape,
-                                            /*haloShape=*/{},
-                                            logicalWorkerSlice))
+            if (applyPhysicalLayoutIfRealized(op, ownerDims, physicalBlockShape,
+                                              /*haloShape=*/{},
+                                              logicalWorkerSlice))
               return;
           }
         }
@@ -1844,7 +1849,7 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
       static_cast<size_t>(ownerPhysicalDim) >= outputPlan->shape.size() ||
       outputPlan->shape[ownerPhysicalDim] <= 0)
     return;
-  if (!classification || usedConsistentOwnerFallback) {
+  if (!classification || usedConsistentOwnerQuery) {
     auto effects = sde::collectStructuredMemoryEffects(op.getBody());
     bool selfRead = effects.reads.contains(outputPlan->root);
     bool ownerLocalSelfRead =
@@ -1885,7 +1890,7 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
                      int64_t{1}, outputPlan->shape[ownerPhysicalDim]);
       return true;
     };
-    std::optional<sde::CuMuPartitionPlan> selected = chooseCuMuTileFloorPlan(
+    std::optional<sde::CuMuPartitionChoice> selected = chooseCuMuTileFloorPlan(
         outputPlan->shape, outputPlan->ownerPhysicalDims, elemBytes,
         readAbstractCommVolumeBytes(op), costModel, workers, physicalBlockShape,
         collectAbstractMuHyperedges(op), rebuild);
@@ -1895,8 +1900,8 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
         outputPlan->shape, outputPlan->ownerPhysicalDims, physicalBlockShape,
         elemBytes, costModel, workers);
   }
-  alignLateOwnerPlanToExistingStep(op, outputPlan->ownerPhysicalDims,
-                                   physicalBlockShape);
+  alignLateOwnerShapeToExistingStep(op, outputPlan->ownerPhysicalDims,
+                                    physicalBlockShape);
   SmallVector<int64_t, 4> logicalWorkerSlice =
       buildLogicalWorkerSliceOrPhysical(op, outputPlan->shape,
                                         outputPlan->ownerPhysicalDims,
@@ -1906,18 +1911,12 @@ static void stampUniformPhysicalPlan(sde::SdeSuIterateOp op,
     op.setStructuredClassificationAttr(
         sde::SdeStructuredClassificationAttr::get(
             op.getContext(), sde::SdeStructuredClassification::elementwise));
-  op.setPhysicalOwnerDimsAttr(
-      buildI64ArrayAttr(op.getContext(), outputPlan->ownerPhysicalDims));
-  op.setPhysicalBlockShapeAttr(
-      buildI64ArrayAttr(op.getContext(), physicalBlockShape));
-  op.setLogicalWorkerSliceAttr(
-      buildI64ArrayAttr(op.getContext(), logicalWorkerSlice));
-  op.setIterationTopologyAttr(sde::SdeIterationTopologyAttr::get(
-      op.getContext(), sde::SdeIterationTopology::owner_strip));
+  applyPhysicalPlan(op, outputPlan->ownerPhysicalDims, physicalBlockShape,
+                    /*haloShape=*/{}, logicalWorkerSlice);
 }
 
-static void stampMatmulPhysicalPlan(sde::SdeSuIterateOp op,
-                                    sde::SDECostModel &costModel) {
+static void commitMatmulPhysicalLayout(sde::SdeSuIterateOp op,
+                                       sde::SDECostModel &costModel) {
   if ((op.getPhysicalOwnerDimsAttr() && op.getPhysicalBlockShapeAttr()) ||
       costModel.getLogicalWorkerCapacity() <= 1)
     return;
@@ -1925,8 +1924,8 @@ static void stampMatmulPhysicalPlan(sde::SdeSuIterateOp op,
   if (!classification ||
       *classification != sde::SdeStructuredClassification::matmul)
     return;
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findLoopIndexedOutputPlan(op);
+  std::optional<sde::LoopIndexedOutputShape> outputPlan =
+      sde::findLoopIndexedOutputShape(op);
   if (!outputPlan || outputPlan->shape.size() < 2 ||
       outputPlan->shape[0] <= 0 || outputPlan->shape[1] <= 0)
     return;
@@ -1964,10 +1963,11 @@ static void stampMatmulPhysicalPlan(sde::SdeSuIterateOp op,
     int64_t elemBytes = outputElementBytes(outputPlan->root);
     if (elemBytes > 0) {
       SmallVector<int64_t, 2> ownerDims{0, 1};
-      std::optional<sde::CuMuPartitionPlan> selected = chooseCuMuTileFloorPlan(
-          outputPlan->shape, ownerDims, elemBytes,
-          readAbstractCommVolumeBytes(op), costModel, workers,
-          physicalBlockShape, collectAbstractMuHyperedges(op), rebuild);
+      std::optional<sde::CuMuPartitionChoice> selected =
+          chooseCuMuTileFloorPlan(outputPlan->shape, ownerDims, elemBytes,
+                                  readAbstractCommVolumeBytes(op), costModel,
+                                  workers, physicalBlockShape,
+                                  collectAbstractMuHyperedges(op), rebuild);
       if (selected)
         workers = selected->computeUnits;
     }
@@ -1984,10 +1984,11 @@ static void stampMatmulPhysicalPlan(sde::SdeSuIterateOp op,
       buildI64ArrayAttr(op.getContext(), logicalWorkerSlice));
   op.setIterationTopologyAttr(sde::SdeIterationTopologyAttr::get(
       op.getContext(), sde::SdeIterationTopology::owner_tile_2d));
+  sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
 }
 
-static void stampDirectRowMatmulPhysicalPlan(sde::SdeSuIterateOp op,
-                                             sde::SDECostModel &costModel) {
+static void commitDirectRowMatmulPhysicalLayout(sde::SdeSuIterateOp op,
+                                                sde::SDECostModel &costModel) {
   if ((op.getPhysicalOwnerDimsAttr() && op.getPhysicalBlockShapeAttr()) ||
       costModel.getLogicalWorkerCapacity() <= 1)
     return;
@@ -1997,8 +1998,8 @@ static void stampDirectRowMatmulPhysicalPlan(sde::SdeSuIterateOp op,
   if (!classification ||
       *classification != sde::SdeStructuredClassification::matmul)
     return;
-  std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-      sde::findLoopIndexedOutputPlan(op);
+  std::optional<sde::LoopIndexedOutputShape> outputPlan =
+      sde::findLoopIndexedOutputShape(op);
   if (!outputPlan || outputPlan->shape.size() < 2 ||
       outputPlan->ownerPhysicalDims.size() != 1 ||
       outputPlan->ownerPhysicalDims.front() != 0 || outputPlan->shape[0] <= 0)
@@ -2022,17 +2023,17 @@ static void stampDirectRowMatmulPhysicalPlan(sde::SdeSuIterateOp op,
   int64_t logicalTarget = coarsenLoopIndexedOwnerPlanToTileFloor(
       *outputPlan, costModel, workers, readAbstractCommVolumeBytes(op),
       collectAbstractMuHyperedges(op), ownerDims, physicalBlockShape);
-  alignLateOwnerPlanToExistingStep(op, outputPlan->ownerPhysicalDims,
-                                   physicalBlockShape);
+  alignLateOwnerShapeToExistingStep(op, outputPlan->ownerPhysicalDims,
+                                    physicalBlockShape);
   SmallVector<int64_t, 4> logicalWorkerSlice =
       buildLogicalWorkerSliceOrPhysical(op, outputPlan->shape, ownerDims,
                                         physicalBlockShape, logicalTarget);
-  (void)applyPhysicalPlanIfRealized(op, ownerDims, physicalBlockShape,
-                                    /*haloShape=*/{}, logicalWorkerSlice);
+  (void)applyPhysicalLayoutIfRealized(op, ownerDims, physicalBlockShape,
+                                      /*haloShape=*/{}, logicalWorkerSlice);
 }
 
-static void stampReductionTaskShapePlan(sde::SdeSuIterateOp op,
-                                        sde::SDECostModel &costModel) {
+static void commitReductionTaskShape(sde::SdeSuIterateOp op,
+                                     sde::SDECostModel &costModel) {
   if (op.getLogicalWorkerSliceAttr() &&
       (op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr()))
     return;
@@ -2055,8 +2056,8 @@ static void stampReductionTaskShapePlan(sde::SdeSuIterateOp op,
   slice = std::clamp<int64_t>(slice, 1, *tripCount);
 
   if (op.getReductionAccumulators().empty()) {
-    std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-        sde::findLoopIndexedOutputPlan(op);
+    std::optional<sde::LoopIndexedOutputShape> outputPlan =
+        sde::findLoopIndexedOutputShape(op);
     if (outputPlan && !outputPlan->ownerPhysicalDims.empty() &&
         !outputPlan->shape.empty()) {
       SmallVector<int64_t, 4> physicalBlockShape(outputPlan->shape);
@@ -2091,6 +2092,7 @@ static void stampReductionTaskShapePlan(sde::SdeSuIterateOp op,
           buildI64ArrayAttr(op.getContext(), logicalWorkerSlice));
       op.setIterationTopologyAttr(sde::SdeIterationTopologyAttr::get(
           op.getContext(), sde::SdeIterationTopology::owner_strip));
+      sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
       return;
     }
   }
@@ -2101,8 +2103,9 @@ static void stampReductionTaskShapePlan(sde::SdeSuIterateOp op,
       op.getContext(), sde::SdeIterationTopology::owner_strip));
 }
 
-static void stampInPlaceSharedStencilSerialSlice(sde::SdeSuIterateOp op,
-                                                 sde::SDECostModel &costModel) {
+static void
+commitInPlaceSharedStencilSerialSlice(sde::SdeSuIterateOp op,
+                                      sde::SDECostModel &costModel) {
   if (op.getLogicalWorkerSliceAttr() ||
       costModel.getLogicalWorkerCapacity() <= 1)
     return;
@@ -2136,6 +2139,7 @@ static void stampInPlaceSharedStencilSerialSlice(sde::SdeSuIterateOp op,
       buildI64ArrayAttr(op.getContext(), SmallVector<int64_t, 1>{slice}));
   op.setIterationTopologyAttr(sde::SdeIterationTopologyAttr::get(
       op.getContext(), sde::SdeIterationTopology::owner_strip));
+  sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
 }
 
 static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
@@ -2167,8 +2171,8 @@ chooseDistributionKind(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
 
   auto classificationAttr = op.getStructuredClassificationAttr();
   if (!classificationAttr) {
-    std::optional<sde::LoopIndexedOutputPlan> outputPlan =
-        sde::findLoopIndexedOutputPlan(op);
+    std::optional<sde::LoopIndexedOutputShape> outputPlan =
+        sde::findLoopIndexedOutputShape(op);
     if (!outputPlan)
       return std::nullopt;
     auto effects = sde::collectStructuredMemoryEffects(op.getBody());
@@ -2189,7 +2193,7 @@ chooseDistributionKind(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
     return sde::SdeDistributionKind::blocked;
   case sde::SdeStructuredClassification::stencil:
     if (sde::requiresNestedStencilOwnerPromotion(op) &&
-        !sde::hasRealizableOwnerStripPlan(op))
+        !sde::hasRealizableOwnerStrip(op))
       return std::nullopt;
     if (isInPlaceSelfReadStencil(op) && !op.getInPlaceSafeAttr())
       return std::nullopt;
@@ -2254,9 +2258,9 @@ struct DistributionPlanningPass
     if (!costModel)
       return;
 
-    SmallVector<PlannedDistribution> rewrites;
+    SmallVector<DistributionRewrite> rewrites;
     bool failed = false;
-    auto planOrFailClosed = [&](sde::SdeSuIterateOp op) {
+    auto chooseDistributionOrFailClosed = [&](sde::SdeSuIterateOp op) {
       if (auto kind = chooseDistributionKind(op, *costModel)) {
         rewrites.push_back({op, *kind});
         return;
@@ -2281,32 +2285,34 @@ struct DistributionPlanningPass
       }
 
       if (op.getDistributionKindAttr()) {
-        planOrFailClosed(op);
+        chooseDistributionOrFailClosed(op);
         continue;
       }
 
-      if (hasPhysicalLayoutPlan(op)) {
-        if (mayRefineExistingPhysicalLayoutPlan(op)) {
+      if (hasCommittedPhysicalLayout(op)) {
+        if (mayRefineCommittedPhysicalLayout(op)) {
           coarsenExistingLoopIndexedOwnerPlanToTileFloor(op, *costModel);
         }
-        planOrFailClosed(op);
+        sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
+        chooseDistributionOrFailClosed(op);
         continue;
       }
 
       coarsenExistingLoopIndexedOwnerPlanToTileFloor(op, *costModel);
-      // Budget-reconciled layout is authored first so the per-pattern stampers
-      // below see an already-planned multi-owner data-parallel SU and skip it;
-      // they still run for the families budget declines (single-owner, matmul,
-      // reduction, in-place). The committed budget layout is the authority.
-      stampBudgetReconciledPlan(op, *costModel);
-      stampStencilPhysicalPlan(op, *costModel);
-      stampDirectRowMatmulPhysicalPlan(op, *costModel);
-      stampMatmulPhysicalPlan(op, *costModel);
-      stampUniformPhysicalPlan(op, *costModel);
-      stampReductionTaskShapePlan(op, *costModel);
-      stampInPlaceSharedStencilSerialSlice(op, *costModel);
-      stampPhysicalPlanFromAssignedLayout(op, *costModel);
-      planOrFailClosed(op);
+      // Budget-reconciled layout is authored first so the per-pattern
+      // committers below see an already-committed multi-owner data-parallel SU
+      // and skip it; they still run for the families budget declines
+      // (single-owner, matmul, reduction, in-place). The committed budget
+      // layout is the authority.
+      commitBudgetReconciledLayout(op, *costModel);
+      commitStencilPhysicalLayout(op, *costModel);
+      commitDirectRowMatmulPhysicalLayout(op, *costModel);
+      commitMatmulPhysicalLayout(op, *costModel);
+      commitUniformPhysicalLayout(op, *costModel);
+      commitReductionTaskShape(op, *costModel);
+      commitInPlaceSharedStencilSerialSlice(op, *costModel);
+      commitPhysicalLayoutFromAssignedLayout(op, *costModel);
+      chooseDistributionOrFailClosed(op);
     }
 
     if (failed) {
@@ -2314,12 +2320,12 @@ struct DistributionPlanningPass
       return;
     }
 
-    for (PlannedDistribution rewrite : rewrites) {
+    for (DistributionRewrite rewrite : rewrites) {
       if (rewrite.op.getNumResults() > 0) {
         // su_iterate with iter_arg results: can't wrap in su_distribute
-        // (NoTerminator op can't forward results). Stamp distribution kind
-        // directly on the su_iterate; boundary lowering carries the committed
-        // fact forward.
+        // (NoTerminator op can't forward results). Commit the distribution kind
+        // directly on the su_iterate; boundary lowering carries that fact
+        // forward.
         rewrite.op.setDistributionKindAttr(
             sde::SdeDistributionKindAttr::get(&getContext(), rewrite.kind));
         continue;

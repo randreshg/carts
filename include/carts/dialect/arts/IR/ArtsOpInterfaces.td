@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: ArtsOpInterfaces.td
 /// Declares ARTS dialect op interfaces used to dispatch attribute family
-/// queries (partition, distributed-db) without raw-string AttrNames fallbacks.
+/// queries (partition, distributed-db) without raw-string AttrNames paths.
 /// Implementing ops provide the ODS-generated attr-name accessor for each
 /// family they own.
 ///==========================================================================///

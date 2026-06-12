@@ -17,7 +17,7 @@ layout facts true.
 Limits: SDE should not encode ARTS runtime call shape or LLVM-facing ABI
 details. It names no collectives, DBs, EDTs, routes, GUIDs, or runtime policy.
 It should preserve and transform high-level semantics so later dialects do not
-need to rediscover OpenMP intent or repair SDE layout promises.
+need to rediscover OpenMP intent or repair SDE layout facts.
 
 Important transform areas:
 
@@ -25,7 +25,7 @@ Important transform areas:
   scalar forwarding.
 - `dep/` - structural and dependency transforms.
 - `effect/` - scheduling, distribution, fusion/vectorization decisions.
-- `Verify/` - SDE boundary contracts.
+- `Verify/` - SDE boundary invariants.
 
 ## ARTS Dialect: `arts`
 
@@ -37,8 +37,8 @@ Paths:
 
 Purpose: high-level ARTS orchestration IR: isolated task bodies with explicit
 dependencies and params, token-local views, EDTs, DBs, epochs, implementation
-`scf.for` loops inside tasks/dispatch, barriers, atomics, lowering contracts,
-per-block single-writer DB realization, owner maps, DB modes, focused DB/EDT
+`scf.for` loops inside tasks/dispatch, barriers, atomics, lowering invariants,
+per-block single-writer DB realization, owner routes, DB modes, focused DB/EDT
 queries, and grouped compute/bridge/communication CU realization. ARTS consumes
 committed SDE layout, access-window, and movement facts and represents them as
 runtime-independent ARTS objects.
@@ -46,13 +46,13 @@ runtime-independent ARTS objects.
 Limits: ARTS should not become a runtime ABI shim or a place to patch
 frontend semantic loss. It should own orchestration invariants and
 IR-backed decisions over committed SDE facts. It may verify,
-consume, realize, or reject upstream plans; it must not silently recompute
+consume, realize, or reject upstream facts; it must not silently recompute
 owner dims, block shape, movement family, storage grain, or runtime mode.
 
 Important areas:
 
 - `IR/` - ArtsDialect, ArtsOps.
-- `Transforms/SdeToArtsBoundary.cpp` - direct SDE-to-ARTS materialization.
+- `Transforms/SdeToArtsBoundary.cpp` - direct SDE-to-ARTS realization.
 - `Transforms/db`, `Transforms/edt`, `Transforms/epoch`, `Transforms/verify`.
 - `Utils/` - DbUtils, EdtUtils, LoweringFactUtils,
   PartitionPredicates, BlockedAccessUtils, ARTSCostModel.

@@ -26,7 +26,7 @@ transformations, distributed shape, or DB/CU grain.
 | Dialect | Namespace | Stages | Purpose |
 |---------|-----------|--------|---------|
 | SDE | `sde::` | 3 (`sde-planning`) | Real source/layout/tiling transforms, HPF-style `DISTRIBUTE`/`ALIGN`, MU/CU/SU facts |
-| ARTS | `arts::` | 4-12 | Direct SDE boundary materialization, graph structure over SDE movement facts, per-block DB/EDT/owner-map realization, and grouped compute/bridge/communication CUs |
+| ARTS | `arts::` | 4-12 | Direct SDE boundary realization, graph structure over SDE movement facts, per-block DB/EDT/distributed ownership realization, and grouped compute/bridge/communication CUs |
 | ARTS-RT | `arts_rt::` | 12-13 | Mechanical runtime ABI and LLVM-facing call mapping |
 
 ## Dialect Boundaries
@@ -37,7 +37,7 @@ C/OMP source
                  SDE commits real layout/tiling/source facts
   → [sde-to-arts]    SDE MU/SU/CU facts → ARTS DB/acquire/EDT objects
                  ARTS represents SDE movement facts on graph edges
-  → [ARTS stages]   ARTS realizes owner maps, DB/EDT graphs, grouped CUs
+  → [ARTS stages]   ARTS realizes owner routes, DB/EDT graphs, grouped CUs
   → [pre-lowering]    ARTS → ARTS-RT lowering
                  (EdtLowering.cpp, EpochLowering.cpp, DbLowering.cpp)
   → [arts-rt-to-llvm] ARTS-RT → LLVM lowering
@@ -61,8 +61,8 @@ C/OMP source
 | Op | Created | Lowered | Stages Active |
 |----|---------|---------|---------------|
 | `arts.edt` | sde-to-arts (5) | pre-lowering (12) | 5-12 |
-| `arts.db_alloc` | sde-to-arts (5) or create-dbs materialization (7) | pre-lowering (12) | 5/7-12 |
-| `arts.db_acquire` | sde-to-arts (5) or create-dbs materialization (7) | pre-lowering (12) | 5/7-12 |
+| `arts.db_alloc` | sde-to-arts (5) or create-dbs realization (7) | pre-lowering (12) | 5/7-12 |
+| `arts.db_acquire` | sde-to-arts (5) or create-dbs realization (7) | pre-lowering (12) | 5/7-12 |
 | `arts.db_ref` | create-dbs (7) | pre-lowering (12) | 7-12 |
 | `arts.epoch` | sde-to-arts (5) or epochs (11) | pre-lowering (12) | 5-12 |
 | `arts.barrier` | sde-to-arts (5) | epochs (11) | 5-11 |
@@ -83,8 +83,8 @@ SDE planning ops are created in `sde-planning`; codelet ops are consumed by
 |----|---------|---------|
 | `sde.cu_codelet` | ConvertOpenMPToSde / `sde-planning` | `sde-to-arts` |
 | `sde.cu_task` | ConvertOpenMPToSde / `sde-planning` | `sde-to-arts`; leftovers fail VerifySdeLowered |
-| `sde.su_iterate` | ConvertOpenMPToSde / `sde-planning` | SDE-to-ARTS scheduling-unit materialization; leftovers fail VerifySdeLowered |
-| `sde.mu_reduction_decl` | ConvertOpenMPToSde / `sde-planning` | SDE reduction materialization; leftovers fail VerifySdeLowered |
+| `sde.su_iterate` | ConvertOpenMPToSde / `sde-planning` | SDE-to-ARTS scheduling-unit realization; leftovers fail VerifySdeLowered |
+| `sde.mu_reduction_decl` | ConvertOpenMPToSde / `sde-planning` | SDE reduction realization; leftovers fail VerifySdeLowered |
 
 ## Tracing Commands
 
@@ -138,4 +138,4 @@ When asked to trace an op:
 6. Report the complete lifecycle: created at stage X, transformed by Y, lowered at Z
 7. Flag any unexpected cross-dialect references (ops used outside their expected stage range)
 8. Flag downstream recomputation of committed facts: owner dims, block shape,
-   movement family, owner maps, DB grain, or runtime policy.
+   movement family, owner routes, DB grain, or runtime policy.

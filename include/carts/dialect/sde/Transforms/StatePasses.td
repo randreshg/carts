@@ -10,7 +10,7 @@ def PromoteTargetAttrs
     : Pass<"sde-promote-target-attrs", "mlir::ModuleOp"> {
   let summary = "Promote polygeist target-cpu/features to CARTS target attrs";
   let description = [{
-    cgeist stamps `polygeist.target-cpu` and `polygeist.target-features` on
+    cgeist writes `polygeist.target-cpu` and `polygeist.target-features` on
     the top-level module. Downstream conversion passes (notably the LLVM
     lowerings inside `llvm-ir-emission`) drop foreign module attrs, so any
     CARTS pass that reads them in the LLVM-facing stages observes a default
@@ -65,12 +65,10 @@ def MemoryUnitRealization
     intentionally SDE-local: it creates target-neutral MU storage declarations
     and leaves conversion to concrete target objects to boundary lowering.
 
-    Physical layout and owner-slice facts stay on the scheduling unit and are
-    consumed at boundary conversion to form acquire windows for supported
-    elementwise/matmul owner slices. Stencil, reduction, halo, and other
-    complex blocked plans remain on the raw bridge until their SDE-local view
-    rewrite exists. The pass does not rediscover target-object layouts or
-    perform concrete index rewriting.
+    Physical layout and owner-slice facts stay on the scheduling unit only when
+    this pass can realize the corresponding SDE MU shape. Unsupported committed
+    physical storage layouts fail closed; the pass does not strip layout
+    evidence or leave a raw bridge for downstream repair.
   }];
   let dependentDialects = ["::mlir::arith::ArithDialect",
                            "::mlir::carts::sde::CartsSdeDialect",
@@ -87,7 +85,7 @@ def SdeRankExpandMu
   let description = [{
     Structural owner-dim/grain carrier. For every `sde.mu_alloc` governed by a
     committed, single-contiguous-owner, fully-static elementwise/stencil BLOCK
-    plan (`physicalOwnerDims`/`physicalBlockShape` on the writer
+    layout (`physicalOwnerDims`/`physicalBlockShape` on the writer
     `sde.su_iterate`), this pass makes the grain STRUCTURE rather than metadata:
 
       * the `sde.mu_alloc` result memref is rank-expanded so the block grid is a
@@ -99,10 +97,10 @@ def SdeRankExpandMu
 
     Owner dims become `recover(structure)` (see `verify-sde-mu-layout`); no
     owner-dim/block-shape attribute is added to the `mu_alloc`. Matmul,
-    reduction, in-place, dynamic, and multi-owner plans are left in conservative
-    flat form (or fail closed) — never papered over with an attribute promise or
-    a compatibility attr. The pass does not recompute owner dims or block
-    shape; it reads the committed plan verbatim.
+    reduction, in-place, dynamic, and multi-owner layouts are left in
+    conservative flat form (or fail closed) — never papered over with an
+    attribute promise or a compatibility attr. The pass does not recompute owner
+    dims or block shape; it reads the committed layout facts verbatim.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect",
@@ -131,8 +129,8 @@ def SdeCuNormalization
     The pass is structural only: it adds no CU isolation, MU token, slice, or
     consumed dependency edge, and introduces no ARTS concept. It makes no
     distribution, movement, DB-grain, or access-window decision; it reads
-    current IR and rewrites structure, stamping no metadata and branching on no
-    downstream contract.
+    current IR and rewrites structure, writing no metadata and branching on no
+    downstream promise.
 
     Values defined by a wrapped span and consumed afterward are threaded through
     `sde.cu_region` results, so the producer-side CU containment invariant
@@ -151,14 +149,14 @@ def SdeScalarBlockReduction
     `sde.su_iterate` that fills one partial per block, and a final scalar
     combine in block order.
 
-    This is an SDE source/state transformation, not a downstream contract. It
+    This is an SDE source/state transformation, not a downstream promise. It
     runs after SDE has committed and rank-expanded physical block facts. For
     already-expanded MU inputs, the partial buffer is emitted as an expanded
     `sde.mu_alloc` with the same structural block-grid proof used by normal MU
     layout verification.
 
     The pass is intentionally fail-closed: it requires add reductions to rank-0
-    accumulators, committed compatible 1-D block plans for every loaded data
+    accumulators, committed compatible 1-D block layouts for every loaded data
     array, no unsupported side effects in the loop body, and deterministic
     floating-point order through per-slot partials when a block contributes
     multiple source samples. Unsupported loops remain unchanged with no
@@ -183,11 +181,11 @@ def SdeRaiseToMuAccessWindow
     mode), in the SAME block-grid coordinate system the carrier type already
     encodes.
 
-    It is a pure ADDITIVE raiser: it reads the committed plan and the expanded
+    It is a pure ADDITIVE raiser: it reads the committed layout facts and the expanded
     type VERBATIM (never recomputing owner dims or block shape), proves the
     structure against the writer `sde.su_iterate` iteration domain, and emits
     explicit window structure. It introduces no `sde.mu_token`, slice,
-    `sde.mu_dep`, or ARTS isolation concept, and stamps no downstream contract.
+    `sde.mu_dep`, or ARTS isolation concept, and writes no downstream promise.
 
     Out-of-scope MUs are skipped conservatively (no window, no error): dynamic,
     matmul/reduction, multi-owner, and unsupported uses. Same-CU in-place
@@ -196,7 +194,7 @@ def SdeRaiseToMuAccessWindow
     receives a writable halo dependency. The pass never mutates existing ops; it
     only inserts window facts.
 
-    Production SDE planning runs this after MU layout has been realized and
+    Production SDE shaping runs this after MU layout has been realized and
     rank-expanded, then verifies the raised windows before crossing into ARTS.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
@@ -214,20 +212,20 @@ def SdeCoarseAvoidance
       * an MU already rank-expanded (the block grid is a leading dim of the
         memref type) already exposes the maximum legal independent blocks — skip;
       * an MU with a committed, single-contiguous-owner, fully-static
-        elementwise/stencil BLOCK plan that proves a real grid is realized as
+        elementwise/stencil BLOCK layout that proves a real grid is realized as
         structure via the shared block-grid realize gate and rewriter — the
-        committed plan is consumed VERBATIM, never re-authored;
+        committed layout facts are consumed VERBATIM, never re-authored;
       * every other coarse MU is left flat because SDE has not committed a
         realizable single-owner grid for it.
 
-    The only hard failure is a committed plan that cannot be realized end to end:
+    The only hard failure is committed layout facts that cannot be realized end to end:
     rather than leave a partial owner-dim promise, the pass fails closed with
     evidence. It owns no redistribution and invents no coarse fallback. It
-    introduces no `sde.mu_token`, slice, `sde.mu_dep`, owner map, DB, or ARTS
-    concept. Its only mutation is the block-grid rewrite (in-place load/store
+    introduces no `sde.mu_token`, slice, `sde.mu_dep`, runtime ownership route,
+    DB, or ARTS concept. Its only mutation is the block-grid rewrite (in-place load/store
     rewrites that move no op across a CU/SU boundary), so CU legality is preserved.
 
-    Production SDE planning runs this after access-window and redistribution
+    Production SDE shaping runs this after access-window and redistribution
     structure is available, then verifies that in-scope committed grids did not
     remain coarse before crossing into ARTS.
   }];
@@ -242,8 +240,8 @@ def SdeRedistribute
     : Pass<"sde-redistribute", "mlir::ModuleOp"> {
   let summary = "Make committed layout-disagreement edges explicit sde.redist";
   let description = [{
-    Realizes the subset of `layoutsDisagree` edges that can be grounded as
-    explicit `sde.redist` structure from committed SDE facts. The currently
+    Consumes each representable `layoutsDisagree` marker into explicit
+    `sde.redist` structure from committed SDE facts. The currently
     representable edge is a cross-owner reduction read: when a consumer reduces a
     committed home's owned axis, the pass emits a `reduce_scatter_like` movement
     over that home block layout (source == target == the committed writer-role
@@ -254,12 +252,11 @@ def SdeRedistribute
     `arrayId` is recovered through the single `assignStableArrayIds` numbering
     shared with `sde-layout-assignment`.
 
-    Other layout disagreements remain broad mismatch evidence until SDE commits
-    enough target-layout structure to realize them directly. This pass
-    introduces no `sde.mu_token`, slice,
-    `sde.mu_dep`, owner map, DB, route, collective, or ARTS isolation concept.
+    Other layout disagreements fail closed in SDE. This pass introduces no
+    `sde.mu_token`, slice,
+    `sde.mu_dep`, runtime ownership route, DB, collective, or ARTS isolation concept.
 
-    Production SDE planning runs this before ARTS conversion so movement edges
+    Production SDE shaping runs this before ARTS conversion so movement edges
     are committed as SDE structure before a downstream layer consumes them.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",

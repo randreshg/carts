@@ -1,7 +1,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,raise-to-mu-access-window,verify-sde-mu-access-window)' 2>&1 | %FileCheck %s
 
-// Stencil: a stencil-classified, single-owner block plan is in scope.
-// The committed plan carries a halo (physicalHaloShape = [2]) but rank expansion does NOT
+// Stencil: a stencil-classified, single-owner block layout is in scope.
+// The committed layout carries a halo (physicalHaloShape = [2]) but rank expansion does NOT
 // grow the tile (halo data lives in neighbouring blocks; halo redistribution is
 // a later transform). So the raised window's in-tile valid extent is the block
 // extent [16, 16] (NOT halo-grown to [20, ...]); growing it would exceed the
@@ -22,6 +22,7 @@ func.func @raise_window_stencil() {
   %A = sde.mu_alloc : memref<128x16xf32>
   sde.su_iterate (%c0) to (%c128) step (%c1) classification(<stencil>) {
   ^bb0(%i: index):
+    sde.array_layout_root write %A : memref<128x16xf32> array_id(0)
     sde.cu_region <single> {
       scf.for %j = %c0 to %c16 step %c1 {
         %v = memref.load %B[%i, %j] : memref<128x16xf32>
@@ -29,6 +30,6 @@ func.func @raise_window_stencil() {
     }
       sde.yield
     }
-  } {physicalOwnerDims = [0], physicalBlockShape = [16, 16], physicalHaloShape = [2]}
+  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [16, 16], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0], role = "write"}], physicalOwnerDims = [0], physicalBlockShape = [16, 16], physicalHaloShape = [2]}
   return
 }

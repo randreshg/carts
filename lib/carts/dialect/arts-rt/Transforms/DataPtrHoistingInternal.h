@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: DataPtrHoistingInternal.h
 ///
-/// Local implementation contract for DataPtrHoisting. This header is
+/// Local implementation boundary for DataPtrHoisting. This header is
 /// intentionally private to the data-ptr-hoisting implementation split and
 /// should not be used as shared compiler infrastructure.
 ///==========================================================================///
@@ -145,7 +145,7 @@ findBlockedNeighborCacheHoistLoop(scf::ForOp loop, int varyingIndex,
                                   ArrayRef<Value> indices,
                                   const BlockedNeighborCarryPattern &pattern);
 
-bool materializeBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop);
+bool createBlockedNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop);
 
 /// Cache the current blocked dep-family pointer inside a monotone unit-step
 /// loop and only reload it when the computed family index changes.
@@ -171,7 +171,7 @@ bool matchSingleBlockBlockedDepIndex(Value value, scf::ForOp loop,
 
 Value stripInvariantZeroFallback(Value value, scf::ForOp loop);
 
-bool materializeSingleBlockBlockedDepView(LLVM::LoadOp loadOp, scf::ForOp loop);
+bool createSingleBlockBlockedDepView(LLVM::LoadOp loadOp, scf::ForOp loop);
 
 bool versionSingleBlockUniformDepLoops(scf::ForOp loop);
 
@@ -213,7 +213,7 @@ int rewriteLoopWindowSegment(scf::ForOp loop, BoundaryLoopRegion region);
 
 bool versionLoopWindowAccesses(scf::ForOp loop, int &rewrittenAccesses);
 
-bool materializeNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop);
+bool createNeighborPtrCache(LLVM::LoadOp loadOp, scf::ForOp loop);
 
 /// Find the highest loop that can legally hoist a pure, operand-only op.
 scf::ForOp findInvariantOpHoistTarget(Operation *op, DominanceInfo &domInfo);

@@ -24,6 +24,7 @@
 #define GEN_PASS_DEF_BLOCKCONTRACTIONSPLIT
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
@@ -59,8 +60,8 @@ struct BlockInputDep {
 ///   ownerLoop   : the enclosing owner-block dispatch loop.
 ///   resultDep   : index of the <inout> block result dependency.
 ///   inputDeps   : all block <in> dependencies remapped into each producer.
-///   replicatedDep : index of the coarse replicated-read contraction operand.
-///   replicaAlloc  : matching `perBlockReplicated` all-gather replica.
+///   replicatedDep : index of the full-grid replicated-read contraction
+///   operand. replicaAlloc  : matching `perBlockReplicated` all-gather replica.
 ///   tileExtent    : replica block extent along the contraction dim.
 ///   numTiles      : number of replica blocks.
 struct BlockContractionTarget {
@@ -91,6 +92,30 @@ static DbAcquireOp getDepAcquire(EdtOp edt, unsigned depIndex) {
   return edt.getDependencies()[depIndex].getDefiningOp<DbAcquireOp>();
 }
 
+static bool hasFullSourceGrid(DbAcquireOp acquire) {
+  std::optional<PartitionMode> mode = acquire.getPartitionMode();
+  if (!mode)
+    return false;
+  if (*mode == PartitionMode::coarse)
+    return true;
+  if (*mode != PartitionMode::block)
+    return false;
+
+  DbAllocOp alloc = acquire.getSourcePtr().getDefiningOp<DbAllocOp>();
+  if (!alloc || acquire.getOffsets().size() != alloc.getSizes().size() ||
+      acquire.getSizes().size() != alloc.getSizes().size())
+    return false;
+  for (auto [offset, size, allocSize] : llvm::zip_equal(
+           acquire.getOffsets(), acquire.getSizes(), alloc.getSizes())) {
+    if (!ValueAnalysis::isZeroConstant(offset))
+      return false;
+    if (!ValueAnalysis::sameValue(size, allocSize) &&
+        !ValueAnalysis::areValuesEquivalent(size, allocSize))
+      return false;
+  }
+  return true;
+}
+
 /// Block-mode <in>/<out> acquire of `alloc` at outer index `offset` (size 1),
 /// emitted OUTSIDE any EDT so the resulting ptr can be a block-arg dep. ARTS-RT
 /// ABI requires every DB an EDT touches to arrive this way.
@@ -116,6 +141,26 @@ static DbAcquireOp emitSingleBlockAcquire(OpBuilder &builder, Location loc,
                                           Value offset, Value size) {
   return emitBlockAcquire(builder, loc, alloc, mode, SmallVector<Value>{offset},
                           SmallVector<Value>{size});
+}
+
+static std::optional<int64_t> inferSingleOwnerBlockExtent(DbAllocOp alloc) {
+  if (!alloc)
+    return std::nullopt;
+
+  if (std::optional<DbOwnerRouteFacts> facts =
+          deriveDbOwnerRouteFactsFromDbGrid(alloc))
+    if (facts->dims.size() == 1 && facts->blockShape.size() == 1 &&
+        facts->blockShape.front() > 0)
+      return facts->blockShape.front();
+
+  if (std::optional<ArtsDbPhysicalLayout> layout =
+          readArtsDbPhysicalLayout(alloc))
+    if (layout->ownerDims.size() == 1 &&
+        layout->physicalBlockShape.size() == 1 &&
+        layout->physicalBlockShape.front() > 0)
+      return layout->physicalBlockShape.front();
+
+  return std::nullopt;
 }
 
 /// The db_ref payload (rank-N memref view) of an EDT body's `depIndex` block
@@ -203,12 +248,12 @@ static bool allGatherWritesReplicaFromSource(EdtOp copyEdt, DbAllocOp replica,
 }
 
 /// Find the unique `perBlockReplicated` replica written by a per-block
-/// all-gather from the same source DB as the coarse replicated-read dep.
+/// all-gather from the same source DB as the full-grid replicated-read dep.
 static DbAllocOp findMatchingReplica(ModuleOp module,
-                                     DbAllocOp coarseReplicaSourceAlloc) {
-  if (!module || !coarseReplicaSourceAlloc)
+                                     DbAllocOp replicaSourceAlloc) {
+  if (!module || !replicaSourceAlloc)
     return {};
-  int64_t wholeProd = getFlattenedElementCount(coarseReplicaSourceAlloc);
+  int64_t wholeProd = getFlattenedElementCount(replicaSourceAlloc);
   if (wholeProd <= 0)
     return {};
 
@@ -218,7 +263,7 @@ static DbAllocOp findMatchingReplica(ModuleOp module,
     if (!alloc.getPerBlockReplicatedAttr())
       return;
     if (alloc.getElementSizes().size() !=
-            coarseReplicaSourceAlloc.getElementSizes().size() ||
+            replicaSourceAlloc.getElementSizes().size() ||
         alloc.getSizes().size() != 1)
       return;
     int64_t blockProd = getFlattenedElementCount(alloc);
@@ -234,8 +279,8 @@ static DbAllocOp findMatchingReplica(ModuleOp module,
     module.walk([&](EdtOp edt) {
       if (graphMatched)
         return;
-      graphMatched = allGatherWritesReplicaFromSource(edt, alloc,
-                                                      coarseReplicaSourceAlloc);
+      graphMatched =
+          allGatherWritesReplicaFromSource(edt, alloc, replicaSourceAlloc);
     });
     if (!graphMatched)
       return;
@@ -323,6 +368,37 @@ findReplicatedContractionAccesses(EdtOp consumerEdt, unsigned replicatedDep,
   return success();
 }
 
+static bool hasSingleReductionDimMarker(ArrayRef<int64_t> map) {
+  return llvm::count(map, -1) == 1;
+}
+
+static bool requiresBlockContractionSplit(EdtOp edt) {
+  if (!edt.getPartialReductionAttr() || !edt.getPartialReductionDimsAttr() ||
+      !edt.getPartialReductionDepResultDimMapsAttr())
+    return false;
+  auto strategy = edt.getReductionStrategyAttr();
+  if (!strategy ||
+      strategy.getValue() != ArtsReductionStrategy::local_accumulate)
+    return false;
+  ModuleOp module = edt->getParentOfType<ModuleOp>();
+  if (!module || !hasArtsInterNodeRuntime(module))
+    return false;
+
+  ArrayAttr depMaps = edt.getPartialReductionDepResultDimMapsAttr();
+  if (depMaps.size() != edt.getDependencies().size())
+    return false;
+  for (auto [idx, dep] : llvm::enumerate(edt.getDependencies())) {
+    DbAcquireOp acq = dep.getDefiningOp<DbAcquireOp>();
+    if (!acq || !acq.getReplicatedReadAttr() || !hasFullSourceGrid(acq))
+      continue;
+    std::optional<SmallVector<int64_t, 4>> depMap =
+        readI64ArrayAttr(dyn_cast<ArrayAttr>(depMaps[idx]));
+    if (depMap && hasSingleReductionDimMarker(*depMap))
+      return true;
+  }
+  return false;
+}
+
 /// Identify an owner-block contraction EDT eligible for contraction split.
 static std::optional<BlockContractionTarget> matchTarget(EdtOp edt) {
   if (!edt.getPartialReductionAttr() || !edt.getPartialReductionDimsAttr() ||
@@ -366,11 +442,7 @@ static std::optional<BlockContractionTarget> matchTarget(EdtOp edt) {
         return false;
     return true;
   };
-  auto mapHasSingleReductionDim = [](ArrayRef<int64_t> map) {
-    return llvm::count(map, -1) == 1;
-  };
-
-  // Locate the coarse `replicatedRead` <in> dep + its matching all-gather
+  // Locate the full-grid `replicatedRead` <in> dep + its matching all-gather
   // replica using committed reduction maps and the ARTS all-gather graph.
   std::optional<unsigned> replicatedDep;
   DbAllocOp replicaAlloc;
@@ -378,17 +450,16 @@ static std::optional<BlockContractionTarget> matchTarget(EdtOp edt) {
     DbAcquireOp acq = getDepAcquire(edt, static_cast<unsigned>(idx));
     if (!acq || !acq.getReplicatedReadAttr())
       continue;
-    std::optional<PartitionMode> pm = acq.getPartitionMode();
-    if (!pm || *pm != PartitionMode::coarse)
+    if (!hasFullSourceGrid(acq))
       continue;
-    DbAllocOp coarseAlloc = acq.getSourcePtr().getDefiningOp<DbAllocOp>();
-    DbAllocOp replica = findMatchingReplica(module, coarseAlloc);
+    DbAllocOp sourceAlloc = acq.getSourcePtr().getDefiningOp<DbAllocOp>();
+    DbAllocOp replica = findMatchingReplica(module, sourceAlloc);
     if (!replica)
       continue;
     unsigned depIndex = static_cast<unsigned>(idx);
     std::optional<SmallVector<int64_t, 4>> depMap =
         readDepMap(depMaps, depIndex);
-    if (!depMap || !mapHasSingleReductionDim(*depMap))
+    if (!depMap || !hasSingleReductionDimMarker(*depMap))
       continue;
     if (replicatedDep)
       return std::nullopt; // ambiguous.
@@ -438,17 +509,8 @@ static std::optional<BlockContractionTarget> matchTarget(EdtOp edt) {
 
   // Replica geometry: owner-block extent along the contraction dim + block
   // count.
-  int64_t tileExtent = 0;
-  if (auto ownerDims = getPlanOwnerDimsAttr(replicaAlloc.getOperation()))
-    if (ownerDims.size() == 1)
-      if (auto od = dyn_cast<IntegerAttr>(ownerDims[0])) {
-        unsigned dim = static_cast<unsigned>(od.getInt());
-        if (dim < replicaAlloc.getElementSizes().size())
-          if (std::optional<int64_t> c = ValueAnalysis::tryFoldConstantIndex(
-                  replicaAlloc.getElementSizes()[dim]))
-            tileExtent = *c;
-      }
-  if (tileExtent <= 0)
+  std::optional<int64_t> tileExtent = inferSingleOwnerBlockExtent(replicaAlloc);
+  if (!tileExtent)
     return std::nullopt;
   std::optional<int64_t> numTiles =
       ValueAnalysis::tryFoldConstantIndex(replicaAlloc.getSizes().front());
@@ -465,7 +527,7 @@ static std::optional<BlockContractionTarget> matchTarget(EdtOp edt) {
   t.inputDeps = std::move(inputDeps);
   t.replicatedDep = *replicatedDep;
   t.replicaAlloc = replicaAlloc;
-  t.tileExtent = tileExtent;
+  t.tileExtent = *tileExtent;
   t.numTiles = *numTiles;
   if (failed(findReplicatedContractionAccesses(edt, *replicatedDep, t)))
     return std::nullopt;
@@ -485,11 +547,6 @@ static DbAllocOp createPartialsDb(OpBuilder &builder, Location loc,
       builder, loc, ArtsMode::inout, route, DbAllocType::heap, DbMode::write,
       resultAlloc.getElementType(), SmallVector<Value>{tileCount},
       std::move(innerSizes), PartitionMode::block);
-  if (auto ownerDims = getPlanOwnerDimsAttr(resultAlloc.getOperation()))
-    setPlanOwnerDimsAttr(db.getOperation(), ownerDims);
-  if (auto blockShape =
-          getPlanPhysicalBlockShapeAttr(resultAlloc.getOperation()))
-    setPlanPhysicalBlockShapeAttr(db.getOperation(), blockShape);
   // Replicated-local: every node holds all per-tile partials for its owned
   // block, exactly like the all-gather replica it consumes.
   db.setLocalOnlyAttr(UnitAttr::get(db.getContext()));
@@ -546,14 +603,6 @@ static LogicalResult emitTileProducer(OpBuilder &builder, Location loc,
       launch.route ? launch.route : createCurrentNodeRoute(builder, loc);
   auto producer = EdtOp::create(builder, loc, EdtType::task, launch.concurrency,
                                 route, deps, params);
-  // Carry the committed placement facts so downstream passes treat the producer
-  // like the original owner-block worker.
-  if (auto ownerDims = t.consumerEdt.getPlanOwnerDimsAttr())
-    producer.setPlanOwnerDimsAttr(ownerDims);
-  if (auto blockShape = t.consumerEdt.getPlanPhysicalBlockShapeAttr())
-    producer.setPlanPhysicalBlockShapeAttr(blockShape);
-  if (auto slice = t.consumerEdt.getPlanLogicalWorkerSliceAttr())
-    producer.setPlanLogicalWorkerSliceAttr(slice);
 
   Block &body = producer.getBody().front();
   for (Value dep : deps)
@@ -748,10 +797,25 @@ struct BlockContractionSplitPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
     SmallVector<BlockContractionTarget, 2> targets;
-    module.walk([&](EdtOp edt) {
-      if (std::optional<BlockContractionTarget> t = matchTarget(edt))
-        targets.push_back(*t);
-    });
+    bool hasFailure = false;
+    module.walk(
+        [&](EdtOp edt) {
+          if (std::optional<BlockContractionTarget> t = matchTarget(edt)) {
+            targets.push_back(*t);
+            return;
+          }
+          if (requiresBlockContractionSplit(edt)) {
+            edt.emitOpError()
+                << "has an unsplit full-grid replicated-read contraction "
+                   "dependency; ARTS must create per-tile producers before "
+                   "lowering";
+            hasFailure = true;
+          }
+        });
+    if (hasFailure) {
+      signalPassFailure();
+      return;
+    }
     for (BlockContractionTarget &t : targets)
       if (failed(splitTarget(t))) {
         t.consumerEdt.emitError() << "failed to split block contraction";

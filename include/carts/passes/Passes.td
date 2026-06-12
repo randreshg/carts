@@ -50,19 +50,34 @@ def DbScratchElimination : Pass<"db-scratch-elimination", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::arts::createDbScratchEliminationPass()";
 }
 
-def DbOwnerMapRealization
-    : Pass<"db-owner-map-realization", "mlir::ModuleOp"> {
-  let summary = "Realize ARTS owner-map and memory-placement facts on "
-                "distribution-eligible DB allocations";
+def DbDistributedOwnershipRealization
+    : Pass<"db-distributed-ownership-realization", "mlir::ModuleOp"> {
+  let summary = "Realize ARTS distributed ownership on distribution-eligible DB "
+                "allocations";
   let description = [{
-    Selects host-level DB allocations whose committed SDE owner/block plan
-    can be realized across nodes, marks them `distributed`, and projects the plan
-    into ARTS owner-map and `db_memory_placement` facts. It does not choose a
-    distribution family or recompute block shape.
+    Selects host-level DB allocations whose committed SDE owner/block facts can
+    answer ARTS owner-route queries and marks them `distributed`. It does not
+    choose a distribution family, write route attrs, or change block shape.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect", "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::carts::arts::createDbOwnerMapRealizationPass()";
+  let constructor = "mlir::carts::arts::createDbDistributedOwnershipRealizationPass()";
+}
+
+def DbDistributedRuntimeInit
+    : Pass<"db-distributed-runtime-init", "mlir::ModuleOp"> {
+  let summary = "Build distributed DB runtime init callbacks from ARTS routes";
+  let description = [{
+    Consumes ARTS distributed DB ownership facts after DB handle lowering and
+    emits explicit init callbacks containing ARTS-RT GUID reservation and
+    owner-local DB creation ops. ARTS-RT-to-LLVM only lowers these runtime ops.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect",
+       "::mlir::carts::arts_rt::ArtsRtDialect", "::mlir::memref::MemRefDialect",
+       "::mlir::LLVM::LLVMDialect", "::mlir::arith::ArithDialect",
+       "::mlir::scf::SCFDialect", "::mlir::polygeist::PolygeistDialect"];
+  let constructor = "mlir::carts::arts::createDbDistributedRuntimeInitPass()";
 }
 
 def DbCommitDistributedDeps
@@ -86,8 +101,8 @@ def DbConsolidateStencilHalos
   let summary = "Consolidate DB stencil halo windows";
   let description = [{
     Unifies stencil halo bounds from graph analysis, raw acquire attrs, and
-    lowering contracts into one contract window, then removes redundant raw
-    attrs from the acquire.
+    lowering facts into one explicit window, then removes redundant raw attrs
+    from the acquire.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::carts::arts::ArtsDialect"];
@@ -156,9 +171,9 @@ def BlockContractionSplit
   let summary = "Split owner-block contractions into per-tile producers";
   let description = [{
     Rewrites an owner-block add-contraction consumer marked with reduction facts
-    that reads one contraction operand from a coarse `replicatedRead` copy into
-    per-(owner-block, replica-tile) producer EDTs reading block-native from the
-    `perBlockReplicated` all-gather replica, plus a per-block summing settle
+    that reads one contraction operand from a full-grid `replicatedRead` view
+    into per-(owner-block, replica-tile) producer EDTs reading block-native from
+    the `perBlockReplicated` all-gather replica, plus a per-block summing settle
     that reduces the partials into the settled block with `arith.addf`. Each
     producer and the settle acquire every DB outside the EDT as a block-arg
     dependency, so no EDT body GEPs an outer DB alloc. The trigger is the
@@ -192,12 +207,12 @@ def DistributedLaunchConsistency
 }
 
 def SdeStorageToArtsDb : Pass<"sde-storage-to-arts-db", "mlir::ModuleOp"> {
-  let summary = "Materialize SDE MU storage as ARTS DB-backed memrefs";
+  let summary = "Realize SDE MU storage as ARTS DB-backed memrefs";
   let description = [{
     Consumes committed SDE MU allocation/data facts and creates the corresponding
     ARTS DB-backed memrefs. It also lowers committed SDE access windows into
-    short-lived ARTS DB access-plan operations so later passes can create
-    acquires without re-inferring dependency shape. It fails closed when SDE
+    short-lived ARTS DB access-window operations so later passes can create
+    acquires from explicit windows. It fails closed when SDE
     movement facts are not representable as direct ARTS storage facts.
   }];
   let dependentDialects =
@@ -210,12 +225,11 @@ def SdeStorageToArtsDb : Pass<"sde-storage-to-arts-db", "mlir::ModuleOp"> {
 
 def SdeAccessesToArtsDeps
     : Pass<"sde-accesses-to-arts-deps", "mlir::ModuleOp"> {
-  let summary = "Materialize SDE scheduling/access facts as ARTS dependencies";
+  let summary = "Realize SDE scheduling/access facts as ARTS dependencies";
   let description = [{
-    Consumes SDE scheduling facts plus ARTS DB access-plan operations and creates
-    ARTS `db_acquire` and `edt` objects. The pass preserves committed SDE
-    owner/block/window facts and rejects missing dependency structure instead of
-    falling back to raw memref inference.
+    Consumes SDE scheduling facts plus ARTS DB access-window operations and
+    creates ARTS `db_acquire` and `edt` objects. The pass preserves committed
+    SDE owner/block/window facts and rejects missing dependency structure.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
@@ -229,7 +243,7 @@ def FinalizeSdeToArts : Pass<"finalize-sde-to-arts", "mlir::ModuleOp"> {
   let summary = "Finalize direct SDE-to-ARTS control cleanup";
   let description = [{
     Lowers remaining SDE resource/control wrappers after DB and dependency
-    materialization, then rejects any residual SDE or boundary access-plan
+    realization, then rejects any residual SDE or boundary access-window
     operations. It is the final pass in the direct SDE-to-ARTS boundary.
   }];
   let dependentDialects =
@@ -246,7 +260,7 @@ def VerifyArtsCdag : Pass<"verify-arts-cdag", "mlir::ModuleOp"> {
     Fail-closed verification at the ARTS/ARTS-RT boundary:
     - no EDT mixes incompatible DB dep grains;
     - every distributed `arts.db_acquire` carries a committed runtime DB mode;
-    - distributed DB owner-map / placement facts are consistent;
+    - distributed DB owner routes are derivable and placement is consistent;
     - no internode EDT depends on a coarse aggregate user DB;
     - SDE-partitioned MUs are preserved (not coarsened or localized);
     - single-writer-multiple-reader holds per distributed DB block grain;
@@ -267,18 +281,17 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::arts::createCreateDbsPass()";
 }
 
-def RealizeEdtDistributionPlan
-    : Pass<"realize-edt-distribution-plan", "mlir::ModuleOp"> {
-  let summary = "Author the EDT distribution plan from committed facts";
+def RealizeEdtDistribution
+    : Pass<"realize-edt-distribution", "mlir::ModuleOp"> {
+  let summary = "Realize EDT distribution facts";
   let description = [{
     Reads the committed dep pattern and access-window facts forwarded onto each
-    `arts.edt` and authors the distribution realization plan: the distribution
-    family, the distribution version, and the block-halo capability marker. It
-    consumes already-committed facts to author ARTS structure and does not
-    classify movement or select a distribution family from source patterns.
+    `arts.edt` and writes the distribution family, version, and block-halo
+    capability marker. It consumes already-committed facts and does not classify
+    movement or select a distribution family from source patterns.
   }];
   let dependentDialects = ["::mlir::carts::arts::ArtsDialect"];
-  let constructor = "mlir::carts::arts::createRealizeEdtDistributionPlanPass()";
+  let constructor = "mlir::carts::arts::createRealizeEdtDistributionPass()";
 }
 
 def EdtAllocaSinking : Pass<"edt-alloca-sinking", "mlir::ModuleOp"> {
@@ -339,7 +352,7 @@ def EpochAmortizeRepeatedLoop
   let description = [{
     Hoists a repeated epoch out of a timestep loop and wraps its EDT bodies in
     repeat loops. This is a narrow ARTS realization of the committed SDE
-    full_timestep repetition plan; it does not re-derive cross-timestep
+    full_timestep repetition facts; it does not re-derive cross-timestep
     legality or perform general epoch optimization.
   }];
   let dependentDialects =
@@ -394,7 +407,7 @@ def Hoisting : Pass<"arts-hoisting", "mlir::ModuleOp"> {
 def VerifyArtsObjectsOnly : Pass<"verify-arts-objects-only", "mlir::ModuleOp"> {
   let summary = "Verify the SDE-to-ARTS boundary contains only ARTS objects";
   let description = [{
-    Rejects IR that violates the target dialect layering contract: no residual
+    Rejects IR that violates the target dialect layering invariant: no residual
     SDE, ARTS, or OpenMP operations may remain after SDE-to-ARTS conversion.
   }];
   let dependentDialects = [

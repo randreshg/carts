@@ -9,8 +9,8 @@ For execution order, use [`pipeline.md`](./pipeline.md) and
 For per-dialect analysis and optimization ownership, see
 [`dialects/`](./dialects/).
 
-Planning notes and experiment records live under `.carts/sessions/...`; they
-are not part of the durable docs tree.
+Scratch investigation records live under `.carts/sessions/...`; they are not
+part of the durable docs tree.
 
 ## One-Line Rule
 
@@ -31,7 +31,8 @@ The names are part of the layering rule:
 
 - `sde` is a CARTS semantic-decomposition dialect. It is not an ARTS dialect.
 - `arts` is the abstract ARTS dialect. It owns the first isolation boundary,
-  explicit deps/params, DB/EDT/epoch objects, owner maps, and grouped execution.
+  explicit deps/params, DB/EDT/epoch objects, distributed ownership, and grouped
+  execution.
 - `arts-rt` is the runtime-facing ARTS bridge. It replaces the documentation
   term "RT"; the textual dialect uses `arts_rt` where MLIR syntax requires an
   underscore.
@@ -50,8 +51,8 @@ compiler stack minimal and shaped around the boundaries below.
 
 SDE owns OpenMP semantics, structured program analysis, memref access facts,
 scheduling-unit structure, approved `sde.pattern` facts, reductions, barrier
-legality, and the memory-unit plan that makes compute units address the
-right data slices.
+legality, and the memory-unit transformations that make compute units address
+the right data slices.
 
 SDE may contain:
 
@@ -63,16 +64,16 @@ SDE may contain:
   shape facts, and source-level synchronization intent.
 - `resource_query <logical_workers>`: target-neutral logical execution
   capacity for symbolic grain arithmetic.
-- Logical work-plan attrs for pattern classification, chunks, access windows,
+- Structured work facts for pattern classification, chunks, access windows,
   reductions, orchestration groups, and diagnostics.
 
 SDE must not contain ARTS-machine concepts: node count, workers per node,
 routes, current node/worker, ARTS runtime topology queries, depv layout, DB
 pointer layout, concrete EDT placement, or runtime API decisions.
 
-SDE also should not own the final EDT ABI. SDE authors the MU/CU/SU shape, then
-SDE-to-ARTS realization creates isolated ARTS tasks and object facts from
-that shape.
+SDE also should not own the final EDT ABI. SDE authors the MU/CU/SU shape; the
+SDE-to-ARTS boundary creates isolated ARTS tasks and object facts from that
+shape.
 
 The names are intentional:
 
@@ -99,7 +100,7 @@ ARTS owns:
 - token-local memref views and body rewrites derived from the SDE MU/CU/SU
   shape;
 - verification that ARTS tasks do not close over values from enclosing regions;
-- runtime-independent DB, EDT, dependency, epoch, placement, mode, and owner-map
+- runtime-independent DB, EDT, dependency, epoch, placement, mode, and owner-route
   object facts;
 - ARTS-local canonicalization that is independent of the runtime ABI.
 
@@ -109,13 +110,13 @@ ARTS may contain operations such as:
   task bodies.
 - `arts.db_*`: DB allocation, acquire, release, ref, mode, layout, and access
   windows.
-- `arts.db_access_plan`: direct SDE boundary carrier for committed MU storage
+- `arts.db_access_window`: direct SDE boundary carrier for committed MU storage
   and access-window facts before acquires are finalized.
 - `arts.epoch_*`: abstract epoch grouping, waits, continuation, and CPS shape.
 - typed ARTS facts on EDTs, DBs, and epochs while those facts are being
   realized or checked.
-- ARTS topology and placement queries selected after SDE has provided a
-  logical work plan.
+- ARTS topology and placement queries selected after SDE has provided logical
+  work shape.
 - local `scf.for` control flow used to implement dispatch or task-local loops.
 
 The exact op set can evolve. The invariant is not: every value used by an ARTS
@@ -177,8 +178,8 @@ boundaries. ARTS is the verifier-enforced staging point that makes this true.
 
 The live implementation uses the direct SDE-to-ARTS spine. The canonical
 `sde-planning` stage performs OpenMP-to-SDE conversion and SDE-owned transforms,
-then `sde-to-arts` mechanically realizes committed SDE storage, access, and
-scheduling facts as ARTS objects:
+then `sde-to-arts` mechanically converts committed SDE storage, access, and
+scheduling facts into ARTS objects:
 
 ```text
 ConvertOpenMPToSde
@@ -189,7 +190,7 @@ RaiseToMuAccessWindow
 SdeStorageToArtsDb
 SdeAccessesToArtsDeps
 FinalizeSdeToArts
-RealizeEdtDistributionPlan
+RealizeEdtDistribution
 VerifySdeLowered
 VerifyArtsObjectsOnly
 ```
@@ -197,7 +198,7 @@ VerifyArtsObjectsOnly
 The current boundary has one EDT-producing path:
 
 1. SDE MU storage and access windows become `arts.db_alloc`,
-   `arts.db_access_plan`, and `arts.db_acquire`.
+   `arts.db_access_window`, and `arts.db_acquire`.
 2. SDE CU/SU scheduling structure becomes isolated `arts.edt` bodies with
    explicit deps and params.
 3. Remaining SDE work is invalid after `sde-to-arts`; `VerifySdeLowered` and
@@ -218,14 +219,14 @@ The production target is the direct SDE/ARTS path:
 sde
   mu_data / mu_alloc    data root and storage intent
   mu_token              mode + memref slice
-  cu_region             planned compute body
+  cu_region             compute body
   su_iterate            task topology
         |
         | SdeStorageToArtsDb / SdeAccessesToArtsDeps / FinalizeSdeToArts
         v
 arts
   arts.db_alloc         created from MU storage
-  arts.db_access_plan   committed storage and access-window facts
+  arts.db_access_window committed storage and access-window facts
   arts.db_acquire       created from SDE access windows
   arts.edt              isolated task body with explicit deps/params
   arts.epoch_*          abstract frontier/continuation shape
@@ -254,7 +255,7 @@ Tiling is not valid unless the MU, CU, and SU all agree.
 A blocked or sliced MU is not a drop-in replacement for the original whole
 memref. A local payload view uses coordinates relative to the slice, while the
 source program's memref indices are usually global element coordinates.
-Therefore SDE planning and SDE-to-ARTS realization must do all pieces
+Therefore SDE transforms and the SDE-to-ARTS boundary must do all pieces
 together:
 
 - choose the CU/SU tile and task schedule;
@@ -270,24 +271,24 @@ token-local ARTS codelet form, then direct ARTS DB/acquire/EDT lowering.
 
 ## Work Shape Rule
 
-The SDE plan on a work unit should include:
+The SDE work shape on a unit should include:
 
 - work family: elementwise, stencil, matmul, reduction, wavefront, Jacobi, or
   explicit unsupported diagnostic;
-- logical worker capacity or requested logical lanes, expressed as SDE plan
-  attrs or `sde.resource_query <logical_workers>`;
+- logical worker capacity or requested logical lanes, expressed as SDE facts or
+  `sde.resource_query <logical_workers>`;
 - iteration domain: rank, bounds, steps, owner dims, spatial dims, and local
   task-loop shape;
 - schedule: source intent and selected logical chunking;
-- access plan: per-root read/write mode, offsets, sizes, halo offsets, write
+- access facts: per-root read/write mode, offsets, sizes, halo offsets, write
   footprint, owner dims, disjointness proof, and self-read status;
-- physical data plan: memory roots, MU token slices, block shape, halo shape,
+- physical data facts: memory roots, MU token slices, block shape, halo shape,
   layout request, and root data value;
-- reduction plan: accumulator, kind, identity, strategy, partial storage
+- reduction facts: accumulator, kind, identity, strategy, partial storage
   request, and final exposure;
-- orchestration plan: barrier status, timestep/wave group, repetition
+- orchestration facts: barrier status, timestep/wave group, repetition
   structure, and async strategy;
-- codelet boundary plan: deps, params, token-local views, local values, yielded
+- codelet boundary facts: deps, params, token-local views, local values, yielded
   results, and diagnostic reason if no codelet can be formed.
 
 The capture rule is explicit:

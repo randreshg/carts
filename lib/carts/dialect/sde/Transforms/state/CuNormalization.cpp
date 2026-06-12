@@ -9,7 +9,7 @@
 /// `verify-sde`) holds for non-OpenMP host code too: init loops, scalar
 /// check/verification code, sequential reductions, and scalar-effect work that
 /// `ConvertOpenMPToSde` / `Parallelize` did not already place in a CU. Local
-/// SU/CU region legality is owned by the SDE operation contracts and op
+/// SU/CU region legality is owned by the SDE op definitions and op
 /// verifiers. `sde.su_iterate` bodies are normalized strictly: tile-local loops
 /// and scalar plumbing are moved into the CU they schedule, leaving the SU to
 /// contain leaf CUs, barriers, provenance, and its terminator.
@@ -17,8 +17,8 @@
 /// wrapper can only contain nested SUs, `sde.redist`, or barriers.
 ///
 /// This is a STRUCTURAL transformation only. It:
-///   * reads current IR and moves existing ops into a CU container — it stamps
-///     no metadata and branches on no downstream contract;
+///   * reads current IR and moves existing ops into a CU container — it writes
+///     no metadata and branches on no downstream promise;
 ///   * requires no CU isolation, no MU token, and no slice, and it introduces
 ///     none;
 ///   * introduces no ARTS concept and no codelet isolation (`cu_region` is not
@@ -113,7 +113,7 @@ static void wrapSpanInCuRegion(Operation *first, Operation *last,
       /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
   Block &body = ensureBlock(cuRegion.getBody());
   // Block::getOperations().splice uses the standard half-open [first, last)
-  // contract, so advance past `last` to include it.
+  // convention, so advance past `last` to include it.
   body.getOperations().splice(body.end(), block->getOperations(),
                               first->getIterator(),
                               std::next(last->getIterator()));

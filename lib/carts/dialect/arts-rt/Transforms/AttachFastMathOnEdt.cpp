@@ -1,7 +1,7 @@
 ///==========================================================================///
 /// File: AttachFastMathOnEdt.cpp
 ///
-/// Walks every `llvm.func` whose symbol starts with `__arts_edt_` and stamps
+/// Walks every `llvm.func` whose symbol starts with `__arts_edt_` and attaches
 /// `fastmath<reassoc,contract>` on contained `llvm.fmul`, `llvm.fadd`,
 /// `llvm.fsub`, `llvm.fdiv`, `llvm.fneg`, `llvm.frem` ops that do not already
 /// carry a non-`none` `fastmathFlags` attribute. `reassoc` lets the LLVM
@@ -44,7 +44,7 @@ struct AttachFastMathOnEdtPass
     auto fastAttr = LLVM::FastmathFlagsAttr::get(
         ctx, LLVM::FastmathFlags::reassoc | LLVM::FastmathFlags::contract);
 
-    int totalStamped = 0;
+    int totalAttached = 0;
     int totalSkippedExisting = 0;
 
     module.walk([&](LLVM::LLVMFuncOp funcOp) {
@@ -53,7 +53,7 @@ struct AttachFastMathOnEdtPass
       if (!funcOp.getName().starts_with("__arts_edt_"))
         return;
 
-      int stampedInFunc = 0;
+      int attachedInFunc = 0;
       int skippedInFunc = 0;
 
       funcOp.walk([&](Operation *op) {
@@ -77,21 +77,21 @@ struct AttachFastMathOnEdtPass
             .Case<LLVM::FMulOp, LLVM::FAddOp, LLVM::FSubOp, LLVM::FDivOp,
                   LLVM::FNegOp, LLVM::FRemOp>(
                 [&](auto fpOp) { fpOp.setFastmathFlagsAttr(fastAttr); });
-        stampedInFunc++;
+        attachedInFunc++;
       });
 
-      if (stampedInFunc > 0 || skippedInFunc > 0) {
-        ARTS_INFO("Stamped fastmath<reassoc,contract> on "
-                  << stampedInFunc << " FP op(s) in " << funcOp.getName()
+      if (attachedInFunc > 0 || skippedInFunc > 0) {
+        ARTS_INFO("Attached fastmath<reassoc,contract> to "
+                  << attachedInFunc << " FP op(s) in " << funcOp.getName()
                   << " (skipped " << skippedInFunc
                   << " op(s) already carrying fastmath)");
-        totalStamped += stampedInFunc;
+        totalAttached += attachedInFunc;
         totalSkippedExisting += skippedInFunc;
       }
     });
 
-    ARTS_INFO("Total: stamped fastmath<reassoc,contract> on "
-              << totalStamped << " FP op(s); skipped " << totalSkippedExisting
+    ARTS_INFO("Total: attached fastmath<reassoc,contract> to "
+              << totalAttached << " FP op(s); skipped " << totalSkippedExisting
               << " op(s) already carrying fastmath");
     ARTS_INFO_FOOTER(AttachFastMathOnEdtPass);
 

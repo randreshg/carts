@@ -5,7 +5,7 @@ description: Use when creating, regenerating, validating, or hardening CARTS pro
 
 # CARTS Skill Maintenance
 
-Skills are process contracts. Descriptions should say when to load a skill, not
+Skills are process instructions. Descriptions should say when to load a skill, not
 summarize the whole workflow.
 
 ## Procedure To Add A New Skill

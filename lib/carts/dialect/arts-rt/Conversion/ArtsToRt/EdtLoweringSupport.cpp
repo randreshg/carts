@@ -56,7 +56,7 @@ void normalizeTaskDepSlice(ArtsCodegen *AC, DbAcquireOp acquire,
   /// range must keep that full-range facts through pre-lowering. Their
   /// partition_* hints still describe the worker-local element slice, but
   /// reinterpreting those hints as the authoritative DB window narrows
-  /// correctness-preserving full-range fallbacks back to one block.
+  /// correctness-preserving full-range facts back to one block.
   if (shouldPreserveParentDepRange(facts, acquire) &&
       !acquire.getOffsets().empty() && !acquire.getSizes().empty())
     return;

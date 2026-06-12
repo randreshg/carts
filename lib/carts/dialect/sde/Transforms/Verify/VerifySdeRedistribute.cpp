@@ -1,24 +1,19 @@
 ///==========================================================================///
 /// File: VerifySdeRedistribute.cpp
 ///
-/// Gate for SDE redistribution realization.
+/// Gate for completed SDE redistribution structure.
 ///
-/// Using the same committed-edge analysis `sde-redistribute` emits from
-/// (`collectRedistributionEdges`), this verifier keeps a committed
-/// redistribution edge from being dropped or invented:
-///
-///   * COMPLETENESS — every representable committed edge is represented by a
-///     matching `sde.redist` op.
-///   * GROUNDING — every `sde.redist` op matches some committed edge, so no
-///     endpoint or family is invented.
-///
-/// It reads committed facts verbatim and never recomputes owner dims, block
-/// shape, or family.
+/// `sde-redistribute` must consume temporary layout-disagreement markers into
+/// explicit `sde.redist` operations. This verifier rejects residual markers and
+/// validates the local geometry carried by each `sde.redist`.
 ///==========================================================================///
 
+#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/RedistributionEdges.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_VERIFYSDEREDISTRIBUTE
@@ -26,62 +21,221 @@ namespace mlir::carts::sde {
 } // namespace mlir::carts::sde
 
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Pass/Pass.h"
+
+#include <string>
 
 using namespace mlir;
 using namespace mlir::carts;
 
 namespace {
 
+static bool hasNegative(ArrayRef<int64_t> values) {
+  return llvm::any_of(values, [](int64_t value) { return value < 0; });
+}
+
+static bool hasNonPositive(ArrayRef<int64_t> values) {
+  return llvm::any_of(values, [](int64_t value) { return value <= 0; });
+}
+
+static bool ownerDimsFitRank(ArrayRef<int64_t> ownerDims, unsigned rank) {
+  return llvm::all_of(ownerDims, [&](int64_t dim) {
+    return dim >= 0 && static_cast<unsigned>(dim) < rank;
+  });
+}
+
+static bool blockShapeFitsType(ArrayRef<int64_t> blockShape,
+                               MemRefType memrefType) {
+  if (blockShape.size() != static_cast<size_t>(memrefType.getRank()) ||
+      hasNonPositive(blockShape))
+    return false;
+  if (!memrefType.hasStaticShape())
+    return true;
+  ArrayRef<int64_t> shape = memrefType.getShape();
+  for (auto [extent, dimExtent] : llvm::zip_equal(blockShape, shape))
+    if (ShapedType::isStatic(dimExtent) && extent > dimExtent)
+      return false;
+  return true;
+}
+
+static LogicalResult verifyRedistGeometry(sde::SdeRedistOp redist) {
+  bool failed = false;
+  auto fail = [&](StringRef message) {
+    redist.emitOpError() << "verify-sde-redistribute: " << message;
+    failed = true;
+  };
+
+  if (!redist.getArrayIdAttr())
+    fail("missing array_id");
+
+  auto memrefType = dyn_cast<MemRefType>(redist.getMu().getType());
+  if (!memrefType) {
+    fail("redistribution root is not a memref");
+    return failure();
+  }
+  unsigned rank = static_cast<unsigned>(memrefType.getRank());
+
+  std::optional<SmallVector<int64_t, 4>> sourceOwnerDims =
+      readI64ArrayAttr(redist.getSourceOwnerDims());
+  std::optional<SmallVector<int64_t, 4>> sourceBlockShape =
+      readI64ArrayAttr(redist.getSourceBlockShape());
+  std::optional<SmallVector<int64_t, 4>> targetOwnerDims =
+      readI64ArrayAttr(redist.getTargetOwnerDims());
+  std::optional<SmallVector<int64_t, 4>> targetBlockShape =
+      readI64ArrayAttr(redist.getTargetBlockShape());
+  if (!sourceOwnerDims || !targetOwnerDims)
+    fail("owner dimensions are not static i64 arrays");
+  if (!sourceBlockShape || !targetBlockShape)
+    fail("block shapes are not static i64 arrays");
+  if (!sourceOwnerDims || !sourceBlockShape || !targetOwnerDims ||
+      !targetBlockShape)
+    return failure();
+
+  if (!ownerDimsFitRank(*sourceOwnerDims, rank) ||
+      !ownerDimsFitRank(*targetOwnerDims, rank))
+    fail("owner dimensions do not fit the redistribution root rank");
+  if (!blockShapeFitsType(*sourceBlockShape, memrefType) ||
+      !blockShapeFitsType(*targetBlockShape, memrefType))
+    fail("block shape does not fit the redistribution root type");
+
+  std::optional<SmallVector<int64_t, 4>> haloShape;
+  if (redist.getHaloShapeAttr())
+    haloShape = readI64ArrayAttr(redist.getHaloShapeAttr());
+  if (redist.getFamily() == sde::SdeMovementFamily::halo_like) {
+    if (!haloShape) {
+      fail("halo_like movement is missing haloShape");
+    } else if (haloShape->size() != rank || hasNegative(*haloShape)) {
+      fail("haloShape is not a non-negative rank-length i64 array");
+    }
+  } else if (redist.getHaloShapeAttr()) {
+    fail("non-halo movement carries haloShape");
+  }
+
+  return failure(failed);
+}
+
+static bool hasNonZero(ArrayAttr attr) {
+  if (!attr)
+    return false;
+  return llvm::any_of(attr, [](Attribute value) {
+    auto integer = dyn_cast<IntegerAttr>(value);
+    return integer && integer.getInt() != 0;
+  });
+}
+
+static bool consumerHasReadRoot(sde::SdeSuIterateOp consumer,
+                                sde::SdeRedistOp redist) {
+  IntegerAttr arrayId = redist.getArrayIdAttr();
+  if (!arrayId)
+    return false;
+  Value root = carts::ValueAnalysis::stripMemrefViewOps(redist.getMu());
+  for (sde::SdeArrayLayoutRootOp provenance :
+       consumer.getBody().getOps<sde::SdeArrayLayoutRootOp>()) {
+    if (static_cast<int64_t>(provenance.getArrayId()) != arrayId.getInt() ||
+        provenance.getMode() != sde::SdeAccessMode::read)
+      continue;
+    Value consumerRoot =
+        carts::ValueAnalysis::stripMemrefViewOps(provenance.getRoot());
+    if (carts::ValueAnalysis::sameMemrefRoot(root, consumerRoot))
+      return true;
+  }
+  return false;
+}
+
+static std::optional<sde::LayoutGraphFact>
+findConsumerReadFact(sde::SdeSuIterateOp consumer, int64_t arrayId) {
+  if (ArrayAttr layout = consumer.getArrayLayoutAttr())
+    for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout))
+      if (fact.id == arrayId && fact.role == sde::LayoutGraphRole::read)
+        return fact;
+  return std::nullopt;
+}
+
+static sde::SdeSuIterateOp findAnchoredConsumer(sde::SdeRedistOp redist) {
+  for (Operation *next = redist->getNextNode(); next;
+       next = next->getNextNode()) {
+    if (isa<sde::SdeRedistOp, sde::SdeSuBarrierOp>(next))
+      continue;
+    return dyn_cast<sde::SdeSuIterateOp>(next);
+  }
+  return {};
+}
+
+static LogicalResult verifyRedistAnchoredInConsumer(sde::SdeRedistOp redist) {
+  IntegerAttr arrayId = redist.getArrayIdAttr();
+  if (!arrayId)
+    return failure();
+  sde::SdeSuIterateOp consumer = findAnchoredConsumer(redist);
+  if (!consumer)
+    return redist.emitOpError()
+           << "verify-sde-redistribute: sde.redist is not anchored before a "
+              "consumer sde.su_iterate";
+  if (!consumerHasReadRoot(consumer, redist))
+    return redist.emitOpError()
+           << "verify-sde-redistribute: anchored consumer has no matching "
+              "read provenance for this redistribution root";
+
+  std::optional<sde::LayoutGraphFact> readFact =
+      findConsumerReadFact(consumer, arrayId.getInt());
+  if (!readFact)
+    return redist.emitOpError()
+           << "verify-sde-redistribute: anchored consumer has no committed "
+              "read layout for this redistribution array";
+
+  switch (redist.getFamily()) {
+  case sde::SdeMovementFamily::halo_like:
+    if (!consumer.getPhysicalHaloShapeAttr() &&
+        !hasNonZero(consumer.getAccessMinOffsetsAttr()) &&
+        !hasNonZero(consumer.getAccessMaxOffsetsAttr()))
+      return redist.emitOpError()
+             << "verify-sde-redistribute: halo_like movement is not backed by "
+                "consumer halo/access-window facts";
+    return success();
+  case sde::SdeMovementFamily::reduce_scatter_like:
+    if (readFact->layoutKind == sde::ArrayLayoutKind::blockContraction ||
+        consumer.getPartialReductionAttr() ||
+        consumer.getReductionStrategyAttr())
+      return success();
+    return redist.emitOpError()
+           << "verify-sde-redistribute: reduce_scatter_like movement is not "
+              "backed by a contraction/reduction consumer";
+  default:
+    return success();
+  }
+}
+
 struct VerifySdeRedistributePass
     : public sde::impl::VerifySdeRedistributeBase<VerifySdeRedistributePass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    sde::RedistributionEdges committed =
-        sde::collectRedistributionEdges(module);
-    bool failed = false;
+    bool hasFailure = false;
 
-    for (const sde::RedistributionEdgeFailure &failure : committed.failures) {
-      sde::SdeSuIterateOp consumer = failure.consumer;
-      consumer.emitOpError()
-          << "verify-sde-redistribute: redistribution edge for array "
-          << failure.arrayId
-          << " is not representable and was left coarse: " << failure.reason;
-      failed = true;
-    }
-
-    // Completeness for the subset SDE can materialize.
-    for (const sde::RedistributionEdge &edge : committed.edges) {
-      bool represented = false;
-      for (Operation *user : edge.root.getUsers())
-        if (auto redist = dyn_cast<sde::SdeRedistOp>(user))
-          if (sde::redistMatchesEdge(redist, edge)) {
-            represented = true;
-            break;
-          }
-      if (!represented) {
-        sde::SdeSuIterateOp consumer = edge.consumer;
-        consumer.emitOpError()
-            << "verify-sde-redistribute: committed redistribution edge for "
-               "array "
-            << edge.arrayId << " is not represented as sde.redist";
-        failed = true;
+    module.walk([&](sde::SdeSuIterateOp su) {
+      if (su.getLayoutsDisagreeAttr()) {
+        su.emitOpError()
+            << "verify-sde-redistribute: residual layout-disagreement marker; "
+               "sde-redistribute must consume it into sde.redist";
+        hasFailure = true;
       }
-    }
+    });
 
-    // Grounding: every sde.redist must match a committed edge.
-    module.walk(
-        [&](sde::SdeRedistOp redist) {
-          for (const sde::RedistributionEdge &edge : committed.edges)
-            if (sde::redistMatchesEdge(redist, edge))
-              return;
-          redist.emitOpError()
-              << "verify-sde-redistribute: sde.redist is not grounded in a "
-                 "committed layout-disagreement edge";
-          failed = true;
-        });
+    module.walk([&](sde::SdeRedistOp redist) {
+      if (failed(verifyRedistGeometry(redist)))
+        hasFailure = true;
+      std::string reason;
+      if (!sde::redistGroundedInCommittedLayout(redist, reason)) {
+        redist.emitOpError()
+            << "verify-sde-redistribute: sde.redist is not grounded in "
+               "committed SDE layout: "
+            << reason;
+        hasFailure = true;
+      }
+      if (failed(verifyRedistAnchoredInConsumer(redist)))
+        hasFailure = true;
+    });
 
-    if (failed)
+    if (hasFailure)
       signalPassFailure();
   }
 };

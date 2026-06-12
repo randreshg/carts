@@ -60,7 +60,7 @@ Read these before editing invalidation behavior:
 - Do not add a broad manager or graph cache to “fix” a stale-fact symptom.
 - If a pass mutates DB/EDT structure, prove later queries are reading the new IR.
 - Invalidation fixes must preserve committed-fact flow: SDE layout and movement
-  facts, ARTS graph facts, ARTS owner maps/DB/EDT facts, and ARTS-RT
+  facts, ARTS graph facts, ARTS owner routes/DB/EDT facts, and ARTS-RT
   mechanical lowering facts stay in their owning layers.
 
 ## Hand-off

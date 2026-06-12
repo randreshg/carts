@@ -34,7 +34,7 @@ recomputation of SDE facts.
 # Dump IR at DB stages to see realized DB modes
 dekk carts compile <file> --pipeline=post-db-refinement 2>/dev/null | grep 'partition_mode'
 
-# Dump IR after SDE planning/materialization to see distribution strategy
+# Dump IR after SDE planning/realization to see distribution strategy
 dekk carts compile <file> --pipeline=sde-planning 2>/dev/null | grep 'distribution_kind'
 
 # Enable debug output for DB mode/refinement decisions
@@ -54,7 +54,7 @@ points:
 | tiny read-only coefficient | Tiny read-only stencil coefficient | COARSE | Small constant arrays |
 | pointer-of-pointer | Pointer-of-pointer type | COARSE | `memref<memref<T>>` |
 | single-node read-only | Single-node + all read-only | COARSE | Read-only arrays on 1 node |
-| explicit coarse contract | Explicit coarse contract | COARSE | Consumer override |
+| explicit coarse bridge | Explicit coarse bridge | COARSE | Consumer override |
 | no block capability | No block/element capability | COARSE | No partition dims found |
 | indirect reads with block writes | Indirect reads + block writes | BLOCK | Mixed access patterns |
 | uniform direct access | Uniform direct access | BLOCK | Regular array operations |
@@ -63,7 +63,7 @@ points:
 | element-wise stencil | Element-wise stencil | STENCIL | Fine-grained stencil |
 | block-capable stencil | Block-capable stencil | STENCIL | Block stencil with halo |
 | element-wise capable | Element-wise capable | FINE | Per-element partitioning |
-| Residual raw bridge | Unsupported or unproven ownership | COARSE or diagnostic | Coarse only for residual raw memrefs; non-coarse raw layout plans fail at `CreateDbs` |
+| Residual raw bridge | Unsupported or unproven ownership | COARSE or diagnostic | Coarse only for residual raw memrefs; non-coarse raw layouts fail at `CreateDbs` |
 
 ## Distribution Strategy Selection
 
@@ -81,7 +81,7 @@ points:
   committed layout/movement facts, layout mismatch, and runtime topology.
 - SDE owns owner dims and block layout facts; ARTS owns collective/bridge
   family selection from SDE facts; ARTS consumes those facts to realize DBs,
-  EDTs, owner maps, and grouped execution.
+  EDTs, owner routes, and grouped execution.
 - DB/MU partition grain is not the same decision as CU/bridge grouping.
 - Hypergraph evidence guides CU grouping, bridge coalescing, and partition
   quality over committed MU facts. It must not hardcode owner dims, block
@@ -90,12 +90,12 @@ points:
 ## Key Source Files
 
 ```
-include/carts/dialect/arts/Utils/DbLayoutPlanUtils.h — layout plan helpers
+include/carts/dialect/arts/Utils/DbLayoutFactsUtils.h — layout fact helpers
 include/carts/dialect/arts/Utils/DbUtils.h — DB/acquire query helpers
 lib/carts/dialect/arts/Transforms/db/DbModeTightening.cpp — DB mode and acquire-window refinement
-lib/carts/dialect/arts/Transforms/db/DbOwnerMapRealization.cpp — distributed owner-map realization
+lib/carts/dialect/arts/Transforms/db/DbDistributedOwnershipRealization.cpp — distributed ownership realization
 lib/carts/dialect/arts/Transforms/db/CreateDbs.cpp — raw bridge and DB creation
-lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp — SDE-to-ARTS materialization
+lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp — SDE-to-ARTS realization
 ```
 
 ## Instructions

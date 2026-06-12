@@ -3,7 +3,6 @@
 // RUN:   --arts-config %inputs_dir/arts_64t.cfg --pipeline=pre-lowering
 // RUN: %FileCheck %s --implicit-check-not='host_whole' \
 // RUN:   --implicit-check-not='local_only' \
-// RUN:   --implicit-check-not='distributed_reject_reason' \
 // RUN:   --implicit-check-not='arts.db_alloc{{.*}}<coarse>{{.*}}elementType(f64)' \
 // RUN:   --implicit-check-not='byte_sizes({{.*}}%c8192' \
 // RUN:   --implicit-check-not='element_sizes[%c1, %c1, %c32, %c32]{{.*}}haloViewDependency' \

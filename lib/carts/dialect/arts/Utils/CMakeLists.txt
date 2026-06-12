@@ -1,6 +1,6 @@
 add_mlir_dialect_library(MLIRCartsArtsUtils
   DbBackedMemrefUtils.cpp
-  DbLayoutPlanUtils.cpp
+  DbLayoutFactsUtils.cpp
   DbDistributedEligibility.cpp
   DbUtils.cpp
   EdtUtils.cpp

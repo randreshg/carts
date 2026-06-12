@@ -45,7 +45,7 @@ The project is organized around three dialect layers:
   token-local memref views, graph optimizations, mechanical representation of
   SDE-authored movement structure, abstract DB, EDT, epoch, dependency-slot,
   placement, distributed ownership, per-block single-writer DB realization,
-  owner maps, and grouped compute/bridge/communication CUs.
+  owner routes, and grouped compute/bridge/communication CUs.
 - `arts_rt`: runtime ABI, packing, pointer lowering, runtime calls, and
   LLVM-facing cleanup. It mechanically lowers ARTS facts and does not infer
   scheduling, ownership, partition, or collective policy.
@@ -67,7 +67,7 @@ tools/compile/Compile.cpp
   `op.getStencilMinOffsetsAttrName()` or the owning dialect utility API.
 - Do real transformations in the owning layer. SDE commits layout/source and
   movement facts, ARTS represents them as graph structure, realizes DB/EDT
-  owner maps and grouped execution, and ARTS-RT lowers mechanically.
+  owner routes and grouped execution, and ARTS-RT lowers mechanically.
   Downstream consumes, verifies, realizes, or rejects committed facts; it does
   not silently recompute them.
 - Keep DB/MU grain separate from CU/bridge grain. Use the hypergraph only as
@@ -100,7 +100,7 @@ Match verification to the change:
 | `carts-commit` | Use when staging CARTS changes, choosing a commit message scope, committing, pushing, or handing a patch to review. | `carts-plugin/skills/carts-commit/SKILL.md` |
 | `carts-review` | Use before committing CARTS changes, during PR review, after substantial compiler/runtime edits, or when checking conventions, missing tests, fixture refreshes, or regression risk. | `carts-plugin/skills/carts-review/SKILL.md` |
 | `carts-simplify` | Use as the final simplification gate before committing or finishing CARTS work: reduce patch complexity, remove accidental changes, confirm utility-placement decisions already made by carts-check-utils, and enforce .carts artifact discipline. | `carts-plugin/skills/carts-simplify/SKILL.md` |
-| `carts-finishing` | Use when advancing, continuing, or finishing CARTS work; choosing the next fix; asking where a fix belongs; applying regression guards; or referencing the carts-finishing plan. | `carts-plugin/skills/carts-finishing/SKILL.md` |
+| `carts-finishing` | Use when advancing or finishing active CARTS compiler/runtime work, choosing the next fix, applying regression guards, or deciding where a fix belongs. | `carts-plugin/skills/carts-finishing/SKILL.md` |
 
 ### Discovery + placement
 
@@ -122,7 +122,6 @@ Match verification to the change:
 | `carts-cli` | Use when asking about CARTS commands, environment setup, wrappers, compile flags, pipeline inspection, examples, benchmarks, generated skills, or how to run project lifecycle tasks. | `carts-plugin/skills/carts-cli/SKILL.md` |
 | `test` | Use when the user asks to test, run tests, validate, check, verify changes, run lit, or run a focused CARTS suite. | `carts-plugin/skills/test/SKILL.md` |
 | `create-test` | Use when adding a new lit test, creating regression tests, writing multi-stage boundary tests, or choosing CARTS test placement and RUN lines. | `carts-plugin/skills/create-test/SKILL.md` |
-| `contract-refresh` | Use when contract tests fail due to legitimate IR changes, after refactoring passes, or when git status shows stale Output/ fixtures. | `carts-plugin/skills/contract-refresh/SKILL.md` |
 | `carts-local-examples` | Use when listing, running, fixing, sweeping, or validating CARTS local sample programs, examples runner behavior, or e2e compile-and-run tests. | `carts-plugin/skills/carts-local-examples/SKILL.md` |
 | `carts-multinode-examples` | Use when the user asks how to compile or run CARTS examples on multiple nodes, including ARTS configs, launchers, SSH, or Slurm. Use carts-distributed-triage for failures. | `carts-plugin/skills/carts-multinode-examples/SKILL.md` |
 | `benchmark` | Use when the user asks to list, build, run, or compare CARTS benchmarks. Use carts-benchmark-triage for failing, timing out, or suspicious benchmark results. | `carts-plugin/skills/benchmark/SKILL.md` |
@@ -135,13 +134,13 @@ Match verification to the change:
 | `analysis-triage` | Use when behavior depends on pass order, stale facts, or metadata inconsistency across staged CARTS pipelines. | `carts-plugin/skills/analysis-triage/SKILL.md` |
 | `miscompile-triage` | Use when a program compiles but produces wrong output, checksum mismatches, phase-equivalence failures, or suspicious partitioning/distribution decisions. | `carts-plugin/skills/miscompile-triage/SKILL.md` |
 | `runtime-triage` | Use when compilation succeeds but the generated ARTS executable hangs, deadlocks, crashes, stalls, or reports anomalous runtime counters. | `carts-plugin/skills/runtime-triage/SKILL.md` |
-| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work materialization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
+| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work realization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
 | `benchmark-triage` | Use when a benchmark fails, times out, produces wrong checksums, shows suspicious speedups, or needs pass-by-pass/runtime diagnosis. | `carts-plugin/skills/benchmark-triage/SKILL.md` |
 | `heuristic-explain` | Use when a benchmark or test has unexpected partitioning, wrong distribution mode, or heuristic drift in ARTS DB/EDT placement decisions. | `carts-plugin/skills/heuristic-explain/SKILL.md` |
 | `reproducer` | Use when a large failing program, benchmark, or stage dump needs to become a minimal C, MLIR, or lit reproducer. | `carts-plugin/skills/reproducer/SKILL.md` |
 | `stage-diff` | Use when debugging miscompiles, verifying pass correctness, comparing MLIR between pipeline stages, or finding where semantics diverge. | `carts-plugin/skills/stage-diff/SKILL.md` |
 | `dialect-trace` | Use when debugging lowering paths, understanding operation placement across SDE/ARTS/ARTS-RT, or verifying dialect boundary invariants. | `carts-plugin/skills/dialect-trace/SKILL.md` |
-| `runtime-first` | Use after runtime triage shows the compiler must match an ARTS runtime contract for EDTs, DBs, epochs, dependencies, or distributed execution. | `carts-plugin/skills/runtime-first/SKILL.md` |
+| `runtime-first` | Use after runtime triage shows the compiler must match an ARTS runtime invariant for EDTs, DBs, epochs, dependencies, or distributed execution. | `carts-plugin/skills/runtime-first/SKILL.md` |
 
 ### Authoring + maintenance
 

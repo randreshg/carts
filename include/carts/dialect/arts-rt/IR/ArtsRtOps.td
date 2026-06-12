@@ -65,6 +65,46 @@ def WaitOnEpochOp : ArtsRt_Op<"wait_on_epoch", [MemoryEffects<[MemWrite]>]> {
   let assemblyFormat = "$epochGuid `:` type($epochGuid) attr-dict";
 }
 
+def DbGuidReserveOp
+    : ArtsRt_Op<"db_guid_reserve", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Reserve one ARTS DataBlock GUID on an explicit route";
+  let description = [{
+    Runtime-shaped operation for `artsGuidReserve(db_type, route)`.
+    Pre-lowering emits it after ARTS has realized distributed DB ownership.
+  }];
+  let arguments = (ins I32:$dbType, I32:$route);
+  let results = (outs I64:$guid);
+  let assemblyFormat =
+      "$dbType `,` $route attr-dict `:` type($dbType) `,` type($route) `->` type($guid)";
+}
+
+class DbCreateWithGuidBase<string mnemonic>
+    : ArtsRt_Op<mnemonic, [MemoryEffects<[MemWrite]>]> {
+  let arguments = (ins I64:$guid, I64:$byteSize, I32:$dbType, I32:$route,
+                       I64:$artsId);
+  let results = (outs AnyType:$ptr);
+  let assemblyFormat = [{
+    $guid `,` $byteSize `,` $dbType `,` $route `,` $artsId
+    attr-dict `:` type($guid) `,` type($byteSize) `,` type($dbType) `,`
+    type($route) `,` type($artsId) `->` type($ptr)
+  }];
+}
+
+def DbCreateWithGuidOp : DbCreateWithGuidBase<"db_create_with_guid"> {
+  let summary = "Create one ARTS DataBlock from a reserved GUID";
+  let description = [{
+    Runtime-shaped operation for `artsDbCreateWithGuid`.
+  }];
+}
+
+def DbCreateWithGuidLocalOp
+    : DbCreateWithGuidBase<"db_create_with_guid_local"> {
+  let summary = "Create one locally owned ARTS DataBlock from a reserved GUID";
+  let description = [{
+    Runtime-shaped operation for the owner-local `artsDbCreateWithGuid` ABI.
+  }];
+}
+
 def EdtCreateOp : ArtsRt_Op<"edt_create", [MemoryEffects<[MemWrite]>]> {
   let summary = "Outlined EDT launch descriptor";
   let description = [{
