@@ -63,6 +63,55 @@ static bool isMemrefForwardingForSource(Operation *op, Value source) {
   return false;
 }
 
+static bool isInsideEdtBody(Operation *op, EdtOp edt) {
+  return op && edt && op->getParentOfType<EdtOp>() == edt;
+}
+
+static bool mayAliasIndex(Value lhs, Value rhs) {
+  if (ValueAnalysis::sameValue(lhs, rhs))
+    return true;
+
+  int64_t lhsConst = 0;
+  int64_t rhsConst = 0;
+  if (ValueAnalysis::getConstantIndex(lhs, lhsConst) &&
+      ValueAnalysis::getConstantIndex(rhs, rhsConst))
+    return lhsConst == rhsConst;
+
+  return true;
+}
+
+static bool mayLoadStoredMemref(memref::StoreOp store, memref::LoadOp load) {
+  if (!isa<BaseMemRefType>(store.getValueToStore().getType()))
+    return false;
+  auto tableType = dyn_cast<MemRefType>(store.getMemRef().getType());
+  if (!tableType || !isa<BaseMemRefType>(tableType.getElementType()))
+    return false;
+  if (ValueAnalysis::stripMemrefViewOps(store.getMemRef()) !=
+      ValueAnalysis::stripMemrefViewOps(load.getMemRef()))
+    return false;
+  if (store.getIndices().size() != load.getIndices().size())
+    return false;
+
+  for (auto [storedIdx, loadedIdx] :
+       llvm::zip(store.getIndices(), load.getIndices()))
+    if (!mayAliasIndex(storedIdx, loadedIdx))
+      return false;
+
+  return true;
+}
+
+static void enqueueMemrefPointerTableLoads(memref::StoreOp store, EdtOp edt,
+                                           SmallVectorImpl<Value> &worklist) {
+  edt.walk([&](memref::LoadOp load) {
+    if (!isInsideEdtBody(load.getOperation(), edt))
+      return;
+    if (!isa<BaseMemRefType>(load.getResult().getType()))
+      return;
+    if (mayLoadStoredMemref(store, load))
+      worklist.push_back(load.getResult());
+  });
+}
+
 static bool isCleanupTerminalOp(Operation *op, Value current) {
   if (auto release = dyn_cast<DbReleaseOp>(op))
     return release.getSource() == current;
@@ -246,17 +295,66 @@ ArtsMode DbUtils::inferEdtAccessMode(Operation *underlyingOp, EdtOp edt) {
     return ArtsMode::uninitialized;
 
   ArtsMode combined = ArtsMode::uninitialized;
-  edt.walk([&](Operation *op) {
-    if (op->getParentOfType<EdtOp>() != edt)
-      return;
-    combined = combineAccessModes(
-        combined, classifyMemrefUserAccessMode(op, underlyingOp));
-  });
+  Value source =
+      underlyingOp->getNumResults() > 0 ? underlyingOp->getResult(0) : Value();
+  if (!source || !isa<BaseMemRefType>(source.getType()))
+    return combined;
+
+  SmallVector<Value, 16> worklist{source};
+  DenseSet<Value> visited;
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!current || !visited.insert(current).second)
+      continue;
+
+    for (Operation *user : current.getUsers()) {
+      if (!isInsideEdtBody(user, edt))
+        continue;
+
+      combined = combineAccessModes(
+          combined, classifyMemrefUserAccessMode(user, underlyingOp));
+
+      if (auto access = getMemoryAccessInfo(user)) {
+        if (access->memref == current) {
+          ArtsMode mode = access->isRead() ? ArtsMode::in : ArtsMode::out;
+          combined = combineAccessModes(combined, mode);
+        }
+      }
+
+      if (auto copy = dyn_cast<memref::CopyOp>(user)) {
+        if (copy.getSource() == current)
+          combined = combineAccessModes(combined, ArtsMode::in);
+        if (copy.getTarget() == current)
+          combined = combineAccessModes(combined, ArtsMode::out);
+      }
+
+      if (auto store = dyn_cast<memref::StoreOp>(user))
+        if (store.getValueToStore() == current)
+          enqueueMemrefPointerTableLoads(store, edt, worklist);
+
+      if (!isMemrefForwardingForSource(user, current))
+        continue;
+      for (Value result : user->getResults())
+        if (isa<BaseMemRefType>(result.getType()))
+          worklist.push_back(result);
+    }
+  }
   return combined;
 }
 
 bool DbUtils::opMatchesAccessMode(Operation *op, Operation *underlyingOp,
                                   ArtsMode requestedMode) {
+  if (requestedMode != ArtsMode::uninitialized &&
+      underlyingOp->getNumResults() > 0 &&
+      isMemrefForwardingForSource(op, underlyingOp->getResult(0)))
+    return true;
+
+  if (requestedMode != ArtsMode::uninitialized &&
+      underlyingOp->getNumResults() > 0)
+    if (auto store = dyn_cast<memref::StoreOp>(op))
+      if (store.getValueToStore() == underlyingOp->getResult(0))
+        return true;
+
   ArtsMode actualMode = classifyMemrefUserAccessMode(op, underlyingOp);
   if (actualMode == ArtsMode::uninitialized)
     return false;

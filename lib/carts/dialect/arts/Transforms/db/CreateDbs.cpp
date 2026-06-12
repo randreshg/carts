@@ -115,6 +115,9 @@ static bool isForwardingMemrefAliasOp(Operation *op, Value source) {
   if (auto viewLike = dyn_cast<ViewLikeOpInterface>(op))
     return viewLike.getViewSource() == source && op->getNumResults() == 1;
 
+  if (auto cast = dyn_cast<memref::CastOp>(op))
+    return cast.getSource() == source && op->getNumResults() == 1;
+
   if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(op)) {
     return unrealized.getInputs().size() == 1 &&
            unrealized.getInputs().front() == source &&
@@ -217,6 +220,42 @@ static LogicalResult rewriteCoarseRawAccess(Operation *op, Value expectedRoot,
     return op->emitError(
         "raw memref subindex reached ARTS DB lowering; SDE must "
         "rewrite tiled or sliced memory views before ARTS conversion");
+  }
+
+  if (isForwardingMemrefAliasOp(op, expectedRoot)) {
+    bool rewrote = false;
+    for (OpOperand &operand : op->getOpOperands()) {
+      Value current = operand.get();
+      if (!isa<MemRefType>(current.getType()) ||
+          ValueAnalysis::stripMemrefViewOps(current) != expectedRoot)
+        continue;
+      Value dbView = createCoarseDbRef(dbPtr, op, builder);
+      Value typedView =
+          adaptMemrefToType(dbView, current.getType(), op, builder);
+      if (!typedView)
+        return op->emitError("cannot adapt raw DB view to forwarded memref "
+                             "alias operand type");
+      operand.set(typedView);
+      rewrote = true;
+    }
+    if (!rewrote)
+      return op->emitError("forwarded raw memref alias did not reference the "
+                           "expected allocation operand");
+    return success();
+  }
+
+  if (auto store = dyn_cast<memref::StoreOp>(op)) {
+    Value stored = store.getValueToStore();
+    if (isa<MemRefType>(stored.getType()) && stored == expectedRoot) {
+      Value dbView = createCoarseDbRef(dbPtr, op, builder);
+      Value typedView =
+          adaptMemrefToType(dbView, stored.getType(), op, builder);
+      if (!typedView)
+        return op->emitError("cannot adapt raw DB view to stored memref "
+                             "alias operand type");
+      store.getValueMutable().assign(typedView);
+      return success();
+    }
   }
 
   auto access = DbUtils::getMemoryAccessInfo(op);
@@ -639,7 +678,10 @@ void CreateDbsPass::collectMemrefs() {
         /// If the parent edt is different from the current edt, it means
         /// it is an external dependency
         if (parentEdt != edt) {
-          edtExternalValues[edt].insert(operand);
+          Value externalValue = underlyingOp->getNumResults() > 0
+                                    ? underlyingOp->getResult(0)
+                                    : operand;
+          edtExternalValues[edt].insert(externalValue);
           info.usedByOtherEdts = true;
         }
       }
@@ -1081,8 +1123,10 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
 
     Value localAcquireView = acquireOp.getPtr();
     auto sourceType = dyn_cast<MemRefType>(localAcquireView.getType());
+    Block &edtBlock = edt.getBody().front();
+    unsigned dependencyArgIndex = dependencyOperands.size();
     BlockArgument dbAcquireArg =
-        edt.getBody().front().addArgument(sourceType, edt.getLoc());
+        edtBlock.insertArgument(dependencyArgIndex, sourceType, edt.getLoc());
     dependencyOperands.push_back(localAcquireView);
     localAcquireView = dbAcquireArg;
 
