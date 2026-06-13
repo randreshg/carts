@@ -8,7 +8,7 @@
 #include <string>
 namespace mlir { class Operation; }
 namespace mlir::carts::sde {
-enum class RedistributionEdgeKind { Halo, ReduceScatter };
+enum class RedistributionEdgeKind { Halo, ReduceScatter, AllToAll };
 struct RedistributionEdge {
   Value root; int64_t arrayId = -1; SdeSuIterateOp consumer;
   RedistributionEdgeKind kind = RedistributionEdgeKind::ReduceScatter;

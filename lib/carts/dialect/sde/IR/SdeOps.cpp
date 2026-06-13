@@ -53,7 +53,8 @@ static bool hasExternalWriteRoot(SdeSuIterateOp op) {
 
 static bool isAllowedSuDistributeChild(Operation *op) {
   return sde::isSuOp(op) ||
-         isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp>(op);
+         isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp, SdeSuAllToAllOp>(
+             op);
 }
 
 static LogicalResult verifyCuContainsNoScheduling(Operation *cu) {
@@ -1218,6 +1219,51 @@ LogicalResult SdeSuReduceScatterOp::verify() {
             getBlockShape(), std::nullopt,
             /*allowExpandedFull=*/false, /*requireHaloBacking=*/false,
             /*requireReductionBacking=*/true)))
+      return failure();
+  }
+  return success();
+}
+
+LogicalResult SdeSuAllToAllOp::verify() {
+  if (!isa_and_nonnull<SdeSuDistributeOp>(getOperation()->getParentOp()))
+    return emitOpError(
+        "sde.su_all_to_all: movement op must be a direct child of "
+        "sde.su_distribute");
+  auto muType = dyn_cast<MemRefType>(getMu().getType());
+  if (!muType)
+    return emitOpError("sde.su_all_to_all: mu operand must be a memref");
+  if (!muType.hasStaticShape())
+    return emitOpError("sde.su_all_to_all: mu must be a static-shape memref");
+  if (IntegerAttr arrayId = getArrayIdAttr())
+    if (arrayId.getInt() < 0)
+      return emitOpError(
+          "sde.su_all_to_all: arrayId must be non-negative when present");
+  if (failed(verifySuMovementEndpoint(*this, "sde.su_all_to_all", muType,
+                                      getSourceOwnerDims(),
+                                      getSourceBlockShape())))
+    return failure();
+  auto targetOwner = readI64ArrayAttr(getTargetOwnerDims());
+  auto targetBlock = readI64ArrayAttr(getTargetBlockShape());
+  if (!targetOwner || !targetBlock || targetOwner->empty())
+    return emitOpError("sde.su_all_to_all: target owner/block geometry is "
+                       "malformed");
+  if (failed(verifySuMovementEndpoint(*this, "sde.su_all_to_all", muType,
+                                      getTargetOwnerDims(),
+                                      getTargetBlockShape())))
+    return failure();
+  auto sourceOwner = readI64ArrayAttr(getSourceOwnerDims());
+  auto sourceBlock = readI64ArrayAttr(getSourceBlockShape());
+  if (!sourceOwner || !sourceBlock || sourceOwner->empty())
+    return failure();
+  if (*sourceOwner == *targetOwner && *sourceBlock == *targetBlock)
+    return emitOpError("sde.su_all_to_all: source and target geometry must "
+                       "differ for a genuine repartition");
+  if (IntegerAttr arrayId = getArrayIdAttr()) {
+    if (failed(verifyMovementGroundedAndAnchored(
+            getOperation(), arrayId.getInt(), getMu(), getSourceOwnerDims(),
+            getSourceBlockShape(), std::nullopt,
+            /*allowExpandedFull=*/true, /*requireHaloBacking=*/false,
+            /*requireReductionBacking=*/false)))
       return failure();
   }
   return success();

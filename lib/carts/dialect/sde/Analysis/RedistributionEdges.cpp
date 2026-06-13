@@ -634,13 +634,9 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       }
       if (!hasOwnerReduction && !committedContractionLayout) {
         if (committedRepartitionLayout) {
-          fail("repartition redistribution edge is not yet realizable as " +
-               repartitionMovementReplacement(home, *readerFact) +
-               " (consumer required-read layout differs from the committed "
-               "home layout)");
-          continue;
-        }
-        if (!committedHaloLayout) {
+          // Genuine cross-owner repartition: emit an all_to_all edge instead of
+          // failing closed once the SU movement op exists.
+        } else if (!committedHaloLayout) {
           fail("redistribution edge is not a cross-owner reduction or halo; "
                "the consumer required-read layout is not committed or does "
                "not differ from the home layout");
@@ -652,10 +648,14 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       edge.root = root;
       edge.arrayId = arrayId;
       edge.consumer = reader;
-      edge.kind = committedHaloLayout && !hasOwnerReduction &&
-                            !committedContractionLayout
-                        ? RedistributionEdgeKind::Halo
-                        : RedistributionEdgeKind::ReduceScatter;
+      edge.kind =
+          committedRepartitionLayout && !hasOwnerReduction &&
+                  !committedContractionLayout
+              ? RedistributionEdgeKind::AllToAll
+          : committedHaloLayout && !hasOwnerReduction &&
+                    !committedContractionLayout
+                ? RedistributionEdgeKind::Halo
+                : RedistributionEdgeKind::ReduceScatter;
       if ((hasOwnerReduction || committedContractionLayout) &&
           expandedEndpoint && !geometryFitsRoot) {
         edge.sourceOwnerDims.assign(expandedEndpoint->ownerDims.begin(),
@@ -701,12 +701,14 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
           edge.kind == RedistributionEdgeKind::ReduceScatter) {
         if (edge.targetOwnerDims.empty())
           commitOwnerPreservingTarget(edge);
-      } else if (readerFact) {
-        commitConsumerTargetGeometry(edge, *readerFact);
-      } else {
-        fail("repartition redistribution edge has no committed consumer "
-             "required-read layout");
-        continue;
+      } else if (edge.kind == RedistributionEdgeKind::AllToAll) {
+        if (readerFact)
+          commitConsumerTargetGeometry(edge, *readerFact);
+        else {
+          fail("all_to_all redistribution edge has no committed consumer "
+               "required-read layout");
+          continue;
+        }
       }
 
       // Committed abstract edge cost, if the reader carries one.

@@ -28,6 +28,7 @@
 /// carrier (windows are raised later by RaiseToMuAccessWindow).
 ///==========================================================================///
 
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeCuStructure.h"
@@ -264,12 +265,11 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
         }
     });
 
-    // Discarded-parallelism guard (companion to Parallelize.cpp:638): a
-    // source-compute cu_region<single> directly inside a multi-trip su_iterate
-    // must carry a serial_reason license; absence is the :638 regression shape.
-    // Gauss-Seidel / in-place self-read is licensed by SU-level inPlaceSharedState.
+    // Discarded-parallelism guard: a source-compute cu_region<single> directly
+    // inside a multi-trip su_iterate must carry a serial_reason license.
+    // Gauss-Seidel / in-place self-read is licensed by proven inPlaceSharedState.
     module.walk([&](sde::SdeSuIterateOp it) {
-      if (suIterateIsProvablySingleTrip(it) || it.getInPlaceSharedStateAttr() ||
+      if (suIterateIsProvablySingleTrip(it) || queryInPlaceSharedState(it) ||
           it.getBody().empty())
         return;
       for (Operation &child : it.getBody().front()) {
@@ -289,9 +289,9 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
           continue;
         cu.emitOpError()
             << "is a serial cu_region<single> directly inside a multi-trip "
-               "sde.su_iterate but carries no serial_reason license; Parallelize "
-               "must promote a proven-independent nest to <parallel> "
-               "(Parallelize.cpp:638) or the producer must assert a serial_reason";
+               "sde.su_iterate but carries no serial_reason license; raise-to-sde "
+               "must promote a proven-independent nest to <parallel> or the "
+               "producer must assert a serial_reason";
         failed = true;
       }
     });

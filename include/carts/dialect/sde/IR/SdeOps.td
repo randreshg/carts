@@ -725,6 +725,37 @@ def SdeSuReduceScatterOp : CartsSde_Op<"su_reduce_scatter", [
   let hasVerifier = 1;
 }
 
+def SdeSuAllToAllOp : CartsSde_Op<"su_all_to_all", [
+      MemoryEffects<[MemWrite]>
+    ]> {
+  let summary = "SU-scope genuine cross-owner repartition on one array";
+  let description = [{
+    Re-partitions an array from a committed source owner grid to a distinct
+    target owner grid. Op identity is the intended replacement for the
+    `all_to_all_like` movement family. Legal only as a direct child of
+    `sde.su_distribute`; names no collective/DB/EDT/route; consumed and erased
+    by SDE-to-ARTS lowering.
+
+    `mu` is the array root. Source and target owner dims/block shapes describe
+    the producer and consumer grids; they must differ on at least one owner dim.
+  }];
+  let arguments = (ins
+    AnyMemRef:$mu,
+    OptionalAttr<I64Attr>:$arrayId,
+    ArrayAttr:$sourceOwnerDims,
+    ArrayAttr:$sourceBlockShape,
+    ArrayAttr:$targetOwnerDims,
+    ArrayAttr:$targetBlockShape
+  );
+  let results = (outs);
+  let assemblyFormat = [{
+    $mu `:` type($mu) (`array_id` `(` $arrayId^ `)`)?
+    `source` `owner` $sourceOwnerDims `block` $sourceBlockShape
+    `target` `owner` $targetOwnerDims `block` $targetBlockShape attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 def SdeMuDataOp : CartsSde_Op<"mu_data", [Pure]> {
   let summary = "Declarative SDE shared-data handle.";
   let description = [{

@@ -161,16 +161,38 @@ BarrierSyncVerdict classifyBarrierSync(ArrayRef<SdeCuRegionOp> before,
   return BarrierSyncVerdict::Unprovable;
 }
 
+static void collectLeafCuRegions(Operation *op,
+                                 SmallVectorImpl<SdeCuRegionOp> &phase) {
+  if (auto cu = dyn_cast<SdeCuRegionOp>(op)) {
+    phase.push_back(cu);
+    return;
+  }
+  if (auto iterate = dyn_cast<SdeSuIterateOp>(op)) {
+    if (iterate.getBody().empty())
+      return;
+    for (Operation &child : iterate.getBody().front())
+      if (auto cu = dyn_cast<SdeCuRegionOp>(&child))
+        phase.push_back(cu);
+    return;
+  }
+  if (auto dist = dyn_cast<SdeSuDistributeOp>(op)) {
+    if (dist.getBody().empty())
+      return;
+    for (Operation &child : dist.getBody().front())
+      collectLeafCuRegions(&child, phase);
+  }
+}
+
 BarrierSyncPartition partitionBarrierPhases(Block &block) {
   BarrierSyncPartition partition;
   partition.phases.emplace_back();
   for (Operation &op : block) {
-    if (auto cu = dyn_cast<SdeCuRegionOp>(&op))
-      partition.phases.back().push_back(cu);
-    else if (auto bar = dyn_cast<SdeSuBarrierOp>(&op)) {
+    if (auto bar = dyn_cast<SdeSuBarrierOp>(&op)) {
       partition.barriers.push_back({bar, partition.phases.size() - 1});
       partition.phases.emplace_back();
+      continue;
     }
+    collectLeafCuRegions(&op, partition.phases.back());
   }
   return partition;
 }

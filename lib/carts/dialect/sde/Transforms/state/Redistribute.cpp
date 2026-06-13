@@ -30,6 +30,20 @@ static bool alreadyRepresented(const carts::sde::RedistributionEdge &edge) {
           reduce.getBlockShape() == buildI64ArrayAttr(reduce.getContext(), edge.sourceBlockShape))
         return true;
     }
+    if (auto allToAll = dyn_cast<carts::sde::SdeSuAllToAllOp>(user)) {
+      if (edge.kind == carts::sde::RedistributionEdgeKind::AllToAll &&
+          allToAll.getArrayIdAttr() &&
+          allToAll.getArrayIdAttr().getInt() == edge.arrayId &&
+          allToAll.getSourceOwnerDims() ==
+              buildI64ArrayAttr(allToAll.getContext(), edge.sourceOwnerDims) &&
+          allToAll.getSourceBlockShape() ==
+              buildI64ArrayAttr(allToAll.getContext(), edge.sourceBlockShape) &&
+          allToAll.getTargetOwnerDims() ==
+              buildI64ArrayAttr(allToAll.getContext(), edge.targetOwnerDims) &&
+          allToAll.getTargetBlockShape() ==
+              buildI64ArrayAttr(allToAll.getContext(), edge.targetBlockShape))
+        return true;
+    }
   }
   return false;
 }
@@ -75,6 +89,15 @@ struct SdeRedistributePass : public carts::sde::impl::SdeRedistributeBase<SdeRed
         carts::sde::SdeSuReduceScatterOp::create(builder, consumer.getLoc(), edge.root, arrayIdAttr,
             ownerDims, blockShape, IntegerAttr::get(IntegerType::get(ctx, 64), 0),
             carts::sde::SdeReductionKindAttr::get(ctx, kind));
+        continue;
+      }
+      if (edge.kind == carts::sde::RedistributionEdgeKind::AllToAll) {
+        carts::sde::SdeSuAllToAllOp::create(
+            builder, consumer.getLoc(), edge.root, arrayIdAttr,
+            buildI64ArrayAttr(ctx, edge.sourceOwnerDims),
+            buildI64ArrayAttr(ctx, edge.sourceBlockShape),
+            buildI64ArrayAttr(ctx, edge.targetOwnerDims),
+            buildI64ArrayAttr(ctx, edge.targetBlockShape));
         continue;
       }
       consumer.emitOpError() << "sde-redistribute: unexpected redistribution edge kind";

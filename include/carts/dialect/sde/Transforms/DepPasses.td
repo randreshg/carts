@@ -63,26 +63,6 @@ def RaiseToSde : Pass<"sde-raise-to-sde", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createRaiseToSdePass()";
 }
 
-def Parallelize : Pass<"sde-parallelize", "mlir::ModuleOp"> {
-  let summary = "Parallelize + raise embarrassingly-parallel sequential loop nests to SDE scheduling units";
-  let description = [{
-    Detects perfectly-nested rectangular `scf.for` nests that are provably
-    dependence-free (one or more external array stores at indices == the loop
-    IVs, no read of a written array, read-only array inputs allowed, pure body).
-    It also recognizes closed-form scalar induction counters whose final mutable
-    state is not observed. The pass raises eligible raw or normalized
-    leaf `sde.cu_region <single>` loop nests to sibling `sde.su_iterate`
-    schedule structure before LayoutAssignment, so SDE exposes real ordering
-    and work structure instead of a serial host whole-array CU. Fail-closed:
-    unprovable nests are left untouched.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::arith::ArithDialect",
-                           "::mlir::scf::SCFDialect",
-                           "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::carts::sde::createParallelizePass()";
-}
-
 def SdeLoopPatternFacts
     : Pass<"sde-loop-pattern-facts", "mlir::ModuleOp"> {
   let summary = "[deprecated] Owner-loop promotion only (no fact stamping)";

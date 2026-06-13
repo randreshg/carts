@@ -263,16 +263,13 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 26> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
-    "SdeCuNormalization",
-    "Parallelize",
     "LayoutAssignment",
     "LoopInterchange",
     "Tiling",
     "ElementwiseFusion",
-    "ReductionStrategy",
     "DistributionPlanning",
     "IterationSpaceDecomposition",
     "BarrierElimination",
@@ -1091,9 +1088,6 @@ void buildSdeInputNormalizationPipeline(PassManager &pm) {
   /// upstream conversion passes drop the polygeist-prefixed originals.
   pm.addPass(sde::createPromoteTargetAttrs());
   OpPassManager &optPM = pm.nest<func::FuncOp>();
-  /// Stage invariant: normalize affine memory/control ops before the module
-  /// pass runs so SdeInputNormalization only needs to reason about the
-  /// memref+SCF form produced by the frontend/inliner pipeline.
   optPM.addPass(createLowerAffinePass());
   pm.addPass(createCSEPass());
   pm.addPass(sde::createSdeInputInlinerPass());
@@ -1127,7 +1121,6 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createLoopInterchangePass());
   pm.addPass(sde::createTilingPass(costModel));
   pm.addPass(sde::createElementwiseFusionPass());
-  pm.addPass(sde::createReductionStrategyPass(costModel));
   pm.addPass(sde::createDistributionPlanningPass(costModel));
   pm.addPass(sde::createIterationSpaceDecompositionPass());
   pm.addPass(sde::createBarrierEliminationPass(costModel));

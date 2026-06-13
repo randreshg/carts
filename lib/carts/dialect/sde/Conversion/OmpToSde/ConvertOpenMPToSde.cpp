@@ -233,8 +233,10 @@ static sde::SdeReductionKind inferReductionKind(omp::DeclareReductionOp decl) {
 }
 
 /// Helper to create a UnitAttr when nowait is true, nullptr otherwise.
-static UnitAttr nowaitAttr(MLIRContext *ctx, bool nowait) {
-  return nowait ? UnitAttr::get(ctx) : nullptr;
+/// Async-by-default (Part 6): stamp `nowait` on converted regions unless the
+/// source explicitly requests a completion fence (inverse of legacy OMP).
+static UnitAttr nowaitAttr(MLIRContext *ctx, bool async = true) {
+  return async ? UnitAttr::get(ctx) : nullptr;
 }
 
 struct OmpDependSlice {
@@ -412,7 +414,8 @@ struct OMPParallelToSdePattern : public OpRewritePattern<omp::ParallelOp> {
     }
 
     auto cuRegion = sde::buildCuRegion(
-        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel));
+        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
+        nowaitAttr(ctx));
 
     Block &old = op.getRegion().front();
     Block &blk = sde::ensureBlock(cuRegion.getBody());
@@ -436,24 +439,18 @@ struct MasterToSdePattern : public OpRewritePattern<omp::MasterOp> {
     auto *ctx = rewriter.getContext();
     if (regionContainsSchedulingBoundaryOp(op.getRegion())) {
       spliceRegionBodyBefore(op.getOperation(), op.getRegion());
-      rewriter.setInsertionPoint(op);
-      sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                  /*barrierReason=*/nullptr);
       rewriter.eraseOp(op);
       return success();
     }
 
     auto cuRegion = sde::buildCuRegion(
-        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single));
+        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
+        nowaitAttr(ctx));
     cuRegion.setSerialReasonAttr(sde::SdeSerialReasonAttr::get(
         ctx, sde::SdeSerialReason::source_single));
     Block &old = op.getRegion().front();
     Block &blk = sde::ensureBlock(cuRegion.getBody());
     blk.getOperations().splice(blk.end(), old.getOperations());
-    // omp.master has implicit barrier (no nowait clause).
-    rewriter.setInsertionPointAfter(cuRegion);
-    sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                /*barrierReason=*/nullptr);
     rewriter.eraseOp(op);
     return success();
   }
@@ -470,29 +467,18 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
     auto *ctx = rewriter.getContext();
     if (regionContainsSchedulingBoundaryOp(op.getRegion())) {
       spliceRegionBodyBefore(op.getOperation(), op.getRegion());
-      if (!op.getNowait()) {
-        rewriter.setInsertionPoint(op);
-        sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                    /*barrierReason=*/nullptr);
-      }
       rewriter.eraseOp(op);
       return success();
     }
 
     auto cuRegion = sde::buildCuRegion(
         rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
-        nowaitAttr(ctx, op.getNowait()));
+        nowaitAttr(ctx, !op.getNowait()));
     cuRegion.setSerialReasonAttr(sde::SdeSerialReasonAttr::get(
         ctx, sde::SdeSerialReason::source_single));
     Block &old = op.getRegion().front();
     Block &blk = sde::ensureBlock(cuRegion.getBody());
     blk.getOperations().splice(blk.end(), old.getOperations());
-    // Emit implicit barrier unless nowait.
-    if (!op.getNowait()) {
-      rewriter.setInsertionPointAfter(cuRegion);
-      sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                  /*barrierReason=*/nullptr);
-    }
     rewriter.eraseOp(op);
     return success();
   }
@@ -514,7 +500,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     auto ubs = ensureIndexRange(rewriter, loc, loopNest.getLoopUpperBounds());
     auto steps = ensureIndexRange(rewriter, loc, loopNest.getLoopSteps());
 
-    // Nowait
+    // Async-by-default: stamp nowait unless the source explicitly requests sync.
     bool nw = op.getNowait();
 
     // Reduction metadata
@@ -537,7 +523,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     }
 
     sde::SuIterateAttrs suAttrs;
-    suAttrs.nowait = nowaitAttr(ctx, nw);
+    suAttrs.nowait = nowaitAttr(ctx, !nw);
     suAttrs.reductionKinds =
         reductionKinds.empty() ? nullptr : rewriter.getArrayAttr(reductionKinds);
     auto suIter = sde::buildSuIterate(
@@ -576,13 +562,6 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     // Yield at su_iterate level (outside cu_region).
     rewriter.setInsertionPointAfter(innerCuRegion);
     sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
-
-    // Barrier if not nowait and work follows
-    if (!nw && hasWorkAfterInParentBlock(op.getOperation())) {
-      rewriter.setInsertionPointAfter(suIter);
-      sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                  /*barrierReason=*/nullptr);
-    }
 
     ++numWsloopsConverted;
     rewriter.eraseOp(op);
@@ -718,7 +697,9 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
     Value st = ensureIndex(rewriter, loc, op.getStep().front());
 
     auto suIter = sde::buildSuIterate(rewriter, loc, ValueRange{lb},
-                                      ValueRange{ub}, ValueRange{st});
+                                      ValueRange{ub}, ValueRange{st},
+                                      sde::SuIterateAttrs{.nowait = nowaitAttr(
+                                          rewriter.getContext())});
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
@@ -739,12 +720,6 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
         rewriter, loc, sde::SdeCuKind::parallel, src, mapper);
     rewriter.setInsertionPointAfter(innerCuRegion);
     sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
-
-    if (hasWorkAfterInParentBlock(op.getOperation())) {
-      rewriter.setInsertionPointAfter(suIter);
-      sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
-                                  /*barrierReason=*/nullptr);
-    }
 
     rewriter.eraseOp(op);
     return success();
