@@ -8,7 +8,9 @@
 #include "carts/dialect/arts/Utils/DbLayoutFactsUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
+#include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/utils/Utils.h"
+#include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 using namespace mlir;
@@ -104,4 +106,25 @@ LogicalResult mlir::carts::arts::createBlockDbBackedMemref(
                         physicalFacts->mode);
   memref = realizeDbInnerPayload(builder, loc, dbAlloc.getPtr());
   return success();
+}
+
+DbAllocOp mlir::carts::arts::resolveBoundaryDbAlloc(Value memref) {
+  if (!memref)
+    return nullptr;
+  if (auto alloc =
+          dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(memref)))
+    return alloc;
+
+  Value root = ValueAnalysis::stripMemrefViewOps(memref);
+  auto result = dyn_cast<OpResult>(root);
+  if (!result)
+    return nullptr;
+  auto cu = dyn_cast_or_null<sde::SdeCuRegionOp>(result.getOwner());
+  if (!cu || cu.getBody().empty())
+    return nullptr;
+  auto yield =
+      dyn_cast_or_null<sde::SdeYieldOp>(cu.getBody().front().getTerminator());
+  if (!yield || result.getResultNumber() >= yield.getValues().size())
+    return nullptr;
+  return resolveBoundaryDbAlloc(yield.getValues()[result.getResultNumber()]);
 }

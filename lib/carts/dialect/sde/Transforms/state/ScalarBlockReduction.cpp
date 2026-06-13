@@ -933,8 +933,6 @@ struct SdeScalarBlockReductionPass
         return;
       }
     }
-    (void)sde::reconcileReaderArrayLayoutsWithCommittedWriterShapes(
-        getOperation());
   }
 };
 

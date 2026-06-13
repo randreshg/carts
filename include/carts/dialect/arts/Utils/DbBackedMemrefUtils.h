@@ -7,6 +7,7 @@
 #ifndef CARTS_DIALECT_ARTS_UTILS_DBBACKEDMEMREFUTILS_H
 #define CARTS_DIALECT_ARTS_UTILS_DBBACKEDMEMREFUTILS_H
 
+#include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/ValueRange.h"
@@ -31,6 +32,10 @@ LogicalResult createBlockDbBackedMemref(OpBuilder &builder, Location loc,
                                         ValueRange dynamicSizes,
                                         ArrayAttr ownerDims,
                                         ArrayAttr blockShape, Value &memref);
+
+/// Resolve the ARTS DbAlloc backing a boundary memref, including CU-yielded
+/// aliases produced during SDE storage realization.
+DbAllocOp resolveBoundaryDbAlloc(Value memref);
 
 } // namespace carts::arts
 } // namespace mlir

@@ -1,5 +1,6 @@
 file(GLOB CARTS_TRANSFORMS_SOURCE_FILES CONFIGURE_DEPENDS
     "*.cpp"
+    "boundary/*.cpp"
     "db/*.cpp"
     "edt/*.cpp"
     "epoch/*.cpp"

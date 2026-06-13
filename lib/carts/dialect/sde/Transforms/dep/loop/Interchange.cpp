@@ -846,9 +846,6 @@ static ArrayAttr buildRowOwnerWriteLayout(MLIRContext *ctx, int64_t arrayId,
       sde::AttrNames::LayoutGraph::MuBlockCount,
       builder.getI64IntegerAttr(
           sde::inferCuCountFromMuPartition(shape, ownerDims, blockShape))));
-  fields.push_back(
-      builder.getNamedAttr(sde::AttrNames::LayoutGraph::CommVolumeBytes,
-                           builder.getI64IntegerAttr(0)));
   return ArrayAttr::get(ctx, {builder.getDictionaryAttr(fields)});
 }
 

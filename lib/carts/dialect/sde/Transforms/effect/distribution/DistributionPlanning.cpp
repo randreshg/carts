@@ -2072,8 +2072,6 @@ struct DistributionPlanningPass
       return;
     }
 
-    sde::reconcileReaderArrayLayoutsWithCommittedWriterShapes(getOperation());
-
     for (DistributionRewrite rewrite : rewrites) {
       if (rewrite.op.getNumResults() > 0)
         continue;

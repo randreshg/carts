@@ -112,8 +112,6 @@ static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
 }
 
 static int64_t defaultMuTrafficBytes(const MuNet &net) {
-  if (net.commVolumeBytes > 0)
-    return net.commVolumeBytes;
   if (net.tilePayloadBytes > 0)
     return net.tilePayloadBytes;
   if (net.staticShape.empty() || net.elementBytes <= 0)
@@ -152,9 +150,6 @@ static LayoutGraphFact parseLayoutCommon(DictionaryAttr dict) {
   if (std::optional<int64_t> value =
           getI64(dict, AttrNames::LayoutGraph::MuBlockCount))
     fact.muBlockCount = std::max<int64_t>(1, *value);
-  if (std::optional<int64_t> value =
-          getI64(dict, AttrNames::LayoutGraph::CommVolumeBytes))
-    fact.commVolumeBytes = *value;
   return fact;
 }
 
@@ -303,12 +298,14 @@ SmallVector<CuMuHyperedgePressure, 4>
 collectCuMuHyperedgePressures(ArrayRef<LayoutGraphFact> facts) {
   SmallVector<CuMuHyperedgePressure, 4> pressures;
   for (const LayoutGraphFact &fact : facts) {
-    int64_t trafficBytes = fact.commVolumeBytes;
-    if (trafficBytes <= 0)
+    if (fact.muBlockCount <= 1)
       continue;
     int64_t remoteFanout = std::max<int64_t>(0, fact.muBlockCount - 1);
     if (remoteFanout <= 0)
       continue;
+    int64_t trafficBytes = 1;
+    for (int64_t dim : fact.blockShape)
+      trafficBytes *= std::max<int64_t>(1, dim);
     pressures.push_back(CuMuHyperedgePressure{remoteFanout, trafficBytes});
   }
   return pressures;
@@ -441,7 +438,6 @@ MuNet makeMuNet(unsigned muId, const ArrayAccessProfile &profile,
                          assignedLayout->layout.ownerPositions.end());
     net.blockShape.assign(assignedLayout->layout.blockShape.begin(),
                           assignedLayout->layout.blockShape.end());
-    net.commVolumeBytes = assignedLayout->commVolumeBytes;
     net.muBlockCount =
         inferBlockCount(net.staticShape, net.ownerDims, net.blockShape);
     net.tilePayloadBytes = tilePayloadBytes(net.blockShape, net.elementBytes);
@@ -460,7 +456,6 @@ MuNet makeMuNet(unsigned muId, const CuMuMemoryUnit &memory,
   net.ownerDims.assign(memory.ownerPhysicalDims.begin(),
                        memory.ownerPhysicalDims.end());
   net.elementBytes = memory.elementBytes;
-  net.commVolumeBytes = memory.abstractCommVolumeBytes;
   if (layoutKind)
     net.layoutKind = *layoutKind;
   else if (!net.ownerDims.empty())

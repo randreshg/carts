@@ -17,7 +17,6 @@ inline constexpr llvm::StringLiteral Kind = "kind";
 inline constexpr llvm::StringLiteral OwnerDims = "ownerDims";
 inline constexpr llvm::StringLiteral BlockShape = "blockShape";
 inline constexpr llvm::StringLiteral MuBlockCount = "muBlockCount";
-inline constexpr llvm::StringLiteral CommVolumeBytes = "commVolumeBytes";
 // Node-agnostic, budget-sized DB/MU block grain: a function of problem size and
 // a target block-byte budget, NOT of node/worker count. BudgetBlockShape is
 // consumed by SDE loop tiling and distribution transforms to choose physical

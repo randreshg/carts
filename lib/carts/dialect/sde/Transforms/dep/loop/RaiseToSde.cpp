@@ -289,18 +289,15 @@ static bool counterUsesAreLoopLocal(Value mem, scf::ForOp outer) {
   return true;
 }
 
-/// Re-entrancy guard: skip nests already under `su_iterate`. Allow direct
-/// children of residual `cu_region<single>` or raw host loops at function scope.
+/// Skip nests already under SDE scheduling, except residual `cu_region<single>`
+/// bodies where the post-tiling raise-to-sde re-run may still promote loops.
 static bool nestHasReentrantAncestor(scf::ForOp outer) {
-  if (outer->getParentOfType<sde::SdeSuIterateOp>())
-    return true;
-  if (auto cu = outer->getParentOfType<sde::SdeCuRegionOp>()) {
-    if (outer->getParentOp() == cu.getOperation() &&
-        cu.getKind() == sde::SdeCuKind::single && cu.getIterArgs().empty())
-      return false;
-    return true;
-  }
-  return false;
+  auto cu = outer->getParentOfType<sde::SdeCuRegionOp>();
+  if (cu && outer->getParentOp() == cu.getOperation() &&
+      cu.getKind() == sde::SdeCuKind::single && cu.getIterArgs().empty())
+    return false;
+  return outer->getParentOfType<sde::SdeSuIterateOp>() ||
+         outer->getParentOfType<sde::SdeCuRegionOp>();
 }
 
 static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {

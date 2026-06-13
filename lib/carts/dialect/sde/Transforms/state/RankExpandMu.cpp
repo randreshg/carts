@@ -101,7 +101,6 @@ struct SdeRankExpandMuPass
       carts::sde::rewriteWriterArrayLayoutToPhysicalShape(
           committed->writer, ownerDims, blockShape);
     }
-    carts::sde::reconcileReaderArrayLayoutsWithCommittedWriterShapes(module);
 
     if (failed)
       signalPassFailure();

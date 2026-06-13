@@ -480,11 +480,15 @@ static double scoreRemoteFanout(const CuMuMemoryUnit &memory,
     return 0.0;
 
   int64_t tileBytes = std::max<int64_t>(1, choice.tilePayloadBytes);
-  int64_t defaultBytes =
-      memory.abstractCommVolumeBytes > 0
-          ? ceilDivPositive(memory.abstractCommVolumeBytes,
-                            static_cast<int64_t>(memory.hyperedges.size()))
-          : tileBytes;
+  int64_t defaultBytes = tileBytes;
+  if (!memory.hyperedges.empty()) {
+    int64_t totalTraffic = 0;
+    for (const CuMuHyperedgePressure &edge : memory.hyperedges)
+      totalTraffic += std::max<int64_t>(0, edge.trafficBytes);
+    if (totalTraffic > 0)
+      defaultBytes = ceilDivPositive(
+          totalTraffic, static_cast<int64_t>(memory.hyperedges.size()));
+  }
   double score = 0.0;
   for (const CuMuHyperedgePressure &edge : memory.hyperedges) {
     int64_t remoteFanout = std::max<int64_t>(0, edge.remoteFanout);
@@ -542,12 +546,15 @@ static double scoreCuMuPartition(const CuMuMemoryUnit &memory,
   // pressure signal: many tiny MUs inflate remote acquire/copy/control traffic,
   // while larger MUs amortize it. This names no concrete communication op or
   // target object.
-  bool hasCommunication = memory.abstractCommVolumeBytes > 0;
+  bool hasCommunication = !memory.hyperedges.empty();
   if (hasCommunication) {
     score += static_cast<double>(choice.computeUnits) * syncCost;
 
     int64_t tileBytes = std::max<int64_t>(1, choice.tilePayloadBytes);
-    double packets = static_cast<double>(memory.abstractCommVolumeBytes) /
+    int64_t trafficBytes = tileBytes;
+    for (const CuMuHyperedgePressure &edge : memory.hyperedges)
+      trafficBytes += std::max<int64_t>(0, edge.trafficBytes);
+    double packets = static_cast<double>(trafficBytes) /
                      static_cast<double>(tileBytes);
     score += packets * dataCost;
   }

@@ -54,7 +54,6 @@ struct CuMuMemoryUnit {
   ArrayRef<int64_t> shape;
   ArrayRef<int64_t> ownerPhysicalDims;
   int64_t elementBytes = 0;
-  int64_t abstractCommVolumeBytes = 0;
   ArrayRef<CuMuHyperedgePressure> hyperedges;
   CuMuTypedHypergraph typedHypergraph;
 };

@@ -1255,3 +1255,38 @@ std::optional<int64_t> arts::DbUtils::extractBlockSizeFromHint(Value sizeHint,
 
   return std::nullopt;
 }
+
+void mlir::carts::arts::buildWholeDbAcquireWindow(
+    OpBuilder &builder, Location loc, DbAllocOp alloc,
+    SmallVectorImpl<Value> &offsets, SmallVectorImpl<Value> &sizes) {
+  offsets.clear();
+  sizes.clear();
+  offsets.reserve(alloc.getSizes().size());
+  sizes.reserve(alloc.getSizes().size());
+  for (Value size : alloc.getSizes()) {
+    offsets.push_back(createZeroIndex(builder, loc));
+    sizes.push_back(size);
+  }
+  if (sizes.empty()) {
+    offsets.push_back(createZeroIndex(builder, loc));
+    sizes.push_back(createOneIndex(builder, loc));
+  }
+}
+
+DbAcquireOp mlir::carts::arts::createUnitBlockDbAcquireAtCoords(
+    OpBuilder &builder, Location loc, ArtsMode mode, DbAllocOp alloc,
+    ArrayRef<int64_t> blockCoords) {
+  SmallVector<Value> offsets;
+  SmallVector<Value> sizes;
+  offsets.reserve(blockCoords.size());
+  sizes.reserve(blockCoords.size());
+  for (int64_t coord : blockCoords) {
+    offsets.push_back(createConstantIndex(builder, loc, coord));
+    sizes.push_back(createOneIndex(builder, loc));
+  }
+  return DbAcquireOp::create(
+      builder, loc, mode, alloc.getGuid(), alloc.getPtr(),
+      std::optional<PartitionMode>(PartitionMode::block), SmallVector<Value>{},
+      offsets, sizes, SmallVector<Value>{}, SmallVector<Value>{},
+      SmallVector<Value>{}, Value{}, SmallVector<Value>{}, SmallVector<Value>{});
+}

@@ -190,8 +190,7 @@ static bool hasQueuedRedistributionForWindow(sde::SdeSuIterateOp su,
     return false;
   for (const sde::LayoutGraphFact &fact :
        sde::parseArrayLayoutFacts(su.getArrayLayoutAttr()))
-    if (fact.id == arrayId.getInt() &&
-        fact.role == sde::LayoutGraphRole::read && fact.commVolumeBytes > 0)
+    if (fact.id == arrayId.getInt() && fact.role == sde::LayoutGraphRole::read)
       return true;
   Value mu = win.getMu();
   for (Operation *user : mu.getUsers()) {

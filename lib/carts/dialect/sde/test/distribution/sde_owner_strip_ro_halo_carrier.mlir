@@ -35,9 +35,9 @@ func.func @owner_strip_three_ro_inputs() {
       sde.yield
     }
   } {arrayLayout = [
-      {arrayId = 0 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write", commVolumeBytes = 0 : i64},
-      {arrayId = 1 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write", commVolumeBytes = 0 : i64},
-      {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write", commVolumeBytes = 0 : i64}
+      {arrayId = 0 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write"},
+      {arrayId = 1 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write"},
+      {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write"}
     ]}
 
   sde.su_distribute <owner_compute> {
@@ -63,10 +63,10 @@ func.func @owner_strip_three_ro_inputs() {
       sde.yield
     }
   } {arrayLayout = [
-      {arrayId = 0 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "read", commVolumeBytes = 64 : i64},
-      {arrayId = 1 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "read", commVolumeBytes = 64 : i64},
-      {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "read", commVolumeBytes = 64 : i64},
-      {arrayId = 3 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write", commVolumeBytes = 0 : i64}
+      {arrayId = 0 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "read"},
+      {arrayId = 1 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "read"},
+      {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "read"},
+      {arrayId = 3 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write"}
     ], accessMinOffsets = [-1], accessMaxOffsets = [1], inPlaceSafe}
   }
   memref.dealloc %B : memref<8x8x64xf32>
@@ -98,6 +98,6 @@ func.func @in_place_gauss_seidel_gets_readwrite_window() {
     }
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 4 : i64, blockShape = [8, 8, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 16 : i64, ownerDims = [2], role = "write"}], accessMinOffsets = [-1], accessMaxOffsets = [1]}
+  } {arrayLayout = [{arrayId = 4 : i64, blockShape = [8, 8, 4], kind = "block_parallel", muBlockCount = 16 : i64, ownerDims = [2], role = "write"}], accessMinOffsets = [-1], accessMaxOffsets = [1]}
   return
 }

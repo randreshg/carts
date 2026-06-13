@@ -87,7 +87,6 @@ struct SuIterateAttrs {
   UnitAttr inPlaceSharedState = nullptr;
   ArrayAttr arrayLayout = nullptr;
   ArrayAttr layoutsDisagree = nullptr;
-  IntegerAttr commVolumeBytes = nullptr;
 
   /// Copy every optional attribute verbatim from an existing op (for the
   /// clone-with-new-bounds construction sites).
@@ -108,7 +107,6 @@ struct SuIterateAttrs {
     a.inPlaceSafe = op.getInPlaceSafeAttr();
     a.inPlaceSharedState = op.getInPlaceSharedStateAttr();
     a.arrayLayout = op.getArrayLayoutAttr();
-    a.commVolumeBytes = op.getCommVolumeBytesAttr();
     return a;
   }
 };
@@ -130,8 +128,7 @@ buildSuIterate(OpBuilder &builder, Location loc, ValueRange lowerBounds,
       attrs.partialReductionDims, attrs.partialReductionOwnerDims,
       attrs.structuredClassification, attrs.pattern, attrs.accessMinOffsets,
       attrs.accessMaxOffsets, attrs.ownerDims, attrs.spatialDims,
-      attrs.writeFootprint, attrs.inPlaceSafe, attrs.inPlaceSharedState,
-      attrs.arrayLayout, attrs.commVolumeBytes);
+      attrs.writeFootprint,       attrs.inPlaceSafe, attrs.inPlaceSharedState, attrs.arrayLayout);
 }
 
 class SDECostModel;

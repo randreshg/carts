@@ -30,6 +30,6 @@ func.func @raise_window_elementwise_2d() {
     }
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [16, 64], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0], role = "write"}]}
+  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [16, 64], kind = "block_parallel", muBlockCount = 8 : i64, ownerDims = [0], role = "write"}]}
   return
 }

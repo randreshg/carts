@@ -12,8 +12,7 @@
 /// It is strictly DATA-LAYOUT: pattern-agnostic (driven only by affine maps,
 /// iterator types, and static shapes), it NAMES NO COLLECTIVE, and it knows
 /// nothing about concrete storage, tasks, epochs, or runtime placement. It only
-/// adds transitional `arrayLayout` and `commVolumeBytes` SDE attrs on
-/// disagreeing readers and writers. Redistribution edges are detected later by
+/// adds transitional `arrayLayout` SDE attrs on disagreeing readers and writers. Redistribution edges are detected later by
 /// comparing committed producer/consumer layout facts (or rank-expanded
 /// `mu_alloc` types), not a `layoutsDisagree` marker.
 ///==========================================================================///
@@ -267,74 +266,60 @@ enumerateCandidates(const sde::ArrayAccessProfile &profile,
 }
 
 //===----------------------------------------------------------------------===//
-// PhaseC — cost model + assignment
+// PhaseC — structural layout assignment
 //===----------------------------------------------------------------------===//
 
-// Abstract communication volume (bytes) a candidate layout costs the module,
-// closed-form and pattern-free:
-//   - replicated: full array must be present everywhere => ~ N*(P-1)/P bytes of
-//     fill, charged once.
-//   - block layouts: each reader whose access geometry disagrees with the owner
-//     positions pays a redistribution edge. An owner-aligned read costs 0; a
-//     full-extent / owner-permuted read costs ~ N*(P-1)/P; a cross-owner
-//     reduction read (the contraction case) costs ~ output*logP.
-// P is the abstract block factor; aligned edges are exactly 0.
-static int64_t estimateCommVolume(
+static int layoutKindRank(sde::ArrayLayoutKind kind, bool preferContraction) {
+  switch (kind) {
+  case sde::ArrayLayoutKind::blockParallel:
+    return preferContraction ? 1 : 0;
+  case sde::ArrayLayoutKind::blockContraction:
+    return preferContraction ? 0 : 1;
+  case sde::ArrayLayoutKind::replicated:
+    return 2;
+  }
+  return 3;
+}
+
+static int candidatePriority(const sde::ArrayLayoutCandidate &candidate,
+                             bool preferContraction,
+                             bool preferFullWriterBlock) {
+  if (preferFullWriterBlock &&
+      candidate.kind == sde::ArrayLayoutKind::replicated)
+    return 1000;
+  if (preferContraction &&
+      candidate.kind == sde::ArrayLayoutKind::blockContraction)
+    return 0;
+  return layoutKindRank(candidate.kind, preferContraction);
+}
+
+// Readers whose access geometry disagrees with the chosen owner layout.
+static void collectDisagreeingReaders(
     const sde::ArrayAccessProfile &profile,
     const sde::ArrayLayoutCandidate &candidate,
-    SmallVectorImpl<std::pair<unsigned, int64_t>> &disagreeingReaderBytes) {
-  disagreeingReaderBytes.clear();
-  int64_t elemBytes = std::max<int64_t>(1, elementBytes(profile.root));
-  int64_t totalElements = productOf(profile.staticShape);
-  int64_t totalBytes = totalElements * elemBytes;
-  int64_t blockFactor = kAbstractBlockFactor;
-  // N*(P-1)/P.
-  int64_t fullExtentEdge =
-      (totalBytes * (blockFactor - 1)) / std::max<int64_t>(1, blockFactor);
-
+    llvm::SmallDenseSet<unsigned, 4> &disagreeingReaders) {
+  disagreeingReaders.clear();
   if (candidate.kind == sde::ArrayLayoutKind::replicated)
-    return fullExtentEdge;
+    return;
 
-  // Owner positions of the candidate.
   llvm::SmallBitVector ownerBits(profile.rank);
   for (int64_t pos : candidate.ownerPositions)
     if (pos >= 0 && static_cast<size_t>(pos) < profile.rank)
       ownerBits.set(pos);
 
-  // The "home" loop-dim per owner position from the writer's parallel index.
-  // A reader is aligned when, for every owner position, it indexes that
-  // position with the same parallel loop-dim kind as the owner. We approximate
-  // alignment geometrically: the reader is aligned if it parallel-indexes every
-  // owner position with offset 0; it disagrees otherwise.
-  int64_t total = 0;
-  // Distinct reader scheduling units and their worst-case per-position use.
   llvm::DenseMap<unsigned, bool> readerAligned;
-  llvm::DenseMap<unsigned, bool> readerCrossOwnerReduction;
   for (unsigned pos = 0; pos < profile.rank; ++pos) {
-    bool ownerPos = ownerBits.test(pos);
+    if (!ownerBits.test(pos))
+      continue;
     for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
       if (use.isWrite)
         continue;
       bool &aligned = readerAligned.try_emplace(use.suId, true).first->second;
-      bool &crossReduce =
-          readerCrossOwnerReduction.try_emplace(use.suId, false).first->second;
-      if (!ownerPos)
-        continue;
-      // This reader touches an owner position: alignment depends on how.
       switch (use.kind) {
       case sde::ArrayDimKind::parallelIndexed:
-        // Owner-aligned read of the owned axis: cost 0.
         break;
       case sde::ArrayDimKind::parallelHalo:
-        // Neighborhood read: geometrically a (small) disagreement.
-        aligned = false;
-        break;
       case sde::ArrayDimKind::reductionIndexed:
-        // The owned axis is consumed as a contraction axis: cross-owner
-        // reduction edge.
-        aligned = false;
-        crossReduce = true;
-        break;
       case sde::ArrayDimKind::broadcast:
         aligned = false;
         break;
@@ -342,47 +327,18 @@ static int64_t estimateCommVolume(
     }
   }
 
-  int64_t outputBytes = std::max<int64_t>(1, fullExtentEdge);
-  int64_t crossOwnerReduceEdge = outputBytes * integerLog2Ceil(blockFactor);
-
-  for (auto &entry : readerAligned) {
-    unsigned suId = entry.first;
-    bool aligned = entry.second;
-    if (aligned)
-      continue;
-    bool crossReduce = readerCrossOwnerReduction.lookup(suId);
-    int64_t edgeBytes = crossReduce ? crossOwnerReduceEdge : fullExtentEdge;
-    disagreeingReaderBytes.push_back({suId, edgeBytes});
-    total += edgeBytes;
-  }
-
-  // A block layout that no reader can align to is no better than replicated for
-  // those readers; if every reader disagrees and the array has no aligned
-  // consumer, the block layout still beats replicated by the writer's locality,
-  // so we keep the block cost (sum of edges) which is naturally <= replicated
-  // when at least one reader aligns.
-  return total;
+  for (auto &entry : readerAligned)
+    if (!entry.second)
+      disagreeingReaders.insert(entry.first);
 }
 
 struct ChosenLayout {
   sde::ArrayLayoutCandidate layout;
-  int64_t commVolumeBytes = 0;
-  SmallVector<std::pair<unsigned, int64_t>, 2> disagreeingReaderBytes;
+  llvm::SmallDenseSet<unsigned, 4> disagreeingReaders;
 };
 
-// PhaseC: pick the minimum-cost candidate. Greedy seed = the writer's owner
-// dims (owner-computes) is naturally expressed because the BlockParallel
-// candidate is built from the writer's parallel-indexed positions; the cost
-// model then confirms it against readers, and Replicated is selected only when
-// block layouts cost more (e.g. every consumer disagrees and the array is
-// tiny).
-//
-// When `contractionPosition` is set the array is a sibling-distributed
-// intermediate consumed on its contraction axis; the contraction consumption is
-// the dominant edge, so a BlockContraction candidate aligned to it wins ties
-// and is preferred over a parallel home that would force every contraction read
-// to redistribute. Otherwise ties prefer block over replicated, and parallel
-// over contraction (the simpler edge).
+// PhaseC: derive layout from access relations (owner-computes / contraction /
+// stencil / replicated), not from an abstract byte-cost search.
 static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
                                  std::optional<unsigned> contractionPosition,
                                  bool preserveFullWriterOwnerTile) {
@@ -392,58 +348,25 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
   bool preferFullWriterBlock =
       preserveFullWriterOwnerTile && profile.hasFullRankWriter;
 
-  ChosenLayout best;
-  bool haveBest = false;
-  int64_t bestSelectionCost = 0;
+  const sde::ArrayLayoutCandidate *chosen = nullptr;
+  int bestPriority = std::numeric_limits<int>::max();
   for (const sde::ArrayLayoutCandidate &candidate : candidates) {
-    SmallVector<std::pair<unsigned, int64_t>, 2> disagree;
-    int64_t cost = estimateCommVolume(profile, candidate, disagree);
-
-    // When the contraction gate fired, this array is a sibling-distributed
-    // intermediate consumed on its contraction axis: the contraction
-    // read is the INTENDED tiling, not a redistribution. The abstract cost
-    // model otherwise undercounts a block_parallel[j] home that "aligns" the
-    // parallel-j read while silently forcing the k-contraction to gather across
-    // owners. Discount the contraction candidate's own contraction edge for the
-    // SELECTION so the home layout matches the contraction-tiling decision; the
-    // committed commVolumeBytes still reports the real abstract estimate.
-    int64_t selectionCost = cost;
-    if (preferContraction &&
-        candidate.kind == sde::ArrayLayoutKind::blockContraction)
-      selectionCost = 0;
-    // A full-rank writer feeding stencil readers is owned distributed state.
-    // Replication would erase the SDE layout fact and force SDE/ARTS to
-    // repair state placement instead of realizing the communication edge.
-    if (preferFullWriterBlock &&
-        candidate.kind == sde::ArrayLayoutKind::replicated)
-      selectionCost = std::numeric_limits<int64_t>::max() / 4;
-
-    bool better = !haveBest || selectionCost < bestSelectionCost;
-    if (!better && selectionCost == bestSelectionCost) {
-      // Tie-break by layout-kind preference.
-      auto rank = [&](sde::ArrayLayoutKind kind) -> int {
-        switch (kind) {
-        case sde::ArrayLayoutKind::blockParallel:
-          return preferContraction ? 1 : 0;
-        case sde::ArrayLayoutKind::blockContraction:
-          return preferContraction ? 0 : 1;
-        case sde::ArrayLayoutKind::replicated:
-          return 2;
-        }
-        return 3;
-      };
-      better = rank(candidate.kind) < rank(best.layout.kind);
-    }
-
-    if (better) {
-      best.layout = candidate;
-      best.commVolumeBytes = cost;
-      best.disagreeingReaderBytes.assign(disagree.begin(), disagree.end());
-      bestSelectionCost = selectionCost;
-      haveBest = true;
+    int priority =
+        candidatePriority(candidate, preferContraction, preferFullWriterBlock);
+    if (priority < bestPriority) {
+      chosen = &candidate;
+      bestPriority = priority;
     }
   }
-  return best;
+  if (!chosen && !candidates.empty())
+    chosen = &candidates.back();
+
+  ChosenLayout result;
+  if (chosen)
+    result.layout = *chosen;
+  if (chosen)
+    collectDisagreeingReaders(profile, result.layout, result.disagreeingReaders);
+  return result;
 }
 
 //===----------------------------------------------------------------------===//
@@ -466,8 +389,7 @@ static StringRef layoutKindString(sde::ArrayLayoutKind kind) {
 static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
                                        ArrayRef<int64_t> staticShape,
                                        const sde::ArrayLayoutCandidate &layout,
-                                       StringRef role, int64_t edgeCommBytes,
-                                       int64_t elemBytes) {
+                                       StringRef role, int64_t elemBytes) {
   Builder b(ctx);
   SmallVector<NamedAttribute, 8> fields;
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::ArrayId,
@@ -486,8 +408,6 @@ static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
       sde::AttrNames::LayoutGraph::MuBlockCount,
       b.getI64IntegerAttr(computeMuBlockCount(
           staticShape, layout.ownerPositions, layout.blockShape))));
-  fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::CommVolumeBytes,
-                                  b.getI64IntegerAttr(edgeCommBytes)));
   // Node-agnostic budget grain consumed by SDE loop tiling and distribution
   // transforms to seed the physical tile block shape. For block layouts only;
   // replicated/contraction keep the abstract grain mirrored so the field is
@@ -680,7 +600,6 @@ struct LayoutAssignmentPass
     struct SchedulingUnitLayoutUpdate {
       SmallVector<DictionaryAttr, 4> entries;
       SmallVector<RootProvenance, 4> roots;
-      int64_t commVolumeBytes = 0;
     };
     SmallVector<SchedulingUnitLayoutUpdate> updates(
         relations.schedulingUnits.size());
@@ -715,27 +634,23 @@ struct LayoutAssignmentPass
         for (const sde::ArrayPositionUse &use : posUses)
           accessors.insert(use.suId);
 
-      llvm::DenseMap<unsigned, int64_t> edgeBytesByReader;
-      for (auto [suId, edgeBytes] : chosen.disagreeingReaderBytes)
-        edgeBytesByReader[suId] += edgeBytes;
-
       for (unsigned suId : accessors) {
         if (suId >= updates.size())
           continue;
         bool isWrite = schedulingUnitWritesRoot(profile, suId);
-        int64_t edgeBytes = edgeBytesByReader.lookup(suId);
+        bool readerDisagrees = chosen.disagreeingReaders.contains(suId);
         sde::ArrayLayoutCandidate layoutForSu = chosen.layout;
-        if (!isWrite && edgeBytes > 0)
+        if (!isWrite && readerDisagrees)
           layoutForSu = inferReaderRequiredLayout(profile, suId, chosen.layout);
         DictionaryAttr entry = buildLayoutEntry(
             ctx, arrayId, profile.staticShape, layoutForSu,
             isWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
                     : sde::AttrNames::LayoutGraphValues::RoleRead,
-            edgeBytes, std::max<int64_t>(1, elementBytes(profile.root)));
+            std::max<int64_t>(1, elementBytes(profile.root)));
         // Aligned readers carry no transitional arrayLayout unless they share a
         // scheduling unit with a writer that still needs local block structure
         // (e.g. coupled read/write in the same reduction nest).
-        if (!isWrite && edgeBytes == 0 &&
+        if (!isWrite && !readerDisagrees &&
             !schedulingUnitWritesAnyRoot(relations, suId))
           continue;
         bool writerViaMuType =
@@ -756,7 +671,6 @@ struct LayoutAssignmentPass
         updates[suId].roots.push_back(
             {profile.root, arrayId,
              isWrite ? sde::SdeAccessMode::write : sde::SdeAccessMode::read});
-        updates[suId].commVolumeBytes += edgeBytes;
       }
     }
 
@@ -771,9 +685,6 @@ struct LayoutAssignmentPass
                                              update.entries.end());
         op.setArrayLayoutAttr(ArrayAttr::get(ctx, entryAttrs));
       }
-      if (update.commVolumeBytes > 0)
-        op.setCommVolumeBytesAttr(
-            IntegerAttr::get(IntegerType::get(ctx, 64), update.commVolumeBytes));
 
       OpBuilder builder(&op.getBody().front(), op.getBody().front().begin());
       for (const RootProvenance &root : update.roots) {

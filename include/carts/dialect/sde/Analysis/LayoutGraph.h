@@ -93,7 +93,6 @@ struct MuNet {
   SmallVector<int64_t, 4> blockShape;
   ArrayLayoutKind layoutKind = ArrayLayoutKind::replicated;
   int64_t elementBytes = 0;
-  int64_t commVolumeBytes = 0;
   int64_t muBlockCount = 1;
   int64_t tilePayloadBytes = 0;
   SmallVector<unsigned, 4> pinIds;
@@ -128,7 +127,6 @@ struct LayoutGraphFact {
   // predate the N-node migration or carry no budget grain.
   SmallVector<int64_t, 4> budgetBlockShape;
   int64_t muBlockCount = 1;
-  int64_t commVolumeBytes = 0;
 };
 
 /// Runtime-neutral graph balance summary. The score fields are abstract SDE

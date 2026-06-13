@@ -19,7 +19,7 @@ func.func @repartition_owner_dims(%T: memref<256x256xf32>, %U: memref<256x256xf3
       memref.store %cst, %T[%i, %j] : memref<256x256xf32>
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write"}]}
   sde.su_distribute <owner_compute> {
   sde.su_iterate (%c0, %c0) to (%c256, %c256) step (%c1, %c1) {
   ^bb0(%i: index, %j: index):
@@ -30,7 +30,7 @@ func.func @repartition_owner_dims(%T: memref<256x256xf32>, %U: memref<256x256xf3
       memref.store %v, %U[%i, %j] : memref<256x256xf32>
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0, 1], blockShape = [64, 128], muBlockCount = 8 : i64, role = "read", commVolumeBytes = 0 : i64}, {arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0, 1], blockShape = [64, 128], muBlockCount = 8 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0, 1], blockShape = [64, 128], muBlockCount = 8 : i64, role = "read"}, {arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0, 1], blockShape = [64, 128], muBlockCount = 8 : i64, role = "write"}]}
   }
   return
 }

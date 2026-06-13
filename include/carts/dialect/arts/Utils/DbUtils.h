@@ -296,6 +296,18 @@ public:
                                                          int depth = 0);
 };
 
+/// Build a whole-DB acquire window: zero offsets and full alloc sizes.
+void buildWholeDbAcquireWindow(OpBuilder &builder, Location loc,
+                               DbAllocOp alloc,
+                               SmallVectorImpl<Value> &offsets,
+                               SmallVectorImpl<Value> &sizes);
+
+/// Create a block-mode acquire for one DB block at the given fold-constant
+/// block coordinates. Each coordinate gets a unit extent in DB space.
+DbAcquireOp createUnitBlockDbAcquireAtCoords(OpBuilder &builder, Location loc,
+                                             ArtsMode mode, DbAllocOp alloc,
+                                             ArrayRef<int64_t> blockCoords);
+
 } // namespace carts::arts
 } // namespace mlir
 

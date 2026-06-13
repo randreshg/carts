@@ -29,7 +29,7 @@ func.func @rank_expanded_source_checksum_partials() -> f64 {
       memref.store %one, %A[%block, %tile] : memref<8x16xf64>
       sde.yield
     } {serialReason = #sde.serial_reason<residual_source>}
-  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 8 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 8 : i64, role = "write"}]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {
       %old = memref.load %sum[] : memref<f64>
@@ -72,7 +72,7 @@ func.func @rank_expanded_nonleading_owner_checksum_partials() -> f64 {
       memref.store %one, %A[%block, %i, %tile, %k] : memref<4x8x2x16xf64>
       sde.yield
     } {serialReason = #sde.serial_reason<residual_source>}
-  } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [1], blockShape = [8, 2, 16], muBlockCount = 4 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [1], blockShape = [8, 2, 16], muBlockCount = 4 : i64, role = "write"}]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c8 step %c1 {
       %old = memref.load %sum[] : memref<f64>

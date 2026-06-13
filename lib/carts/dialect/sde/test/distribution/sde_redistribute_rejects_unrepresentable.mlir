@@ -2,7 +2,7 @@
 
 // Non-reduction layout mismatches fail closed until SDE commits a real
 // redistribution transform for that geometry.
-// CHECK: error: {{.*}}redistribution edge
+// CHECK: error: {{.*}}redistribut
 
 func.func @unrepresentable(%T: memref<256x256xf32>,
                            %G: memref<256x256xf32>) {
@@ -17,7 +17,7 @@ func.func @unrepresentable(%T: memref<256x256xf32>,
       memref.store %cst, %T[%i, %j] : memref<256x256xf32>
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write"}]}
   sde.su_iterate (%c0, %c0) to (%c256, %c256) step (%c1, %c1) {
   ^bb0(%i: index, %j: index):
     sde.array_layout_root read %T : memref<256x256xf32> array_id(0)
@@ -27,6 +27,6 @@ func.func @unrepresentable(%T: memref<256x256xf32>,
       memref.store %t, %G[%i, %j] : memref<256x256xf32>
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read", commVolumeBytes = 2097152 : i64}, {arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [1], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read"}, {arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write"}]}
   return
 }

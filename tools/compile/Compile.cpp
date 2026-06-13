@@ -251,7 +251,7 @@ static cl::opt<std::string> CustomPassPipeline(
 
 static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
     {"PromoteTargetAttrs",
-     "LowerAffine(func)",
+     "SimplifyAffineStructures(func)",
      "CSE",
      "SdeInputInliner",
      "PolygeistCanonicalize",
@@ -261,14 +261,16 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "SdeHandleDeps",
      "SdeDeadStateCleanup",
      "CSE"};
-static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
-    "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 2> kInitialCleanupPasses = {
+    "CSE(func)", "PolygeistCanonicalizeFor(func)"};
+static const std::array<llvm::StringLiteral, 25> kSdePlanningPasses = {
+    "LowerAffine(func)",
     "ConvertOpenMPToSde",
     "RaiseToSde",
     "LayoutAssignment",
     "LoopInterchange",
     "Tiling",
+    "RaiseToSde",
     "ElementwiseFusion",
     "DistributionPlanning",
     "IterationSpaceDecomposition",
@@ -1088,7 +1090,9 @@ void buildSdeInputNormalizationPipeline(PassManager &pm) {
   /// upstream conversion passes drop the polygeist-prefixed originals.
   pm.addPass(sde::createPromoteTargetAttrs());
   OpPassManager &optPM = pm.nest<func::FuncOp>();
-  optPM.addPass(createLowerAffinePass());
+  // architecture.md S3: keep affine through normalization; normalize instead of
+  // lowering so memref normalization can read affine.load/store maps natively.
+  optPM.addPass(affine::createSimplifyAffineStructuresPass());
   pm.addPass(createCSEPass());
   pm.addPass(sde::createSdeInputInlinerPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -1102,7 +1106,6 @@ void buildSdeInputNormalizationPipeline(PassManager &pm) {
 
 /// Initial cleanup and simplification passes.
 void buildInitialCleanupPipeline(OpPassManager &optPM) {
-  optPM.addPass(createLowerAffinePass());
   optPM.addPass(createCSEPass());
   optPM.addPass(polygeist::createCanonicalizeForPass());
 }
@@ -1111,6 +1114,9 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
 /// here; SDE facts feed the direct `sde-to-arts` boundary.
 void buildSdePlanningPipeline(PassManager &pm,
                               sde::SDECostModel *costModel = nullptr) {
+  // S3 bridge: SDE structural passes still consume scf until S4 swaps loop
+  // analysis/tiling/interchange onto upstream affine inside su_iterate bodies.
+  pm.addNestedPass<func::FuncOp>(createLowerAffinePass());
   pm.addPass(sde::createConvertOpenMPToSdePass());
   // raise-to-sde CORE promotes proven-independent host nests and folds the
   // initial cu-normalization.
@@ -1120,6 +1126,8 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createLayoutAssignmentPass(costModel));
   pm.addPass(sde::createLoopInterchangePass());
   pm.addPass(sde::createTilingPass(costModel));
+  // S6: re-run raise-to-sde after shape transforms expose new parallelism.
+  pm.addPass(sde::createRaiseToSdePass());
   pm.addPass(sde::createElementwiseFusionPass());
   pm.addPass(sde::createDistributionPlanningPass(costModel));
   pm.addPass(sde::createIterationSpaceDecompositionPass());

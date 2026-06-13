@@ -95,12 +95,12 @@ def LayoutAssignment
       (`buildModuleSuAccessRelations`).
     - PhaseB enumerates candidate layouts per array (block-parallel owner-dim,
       block-contraction, replicated layout).
-    - PhaseC assigns one layout per array, seeding from the writer's owner dims
-      (owner-computes) and minimizing total abstract `commVolumeBytes`.
+    - PhaseC assigns one layout per array structurally from access profiles
+      (owner-computes; no comm-volume score).
     - PhaseD writes the chosen layout as the `arrayLayout` attr on BOTH the
-      writer and every reader scheduling unit (the key generalization to
-      INPUTS), plus a per-edge `layoutsDisagree` geometric mismatch marker and
-      an abstract `commVolumeBytes`.
+      writer and every reader scheduling unit, plus a per-edge
+      `layoutsDisagree` geometric mismatch marker when reader/writer shapes
+      disagree.
 
     These attrs are SDE layout facts, not decorative breadcrumbs: SDE
     distribution consumes the abstract communication volume when choosing

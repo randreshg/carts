@@ -66,7 +66,7 @@ func.func @owner_local_pipeline_budget_retiled() {
     }
     sde.yield
   } {arrayLayout = [{arrayId = 1 : i64, blockShape = [32768, 8192],
-       budgetBlockShape = [64, 8192], commVolumeBytes = 0 : i64,
+       budgetBlockShape = [64, 8192],
        kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0],
        role = "write"}],
      inPlaceSharedState, partialReduction, partialReductionDims = [1],
@@ -113,11 +113,11 @@ func.func @promoted_reduction_budget_retiled() {
     }
     sde.yield
   } {arrayLayout = [{arrayId = 2 : i64, blockShape = [256, 128],
-       budgetBlockShape = [512, 256], commVolumeBytes = 0 : i64,
+       budgetBlockShape = [512, 256],
        kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1],
        role = "write"},
       {arrayId = 3 : i64, blockShape = [256, 256, 3136],
-       budgetBlockShape = [1, 256, 3136], commVolumeBytes = 0 : i64,
+       budgetBlockShape = [1, 256, 3136],
        kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0],
        role = "read"}],
      inPlaceSharedState}
@@ -162,7 +162,7 @@ func.func @replicated_writer_physical_shape_window() {
     }
     sde.yield
   } {arrayLayout = [{arrayId = 4 : i64, blockShape = [512, 256, 784],
-       budgetBlockShape = [512, 256, 784], commVolumeBytes = 0 : i64,
+       budgetBlockShape = [512, 256, 784],
        kind = "replicated", muBlockCount = 1 : i64, ownerDims = [],
        role = "write"}],
      logicalWorkerSlice = [8, 256, 784], inPlaceSharedState}
@@ -205,7 +205,7 @@ func.func @block_contraction_writer_physical_shape_window() {
     }
     sde.yield
   } {arrayLayout = [{arrayId = 5 : i64, blockShape = [1024, 256],
-       budgetBlockShape = [1024, 256], commVolumeBytes = 0 : i64,
+       budgetBlockShape = [1024, 256],
        kind = "block_contraction", muBlockCount = 1 : i64, ownerDims = [0],
        role = "write"}],
      logicalWorkerSlice = [128, 256]}

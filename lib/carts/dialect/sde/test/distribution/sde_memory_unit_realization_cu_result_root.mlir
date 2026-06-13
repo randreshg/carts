@@ -26,6 +26,6 @@ func.func @cu_result_root_realizes_visible_mu() {
       memref.store %one, %A[%i] : memref<64xf32>
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [16], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0], role = "write"}]}
+  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [16], kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0], role = "write"}]}
   return
 }

@@ -22,6 +22,6 @@ func.func @reduction_output_window() {
       sde.yield
     }
     sde.yield
-  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [256], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0], role = "write"}]}
+  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [256], kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0], role = "write"}]}
   return
 }

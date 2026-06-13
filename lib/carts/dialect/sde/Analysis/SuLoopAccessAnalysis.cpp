@@ -396,6 +396,34 @@ tryGetAffineExpr(Value value, ArrayRef<Value> ivs, MLIRContext *ctx) {
   if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp))
     return tryGetAffineExpr(castOp.getIn(), ivs, ctx);
 
+  auto tryAffineBin = [&](Value lhsVal, Value rhsVal,
+                          AffineExprKind kind) -> std::optional<AffineExpr> {
+    auto lhs = tryGetAffineExpr(lhsVal, ivs, ctx);
+    if (!lhs)
+      return std::nullopt;
+    int64_t rhsCst = 0;
+    if (!ValueAnalysis::getConstantIndex(rhsVal, rhsCst) || rhsCst <= 0)
+      return std::nullopt;
+    auto rhsExpr = getAffineConstantExpr(rhsCst, ctx);
+    switch (kind) {
+    case AffineExprKind::FloorDiv:
+      return (*lhs).floorDiv(rhsExpr);
+    case AffineExprKind::Mod:
+      return *lhs % rhsExpr;
+    default:
+      return std::nullopt;
+    }
+  };
+
+  if (auto divOp = dyn_cast<arith::DivSIOp>(defOp))
+    return tryAffineBin(divOp.getLhs(), divOp.getRhs(), AffineExprKind::FloorDiv);
+  if (auto remOp = dyn_cast<arith::RemSIOp>(defOp))
+    return tryAffineBin(remOp.getLhs(), remOp.getRhs(), AffineExprKind::Mod);
+  if (auto divOp = dyn_cast<arith::DivUIOp>(defOp))
+    return tryAffineBin(divOp.getLhs(), divOp.getRhs(), AffineExprKind::FloorDiv);
+  if (auto remOp = dyn_cast<arith::RemUIOp>(defOp))
+    return tryAffineBin(remOp.getLhs(), remOp.getRhs(), AffineExprKind::Mod);
+
   return std::nullopt;
 }
 
@@ -1113,6 +1141,18 @@ std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr) {
       return std::nullopt;
     return AffineDimOffset{lhs->dim ? lhs->dim : rhs->dim,
                            lhs->offset + rhs->offset};
+  case AffineExprKind::Mul: {
+    if (lhs->dim && !rhs->dim)
+      return AffineDimOffset{*lhs->dim, lhs->offset * rhs->offset};
+    if (rhs->dim && !lhs->dim)
+      return AffineDimOffset{*rhs->dim, rhs->offset * lhs->offset};
+    return std::nullopt;
+  }
+  case AffineExprKind::FloorDiv:
+  case AffineExprKind::Mod:
+    if (!lhs->dim || rhs->dim || rhs->offset == 0)
+      return std::nullopt;
+    return AffineDimOffset{*lhs->dim, 0};
   default:
     return std::nullopt;
   }

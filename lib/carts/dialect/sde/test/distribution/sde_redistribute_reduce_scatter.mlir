@@ -22,7 +22,7 @@ func.func @reduce_scatter_contraction(%T: memref<256x256xf32>,
       memref.store %cst, %T[%i, %j] : memref<256x256xf32>
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_contraction", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_contraction", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write"}]}
   // Consumer reduces through %T on its row axis %k (a reduction read of the owned
   // dim) -> a cross-owner reduction redistribution edge.
   sde.su_distribute <owner_compute> {
@@ -42,7 +42,7 @@ func.func @reduce_scatter_contraction(%T: memref<256x256xf32>,
     }
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read", commVolumeBytes = 0 : i64}, {arrayId = 0 : i64, kind = "block_contraction", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read", commVolumeBytes = 2097152 : i64}, {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read"}, {arrayId = 0 : i64, kind = "block_contraction", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read"}, {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write"}]}
   }
   return
 }

@@ -46,11 +46,12 @@ struct ElementwiseStage {
 struct MergedLayoutEntry {
   DictionaryAttr entry;
   bool sawWrite = false;
-  int64_t commVolumeBytes = 0;
 };
 
-static bool isSkippableInterStageOp(Operation *op) {
-  return op && op->getNumRegions() == 0 && isMemoryEffectFree(op);
+static bool layoutFactsDisagree(const sde::LayoutGraphFact &a,
+                                const sde::LayoutGraphFact &b) {
+  return a.ownerDims != b.ownerDims || a.blockShape != b.blockShape ||
+         a.layoutKind != b.layoutKind;
 }
 
 static DictionaryAttr
@@ -60,9 +61,11 @@ rebuildMergedLayoutEntry(MLIRContext *ctx, const MergedLayoutEntry &merged) {
   Builder builder(ctx);
   SmallVector<NamedAttribute, 10> attrs;
   bool sawRole = false;
-  bool sawComm = false;
   attrs.reserve(merged.entry.size());
   for (NamedAttribute attr : merged.entry) {
+    // Drop the deleted commVolumeBytes field if stale IR still carries it.
+    if (attr.getName() == "commVolumeBytes")
+      continue;
     if (attr.getName() == sde::AttrNames::LayoutGraph::Role) {
       sawRole = true;
       attrs.push_back(builder.getNamedAttr(
@@ -70,13 +73,6 @@ rebuildMergedLayoutEntry(MLIRContext *ctx, const MergedLayoutEntry &merged) {
           builder.getStringAttr(
               merged.sawWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
                               : sde::AttrNames::LayoutGraphValues::RoleRead)));
-      continue;
-    }
-    if (attr.getName() == sde::AttrNames::LayoutGraph::CommVolumeBytes) {
-      sawComm = true;
-      attrs.push_back(builder.getNamedAttr(
-          sde::AttrNames::LayoutGraph::CommVolumeBytes,
-          builder.getI64IntegerAttr(merged.commVolumeBytes)));
       continue;
     }
     attrs.push_back(attr);
@@ -87,11 +83,11 @@ rebuildMergedLayoutEntry(MLIRContext *ctx, const MergedLayoutEntry &merged) {
         builder.getStringAttr(
             merged.sawWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
                             : sde::AttrNames::LayoutGraphValues::RoleRead)));
-  if (!sawComm)
-    attrs.push_back(builder.getNamedAttr(
-        sde::AttrNames::LayoutGraph::CommVolumeBytes,
-        builder.getI64IntegerAttr(merged.commVolumeBytes)));
   return builder.getDictionaryAttr(attrs);
+}
+
+static bool isSkippableInterStageOp(Operation *op) {
+  return op && op->getNumRegions() == 0 && isMemoryEffectFree(op);
 }
 
 static void applyMergedLayoutAttrs(sde::SdeSuIterateOp fused,
@@ -118,44 +114,33 @@ static void applyMergedLayoutAttrs(sde::SdeSuIterateOp fused,
       if (inserted) {
         order.push_back(arrayId);
         entries.push_back(
-            MergedLayoutEntry{dict, fact->role == sde::LayoutGraphRole::write,
-                              std::max<int64_t>(0, fact->commVolumeBytes)});
+            MergedLayoutEntry{dict, fact->role == sde::LayoutGraphRole::write});
         continue;
       }
 
       MergedLayoutEntry &merged = entries[it->second];
       bool candidateWrites = fact->role == sde::LayoutGraphRole::write;
-      int64_t candidateComm = std::max<int64_t>(0, fact->commVolumeBytes);
-      merged.commVolumeBytes += candidateComm;
-      if (candidateComm > 0)
+      if (layoutFactsDisagree(*fact, *sde::parseArrayLayoutFact(merged.entry)))
         disagreeIds.insert(arrayId);
       if (candidateWrites && !merged.sawWrite) {
         merged.entry = dict;
         merged.sawWrite = true;
-      } else if (!merged.sawWrite && candidateComm > 0 &&
-                 sde::parseArrayLayoutFact(merged.entry)->commVolumeBytes ==
-                     0) {
-        merged.entry = dict;
       }
     }
   }
 
   if (entries.empty()) {
     fused->removeAttr(fused.getArrayLayoutAttrName());
-    fused->removeAttr(fused.getCommVolumeBytesAttrName());
     return;
   }
 
   SmallVector<Attribute, 4> layoutAttrs;
   layoutAttrs.reserve(order.size());
-  int64_t totalCommBytes = 0;
   for (int64_t arrayId : order) {
     MergedLayoutEntry &merged = entries[indexByArrayId.lookup(arrayId)];
-    totalCommBytes += merged.commVolumeBytes;
     layoutAttrs.push_back(rebuildMergedLayoutEntry(ctx, merged));
   }
   fused.setArrayLayoutAttr(builder.getArrayAttr(layoutAttrs));
-  fused.setCommVolumeBytesAttr(builder.getI64IntegerAttr(totalCommBytes));
 }
 
 static std::optional<sde::SdeAccessMode>

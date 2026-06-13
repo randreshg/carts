@@ -35,7 +35,7 @@ func.func @fp_stride_checksum_block_partials(%A: memref<1024xf64>) -> f64 {
       memref.store %one, %A[%i] : memref<1024xf64>
       sde.yield
     } {serialReason = #sde.serial_reason<residual_source>}
-  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 64 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 64 : i64, role = "write"}]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c1024 step %c128 {
       %old = memref.load %sum[] : memref<f64>
@@ -72,7 +72,7 @@ func.func @strict_fp_dense_checksum_ordered_partials(%A: memref<128xf64>) -> f64
       memref.store %one, %A[%i] : memref<128xf64>
       sde.yield
     } {serialReason = #sde.serial_reason<residual_source>}
-  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 8 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 8 : i64, role = "write"}]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {
       %old = memref.load %sum[] : memref<f64>
@@ -107,7 +107,7 @@ func.func @integer_dense_checksum_block_partials(%A: memref<128xi32>) -> i32 {
       memref.store %one, %A[%i] : memref<128xi32>
       sde.yield
     } {serialReason = #sde.serial_reason<residual_source>}
-  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 8 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 8 : i64, role = "write"}]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {
       %old = memref.load %sum[] : memref<i32>

@@ -7,6 +7,7 @@ add_mlir_dialect_library(MLIRCartsArtsUtils
   LocationMetadata.cpp
   LoopStructureUtils.cpp
   LoweringFactUtils.cpp
+  MovementLoweringUtils.cpp
   RuntimeConfig.cpp
   StringUtils.cpp
   ValueAnalysisUtils.cpp
@@ -28,6 +29,7 @@ add_mlir_dialect_library(MLIRCartsArtsUtils
     MLIRSideEffectInterfaces
     MLIRTransformUtils
     MLIRCartsArts
+    MLIRCartsSde
 )
 
 target_link_libraries(MLIRCartsArtsUtils PRIVATE ${MLIR_POLYGEIST_LIB})

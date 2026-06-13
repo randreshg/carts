@@ -34,7 +34,7 @@ func.func @matmul_output_access_windows() {
       sde.yield
     }
     sde.yield
-  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [32, 32], budgetBlockShape = [32, 128], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 16 : i64, ownerDims = [0, 1], role = "write"}]}
+  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [32, 32], budgetBlockShape = [32, 128], kind = "block_parallel", muBlockCount = 16 : i64, ownerDims = [0, 1], role = "write"}]}
 
   sde.su_iterate (%c0, %c0) to (%c128, %c128) step (%c32, %c32) classification(<elementwise>) {
   ^bb0(%i: index, %j: index):
@@ -45,7 +45,7 @@ func.func @matmul_output_access_windows() {
       sde.yield
     }
     sde.yield
-  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [32, 32], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 16 : i64, ownerDims = [0, 1], role = "read"}]}
+  } {arrayLayout = [{arrayId = 0 : i64, blockShape = [32, 32], kind = "block_parallel", muBlockCount = 16 : i64, ownerDims = [0, 1], role = "read"}]}
   return
 }
 
@@ -79,6 +79,6 @@ func.func @symmetric_self_gram_mirror_access_windows() {
       sde.yield
     }
     sde.yield
-  } {arrayLayout = [{arrayId = 1 : i64, blockShape = [4, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 1 : i64, ownerDims = [0], role = "write"}]}
+  } {arrayLayout = [{arrayId = 1 : i64, blockShape = [4, 4], kind = "block_parallel", muBlockCount = 1 : i64, ownerDims = [0], role = "write"}]}
   return
 }

@@ -384,10 +384,7 @@ def SdeSuIterateOp
     // Transitional per-array BLOCK layout on disagreeing readers and writers.
     // Aligned readers carry no entry; their layout lives in the rank-expanded
     // `mu_alloc` type after `sde-memory-unit-realization`.
-    OptionalAttr<ArrayAttr>:$arrayLayout,
-    // Abstract communication-volume estimate (bytes) for this scheduling unit
-    // under the chosen layouts. Advisory only.
-    OptionalAttr<I64Attr>:$commVolumeBytes
+    OptionalAttr<ArrayAttr>:$arrayLayout
   );
 
   let results = (outs Variadic<AnyType>:$results);

@@ -19,7 +19,7 @@ func.func @ungrounded() {
         sde.yield
       }
       sde.yield
-    } {arrayLayout = [{arrayId = 0 : i64, kind = "block_contraction", ownerDims = [0], blockShape = [16, 64], muBlockCount = 8 : i64, role = "read", commVolumeBytes = 0 : i64}], partialReduction, partialReductionDims = [0], partialReductionOwnerDims = [0]}
+    } {arrayLayout = [{arrayId = 0 : i64, kind = "block_contraction", ownerDims = [0], blockShape = [16, 64], muBlockCount = 8 : i64, role = "read"}], partialReduction, partialReductionDims = [0], partialReductionOwnerDims = [0]}
   }
   return
 }

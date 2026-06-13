@@ -53,7 +53,7 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
         sde.yield
       }
       sde.yield
-    } {arrayLayout = [{arrayId = 0 : i64, blockShape = [1, 4], commVolumeBytes = 0 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}]}
+    } {arrayLayout = [{arrayId = 0 : i64, blockShape = [1, 4], kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}]}
 
     sde.su_distribute <owner_compute> {
       sde.su_reduce_scatter %T : memref<2x4xf32> array_id(0) owner [0] block [1, 4] reduce 0 kind <add>
@@ -72,7 +72,7 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
           memref.store %sum, %G[%b, %e] : memref<2x4xf32>
         } {groupBlockCount = [2]}
         sde.yield
-      } {arrayLayout = [{arrayId = 0 : i64, blockShape = [1, 4], commVolumeBytes = 128 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 1 : i64, blockShape = [4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}], partialReduction, partialReductionDims = [0], partialReductionOwnerDims = [0]}
+      } {arrayLayout = [{arrayId = 0 : i64, blockShape = [1, 4], kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 1 : i64, blockShape = [4], kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}], partialReduction, partialReductionDims = [0], partialReductionOwnerDims = [0]}
     }
     return
   }
@@ -98,7 +98,7 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
         sde.yield
       }
       sde.yield
-    } {arrayLayout = [{arrayId = 0 : i64, blockShape = [1, 1, 4, 4], commVolumeBytes = 0 : i64, kind = "block_contraction", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}]}
+    } {arrayLayout = [{arrayId = 0 : i64, blockShape = [1, 1, 4, 4], kind = "block_contraction", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}]}
 
     sde.su_distribute <owner_compute> {
       sde.su_reduce_scatter %T : memref<2x2x4x4xf32> array_id(0) owner [0, 1] block [1, 1, 4, 4] reduce 0 kind <add>
@@ -119,7 +119,7 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
           memref.store %sum, %G[%bi, %bj, %ei, %ej] : memref<2x2x4x4xf32>
         } {groupBlockCount = [2, 2]}
         sde.yield
-      } {arrayLayout = [{arrayId = 0 : i64, blockShape = [1, 1, 4, 4], commVolumeBytes = 512 : i64, kind = "block_contraction", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"}, {arrayId = 1 : i64, blockShape = [4, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}], partialReduction, partialReductionDims = [0], partialReductionOwnerDims = [0]}
+      } {arrayLayout = [{arrayId = 0 : i64, blockShape = [1, 1, 4, 4], kind = "block_contraction", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "read"}, {arrayId = 1 : i64, blockShape = [4, 4], kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}], partialReduction, partialReductionDims = [0], partialReductionOwnerDims = [0]}
     }
     return
   }

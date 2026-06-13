@@ -18,7 +18,7 @@ func.func @expanded_halo_permuted_owner_order(%U: memref<4x4x55x72x72x7xf64>) {
       memref.store %cst, %U[%i, %j, %k, %c0, %c0, %c0] : memref<4x4x55x72x72x7xf64>
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 3 : i64, kind = "block_parallel", ownerDims = [2, 1, 0], blockShape = [72, 72, 7], budgetBlockShape = [144, 288, 7], muBlockCount = 880 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  } {arrayLayout = [{arrayId = 3 : i64, kind = "block_parallel", ownerDims = [2, 1, 0], blockShape = [72, 72, 7], budgetBlockShape = [144, 288, 7], muBlockCount = 880 : i64, role = "write"}]}
   sde.su_distribute <owner_compute> {
   sde.su_iterate (%c0, %c0, %c0) to (%c55, %c4, %c4) step (%c1, %c1, %c1) classification(<stencil>) {
   ^bb0(%k: index, %j: index, %i: index):
@@ -28,7 +28,7 @@ func.func @expanded_halo_permuted_owner_order(%U: memref<4x4x55x72x72x7xf64>) {
       memref.store %v, %U[%i, %j, %k, %c0, %c0, %c0] : memref<4x4x55x72x72x7xf64>
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 3 : i64, kind = "block_parallel", ownerDims = [2, 1, 0], blockShape = [72, 72, 7], muBlockCount = 880 : i64, role = "read", commVolumeBytes = 99 : i64}], accessMinOffsets = [-1, -1, -1], accessMaxOffsets = [1, 1, 1]}
+  } {arrayLayout = [{arrayId = 3 : i64, kind = "block_parallel", ownerDims = [2, 1, 0], blockShape = [72, 72, 7], muBlockCount = 880 : i64, role = "read"}], accessMinOffsets = [-1, -1, -1], accessMaxOffsets = [1, 1, 1]}
   }
   return
 }

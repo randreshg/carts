@@ -7,17 +7,10 @@
 /// classification can be shared by SDE-owned distribution and tiling planning
 /// without depending on target runtime IR.
 ///
-/// Consumes post-LowerAffine IR: the executable leaf CU block inside an
-/// `sde.su_iterate` contains `scf.for`, `memref.load`/`store`, and
-/// `arith.addi`/`subi`/`muli`/`index_cast`/`constant`. Direct raw compute in
-/// the SU body is illegal after CU normalization. This analysis does **not**
-/// match `affine.*` ops; those have been lowered by the
-/// `sde-input-normalization` and `initial-cleanup` stages registered in
-/// `tools/compile/Compile.cpp`. The `AffineMap` / `AffineExpr` types here come
-/// from `mlir/IR/AffineMap.h` (MLIR's IR-level math data structure for linear
-/// combinations of dims and symbols) and are reconstructed from post-lowering
-/// `arith` chains by `tryGetAffineExpr` and `tryBuildIndexingMap` in
-/// `SuLoopAccessAnalysis.cpp`.
+/// Consumes post-SDE-wrap IR inside `sde.su_iterate` CU bodies: `scf.for`,
+/// `memref.load`/`store`, and lowered `arith` index chains. A planning-head
+/// `LowerAffine` bridge remains until S4 swaps onto upstream `MemRefAccess`.
+/// Index maps are rebuilt from `arith` by `tryGetAffineExpr` in this file.
 ///==========================================================================///
 
 #ifndef ARTS_DIALECT_SDE_ANALYSIS_SU_LOOP_ACCESS_ANALYSIS_H
@@ -287,11 +280,9 @@ struct ArrayLayoutCandidate {
   SmallVector<int64_t, 4> blockShape;
 };
 
-/// The chosen layout for an array root after cost-minimizing assignment
-/// (PhaseC). `commVolumeBytes` is the abstract per-array contribution.
+/// The chosen layout for an array root after structural assignment (PhaseC).
 struct AssignedArrayLayout {
   ArrayLayoutCandidate layout;
-  int64_t commVolumeBytes = 0;
 };
 
 //===----------------------------------------------------------------------===//

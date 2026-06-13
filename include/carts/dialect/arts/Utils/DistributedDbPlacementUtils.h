@@ -524,6 +524,30 @@ inline std::optional<int64_t> staticLinearIndex(ArrayRef<int64_t> sizes,
   return linear;
 }
 
+inline std::optional<SmallVector<int64_t, 4>>
+staticCoordsFromLinearIndex(int64_t linear, ArrayRef<int64_t> sizes) {
+  if (linear < 0)
+    return std::nullopt;
+  std::optional<SmallVector<int64_t, 4>> strides = staticRowMajorStrides(sizes);
+  if (!strides)
+    return std::nullopt;
+  SmallVector<int64_t, 4> coords;
+  coords.reserve(sizes.size());
+  for (size_t idx = 0; idx < sizes.size(); ++idx) {
+    int64_t stride = (*strides)[idx];
+    int64_t size = sizes[idx];
+    if (stride <= 0 || size <= 0)
+      return std::nullopt;
+    int64_t coord = linear / stride;
+    if (idx + 1 < sizes.size())
+      coord %= size;
+    if (coord < 0 || coord >= size)
+      return std::nullopt;
+    coords.push_back(coord);
+  }
+  return coords;
+}
+
 inline std::optional<int64_t>
 staticOwnerDimContiguousRoute(int64_t ownerLinear, int64_t ownerSpace,
                               int64_t totalNodes) {

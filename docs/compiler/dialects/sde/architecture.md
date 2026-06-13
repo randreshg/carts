@@ -4,37 +4,42 @@ The single coherent statement of the redesign. It supersedes, as *narrative*, th
 accreted Parts 5/6/7 of [`design-revision.md`](./design-revision.md) (kept as the
 detailed file:line derivations).
 
-## Implementation status (live checklist — `v4`, scanned @ `5010dc38f`)
+## Implementation status (`v4`, post S3–S7 + boundary split)
 
-The structural/no-contract SDE work is **substantially implemented**; the
-analysis-modernization, two attribute deletions, ARTS audit, and scaling levers
-remain. Verified by tree scan (markers in parentheses).
+Structural SDE redesign is **live**. Remaining work is affine modernization (S4),
+attribute collapse (S12/S14), ARTS audit (Part 8), and scaling levers (S17–S21).
+**Gate:** 48/48 SDE + ARTS dialect lit tests pass.
 
-**✅ DONE**
-- `raise-to-sde` exists; standalone `sde-parallelize` dropped (`RaiseToSde.cpp` present, `Parallelize.cpp` gone).
-- `sde.redist` retired; **movement is ops** — `su.halo`, `su.reduce_scatter`, `su.all_to_all` all in `SdeOps.td` (`SdeRedistOp` def = 0).
-- Layout attrs deleted from the op: `physicalOwnerDims`, `physicalBlockShape`, `iterationTopology`, `logicalWorkerSlice` (all 0 in `SdeOps.td`) → grain is the type.
-- Verify passes reduced 8 → **6** (op-level migration started).
+**Done**
+- `raise-to-sde` subsumes dropped `sde-parallelize`; movement is ops (`su.halo`,
+  `su.reduce_scatter`, `su.all_to_all`); `sde.redist` / `SdeMovementFamily` retired.
+- Op-level layout attrs removed (`physicalOwnerDims`, `physicalBlockShape`,
+  `iterationTopology`, `logicalWorkerSlice`); grain is the rank-expanded type.
+- Verify passes 8 → **6** (op-level fold in progress).
+- **S3:** pre-planning `LowerAffine` removed; `SimplifyAffineStructures` in input
+  normalization; planning-head `LowerAffine` bridge until S4.
+- **S5:** proof-derived `cu_region<parallel>`; residual serial wrappers keep
+  `serial_reason`; `verify-sde` rejects untagged `<single>` in multi-trip SU.
+- **S6:** second `raise-to-sde` after Tiling; re-entrancy allows promotion inside
+  residual `cu_region<single>`.
+- **S7:** `commVolumeBytes` deleted; structural `assignLayout`; consumers use layout
+  geometry / `muBlockCount > 1`.
+- **Boundary:** `SdeToArtsBoundary.cpp` is pass registration only; lowering lives in
+  `Transforms/boundary/*` with shared helpers in `DbUtils` / `MovementLoweringUtils`.
 
-**◑ PARTIAL**
-- Op-level verification: 6 SDE verify passes remain (target ≈2 + the residuals) — finish the fold.
-- `SdeMovementFamily` enum: 1 residual reference to clean up.
-- Shared `buildSuIterate` helper: present in `ConvertOpenMPToSde` only — confirm it's the single shared builder.
+**Partial**
+- **S4:** hand-rolled `tryGetAffineExpr`/`extractDimOffset` (+ div/mod bridge);
+  planning-head `LowerAffine` remains; no upstream `MemRefAccess` in SDE yet.
+- Op-level verify fold: 6 SDE verify passes remain (target ≈2 + residuals).
 
-**☐ TODO (what to work on)**
-1. **AFFINE modernization (biggest, not started):** `tryGetAffineExpr`/`extractDimOffset` still present (9); `LowerAffine` still runs early (`Compile.cpp` ×3); **0** `MemRefAccess`/`isLoopParallel` uses in SDE. → delete the hand-rolled parser, stop lowering affine early, adopt upstream affine + `ValueBounds` (DAG S3/S4 + Part 7). Unblocks re-runnable parallelize-after-tiling.
-2. **`mu_access_window` elimination** — op still present (S12).
-3. **`commVolumeBytes` deletion** — still present (S7).
-4. **`arrayLayout` dict deletion** — still present ×5 (S14; → SSA-root identity).
-5. **ARTS no-contract audit (PHASE 7 / Part 8)** — 84 ARTS `OptionalAttr` untouched; the largest remaining contract surface.
-6. **Scaling levers (PHASE 8, S17–S21)** — reader-grain reconcile, halo read windows, FEM one-owner-grid, cross-owner repartition, K-grain split — *the steps that actually fix 2n scaling* (cleanup alone does not).
-7. **async executor (PHASE 9)** — greenfield, 0 usage.
-8. **Second boundary parser port** (`analyzeDepOwnerAccessIndex`) and **cost-model deletion** (fabricated costs).
-
-> Status line was "not yet implemented" — corrected: the structural redesign is
-> live on `v4`. Re-scan the markers above to refresh this checklist. The migration
-> DAG below is the ordered plan for the ☐ items; gates still measure
-> delta-from-baseline (RED at HEAD).
+**Open (DAG order)**
+1. **S4 main** — upstream affine + `ValueBounds`; delete hand parser; drop bridge.
+2. **S4b** — port `analyzeDepOwnerAccessIndex` at the ARTS boundary.
+3. **S12 / S14** — collapse `mu_access_window`; delete `arrayLayout` dict.
+4. **Part 8** — ARTS 84 `OptionalAttr` audit.
+5. **S17–S21** — scaling levers + megalarge 1n→2n gates.
+6. **PHASE 9** — async local executor (greenfield).
+7. **Loose ends** — fabricated `SDECostModel` cost deletion.
 
 ## The one principle
 
@@ -302,9 +307,11 @@ PHASE 1 — INERT (no deps)
 
 PHASE 2 — STRUCTURE (affine + parallelize)
   S3  Relocate LowerAffine out of pre-planning (Compile.cpp:1112/1126; keep :1303).
+      [DONE]
   S4  Swap SuLoopAccessAnalysis/Parallelize/Tiling/Interchange onto upstream affine
       (MemRefAccess/checkMemrefAccessDependence/ValueBounds/tilePerfectlyNested);
       DELETE tryGetAffineExpr/extractDimOffset/stripMineLoop. blockedBy S3.
+      [PARTIAL: div/mod bridge only; bridge LowerAffine remains]
   S4b PORT analyzeDepOwnerAccessIndex (the SECOND parser) onto MemRefAccess/
       ValueBounds — BOTH its analysis half (:1340) AND its div/rem EMISSION half
       (:4102/:4229). **Forced to the PORT branch (not a bounded fail-closed
@@ -314,14 +321,14 @@ PHASE 2 — STRUCTURE (affine + parallelize)
   S5  Parallelize single->parallel leaf-kind fix + verifier. **Re-DERIVE the leaf
       site empirically — the cited Parallelize.cpp:638 is a `builder.clone` body
       loop at the real path Transforms/dep/loop/, NOT the leaf-kind site.**
+      [DONE]
   S6  Post-interchange/tiling parallelize re-run (D-a on pre-wrap func.func).
-      blockedBy S4; value depends on S5.
+      blockedBy S4; value depends on S5.  [DONE]
 
 PHASE 3 — COST ELIMINATION (independent of movement ops)
   S7  Delete commVolumeBytes ATTR structurally (§5.9.3: estimateCommVolume/
       kAbstractBlockFactor/argmin gone; consumers use tilePayloadBytes/
-      muBlockCount>1). blockedBy S4. NOT coupled to su.halo.  [REGENERATE the
-      commVolumeBytes lit CHECK lines, don't hand-edit]
+      muBlockCount>1). blockedBy S4. NOT coupled to su.halo.  [DONE]
 
 PHASE 4 — MOVEMENT OPS
   S8  Add su.halo + su.reduce_scatter ops + op verifiers + boundary dispatch; halo

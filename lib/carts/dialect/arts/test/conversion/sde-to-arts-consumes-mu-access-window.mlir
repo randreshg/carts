@@ -79,7 +79,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
       sde.cu_region <parallel> {
         memref.store %cst, %A[%i] : memref<1024xf32>
       }
-    } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [256], muBlockCount = 4 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+    } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [256], muBlockCount = 4 : i64, role = "write"}]}
     return
   }
 

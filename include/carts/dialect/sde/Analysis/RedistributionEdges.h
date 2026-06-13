@@ -14,7 +14,6 @@ struct RedistributionEdge {
   RedistributionEdgeKind kind = RedistributionEdgeKind::ReduceScatter;
   SmallVector<int64_t, 4> sourceOwnerDims, sourceBlockShape;
   SmallVector<int64_t, 4> targetOwnerDims, targetBlockShape, haloShape;
-  int64_t commVolumeBytes = 0;
 };
 struct RedistributionEdgeFailure { SdeSuIterateOp consumer; int64_t arrayId = -1; std::string reason; };
 struct RedistributionEdges {

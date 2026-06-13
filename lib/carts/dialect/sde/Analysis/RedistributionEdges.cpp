@@ -393,7 +393,7 @@ static void collectReaderRedistributionCandidates(
   }
   if (ArrayAttr layout = reader.getArrayLayoutAttr()) {
     for (const LayoutGraphFact &fact : parseArrayLayoutFacts(layout)) {
-      if (fact.role != LayoutGraphRole::read || fact.commVolumeBytes <= 0)
+      if (fact.role != LayoutGraphRole::read)
         continue;
       if (seen.insert(fact.id).second)
         arrayIds.push_back(fact.id);
@@ -420,8 +420,6 @@ static bool readerCommittedLayoutDisagreesWithHome(
     const std::optional<LayoutGraphFact> &readerFact, const HomeLayout &home) {
   if (!readerFact || readerFact->role != LayoutGraphRole::read)
     return false;
-  if (readerFact->commVolumeBytes > 0)
-    return true;
   if (!sameOwnerDimSet(readerFact->ownerDims, home.ownerDims))
     return true;
   return committedBlockShape(*readerFact) !=
@@ -710,13 +708,6 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
           continue;
         }
       }
-
-      // Committed abstract edge cost, if the reader carries one.
-      if (ArrayAttr readerLayout = reader.getArrayLayoutAttr())
-        for (const LayoutGraphFact &f : parseArrayLayoutFacts(readerLayout))
-          if (f.id == arrayId && f.role == LayoutGraphRole::read &&
-              f.commVolumeBytes > 0)
-            edge.commVolumeBytes = f.commVolumeBytes;
 
       result.edges.push_back(std::move(edge));
     }
