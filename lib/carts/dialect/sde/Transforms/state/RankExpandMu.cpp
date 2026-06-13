@@ -20,6 +20,7 @@
 ///     fail closed; this pass does not add compatibility attrs.
 ///==========================================================================///
 
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
@@ -72,10 +73,15 @@ struct SdeRankExpandMuPass
       if (hasExplicitWindow)
         continue; // pre-windowed MUs keep their explicit grain
 
+      std::optional<carts::sde::SdeStructuredClassification> classification =
+          carts::sde::queryStructuredClassification(committed->writer);
+      if (!classification)
+        classification = committed->writer.getStructuredClassification();
+      if (!classification)
+        continue;
+
       std::unique_ptr<carts::sde::MuAccessIndexer> indexer =
-          carts::sde::makeMuAccessIndexer(
-              *committed->writer.getStructuredClassification(),
-              committed->layout);
+          carts::sde::makeMuAccessIndexer(*classification, committed->layout);
       carts::sde::MuLayoutRewriter rewriter(committed->layout, *indexer);
       if (mlir::failed(rewriter.apply(mu))) {
         mu.emitOpError()

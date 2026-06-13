@@ -727,11 +727,17 @@ static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
   for (unsigned d = 0; d < parallelPrefix; ++d)
     mapper.map(nest.loops[d].getInductionVar(), dst.getArgument(d));
 
-  Block &innermost = nest.loops.back().getRegion().front();
-  for (Operation &op : innermost.without_terminator()) {
-    if (isa<scf::ForOp>(op))
-      continue;
-    builder.clone(op, mapper);
+  // Clone executable work from every loop level, not only the innermost body.
+  // Jacobi-style init nests compute outer-loop values (e.g. index_cast of the
+  // outer IV) that the inner body still references; dropping those defs and
+  // erasing the scf nest leaves dangling uses.
+  for (scf::ForOp loop : nest.loops) {
+    Block &body = loop.getRegion().front();
+    for (Operation &op : body.without_terminator()) {
+      if (isa<scf::ForOp>(op))
+        continue;
+      builder.clone(op, mapper);
+    }
   }
   sde::SdeYieldOp::create(builder, loc, ValueRange{});
 
@@ -828,10 +834,25 @@ static void raiseNest(ParallelNest &nest, OpBuilder &builder) {
   outer.erase();
 }
 
+static bool moduleHasAsyncSuIterate(ModuleOp module) {
+  bool found = false;
+  module.walk([&](sde::SdeSuIterateOp op) {
+    if (op.getNowaitAttr()) {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
 static std::optional<ParallelNest> findNextParallelNest(ModuleOp module) {
+  const bool skipRawHostNests = moduleHasAsyncSuIterate(module);
   std::optional<ParallelNest> next;
   module.walk([&](scf::ForOp outer) -> WalkResult {
     if (isa<scf::ForOp>(outer->getParentOp()))
+      return WalkResult::advance();
+    if (skipRawHostNests && !outer->getParentOfType<sde::SdeCuRegionOp>())
       return WalkResult::advance();
     if (std::optional<ParallelNest> nest = matchParallelNest(outer)) {
       next = std::move(*nest);

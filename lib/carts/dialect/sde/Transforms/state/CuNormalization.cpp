@@ -43,8 +43,6 @@
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeCuNormalizationUtils.h"
 #include "carts/dialect/sde/Utils/SdeCuStructure.h"
-#include "carts/dialect/sde/Utils/SdeOwnerLoopPromotion.h"
-
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_SDECUNORMALIZATION
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
@@ -202,8 +200,6 @@ static bool normalizeSchedulingCarrierRegions(Operation *op) {
 namespace mlir::carts::sde {
 
 bool normalizeSdeCuStructure(ModuleOp module) {
-  promoteModuleOwnerLoops(module);
-
   SmallVector<Block *> targets;
   llvm::DenseSet<Block *> suTargets;
   module.walk([&](SdeSuIterateOp op) {

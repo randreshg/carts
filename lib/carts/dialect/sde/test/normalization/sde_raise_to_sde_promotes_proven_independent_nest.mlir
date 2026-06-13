@@ -48,3 +48,33 @@ func.func @promote_wrapped_nest(%A: memref<8x8xf32>, %v: f32) {
   }
   return
 }
+
+// CHECK-LABEL: func.func @promote_outer_loop_prep
+// CHECK: sde.su_iterate
+// CHECK: sde.cu_region <parallel>
+// CHECK: arith.index_cast
+// CHECK: arith.addi
+// CHECK: memref.store
+// CHECK-NOT: scf.for
+
+func.func @promote_outer_loop_prep(%A: memref<8x8xf32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c8 = arith.constant 8 : index
+  %c17_i32 = arith.constant 17 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %cst = arith.constant 0.01 : f32
+  scf.for %i = %c0 to %c8 step %c1 {
+    %ii = arith.index_cast %i : index to i32
+    scf.for %j = %c0 to %c8 step %c1 {
+      %jj = arith.index_cast %j : index to i32
+      %s = arith.addi %ii, %jj : i32
+      %m = arith.remsi %s, %c17_i32 : i32
+      %v = arith.addi %m, %c1_i32 : i32
+      %vf = arith.sitofp %v : i32 to f32
+      %scaled = arith.mulf %vf, %cst : f32
+      memref.store %scaled, %A[%i, %j] : memref<8x8xf32>
+    }
+  }
+  return
+}

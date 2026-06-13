@@ -11,6 +11,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
+#include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -562,6 +563,72 @@ static void createBlockSummingProducerBody(ReductionCandidate &candidate,
                 locals, builder, loc);
 }
 
+static std::optional<sde::SdeMuAllocOp>
+findMuAllocForMemref(Value memref, ModuleOp module) {
+  Value stripped = ValueAnalysis::stripMemrefViewOps(memref);
+  if (auto mu = stripped.getDefiningOp<sde::SdeMuAllocOp>())
+    return mu;
+  if (!module)
+    return std::nullopt;
+  std::optional<sde::SdeMuAllocOp> found;
+  module.walk([&](sde::SdeMuAllocOp mu) {
+    if (ValueAnalysis::stripMemrefViewOps(mu.getMemref()) != stripped)
+      return WalkResult::advance();
+    found = mu;
+    return WalkResult::interrupt();
+  });
+  return found;
+}
+
+static bool canRaiseSourceReadWindow(Value sourceRoot, ModuleOp module) {
+  std::optional<sde::SdeMuAllocOp> mu =
+      findMuAllocForMemref(sourceRoot, module);
+  if (!mu)
+    return true;
+  for (const sde::RaisedWindowSpec &spec : sde::queryAccessWindows(*mu))
+    if (spec.mode == sde::SdeAccessMode::read)
+      return true;
+  return false;
+}
+
+static std::optional<int64_t> arrayIdForSourceMemref(Value sourceRoot,
+                                                     ModuleOp module) {
+  if (auto sourceMu = sourceRoot.getDefiningOp<sde::SdeMuAllocOp>())
+    return sde::getMuArrayIdFromLayoutRoot(sourceMu);
+  Value stripped = ValueAnalysis::stripMemrefViewOps(sourceRoot);
+  if (module) {
+    std::optional<int64_t> found;
+    module.walk([&](sde::SdeMuAllocOp mu) {
+      if (ValueAnalysis::stripMemrefViewOps(mu.getMemref()) != stripped)
+        return WalkResult::advance();
+      if (std::optional<int64_t> id = sde::getMuArrayIdFromLayoutRoot(mu)) {
+        found = id;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (found)
+      return found;
+  }
+  for (Operation *user : stripped.getUsers()) {
+    if (auto root = dyn_cast<sde::SdeArrayLayoutRootOp>(user))
+      return static_cast<int64_t>(root.getArrayId());
+  }
+  return std::nullopt;
+}
+
+static Value primarySourceLoadMemref(ReductionCandidate &candidate) {
+  for (Operation &op : candidate.loop.getBody()->without_terminator()) {
+    auto load = dyn_cast<memref::LoadOp>(&op);
+    if (!load || load.getIndices().empty())
+      continue;
+    if (rank0AccumulatorIndex(load.getMemRef(), candidate.accumulators))
+      continue;
+    return ValueAnalysis::stripMemrefViewOps(load.getMemRef());
+  }
+  return candidate.sourceGeometry.root;
+}
+
 static sde::SdeSuIterateOp createProducer(ReductionCandidate &candidate,
                                           Value partial,
                                           std::optional<int64_t> partialArrayId,
@@ -590,6 +657,15 @@ static sde::SdeSuIterateOp createProducer(ReductionCandidate &candidate,
         builder, loc, partial,
         sde::SdeAccessModeAttr::get(ctx, sde::SdeAccessMode::write),
         builder.getI64IntegerAttr(*partialArrayId));
+  Value sourceRoot = primarySourceLoadMemref(candidate);
+  ModuleOp module = candidate.loop->getParentOfType<ModuleOp>();
+  std::optional<int64_t> sourceArrayId =
+      arrayIdForSourceMemref(sourceRoot, module);
+  if (sourceArrayId)
+    sde::SdeArrayLayoutRootOp::create(
+        builder, loc, sourceRoot,
+        sde::SdeAccessModeAttr::get(ctx, sde::SdeAccessMode::read),
+        builder.getI64IntegerAttr(*sourceArrayId));
   auto cu = sde::buildCuRegion(
       builder, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel));
   Block &cuBody = sde::ensureBlock(cu.getBody());
@@ -782,6 +858,10 @@ createFinalCombineCuAfter(Operation *anchor, ReductionCandidate &candidate,
 }
 
 static LogicalResult rewriteReduction(ReductionCandidate candidate) {
+  ModuleOp module = candidate.loop->getParentOfType<ModuleOp>();
+  if (!canRaiseSourceReadWindow(primarySourceLoadMemref(candidate), module))
+    return success();
+
   sde::SdeCuRegionOp parentCu =
       candidate.loop->getParentOfType<sde::SdeCuRegionOp>();
   if (!canHoistProducerOutsideParentCu(candidate, parentCu))
@@ -853,6 +933,8 @@ struct SdeScalarBlockReductionPass
         return;
       }
     }
+    (void)sde::reconcileReaderArrayLayoutsWithCommittedWriterShapes(
+        getOperation());
   }
 };
 

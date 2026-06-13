@@ -34,6 +34,34 @@ static SdeSuIterateOp findAccessWindowWitness(SdeMuAllocOp mu) {
   return findCommittedBlockLayoutWitness(mu);
 }
 
+static SdeSuIterateOp findReaderAccessWindowWitness(SdeMuAllocOp mu) {
+  std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(mu);
+  if (!arrayId)
+    return SdeSuIterateOp();
+  SdeSuIterateOp witness;
+  for (Operation *user : mu.getMemref().getUsers()) {
+    auto root = dyn_cast<SdeArrayLayoutRootOp>(user);
+    if (!root || root.getMode() != SdeAccessMode::read ||
+        static_cast<int64_t>(root.getArrayId()) != *arrayId)
+      continue;
+    SdeSuIterateOp reader = root->getParentOfType<SdeSuIterateOp>();
+    if (!reader || !supportsRankExpandedAccessWindows(reader))
+      continue;
+    if (!findArrayLayoutFact(reader, *arrayId, LayoutGraphRole::read))
+      continue;
+    if (!witness)
+      witness = reader;
+  }
+  return witness;
+}
+
+static SdeSuIterateOp resolveAccessWindowWitness(SdeMuAllocOp mu) {
+  SdeSuIterateOp witness = findAccessWindowWitness(mu);
+  if (witness && supportsRankExpandedAccessWindows(witness))
+    return witness;
+  return findReaderAccessWindowWitness(mu);
+}
+
 static bool hasUnsupportedCommittedWriter(SdeMuAllocOp mu) {
   for (Operation *user : mu.getMemref().getUsers()) {
     if (!isa<memref::StoreOp>(user))
@@ -147,14 +175,13 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
   if (!muType || !muType.hasStaticShape())
     return specs; // dynamic / non-memref -> conservative
 
-  SdeSuIterateOp si = findAccessWindowWitness(mu);
+  SdeSuIterateOp si = resolveAccessWindowWitness(mu);
   if (!si)
     return queryReplicatedReadAccessWindows(mu, muType);
 
   if (!supportsRankExpandedAccessWindows(si))
     return specs; // accumulator reductions -> conservative
-  if (hasUnsupportedCommittedWriter(mu))
-    return specs; // mixed writers for one MU -> conservative
+  const bool blockWriteWindows = hasUnsupportedCommittedWriter(mu);
 
   // Recognize the ND rank-expanded block-grid form and prove that it encodes
   // the committed grain without deriving facts from the window itself. The
@@ -284,13 +311,23 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
 
     if (access.hasRead && access.hasWrite && cuNeedsSplitHaloRead(access.cu)) {
       appendSpec(SdeAccessMode::read);
-      appendSpec(SdeAccessMode::write);
+      if (!blockWriteWindows)
+        appendSpec(SdeAccessMode::write);
       continue;
     }
-    if (access.hasRead && access.hasWrite)
-      appendSpec(SdeAccessMode::readwrite);
-    else
-      appendSpec(access.hasWrite ? SdeAccessMode::write : SdeAccessMode::read);
+    if (access.hasRead && access.hasWrite) {
+      if (!blockWriteWindows)
+        appendSpec(SdeAccessMode::readwrite);
+      else
+        appendSpec(SdeAccessMode::read);
+      continue;
+    }
+    if (access.hasWrite) {
+      if (!blockWriteWindows)
+        appendSpec(SdeAccessMode::write);
+      continue;
+    }
+    appendSpec(SdeAccessMode::read);
   }
   return specs;
 }

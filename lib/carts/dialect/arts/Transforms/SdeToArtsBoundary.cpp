@@ -81,6 +81,11 @@ static bool isDefinedInside(Value value, Operation *scope) {
   return false;
 }
 
+static bool isStackScratchMemref(Value memref) {
+  Value root = ValueAnalysis::stripMemrefViewOps(memref);
+  return root && isa<memref::AllocaOp>(root.getDefiningOp());
+}
+
 static FailureOr<ArtsMode> convertAccessMode(sde::SdeAccessMode mode,
                                              Operation *context) {
   switch (mode) {
@@ -1754,6 +1759,8 @@ recordCoarseSuAccess(sde::SdeSuIterateOp source, Operation *site, Value memref,
     Value root = ValueAnalysis::stripMemrefViewOps(memref);
     if (root && isDefinedInside(root, source.getOperation()))
       return success();
+    if (isStackScratchMemref(memref))
+      return success();
     return site->emitError()
            << "accesses external memref without ARTS DB-backed storage during "
               "coarse SDE-to-ARTS SU realization";
@@ -1787,6 +1794,8 @@ static LogicalResult verifyRawSuAccessCoveredByDep(
   if (!alloc) {
     Value root = ValueAnalysis::stripMemrefViewOps(memref);
     if (root && isDefinedInside(root, source.getOperation()))
+      return success();
+    if (isStackScratchMemref(memref))
       return success();
     return site->emitError()
            << "accesses external memref without ARTS DB-backed storage during "
@@ -3890,9 +3899,7 @@ convertCoarseSuIterate(sde::SdeSuIterateOp source,
              << "has committed physical partition facts but no access-window "
                 "dependencies; refusing coarse ARTS realization";
   }
-  sde::SdeCuRegionOp computeCu = sde::findSuComputeCuRegion(source);
-  if ((computeCu && computeCu.getGroupBlockCountAttr()) ||
-      source.getAccessMinOffsetsAttr() || source.getAccessMaxOffsetsAttr() ||
+  if (source.getAccessMinOffsetsAttr() || source.getAccessMaxOffsetsAttr() ||
       source.getOwnerDimsAttr() || source.getSpatialDimsAttr() ||
       source.getWriteFootprintAttr())
     return source.emitOpError()

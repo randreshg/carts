@@ -623,12 +623,13 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
       innerFor.getLowerBound(), innerFor.getUpperBound(), innerFor.getStep());
   // The static trip bound only feeds the iteration-extent cap, a guard against
   // promoting unrelated/huge elementwise spaces. A stencil-coupled writer must
-  // adopt owner_tile regardless of extent and regardless of whether the bound
-  // is a runtime value (the double-buffer size is dynamic), so both the
-  // static-trip requirement and the cap are lifted only for that case.
+  // adopt owner_tile regardless of extent when the outer bound is statically
+  // known; dynamic OpenMP wsloop upper bounds stay rank-1 until the rank-N
+  // rebuild path is safe for non-constant promotion.
+  if (!outerTrip || !innerTrip)
+    return false;
   if (!stencilCoupledOwnerTile) {
-    if (!outerTrip || !innerTrip || *outerTrip > kMaxPromotedOwnerExtent ||
-        *innerTrip > kMaxPromotedOwnerExtent)
+    if (*outerTrip > kMaxPromotedOwnerExtent || *innerTrip > kMaxPromotedOwnerExtent)
       return false;
   }
 
@@ -708,7 +709,6 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
 static sde::SdeSuIterateOp
 promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor,
                                  bool outerFirst = false) {
-  OpBuilder builder(op);
   Location loc = op.getLoc();
   // Default order places the promoted inner loop as su_iterate dim 0 and the
   // original owner loop as dim 1 (inner, outer). `outerFirst` flips this to
@@ -732,6 +732,8 @@ promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor,
           ? SmallVector<Value, 2>{op.getSteps().front(), innerFor.getStep()}
           : SmallVector<Value, 2>{innerFor.getStep(), op.getSteps().front()};
 
+  OpBuilder builder(op->getContext());
+  builder.setInsertionPointAfter(op);
   auto newOp = sde::buildSuIterate(
       builder, loc, ValueRange(lowerBounds), ValueRange(upperBounds),
       ValueRange(steps), sde::SuIterateAttrs::fromOp(op),
@@ -814,6 +816,29 @@ isSafeOpaqueElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
       ::mlir::carts::ValueAnalysis::dependsOn(innerFor.getUpperBound(),
                                               outerIv) ||
       ::mlir::carts::ValueAnalysis::dependsOn(innerFor.getStep(), outerIv))
+    return false;
+
+  auto staticTripCount = [](Value lb, Value ub,
+                            Value step) -> std::optional<int64_t> {
+    int64_t lbC, ubC, stepC;
+    if (!::mlir::carts::ValueAnalysis::getConstantIndex(lb, lbC) ||
+        !::mlir::carts::ValueAnalysis::getConstantIndex(ub, ubC) ||
+        !::mlir::carts::ValueAnalysis::getConstantIndex(step, stepC) ||
+        stepC == 0)
+      return std::nullopt;
+    if (lbC > ubC)
+      return 0;
+    return llvm::divideCeilSigned(ubC - lbC, stepC);
+  };
+  std::optional<int64_t> outerTrip = staticTripCount(
+      op.getLowerBounds().front(), op.getUpperBounds().front(),
+      op.getSteps().front());
+  std::optional<int64_t> innerTrip =
+      staticTripCount(innerFor.getLowerBound(), innerFor.getUpperBound(),
+                      innerFor.getStep());
+  constexpr int64_t kMaxPromotedOwnerExtent = 1024;
+  if (!outerTrip || !innerTrip || *outerTrip > kMaxPromotedOwnerExtent ||
+      *innerTrip > kMaxPromotedOwnerExtent)
     return false;
 
   llvm::DenseSet<Value> readRoots;
@@ -981,7 +1006,6 @@ tryPromoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op,
 static sde::SdeSuIterateOp
 promoteNestedParallelOwnerLoops(sde::SdeSuIterateOp op,
                                 ArrayRef<scf::ForOp> innerForChain) {
-  OpBuilder builder(op);
   Location loc = op.getLoc();
   SmallVector<Value, 4> lowerBounds(op.getLowerBounds().begin(),
                                     op.getLowerBounds().end());
@@ -994,6 +1018,8 @@ promoteNestedParallelOwnerLoops(sde::SdeSuIterateOp op,
     steps.push_back(innerFor.getStep());
   }
 
+  OpBuilder builder(op->getContext());
+  builder.setInsertionPointAfter(op);
   auto newOp = sde::buildSuIterate(
       builder, loc, ValueRange(lowerBounds), ValueRange(upperBounds),
       ValueRange(steps), sde::SuIterateAttrs::fromOp(op),
@@ -1233,6 +1259,10 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
 static sde::SdeSuIterateOp runOwnerLoopPromotions(sde::SdeSuIterateOp op) {
   if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
     return op;
+  // OpenMP-converted async loops keep dynamic wsloop bounds and prelude control
+  // stores; defer owner-loop rank promotion until a later pass with stable shape.
+  if (op.getNowaitAttr())
+    return op;
 
   std::optional<sde::SuLoopAccessSummary> summary =
       sde::analyzeSuLoopAccesses(op);
@@ -1324,9 +1354,13 @@ SdeSuIterateOp promoteSuIterateOwnerLoops(SdeSuIterateOp op) {
 void promoteModuleOwnerLoops(ModuleOp moduleOp) {
   if (!moduleOp)
     return;
-  moduleOp.walk([&](SdeSuIterateOp op) {
+  SmallVector<SdeSuIterateOp> iterates;
+  moduleOp.walk([&](SdeSuIterateOp op) { iterates.push_back(op); });
+  for (SdeSuIterateOp op : iterates) {
+    if (!op || !op->getBlock())
+      continue;
     (void)promoteSuIterateOwnerLoops(op);
-  });
+  }
 }
 
 std::unique_ptr<Pass> createSdeLoopPatternFactsPass() {
