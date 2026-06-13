@@ -3,16 +3,16 @@
 ///
 /// Gate for completed SDE redistribution structure.
 ///
-/// `sde-redistribute` must consume temporary layout-disagreement markers into
-/// explicit movement ops (`sde.su_halo`, `sde.su_reduce_scatter`, or legacy
-/// `sde.redist` for remaining families). This verifier rejects residual markers
-/// and validates the local geometry carried by each movement fact.
+/// Companion of `sde-redistribute`. Rejects residual layout-disagreement
+/// scaffolding, any retired `sde.redist` carrier, and validates grounding and
+/// consumer anchoring for the live SU movement ops.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/RedistributionEdges.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
@@ -110,62 +110,6 @@ static LogicalResult verifyMovementEndpointGeometry(
   return failure(failed);
 }
 
-static LogicalResult verifyRedistGeometry(sde::SdeRedistOp redist) {
-  bool failed = false;
-  auto fail = [&](StringRef message) {
-    redist.emitOpError() << "verify-sde-redistribute: " << message;
-    failed = true;
-  };
-
-  if (redist.getFamily() == sde::SdeMovementFamily::halo_like) {
-    fail("halo_like is retired on sde.redist; use sde.su_halo");
-    return failure(failed);
-  }
-  if (redist.getFamily() == sde::SdeMovementFamily::reduce_scatter_like) {
-    fail("reduce_scatter_like is retired on sde.redist; use "
-         "sde.su_reduce_scatter");
-    return failure(failed);
-  }
-
-  if (!redist.getArrayIdAttr())
-    fail("missing array_id");
-
-  auto memrefType = dyn_cast<MemRefType>(redist.getMu().getType());
-  if (!memrefType) {
-    fail("redistribution root is not a memref");
-    return failure();
-  }
-  unsigned rank = static_cast<unsigned>(memrefType.getRank());
-
-  std::optional<SmallVector<int64_t, 4>> sourceOwnerDims =
-      readI64ArrayAttr(redist.getSourceOwnerDims());
-  std::optional<SmallVector<int64_t, 4>> sourceBlockShape =
-      readI64ArrayAttr(redist.getSourceBlockShape());
-  std::optional<SmallVector<int64_t, 4>> targetOwnerDims =
-      readI64ArrayAttr(redist.getTargetOwnerDims());
-  std::optional<SmallVector<int64_t, 4>> targetBlockShape =
-      readI64ArrayAttr(redist.getTargetBlockShape());
-  if (!sourceOwnerDims || !targetOwnerDims)
-    fail("owner dimensions are not static i64 arrays");
-  if (!sourceBlockShape || !targetBlockShape)
-    fail("block shapes are not static i64 arrays");
-  if (!sourceOwnerDims || !sourceBlockShape || !targetOwnerDims ||
-      !targetBlockShape)
-    return failure();
-
-  if (!ownerDimsFitRank(*sourceOwnerDims, rank) ||
-      !ownerDimsFitRank(*targetOwnerDims, rank))
-    fail("owner dimensions do not fit the redistribution root rank");
-  if (!blockShapeFitsType(*sourceBlockShape, memrefType) ||
-      !blockShapeFitsType(*targetBlockShape, memrefType))
-    fail("block shape does not fit the redistribution root type");
-
-  if (redist.getHaloShapeAttr())
-    fail("non-halo movement carries haloShape");
-
-  return failure(failed);
-}
-
 static bool hasNonZero(ArrayAttr attr) {
   if (!attr)
     return false;
@@ -232,7 +176,7 @@ static LogicalResult verifyMovementAnchoredInConsumer(
               "read layout for this redistribution array";
 
   if (requireHaloBacking) {
-    if (!consumer.getPhysicalHaloShapeAttr() &&
+    if (!sde::deriveCommittedHaloShape(consumer) &&
         !hasNonZero(consumer.getAccessMinOffsetsAttr()) &&
         !hasNonZero(consumer.getAccessMaxOffsetsAttr()))
       return movement->emitOpError()
@@ -248,15 +192,6 @@ static LogicalResult verifyMovementAnchoredInConsumer(
               "by a contraction/reduction consumer";
   }
   return success();
-}
-
-static LogicalResult verifyRedistAnchoredInConsumer(sde::SdeRedistOp redist) {
-  IntegerAttr arrayId = redist.getArrayIdAttr();
-  if (!arrayId)
-    return failure();
-  return verifyMovementAnchoredInConsumer(
-      redist, arrayId.getInt(), redist.getMu(),
-      /*requireHaloBacking=*/false, /*requireReductionBacking=*/false);
 }
 
 static LogicalResult verifySuHalo(sde::SdeSuHaloOp halo, ModuleOp module) {
@@ -329,6 +264,14 @@ struct VerifySdeRedistributePass
     ModuleOp module = getOperation();
     bool hasFailure = false;
 
+    module.walk([&](sde::SdeRedistOp redist) {
+      redist.emitOpError()
+          << "verify-sde-redistribute: sde.redist is retired on all movement "
+             "families; use "
+          << sde::suMovementReplacementForFamily(redist.getFamily());
+      hasFailure = true;
+    });
+
     module.walk([&](sde::SdeSuHaloOp halo) {
       if (failed(verifySuHalo(halo, module)))
         hasFailure = true;
@@ -336,21 +279,6 @@ struct VerifySdeRedistributePass
 
     module.walk([&](sde::SdeSuReduceScatterOp reduce) {
       if (failed(verifySuReduceScatter(reduce, module)))
-        hasFailure = true;
-    });
-
-    module.walk([&](sde::SdeRedistOp redist) {
-      if (failed(verifyRedistGeometry(redist)))
-        hasFailure = true;
-      std::string reason;
-      if (!sde::redistGroundedInCommittedLayout(redist, reason)) {
-        redist.emitOpError()
-            << "verify-sde-redistribute: sde.redist is not grounded in "
-               "committed SDE layout: "
-            << reason;
-        hasFailure = true;
-      }
-      if (failed(verifyRedistAnchoredInConsumer(redist)))
         hasFailure = true;
     });
 

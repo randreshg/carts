@@ -235,7 +235,11 @@ def SdeCuRegionOp
     // Positive serial license on a kind==single leaf whose serialism is asserted
     // by its producer; its absence on a source-compute single leaf directly in a
     // multi-trip su_iterate is the Parallelize.cpp:638 regression shape.
-    OptionalAttr<SdeSerialReasonAttr>:$serialReason
+    OptionalAttr<SdeSerialReasonAttr>:$serialReason,
+    // CU-grain-over-DB-block ratio over the recovered owner grid: per owner dim,
+    // how many physical DB blocks one CU dispatch spans. Omitted when every
+    // entry is 1 (slice equals block shape).
+    OptionalAttr<ArrayAttr>:$groupBlockCount
   );
 
   let results = (outs Variadic<AnyType>:$results);
@@ -378,7 +382,6 @@ def SdeSuIterateOp
     UnitAttr:$nowait,
     Variadic<AnyType>:$reductionAccumulators,
     OptionalAttr<ArrayAttr>:$reductionKinds,
-    OptionalAttr<SdeReductionStrategyAttr>:$reductionStrategy,
     UnitAttr:$partialReduction,
     OptionalAttr<ArrayAttr>:$partialReductionDims,
     OptionalAttr<ArrayAttr>:$partialReductionOwnerDims,
@@ -389,14 +392,6 @@ def SdeSuIterateOp
     OptionalAttr<ArrayAttr>:$ownerDims,
     OptionalAttr<ArrayAttr>:$spatialDims,
     OptionalAttr<ArrayAttr>:$writeFootprint,
-    // Element-space/storage layout facts authored by SDE. These do not encode
-    // target nodes, routes, or concrete worker placement.
-    OptionalAttr<ArrayAttr>:$physicalOwnerDims,
-    OptionalAttr<ArrayAttr>:$physicalBlockShape,
-    OptionalAttr<ArrayAttr>:$logicalWorkerSlice,
-    OptionalAttr<ArrayAttr>:$physicalHaloShape,
-    OptionalAttr<SdeIterationTopologyAttr>:$iterationTopology,
-    OptionalAttr<SdeDistributionKindAttr>:$distributionKind,
     UnitAttr:$inPlaceSafe,
     UnitAttr:$inPlaceSharedState,
     // --- Module-scoped layout assignment. Placed last so the positional
@@ -406,10 +401,6 @@ def SdeSuIterateOp
     // Aligned readers carry no entry; their layout lives in the rank-expanded
     // `mu_alloc` type after `sde-memory-unit-realization`.
     OptionalAttr<ArrayAttr>:$arrayLayout,
-    // Legacy layout-disagreement marker retained for parse/round-trip only.
-    // `sde-redistribute` detects edges by comparing committed producer and
-    // consumer layout facts (or rank-expanded `mu_alloc` types).
-    OptionalAttr<ArrayAttr>:$layoutsDisagree,
     // Abstract communication-volume estimate (bytes) for this scheduling unit
     // under the chosen layouts. Advisory only.
     OptionalAttr<I64Attr>:$commVolumeBytes

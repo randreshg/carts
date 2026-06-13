@@ -17,12 +17,17 @@
 
 #include "carts/dialect/sde/IR/SdeOpsDialect.h.inc"
 
-namespace mlir::carts::sde {} // namespace mlir::carts::sde
-
 #define GET_TYPEDEF_CLASSES
 #include "carts/dialect/sde/IR/SdeOpsTypes.h.inc"
 
 #include "carts/dialect/sde/IR/SdeOpsEnums.h.inc"
+
+namespace mlir::carts::sde {
+
+/// First-class SU movement op that replaces a retired `sde.redist` family.
+StringRef suMovementReplacementForFamily(SdeMovementFamily family);
+
+} // namespace mlir::carts::sde
 
 #define GET_ATTRDEF_CLASSES
 #include "carts/dialect/sde/IR/SdeOpsAttributes.h.inc"

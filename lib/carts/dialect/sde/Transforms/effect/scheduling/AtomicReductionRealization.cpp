@@ -56,9 +56,6 @@ static bool hasNestedSequentialLoop(sde::SdeSuIterateOp op) {
 static bool isAtomicReductionCandidate(sde::SdeSuIterateOp op) {
   if (op.getReductionAccumulators().empty() || op.getPartialReductionAttr())
     return false;
-  if (std::optional<sde::SdeReductionStrategy> strategy =
-          op.getReductionStrategy())
-    return *strategy == sde::SdeReductionStrategy::atomic;
   if (hasNestedSequentialLoop(op))
     return false;
   ArrayAttr kindsAttr = op.getReductionKindsAttr();
@@ -189,7 +186,6 @@ static LogicalResult realizeAccumulatorAtomic(sde::SdeSuIterateOp op,
 static void clearConsumedReductionMetadata(sde::SdeSuIterateOp op) {
   op.getReductionAccumulatorsMutable().clear();
   op->removeAttr(op.getReductionKindsAttrName());
-  op->removeAttr(op.getReductionStrategyAttrName());
 }
 
 struct SdeAtomicReductionRealizationPass

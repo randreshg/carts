@@ -79,7 +79,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
       sde.cu_region <parallel> {
         memref.store %cst, %A[%i] : memref<1024xf32>
       }
-    } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [256], muBlockCount = 4 : i64, role = "write", commVolumeBytes = 0 : i64}], physicalOwnerDims = [0], physicalBlockShape = [256]}
+    } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [256], muBlockCount = 4 : i64, role = "write", commVolumeBytes = 0 : i64}]}
     return
   }
 
@@ -98,8 +98,8 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
         scf.for %slot = %c0 to %c16 step %c1 {
           memref.store %cst, %P[%b, %c0, %slot, %c0] : memref<8x1x16x1xf64>
         }
-      }
-    } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16, 1], muBlockCount = 8 : i64, role = "write"}], iterationTopology = #sde.iteration_topology<owner_strip>, logicalWorkerSlice = [4, 16, 1], physicalOwnerDims = [0], physicalBlockShape = [1, 16, 1]}
+      } {groupBlockCount = [4]}
+    } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16, 1], muBlockCount = 8 : i64, role = "write"}]}
     return
   }
 
@@ -123,7 +123,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
           memref.store %w, %P[%b, %c0, %slot, %c0] : memref<8x1x16x1xf64>
         }
       }
-    } {arrayLayout = [{arrayId = 2 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16], muBlockCount = 8 : i64, role = "read"}, {arrayId = 3 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16, 1], muBlockCount = 8 : i64, role = "write"}], iterationTopology = #sde.iteration_topology<owner_strip>, logicalWorkerSlice = [1], physicalOwnerDims = [0], physicalBlockShape = [1, 16, 1]}
+    } {arrayLayout = [{arrayId = 2 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16], muBlockCount = 8 : i64, role = "read"}, {arrayId = 3 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16, 1], muBlockCount = 8 : i64, role = "write"}]}
     return
   }
 
@@ -153,7 +153,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
           memref.store %v, %P[%p_block, %p_lane] : memref<4x8xf32>
         }
       }
-    } {arrayLayout = [{arrayId = 4 : i64, kind = "block_parallel", ownerDims = [1], blockShape = [32, 16], budgetBlockShape = [32, 2], muBlockCount = 16 : i64, role = "read"}, {arrayId = 5 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [8], muBlockCount = 4 : i64, role = "write"}], iterationTopology = #sde.iteration_topology<owner_strip>, logicalWorkerSlice = [8], physicalOwnerDims = [0], physicalBlockShape = [8]}
+    } {arrayLayout = [{arrayId = 4 : i64, kind = "block_parallel", ownerDims = [1], blockShape = [32, 16], budgetBlockShape = [32, 2], muBlockCount = 16 : i64, role = "read"}, {arrayId = 5 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [8], muBlockCount = 4 : i64, role = "write"}]}
     return
   }
 
@@ -182,7 +182,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
           memref.store %w, %P[%b, %c0, %slot, %c0] : memref<16x1x2x1xf64>
         }
       }
-    } {arrayLayout = [{arrayId = 6 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [32, 2], muBlockCount = 16 : i64, role = "read"}, {arrayId = 7 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 2, 1], muBlockCount = 16 : i64, role = "write"}], iterationTopology = #sde.iteration_topology<owner_strip>, logicalWorkerSlice = [1], physicalOwnerDims = [0], physicalBlockShape = [1, 2, 1]}
+    } {arrayLayout = [{arrayId = 6 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [32, 2], muBlockCount = 16 : i64, role = "read"}, {arrayId = 7 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 2, 1], muBlockCount = 16 : i64, role = "write"}]}
     return
   }
 }

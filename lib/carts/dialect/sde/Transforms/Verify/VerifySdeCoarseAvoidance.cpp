@@ -32,11 +32,13 @@ using namespace mlir::carts;
 
 namespace {
 
-/// True if the MU's redistribution is explicitly represented by an sde.redist
-/// fact — its movement is owned by sde-redistribute, not a coarse last resort.
-static bool muHasRedist(carts::sde::SdeMuAllocOp mu) {
+/// True if the MU's redistribution is explicitly represented by a first-class
+/// SU movement op — its movement is owned by sde-redistribute, not a coarse last
+/// resort.
+static bool muHasExplicitMovement(carts::sde::SdeMuAllocOp mu) {
   for (Operation *user : mu.getMemref().getUsers())
-    if (isa<carts::sde::SdeRedistOp>(user))
+    if (isa<carts::sde::SdeSuHaloOp, carts::sde::SdeSuReduceScatterOp,
+            carts::sde::SdeRedistOp>(user))
       return true;
   return false;
 }
@@ -56,7 +58,7 @@ struct VerifySdeCoarseAvoidancePass
           // Redistribution explicitly represented: sde-redistribute owns this
           // MU's movement, so it is not a coarse last resort.
           // verify-sde-redistribute gates the redistribution structure itself.
-          if (muHasRedist(mu))
+          if (muHasExplicitMovement(mu))
             return;
           // Block-partitioned: the grid is in the type. OK.
           if (sde::recognizeExpandedBlockGridMu(mu))

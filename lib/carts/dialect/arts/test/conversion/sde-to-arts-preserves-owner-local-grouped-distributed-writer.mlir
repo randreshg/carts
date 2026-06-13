@@ -35,8 +35,8 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
         %owner = arith.divui %i, %c4 : index
         %local = arith.remui %i, %c4 : index
         memref.store %value, %A[%owner, %local] : memref<4x4xf32>
-      }
-    } {physicalOwnerDims = [0], physicalBlockShape = [4], logicalWorkerSlice = [8]}
+      } {groupBlockCount = [2]}
+    } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [4], muBlockCount = 4 : i64, role = "write", commVolumeBytes = 0 : i64}]}
     return
   }
 }

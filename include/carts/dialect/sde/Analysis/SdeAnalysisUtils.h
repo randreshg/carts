@@ -42,6 +42,27 @@ inline Block *getSuIterateComputeBlock(SdeSuIterateOp op) {
   return &body;
 }
 
+/// The single executable leaf `sde.cu_region` directly under an `sde.su_iterate`.
+inline SdeCuRegionOp findSuComputeCuRegion(SdeSuIterateOp op) {
+  if (!op)
+    return SdeCuRegionOp{};
+  Block &body = op.getBody().front();
+  SdeCuRegionOp onlyCuRegion;
+  for (Operation &inner : body.without_terminator()) {
+    if (isa<SdeArrayLayoutRootOp>(&inner))
+      continue;
+    if (auto cuRegion = dyn_cast<SdeCuRegionOp>(&inner)) {
+      if (onlyCuRegion)
+        return SdeCuRegionOp{};
+      onlyCuRegion = cuRegion;
+      continue;
+    }
+    if (!isSchedulePlumbing(&inner))
+      return SdeCuRegionOp{};
+  }
+  return onlyCuRegion;
+}
+
 /// Root-level memory effects for an SDE structured region. This intentionally
 /// stays in SDE because memref reads/writes are SDE scheduling facts, not
 /// downstream object-graph facts.

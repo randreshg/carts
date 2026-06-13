@@ -238,23 +238,22 @@ def SdeCoarseAvoidance
 
 def SdeRedistribute
     : Pass<"sde-redistribute", "mlir::ModuleOp"> {
-  let summary = "Make committed layout-disagreement edges explicit sde.redist";
+  let summary = "Materialize committed layout-disagreement into SU movement ops";
   let description = [{
-    Consumes each representable `layoutsDisagree` marker into explicit
-    `sde.redist` structure from committed SDE facts. The currently
-    representable edge is a cross-owner reduction read: when a consumer reduces a
-    committed home's owned axis, the pass emits a `reduce_scatter_like` movement
-    over that home block layout (source == target == the committed writer-role
-    home; the movement is the reduction, not a re-layout). The home layout is
-    read verbatim from the committed `arrayLayout` writer-role entry and the
-    family from the consumer's grounded `reductionIndexed` access kind; owner
-    dims, block shape, and family are never recomputed. The array root for an
-    `arrayId` is recovered through the single `assignStableArrayIds` numbering
-    shared with `sde-layout-assignment`.
+    Consumes each representable committed layout-disagreement edge into explicit
+    first-class SU movement structure from committed SDE facts. Today that is
+    owner-preserving stencil halos (`sde.su_halo`) and owned-axis cross-owner
+    reductions (`sde.su_reduce_scatter`). The home layout is read verbatim from
+    the committed `arrayLayout` writer-role entry and the family from the
+    consumer's grounded access kind; owner dims, block shape, and family are
+    never recomputed. The array root for an `arrayId` is recovered through the
+    single `assignStableArrayIds` numbering shared with `sde-layout-assignment`.
 
-    Other layout disagreements fail closed in SDE. This pass introduces no
-    `sde.mu_token`, slice,
-    `sde.mu_dep`, runtime ownership route, DB, collective, or ARTS isolation concept.
+    Other layout disagreements fail closed in SDE with evidence pointing at the
+    SU movement roadmap (`sde.su_broadcast`, `sde.su_gather`,
+    `sde.su_all_to_all`, and cousins). This pass introduces no `sde.mu_token`,
+    slice, `sde.mu_dep`, runtime ownership route, DB, collective, or ARTS
+    isolation concept.
 
     Production SDE shaping runs this before ARTS conversion so movement edges
     are committed as SDE structure before a downstream layer consumes them.

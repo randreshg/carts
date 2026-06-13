@@ -27,6 +27,9 @@ using namespace mlir::carts;
 
 namespace mlir::carts::sde {
 
+static std::optional<MuPhysicalLayout>
+resolveMuPhysicalLayoutForWriter(MemRefType logicalType, SdeSuIterateOp writer);
+
 std::unique_ptr<MuAccessIndexer>
 makeMuAccessIndexer(SdeStructuredClassification cls,
                     const MuPhysicalLayout &layout) {
@@ -70,8 +73,7 @@ bool isBlockGridRealizable(SdeSuIterateOp si, MemRefType logicalType,
     return false;
 
   std::optional<MuPhysicalLayout> layout =
-      resolveMuPhysicalLayout(logicalType, si.getPhysicalOwnerDimsAttr(),
-                              si.getPhysicalBlockShapeAttr());
+      resolveMuPhysicalLayoutForWriter(logicalType, si);
   if (!layout)
     return false;
   out = *layout;
@@ -169,10 +171,6 @@ resolveMuPhysicalLayoutForWriter(MemRefType logicalType,
                                  SdeSuIterateOp writer) {
   if (!writer)
     return std::nullopt;
-  if (std::optional<MuPhysicalLayout> layout = resolveMuPhysicalLayout(
-          logicalType, writer.getPhysicalOwnerDimsAttr(),
-          writer.getPhysicalBlockShapeAttr()))
-    return layout;
   if (std::optional<LayoutGraphFact> fact = findSingleWriteBlockLayoutFact(writer))
     return resolveMuPhysicalLayout(logicalType, fact->ownerDims,
                                    fact->blockShape);
@@ -242,22 +240,17 @@ recognizeExpandedBlockGridMuForWriter(SdeSuIterateOp writer,
                                       MemRefType muType) {
   if (!writer || !muType)
     return std::nullopt;
-  std::optional<SmallVector<int64_t, 4>> ownerVals =
-      readI64ArrayAttr(writer.getPhysicalOwnerDimsAttr());
-  std::optional<SmallVector<int64_t, 4>> blockVals =
-      readI64ArrayAttr(writer.getPhysicalBlockShapeAttr());
-  if (!ownerVals || !blockVals) {
-    if (std::optional<LayoutGraphFact> fact =
-            findSingleWriteBlockLayoutFact(writer)) {
-      ownerVals = fact->ownerDims;
-      blockVals = fact->blockShape;
-    }
-  }
-  if (ownerVals && blockVals)
+  if (std::optional<LayoutGraphFact> fact = findSingleWriteBlockLayoutFact(writer)) {
     if (std::optional<ExpandedBlockGridMu> expanded =
-            recognizeExpandedBlockGridMuFromShape(*ownerVals, *blockVals,
+            recognizeExpandedBlockGridMuFromShape(fact->ownerDims, fact->blockShape,
                                                   muType))
       return expanded;
+  }
+  if (std::optional<RecoveredMuPhysicalLayout> recovered =
+          recoverMuPhysicalLayoutFromExpandedType(muType))
+    return recognizeExpandedBlockGridMuFromShape(
+        ownerDimsAsI64(recovered->ownerDims), recovered->physicalBlockShape,
+        muType);
   return std::nullopt;
 }
 
@@ -661,7 +654,7 @@ findOwnerIterationExtents(SdeSuIterateOp si,
   if (!si || blockExtents.size() != gridCounts.size() || blockExtents.empty())
     return std::nullopt;
   std::optional<llvm::SmallVector<int64_t, 4>> halo =
-      readI64ArrayAttr(si.getPhysicalHaloShapeAttr());
+      deriveCommittedHaloShape(si);
 
   // Fold the committed iteration extents once (independent of the expanded
   // type) so each per-owner-dim proof is non-tautological.

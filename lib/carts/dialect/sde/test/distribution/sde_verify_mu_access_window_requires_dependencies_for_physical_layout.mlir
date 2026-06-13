@@ -15,6 +15,6 @@ func.func @physical_layout_without_access_windows_fails_closed(%A: memref<128xf3
       sde.yield
     }
     sde.yield
-  } {physicalOwnerDims = [0], physicalBlockShape = [16], logicalWorkerSlice = [16]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 8 : i64, role = "write", commVolumeBytes = 0 : i64}]}
   return
 }

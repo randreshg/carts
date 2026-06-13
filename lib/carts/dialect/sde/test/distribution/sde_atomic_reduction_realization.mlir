@@ -14,7 +14,6 @@ func.func @atomic_reduction_realizes_cu_atomic(
   %c1 = arith.constant 1 : index
   sde.su_iterate (%c0) to (%n) step (%c1)
       reduction[[#sde.reduction_kind<add>]](%sum : memref<1xi64>)
-      reduction_strategy(<atomic>)
       classification(<reduction>) {
   ^bb0(%i: index):
     sde.cu_region <parallel> {

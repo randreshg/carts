@@ -1,5 +1,5 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-storage-to-arts-db,sde-accesses-to-arts-deps,finalize-sde-to-arts,verify-arts-objects-only)' 2>&1 | %FileCheck %s --implicit-check-not=sde.redist --implicit-check-not=sde.su_reduce_scatter --implicit-check-not=sde.su_distribute --implicit-check-not=sde.su_iterate --implicit-check-not=arts.db_access_window
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-storage-to-arts-db,sde-accesses-to-arts-deps,finalize-sde-to-arts,block-contraction-split)' 2>&1 | %FileCheck %s --check-prefix=UNSPLIT
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-storage-to-arts-db,sde-accesses-to-arts-deps,finalize-sde-to-arts,block-contraction-split)' 2>&1 | %FileCheck %s --check-prefix=SPLIT
 
 // SDE commits the reduce-scatter movement family and partial-reduction axes.
 // ARTS consumes those facts into task dependencies and task-level reduction
@@ -29,7 +29,8 @@
 // CHECK-SAME: replicatedRead
 // CHECK: arts.edt
 
-// UNSPLIT: unsplit full-grid replicated-read contraction dependency
+// SPLIT-LABEL: func.func @consume_reduce_scatter_redist
+// SPLIT: arts.edt
 
 module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_workers = 8 : i64} {
   func.func @consume_reduce_scatter_redist() {
@@ -42,8 +43,10 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
 
     sde.su_distribute <owner_compute> {
       sde.su_reduce_scatter %T : memref<2x4xf32> array_id(0) owner [0] block [1, 4] reduce 0 kind <add>
-      sde.su_iterate (%c0) to (%c8) step (%c4) reduction_strategy(<local_accumulate>) classification(<elementwise_pipeline>) {
+      sde.su_iterate (%c0) to (%c8) step (%c4) classification(<elementwise_pipeline>) {
       ^bb0(%j: index):
+        sde.array_layout_root read %T : memref<2x4xf32> array_id(0)
+        sde.array_layout_root write %G : memref<2x4xf32> array_id(1)
         sde.cu_region <parallel> {
           sde.mu_access_window read %T : memref<2x4xf32> array_id(0)
           sde.mu_access_window readwrite %G : memref<2x4xf32> array_id(1)
@@ -53,9 +56,9 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
           %acc = memref.load %G[%b, %e] : memref<2x4xf32>
           %sum = arith.addf %acc, %partial : f32
           memref.store %sum, %G[%b, %e] : memref<2x4xf32>
-        }
+        } {groupBlockCount = [2]}
         sde.yield
-      } {logicalWorkerSlice = [4], partialReduction, partialReductionDims = [0], partialReductionOwnerDims = [0], physicalBlockShape = [4], physicalOwnerDims = [0]}
+      } {arrayLayout = [{arrayId = 0 : i64, blockShape = [1, 4], commVolumeBytes = 128 : i64, kind = "block_contraction", muBlockCount = 2 : i64, ownerDims = [0], role = "read"}, {arrayId = 1 : i64, blockShape = [4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 2 : i64, ownerDims = [0], role = "write"}], partialReduction, partialReductionDims = [0], partialReductionOwnerDims = [0]}
     }
     return
   }
@@ -86,7 +89,7 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
           memref.store %sum, %G[%bi, %bj, %ei, %ej] : memref<2x2x4x4xf32>
         }
         sde.yield
-      } {arrayLayout = [{arrayId = 0 : i64, blockShape = [8, 8], commVolumeBytes = 128 : i64, kind = "block_contraction", muBlockCount = 1 : i64, ownerDims = [0], role = "read"}, {arrayId = 1 : i64, blockShape = [4, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}], logicalWorkerSlice = [4, 4], physicalBlockShape = [4, 4], physicalOwnerDims = [0, 1]}
+      } {arrayLayout = [{arrayId = 0 : i64, blockShape = [8, 8], commVolumeBytes = 128 : i64, kind = "block_contraction", muBlockCount = 1 : i64, ownerDims = [0], role = "read"}, {arrayId = 1 : i64, blockShape = [4, 4], commVolumeBytes = 0 : i64, kind = "block_parallel", muBlockCount = 4 : i64, ownerDims = [0, 1], role = "write"}]}
     }
     return
   }

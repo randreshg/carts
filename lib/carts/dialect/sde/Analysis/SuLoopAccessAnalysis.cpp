@@ -6,6 +6,7 @@
 
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 
 #include "carts/utils/ValueAnalysis.h"
@@ -1273,9 +1274,10 @@ bool hasRealizableOwnerStrip(SdeSuIterateOp op) {
   // tiling the loop carries inner element loops, so the access-derived layout
   // recovery below no longer matches; the committed owner-dim count is the
   // authoritative realizability signal at that point.
-  if (auto committed = readI64ArrayAttr(op.getPhysicalOwnerDimsAttr())) {
-    if (!committed->empty() && committed->size() <= loopRank &&
-        llvm::all_of(*committed, [](int64_t d) { return d >= 0; }))
+  if (std::optional<sde::CommittedSuPhysicalLayout> committed =
+          sde::recoverCommittedPhysicalLayout(op)) {
+    if (!committed->ownerDims.empty() && committed->ownerDims.size() <= loopRank &&
+        llvm::all_of(committed->ownerDims, [](int64_t d) { return d >= 0; }))
       return true;
   }
 

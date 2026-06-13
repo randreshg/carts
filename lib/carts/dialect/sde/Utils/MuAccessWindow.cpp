@@ -10,6 +10,7 @@
 #include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -38,8 +39,7 @@ static bool hasUnsupportedCommittedWriter(SdeMuAllocOp mu) {
     if (!isa<memref::StoreOp>(user))
       continue;
     SdeSuIterateOp writer = user->getParentOfType<SdeSuIterateOp>();
-    while (writer && !(writer.getPhysicalOwnerDimsAttr() &&
-                       writer.getPhysicalBlockShapeAttr()))
+    while (writer && !recoverCommittedPhysicalLayout(writer))
       writer = writer->getParentOfType<SdeSuIterateOp>();
     if (writer && !supportsRankExpandedAccessWindows(writer))
       return true;
@@ -240,8 +240,7 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
     if (!arrayId)
       return false;
     auto parentSu = cu->getParentOfType<SdeSuIterateOp>();
-    if (!parentSu ||
-        !hasPositiveI64ArrayEntry(parentSu.getPhysicalHaloShapeAttr()))
+    if (!parentSu || !deriveCommittedHaloShape(parentSu))
       return false;
     bool hasReadOnlyRoot = false;
     for (SdeArrayLayoutRootOp root :

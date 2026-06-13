@@ -62,7 +62,7 @@ inline SdeCuRegionOp buildCuRegion(OpBuilder &builder, Location loc,
                                    TypeRange resultTypes = {},
                                    SdeSerialReasonAttr serialReason = nullptr) {
   return SdeCuRegionOp::create(builder, loc, resultTypes, kind, nowait, iterArgs,
-                               serialReason);
+                               serialReason, /*groupBlockCount=*/nullptr);
 }
 
 /// The full optional attribute set of an `sde.su_iterate`, each defaulting to
@@ -73,7 +73,6 @@ inline SdeCuRegionOp buildCuRegion(OpBuilder &builder, Location loc,
 struct SuIterateAttrs {
   UnitAttr nowait = nullptr;
   ArrayAttr reductionKinds = nullptr;
-  SdeReductionStrategyAttr reductionStrategy = nullptr;
   UnitAttr partialReduction = nullptr;
   ArrayAttr partialReductionDims = nullptr;
   ArrayAttr partialReductionOwnerDims = nullptr;
@@ -84,12 +83,6 @@ struct SuIterateAttrs {
   ArrayAttr ownerDims = nullptr;
   ArrayAttr spatialDims = nullptr;
   ArrayAttr writeFootprint = nullptr;
-  ArrayAttr physicalOwnerDims = nullptr;
-  ArrayAttr physicalBlockShape = nullptr;
-  ArrayAttr logicalWorkerSlice = nullptr;
-  ArrayAttr physicalHaloShape = nullptr;
-  SdeIterationTopologyAttr iterationTopology = nullptr;
-  SdeDistributionKindAttr distributionKind = nullptr;
   UnitAttr inPlaceSafe = nullptr;
   UnitAttr inPlaceSharedState = nullptr;
   ArrayAttr arrayLayout = nullptr;
@@ -102,7 +95,6 @@ struct SuIterateAttrs {
     SuIterateAttrs a;
     a.nowait = op.getNowaitAttr();
     a.reductionKinds = op.getReductionKindsAttr();
-    a.reductionStrategy = op.getReductionStrategyAttr();
     a.partialReduction = op.getPartialReductionAttr();
     a.partialReductionDims = op.getPartialReductionDimsAttr();
     a.partialReductionOwnerDims = op.getPartialReductionOwnerDimsAttr();
@@ -113,16 +105,9 @@ struct SuIterateAttrs {
     a.ownerDims = op.getOwnerDimsAttr();
     a.spatialDims = op.getSpatialDimsAttr();
     a.writeFootprint = op.getWriteFootprintAttr();
-    a.physicalOwnerDims = op.getPhysicalOwnerDimsAttr();
-    a.physicalBlockShape = op.getPhysicalBlockShapeAttr();
-    a.logicalWorkerSlice = op.getLogicalWorkerSliceAttr();
-    a.physicalHaloShape = op.getPhysicalHaloShapeAttr();
-    a.iterationTopology = op.getIterationTopologyAttr();
-    a.distributionKind = op.getDistributionKindAttr();
     a.inPlaceSafe = op.getInPlaceSafeAttr();
     a.inPlaceSharedState = op.getInPlaceSharedStateAttr();
     a.arrayLayout = op.getArrayLayoutAttr();
-    a.layoutsDisagree = op.getLayoutsDisagreeAttr();
     a.commVolumeBytes = op.getCommVolumeBytesAttr();
     return a;
   }
@@ -141,14 +126,12 @@ buildSuIterate(OpBuilder &builder, Location loc, ValueRange lowerBounds,
   return SdeSuIterateOp::create(
       builder, loc, resultTypes, lowerBounds, upperBounds, steps,
       attrs.nowait, reductionAccumulators,
-      attrs.reductionKinds, attrs.reductionStrategy, attrs.partialReduction,
+      attrs.reductionKinds, attrs.partialReduction,
       attrs.partialReductionDims, attrs.partialReductionOwnerDims,
       attrs.structuredClassification, attrs.pattern, attrs.accessMinOffsets,
       attrs.accessMaxOffsets, attrs.ownerDims, attrs.spatialDims,
-      attrs.writeFootprint, attrs.physicalOwnerDims, attrs.physicalBlockShape,
-      attrs.logicalWorkerSlice, attrs.physicalHaloShape, attrs.iterationTopology,
-      attrs.distributionKind, attrs.inPlaceSafe, attrs.inPlaceSharedState,
-      attrs.arrayLayout, attrs.layoutsDisagree, attrs.commVolumeBytes);
+      attrs.writeFootprint, attrs.inPlaceSafe, attrs.inPlaceSharedState,
+      attrs.arrayLayout, attrs.commVolumeBytes);
 }
 
 class SDECostModel;

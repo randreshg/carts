@@ -490,12 +490,8 @@ static bool promotedLoopBoundsAreRectangular(sde::SdeSuIterateOp op,
 }
 
 static void removeStaleShapeAttrs(sde::SdeSuIterateOp op) {
-  op.removePhysicalOwnerDimsAttr();
-  op.removePhysicalBlockShapeAttr();
-  op.removeLogicalWorkerSliceAttr();
-  op.removePhysicalHaloShapeAttr();
-  op.removeIterationTopologyAttr();
-  op.removeDistributionKindAttr();
+  if (sde::SdeCuRegionOp cu = sde::findSuComputeCuRegion(op))
+    cu.removeGroupBlockCountAttr();
 }
 
 static void clonePromotedPreludeControlStores(

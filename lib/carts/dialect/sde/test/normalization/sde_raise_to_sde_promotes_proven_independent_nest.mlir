@@ -10,8 +10,8 @@
 // CHECK-NOT: nowait
 // CHECK-NOT: pattern
 // CHECK: sde.cu_region <parallel>
-// CHECK: scf.for
 // CHECK: memref.store
+// CHECK-NOT: scf.for
 // CHECK-NOT: sde.cu_region <single>
 
 // CHECK-LABEL: func.func @promote_wrapped_nest

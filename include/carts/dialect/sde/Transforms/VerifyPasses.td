@@ -109,14 +109,12 @@ def VerifySdeCoarseAvoidance
 
 def VerifySdeRedistribute
     : Pass<"verify-sde-redistribute", "mlir::ModuleOp"> {
-  let summary = "Fail closed unless redistribution is explicit SDE structure";
+  let summary = "Fail closed unless redistribution is explicit SU structure";
   let description = [{
-    Companion of `sde-redistribute` after that pass has consumed temporary
-    layout-disagreement markers. It rejects residual `layoutsDisagree` attrs,
-    validates `sde.su_halo`/`sde.su_reduce_scatter` geometry and grounding, and
-    validates remaining legacy `sde.redist` families before the ARTS boundary
-    consumes them. Halo and reduce-scatter movement must use the first-class
-    SU ops, not retired `sde.redist` families.
+    Companion of `sde-redistribute` after that pass has materialized movement
+    edges. It rejects any retired `sde.redist` carrier and validates grounding
+    and consumer anchoring for the live `sde.su_halo`/`sde.su_reduce_scatter`
+    movement ops.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];

@@ -109,8 +109,9 @@ getUnclassifiedOwnerSliceLayout(sde::SdeSuIterateOp op) {
   if (std::optional<sde::LayoutGraphFact> writeLayout =
           sde::findSingleCommittedWriterBlockLayout(op))
     committedOwnerDims = writeLayout->ownerDims;
-  else
-    committedOwnerDims = readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
+  else if (std::optional<sde::CommittedSuPhysicalLayout> layout =
+               sde::recoverCommittedPhysicalLayout(op))
+    committedOwnerDims = layout->ownerDims;
   if (!committedOwnerDims || committedOwnerDims->empty())
     return std::nullopt;
 

@@ -197,16 +197,25 @@ static bool sameI64ArrayAttr(ArrayAttr lhs, ArrayAttr rhs) {
   return true;
 }
 
-static bool haveSamePhysicalTimestepPlan(sde::SdeSuIterateOp predecessor,
-                                         sde::SdeSuIterateOp successor) {
-  return sameI64ArrayAttr(predecessor.getPhysicalOwnerDimsAttr(),
-                          successor.getPhysicalOwnerDimsAttr()) &&
-         sameI64ArrayAttr(predecessor.getPhysicalBlockShapeAttr(),
-                          successor.getPhysicalBlockShapeAttr());
+static bool sameCommittedPhysicalLayout(sde::SdeSuIterateOp lhs,
+                                        sde::SdeSuIterateOp rhs) {
+  std::optional<sde::CommittedSuPhysicalLayout> lhsLayout =
+      sde::recoverCommittedPhysicalLayout(lhs);
+  std::optional<sde::CommittedSuPhysicalLayout> rhsLayout =
+      sde::recoverCommittedPhysicalLayout(rhs);
+  if (!lhsLayout || !rhsLayout)
+    return false;
+  return sde::sameI64Values(lhsLayout->ownerDims, rhsLayout->ownerDims) &&
+         sde::sameI64Values(lhsLayout->blockShape, rhsLayout->blockShape);
 }
 
 static bool hasPhysicalTimestepPlan(sde::SdeSuIterateOp op) {
-  return op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr();
+  return sde::recoverCommittedPhysicalLayout(op).has_value();
+}
+
+static bool haveSamePhysicalTimestepPlan(sde::SdeSuIterateOp predecessor,
+                                         sde::SdeSuIterateOp successor) {
+  return sameCommittedPhysicalLayout(predecessor, successor);
 }
 
 static bool haveCompatiblePhysicalTimestepPlan(sde::SdeSuIterateOp predecessor,
@@ -220,20 +229,24 @@ static bool haveCompatiblePhysicalTimestepPlan(sde::SdeSuIterateOp predecessor,
   return haveSamePhysicalTimestepPlan(predecessor, successor);
 }
 
-static bool sameSdeIterationTopology(sde::SdeSuIterateOp lhs,
-                                     sde::SdeSuIterateOp rhs) {
-  auto lhsTopology = lhs.getIterationTopology();
-  auto rhsTopology = rhs.getIterationTopology();
+static bool sameDerivedIterationTopology(sde::SdeSuIterateOp lhs,
+                                         sde::SdeSuIterateOp rhs) {
+  std::optional<sde::SdeIterationTopology> lhsTopology =
+      sde::deriveIterationTopology(lhs);
+  std::optional<sde::SdeIterationTopology> rhsTopology =
+      sde::deriveIterationTopology(rhs);
   return lhsTopology && rhsTopology && *lhsTopology == *rhsTopology;
 }
 
 static bool haveSdeApprovedTiledTimestepPlan(sde::SdeSuIterateOp lhs,
                                              sde::SdeSuIterateOp rhs) {
+  auto lhsCu = sde::findSuComputeCuRegion(lhs);
+  auto rhsCu = sde::findSuComputeCuRegion(rhs);
   return haveSameIterationBounds(lhs, rhs) &&
          haveSamePhysicalTimestepPlan(lhs, rhs) &&
-         sameI64ArrayAttr(lhs.getLogicalWorkerSliceAttr(),
-                          rhs.getLogicalWorkerSliceAttr()) &&
-         sameSdeIterationTopology(lhs, rhs) &&
+         sameI64ArrayAttr(lhsCu ? lhsCu.getGroupBlockCountAttr() : nullptr,
+                          rhsCu ? rhsCu.getGroupBlockCountAttr() : nullptr) &&
+         sameDerivedIterationTopology(lhs, rhs) &&
          haveEquivalentOrTiledSteps(lhs, rhs);
 }
 
@@ -257,14 +270,14 @@ static bool isPipelineableStructuredClassification(sde::SdeSuIterateOp op) {
 
 static std::optional<SmallVector<unsigned, 4>>
 getPhysicalOwnerDims(sde::SdeSuIterateOp op) {
-  auto ownerDims =
-      ::mlir::carts::readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
-  if (!ownerDims || ownerDims->empty())
+  std::optional<sde::CommittedSuPhysicalLayout> layout =
+      sde::recoverCommittedPhysicalLayout(op);
+  if (!layout || layout->ownerDims.empty())
     return std::nullopt;
 
   SmallVector<unsigned, 4> result;
-  result.reserve(ownerDims->size());
-  for (int64_t dim : *ownerDims) {
+  result.reserve(layout->ownerDims.size());
+  for (int64_t dim : layout->ownerDims) {
     if (dim < 0)
       return std::nullopt;
     result.push_back(static_cast<unsigned>(dim));
@@ -273,7 +286,8 @@ getPhysicalOwnerDims(sde::SdeSuIterateOp op) {
 }
 
 static bool isTokenLocalPipelineTopology(sde::SdeSuIterateOp op) {
-  auto topology = op.getIterationTopology();
+  std::optional<sde::SdeIterationTopology> topology =
+      sde::deriveIterationTopology(op);
   return topology && (*topology == sde::SdeIterationTopology::owner_strip ||
                       *topology == sde::SdeIterationTopology::owner_tile ||
                       *topology == sde::SdeIterationTopology::owner_tile_2d);
@@ -382,7 +396,7 @@ static bool canPipelineThroughTokenLocalMemoryDeps(
     return false;
 
   if (!isTokenLocalPipelineTopology(predecessor) ||
-      !sameSdeIterationTopology(predecessor, successor))
+      !sameDerivedIterationTopology(predecessor, successor))
     return false;
 
   std::optional<SmallVector<unsigned, 4>> predOwnerDims =

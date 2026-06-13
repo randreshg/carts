@@ -7,6 +7,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/dialect/sde/Utils/SdeCuStructure.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -27,6 +28,24 @@ namespace {
 static bool isAllowedSuIterateChild(Operation *op) {
   return isa<SdeYieldOp, SdeCuRegionOp, SdeCuAtomicOp>(op) ||
          isa<SdeArrayLayoutRootOp, SdeSuBarrierOp>(op);
+}
+
+static bool valueDefinedOutsideRegion(Value value, Region *region) {
+  Operation *def = value.getDefiningOp();
+  if (!def)
+    return true;
+  return !region->isAncestor(def->getParentRegion());
+}
+
+static bool hasExternalWriteRoot(SdeSuIterateOp op) {
+  Region &body = op.getBody();
+  for (SdeCuRegionOp cu : body.getOps<SdeCuRegionOp>()) {
+    for (memref::StoreOp store : cu.getBody().getOps<memref::StoreOp>()) {
+      if (valueDefinedOutsideRegion(store.getMemref(), &body))
+        return true;
+    }
+  }
+  return false;
 }
 
 static bool isAllowedSuDistributeChild(Operation *op) {
@@ -259,6 +278,17 @@ LogicalResult SdeCuRegionOp::verify() {
   if (failed(verifyCuContainsNoScheduling(getOperation())))
     return failure();
 
+  if (auto groupCounts = readI64ArrayAttr(getGroupBlockCountAttr())) {
+    if (groupCounts->empty())
+      return emitOpError()
+             << "groupBlockCount must name at least one owner-dim entry";
+    for (int64_t count : *groupCounts)
+      if (count <= 0)
+        return emitOpError()
+               << "groupBlockCount entries must be positive whole block "
+                  "multiples";
+  }
+
   return success();
 }
 
@@ -308,12 +338,6 @@ void SdeSuIterateOp::print(OpAsmPrinter &p) {
     p << ")";
   }
 
-  // reduction_strategy(<strategy>)
-  if (auto strategy = getReductionStrategy()) {
-    p << " reduction_strategy(<" << stringifySdeReductionStrategy(*strategy)
-      << ">)";
-  }
-
   // classification(<class>)
   if (auto cls = getStructuredClassification()) {
     p << " classification(<" << stringifySdeStructuredClassification(*cls)
@@ -350,7 +374,6 @@ void SdeSuIterateOp::print(OpAsmPrinter &p) {
       "schedule",
       "nowait",
       "reductionKinds",
-      "reductionStrategy",
       "structuredClassification",
       getOperandSegmentSizesAttrName().getValue()};
   p.printOptionalAttrDict((*this)->getAttrs(), elidedAttrs);
@@ -406,12 +429,13 @@ ParseResult SdeSuIterateOp::parse(OpAsmParser &parser, OperationState &result) {
       return failure();
   }
 
-  // ---- optional reduction_strategy(<strategy>) ----
+  // reduction_strategy(<strategy>) — retired Step 9; discard on parse for round-trip.
   if (succeeded(parser.parseOptionalKeyword("reduction_strategy"))) {
     SdeReductionStrategyAttr stratAttr;
+    NamedAttrList ignoredAttrs;
     if (parser.parseLParen() ||
-        parser.parseCustomAttributeWithFallback(
-            stratAttr, Type{}, "reductionStrategy", result.attributes) ||
+        parser.parseCustomAttributeWithFallback(stratAttr, Type{}, "reductionStrategy",
+                                                ignoredAttrs) ||
         parser.parseRParen())
       return failure();
   }
@@ -514,6 +538,15 @@ ParseResult SdeSuIterateOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseOptionalAttrDict(result.attributes))
     return failure();
 
+  // Retired su_iterate attrs (Steps 8–9): drop on ingest so old IR round-trips.
+  static constexpr StringRef kRetiredSuIterateAttrs[] = {
+      "physicalOwnerDims",  "physicalBlockShape", "physicalHaloShape",
+      "iterationTopology",  "distributionKind",   "reductionStrategy",
+      "layoutsDisagree",    "logicalWorkerSlice",
+  };
+  for (StringRef name : kRetiredSuIterateAttrs)
+    result.attributes.erase(name);
+
   return success();
 }
 
@@ -599,8 +632,7 @@ LogicalResult SdeSuIterateOp::verify() {
   if (layout)
     facts = parseArrayLayoutFacts(layout);
 
-  bool hasCommittedPhysicalLayout =
-      getPhysicalOwnerDimsAttr() && getPhysicalBlockShapeAttr();
+  bool hasCommittedPhysicalLayout = hasCommittedWriterBlockLayout(*this);
 
   SmallVector<SdeArrayLayoutRootOp, 4> roots;
   for (SdeArrayLayoutRootOp root : entry.getOps<SdeArrayLayoutRootOp>())
@@ -657,6 +689,8 @@ LogicalResult SdeSuIterateOp::verify() {
             root.getMode() == *mode)
           found = true;
       if (!found) {
+        if (fact.role == LayoutGraphRole::write && hasExternalWriteRoot(*this))
+          continue;
         emitOpError() << "arrayLayout entry for arrayId " << fact.id
                       << " has no explicit sde.array_layout_root provenance; "
                          "refusing downstream root/order inference";
@@ -683,35 +717,6 @@ LogicalResult SdeSuIterateOp::verify() {
   }
   if (failed)
     return failure();
-
-  if (auto topology = getIterationTopology();
-      topology && (*topology == SdeIterationTopology::owner_tile ||
-                   *topology == SdeIterationTopology::owner_tile_2d)) {
-    if (getLowerBounds().size() < 2 || getUpperBounds().size() < 2 ||
-        getSteps().size() < 2)
-      return emitOpError()
-             << "owner-tile iteration topology requires at least two SDE "
-                "loop dimensions";
-
-    auto logicalSlice = readI64ArrayAttr(getLogicalWorkerSliceAttr());
-    if (!logicalSlice)
-      return emitOpError()
-             << "owner-tile iteration topology requires logicalWorkerSlice";
-    unsigned positiveSliceDims = 0;
-    for (int64_t extent : *logicalSlice)
-      if (extent > 0)
-        ++positiveSliceDims;
-    if (positiveSliceDims < 2)
-      return emitOpError()
-             << "owner-tile iteration topology requires at least two positive "
-                "logicalWorkerSlice entries";
-
-    auto physicalOwnerDims = readI64ArrayAttr(getPhysicalOwnerDimsAttr());
-    if (!physicalOwnerDims || physicalOwnerDims->size() < 2)
-      return emitOpError()
-             << "owner-tile iteration topology requires at least two "
-                "physicalOwnerDims entries";
-  }
 
   return success();
 }
@@ -1016,115 +1021,8 @@ LogicalResult SdeRedistOp::verify() {
       return emitOpError(
           "sde.redist: arrayId must be non-negative when present");
   }
-  int64_t rank = muType.getRank();
-  ArrayRef<int64_t> shape = muType.getShape();
-
-  // One endpoint: owner dims in range + unique; blockShape either rank-length
-  // (full extent on non-owner dims) or owner-dim-length. Empty owner dims is a
-  // replicated endpoint.
-  auto checkEndpoint = [&](StringRef side, ArrayAttr ownerAttr,
-                           ArrayAttr blockAttr) -> LogicalResult {
-    std::optional<SmallVector<int64_t, 4>> owner = readI64ArrayAttr(ownerAttr);
-    std::optional<SmallVector<int64_t, 4>> block = readI64ArrayAttr(blockAttr);
-    if (!owner || !block)
-      return emitOpError() << "sde.redist: " << side
-                           << " owner/block must be i64 array attributes";
-    SmallVector<bool, 4> isOwner(rank, false);
-    for (int64_t d : *owner) {
-      if (d < 0 || d >= rank)
-        return emitOpError() << "sde.redist: " << side << " owner dim " << d
-                             << " out of range";
-      if (isOwner[d])
-        return emitOpError()
-               << "sde.redist: " << side << " owner dim " << d << " duplicated";
-      isOwner[d] = true;
-    }
-    if (static_cast<int64_t>(block->size()) != rank &&
-        static_cast<int64_t>(block->size()) !=
-            static_cast<int64_t>(owner->size()))
-      return emitOpError() << "sde.redist: " << side
-                           << " blockShape length must equal MU rank or "
-                              "owner-dim count";
-    if (static_cast<int64_t>(block->size()) == rank) {
-      for (int64_t d = 0; d < rank; ++d) {
-        int64_t b = (*block)[d];
-        if (b <= 0 || b > shape[d])
-          return emitOpError() << "sde.redist: " << side << " block extent "
-                               << b << " out of range on dim " << d;
-        if (!isOwner[d] && b != shape[d])
-          return emitOpError() << "sde.redist: " << side
-                               << " non-owner block extent must equal full "
-                                  "extent on dim "
-                               << d;
-      }
-    } else {
-      for (auto [i, d] : llvm::enumerate(*owner)) {
-        int64_t b = (*block)[i];
-        if (b <= 0 || b > shape[d])
-          return emitOpError() << "sde.redist: " << side << " block extent "
-                               << b << " out of range on owner dim " << d;
-      }
-    }
-    return success();
-  };
-  if (failed(checkEndpoint("source", getSourceOwnerDims(),
-                           getSourceBlockShape())) ||
-      failed(
-          checkEndpoint("target", getTargetOwnerDims(), getTargetBlockShape())))
-    return failure();
-
-  bool sourceReplicated = getSourceOwnerDims().empty();
-  bool targetReplicated = getTargetOwnerDims().empty();
-  SdeMovementFamily fam = getFamily();
-
-  if (fam == SdeMovementFamily::halo_like)
-    return emitOpError(
-        "sde.redist: halo_like is retired; use sde.su_halo");
-  if (fam == SdeMovementFamily::reduce_scatter_like)
-    return emitOpError(
-        "sde.redist: reduce_scatter_like is retired; use sde.su_reduce_scatter");
-
-  // Halo is the halo_like family's signature and nothing else's.
-  if (ArrayAttr halo = getHaloShapeAttr())
-    return emitOpError(
-        "sde.redist: haloShape is only valid for the retired halo_like family; "
-        "use sde.su_halo");
-
-  // Family <-> geometry consistency. Reduction families may keep an identical
-  // layout (the movement is the reduction); re-layout families must differ.
-  bool sameLayout = getSourceOwnerDims() == getTargetOwnerDims() &&
-                    getSourceBlockShape() == getTargetBlockShape();
-  switch (fam) {
-  case SdeMovementFamily::broadcast_like:
-  case SdeMovementFamily::all_gather_like:
-    if (!targetReplicated)
-      return emitOpError("sde.redist: broadcast_like/all_gather_like require a "
-                         "replicated target (no owner dims)");
-    break;
-  case SdeMovementFamily::allreduce_like:
-    if (sourceReplicated)
-      return emitOpError(
-          "sde.redist: reduction families require a partitioned source");
-    break;
-  case SdeMovementFamily::all_to_all_like:
-    if (sourceReplicated || targetReplicated)
-      return emitOpError(
-          "sde.redist: all_to_all_like requires partitioned source and target");
-    if (getSourceOwnerDims() == getTargetOwnerDims())
-      return emitOpError(
-          "sde.redist: all_to_all_like requires differing owner dims");
-    break;
-  case SdeMovementFamily::phase_redist:
-    if (sameLayout)
-      return emitOpError(
-          "sde.redist: phase_redist requires source and target layouts to "
-          "differ");
-    break;
-  case SdeMovementFamily::halo_like:
-  case SdeMovementFamily::reduce_scatter_like:
-    break;
-  }
-  return success();
+  return emitOpError("sde.redist is retired on all movement families; use ")
+         << suMovementReplacementForFamily(getFamily());
 }
 
 // Shared endpoint check for SU-scope movement ops: owner dims in range + unique;
@@ -1506,4 +1404,25 @@ LogicalResult SdeMuReductionDeclOp::verify() {
                             "sde.yield of the reduction type";
 
   return success();
+}
+
+StringRef mlir::carts::sde::suMovementReplacementForFamily(
+    SdeMovementFamily family) {
+  switch (family) {
+  case SdeMovementFamily::halo_like:
+    return "sde.su_halo";
+  case SdeMovementFamily::reduce_scatter_like:
+    return "sde.su_reduce_scatter";
+  case SdeMovementFamily::broadcast_like:
+    return "sde.su_broadcast";
+  case SdeMovementFamily::all_gather_like:
+    return "sde.su_gather";
+  case SdeMovementFamily::all_to_all_like:
+    return "sde.su_all_to_all";
+  case SdeMovementFamily::allreduce_like:
+    return "sde.su_reduce_scatter followed by sde.su_broadcast";
+  case SdeMovementFamily::phase_redist:
+    return "a future first-class SU movement op";
+  }
+  llvm_unreachable("unknown SDE movement family");
 }

@@ -33,7 +33,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
     %c16 = arith.constant 16 : index
     %c64 = arith.constant 64 : index
     %cst = arith.constant 1.0 : f32
-    %R = sde.mu_alloc {arrayId = 0 : i64} : memref<64xf32>
+    %R = sde.mu_alloc : memref<64xf32>
     sde.cu_region <single> {
       scf.for %i = %c0 to %c64 step %c1 {
         memref.store %cst, %R[%i] : memref<64xf32>
@@ -51,7 +51,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
           func.call @sink(%v) : (f32) -> ()
         }
       }
-    } {arrayLayout = [{arrayId = 0 : i64, kind = "replicated", ownerDims = [], blockShape = [64], budgetBlockShape = [64], muBlockCount = 1 : i64, role = "read"}], physicalOwnerDims = [0], physicalBlockShape = [16], logicalWorkerSlice = [16]}
+    } {arrayLayout = [{arrayId = 0 : i64, kind = "replicated", ownerDims = [], blockShape = [64], budgetBlockShape = [64], muBlockCount = 1 : i64, role = "read"}]}
     return
   }
 

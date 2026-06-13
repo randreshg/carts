@@ -2,9 +2,11 @@
 #define CARTS_DIALECT_SDE_UTILS_SDECOMMITTEDFACTUTILS_H
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
+#include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
+#include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -20,6 +22,80 @@
 #include <limits>
 
 namespace mlir::carts::sde {
+
+inline std::optional<LayoutGraphFact>
+findSingleCommittedWriterBlockLayout(SdeSuIterateOp op);
+
+/// Physical block layout recovered from arrayLayout facts or rank-expanded roots.
+struct CommittedSuPhysicalLayout {
+  SmallVector<int64_t, 4> ownerDims;
+  SmallVector<int64_t, 4> blockShape;
+};
+
+inline std::optional<CommittedSuPhysicalLayout>
+recoverCommittedPhysicalLayout(SdeSuIterateOp op) {
+  if (!op)
+    return std::nullopt;
+  if (std::optional<LayoutGraphFact> writeLayout =
+          findSingleCommittedWriterBlockLayout(op))
+    return CommittedSuPhysicalLayout{writeLayout->ownerDims,
+                                     writeLayout->blockShape};
+  if (op.getBody().empty())
+    return std::nullopt;
+  for (SdeArrayLayoutRootOp root :
+       op.getBody().front().getOps<SdeArrayLayoutRootOp>()) {
+    auto muType = dyn_cast<MemRefType>(root.getRoot().getType());
+    if (!muType)
+      continue;
+    if (std::optional<RecoveredMuPhysicalLayout> recovered =
+            recoverMuPhysicalLayoutFromExpandedType(muType)) {
+      CommittedSuPhysicalLayout layout;
+      layout.ownerDims.reserve(recovered->ownerDims.size());
+      for (unsigned dim : recovered->ownerDims)
+        layout.ownerDims.push_back(static_cast<int64_t>(dim));
+      layout.blockShape.assign(recovered->physicalBlockShape.begin(),
+                               recovered->physicalBlockShape.end());
+      return layout;
+    }
+  }
+  return std::nullopt;
+}
+
+inline bool hasCommittedSuPhysicalLayout(SdeSuIterateOp op) {
+  return recoverCommittedPhysicalLayout(op).has_value();
+}
+
+inline std::optional<SdeIterationTopology>
+deriveIterationTopology(SdeSuIterateOp op) {
+  std::optional<CommittedSuPhysicalLayout> layout =
+      recoverCommittedPhysicalLayout(op);
+  if (!layout || layout->ownerDims.empty())
+    return std::nullopt;
+  if (layout->ownerDims.size() == 1)
+    return SdeIterationTopology::owner_strip;
+  if (layout->ownerDims.size() >= 2)
+    return SdeIterationTopology::owner_tile;
+  return std::nullopt;
+}
+
+inline std::optional<SmallVector<int64_t, 4>>
+deriveCommittedHaloShape(SdeSuIterateOp op) {
+  std::optional<SuNeighborhoodAccessInfo> neighborhood =
+      queryNeighborhoodAccessInfo(op);
+  if (!neighborhood)
+    return std::nullopt;
+  SmallVector<int64_t, 4> halo;
+  bool nonZero = false;
+  for (auto [minOffset, maxOffset] :
+       llvm::zip_equal(neighborhood->minOffsets, neighborhood->maxOffsets)) {
+    int64_t width =
+        std::max<int64_t>(std::llabs(minOffset), std::llabs(maxOffset));
+    nonZero |= width != 0;
+    halo.push_back(width);
+  }
+  return nonZero ? std::optional<SmallVector<int64_t, 4>>(std::move(halo))
+                 : std::nullopt;
+}
 
 /// True when a writer SU has committed block layout in arrayLayout facts.
 inline bool hasCommittedWriterBlockLayout(SdeSuIterateOp op) {
@@ -61,8 +137,50 @@ inline bool hasCommittedCuMuPartitionFacts(Operation *op) {
   auto iterate = dyn_cast_or_null<SdeSuIterateOp>(op);
   if (!iterate)
     return false;
-  return iterate.getLogicalWorkerSliceAttr() ||
-         hasCommittedWriterBlockLayout(iterate);
+  if (SdeCuRegionOp cu = findSuComputeCuRegion(iterate))
+    if (cu.getGroupBlockCountAttr())
+      return true;
+  return hasCommittedWriterBlockLayout(iterate);
+}
+
+/// Commit CU grouping as per-owner-dim block counts on the compute `cu_region`.
+/// Omits the attribute when every owner dim groups exactly one DB block.
+inline void commitCuGroupBlockCounts(SdeCuRegionOp cu,
+                                     ArrayRef<int64_t> ownerDims,
+                                     ArrayRef<int64_t> physicalBlockShape,
+                                     ArrayRef<int64_t> logicalWorkerSlice = {}) {
+  if (!cu || ownerDims.empty() || physicalBlockShape.empty())
+    return;
+  ArrayRef<int64_t> slice =
+      logicalWorkerSlice.empty() ? physicalBlockShape : logicalWorkerSlice;
+  SmallVector<int64_t, 4> counts;
+  counts.reserve(ownerDims.size());
+  bool anyGrouped = false;
+  for (int64_t rawDim : ownerDims) {
+    if (rawDim < 0 || static_cast<size_t>(rawDim) >= slice.size() ||
+        static_cast<size_t>(rawDim) >= physicalBlockShape.size())
+      return;
+    int64_t blockSize = physicalBlockShape[rawDim];
+    int64_t span = slice[rawDim];
+    if (span <= 0 || blockSize <= 0 || span % blockSize != 0)
+      return;
+    int64_t count = span / blockSize;
+    counts.push_back(count);
+    anyGrouped |= count > 1;
+  }
+  if (!anyGrouped) {
+    cu.removeGroupBlockCountAttr();
+    return;
+  }
+  cu.setGroupBlockCountAttr(buildI64ArrayAttr(cu.getContext(), counts));
+}
+
+inline void commitCuGroupBlockCounts(SdeSuIterateOp op,
+                                     ArrayRef<int64_t> ownerDims,
+                                     ArrayRef<int64_t> physicalBlockShape,
+                                     ArrayRef<int64_t> logicalWorkerSlice = {}) {
+  commitCuGroupBlockCounts(findSuComputeCuRegion(op), ownerDims,
+                           physicalBlockShape, logicalWorkerSlice);
 }
 
 /// True when a stencil carries N-D owner/access facts that cannot be realized
@@ -275,16 +393,15 @@ inline bool reconcilePartialReductionOwnersWithCommittedShape(
   return true;
 }
 
-/// Commit physical grain to arrayLayout and logicalWorkerSlice only.
+/// Commit physical grain to arrayLayout and CU group-block counts only.
 inline bool commitWriterPhysicalLayoutFacts(
     SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
     ArrayRef<int64_t> physicalBlockShape,
     ArrayRef<int64_t> logicalWorkerSlice = {}) {
   if (!op || ownerDims.empty() || physicalBlockShape.empty())
     return false;
-  ArrayRef<int64_t> logicalSlice =
-      logicalWorkerSlice.empty() ? physicalBlockShape : logicalWorkerSlice;
-  op.setLogicalWorkerSliceAttr(buildI64ArrayAttr(op.getContext(), logicalSlice));
+  commitCuGroupBlockCounts(op, ownerDims, physicalBlockShape,
+                           logicalWorkerSlice);
   bool changed =
       rewriteWriterArrayLayoutToPhysicalShape(op, ownerDims, physicalBlockShape);
   changed |=

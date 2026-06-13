@@ -11,6 +11,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
@@ -155,35 +156,31 @@ findCommittedBlockGeometryForRoot(Value root) {
     if (!isa<memref::StoreOp>(user))
       continue;
     sde::SdeSuIterateOp su = user->getParentOfType<sde::SdeSuIterateOp>();
-    while (su &&
-           !(su.getPhysicalOwnerDimsAttr() && su.getPhysicalBlockShapeAttr()))
+    while (su && !sde::recoverCommittedPhysicalLayout(su))
       su = su->getParentOfType<sde::SdeSuIterateOp>();
     if (!su)
       continue;
 
-    std::optional<SmallVector<int64_t, 2>> ownerDims =
-        readI64Vector(su.getPhysicalOwnerDimsAttr());
-    std::optional<SmallVector<int64_t, 2>> blockShape =
-        readI64Vector(su.getPhysicalBlockShapeAttr());
-    if (!ownerDims || !blockShape || ownerDims->size() != 1 ||
-        blockShape->empty())
+    std::optional<sde::CommittedSuPhysicalLayout> layout =
+        sde::recoverCommittedPhysicalLayout(su);
+    if (!layout || layout->ownerDims.size() != 1 || layout->blockShape.empty())
       continue;
-    int64_t ownerDim = (*ownerDims)[0];
-    if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= blockShape->size())
+    int64_t ownerDim = layout->ownerDims[0];
+    if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= layout->blockShape.size())
       continue;
 
     int64_t extent = type.getDimSize(0);
-    int64_t blockExtent = (*blockShape)[ownerDim];
+    int64_t blockExtent = layout->blockShape[ownerDim];
     if (blockExtent <= 0)
       continue;
     int64_t blockCount = ceilDiv(type.getDimSize(0), blockExtent);
     if (rankExpandedMu) {
       unsigned logicalRank = type.getRank() - 1;
-      if (blockShape->size() != logicalRank ||
+      if (layout->blockShape.size() != logicalRank ||
           static_cast<unsigned>(ownerDim) >= logicalRank)
         continue;
       bool shapeMatches = true;
-      for (auto [dim, block] : llvm::enumerate(*blockShape))
+      for (auto [dim, block] : llvm::enumerate(layout->blockShape))
         if (type.getDimSize(dim + 1) != block) {
           shapeMatches = false;
           break;
@@ -601,12 +598,6 @@ static sde::SdeSuIterateOp createProducer(ReductionCandidate &candidate,
   sde::SuIterateAttrs suAttrs;
   suAttrs.structuredClassification = sde::SdeStructuredClassificationAttr::get(
       ctx, sde::SdeStructuredClassification::elementwise);
-  suAttrs.physicalOwnerDims = buildI64ArrayAttr(ctx, {0});
-  suAttrs.physicalBlockShape =
-      buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate));
-  suAttrs.logicalWorkerSlice = buildI64ArrayAttr(ctx, {1});
-  suAttrs.iterationTopology = sde::SdeIterationTopologyAttr::get(
-      ctx, sde::SdeIterationTopology::owner_strip);
   suAttrs.arrayLayout =
       partialArrayId ? buildPartialArrayLayout(ctx, *partialArrayId, candidate)
                      : ArrayAttr{};
@@ -646,6 +637,9 @@ static sde::SdeSuIterateOp createProducer(ReductionCandidate &candidate,
 
   builder.setInsertionPointToEnd(&suBody);
   sde::SdeYieldOp::create(builder, loc, ValueRange{});
+  if (std::optional<SmallVector<int64_t, 2>> blockShape =
+          partialPhysicalBlockShape(candidate))
+    (void)sde::commitWriterPhysicalLayoutFacts(su, {0}, *blockShape, {1});
   return su;
 }
 

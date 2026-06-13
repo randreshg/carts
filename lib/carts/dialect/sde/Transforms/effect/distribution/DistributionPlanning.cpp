@@ -583,26 +583,6 @@ static sde::SdeSuIterateOp realizeWavefrontSkew(sde::SdeSuIterateOp op,
       buildI64ArrayAttr(ctx, plan.neighborhood.writeFootprint);
   std::optional<WavefrontOwnerStoragePlan> storagePlan =
       buildWavefrontOwnerStoragePlan(plan);
-  ArrayAttr physicalOwnerDimsAttr;
-  ArrayAttr physicalBlockShapeAttr;
-  ArrayAttr logicalWorkerSliceAttr;
-  ArrayAttr physicalHaloShapeAttr;
-  sde::SdeIterationTopologyAttr iterationTopologyAttr;
-  if (storagePlan) {
-    physicalOwnerDimsAttr =
-        buildI64ArrayAttr(ctx, storagePlan->ownerPhysicalDims);
-    physicalBlockShapeAttr =
-        buildI64ArrayAttr(ctx, storagePlan->physicalBlockShape);
-    logicalWorkerSliceAttr =
-        buildI64ArrayAttr(ctx, storagePlan->logicalWorkerSlice);
-    if (llvm::any_of(storagePlan->haloShape,
-                     [](int64_t halo) { return halo > 0; }))
-      physicalHaloShapeAttr = buildI64ArrayAttr(ctx, storagePlan->haloShape);
-    iterationTopologyAttr = sde::SdeIterationTopologyAttr::get(
-        ctx, storagePlan->ownerPhysicalDims.size() > 1
-                 ? sde::SdeIterationTopology::owner_tile
-                 : sde::SdeIterationTopology::owner_strip);
-  }
   sde::SuIterateAttrs suAttrs = sde::SuIterateAttrs::fromOp(op);
   suAttrs.pattern =
       sde::SdePatternAttr::get(ctx, sde::SdePattern::stencil_tiling_nd);
@@ -611,15 +591,7 @@ static sde::SdeSuIterateOp realizeWavefrontSkew(sde::SdeSuIterateOp op,
   suAttrs.ownerDims = ownerDimsAttr;
   suAttrs.spatialDims = spatialDimsAttr;
   suAttrs.writeFootprint = writeFootprintAttr;
-  suAttrs.physicalOwnerDims = physicalOwnerDimsAttr;
-  suAttrs.physicalBlockShape = physicalBlockShapeAttr;
-  suAttrs.logicalWorkerSlice = logicalWorkerSliceAttr;
-  suAttrs.physicalHaloShape = physicalHaloShapeAttr;
-  suAttrs.iterationTopology = iterationTopologyAttr;
-  // Distribution/in-place predicates are intentionally re-derived downstream,
-  // so they are cleared on the rebuilt op (preserved verbatim from the prior
-  // positional create).
-  suAttrs.distributionKind = nullptr;
+  // Distribution/in-place predicates are intentionally re-derived downstream.
   suAttrs.inPlaceSafe = nullptr;
   suAttrs.inPlaceSharedState = nullptr;
   auto newOp = sde::buildSuIterate(
@@ -645,6 +617,10 @@ static sde::SdeSuIterateOp realizeWavefrontSkew(sde::SdeSuIterateOp op,
 
   auto newCuRegion = sde::buildCuRegion(
       builder, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel));
+  if (storagePlan)
+    (void)sde::commitWriterPhysicalLayoutFacts(
+        newOp, storagePlan->ownerPhysicalDims, storagePlan->physicalBlockShape,
+        storagePlan->logicalWorkerSlice);
   Block &newComputeBlock = sde::ensureBlock(newCuRegion.getBody());
   builder.setInsertionPointToStart(&newComputeBlock);
 
@@ -1723,8 +1699,6 @@ static void commitMatmulPhysicalLayout(sde::SdeSuIterateOp op,
       buildLogicalWorkerSliceOrPhysical(op, outputPlan->shape, ownerDims,
                                         physicalBlockShape, workers);
 
-  op.setLogicalWorkerSliceAttr(
-      buildI64ArrayAttr(op.getContext(), logicalWorkerSlice));
   sde::commitWriterPhysicalLayoutFacts(op, ownerDims, physicalBlockShape,
                                        logicalWorkerSlice);
 }
@@ -1774,7 +1748,8 @@ static void commitDirectRowMatmulPhysicalLayout(sde::SdeSuIterateOp op,
 
 static void commitReductionTaskShape(sde::SdeSuIterateOp op,
                                      sde::SDECostModel &costModel) {
-  if (op.getLogicalWorkerSliceAttr() && hasCommittedPhysicalLayout(op))
+  if (sde::SdeCuRegionOp cu = sde::findSuComputeCuRegion(op);
+      cu && cu.getGroupBlockCountAttr() && hasCommittedPhysicalLayout(op))
     return;
   auto classification = sde::queryStructuredClassification(op);
   if (!classification ||
@@ -1800,16 +1775,11 @@ static void commitReductionTaskShape(sde::SdeSuIterateOp op,
     if (outputPlan && !outputPlan->ownerPhysicalDims.empty() &&
         !outputPlan->shape.empty()) {
       SmallVector<int64_t, 4> physicalBlockShape(outputPlan->shape);
-      if (auto logicalSlice = readI64ArrayAttr(op.getLogicalWorkerSliceAttr());
-          logicalSlice && logicalSlice->size() == physicalBlockShape.size()) {
-        physicalBlockShape.assign(logicalSlice->begin(), logicalSlice->end());
-      } else {
-        for (int64_t rawDim : outputPlan->ownerPhysicalDims) {
-          if (rawDim < 0 ||
-              static_cast<size_t>(rawDim) >= physicalBlockShape.size())
-            return;
-          physicalBlockShape[rawDim] = slice;
-        }
+      for (int64_t rawDim : outputPlan->ownerPhysicalDims) {
+        if (rawDim < 0 ||
+            static_cast<size_t>(rawDim) >= physicalBlockShape.size())
+          return;
+        physicalBlockShape[rawDim] = slice;
       }
       for (int64_t rawDim : outputPlan->ownerPhysicalDims)
         if (rawDim < 0 ||
@@ -1826,16 +1796,15 @@ static void commitReductionTaskShape(sde::SdeSuIterateOp op,
       return;
     }
   }
-
-  op.setLogicalWorkerSliceAttr(
-      buildI64ArrayAttr(op.getContext(), SmallVector<int64_t, 1>{slice}));
 }
 
 static void
 commitInPlaceSharedStencilSerialSlice(sde::SdeSuIterateOp op,
                                       sde::SDECostModel &costModel) {
-  if (op.getLogicalWorkerSliceAttr() ||
-      costModel.getLogicalWorkerCapacity() <= 1)
+  if (sde::SdeCuRegionOp cu = sde::findSuComputeCuRegion(op);
+      cu && cu.getGroupBlockCountAttr())
+    return;
+  if (costModel.getLogicalWorkerCapacity() <= 1)
     return;
   auto classification = sde::queryStructuredClassification(op);
   if (!classification ||

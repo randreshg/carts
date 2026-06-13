@@ -60,7 +60,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
           }
         }
         sde.yield
-      } {accessMaxOffsets = [1, 1, 1], accessMinOffsets = [-1, -1, -1], logicalWorkerSlice = [7, 5, 3], ownerDims = [2, 1, 0], pattern = #sde.pattern<cross_dim_stencil_3d>, physicalBlockShape = [7, 5, 3], physicalHaloShape = [1, 1, 1], physicalOwnerDims = [2, 1, 0], spatialDims = [0, 1, 2], writeFootprint = [1, 1, 1]}
+      } {accessMaxOffsets = [1, 1, 1], accessMinOffsets = [-1, -1, -1], ownerDims = [2, 1, 0], pattern = #sde.pattern<cross_dim_stencil_3d>, spatialDims = [0, 1, 2], writeFootprint = [1, 1, 1]}
     }
     return
   }

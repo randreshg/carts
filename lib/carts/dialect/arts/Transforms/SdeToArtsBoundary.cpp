@@ -15,7 +15,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
-#include "carts/dialect/sde/Utils/MuAccessWindow.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
@@ -152,16 +152,13 @@ static LogicalResult attachCommittedSdeFacts(sde::SdeSuIterateOp source,
       return failure();
     arts::setDepPattern(taskOp, *depPattern);
   }
-  if (auto kind = source.getDistributionKindAttr()) {
+  if (auto distribute = source->getParentOfType<sde::SdeSuDistributeOp>()) {
     FailureOr<EdtDistributionKind> converted =
-        convertDistributionKind(kind.getValue(), source.getOperation());
+        convertDistributionKind(distribute.getKind(), source.getOperation());
     if (failed(converted))
       return failure();
     arts::setEdtDistributionKind(taskOp, *converted);
   }
-  if (auto strategy = source.getReductionStrategyAttr())
-    task.setReductionStrategyAttr(ArtsReductionStrategyAttr::get(
-        ctx, static_cast<ArtsReductionStrategy>(strategy.getValue())));
   if (hasCommittedPartialReductionFacts(source))
     task.setPartialReductionAttr(UnitAttr::get(ctx));
   if (auto dims = source.getPartialReductionDimsAttr())
@@ -255,9 +252,9 @@ readCommittedPhysicalOwnerDims(
   if (std::optional<SmallVector<int64_t, 4>> ownerDims =
           readI64ArrayAttr(source.getOwnerDimsAttr()))
     return ownerDims;
-  if (std::optional<SmallVector<int64_t, 4>> ownerDims =
-          readI64ArrayAttr(source.getPhysicalOwnerDimsAttr()))
-    return ownerDims;
+  if (std::optional<sde::CommittedSuPhysicalLayout> layout =
+          sde::recoverCommittedPhysicalLayout(source))
+    return layout->ownerDims;
   return std::nullopt;
 }
 
@@ -525,23 +522,9 @@ validateAndCollectStorageRedists(ModuleOp module,
   };
 
   module.walk([&](sde::SdeRedistOp redist) {
-    if (redist.getFamily() == sde::SdeMovementFamily::halo_like) {
-      redist.emitOpError()
-          << "commits retired halo_like movement on sde.redist; use "
-             "sde.su_halo";
-      foundError = true;
-      return;
-    }
-    if (redist.getFamily() == sde::SdeMovementFamily::reduce_scatter_like) {
-      redist.emitOpError()
-          << "commits retired reduce_scatter_like movement on sde.redist; use "
-             "sde.su_reduce_scatter";
-      foundError = true;
-      return;
-    }
-    redist.emitOpError() << "direct SDE-to-ARTS lowering for movement family "
-                         << stringifySdeMovementFamily(redist.getFamily())
-                         << " requires a real ARTS realization";
+    redist.emitOpError()
+        << "commits retired movement on sde.redist; use "
+        << sde::suMovementReplacementForFamily(redist.getFamily());
     foundError = true;
   });
 
@@ -730,29 +713,15 @@ struct DirectDepSpec {
 
 static std::optional<CommittedPhysicalLayout>
 readPhysicalLayoutFromSuIterateAttrs(sde::SdeSuIterateOp source) {
-  std::optional<SmallVector<int64_t, 4>> ownerDims =
-      readI64ArrayAttr(source.getPhysicalOwnerDimsAttr());
-  std::optional<SmallVector<int64_t, 4>> blockShape =
-      readI64ArrayAttr(source.getPhysicalBlockShapeAttr());
-  if (!ownerDims || ownerDims->empty() || !blockShape || blockShape->empty())
-    return std::nullopt;
-  return CommittedPhysicalLayout{*ownerDims, *blockShape};
+  if (std::optional<sde::CommittedSuPhysicalLayout> layout =
+          sde::recoverCommittedPhysicalLayout(source))
+    return CommittedPhysicalLayout{layout->ownerDims, layout->blockShape};
+  return std::nullopt;
 }
 
 static std::optional<CommittedPhysicalLayout>
 readPhysicalLayoutFromSuIterateOwnerFacts(sde::SdeSuIterateOp source) {
-  if (std::optional<CommittedPhysicalLayout> fromAttrs =
-          readPhysicalLayoutFromSuIterateAttrs(source))
-    return fromAttrs;
-
-  if (std::optional<SmallVector<int64_t, 4>> ownerDims =
-          readI64ArrayAttr(source.getOwnerDimsAttr())) {
-    std::optional<SmallVector<int64_t, 4>> blockShape =
-        readI64ArrayAttr(source.getPhysicalBlockShapeAttr());
-    if (blockShape && !blockShape->empty())
-      return CommittedPhysicalLayout{*ownerDims, *blockShape};
-  }
-  return std::nullopt;
+  return readPhysicalLayoutFromSuIterateAttrs(source);
 }
 
 static std::optional<CommittedPhysicalLayout>
@@ -774,9 +743,10 @@ readPhysicalLayoutFromDepWindow(sde::SdeSuIterateOp source,
     layout.ownerDims.assign(ownerDims->begin(), ownerDims->end());
     return layout;
   }
-  if (std::optional<SmallVector<int64_t, 4>> ownerDims =
-          readI64ArrayAttr(source.getPhysicalOwnerDimsAttr())) {
-    layout.ownerDims.assign(ownerDims->begin(), ownerDims->end());
+  if (std::optional<sde::CommittedSuPhysicalLayout> committed =
+          sde::recoverCommittedPhysicalLayout(source)) {
+    layout.ownerDims.assign(committed->ownerDims.begin(),
+                           committed->ownerDims.end());
     return layout;
   }
   return std::nullopt;
@@ -3919,7 +3889,7 @@ convertCoarseSuIterate(sde::SdeSuIterateOp source,
     return source.emitOpError()
            << "has no DB-backed accesses for coarse SDE-to-ARTS SU "
               "realization";
-  if (source.getPhysicalOwnerDimsAttr() || source.getPhysicalBlockShapeAttr()) {
+  if (sde::recoverCommittedPhysicalLayout(source)) {
     if (llvm::any_of(deps, [](CoarseSuDependency &dep) {
           auto partition = dep.alloc.getPartitionMode();
           return partition && *partition != arts::PartitionMode::coarse;
@@ -3928,10 +3898,11 @@ convertCoarseSuIterate(sde::SdeSuIterateOp source,
              << "has committed physical partition facts but no access-window "
                 "dependencies; refusing coarse ARTS realization";
   }
-  if (source.getLogicalWorkerSliceAttr() || source.getPhysicalHaloShapeAttr() ||
+  sde::SdeCuRegionOp computeCu = sde::findSuComputeCuRegion(source);
+  if ((computeCu && computeCu.getGroupBlockCountAttr()) ||
       source.getAccessMinOffsetsAttr() || source.getAccessMaxOffsetsAttr() ||
       source.getOwnerDimsAttr() || source.getSpatialDimsAttr() ||
-      source.getWriteFootprintAttr() || source.getLayoutsDisagreeAttr())
+      source.getWriteFootprintAttr())
     return source.emitOpError()
            << "has movement, halo, or physical scheduling facts without "
               "committed access windows; refusing coarse ARTS realization";
@@ -4097,11 +4068,13 @@ convertSuIterate(sde::SdeSuIterateOp source,
 
   std::optional<CommittedPhysicalLayout> physicalLayout =
       readCommittedPhysicalLayout(source, deps);
-  if (!physicalLayout || physicalLayout->ownerDims.empty() ||
-      physicalLayout->blockShape.empty())
-    return source.emitOpError()
-           << "requires committed physical owner dimensions and block shape "
-              "for direct ARTS dispatch";
+  if (!physicalLayout || physicalLayout->blockShape.empty() ||
+      physicalLayout->ownerDims.empty()) {
+    SmallVector<CoarseSuDependency, 4> coarseDeps;
+    if (failed(collectCoarseSuDependencies(source, coarseDeps)))
+      return failure();
+    return convertCoarseSuIterate(source, coarseDeps);
+  }
 
   ArrayRef<int64_t> ownerDims = physicalLayout->ownerDims;
   ArrayRef<int64_t> blockShape = physicalLayout->blockShape;
@@ -4130,34 +4103,23 @@ convertSuIterate(sde::SdeSuIterateOp source,
   SmallVector<int64_t, 4> workerSpans(ownerBlockSizes.begin(),
                                       ownerBlockSizes.end());
   SmallVector<int64_t, 4> groupBlockCounts(ownerDimCount, 1);
-  if (auto workerSlice = readI64ArrayAttr(source.getLogicalWorkerSliceAttr())) {
-    unsigned workerSliceRank = workerSlice->size();
-    unsigned physicalRank = blockShape.size();
-    if (workerSliceRank != physicalRank && workerSliceRank != loopRank &&
-        workerSliceRank != ownerDimCount)
-      return source.emitOpError()
-             << "commits logicalWorkerSlice whose rank does not match the "
-                "physical, iteration, or owner rank";
-    for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-      unsigned physicalDim = static_cast<unsigned>(ownerSlotDims[slot]);
-      unsigned loopDim = ownerRouteping->loopDims[slot];
-      unsigned sliceDim =
-          workerSliceRank == physicalRank
-              ? physicalDim
-              : (workerSliceRank == loopRank ? loopDim
-                                             : ownerRouteping->rawSlots[slot]);
-      if (sliceDim >= workerSliceRank)
+  if (sde::SdeCuRegionOp computeCu = sde::findSuComputeCuRegion(source)) {
+    if (auto groupCounts =
+            readI64ArrayAttr(computeCu.getGroupBlockCountAttr())) {
+      if (groupCounts->size() != ownerDimCount)
         return source.emitOpError()
-               << "commits logicalWorkerSlice that does not cover a committed "
-                  "physical owner dimension";
-      int64_t span = (*workerSlice)[sliceDim];
-      int64_t blockSize = ownerBlockSizes[slot];
-      if (span <= 0 || span < blockSize || span % blockSize != 0)
-        return source.emitOpError()
-               << "commits logicalWorkerSlice that cannot be represented as "
-                  "a whole-number group of physical DB blocks";
-      workerSpans[slot] = span;
-      groupBlockCounts[slot] = span / blockSize;
+               << "commits groupBlockCount whose rank does not match the "
+                  "committed owner rank";
+      for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+        int64_t count = (*groupCounts)[slot];
+        int64_t blockSize = ownerBlockSizes[slot];
+        if (count <= 0)
+          return source.emitOpError()
+                 << "commits groupBlockCount that cannot be represented as "
+                    "a whole-number group of physical DB blocks";
+        workerSpans[slot] = blockSize * count;
+        groupBlockCounts[slot] = count;
+      }
     }
   }
 
@@ -5008,9 +4970,6 @@ static LogicalResult inlineSdeSuDistribute(sde::SdeSuDistributeOp op) {
            << "has non-empty region arguments during SDE-to-ARTS cleanup";
 
   Block &body = op.getBody().front();
-  for (auto iterate : body.getOps<sde::SdeSuIterateOp>())
-    if (!iterate.getDistributionKindAttr())
-      iterate.setDistributionKindAttr(op.getKindAttr());
   if (!body.empty())
     if (auto yield = dyn_cast<sde::SdeYieldOp>(&body.back()))
       yield.erase();

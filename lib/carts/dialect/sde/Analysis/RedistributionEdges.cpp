@@ -67,7 +67,7 @@ findProfileForRoot(const ModuleSuAccessRelations &relations, Value root) {
 static std::optional<SmallVector<int64_t, 4>>
 getCommittedHaloShape(SdeSuIterateOp reader) {
   if (std::optional<SmallVector<int64_t, 4>> halo =
-          readI64ArrayAttr(reader.getPhysicalHaloShapeAttr()))
+          deriveCommittedHaloShape(reader))
     return halo;
 
   std::optional<SmallVector<int64_t, 4>> mins =
@@ -184,6 +184,22 @@ static bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
     return false;
   }
 
+  ArrayRef<int64_t> ownerHaloShape = committedHaloShape;
+  SmallVector<int64_t, 4> projectedOwnerHalo;
+  if (committedHaloShape.size() == rootType.getRank()) {
+    projectedOwnerHalo.reserve(rawSourceOwner.size());
+    for (int64_t ownerDim : rawSourceOwner) {
+      if (ownerDim < 0 ||
+          ownerDim >= static_cast<int64_t>(committedHaloShape.size())) {
+        failReason = "rank-expanded halo redistribution has no recoverable "
+                     "ghost width for a committed owner grid dim";
+        return false;
+      }
+      projectedOwnerHalo.push_back(committedHaloShape[ownerDim]);
+    }
+    ownerHaloShape = projectedOwnerHalo;
+  }
+
   // The home block over the EXPANDED root is a single block per grid step:
   // block extent 1 on each of the K grid dims, full tile extent on every tile
   // dim (the trailing in-block extents are preserved verbatim).
@@ -199,7 +215,7 @@ static bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
   SmallVector<int64_t, 4> halo(rootType.getRank(), 0);
   for (unsigned i = 0; i < numGrid; ++i) {
     std::optional<int64_t> radius = getOwnerHaloRadius(
-        committedHaloShape, expanded->logicalRank, rawSourceOwner,
+        ownerHaloShape, expanded->logicalRank, rawSourceOwner,
         /*ownerSlot=*/i, /*logicalOwnerDim=*/expanded->ownerDims[i]);
     if (!radius || *radius <= 0) {
       failReason = "rank-expanded halo redistribution has no recoverable ghost "
@@ -281,6 +297,22 @@ getRankExpandedReductionEndpoint(const HomeLayout &home, MemRefType muType) {
 static ArrayRef<int64_t> committedBlockShape(const LayoutGraphFact &fact) {
   return fact.budgetBlockShape.empty() ? ArrayRef<int64_t>(fact.blockShape)
                                        : ArrayRef<int64_t>(fact.budgetBlockShape);
+}
+
+static SdeMovementFamily repartitionMovementFamily(const HomeLayout &home,
+                                                   const LayoutGraphFact &readerFact) {
+  if (home.ownerDims.empty() && !readerFact.ownerDims.empty())
+    return SdeMovementFamily::broadcast_like;
+  if (!home.ownerDims.empty() && readerFact.ownerDims.empty())
+    return SdeMovementFamily::all_gather_like;
+  if (!sameOwnerDimSet(home.ownerDims, readerFact.ownerDims))
+    return SdeMovementFamily::all_to_all_like;
+  return SdeMovementFamily::phase_redist;
+}
+
+static std::string unrepresentableMovementMessage(SdeMovementFamily family) {
+  return "not yet realizable as " +
+         suMovementReplacementForFamily(family).str();
 }
 
 static void commitConsumerTargetGeometry(RedistributionEdge &edge,
@@ -548,15 +580,15 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         else {
           fail(
               "cross-owner reduction of a rank-expanded distributed "
-              "intermediate is recognized but not yet realizable as sde.redist "
-              "(the home block geometry does not fit the expanded root)");
+              "intermediate is recognized but not yet realizable as " +
+              unrepresentableMovementMessage(SdeMovementFamily::reduce_scatter_like));
           continue;
         }
       }
       if (hasOwnerReduction && !geometryFitsRoot && !expandedEndpoint) {
         fail("cross-owner reduction of a rank-expanded distributed "
-             "intermediate is recognized but not yet realizable as sde.redist "
-             "(the home block geometry does not fit the expanded root)");
+             "intermediate is recognized but not yet realizable as " +
+             unrepresentableMovementMessage(SdeMovementFamily::reduce_scatter_like));
         continue;
       }
       bool committedContractionLayout =
@@ -567,7 +599,7 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
           haloShape && readerFact &&
           sameOwnerDimSet(home.ownerDims, readerFact->ownerDims);
       bool committedRepartitionLayout =
-          readerFact &&
+          readerFact && !committedHaloLayout &&
           (!sameOwnerDimSet(home.ownerDims, readerFact->ownerDims) ||
            committedBlockShape(*readerFact) !=
                ArrayRef<int64_t>(home.blockShape));
@@ -579,9 +611,11 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       }
       if (!hasOwnerReduction && !committedContractionLayout) {
         if (committedRepartitionLayout) {
-          fail("repartition redistribution edge is not yet representable as "
-               "sde.redist (consumer required-read layout differs from the "
-               "committed home layout)");
+          fail("repartition redistribution edge is " +
+               unrepresentableMovementMessage(
+                   repartitionMovementFamily(home, *readerFact)) +
+               " (consumer required-read layout differs from the committed "
+               "home layout)");
           continue;
         }
         if (!committedHaloLayout) {

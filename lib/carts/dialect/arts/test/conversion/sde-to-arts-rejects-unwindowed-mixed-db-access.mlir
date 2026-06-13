@@ -29,7 +29,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
           memref.store %value, %out[%block, %j] : memref<4x16xf32>
         }
       }
-    } {logicalWorkerSlice = [16], physicalBlockShape = [16], physicalOwnerDims = [0]}
+    } {}
     return
   }
 }

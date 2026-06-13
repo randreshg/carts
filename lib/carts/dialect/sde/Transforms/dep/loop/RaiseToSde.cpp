@@ -5,6 +5,12 @@
 /// sequential `scf.for` nests into bare `sde.su_iterate` + `sde.cu_region`
 /// skeletons via `buildSuIterate` / `buildCuRegion` with zero optional attrs.
 ///
+/// Per-axis split: a contiguous parallel outer prefix becomes an N-D
+/// `su_iterate` domain; dependence-carrying inner axes stay as `scf.for`
+/// inside the proof-derived `cu_region<parallel>`. Reduction loops are
+/// admitted only with a reassociation license (integer add/mul or fast-math
+/// reassoc on float); plain sequential float `+=` fails closed.
+///
 /// Subsumes the parallel-promotion slice of `sde-parallelize` and will
 /// eventually fold `sde-cu-normalization`. Re-entrancy guard: skip loop nests
 /// already under `sde.su_iterate`; allow direct children of residual
@@ -57,6 +63,7 @@ struct ParallelNest {
   SmallVector<Value, 4> roots;
   SmallVector<Counter, 2> counters;
   sde::SdeCuRegionOp enclosingSingleCu;
+  unsigned parallelPrefix = 0;
 };
 
 static bool isPureScalarOp(Operation *op);
@@ -121,36 +128,134 @@ static bool isScalarScratch(Value root) {
   return mt && mt.getRank() == 0;
 }
 
-static bool isLoopIndexedStore(memref::StoreOp store,
-                               ArrayRef<scf::ForOp> loops,
-                               SmallVectorImpl<int64_t> &ownerPhysicalDims) {
-  OperandRange indices = store.getIndices();
-  if (indices.size() != loops.size())
-    return false;
+static bool rootIn(Value root, ArrayRef<Value> roots) {
+  for (Value candidate : roots)
+    if (candidate == root)
+      return true;
+  return false;
+}
 
-  llvm::SmallBitVector usedPhysicalDims(indices.size(), false);
-  ownerPhysicalDims.clear();
-  ownerPhysicalDims.reserve(loops.size());
-  for (scf::ForOp loop : loops) {
-    std::optional<unsigned> selectedPhysicalDim;
-    Value iv = loop.getInductionVar();
-    for (auto [physicalDim, rawIndex] : llvm::enumerate(indices)) {
-      int64_t offset = 0;
-      Value index = ValueAnalysis::stripConstantOffset(
-          ValueAnalysis::stripNumericCasts(rawIndex), &offset);
-      index = ValueAnalysis::stripNumericCasts(index);
-      if (offset != 0 || !ValueAnalysis::sameValue(index, iv))
-        continue;
-      if (selectedPhysicalDim)
-        return false;
-      selectedPhysicalDim = static_cast<unsigned>(physicalDim);
-    }
-    if (!selectedPhysicalDim || usedPhysicalDims.test(*selectedPhysicalDim))
+static bool indexUsesLoopIv(OperandRange indices, scf::ForOp loop,
+                            std::optional<unsigned> &physicalDim) {
+  Value iv = loop.getInductionVar();
+  for (auto [dim, rawIndex] : llvm::enumerate(indices)) {
+    int64_t offset = 0;
+    Value index = ValueAnalysis::stripConstantOffset(
+        ValueAnalysis::stripNumericCasts(rawIndex), &offset);
+    index = ValueAnalysis::stripNumericCasts(index);
+    if (offset != 0 || !ValueAnalysis::sameValue(index, iv))
+      continue;
+    if (physicalDim)
       return false;
-    usedPhysicalDims.set(*selectedPhysicalDim);
-    ownerPhysicalDims.push_back(static_cast<int64_t>(*selectedPhysicalDim));
+    physicalDim = static_cast<unsigned>(dim);
+  }
+  return physicalDim.has_value();
+}
+
+static bool storeUsesLoopIv(memref::StoreOp store, scf::ForOp loop,
+                            std::optional<unsigned> &physicalDim) {
+  return indexUsesLoopIv(store.getIndices(), loop, physicalDim);
+}
+
+static bool storeMatchesParallelPrefix(memref::StoreOp store,
+                                       ArrayRef<scf::ForOp> loops,
+                                       unsigned parallelPrefix,
+                                       SmallVectorImpl<int64_t> &ownerPhysicalDims) {
+  llvm::SmallBitVector usedPhysicalDims(store.getIndices().size(), false);
+  ownerPhysicalDims.clear();
+  ownerPhysicalDims.reserve(parallelPrefix);
+  for (unsigned d = 0; d < parallelPrefix; ++d) {
+    std::optional<unsigned> physicalDim;
+    if (!storeUsesLoopIv(store, loops[d], physicalDim))
+      return false;
+    if (usedPhysicalDims.test(*physicalDim))
+      return false;
+    usedPhysicalDims.set(*physicalDim);
+    ownerPhysicalDims.push_back(static_cast<int64_t>(*physicalDim));
   }
   return true;
+}
+
+static bool hasReassociationLicense(Operation *comb) {
+  if (isa<arith::AddIOp, arith::MulIOp>(comb))
+    return true;
+  if (auto addf = dyn_cast<arith::AddFOp>(comb))
+    return arith::bitEnumContainsAny(addf.getFastmath(),
+                                     arith::FastMathFlags::reassoc);
+  if (auto mulf = dyn_cast<arith::MulFOp>(comb))
+    return arith::bitEnumContainsAny(mulf.getFastmath(),
+                                     arith::FastMathFlags::reassoc);
+  return false;
+}
+
+static bool reductionLoopHasLicense(scf::ForOp loop) {
+  if (loop.getInitArgs().empty())
+    return true;
+  Block &body = loop.getRegion().front();
+  auto yield = dyn_cast<scf::YieldOp>(body.getTerminator());
+  if (!yield || yield.getNumOperands() != loop.getNumResults())
+    return false;
+  Operation *comb = yield.getOperand(0).getDefiningOp();
+  return comb && hasReassociationLicense(comb);
+}
+
+static std::optional<unsigned>
+firstLoopCarriedReadAxis(ArrayRef<scf::ForOp> loops,
+                         ArrayRef<Value> writtenRoots) {
+  std::optional<unsigned> firstAxis;
+  scf::ForOp outer = loops.front();
+  outer.walk([&](memref::LoadOp load) {
+    Value root = ValueAnalysis::stripMemrefViewOps(load.getMemref());
+    if (!rootIn(root, writtenRoots))
+      return WalkResult::advance();
+    for (unsigned d = 0; d < loops.size(); ++d) {
+      std::optional<unsigned> ignored;
+      if (!indexUsesLoopIv(load.getIndices(), loops[d], ignored))
+        continue;
+      if (!firstAxis || d < *firstAxis)
+        firstAxis = d;
+    }
+    return WalkResult::advance();
+  });
+  return firstAxis;
+}
+
+static std::optional<unsigned>
+firstSerialAxis(ArrayRef<scf::ForOp> loops, ArrayRef<Value> writtenRoots) {
+  std::optional<unsigned> firstAxis;
+  for (unsigned d = 0; d < loops.size(); ++d) {
+    scf::ForOp loop = loops[d];
+    if (!loop.getInitArgs().empty())
+      firstAxis = firstAxis ? std::min(*firstAxis, d) : d;
+  }
+  if (std::optional<unsigned> readAxis = firstLoopCarriedReadAxis(loops, writtenRoots)) {
+    if (!firstAxis || *readAxis < *firstAxis)
+      firstAxis = *readAxis;
+  }
+  return firstAxis;
+}
+
+static bool nestBodyIsSupported(scf::ForOp outer,
+                                ArrayRef<scf::ForOp> loops) {
+  llvm::SmallDenseSet<Operation *> loopOps;
+  for (scf::ForOp loop : loops)
+    loopOps.insert(loop.getOperation());
+
+  bool rejected = false;
+  outer.walk([&](Operation *op) {
+    if (rejected)
+      return WalkResult::interrupt();
+    if (loopOps.contains(op))
+      return WalkResult::advance();
+    if (isa<memref::StoreOp, memref::LoadOp, scf::YieldOp>(op))
+      return WalkResult::advance();
+    if (isa<scf::IfOp>(op) || isPureScalarOp(op) ||
+        sde::isKnownPureScalarLibmCall(op) || isMemoryEffectFree(op))
+      return WalkResult::advance();
+    rejected = true;
+    return WalkResult::interrupt();
+  });
+  return !rejected;
 }
 
 static std::optional<int64_t> findCounterInit(Value mem, scf::ForOp outer) {
@@ -180,13 +285,6 @@ static bool counterUsesAreLoopLocal(Value mem, scf::ForOp outer) {
       return false;
   }
   return true;
-}
-
-static bool rootIn(Value root, ArrayRef<Value> roots) {
-  for (Value candidate : roots)
-    if (candidate == root)
-      return true;
-  return false;
 }
 
 /// Re-entrancy guard: skip nests already under `su_iterate`. Allow direct
@@ -221,7 +319,7 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
   if (nest.loops.size() < 1)
     return std::nullopt;
   for (scf::ForOp loop : nest.loops) {
-    if (!loop.getInitArgs().empty() || loop.getNumResults() != 0)
+    if (loop.getNumResults() != 0 && loop.getInitArgs().empty())
       return std::nullopt;
     std::optional<int64_t> trip = constantTrip(loop);
     if (!trip)
@@ -229,33 +327,30 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
     nest.extents.push_back(*trip);
   }
 
-  Block &innermost = nest.loops.back().getRegion().front();
+  for (scf::ForOp loop : nest.loops) {
+    if (!loop.getInitArgs().empty() && !reductionLoopHasLicense(loop))
+      return std::nullopt;
+  }
+
+  if (!nestBodyIsSupported(outer, nest.loops))
+    return std::nullopt;
 
   SmallVector<memref::StoreOp, 4> stores;
   SmallVector<memref::LoadOp, 8> loads;
-  bool rejected = false;
-  innermost.walk([&](Operation *op) {
-    if (rejected || op == nest.loops.back().getOperation())
-      return;
+  outer.walk([&](Operation *op) {
     if (auto st = dyn_cast<memref::StoreOp>(op)) {
       stores.push_back(st);
-      return;
+      return WalkResult::advance();
     }
     if (auto ld = dyn_cast<memref::LoadOp>(op)) {
       loads.push_back(ld);
-      return;
+      return WalkResult::advance();
     }
-    if (isa<scf::IfOp, scf::YieldOp>(op) || isPureScalarOp(op) ||
-        sde::isKnownPureScalarLibmCall(op) || isMemoryEffectFree(op))
-      return;
-    rejected = true;
+    return WalkResult::advance();
   });
-  if (rejected)
-    return std::nullopt;
 
   llvm::SmallDenseMap<Value, int64_t> counterStep;
-  std::optional<SmallVector<int64_t, 4>> selectedOwnerDims;
-  std::optional<SmallVector<int64_t, 4>> selectedShape;
+  SmallVector<Value, 4> writtenRoots;
   for (memref::StoreOp st : stores) {
     Value r = ValueAnalysis::stripMemrefViewOps(st.getMemref());
     if (isScalarScratch(r)) {
@@ -285,17 +380,44 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
     auto memRefType = dyn_cast<MemRefType>(r.getType());
     if (!memRefType || memRefType.getRank() == 0)
       return std::nullopt;
-    SmallVector<int64_t, 4> shape;
-    shape.reserve(memRefType.getRank());
     for (int64_t dim : memRefType.getShape()) {
       if (dim == ShapedType::kDynamic)
         return std::nullopt;
-      shape.push_back(dim);
     }
 
+    if (!rootIn(r, writtenRoots))
+      writtenRoots.push_back(r);
+  }
+
+  std::optional<unsigned> firstSerial =
+      firstSerialAxis(nest.loops, writtenRoots);
+  nest.parallelPrefix =
+      firstSerial ? *firstSerial : static_cast<unsigned>(nest.loops.size());
+  if (nest.parallelPrefix == 0)
+    return std::nullopt;
+  // Fail closed on partial prefix until move-raise of serial suffixes (especially
+  // result-bearing scf.for loops) is stable end-to-end.
+  if (nest.parallelPrefix < nest.loops.size())
+    return std::nullopt;
+
+  std::optional<SmallVector<int64_t, 4>> selectedOwnerDims;
+  std::optional<SmallVector<int64_t, 4>> selectedShape;
+  for (memref::StoreOp st : stores) {
+    Value r = ValueAnalysis::stripMemrefViewOps(st.getMemref());
+    if (isScalarScratch(r))
+      continue;
+
     SmallVector<int64_t, 4> ownerPhysicalDims;
-    if (!isLoopIndexedStore(st, nest.loops, ownerPhysicalDims))
+    if (!storeMatchesParallelPrefix(st, nest.loops, nest.parallelPrefix,
+                                    ownerPhysicalDims))
       return std::nullopt;
+
+    auto memRefType = cast<MemRefType>(r.getType());
+    SmallVector<int64_t, 4> shape;
+    shape.reserve(memRefType.getRank());
+    for (int64_t dim : memRefType.getShape())
+      shape.push_back(dim);
+
     if (!selectedOwnerDims) {
       selectedOwnerDims = ownerPhysicalDims;
       selectedShape = shape;
@@ -566,23 +688,31 @@ static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
                                                   Operation *insertBefore) {
   scf::ForOp outer = nest.loops.front();
   Location loc = outer.getLoc();
+  unsigned parallelPrefix = nest.parallelPrefix;
 
   if (insertBefore)
     builder.setInsertionPoint(insertBefore);
-  Value lb = createConstantIndex(builder, loc, 0);
-  Value ub = createConstantIndex(builder, loc, nest.extents.front());
-  Value one = createConstantIndex(builder, loc, 1);
 
-  auto suIter = sde::buildSuIterate(builder, loc, ValueRange{lb},
-                                    ValueRange{ub}, ValueRange{one});
+  SmallVector<Value, 4> lowerBounds;
+  SmallVector<Value, 4> upperBounds;
+  SmallVector<Value, 4> steps;
+  lowerBounds.reserve(parallelPrefix);
+  upperBounds.reserve(parallelPrefix);
+  steps.reserve(parallelPrefix);
+  for (unsigned d = 0; d < parallelPrefix; ++d) {
+    lowerBounds.push_back(createConstantIndex(builder, loc, 0));
+    upperBounds.push_back(createConstantIndex(builder, loc, nest.extents[d]));
+    steps.push_back(createConstantIndex(builder, loc, 1));
+  }
+
+  auto suIter = sde::buildSuIterate(builder, loc, lowerBounds, upperBounds, steps);
 
   Region &dstRegion = suIter.getBody();
   if (dstRegion.empty())
     dstRegion.push_back(new Block());
   Block &dst = dstRegion.front();
-  if (dst.getNumArguments() == 0)
+  while (dst.getNumArguments() < static_cast<unsigned>(parallelPrefix))
     dst.addArgument(builder.getIndexType(), loc);
-  Value outerIv = dst.getArgument(0);
 
   OpBuilder::InsertionGuard ig(builder);
   builder.setInsertionPointToStart(&dst);
@@ -592,10 +722,15 @@ static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
   Block &cuBody = sde::ensureBlock(cuRegion.getBody());
   builder.setInsertionPointToStart(&cuBody);
   IRMapping mapper;
-  mapper.map(outer.getInductionVar(), outerIv);
-  Block &outerBody = outer.getRegion().front();
-  for (Operation &op : outerBody.without_terminator())
+  for (unsigned d = 0; d < parallelPrefix; ++d)
+    mapper.map(nest.loops[d].getInductionVar(), dst.getArgument(d));
+
+  Block &innermost = nest.loops.back().getRegion().front();
+  for (Operation &op : innermost.without_terminator()) {
+    if (isa<scf::ForOp>(op))
+      continue;
     builder.clone(op, mapper);
+  }
   sde::SdeYieldOp::create(builder, loc, ValueRange{});
 
   builder.setInsertionPointToEnd(&dst);
@@ -611,7 +746,9 @@ static void substituteCounters(ParallelNest &nest, sde::SdeSuIterateOp suIter,
   unsigned n = nest.loops.size();
 
   SmallVector<Value, 4> dimIv;
-  dimIv.push_back(suIter.getBody().front().getArgument(0));
+  Block &suBody = suIter.getBody().front();
+  for (unsigned d = 0; d < nest.parallelPrefix; ++d)
+    dimIv.push_back(suBody.getArgument(d));
   {
     Block *cur = sde::getSuIterateComputeBlock(suIter);
     while (dimIv.size() < n) {

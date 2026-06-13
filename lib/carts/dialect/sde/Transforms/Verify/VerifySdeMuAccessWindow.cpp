@@ -124,6 +124,11 @@ static bool requiresRaisedAccessWindows(sde::SdeMuAllocOp muAlloc) {
   sde::SdeSuIterateOp writer = sde::findCommittedBlockLayoutWitness(muAlloc);
   if (!sde::supportsRankExpandedAccessWindows(writer))
     return false;
+  if (std::optional<sde::LayoutGraphFact> writeLayout =
+          sde::findSingleCommittedWriterBlockLayout(writer)) {
+    if (writeLayout->muBlockCount <= 1)
+      return false;
+  }
   if (sde::recognizeExpandedBlockGridMu(muAlloc))
     return true;
   sde::MuPhysicalLayout spec;
@@ -137,25 +142,23 @@ static bool hasConflictingCommittedWriterLayouts(sde::SdeMuAllocOp muAlloc) {
     if (!isa<memref::StoreOp>(user))
       continue;
     sde::SdeSuIterateOp writer = user->getParentOfType<sde::SdeSuIterateOp>();
-    while (writer && !(writer.getPhysicalOwnerDimsAttr() &&
-                       writer.getPhysicalBlockShapeAttr()))
+    while (writer && !sde::recoverCommittedPhysicalLayout(writer))
       writer = writer->getParentOfType<sde::SdeSuIterateOp>();
     if (!writer)
       continue;
 
-    std::optional<SmallVector<int64_t, 4>> ownerDims =
-        readI64ArrayAttr(writer.getPhysicalOwnerDimsAttr());
-    std::optional<SmallVector<int64_t, 4>> blockShape =
-        readI64ArrayAttr(writer.getPhysicalBlockShapeAttr());
-    if (!ownerDims || !blockShape)
+    std::optional<sde::CommittedSuPhysicalLayout> layout =
+        sde::recoverCommittedPhysicalLayout(writer);
+    if (!layout)
       continue;
 
     if (!selectedOwnerDims) {
-      selectedOwnerDims = *ownerDims;
-      selectedBlockShape = *blockShape;
+      selectedOwnerDims = layout->ownerDims;
+      selectedBlockShape = layout->blockShape;
       continue;
     }
-    if (*selectedOwnerDims != *ownerDims || *selectedBlockShape != *blockShape)
+    if (*selectedOwnerDims != layout->ownerDims ||
+        *selectedBlockShape != layout->blockShape)
       return true;
   }
   return false;
@@ -215,28 +218,37 @@ static void verifyPartialReductionOwnersCovered(sde::SdeSuIterateOp op,
   if (!reductionOwnerDims || reductionOwnerDims->empty())
     return;
 
-  std::optional<SmallVector<int64_t, 4>> physicalOwnerDims =
-      readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
-  if (!physicalOwnerDims || physicalOwnerDims->empty())
+  std::optional<sde::CommittedSuPhysicalLayout> committedLayout =
+      sde::recoverCommittedPhysicalLayout(op);
+  if (!committedLayout || committedLayout->ownerDims.empty())
     return;
 
-  if (containsAll(*physicalOwnerDims, *reductionOwnerDims))
+  if (containsAll(committedLayout->ownerDims, *reductionOwnerDims))
+    return;
+
+  // Inner pipeline-reduction axes may extend beyond the committed block-partition
+  // owner dims; require only that every committed partition owner dim appears in
+  // partialReductionOwnerDims.
+  if (containsAll(*reductionOwnerDims, committedLayout->ownerDims))
     return;
 
   op.emitOpError() << "partialReductionOwnerDims are not covered by committed "
-                      "physicalOwnerDims; SDE must author a compatible "
+                      "physical owner dims; SDE must author a compatible "
                       "partial-reduction physical spec before sde-to-arts";
   failed = true;
 }
 
 static bool hasCommittedBoundaryFacts(sde::SdeSuIterateOp op) {
-  return op.getArrayLayoutAttr() || op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr() ||
-         op.getLogicalWorkerSliceAttr() || op.getPhysicalHaloShapeAttr() ||
-         op.getAccessMinOffsetsAttr() || op.getAccessMaxOffsetsAttr() ||
-         op.getOwnerDimsAttr() || op.getSpatialDimsAttr() ||
-         op.getWriteFootprintAttr() || op.getPartialReductionAttr() ||
-         op.getPartialReductionDimsAttr() ||
-         op.getPartialReductionOwnerDimsAttr() || op.getReductionStrategyAttr();
+  if (sde::SdeCuRegionOp cu = sde::findSuComputeCuRegion(op);
+      cu && cu.getGroupBlockCountAttr())
+    return true;
+  if (sde::recoverCommittedPhysicalLayout(op))
+    return true;
+  return op.getArrayLayoutAttr() || op.getAccessMinOffsetsAttr() ||
+         op.getAccessMaxOffsetsAttr() || op.getOwnerDimsAttr() ||
+         op.getSpatialDimsAttr() || op.getWriteFootprintAttr() ||
+         op.getPartialReductionAttr() || op.getPartialReductionDimsAttr() ||
+         op.getPartialReductionOwnerDimsAttr();
 }
 
 static void verifyCommittedFactsHaveWindowDeps(sde::SdeSuIterateOp op,
@@ -246,7 +258,7 @@ static void verifyCommittedFactsHaveWindowDeps(sde::SdeSuIterateOp op,
   if (!hasDirectPreexistingMemrefAccess(op))
     return;
 
-  if (op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr()) {
+  if (sde::recoverCommittedPhysicalLayout(op)) {
     op.emitOpError()
         << "has committed physical partition facts but no access-window "
            "dependencies for a direct external memref access; SDE must raise "

@@ -6,7 +6,6 @@
 // CHECK-LABEL: func.func @reduce_scatter_contraction
 // CHECK: sde.su_distribute <owner_compute>
 // CHECK: sde.su_reduce_scatter %{{.*}} : memref<256x256xf32> array_id(0) owner [0] block [128, 256] reduce 0 kind <add>
-// CHECK-NOT: layoutsDisagree
 
 func.func @reduce_scatter_contraction(%T: memref<256x256xf32>,
                                       %E: memref<256x256xf32>,

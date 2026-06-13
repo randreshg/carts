@@ -6,6 +6,9 @@
 // contributes at most one element to the final scalar combine.
 
 // CHECK-LABEL: func.func @fp_stride_checksum_block_partials
+// CHECK: sde.su_iterate
+// CHECK: arrayLayout = [{arrayId = 0 : i64
+// CHECK-SAME: ownerDims = [0]
 // CHECK: memref.alloc() : memref<64xf64>
 // CHECK: sde.su_iterate (%{{.*}}) to (%c64) step (%{{.*}}) classification(<elementwise>)
 // CHECK: sde.cu_region <parallel>
@@ -13,10 +16,6 @@
 // CHECK: arith.select
 // CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %c128
 // CHECK: memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<64xf64>
-// CHECK: iterationTopology = #sde.iteration_topology<owner_strip>
-// CHECK-SAME: logicalWorkerSlice = [1]
-// CHECK-SAME: physicalBlockShape = [1]
-// CHECK-SAME: physicalOwnerDims = [0]
 // CHECK: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}}
 // CHECK: memref.load %{{.*}}[%{{.*}}] : memref<64xf64>
 
@@ -36,7 +35,7 @@ func.func @fp_stride_checksum_block_partials(%A: memref<1024xf64>) -> f64 {
       memref.store %one, %A[%i] : memref<1024xf64>
       sde.yield
     } {serialReason = #sde.serial_reason<residual_source>}
-  } {physicalOwnerDims = [0], physicalBlockShape = [16]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 64 : i64, role = "write", commVolumeBytes = 0 : i64}]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c1024 step %c128 {
       %old = memref.load %sum[] : memref<f64>
@@ -73,7 +72,7 @@ func.func @strict_fp_dense_checksum_ordered_partials(%A: memref<128xf64>) -> f64
       memref.store %one, %A[%i] : memref<128xf64>
       sde.yield
     } {serialReason = #sde.serial_reason<residual_source>}
-  } {physicalOwnerDims = [0], physicalBlockShape = [16]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 8 : i64, role = "write", commVolumeBytes = 0 : i64}]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {
       %old = memref.load %sum[] : memref<f64>
@@ -108,7 +107,7 @@ func.func @integer_dense_checksum_block_partials(%A: memref<128xi32>) -> i32 {
       memref.store %one, %A[%i] : memref<128xi32>
       sde.yield
     } {serialReason = #sde.serial_reason<residual_source>}
-  } {physicalOwnerDims = [0], physicalBlockShape = [16]}
+  } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [16], muBlockCount = 8 : i64, role = "write", commVolumeBytes = 0 : i64}]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {
       %old = memref.load %sum[] : memref<i32>

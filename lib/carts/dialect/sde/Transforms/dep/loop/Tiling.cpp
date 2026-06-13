@@ -1195,11 +1195,26 @@ alignExistingStaticPhysicalPlanToSteps(sde::SdeSuIterateOp op,
 
   sde::commitWriterPhysicalLayoutFacts(op, writeLayout->ownerDims, blockShape);
 
-  if (std::optional<SmallVector<int64_t, 4>> workerSlice =
-          alignStaticShapeAttrToSteps(op, op.getLogicalWorkerSliceAttr(),
-                                      tiledSteps, parallelMask))
-    op.setLogicalWorkerSliceAttr(
-        buildI64ArrayAttr(op.getContext(), *workerSlice));
+  sde::SdeCuRegionOp cu = sde::findSuComputeCuRegion(op);
+  if (!cu || !cu.getGroupBlockCountAttr())
+    return;
+
+  SmallVector<int64_t, 4> workerSlice(blockShape.begin(), blockShape.end());
+  if (auto groupCounts = readI64ArrayAttr(cu.getGroupBlockCountAttr())) {
+    for (auto [idx, rawDim] : llvm::enumerate(writeLayout->ownerDims)) {
+      if (idx >= groupCounts->size() || rawDim < 0 ||
+          static_cast<size_t>(rawDim) >= workerSlice.size())
+        return;
+      workerSlice[rawDim] = blockShape[rawDim] * (*groupCounts)[idx];
+    }
+  }
+
+  if (std::optional<SmallVector<int64_t, 4>> alignedSlice =
+          alignStaticShapeAttrToSteps(
+              op, buildI64ArrayAttr(op.getContext(), workerSlice), tiledSteps,
+              parallelMask))
+    sde::commitCuGroupBlockCounts(cu, writeLayout->ownerDims, blockShape,
+                                  *alignedSlice);
 }
 
 static bool isTilingCandidate(sde::SdeSuIterateOp op, Block &body) {

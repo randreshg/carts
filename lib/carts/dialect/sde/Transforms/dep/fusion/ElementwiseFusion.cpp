@@ -104,12 +104,6 @@ static void applyMergedLayoutAttrs(sde::SdeSuIterateOp fused,
   llvm::SmallDenseSet<int64_t, 4> disagreeIds;
 
   for (ElementwiseStage &stage : stages) {
-    if (auto disagree = stage.op.getLayoutsDisagreeAttr()) {
-      for (Attribute attr : disagree)
-        if (auto id = dyn_cast<IntegerAttr>(attr); id && id.getInt() >= 0)
-          disagreeIds.insert(id.getInt());
-    }
-
     ArrayAttr layout = stage.op.getArrayLayoutAttr();
     if (!layout)
       continue;
@@ -148,7 +142,6 @@ static void applyMergedLayoutAttrs(sde::SdeSuIterateOp fused,
 
   if (entries.empty()) {
     fused->removeAttr(fused.getArrayLayoutAttrName());
-    fused->removeAttr(fused.getLayoutsDisagreeAttrName());
     fused->removeAttr(fused.getCommVolumeBytesAttrName());
     return;
   }
@@ -163,15 +156,6 @@ static void applyMergedLayoutAttrs(sde::SdeSuIterateOp fused,
   }
   fused.setArrayLayoutAttr(builder.getArrayAttr(layoutAttrs));
   fused.setCommVolumeBytesAttr(builder.getI64IntegerAttr(totalCommBytes));
-
-  SmallVector<Attribute, 4> disagreeAttrs;
-  for (int64_t arrayId : order)
-    if (disagreeIds.contains(arrayId))
-      disagreeAttrs.push_back(builder.getI64IntegerAttr(arrayId));
-  if (disagreeAttrs.empty())
-    fused->removeAttr(fused.getLayoutsDisagreeAttrName());
-  else
-    fused.setLayoutsDisagreeAttr(builder.getArrayAttr(disagreeAttrs));
 }
 
 static std::optional<sde::SdeAccessMode>
