@@ -159,11 +159,6 @@ static cl::opt<bool> RuntimeStaticWorkers(
              "worker count when the module embeds a valid ARTS config"),
     cl::init(false));
 
-static cl::opt<bool> SdeUseLegacyParallelize(
-    "sde-use-legacy-parallelize",
-    cl::desc("Run legacy sde-parallelize after raise-to-sde (debug/fallback)"),
-    cl::init(false));
-
 ///===----------------------------------------------------------------------===///
 /// Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
@@ -1124,10 +1119,8 @@ void buildSdePlanningPipeline(PassManager &pm,
                               sde::SDECostModel *costModel = nullptr) {
   pm.addPass(sde::createConvertOpenMPToSdePass());
   // raise-to-sde CORE promotes proven-independent host nests and folds the
-  // initial cu-normalization; legacy sde-parallelize remains behind a debug flag.
+  // initial cu-normalization.
   pm.addPass(sde::createRaiseToSdePass());
-  if (SdeUseLegacyParallelize)
-    pm.addPass(sde::createParallelizePass());
   // Module-scoped per-array BLOCK layout assignment. Runs before
   // Tiling/Interchange split the parallel axes.
   pm.addPass(sde::createLayoutAssignmentPass(costModel));
