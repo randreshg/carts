@@ -35,10 +35,6 @@ public:
   // --- Generic memory-access cost ---
   virtual double getDataAccessCost() const = 0;
 
-  // --- Scheduling costs ---
-  virtual double getSchedulingOverhead(SdeScheduleKind kind,
-                                       int64_t tripCount) const = 0;
-
   // --- Abstract execution capacity ---
   virtual int getLogicalWorkerCapacity() const = 0;
 
@@ -49,35 +45,6 @@ public:
   // concepts such as nodes, sockets, or accelerator islands, while SDE only
   // reasons about source-level work availability.
   virtual int getWorkerLocalityGroupCount() const { return 1; }
-  virtual int getWorkersPerLocalityGroup() const {
-    return std::max(1, getLogicalWorkerCapacity());
-  }
-
-  // --- Hardware parameters ---
-  virtual int getVectorWidth() const = 0;
-  virtual int64_t getL2CacheSize() const = 0;
-
-  // --- Vector transform policy ---
-  virtual int getVectorWidthForElementBits(unsigned elementBits) const {
-    int baseWidth = std::max(1, getVectorWidth());
-    if (elementBits == 0)
-      return baseWidth;
-
-    constexpr unsigned referenceElementBits =
-        std::numeric_limits<uint64_t>::digits;
-    unsigned scale = std::max<unsigned>(1, referenceElementBits / elementBits);
-    return baseWidth * static_cast<int>(scale);
-  }
-
-  virtual int getVectorUnrollFactor(bool reuseHeavy) const {
-    int baseWidth = std::max(1, getVectorWidth());
-    return reuseHeavy ? baseWidth * baseWidth : baseWidth;
-  }
-
-  virtual int getVectorInterleaveCount() const {
-    int baseWidth = std::max(1, getVectorWidth());
-    return baseWidth * baseWidth;
-  }
 
   // --- Derived thresholds (computed, not hardcoded) ---
   virtual int64_t getMinIterationsPerWorker() const {
@@ -124,13 +91,6 @@ public:
     // enough.
     return 1;
   }
-
-  // Per-tile output-payload floor for distributed layouts. 0 disables the
-  // floor; a positive value asks distribution writers to grow tiles (and shrink
-  // the worker grid) until each owner tile carries at least this many bytes of
-  // output. The unit is bytes on the output element type so SDE can reason
-  // about both numeric (f32/f64) and packed-vector workloads uniformly.
-  virtual int64_t getMinDistributedTileBytes() const { return 0; }
 };
 
 } // namespace mlir::carts::sde

@@ -9,12 +9,8 @@
 ///        enclosing `sde.cu_region`. Zero => the raiser did not run; more than
 ///        one => the idempotency guard is broken.
 ///
-///   R2 — grain consistency: every `sde.mu_access_window`'s `blockHi` is the
-///        `ceilDiv` of a REAL iteration extent on the writer `su_iterate` (an
-///        INDEPENDENT fact, never re-derived from the window), so the window
-///        cannot silently encode a recomputed grain. (Block/valid-range bounds
-///        are already enforced by the op's own ODS verifier.)
-///
+/// Block-grid bounds are enforced by the op's ODS verifier via type-derived
+/// geometry (`deriveMuAccessWindowGeometry`).
 /// Conservative MUs are skipped only when no committed SDE physical/window
 /// facts require a structural dependency. Committed-but-unrepresentable facts
 /// fail closed here, before ARTS can infer a coarse shape.
@@ -23,6 +19,7 @@
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/utils/ArrayAttrUtils.h"
@@ -124,7 +121,7 @@ static bool requiresRaisedAccessWindows(sde::SdeMuAllocOp muAlloc) {
   if (!muType || !muType.hasStaticShape())
     return false;
 
-  sde::SdeSuIterateOp writer = sde::findCommittedBlockLayoutWriter(muAlloc);
+  sde::SdeSuIterateOp writer = sde::findCommittedBlockLayoutWitness(muAlloc);
   if (!sde::supportsRankExpandedAccessWindows(writer))
     return false;
   if (sde::recognizeExpandedBlockGridMu(muAlloc))
@@ -188,7 +185,27 @@ static bool hasQueuedRedistributionForWindow(sde::SdeSuIterateOp su,
   IntegerAttr arrayId = win.getArrayIdAttr();
   if (!arrayId)
     return false;
-  return i64ArrayContains(su.getLayoutsDisagreeAttr(), arrayId.getInt());
+  for (const sde::LayoutGraphFact &fact :
+       sde::parseArrayLayoutFacts(su.getArrayLayoutAttr()))
+    if (fact.id == arrayId.getInt() &&
+        fact.role == sde::LayoutGraphRole::read && fact.commVolumeBytes > 0)
+      return true;
+  Value mu = win.getMu();
+  for (Operation *user : mu.getUsers()) {
+    if (auto halo = dyn_cast<sde::SdeSuHaloOp>(user))
+      if (halo.getArrayIdAttr() &&
+          halo.getArrayIdAttr().getInt() == arrayId.getInt())
+        return true;
+    if (auto reduce = dyn_cast<sde::SdeSuReduceScatterOp>(user))
+      if (reduce.getArrayIdAttr() &&
+          reduce.getArrayIdAttr().getInt() == arrayId.getInt())
+        return true;
+    if (auto redist = dyn_cast<sde::SdeRedistOp>(user))
+      if (redist.getArrayIdAttr() &&
+          redist.getArrayIdAttr().getInt() == arrayId.getInt())
+        return true;
+  }
+  return false;
 }
 
 static void verifyPartialReductionOwnersCovered(sde::SdeSuIterateOp op,
@@ -213,8 +230,7 @@ static void verifyPartialReductionOwnersCovered(sde::SdeSuIterateOp op,
 }
 
 static bool hasCommittedBoundaryFacts(sde::SdeSuIterateOp op) {
-  return op.getArrayLayoutAttr() || op.getLayoutsDisagreeAttr() ||
-         op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr() ||
+  return op.getArrayLayoutAttr() || op.getPhysicalOwnerDimsAttr() || op.getPhysicalBlockShapeAttr() ||
          op.getLogicalWorkerSliceAttr() || op.getPhysicalHaloShapeAttr() ||
          op.getAccessMinOffsetsAttr() || op.getAccessMaxOffsetsAttr() ||
          op.getOwnerDimsAttr() || op.getSpatialDimsAttr() ||
@@ -276,7 +292,11 @@ static void verifyWindowOwnerRankRepresentable(sde::SdeMuAccessWindowOp win,
   if (!matched)
     return;
 
-  if (static_cast<size_t>(win.getOwnerDimCount()) == matched->ownerDims.size())
+  std::optional<sde::MuAccessWindowGeometry> geom =
+      sde::deriveMuAccessWindowGeometry(win);
+  if (!geom)
+    return;
+  if (static_cast<size_t>(geom->ownerDimCount) == matched->ownerDims.size())
     return;
   if (hasQueuedRedistributionForWindow(su, win))
     return;
@@ -286,6 +306,18 @@ static void verifyWindowOwnerRankRepresentable(sde::SdeMuAccessWindowOp win,
          "SDE must emit redistribution or a compatible physical spec before "
          "sde-to-arts";
   failed = true;
+}
+
+static bool hasCommittedBlockLayoutFacts(sde::SdeSuIterateOp op) {
+  if (sde::hasCommittedWriterBlockLayout(op))
+    return true;
+  for (const sde::LayoutGraphFact &fact :
+       sde::parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+    if (fact.role == sde::LayoutGraphRole::read && !fact.ownerDims.empty() &&
+        !fact.blockShape.empty())
+      return true;
+  }
+  return false;
 }
 
 struct VerifySdeMuAccessWindowPass
@@ -298,13 +330,12 @@ struct VerifySdeMuAccessWindowPass
     module.walk([&](sde::SdeSuIterateOp op) {
       verifyPartialReductionOwnersCovered(op, failed);
       verifyCommittedFactsHaveWindowDeps(op, failed);
-      if ((op.getPhysicalOwnerDimsAttr() && op.getPhysicalBlockShapeAttr()) ||
-          !hasAccessWindowFacts(op))
+      if (hasCommittedBlockLayoutFacts(op) || !hasAccessWindowFacts(op))
         return;
       op.emitOpError()
-          << "has SDE MU access-window facts but no committed "
-             "physicalOwnerDims/physicalBlockShape; SDE must author a "
-             "physical layout shape or fail before sde-to-arts";
+          << "has SDE MU access-window facts but no committed block layout "
+             "in arrayLayout; SDE must author a physical layout shape or fail "
+             "before sde-to-arts";
       failed = true;
     });
 
@@ -413,51 +444,6 @@ struct VerifySdeMuAccessWindowPass
                  "cu_region";
           failed = true;
         }
-      }
-    });
-
-    // R2 — non-tautological grain: blockHi == ceilDiv(real iteration extent,
-    // committed block) on the writer su_iterate.
-    module.walk([&](sde::SdeMuAccessWindowOp win) {
-      auto muAlloc = win.getMu().getDefiningOp<sde::SdeMuAllocOp>();
-      if (!muAlloc)
-        return; // the op's ODS verifier already requires an sde.mu_alloc root
-      sde::SdeSuIterateOp si = sde::findCommittedBlockLayoutWriter(muAlloc);
-      if (!si)
-        return; // no committed writer to cross-check against -> conservative
-      std::optional<SmallVector<int64_t, 4>> ownerVals =
-          readI64ArrayAttr(si.getPhysicalOwnerDimsAttr());
-      std::optional<SmallVector<int64_t, 4>> blockVals =
-          readI64ArrayAttr(si.getPhysicalBlockShapeAttr());
-      std::optional<SmallVector<int64_t, 4>> blockHi =
-          readI64ArrayAttr(win.getBlockHi());
-      if (!ownerVals || !blockVals || !blockHi || ownerVals->empty() ||
-          blockHi->size() != ownerVals->size())
-        return;
-      SmallVector<int64_t, 4> blockExtents;
-      if (auto muType = dyn_cast<MemRefType>(muAlloc.getMemref().getType())) {
-        if (std::optional<sde::ExpandedBlockGridMu> expanded =
-                sde::recognizeExpandedBlockGridMu(muAlloc)) {
-          if (expanded->blockExtents.size() == blockHi->size())
-            blockExtents.assign(expanded->blockExtents.begin(),
-                                expanded->blockExtents.end());
-        }
-      }
-      if (blockExtents.empty()) {
-        blockExtents.reserve(ownerVals->size());
-        for (int64_t ownerDim : *ownerVals) {
-          if (ownerDim < 0 ||
-              static_cast<size_t>(ownerDim) >= blockVals->size())
-            return;
-          blockExtents.push_back((*blockVals)[ownerDim]);
-        }
-      }
-      if (!sde::findOwnerIterationExtents(si, blockExtents, *blockHi)) {
-        win.emitOpError()
-            << "blockHi grid counts are not ceilDiv(iterationExtent, block) of "
-               "distinct committed iteration extents on the writer su_iterate; "
-               "access-window verification must not recompute the grain";
-        failed = true;
       }
     });
 

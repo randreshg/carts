@@ -41,24 +41,7 @@ public:
   // --- Generic memory access (no placement/topology scope) ---
   double getDataAccessCost() const override { return 500.0; }
 
-  // --- Scheduling ---
-  double getSchedulingOverhead(carts::sde::SdeScheduleKind kind,
-                               int64_t tripCount) const override {
-    switch (kind) {
-    case carts::sde::SdeScheduleKind::static_:
-      return 0.0;
-    case carts::sde::SdeScheduleKind::dynamic:
-      return getTaskCreationCost() * 0.1;
-    case carts::sde::SdeScheduleKind::guided:
-      return getTaskCreationCost() * 0.05;
-    default:
-      return 0.0;
-    }
-  }
 
-  // --- Hardware parameters ---
-  int getVectorWidth() const override { return 2; } // generic x86-64 SSE2 / f64
-  int64_t getL2CacheSize() const override { return 262144; } // 256KB
 
   // --- Abstract execution capacity ---
   int getLogicalWorkerCapacity() const override {
@@ -69,19 +52,11 @@ public:
     return std::max(1, machine.getNodeCount());
   }
 
-  int getWorkersPerLocalityGroup() const override {
-    return std::max(1, machine.getRuntimeWorkersPerNode());
-  }
-
   int64_t getMinIterationsPerWorker() const override {
     int configured = machine.getMinIterationsPerWorker();
     if (configured > 0)
       return configured;
     return carts::sde::SDECostModel::getMinIterationsPerWorker();
-  }
-
-  int64_t getMinDistributedTileBytes() const override {
-    return machine.getMinDistributedTileBytes();
   }
 };
 

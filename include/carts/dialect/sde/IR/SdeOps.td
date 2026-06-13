@@ -55,6 +55,15 @@ def SdeCuKind
     ]>;
 def SdeCuKindAttr : CartsSde_I32EnumAttr<"cu_kind", SdeCuKind>;
 
+def SdeSerialReason
+    : CartsSde_I32Enum<"SdeSerialReason",
+        "Asserted reason a single-kind CU leaf is legitimately serial", [
+      I32EnumAttrCase<"residual_source", 0, "residual_source">,
+      I32EnumAttrCase<"reduction_combine", 1, "reduction_combine">,
+      I32EnumAttrCase<"source_single", 2, "source_single">
+    ]>;
+def SdeSerialReasonAttr : CartsSde_I32EnumAttr<"serial_reason", SdeSerialReason>;
+
 def SdeAccessMode
     : CartsSde_I32Enum<"SdeAccessMode", "Memory access mode", [
       I32EnumAttrCase<"read", 0, "read">,
@@ -113,21 +122,11 @@ def SdePattern
 def SdePatternAttr
     : CartsSde_I32EnumAttr<"pattern", SdePattern>;
 
-def SdeScheduleKind
-    : CartsSde_I32Enum<"SdeScheduleKind", "Scheduling policy", [
-      I32EnumAttrCase<"static_", 0, "static">,
-      I32EnumAttrCase<"dynamic", 1, "dynamic">,
-      I32EnumAttrCase<"guided", 2, "guided">,
-      I32EnumAttrCase<"auto_", 3, "auto">,
-      I32EnumAttrCase<"runtime", 4, "runtime">
-    ]>;
-def SdeScheduleKindAttr : CartsSde_I32EnumAttr<"schedule", SdeScheduleKind>;
 
 def SdeDistributionKind
     : CartsSde_I32Enum<"SdeDistributionKind", "Distribution kind", [
       I32EnumAttrCase<"owner_compute", 0, "owner_compute">,
-      I32EnumAttrCase<"blocked", 1, "blocked">,
-      I32EnumAttrCase<"cyclic", 2, "cyclic">
+      I32EnumAttrCase<"blocked", 1, "blocked">
     ]>;
 def SdeDistributionKindAttr
     : CartsSde_I32EnumAttr<"distribution_kind", SdeDistributionKind>;
@@ -138,27 +137,6 @@ def SdeIterationTopology
                       CartsIterationTopologyCases>;
 def SdeIterationTopologyAttr
     : CartsSde_I32EnumAttr<"iteration_topology", SdeIterationTopology>;
-
-def SdeRepetitionStructure
-    : CartsSde_I32Enum<"SdeRepetitionStructure",
-                      "SDE repeated-wave or timestep structure", [
-      I32EnumAttrCase<"none", 0, "none">,
-      I32EnumAttrCase<"pair_step", 1, "pair_step">,
-      I32EnumAttrCase<"k_step", 2, "k_step">,
-      I32EnumAttrCase<"full_timestep", 3, "full_timestep">
-    ]>;
-def SdeRepetitionStructureAttr
-    : CartsSde_I32EnumAttr<"repetition_structure",
-                          SdeRepetitionStructure>;
-
-def SdeAsyncStrategy
-    : CartsSde_I32Enum<"SdeAsyncStrategy",
-                      "SDE async task-shape strategy", [
-      I32EnumAttrCase<"blocking", 0, "blocking">,
-      I32EnumAttrCase<"advance_stage", 1, "advance_stage">
-    ]>;
-def SdeAsyncStrategyAttr
-    : CartsSde_I32EnumAttr<"async_strategy", SdeAsyncStrategy>;
 
 def SdeBarrierReason
     : CartsSde_I32Enum<"SdeBarrierReason",
@@ -253,7 +231,11 @@ def SdeCuRegionOp
   let arguments = (ins
     SdeCuKindAttr:$kind,
     UnitAttr:$nowait,
-    Variadic<AnyType>:$iterArgs
+    Variadic<AnyType>:$iterArgs,
+    // Positive serial license on a kind==single leaf whose serialism is asserted
+    // by its producer; its absence on a source-compute single leaf directly in a
+    // multi-trip su_iterate is the Parallelize.cpp:638 regression shape.
+    OptionalAttr<SdeSerialReasonAttr>:$serialReason
   );
 
   let results = (outs Variadic<AnyType>:$results);
@@ -393,8 +375,6 @@ def SdeSuIterateOp
     Variadic<Index>:$lowerBounds,
     Variadic<Index>:$upperBounds,
     Variadic<Index>:$steps,
-    OptionalAttr<SdeScheduleKindAttr>:$schedule,
-    Optional<Index>:$chunkSize,
     UnitAttr:$nowait,
     Variadic<AnyType>:$reductionAccumulators,
     OptionalAttr<ArrayAttr>:$reductionKinds,
@@ -416,42 +396,19 @@ def SdeSuIterateOp
     OptionalAttr<ArrayAttr>:$logicalWorkerSlice,
     OptionalAttr<ArrayAttr>:$physicalHaloShape,
     OptionalAttr<SdeIterationTopologyAttr>:$iterationTopology,
-    OptionalAttr<SdeRepetitionStructureAttr>:$repetitionStructure,
-    OptionalAttr<SdeAsyncStrategyAttr>:$asyncStrategy,
     OptionalAttr<SdeDistributionKindAttr>:$distributionKind,
     UnitAttr:$inPlaceSafe,
     UnitAttr:$inPlaceSharedState,
     // --- Module-scoped layout assignment. Placed last so the positional
     // op builder stays additive: existing create() sites that stop at
     // inPlaceSharedState keep compiling. ---
-    // Per-array BLOCK layout authored by the `sde-layout-assignment` pass. Pure
-    // DATA-LAYOUT structure in the spirit of HPF DISTRIBUTE/ALIGN: for every array
-    // root this scheduling unit accesses (writer AND readers — the key
-    // generalization over output-only physical owner layout), a dictionary
-    // entry records the chosen BLOCK layout. Each entry is a DictionaryAttr
-    // with keys:
-    //   - `arrayId`    (I64): a module-stable id joining the same array root
-    //                         across the writer and all reader su_iterates.
-    //   - `kind`       (StringAttr): "block_parallel", "block_contraction", or
-    //                         "replicated" — geometric layout family only,
-    //                         geometric layout family only, no target object,
-    //                         no runtime communication operation, no pattern.
-    //   - `ownerDims`  (ArrayAttr<I64>): the element-space owner (distributed)
-    //                         positions of the array.
-    //   - `blockShape` (ArrayAttr<I64>): element-space per-block extents
-    //                         (full extent on non-owner positions).
-    //   - `muBlockCount` (I64): number of memory-unit blocks implied by the
-    //                         owner dims and block shape.
-    // Element-space only: encodes no target nodes, routes, concrete worker
-    // placement, communication primitive, or split factor. ARTS consumes these
-    // facts on explicit codelet deps; ARTS realizes target objects later.
+    // Transitional per-array BLOCK layout on disagreeing readers and writers.
+    // Aligned readers carry no entry; their layout lives in the rank-expanded
+    // `mu_alloc` type after `sde-memory-unit-realization`.
     OptionalAttr<ArrayAttr>:$arrayLayout,
-    // Temporary per-edge geometric layouts-disagree marker. An ArrayAttr of the
-    // `arrayId`s (I64) whose chosen layout on this scheduling unit is a pure
-    // GEOMETRIC mismatch against the array's home/writer layout (e.g. an input
-    // read on a non-owner-aligned window, or a contraction-dim read of a
-    // row-block intermediate). `sde-redistribute` must consume it into
-    // `sde.redist` structure or reject it before ARTS.
+    // Legacy layout-disagreement marker retained for parse/round-trip only.
+    // `sde-redistribute` detects edges by comparing committed producer and
+    // consumer layout facts (or rank-expanded `mu_alloc` types).
     OptionalAttr<ArrayAttr>:$layoutsDisagree,
     // Abstract communication-volume estimate (bytes) for this scheduling unit
     // under the chosen layouts. Advisory only.
@@ -651,14 +608,11 @@ def SdeMuAllocOp : CartsSde_Op<"mu_alloc", [Pure]> {
       %arr = sde.mu_alloc : memref<100xi32>
       %mat = sde.mu_alloc(%n, %m) : memref<?x?xf64>
 
-    Optional `arrayId` is SDE-authored root provenance from committed
-    `arrayLayout` facts. It binds this MU root to the module-stable SDE array
-    identity before ARTS consumes dependency facts. It names no ARTS or
-    runtime object.
+    Array identity is carried by SSA-reachable `sde.array_layout_root` facts,
+    not by attributes on this op.
   }];
   let arguments = (ins
-    Variadic<Index>:$dynamicSizes,
-    OptionalAttr<I64Attr>:$arrayId
+    Variadic<Index>:$dynamicSizes
   );
   let results = (outs AnyMemRef:$memref);
   let assemblyFormat = [{
@@ -687,7 +641,7 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
     structural fact, consumed (not reinterpreted) by mechanical SDE-to-ARTS
     lowering.
 
-    Attributes (block-grid coordinates, all static `I64 ArrayAttr`):
+    Attributes:
       - `mode`          : SdeAccessMode, `read`, `write`, or `readwrite`.
                           Same-CU in-place access is represented as one
                           `readwrite` window and lowers to an inout dependency,
@@ -697,13 +651,12 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
                           copied from the MU root. When the enclosing SU has
                           `arrayLayout`, consumers must require a non-negative
                           value instead of inferring by root order or size.
-      - `ownerDimCount` : number of leading owner (grid) dims.
-      - `blockLo`/`blockHi` : per-owner-dim half-open block range [lo, hi) the CU
-                          touches; `blockHi[k]` == grid dim k of the expanded
-                          type. Length == `ownerDimCount`.
-      - `validExtents`  : per-logical-dim valid element extent within a block
-                          (== the tile dims of the expanded type). Length ==
-                          logical rank == `muType.getRank() - ownerDimCount`.
+
+    Block-grid coordinates (`ownerDimCount`, `blockLo`/`blockHi`,
+    `validExtents`) are derived from the rank-expanded `mu` memref type:
+    leading grid dims are `blockHi` with `blockLo == 0`, trailing tile dims are
+    `validExtents` (== committed blockExtent, never halo-inflated). A flat
+    whole-object MU uses `ownerDimCount == 0` with `validExtents == shape`.
 
     For a ceil/partial last block the per-block valid extent is uniform
     `blockExtent`; the partial last-block extent is derivable by a consumer from
@@ -718,11 +671,7 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
   let arguments = (ins
     AnyMemRef:$mu,
     SdeAccessModeAttr:$mode,
-    OptionalAttr<I64Attr>:$arrayId,
-    I64Attr:$ownerDimCount,
-    ArrayAttr:$blockLo,
-    ArrayAttr:$blockHi,
-    ArrayAttr:$validExtents
+    OptionalAttr<I64Attr>:$arrayId
   );
 
   // No results: a structural fact op, not a value producer.
@@ -795,14 +744,86 @@ def SdeRedistOp : CartsSde_Op<"redist", [
   let hasVerifier = 1;
 }
 
+def SdeSuHaloOp : CartsSde_Op<"su_halo", [
+      // Mirror SdeRedistOp: a zero-result structural fact, NOT Pure, MemWrite so
+      // it survives DCE until SDE-to-ARTS lowering consumes it.
+      MemoryEffects<[MemWrite]>
+    ]> {
+  let summary = "SU-scope owner-preserving stencil halo movement on one array";
+  let description = [{
+    Makes a stencil ghost-exchange edge explicit SDE structure. Op identity is
+    the intended replacement for the `halo_like` case of `sde.redist`. Owner grid
+    AND in-block tile geometry are preserved (the movement is the per-owner-block
+    neighbor face grown by `haloShape`, not a re-layout). Legal only as a direct
+    child of `sde.su_distribute`; names no collective/DB/EDT/route; consumed and
+    erased by SDE-to-ARTS lowering and does NOT survive the dialect boundary.
+
+    `mu` is the array root. `ownerDims`/`blockShape` are element-space geometry
+    (same convention as `sde.redist`'s source endpoint). `haloShape` is the
+    per-MU-dim ghost width: MU-rank-length, owner (grid) dims carry the ghost
+    radius, non-owner dims carry 0.
+  }];
+  let arguments = (ins
+    AnyMemRef:$mu,
+    OptionalAttr<I64Attr>:$arrayId,
+    ArrayAttr:$ownerDims,
+    ArrayAttr:$blockShape,
+    ArrayAttr:$haloShape
+  );
+  // No results: a structural fact op, not a value producer.
+  let results = (outs);
+  let assemblyFormat = [{
+    $mu `:` type($mu) (`array_id` `(` $arrayId^ `)`)?
+    `owner` $ownerDims `block` $blockShape `halo` $haloShape attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
+def SdeSuReduceScatterOp : CartsSde_Op<"su_reduce_scatter", [
+      MemoryEffects<[MemWrite]>
+    ]> {
+  let summary = "SU-scope owned-axis reduce-scatter movement on one array";
+  let description = [{
+    Reduces over the owned `reduceDim` across owners and re-partitions. Op
+    identity is the intended replacement for the `reduce_scatter_like` case of
+    `sde.redist`. An identical source/target geometry is legitimate (the movement
+    is the reduction over the owned axis, not a re-layout). Legal only as a direct
+    child of `sde.su_distribute`; names no collective/DB/EDT/route; consumed and
+    erased by SDE-to-ARTS lowering.
+
+    `ownerDims`/`blockShape` are the partitioned source geometry (a non-empty
+    owner is required). `reduceDim` is an owner-relative slot into `ownerDims`.
+    `reductionKind` reuses the dialect reduction-combiner enum.
+  }];
+  let arguments = (ins
+    AnyMemRef:$mu,
+    OptionalAttr<I64Attr>:$arrayId,
+    ArrayAttr:$ownerDims,
+    ArrayAttr:$blockShape,
+    I64Attr:$reduceDim,
+    SdeReductionKindAttr:$reductionKind
+  );
+  // No results: a structural fact op, not a value producer.
+  let results = (outs);
+  let assemblyFormat = [{
+    $mu `:` type($mu) (`array_id` `(` $arrayId^ `)`)?
+    `owner` $ownerDims `block` $blockShape
+    `reduce` $reduceDim `kind` $reductionKind attr-dict
+  }];
+  let hasVerifier = 1;
+}
+
 def SdeMuDataOp : CartsSde_Op<"mu_data", [Pure]> {
   let summary = "Declarative SDE shared-data handle.";
   let description = [{
-    Canonical anchor for data that crosses SDE tasks. Replaces the pattern
-    of inheriting Polygeist `memref.alloca` for OMP-shared variables.
-    Produced by `ConvertOpenMPToSde` for every variable named by an OMP
-    `shared(...)` clause (or otherwise shared across tasks), consumed by SDE
-    MU/token compute-unit shaping.
+    Canonical anchor for data that crosses SDE tasks. Designed as the
+    replacement for inheriting Polygeist `memref.alloca` for shared variables.
+
+    Currently has no in-tree producer (no `SdeMuDataOp::create` site); shared
+    memory is realized instead by `MemoryUnitRealization` authoring `mu_alloc`
+    from access. The op is kept because its lowering (`lowerMuData`) is still
+    invoked from the SDE-to-ARTS module walk, so any erase must remove the op,
+    its lowering, and the walk together.
   }];
 
   let arguments = (ins

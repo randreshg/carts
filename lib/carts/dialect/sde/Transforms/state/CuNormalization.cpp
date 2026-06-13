@@ -42,6 +42,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeCuStructure.h"
+#include "carts/dialect/sde/Utils/SdeOwnerLoopPromotion.h"
 
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_SDECUNORMALIZATION
@@ -107,10 +108,12 @@ static void wrapSpanInCuRegion(Operation *first, Operation *last,
   for (Value value : escaping)
     resultTypes.push_back(value.getType());
 
-  auto cuRegion = SdeCuRegionOp::create(
-      builder, first->getLoc(), resultTypes,
+  auto cuRegion = buildCuRegion(
+      builder, first->getLoc(),
       SdeCuKindAttr::get(builder.getContext(), SdeCuKind::single),
-      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{}, resultTypes);
+  cuRegion.setSerialReasonAttr(SdeSerialReasonAttr::get(
+      builder.getContext(), SdeSerialReason::residual_source));
   Block &body = ensureBlock(cuRegion.getBody());
   // Block::getOperations().splice uses the standard half-open [first, last)
   // convention, so advance past `last` to include it.
@@ -197,8 +200,9 @@ struct SdeCuNormalizationPass
     : public sde::impl::SdeCuNormalizationBase<SdeCuNormalizationPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    promoteModuleOwnerLoops(module);
 
-    // Collect target blocks before mutating. Two kinds, disjoint:
+    // Collect target blocks before mutating.
     //   * the body block of every su_iterate (raw compute directly in an
     //     iterate SU body is illegal — the SU must be scheduling-only), and
     //   * every block of every SDE-bearing func (source work outside any CU is

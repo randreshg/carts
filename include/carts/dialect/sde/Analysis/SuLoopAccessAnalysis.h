@@ -81,6 +81,49 @@ std::optional<SuLoopAccessSummary> analyzeSuLoopAccesses(SdeSuIterateOp op);
 std::optional<SuNeighborhoodAccessInfo>
 extractNeighborhoodAccessInfo(const SuLoopAccessSummary &summary);
 
+/// Resolve structured classification with the same refinements the deleted
+/// loop-pattern-facts pass applied (explicit stencil facts, pipeline carry,
+/// strip-mined reduction preservation).
+SdeStructuredClassification
+resolveStructuredClassification(SdeSuIterateOp op,
+                                const SuLoopAccessSummary &summary);
+
+/// Recomputed structured classification; nullopt when analysis fails.
+std::optional<SdeStructuredClassification>
+queryStructuredClassification(SdeSuIterateOp op);
+
+/// Derive the SDE pattern enum from loop-access summary facts.
+SdePattern deriveSuPattern(const SuLoopAccessSummary &summary,
+                           SdeStructuredClassification classification,
+                           const SuNeighborhoodAccessInfo *neighborhood);
+
+/// Recomputed pattern; nullopt when analysis fails.
+std::optional<SdePattern> querySuPattern(SdeSuIterateOp op);
+
+/// True when every self-read matches the write map at the same indices.
+bool hasOnlyPointInPlaceSelfReads(const SuLoopAccessSummary &summary);
+
+/// Recomputed neighborhood; honors frontend-authored explicit stencil facts
+/// when present, otherwise derives from the loop-access summary.
+std::optional<SuNeighborhoodAccessInfo>
+queryNeighborhoodAccessInfo(SdeSuIterateOp op);
+
+/// Recomputed in-place aliasing legality (point-local self-read stencils).
+bool queryInPlaceSafe(SdeSuIterateOp op);
+
+/// Recomputed Gauss-Seidel / shared-state in-place gate.
+bool queryInPlaceSharedState(SdeSuIterateOp op);
+
+struct SuPartialReductionFacts {
+  bool hasPartialReduction = false;
+  SmallVector<int64_t, 4> reductionDims;
+  SmallVector<int64_t, 4> ownerDims;
+};
+
+/// Recomputed partial-reduction facts (pipeline + matmul contraction tiling).
+std::optional<SuPartialReductionFacts>
+queryPartialReductionFacts(SdeSuIterateOp op);
+
 /// Recover a static write-backed output layout with a loop-dim to physical-dim
 /// map. Returns nullopt when external writes disagree or the layout is not
 /// statically shapeable.

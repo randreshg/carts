@@ -7,36 +7,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ScheduleRefinement
-    : Pass<"schedule-refinement", "mlir::ModuleOp"> {
-  let summary = "Refine abstract SDE schedule hints into concrete schedules";
-  let description = [{
-    Uses the SDE-owned cost model to refine eligible `sde.su_iterate`
-    schedule hints before later SDE optimizations run. The current
-    implementation is deliberately narrow: it only handles one-dimensional
-    loops with constant trip counts, only rewrites `auto` / `runtime`
-    schedules, and chooses the lowest-overhead concrete policy among
-    `static`, `dynamic`, and `guided`.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
-  let constructor = "mlir::carts::sde::createScheduleRefinementPass()";
-}
-
-def ChunkOpt : Pass<"chunk-opt", "mlir::ModuleOp"> {
-  let summary = "Fill missing SDE chunk sizes from logical capacity";
-  let description = [{
-    Uses SDE-owned logical capacity to synthesize chunk sizes for eligible
-    sde.su_iterate operations when the source program left them unspecified.
-    Symbolic trip-count cases use `sde.resource_query <logical_workers>` so
-    the boundary layer, not SDE, binds the expression to a concrete target
-    mechanism. The current implementation handles one-dimensional
-    dynamic/guided loops and preserves explicit source chunk sizes.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::arith::ArithDialect"];
-  let constructor = "mlir::carts::sde::createChunkOptPass()";
-}
-
 def ReductionStrategy : Pass<"reduction-strategy", "mlir::ModuleOp"> {
   let summary = "Select an SDE reduction strategy from the active cost model";
   let description = [{

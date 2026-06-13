@@ -70,9 +70,6 @@ struct SdeRankExpandMuPass
               committed->layout);
       carts::sde::MuLayoutRewriter rewriter(committed->layout, *indexer);
       if (mlir::failed(rewriter.apply(mu))) {
-        // The committed facts require a distributed/block-shaped result this
-        // pass cannot realize end to end. Fail closed with evidence rather than
-        // emit a partial promise.
         mu.emitOpError()
             << "committed block-grid layout cannot be realized as a "
                "rank-expanded MU (unsupported use of the MU root); refusing to "
@@ -80,9 +77,17 @@ struct SdeRankExpandMuPass
         failed = true;
         continue;
       }
-      carts::sde::reconcileArrayLayoutWithCommittedPhysicalShape(
-          committed->writer);
+      SmallVector<int64_t, 4> ownerDims;
+      ownerDims.reserve(committed->layout.ownerDims.size());
+      for (unsigned dim : committed->layout.ownerDims)
+        ownerDims.push_back(static_cast<int64_t>(dim));
+      SmallVector<int64_t, 4> blockShape = committed->layout.logicalShape;
+      for (auto [slot, dim] : llvm::enumerate(committed->layout.ownerDims))
+        blockShape[dim] = committed->layout.blockExtents[slot];
+      carts::sde::rewriteWriterArrayLayoutToPhysicalShape(
+          committed->writer, ownerDims, blockShape);
     }
+    carts::sde::reconcileReaderArrayLayoutsWithCommittedWriterShapes(module);
 
     if (failed)
       signalPassFailure();

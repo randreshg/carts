@@ -7,6 +7,8 @@
 
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
@@ -45,7 +47,9 @@ bool supportsRankExpandedAccessWindows(SdeSuIterateOp si) {
   if (!si)
     return false;
   std::optional<SdeStructuredClassification> cls =
-      si.getStructuredClassification();
+      queryStructuredClassification(si);
+  if (!cls)
+    cls = si.getStructuredClassification();
   if (!cls)
     return false;
   switch (*cls) {
@@ -103,16 +107,6 @@ comparableBlockGrid(const ExpandedBlockGridMu &layout) {
   return result;
 }
 
-static std::optional<int64_t> getMuArrayId(SdeMuAllocOp muAlloc) {
-  if (IntegerAttr arrayId = muAlloc.getArrayIdAttr())
-    return arrayId.getInt();
-  for (Operation *user : muAlloc.getMemref().getUsers()) {
-    if (auto root = dyn_cast<SdeArrayLayoutRootOp>(user))
-      return static_cast<int64_t>(root.getArrayId());
-  }
-  return std::nullopt;
-}
-
 static std::optional<LayoutGraphFact> findWriteLayoutFact(SdeSuIterateOp si,
                                                           int64_t arrayId) {
   if (!si)
@@ -127,25 +121,62 @@ static std::optional<LayoutGraphFact> findWriteLayoutFact(SdeSuIterateOp si,
   return std::nullopt;
 }
 
-static std::optional<MuPhysicalLayout>
-resolveMuPhysicalLayoutFromFact(MemRefType logicalType,
-                                const LayoutGraphFact &fact) {
-  if (!fact.budgetBlockShape.empty())
-    if (std::optional<MuPhysicalLayout> layout = resolveMuPhysicalLayout(
-            logicalType, fact.ownerDims, fact.budgetBlockShape))
-      return layout;
-  return resolveMuPhysicalLayout(logicalType, fact.ownerDims, fact.blockShape);
+static std::optional<LayoutGraphFact>
+findBlockLayoutFact(SdeSuIterateOp si, int64_t arrayId, LayoutGraphRole role) {
+  if (!si)
+    return std::nullopt;
+  for (const LayoutGraphFact &fact :
+       parseArrayLayoutFacts(si.getArrayLayoutAttr())) {
+    if (fact.id == arrayId && fact.role == role &&
+        fact.layoutKind != ArrayLayoutKind::replicated &&
+        !fact.ownerDims.empty() && !fact.blockShape.empty())
+      return fact;
+  }
+  return std::nullopt;
+}
+
+static bool hasExplicitAccessWindow(SdeMuAllocOp muAlloc) {
+  for (Operation *user : muAlloc.getMemref().getUsers())
+    if (isa<SdeMuAccessWindowOp>(user))
+      return true;
+  return false;
+}
+
+static std::optional<LayoutGraphFact>
+findSingleWriteBlockLayoutFact(SdeSuIterateOp si) {
+  if (!si)
+    return std::nullopt;
+  std::optional<LayoutGraphFact> selected;
+  for (const LayoutGraphFact &fact :
+       parseArrayLayoutFacts(si.getArrayLayoutAttr())) {
+    if (fact.role != LayoutGraphRole::write ||
+        fact.layoutKind != ArrayLayoutKind::blockParallel ||
+        fact.ownerDims.empty() || fact.blockShape.empty())
+      continue;
+    if (!selected) {
+      selected = fact;
+      continue;
+    }
+    if (selected->ownerDims != fact.ownerDims ||
+        selected->blockShape != fact.blockShape)
+      return std::nullopt;
+  }
+  return selected;
 }
 
 static std::optional<MuPhysicalLayout>
-resolveMuPhysicalLayoutForWriter(MemRefType logicalType, SdeSuIterateOp writer,
-                                 const LayoutGraphFact &fact) {
-  if (writer)
-    if (std::optional<MuPhysicalLayout> layout = resolveMuPhysicalLayout(
-            logicalType, writer.getPhysicalOwnerDimsAttr(),
-            writer.getPhysicalBlockShapeAttr()))
-      return layout;
-  return resolveMuPhysicalLayoutFromFact(logicalType, fact);
+resolveMuPhysicalLayoutForWriter(MemRefType logicalType,
+                                 SdeSuIterateOp writer) {
+  if (!writer)
+    return std::nullopt;
+  if (std::optional<MuPhysicalLayout> layout = resolveMuPhysicalLayout(
+          logicalType, writer.getPhysicalOwnerDimsAttr(),
+          writer.getPhysicalBlockShapeAttr()))
+    return layout;
+  if (std::optional<LayoutGraphFact> fact = findSingleWriteBlockLayoutFact(writer))
+    return resolveMuPhysicalLayout(logicalType, fact->ownerDims,
+                                   fact->blockShape);
+  return std::nullopt;
 }
 
 static std::optional<ExpandedBlockGridMu>
@@ -197,32 +228,37 @@ recognizeExpandedBlockGridMuFromShape(ArrayRef<int64_t> ownerVals,
   return out;
 }
 
-static std::optional<ExpandedBlockGridMu>
-recognizeExpandedBlockGridMuFromFact(const LayoutGraphFact &fact,
-                                     MemRefType muType) {
-  if (!fact.budgetBlockShape.empty())
-    if (std::optional<ExpandedBlockGridMu> expanded =
-            recognizeExpandedBlockGridMuFromShape(
-                fact.ownerDims, fact.budgetBlockShape, muType))
-      return expanded;
-  return recognizeExpandedBlockGridMuFromShape(fact.ownerDims, fact.blockShape,
-                                               muType);
+static SmallVector<int64_t, 4>
+ownerDimsAsI64(ArrayRef<unsigned> ownerDims) {
+  SmallVector<int64_t, 4> out;
+  out.reserve(ownerDims.size());
+  for (unsigned dim : ownerDims)
+    out.push_back(static_cast<int64_t>(dim));
+  return out;
 }
 
-static std::optional<ExpandedBlockGridMu> recognizeExpandedBlockGridMuForWriter(
-    SdeSuIterateOp writer, const LayoutGraphFact &fact, MemRefType muType) {
-  if (writer) {
-    std::optional<SmallVector<int64_t, 4>> ownerVals =
-        readI64ArrayAttr(writer.getPhysicalOwnerDimsAttr());
-    std::optional<SmallVector<int64_t, 4>> blockVals =
-        readI64ArrayAttr(writer.getPhysicalBlockShapeAttr());
-    if (ownerVals && blockVals)
-      if (std::optional<ExpandedBlockGridMu> expanded =
-              recognizeExpandedBlockGridMuFromShape(*ownerVals, *blockVals,
-                                                    muType))
-        return expanded;
+static std::optional<ExpandedBlockGridMu>
+recognizeExpandedBlockGridMuForWriter(SdeSuIterateOp writer,
+                                      MemRefType muType) {
+  if (!writer || !muType)
+    return std::nullopt;
+  std::optional<SmallVector<int64_t, 4>> ownerVals =
+      readI64ArrayAttr(writer.getPhysicalOwnerDimsAttr());
+  std::optional<SmallVector<int64_t, 4>> blockVals =
+      readI64ArrayAttr(writer.getPhysicalBlockShapeAttr());
+  if (!ownerVals || !blockVals) {
+    if (std::optional<LayoutGraphFact> fact =
+            findSingleWriteBlockLayoutFact(writer)) {
+      ownerVals = fact->ownerDims;
+      blockVals = fact->blockShape;
+    }
   }
-  return recognizeExpandedBlockGridMuFromFact(fact, muType);
+  if (ownerVals && blockVals)
+    if (std::optional<ExpandedBlockGridMu> expanded =
+            recognizeExpandedBlockGridMuFromShape(*ownerVals, *blockVals,
+                                                  muType))
+      return expanded;
+  return std::nullopt;
 }
 
 static std::optional<ComparableBlockGrid> resolveComparableBlockGridForWriter(
@@ -230,10 +266,10 @@ static std::optional<ComparableBlockGrid> resolveComparableBlockGridForWriter(
   if (!muType)
     return std::nullopt;
   if (std::optional<MuPhysicalLayout> flat =
-          resolveMuPhysicalLayoutForWriter(muType, writer, fact))
+          resolveMuPhysicalLayoutForWriter(muType, writer))
     return comparableBlockGrid(*flat);
   if (std::optional<ExpandedBlockGridMu> expanded =
-          recognizeExpandedBlockGridMuForWriter(writer, fact, muType))
+          recognizeExpandedBlockGridMuForWriter(writer, muType))
     return comparableBlockGrid(*expanded);
   return std::nullopt;
 }
@@ -300,7 +336,7 @@ SdeSuIterateOp findCommittedBlockLayoutWriter(SdeMuAllocOp muAlloc) {
   auto muType = dyn_cast<MemRefType>(muAlloc.getMemref().getType());
   if (!muType)
     return SdeSuIterateOp();
-  std::optional<int64_t> arrayId = getMuArrayId(muAlloc);
+  std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc);
   if (!arrayId)
     return SdeSuIterateOp();
 
@@ -354,12 +390,74 @@ SdeSuIterateOp findCommittedBlockLayoutWriter(SdeMuAllocOp muAlloc) {
   return staticResult ? staticResult : result;
 }
 
+SdeSuIterateOp findCommittedBlockLayoutWitness(SdeMuAllocOp muAlloc) {
+  if (SdeSuIterateOp writer = findCommittedBlockLayoutWriter(muAlloc))
+    return writer;
+
+  auto muType = dyn_cast<MemRefType>(muAlloc.getMemref().getType());
+  if (!muType)
+    return SdeSuIterateOp();
+  std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc);
+  if (!arrayId)
+    return SdeSuIterateOp();
+
+  SdeSuIterateOp result;
+  SdeSuIterateOp staticResult;
+  SdeSuIterateOp supportedResult;
+  SdeSuIterateOp staticSupportedResult;
+  std::optional<ComparableBlockGrid> committedLayout;
+
+  for (Operation *user : muAlloc.getMemref().getUsers()) {
+    auto root = dyn_cast<SdeArrayLayoutRootOp>(user);
+    if (!root || root.getMode() != SdeAccessMode::read ||
+        static_cast<int64_t>(root.getArrayId()) != *arrayId)
+      continue;
+    SdeSuIterateOp reader = root->getParentOfType<SdeSuIterateOp>();
+    std::optional<LayoutGraphFact> fact =
+        findBlockLayoutFact(reader, *arrayId, LayoutGraphRole::read);
+    if (!reader || !fact)
+      continue;
+
+    std::optional<ComparableBlockGrid> layout;
+    if (std::optional<MuPhysicalLayout> flat =
+            resolveMuPhysicalLayout(muType, fact->ownerDims, fact->blockShape))
+      layout = comparableBlockGrid(*flat);
+    else if (std::optional<ExpandedBlockGridMu> expanded =
+                 recognizeExpandedBlockGridMuFromShape(
+                     fact->ownerDims, fact->blockShape, muType))
+      layout = comparableBlockGrid(*expanded);
+    if (!layout)
+      continue;
+
+    if (!result) {
+      result = reader;
+      committedLayout = *layout;
+    } else if (!samePhysicalLayout(*committedLayout, *layout)) {
+      return SdeSuIterateOp();
+    }
+    if (!staticResult && hasStaticIterationDomain(reader))
+      staticResult = reader;
+    if (!supportsRankExpandedAccessWindows(reader))
+      continue;
+    if (!supportedResult)
+      supportedResult = reader;
+    if (!staticSupportedResult && hasStaticIterationDomain(reader))
+      staticSupportedResult = reader;
+  }
+
+  if (staticSupportedResult)
+    return staticSupportedResult;
+  if (supportedResult)
+    return supportedResult;
+  return staticResult ? staticResult : result;
+}
+
 std::optional<CommittedMuBlockLayout>
 findCommittedMuBlockLayout(SdeMuAllocOp muAlloc) {
   auto muType = dyn_cast<MemRefType>(muAlloc.getMemref().getType());
   if (!muType)
     return std::nullopt;
-  std::optional<int64_t> arrayId = getMuArrayId(muAlloc);
+  std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc);
   if (!arrayId)
     return std::nullopt;
 
@@ -386,7 +484,7 @@ findCommittedMuBlockLayout(SdeMuAllocOp muAlloc) {
       continue;
 
     std::optional<MuPhysicalLayout> layout =
-        resolveMuPhysicalLayoutForWriter(muType, writer, *fact);
+        resolveMuPhysicalLayoutForWriter(muType, writer);
     if (!layout)
       continue;
     ComparableBlockGrid comparable = comparableBlockGrid(*layout);
@@ -414,7 +512,57 @@ findCommittedMuBlockLayout(SdeMuAllocOp muAlloc) {
     return supportedResult;
   if (staticResult)
     return staticResult;
-  return result;
+  if (result)
+    return result;
+  if (hasExplicitAccessWindow(muAlloc))
+    return std::nullopt;
+
+  std::optional<CommittedMuBlockLayout> readResult;
+  std::optional<CommittedMuBlockLayout> staticReadResult;
+  std::optional<CommittedMuBlockLayout> supportedReadResult;
+  std::optional<CommittedMuBlockLayout> staticSupportedReadResult;
+  std::optional<ComparableBlockGrid> readCommittedLayout;
+
+  for (Operation *user : muAlloc.getMemref().getUsers()) {
+    auto root = dyn_cast<SdeArrayLayoutRootOp>(user);
+    if (!root || root.getMode() != SdeAccessMode::read ||
+        static_cast<int64_t>(root.getArrayId()) != *arrayId)
+      continue;
+    SdeSuIterateOp reader = root->getParentOfType<SdeSuIterateOp>();
+    std::optional<LayoutGraphFact> fact =
+        findBlockLayoutFact(reader, *arrayId, LayoutGraphRole::read);
+    if (!reader || !fact)
+      continue;
+    std::optional<MuPhysicalLayout> layout =
+        resolveMuPhysicalLayout(muType, fact->ownerDims, fact->blockShape);
+    if (!layout)
+      continue;
+    ComparableBlockGrid comparable = comparableBlockGrid(*layout);
+    if (!readResult) {
+      readResult = CommittedMuBlockLayout{reader, *layout};
+      readCommittedLayout = comparable;
+    } else if (!samePhysicalLayout(*readCommittedLayout, comparable)) {
+      return std::nullopt;
+    }
+
+    CommittedMuBlockLayout current{reader, *layout};
+    if (!staticReadResult && hasStaticIterationDomain(reader))
+      staticReadResult = current;
+    if (!supportsRankExpandedAccessWindows(reader))
+      continue;
+    if (!supportedReadResult)
+      supportedReadResult = current;
+    if (!staticSupportedReadResult && hasStaticIterationDomain(reader))
+      staticSupportedReadResult = current;
+  }
+
+  if (staticSupportedReadResult)
+    return staticSupportedReadResult;
+  if (supportedReadResult)
+    return supportedReadResult;
+  if (staticReadResult)
+    return staticReadResult;
+  return readResult;
 }
 
 bool isBlockGridRealizable(SdeMuAllocOp muAlloc, MuPhysicalLayout &out) {
@@ -452,45 +600,10 @@ std::optional<ExpandedBlockGridMu>
 recognizeExpandedBlockGridMu(SdeSuIterateOp si, MemRefType muType) {
   if (!si || !muType)
     return std::nullopt;
-  std::optional<llvm::SmallVector<int64_t, 4>> ownerVals =
-      readI64ArrayAttr(si.getPhysicalOwnerDimsAttr());
-  std::optional<llvm::SmallVector<int64_t, 4>> blockVals =
-      readI64ArrayAttr(si.getPhysicalBlockShapeAttr());
-  if (!ownerVals || blockVals == std::nullopt || ownerVals->empty())
-    return std::nullopt;
-
-  // Expanded form: K leading grid dims + L tile dims, with the rank-length
-  // block-shape carrying the logical rank L.
-  const unsigned numOwner = ownerVals->size();
-  const unsigned logicalRank = blockVals->size();
-  const unsigned muRank = muType.getRank();
-  if (logicalRank + numOwner != muRank)
-    return std::nullopt; // flat / owner-length / rank mismatch -> out of scope
-
-  llvm::SmallVector<bool, 4> seen(logicalRank, false);
-  llvm::SmallVector<unsigned, 4> ownerDims;
-  ownerDims.reserve(numOwner);
-  for (int64_t od : *ownerVals) {
-    if (od < 0 || static_cast<unsigned>(od) >= logicalRank)
-      return std::nullopt;
-    if (seen[od])
-      return std::nullopt;
-    seen[od] = true;
-    ownerDims.push_back(static_cast<unsigned>(od));
-  }
-  llvm::sort(ownerDims);
-
-  ExpandedBlockGridMu out;
-  out.ownerDims = std::move(ownerDims);
-  out.logicalRank = logicalRank;
-  out.blockExtents.reserve(numOwner);
-  out.gridCounts.reserve(numOwner);
-  ArrayRef<int64_t> shape = muType.getShape();
-  for (unsigned i = 0; i < numOwner; ++i) {
-    out.blockExtents.push_back((*blockVals)[out.ownerDims[i]]);
-    out.gridCounts.push_back(shape[i]); // leading K grid dims, owner order
-  }
-  return out;
+  if (std::optional<ExpandedBlockGridMu> fromWriter =
+          recognizeExpandedBlockGridMuForWriter(si, muType))
+    return fromWriter;
+  return std::nullopt;
 }
 
 std::optional<ExpandedBlockGridMu>
@@ -498,36 +611,47 @@ recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc) {
   auto muType = dyn_cast<MemRefType>(muAlloc.getMemref().getType());
   if (!muType)
     return std::nullopt;
-  std::optional<int64_t> arrayId = getMuArrayId(muAlloc);
+  std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc);
   if (!arrayId)
     return std::nullopt;
+
+  if (SdeSuIterateOp writer = findCommittedBlockLayoutWriter(muAlloc))
+    return recognizeExpandedBlockGridMuForWriter(writer, muType);
 
   std::optional<ExpandedBlockGridMu> result;
   std::optional<ComparableBlockGrid> committedLayout;
   for (Operation *user : muAlloc.getMemref().getUsers()) {
-    if (!isa<memref::StoreOp>(user))
+    auto root = dyn_cast<SdeArrayLayoutRootOp>(user);
+    if (!root || static_cast<int64_t>(root.getArrayId()) != *arrayId)
       continue;
-    for (SdeSuIterateOp writer = user->getParentOfType<SdeSuIterateOp>();
-         writer; writer = writer->getParentOfType<SdeSuIterateOp>()) {
-      std::optional<LayoutGraphFact> fact =
-          findWriteLayoutFact(writer, *arrayId);
-      if (!fact)
-        continue;
-      std::optional<ExpandedBlockGridMu> expanded =
-          recognizeExpandedBlockGridMuForWriter(writer, *fact, muType);
-      if (!expanded)
-        break;
-      ComparableBlockGrid comparable = comparableBlockGrid(*expanded);
-      if (!result) {
-        result = *expanded;
-        committedLayout = comparable;
-      } else if (!samePhysicalLayout(*committedLayout, comparable)) {
-        return std::nullopt;
-      }
-      break;
+    if (root.getMode() != SdeAccessMode::read)
+      continue;
+    SdeSuIterateOp source = root->getParentOfType<SdeSuIterateOp>();
+    std::optional<LayoutGraphFact> fact =
+        findBlockLayoutFact(source, *arrayId, LayoutGraphRole::read);
+    if (!fact)
+      continue;
+    std::optional<ExpandedBlockGridMu> expanded =
+        recognizeExpandedBlockGridMuFromShape(fact->ownerDims, fact->blockShape,
+                                              muType);
+    if (!expanded)
+      continue;
+    ComparableBlockGrid comparable = comparableBlockGrid(*expanded);
+    if (!result) {
+      result = *expanded;
+      committedLayout = comparable;
+    } else if (!samePhysicalLayout(*committedLayout, comparable)) {
+      return std::nullopt;
     }
   }
-  return result;
+  if (result)
+    return result;
+  if (std::optional<RecoveredMuPhysicalLayout> recovered =
+          recoverMuPhysicalLayoutFromExpandedType(muType))
+    return recognizeExpandedBlockGridMuFromShape(
+        ownerDimsAsI64(recovered->ownerDims), recovered->physicalBlockShape,
+        muType);
+  return std::nullopt;
 }
 
 std::optional<llvm::SmallVector<int64_t, 4>>
@@ -652,8 +776,6 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
   OpBuilder builder(muAlloc);
   auto newAlloc = SdeMuAllocOp::create(builder, muAlloc.getLoc(), expandedType,
                                        ValueRange{});
-  if (IntegerAttr arrayId = muAlloc.getArrayIdAttr())
-    newAlloc.setArrayIdAttr(arrayId);
   Value newMemref = newAlloc.getMemref();
 
   for (SdeArrayLayoutRootOp root : provenance)

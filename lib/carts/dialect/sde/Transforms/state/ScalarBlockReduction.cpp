@@ -70,8 +70,8 @@ static bool isSupportedStaticSourceMemref(Value value) {
     return false;
   if (type.getRank() == 1)
     return type.getDimSize(0) > 0;
-  if (type.getRank() == 2)
-    return type.getDimSize(0) > 1 && type.getDimSize(1) > 0 &&
+  if (type.getRank() >= 2)
+    return type.getDimSize(0) > 1 &&
            isa_and_nonnull<sde::SdeMuAllocOp>(value.getDefiningOp());
   return false;
 }
@@ -149,10 +149,10 @@ findCommittedBlockGeometryForRoot(Value root) {
     return std::nullopt;
 
   auto type = cast<MemRefType>(root.getType());
-  bool rankExpandedMu = type.getRank() == 2;
+  bool rankExpandedMu = type.getRank() >= 2;
   std::optional<BlockGeometry1D> result;
   for (Operation *user : root.getUsers()) {
-    if (!isa<memref::LoadOp, memref::StoreOp>(user))
+    if (!isa<memref::StoreOp>(user))
       continue;
     sde::SdeSuIterateOp su = user->getParentOfType<sde::SdeSuIterateOp>();
     while (su &&
@@ -166,16 +166,37 @@ findCommittedBlockGeometryForRoot(Value root) {
     std::optional<SmallVector<int64_t, 2>> blockShape =
         readI64Vector(su.getPhysicalBlockShapeAttr());
     if (!ownerDims || !blockShape || ownerDims->size() != 1 ||
-        (*ownerDims)[0] != 0 || blockShape->empty())
+        blockShape->empty())
       continue;
-    int64_t blockExtent =
-        rankExpandedMu ? type.getDimSize(1) : (*blockShape)[0];
-    int64_t blockCount = rankExpandedMu
-                             ? type.getDimSize(0)
-                             : ceilDiv(type.getDimSize(0), blockExtent);
-    int64_t extent =
-        rankExpandedMu ? blockCount * blockExtent : type.getDimSize(0);
-    if (blockExtent <= 0 || blockCount <= 1)
+    int64_t ownerDim = (*ownerDims)[0];
+    if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= blockShape->size())
+      continue;
+
+    int64_t extent = type.getDimSize(0);
+    int64_t blockExtent = (*blockShape)[ownerDim];
+    if (blockExtent <= 0)
+      continue;
+    int64_t blockCount = ceilDiv(type.getDimSize(0), blockExtent);
+    if (rankExpandedMu) {
+      unsigned logicalRank = type.getRank() - 1;
+      if (blockShape->size() != logicalRank ||
+          static_cast<unsigned>(ownerDim) >= logicalRank)
+        continue;
+      bool shapeMatches = true;
+      for (auto [dim, block] : llvm::enumerate(*blockShape))
+        if (type.getDimSize(dim + 1) != block) {
+          shapeMatches = false;
+          break;
+        }
+      if (!shapeMatches)
+        continue;
+      blockExtent = type.getDimSize(ownerDim + 1);
+      blockCount = type.getDimSize(0);
+      extent = blockCount * blockExtent;
+    } else if (ownerDim != 0) {
+      continue;
+    }
+    if (blockCount <= 1)
       continue;
     if (!rankExpandedMu && blockExtent > type.getDimSize(0))
       continue;
@@ -366,15 +387,18 @@ static Value buildAdd(OpBuilder &builder, Location loc, Value lhs, Value rhs) {
 }
 
 static Value buildFirstIndexInBlock(OpBuilder &builder, Location loc,
-                                    Value blockIv, Value step,
+                                    Value blockIv, int64_t step,
                                     int64_t blockExtent) {
   Value blockSize = constantIndex(builder, loc, blockExtent);
   Value blockStart = arith::MulIOp::create(builder, loc, blockIv, blockSize);
-  Value rem = arith::RemUIOp::create(builder, loc, blockStart, step);
+  if (step > 0 && blockExtent % step == 0)
+    return blockStart;
+  Value stepValue = constantIndex(builder, loc, step);
+  Value rem = arith::RemUIOp::create(builder, loc, blockStart, stepValue);
   Value zero = constantIndex(builder, loc, 0);
   Value isAligned =
       arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq, rem, zero);
-  Value adjust = arith::SubIOp::create(builder, loc, step, rem);
+  Value adjust = arith::SubIOp::create(builder, loc, stepValue, rem);
   Value rounded = arith::AddIOp::create(builder, loc, blockStart, adjust);
   return arith::SelectOp::create(builder, loc, isAligned, blockStart, rounded);
 }
@@ -433,7 +457,6 @@ static int64_t nextInternalArrayId(Operation *anchor) {
   scope->walk([&](sde::SdeArrayLayoutRootOp root) {
     maxId = std::max<int64_t>(maxId, root.getArrayId());
   });
-  scope->walk([&](sde::SdeMuAllocOp alloc) { record(alloc.getArrayIdAttr()); });
   scope->walk(
       [&](sde::SdeMuAccessWindowOp win) { record(win.getArrayIdAttr()); });
   scope->walk(
@@ -575,33 +598,20 @@ static sde::SdeSuIterateOp createProducer(ReductionCandidate &candidate,
   Value blockCount =
       constantIndex(builder, loc, candidate.sourceGeometry.blockCount);
 
-  auto su = sde::SdeSuIterateOp::create(
-      builder, loc, /*resultTypes=*/TypeRange{}, ValueRange{zero},
-      ValueRange{blockCount}, ValueRange{one},
-      /*schedule=*/nullptr, /*chunkSize=*/Value(),
-      /*nowait=*/nullptr,
-      /*reductionAccumulators=*/ValueRange{},
-      /*reductionKinds=*/nullptr,
-      /*reductionStrategy=*/nullptr, /*partialReduction=*/nullptr,
-      /*partialReductionDims=*/nullptr,
-      /*partialReductionOwnerDims=*/nullptr,
-      sde::SdeStructuredClassificationAttr::get(
-          ctx, sde::SdeStructuredClassification::elementwise),
-      /*pattern=*/nullptr,
-      /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
-      /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
-      /*writeFootprint=*/nullptr, buildI64ArrayAttr(ctx, {0}),
-      buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate)),
-      buildI64ArrayAttr(ctx, {1}),
-      /*physicalHaloShape=*/nullptr,
-      sde::SdeIterationTopologyAttr::get(
-          ctx, sde::SdeIterationTopology::owner_strip),
-      /*repetitionStructure=*/nullptr, /*asyncStrategy=*/nullptr,
-      /*distributionKind=*/nullptr, /*inPlaceSafe=*/nullptr,
-      /*inPlaceSharedState=*/nullptr,
+  sde::SuIterateAttrs suAttrs;
+  suAttrs.structuredClassification = sde::SdeStructuredClassificationAttr::get(
+      ctx, sde::SdeStructuredClassification::elementwise);
+  suAttrs.physicalOwnerDims = buildI64ArrayAttr(ctx, {0});
+  suAttrs.physicalBlockShape =
+      buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate));
+  suAttrs.logicalWorkerSlice = buildI64ArrayAttr(ctx, {1});
+  suAttrs.iterationTopology = sde::SdeIterationTopologyAttr::get(
+      ctx, sde::SdeIterationTopology::owner_strip);
+  suAttrs.arrayLayout =
       partialArrayId ? buildPartialArrayLayout(ctx, *partialArrayId, candidate)
-                     : ArrayAttr{},
-      /*layoutsDisagree=*/nullptr, /*commVolumeBytes=*/nullptr);
+                     : ArrayAttr{};
+  auto su = sde::buildSuIterate(builder, loc, ValueRange{zero},
+                                ValueRange{blockCount}, ValueRange{one}, suAttrs);
 
   Block &suBody = sde::ensureBlock(su.getBody());
   if (suBody.getNumArguments() == 0)
@@ -614,16 +624,13 @@ static sde::SdeSuIterateOp createProducer(ReductionCandidate &candidate,
         builder, loc, partial,
         sde::SdeAccessModeAttr::get(ctx, sde::SdeAccessMode::write),
         builder.getI64IntegerAttr(*partialArrayId));
-  auto cu = sde::SdeCuRegionOp::create(
-      builder, loc, /*resultTypes=*/TypeRange{},
-      sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  auto cu = sde::buildCuRegion(
+      builder, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel));
   Block &cuBody = sde::ensureBlock(cu.getBody());
   builder.setInsertionPointToStart(&cuBody);
 
-  Value first =
-      buildFirstIndexInBlock(builder, loc, blockIv, candidate.loop.getStep(),
-                             candidate.sourceGeometry.blockExtent);
+  Value first = buildFirstIndexInBlock(builder, loc, blockIv, candidate.step,
+                                       candidate.sourceGeometry.blockExtent);
   Value end =
       buildBlockEnd(builder, loc, blockIv, candidate.loop.getUpperBound(),
                     candidate.sourceGeometry.blockExtent);
@@ -681,10 +688,11 @@ static sde::SdeCuRegionOp createEmptySingleCuAfter(Operation *anchor,
                                                    Location loc) {
   OpBuilder builder(anchor);
   builder.setInsertionPointAfter(anchor);
-  auto cu = sde::SdeCuRegionOp::create(
-      builder, loc, /*resultTypes=*/TypeRange{},
-      sde::SdeCuKindAttr::get(anchor->getContext(), sde::SdeCuKind::single),
-      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  auto cu = sde::buildCuRegion(
+      builder, loc,
+      sde::SdeCuKindAttr::get(anchor->getContext(), sde::SdeCuKind::single));
+  cu.setSerialReasonAttr(sde::SdeSerialReasonAttr::get(
+      anchor->getContext(), sde::SdeSerialReason::reduction_combine));
   Block &body = sde::ensureBlock(cu.getBody());
   OpBuilder bodyBuilder(cu.getContext());
   bodyBuilder.setInsertionPointToEnd(&body);
@@ -822,15 +830,16 @@ static LogicalResult rewriteReduction(ReductionCandidate candidate) {
     partialArrayId = nextInternalArrayId(parentCu.getOperation());
     auto partialAlloc =
         sde::SdeMuAllocOp::create(outerBuilder, loc, partialType, ValueRange{});
-    partialAlloc.setArrayIdAttr(
-        outerBuilder.getI64IntegerAttr(*partialArrayId));
     partial = partialAlloc.getMemref();
   } else {
-    auto allocCu = sde::SdeCuRegionOp::create(
-        outerBuilder, loc, TypeRange{partialType},
+    auto allocCu = sde::buildCuRegion(
+        outerBuilder, loc,
         sde::SdeCuKindAttr::get(outerBuilder.getContext(),
                                 sde::SdeCuKind::single),
-        /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+        /*nowait=*/nullptr, /*iterArgs=*/ValueRange{},
+        /*resultTypes=*/TypeRange{partialType});
+    allocCu.setSerialReasonAttr(sde::SdeSerialReasonAttr::get(
+        outerBuilder.getContext(), sde::SdeSerialReason::reduction_combine));
     Block &allocBody = sde::ensureBlock(allocCu.getBody());
     outerBuilder.setInsertionPointToStart(&allocBody);
     Value alloc =

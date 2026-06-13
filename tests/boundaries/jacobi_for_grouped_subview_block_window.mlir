@@ -7,10 +7,18 @@
 // CHECK: %[[C512:[A-Za-z0-9_]+]] = arith.constant 512 : index
 // CHECK: scf.for %[[ROW_BASE:arg[0-9]+]] = {{.*}} step %[[C3584]]
 // CHECK: scf.for %[[COL_BASE:arg[0-9]+]] = {{.*}} step %[[C512]]
+// The per-group block coordinate is materialized once for the EDT params (used
+// for in-EDT localization below) and once at the acquire site; the values are
+// equal but carry distinct SSA names. Consume the param-side pair first.
+// CHECK: arith.divui %[[ROW_BASE]], %[[C512]] : index
+// CHECK: arith.divui %[[COL_BASE]], %[[C512]] : index
+// Acquire-side row block offset + clamped group extent (one block-index value
+// feeds both the remainder and the acquire offset).
 // CHECK: %[[ROW_BLOCK:[A-Za-z0-9_]+]] = arith.divui %[[ROW_BASE]], %[[C512]] : index
-// CHECK: %[[COL_BLOCK:[A-Za-z0-9_]+]] = arith.divui %[[COL_BASE]], %[[C512]] : index
 // CHECK: %[[ROW_REMAIN:[A-Za-z0-9_]+]] = arith.subi %{{[A-Za-z0-9_]+}}, %[[ROW_BLOCK]] : index
 // CHECK: %[[ROW_GROUP:[A-Za-z0-9_]+]] = arith.minui %[[ROW_REMAIN]], %{{[A-Za-z0-9_]+}} : index
+// Acquire-side col block offset + clamped group extent.
+// CHECK: %[[COL_BLOCK:[A-Za-z0-9_]+]] = arith.divui %[[COL_BASE]], %[[C512]] : index
 // CHECK: %[[COL_REMAIN:[A-Za-z0-9_]+]] = arith.subi %{{[A-Za-z0-9_]+}}, %[[COL_BLOCK]] : index
 // CHECK: %[[COL_GROUP:[A-Za-z0-9_]+]] = arith.minui %[[COL_REMAIN]], %{{[A-Za-z0-9_]+}} : index
 // CHECK: arts.db_acquire[<{{inout|out}}>] {{.*}} offsets[%[[ROW_BLOCK]], %[[COL_BLOCK]]], sizes[%[[ROW_GROUP]], %[[COL_GROUP]]]

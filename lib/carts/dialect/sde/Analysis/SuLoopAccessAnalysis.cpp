@@ -1257,9 +1257,9 @@ findCompatibleSuOutputLayoutFacts(SdeSuIterateOp op) {
 bool hasRealizableOwnerStrip(SdeSuIterateOp op) {
   // Restricted to inPlaceSafe (proven point-local self-read) stencils so it
   // never reinterprets a Gauss-Seidel / inPlaceSharedState owner shape.
-  if (!op.getInPlaceSafe())
+  if (!queryInPlaceSafe(op))
     return false;
-  auto classification = op.getStructuredClassification();
+  auto classification = queryStructuredClassification(op);
   if (!classification ||
       *classification != SdeStructuredClassification::stencil)
     return false;

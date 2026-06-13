@@ -9,6 +9,7 @@
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
+#include "carts/dialect/sde/Utils/SdeOwnerLoopPromotion.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -63,35 +64,6 @@ static bool hasSelfRead(const sde::SuLoopAccessSummary &summary) {
       if (sameAccessRoot(write.memref, read.memref))
         return true;
   return false;
-}
-
-static bool
-hasOnlyPointInPlaceSelfReads(const sde::SuLoopAccessSummary &summary) {
-  bool sawSelfRead = false;
-  for (const sde::MemrefAccessEntry &read : summary.reads) {
-    bool readsWrittenRoot = false;
-    bool matchesWriteMap = false;
-    for (const sde::MemrefAccessEntry &write : summary.writes) {
-      if (!sameAccessRoot(write.memref, read.memref))
-        continue;
-      readsWrittenRoot = true;
-      if (read.indexingMap != write.indexingMap)
-        continue;
-      auto loadOp = dyn_cast_or_null<memref::LoadOp>(read.op);
-      auto storeOp = dyn_cast_or_null<memref::StoreOp>(write.op);
-      if (loadOp && storeOp &&
-          ValueAnalysis::sameDirectMemrefAccess(
-              loadOp.getMemref(), loadOp.getIndices(), storeOp.getMemref(),
-              storeOp.getIndices()))
-        matchesWriteMap = true;
-    }
-    if (!readsWrittenRoot)
-      continue;
-    sawSelfRead = true;
-    if (!matchesWriteMap)
-      return false;
-  }
-  return sawSelfRead;
 }
 
 static bool isRankZeroMemref(Value value) {
@@ -425,7 +397,7 @@ static bool isSafeOutOfPlaceStencilPromotion(
   if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
       op.getSteps().size() != 1)
     return reject("owner loop is not rank-1");
-  if (op.getChunkSize() || op.getNumResults() != 0 ||
+  if (op.getNumResults() != 0 ||
       !op.getReductionAccumulators().empty() || op.getReductionKindsAttr())
     return reject("owner loop has chunk/results/reduction carrier");
   if (summary.classification != sde::SdeStructuredClassification::stencil)
@@ -458,7 +430,7 @@ static bool isSafeOutOfPlaceStencilPromotion(
   if (effects.hasUnknownEffects || effects.writes.empty())
     return reject("memory effects are unknown/empty");
   if (sde::hasInPlaceSelfRead(effects) &&
-      !hasOnlyPointInPlaceSelfReads(summary))
+      !sde::hasOnlyPointInPlaceSelfReads(summary))
     return reject("in-place stencil has non-point self reads");
 
   Block *computeBlock = sde::getSuIterateComputeBlock(op);
@@ -583,7 +555,7 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
   if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
       op.getSteps().size() != 1)
     return false;
-  if (op.getChunkSize() || op.getNumResults() != 0 ||
+  if (op.getNumResults() != 0 ||
       !op.getReductionAccumulators().empty() || op.getReductionKindsAttr())
     return false;
   if (summary.classification != sde::SdeStructuredClassification::elementwise)
@@ -668,7 +640,7 @@ isSafeElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
   if (effects.hasUnknownEffects || effects.writes.empty())
     return false;
   if (sde::hasInPlaceSelfRead(effects) &&
-      !hasOnlyPointInPlaceSelfReads(summary))
+      !sde::hasOnlyPointInPlaceSelfReads(summary))
     return false;
 
   std::optional<unsigned> promotedPhysicalDim;
@@ -764,23 +736,10 @@ promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor,
           ? SmallVector<Value, 2>{op.getSteps().front(), innerFor.getStep()}
           : SmallVector<Value, 2>{innerFor.getStep(), op.getSteps().front()};
 
-  auto newOp = sde::SdeSuIterateOp::create(
-      builder, loc, /*resultTypes=*/TypeRange{}, ValueRange(lowerBounds),
-      ValueRange(upperBounds), ValueRange(steps), op.getScheduleAttr(),
-      op.getChunkSize(), op.getNowaitAttr(), op.getReductionAccumulators(),
-      op.getReductionKindsAttr(), op.getReductionStrategyAttr(),
-      op.getPartialReductionAttr(), op.getPartialReductionDimsAttr(),
-      op.getPartialReductionOwnerDimsAttr(),
-      op.getStructuredClassificationAttr(), op.getPatternAttr(),
-      op.getAccessMinOffsetsAttr(), op.getAccessMaxOffsetsAttr(),
-      op.getOwnerDimsAttr(), op.getSpatialDimsAttr(),
-      op.getWriteFootprintAttr(), op.getPhysicalOwnerDimsAttr(),
-      op.getPhysicalBlockShapeAttr(), op.getLogicalWorkerSliceAttr(),
-      op.getPhysicalHaloShapeAttr(), op.getIterationTopologyAttr(),
-      op.getRepetitionStructureAttr(), op.getAsyncStrategyAttr(),
-      op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
-      op.getInPlaceSharedStateAttr(), op.getArrayLayoutAttr(),
-      op.getLayoutsDisagreeAttr(), op.getCommVolumeBytesAttr());
+  auto newOp = sde::buildSuIterate(
+      builder, loc, ValueRange(lowerBounds), ValueRange(upperBounds),
+      ValueRange(steps), sde::SuIterateAttrs::fromOp(op),
+      op.getReductionAccumulators());
   newOp->setAttrs(sde::getRewrittenAttrs(op));
   removeStaleShapeAttrs(newOp);
 
@@ -807,9 +766,10 @@ promoteElementwiseInnerOwnerLoop(sde::SdeSuIterateOp op, scf::ForOp innerFor,
   builder.setInsertionPointToStart(&newBody);
   Block *cloneBlock = &newBody;
   if (oldCuRegion) {
-    auto newCuRegion = sde::SdeCuRegionOp::create(
-        builder, loc, /*resultTypes=*/TypeRange{}, oldCuRegion.getKindAttr(),
-        oldCuRegion.getNowaitAttr(), /*iterArgs=*/ValueRange{});
+    auto newCuRegion = sde::buildCuRegion(
+        builder, loc, oldCuRegion.getKindAttr(), oldCuRegion.getNowaitAttr(),
+        /*iterArgs=*/ValueRange{}, /*resultTypes=*/TypeRange{},
+        oldCuRegion.getSerialReasonAttr());
     cloneBlock = &sde::ensureBlock(newCuRegion.getBody());
     builder.setInsertionPointToStart(cloneBlock);
   }
@@ -834,7 +794,7 @@ isSafeOpaqueElementwiseInnerOwnerPromotion(sde::SdeSuIterateOp op,
   if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
       op.getSteps().size() != 1)
     return false;
-  if (op.getChunkSize() || op.getNumResults() != 0 ||
+  if (op.getNumResults() != 0 ||
       !op.getReductionAccumulators().empty() || op.getReductionKindsAttr())
     return false;
 
@@ -1038,23 +998,10 @@ promoteNestedParallelOwnerLoops(sde::SdeSuIterateOp op,
     steps.push_back(innerFor.getStep());
   }
 
-  auto newOp = sde::SdeSuIterateOp::create(
-      builder, loc, /*resultTypes=*/TypeRange{}, ValueRange(lowerBounds),
-      ValueRange(upperBounds), ValueRange(steps), op.getScheduleAttr(),
-      op.getChunkSize(), op.getNowaitAttr(), op.getReductionAccumulators(),
-      op.getReductionKindsAttr(), op.getReductionStrategyAttr(),
-      op.getPartialReductionAttr(), op.getPartialReductionDimsAttr(),
-      op.getPartialReductionOwnerDimsAttr(),
-      op.getStructuredClassificationAttr(), op.getPatternAttr(),
-      op.getAccessMinOffsetsAttr(), op.getAccessMaxOffsetsAttr(),
-      op.getOwnerDimsAttr(), op.getSpatialDimsAttr(),
-      op.getWriteFootprintAttr(), op.getPhysicalOwnerDimsAttr(),
-      op.getPhysicalBlockShapeAttr(), op.getLogicalWorkerSliceAttr(),
-      op.getPhysicalHaloShapeAttr(), op.getIterationTopologyAttr(),
-      op.getRepetitionStructureAttr(), op.getAsyncStrategyAttr(),
-      op.getDistributionKindAttr(), op.getInPlaceSafeAttr(),
-      op.getInPlaceSharedStateAttr(), op.getArrayLayoutAttr(),
-      op.getLayoutsDisagreeAttr(), op.getCommVolumeBytesAttr());
+  auto newOp = sde::buildSuIterate(
+      builder, loc, ValueRange(lowerBounds), ValueRange(upperBounds),
+      ValueRange(steps), sde::SuIterateAttrs::fromOp(op),
+      op.getReductionAccumulators());
   newOp->setAttrs(sde::getRewrittenAttrs(op));
   removeStaleShapeAttrs(newOp);
 
@@ -1084,9 +1031,10 @@ promoteNestedParallelOwnerLoops(sde::SdeSuIterateOp op,
   builder.setInsertionPointToStart(&newBody);
   Block *cloneBlock = &newBody;
   if (oldCuRegion) {
-    auto newCuRegion = sde::SdeCuRegionOp::create(
-        builder, loc, /*resultTypes=*/TypeRange{}, oldCuRegion.getKindAttr(),
-        oldCuRegion.getNowaitAttr(), /*iterArgs=*/ValueRange{});
+    auto newCuRegion = sde::buildCuRegion(
+        builder, loc, oldCuRegion.getKindAttr(), oldCuRegion.getNowaitAttr(),
+        /*iterArgs=*/ValueRange{}, /*resultTypes=*/TypeRange{},
+        oldCuRegion.getSerialReasonAttr());
     cloneBlock = &sde::ensureBlock(newCuRegion.getBody());
     builder.setInsertionPointToStart(cloneBlock);
   }
@@ -1120,7 +1068,7 @@ static sde::SdeSuIterateOp tryPromoteOutOfPlaceStencilOwnerLoop(
 static sde::SdeSuIterateOp
 tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
                                const sde::SuLoopAccessSummary &summary) {
-  if (!op || op.getChunkSize() || op.getNumResults() != 0 ||
+  if (!op || op.getNumResults() != 0 ||
       !op.getReductionAccumulators().empty() || op.getReductionKindsAttr())
     return op;
   if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
@@ -1172,7 +1120,7 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
   if (effects.hasUnknownEffects || effects.writes.empty())
     return op;
   if (sde::hasInPlaceSelfRead(effects) &&
-      !hasOnlyPointInPlaceSelfReads(summary))
+      !sde::hasOnlyPointInPlaceSelfReads(summary))
     return op;
 
   if (summary.classification == sde::SdeStructuredClassification::elementwise &&
@@ -1185,83 +1133,6 @@ tryPromoteNestedParallelPrefix(sde::SdeSuIterateOp op,
   }
 
   return promoteNestedParallelOwnerLoops(op, innerForPrefix);
-}
-
-static sde::SdePattern
-derivePattern(const sde::SuLoopAccessSummary &summary,
-              sde::SdeStructuredClassification classification,
-              std::optional<sde::SuNeighborhoodAccessInfo> neighborhood) {
-  switch (classification) {
-  case sde::SdeStructuredClassification::elementwise:
-    return sde::SdePattern::uniform;
-  case sde::SdeStructuredClassification::elementwise_pipeline:
-    return sde::SdePattern::elementwise_pipeline;
-  case sde::SdeStructuredClassification::matmul:
-    return sde::SdePattern::matmul;
-  case sde::SdeStructuredClassification::reduction:
-    return sde::SdePattern::reduction;
-  case sde::SdeStructuredClassification::stencil:
-    break;
-  }
-
-  if (!neighborhood)
-    return sde::SdePattern::stencil_tiling_nd;
-
-  if (isWavefront2D(summary, *neighborhood))
-    return sde::SdePattern::wavefront_2d;
-  if (hasHigherOrderHalo(*neighborhood))
-    return sde::SdePattern::higher_order_stencil;
-  if (countHaloDims(*neighborhood) >= 3)
-    return sde::SdePattern::cross_dim_stencil_3d;
-  return sde::SdePattern::stencil_tiling_nd;
-}
-
-static void clearPartialReductionFacts(sde::SdeSuIterateOp op) {
-  op->removeAttr(op.getPartialReductionAttrName());
-  op->removeAttr(op.getPartialReductionDimsAttrName());
-  op->removeAttr(op.getPartialReductionOwnerDimsAttrName());
-}
-
-static void
-commitPartialReductionFacts(sde::SdeSuIterateOp op,
-                            const sde::SuLoopAccessSummary &summary,
-                            sde::SdeStructuredClassification classification) {
-  clearPartialReductionFacts(op);
-
-  if (classification != sde::SdeStructuredClassification::elementwise_pipeline)
-    return;
-  if (!sde::isOwnerLocalPipelineReduction(op))
-    return;
-
-  SmallVector<int64_t, 4> reductionDims;
-  for (auto [dim, iteratorType] : llvm::enumerate(summary.iterTypes)) {
-    if (iteratorType == utils::IteratorType::reduction)
-      reductionDims.push_back(static_cast<int64_t>(dim));
-  }
-  if (reductionDims.empty())
-    return;
-
-  std::optional<sde::SuOutputLayoutFacts> outputLayout =
-      sde::findCompatibleSuOutputLayoutFacts(summary);
-  if (!outputLayout)
-    return;
-
-  SmallVector<int64_t, 4> ownerDims;
-  for (auto [physicalDim, loopDim] :
-       llvm::enumerate(outputLayout->physicalDimToLoopDim)) {
-    if (loopDim < 0 || static_cast<size_t>(loopDim) >= summary.iterTypes.size())
-      continue;
-    if (summary.iterTypes[loopDim] == utils::IteratorType::parallel)
-      ownerDims.push_back(static_cast<int64_t>(physicalDim));
-  }
-  if (ownerDims.empty())
-    return;
-
-  op.setPartialReductionAttr(UnitAttr::get(op.getContext()));
-  op.setPartialReductionDimsAttr(
-      buildI64ArrayAttr(op.getContext(), reductionDims));
-  op.setPartialReductionOwnerDimsAttr(
-      buildI64ArrayAttr(op.getContext(), ownerDims));
 }
 
 /// True when `root` is the output of a SIBLING `sde.su_iterate` (a distributed
@@ -1363,54 +1234,78 @@ static Value elementwiseExternalWrittenRoot(sde::SdeSuIterateOp op) {
   return ambiguous ? Value() : root;
 }
 
-/// Contraction tiling as SDE facts.
-///
-/// SDE decides — pattern-free, from iterator types and affine access shapes —
-/// to tile the reduction axis of a matmul-class scheduling unit when its
-/// contraction-dim input is a sibling-computed distributed intermediate.
-/// Detection runs in SdeLoopPatternFacts, while the loop nest is still the
-/// canonical (2-parallel, 1-reduction, 3-dim) matmul (later loop
-/// tiling/interchange splits the parallel axes and breaks canonical recovery).
-/// It commits the typed SDE facts `partialReductionDims` /
-/// `partialReductionOwnerDims`: the reduction axis and the parallel owner
-/// axes. Downstream SDE transforms must either consume those facts into
-/// physical owner-block structure before ARTS conversion or clear/reject them.
-/// The combine kind is sum, left implicit: it is
-/// unambiguous from the matmul pattern + the named reduction axis, and the
-/// su_iterate `reductionKinds` carrier is tied to `reductionAccumulators`
-/// (wrong vehicle for a matmul contraction without an accumulator carrier).
-///
-/// SDE never names the communication operation, emits no combine, and encodes
-/// no nodes/routes/concrete split factor. Later SDE structure must make
-/// the reduction explicit before ARTS realization.
-///
-/// The gate is tight: it fires only for a canonical matmul whose contraction
-/// input is a sibling distributed intermediate. Single contractions that read
-/// only host inputs, intermediates consumed on a parallel owner axis, self-Gram
-/// shapes without distinct lhs/rhs roots, and stencils do not satisfy it.
-static void
-commitContractionTilingFacts(sde::SdeSuIterateOp op,
-                             sde::SdeStructuredClassification classification) {
-  if (classification != sde::SdeStructuredClassification::matmul)
-    return;
+static sde::SdeSuIterateOp runOwnerLoopPromotions(sde::SdeSuIterateOp op) {
+  if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
+    return op;
 
-  std::optional<sde::ContractionTilingCandidate> candidate =
-      sde::findContractionTilingCandidate(op);
-  if (!candidate)
-    return;
-  if (!candidate->contractionExtent || *candidate->contractionExtent <= 0)
-    return;
-  if (!isSiblingDistributedIntermediate(op, candidate->contractionInputRoot))
-    return;
+  std::optional<sde::SuLoopAccessSummary> summary =
+      sde::analyzeSuLoopAccesses(op);
+  if (!summary) {
+    sde::SdeSuIterateOp promoted =
+        tryPromoteOpaqueElementwiseInnerOwnerLoop(op);
+    if (promoted != op)
+      ARTS_DEBUG("promoted opaque SDE elementwise owner loop");
+    return promoted;
+  }
 
-  // The reduction axis (partialReductionDims) and the matmul pattern already
-  // make the combine kind unambiguous (sum). The `reductionKinds` carrier is
-  // tied to `reductionAccumulators` in the su_iterate assembly format and is
-  // the wrong vehicle for a matmul contraction without an accumulator carrier.
-  op.setPartialReductionDimsAttr(buildI64ArrayAttr(
-      op.getContext(), {static_cast<int64_t>(candidate->reductionLoopDim)}));
-  op.setPartialReductionOwnerDimsAttr(
-      buildI64ArrayAttr(op.getContext(), candidate->parallelLoopDims));
+  sde::SdeStructuredClassification classification = summary->classification;
+  bool hasExplicitStencilFacts = false;
+  if (auto existingClassification = op.getStructuredClassification();
+      existingClassification &&
+      *existingClassification == sde::SdeStructuredClassification::stencil &&
+      op.getAccessMinOffsetsAttr() && op.getAccessMaxOffsetsAttr() &&
+      op.getOwnerDimsAttr() && op.getWriteFootprintAttr()) {
+    classification = *existingClassification;
+    hasExplicitStencilFacts = true;
+  } else if (auto existingClassification = op.getStructuredClassification();
+             existingClassification &&
+             *existingClassification ==
+                 sde::SdeStructuredClassification::elementwise_pipeline &&
+             classification ==
+                 sde::SdeStructuredClassification::elementwise) {
+    classification = sde::SdeStructuredClassification::elementwise_pipeline;
+  } else if (auto existingClassification = op.getStructuredClassification();
+             existingClassification &&
+             classification == sde::SdeStructuredClassification::reduction &&
+             *existingClassification !=
+                 sde::SdeStructuredClassification::reduction &&
+             op.getReductionAccumulators().empty()) {
+    classification = *existingClassification;
+  }
+
+  if (!hasExplicitStencilFacts &&
+      classification != sde::SdeStructuredClassification::elementwise) {
+    if (sde::SdeSuIterateOp promoted =
+            tryPromoteNestedParallelPrefix(op, *summary);
+        promoted != op) {
+      op = promoted;
+      summary = sde::analyzeSuLoopAccesses(op);
+      if (!summary)
+        return op;
+      classification = summary->classification;
+    }
+  }
+
+  if (classification == sde::SdeStructuredClassification::elementwise) {
+    sde::SdeSuIterateOp promoted =
+        tryPromoteElementwiseInnerOwnerLoop(op, *summary);
+    if (promoted != op)
+      return promoted;
+  }
+
+  if (classification == sde::SdeStructuredClassification::stencil) {
+    std::optional<sde::SuNeighborhoodAccessInfo> neighborhoodSummary =
+        sde::extractNeighborhoodAccessInfo(*summary);
+    if (neighborhoodSummary) {
+      sde::SdeSuIterateOp promoted = tryPromoteOutOfPlaceStencilOwnerLoop(
+          op, *summary, *neighborhoodSummary,
+          /*requireExistingStencilFactsMatch=*/hasExplicitStencilFacts);
+      if (promoted != op)
+        return promoted;
+    }
+  }
+
+  return op;
 }
 
 struct SdeLoopPatternFactsPass
@@ -1418,183 +1313,25 @@ struct SdeLoopPatternFactsPass
   using SdeLoopPatternFactsBase::SdeLoopPatternFactsBase;
 
   void runOnOperation() override {
-    getOperation().walk([&](sde::SdeSuIterateOp op) {
-      if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
-        return;
-
-      std::optional<sde::SuLoopAccessSummary> summary =
-          sde::analyzeSuLoopAccesses(op);
-      if (!summary) {
-        sde::SdeSuIterateOp promoted =
-            tryPromoteOpaqueElementwiseInnerOwnerLoop(op);
-        if (promoted != op) {
-          promoted.setStructuredClassificationAttr(
-              sde::SdeStructuredClassificationAttr::get(
-                  &getContext(),
-                  sde::SdeStructuredClassification::elementwise));
-          promoted.setPatternAttr(sde::SdePatternAttr::get(
-              &getContext(), sde::SdePattern::uniform));
-          ARTS_DEBUG("promoted opaque SDE elementwise owner loop");
-        }
-        return;
-      }
-
-      op->removeAttr(op.getInPlaceSafeAttrName());
-      op->removeAttr(op.getInPlaceSharedStateAttrName());
-      clearPartialReductionFacts(op);
-
-      sde::SdeStructuredClassification classification = summary->classification;
-      bool hasExplicitStencilFacts = false;
-      if (auto existingClassification = op.getStructuredClassification();
-          existingClassification &&
-          *existingClassification ==
-              sde::SdeStructuredClassification::stencil &&
-          op.getAccessMinOffsetsAttr() && op.getAccessMaxOffsetsAttr() &&
-          op.getOwnerDimsAttr() && op.getWriteFootprintAttr()) {
-        // Explicit SDE stencil facts carry the neighborhood shape. Do not let
-        // a later scalar-shape refresh
-        // rediscover a different family and lose the authored stencil meaning.
-        classification = *existingClassification;
-        hasExplicitStencilFacts = true;
-      } else if (existingClassification &&
-                 *existingClassification ==
-                     sde::SdeStructuredClassification::elementwise_pipeline &&
-                 classification ==
-                     sde::SdeStructuredClassification::elementwise) {
-        classification = sde::SdeStructuredClassification::elementwise_pipeline;
-      } else if (auto existingClassification = op.getStructuredClassification();
-                 existingClassification &&
-                 classification ==
-                     sde::SdeStructuredClassification::reduction &&
-                 *existingClassification !=
-                     sde::SdeStructuredClassification::reduction &&
-                 op.getReductionAccumulators().empty()) {
-        // Loop strip-mining preserves the original classification even when the
-        // tiled body looks reduction-shaped after block-local rewriting.
-        classification = *existingClassification;
-      }
-
-      if (!hasExplicitStencilFacts) {
-        if (sde::SdeSuIterateOp promoted =
-                tryPromoteNestedParallelPrefix(op, *summary);
-            promoted != op) {
-          op = promoted;
-          summary = sde::analyzeSuLoopAccesses(op);
-          if (!summary)
-            return;
-          classification = summary->classification;
-        }
-      }
-
-      op.setStructuredClassificationAttr(
-          sde::SdeStructuredClassificationAttr::get(&getContext(),
-                                                    classification));
-      commitPartialReductionFacts(op, *summary, classification);
-      commitContractionTilingFacts(op, classification);
-
-      if (classification == sde::SdeStructuredClassification::elementwise) {
-        sde::SdeSuIterateOp promoted =
-            tryPromoteElementwiseInnerOwnerLoop(op, *summary);
-        if (promoted != op) {
-          op = promoted;
-          summary = sde::analyzeSuLoopAccesses(op);
-          if (!summary)
-            return;
-          classification = summary->classification;
-          if (classification != sde::SdeStructuredClassification::elementwise)
-            return;
-          op.setStructuredClassificationAttr(
-              sde::SdeStructuredClassificationAttr::get(&getContext(),
-                                                        classification));
-        }
-      }
-
-      std::optional<sde::SuNeighborhoodAccessInfo> neighborhoodSummary;
-      if (classification == sde::SdeStructuredClassification::stencil) {
-        neighborhoodSummary = sde::extractNeighborhoodAccessInfo(*summary);
-        if (!neighborhoodSummary) {
-          if (hasExplicitStencilFacts) {
-            if (!op.getPatternAttr())
-              op.setPatternAttr(sde::SdePatternAttr::get(
-                  &getContext(), sde::SdePattern::stencil_tiling_nd));
-            ARTS_DEBUG("preserved explicit SDE stencil pattern on su_iterate");
-          }
-          return;
-        }
-
-        sde::SdeSuIterateOp promoted = tryPromoteOutOfPlaceStencilOwnerLoop(
-            op, *summary, *neighborhoodSummary,
-            /*requireExistingStencilFactsMatch=*/hasExplicitStencilFacts);
-        if (promoted != op) {
-          op = promoted;
-          summary = sde::analyzeSuLoopAccesses(op);
-          if (!summary)
-            return;
-          classification = summary->classification;
-          if (classification != sde::SdeStructuredClassification::stencil)
-            return;
-          op.setStructuredClassificationAttr(
-              sde::SdeStructuredClassificationAttr::get(&getContext(),
-                                                        classification));
-          neighborhoodSummary = sde::extractNeighborhoodAccessInfo(*summary);
-          if (!neighborhoodSummary)
-            return;
-        }
-
-        op.setPatternAttr(sde::SdePatternAttr::get(
-            &getContext(),
-            derivePattern(*summary, classification, neighborhoodSummary)));
-
-        if (hasExplicitStencilFacts) {
-          ARTS_DEBUG("preserved explicit SDE stencil pattern on su_iterate");
-          return;
-        }
-
-        op.setAccessMinOffsetsAttr(buildI64ArrayAttr(
-            op.getContext(), neighborhoodSummary->minOffsets));
-        op.setAccessMaxOffsetsAttr(buildI64ArrayAttr(
-            op.getContext(), neighborhoodSummary->maxOffsets));
-        op.setOwnerDimsAttr(
-            buildI64ArrayAttr(op.getContext(), neighborhoodSummary->ownerDims));
-        op.setSpatialDimsAttr(buildI64ArrayAttr(
-            op.getContext(), neighborhoodSummary->spatialDims));
-        op.setWriteFootprintAttr(buildI64ArrayAttr(
-            op.getContext(), neighborhoodSummary->writeFootprint));
-
-        auto memoryEffects = sde::collectStructuredMemoryEffects(op.getBody());
-        if (!memoryEffects.hasUnknownEffects &&
-            sde::hasInPlaceSelfRead(memoryEffects) && hasParallelLeafCu(op)) {
-          if (hasOnlyPointInPlaceSelfReads(*summary))
-            op.setInPlaceSafeAttr(UnitAttr::get(op.getContext()));
-          else
-            op.setInPlaceSharedStateAttr(UnitAttr::get(op.getContext()));
-        }
-
-        ARTS_DEBUG("committed generic SDE pattern facts on su_iterate");
-        return;
-      }
-
-      op.setPatternAttr(sde::SdePatternAttr::get(
-          &getContext(),
-          derivePattern(*summary, classification, neighborhoodSummary)));
-
-      auto memoryEffects = sde::collectStructuredMemoryEffects(op.getBody());
-      if (!memoryEffects.hasUnknownEffects &&
-          sde::hasInPlaceSelfRead(memoryEffects)) {
-        if (hasOnlyPointInPlaceSelfReads(*summary))
-          op.setInPlaceSafeAttr(UnitAttr::get(op.getContext()));
-        else if (hasParallelLeafCu(op))
-          op.setInPlaceSharedStateAttr(UnitAttr::get(op.getContext()));
-      }
-
-      ARTS_DEBUG("refreshed SDE pattern classification on su_iterate");
-    });
+    sde::promoteModuleOwnerLoops(getOperation());
   }
 };
 
 } // namespace
 
 namespace mlir::carts::sde {
+
+SdeSuIterateOp promoteSuIterateOwnerLoops(SdeSuIterateOp op) {
+  return runOwnerLoopPromotions(op);
+}
+
+void promoteModuleOwnerLoops(ModuleOp moduleOp) {
+  if (!moduleOp)
+    return;
+  moduleOp.walk([&](SdeSuIterateOp op) {
+    (void)promoteSuIterateOwnerLoops(op);
+  });
+}
 
 std::unique_ptr<Pass> createSdeLoopPatternFactsPass() {
   return std::make_unique<SdeLoopPatternFactsPass>();

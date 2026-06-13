@@ -8,7 +8,7 @@
 // SDE-LABEL: func.func @sde_to_arts_production_carrier
 // SDE: sde.su_iterate
 // SDE: sde.cu_region <parallel>
-// SDE: sde.mu_access_window write %{{.*}} : memref<4x256xf32> owner_dims(1) block_lo [0] block_hi [4] valid [256]
+// SDE: sde.mu_access_window write %{{.*}} : memref<4x256xf32>
 
 // ARTS-LABEL: func.func @sde_to_arts_production_carrier
 // ARTS: arts.db_alloc

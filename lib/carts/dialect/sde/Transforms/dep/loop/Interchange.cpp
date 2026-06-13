@@ -795,6 +795,63 @@ static bool isSameIndexPair(ValueRange indices, Value first, Value second) {
          isSameValue(indices[1], second);
 }
 
+static std::optional<int64_t> findCommittedWriteArrayId(sde::SdeSuIterateOp op,
+                                                        Value root) {
+  if (!op || op.getBody().empty() || !root)
+    return std::nullopt;
+
+  Value canonicalRoot = ValueAnalysis::stripMemrefViewOps(root);
+  std::optional<int64_t> arrayId;
+  for (sde::SdeArrayLayoutRootOp layoutRoot :
+       op.getBody().front().getOps<sde::SdeArrayLayoutRootOp>()) {
+    if (layoutRoot.getMode() != sde::SdeAccessMode::write ||
+        !ValueAnalysis::sameMemrefRoot(layoutRoot.getRoot(), canonicalRoot))
+      continue;
+    arrayId = static_cast<int64_t>(layoutRoot.getArrayId());
+    break;
+  }
+  if (!arrayId)
+    return std::nullopt;
+
+  for (const sde::LayoutGraphFact &fact :
+       sde::parseArrayLayoutFacts(op.getArrayLayoutAttr()))
+    if (fact.id == *arrayId && fact.role == sde::LayoutGraphRole::write)
+      return arrayId;
+  return std::nullopt;
+}
+
+static ArrayAttr buildRowOwnerWriteLayout(MLIRContext *ctx, int64_t arrayId,
+                                          MemRefType outputType) {
+  SmallVector<int64_t, 4> shape(outputType.getShape().begin(),
+                                outputType.getShape().end());
+  SmallVector<int64_t, 4> ownerDims{0};
+  SmallVector<int64_t, 4> blockShape(shape.begin(), shape.end());
+  blockShape[0] = 1;
+
+  Builder builder(ctx);
+  SmallVector<NamedAttribute, 8> fields;
+  fields.push_back(builder.getNamedAttr(sde::AttrNames::LayoutGraph::ArrayId,
+                                        builder.getI64IntegerAttr(arrayId)));
+  fields.push_back(builder.getNamedAttr(
+      sde::AttrNames::LayoutGraph::Role,
+      builder.getStringAttr(sde::AttrNames::LayoutGraphValues::RoleWrite)));
+  fields.push_back(builder.getNamedAttr(
+      sde::AttrNames::LayoutGraph::Kind,
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::BlockParallel)));
+  fields.push_back(builder.getNamedAttr(sde::AttrNames::LayoutGraph::OwnerDims,
+                                        buildI64ArrayAttr(ctx, ownerDims)));
+  fields.push_back(builder.getNamedAttr(sde::AttrNames::LayoutGraph::BlockShape,
+                                        buildI64ArrayAttr(ctx, blockShape)));
+  fields.push_back(builder.getNamedAttr(
+      sde::AttrNames::LayoutGraph::MuBlockCount,
+      builder.getI64IntegerAttr(
+          sde::inferCuCountFromMuPartition(shape, ownerDims, blockShape))));
+  fields.push_back(
+      builder.getNamedAttr(sde::AttrNames::LayoutGraph::CommVolumeBytes,
+                           builder.getI64IntegerAttr(0)));
+  return ArrayAttr::get(ctx, {builder.getDictionaryAttr(fields)});
+}
+
 static void commitRowOwnerShape(sde::SdeSuIterateOp op, MemRefType outputType) {
   if (!op || !outputType || outputType.getRank() < 2 ||
       !outputType.hasStaticShape())
@@ -804,13 +861,8 @@ static void commitRowOwnerShape(sde::SdeSuIterateOp op, MemRefType outputType) {
                                      outputType.getShape().end());
   blockShape[0] = 1;
 
-  op.setPhysicalOwnerDimsAttr(
-      buildI64ArrayAttr(op.getContext(), SmallVector<int64_t, 1>{0}));
-  op.setPhysicalBlockShapeAttr(buildI64ArrayAttr(op.getContext(), blockShape));
-  op.setLogicalWorkerSliceAttr(buildI64ArrayAttr(op.getContext(), blockShape));
-  op.setIterationTopologyAttr(sde::SdeIterationTopologyAttr::get(
-      op.getContext(), sde::SdeIterationTopology::owner_strip));
-  sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
+  sde::commitWriterPhysicalLayoutFacts(
+      op, SmallVector<int64_t, 1>{0}, blockShape, blockShape);
 }
 
 static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
@@ -823,32 +875,14 @@ static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
   Value lowerBound = source.getLowerBounds().front();
   Value upperBound = source.getUpperBounds().front();
   Value step = source.getSteps().front();
-  Value singleIterationUpper =
-      arith::AddIOp::create(builder, loc, lowerBound, step);
 
-  // The mirror reads transposed rows of the same matrix it writes, so it is not
-  // owner-local in the row dimension. Keep it as one coarse scheduling unit and
-  // let the heavy upper-triangle dot-product phase own the row-blocked DBs.
-  auto mirror = sde::SdeSuIterateOp::create(
-      builder, loc, /*resultTypes=*/TypeRange{}, ValueRange{lowerBound},
-      ValueRange{singleIterationUpper}, ValueRange{step},
-      source.getScheduleAttr(),
-      /*chunkSize=*/nullptr, source.getNowaitAttr(),
-      /*reductionAccumulators=*/ValueRange{},
-      /*reductionKinds=*/nullptr, /*reductionStrategy=*/nullptr,
-      /*partialReduction=*/nullptr, /*partialReductionDims=*/nullptr,
-      /*partialReductionOwnerDims=*/nullptr,
-      /*structuredClassification=*/nullptr, /*pattern=*/nullptr,
-      /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
-      /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
-      /*writeFootprint=*/nullptr, /*physicalOwnerDims=*/nullptr,
-      /*physicalBlockShape=*/nullptr, /*logicalWorkerSlice=*/nullptr,
-      /*physicalHaloShape=*/nullptr, /*iterationTopology=*/nullptr,
-      /*repetitionStructure=*/nullptr, /*asyncStrategy=*/nullptr,
-      /*distributionKind=*/nullptr,
-      /*inPlaceSafe=*/nullptr, /*inPlaceSharedState=*/nullptr,
-      /*arrayLayout=*/nullptr,
-      /*layoutsDisagree=*/nullptr, /*commVolumeBytes=*/nullptr);
+  sde::SuIterateAttrs suAttrs;
+  suAttrs.nowait = source.getNowaitAttr();
+  suAttrs.structuredClassification = sde::SdeStructuredClassificationAttr::get(
+      ctx, sde::SdeStructuredClassification::elementwise);
+  auto mirror =
+      sde::buildSuIterate(builder, loc, ValueRange{lowerBound},
+                          ValueRange{upperBound}, ValueRange{step}, suAttrs);
 
   Block &mirrorBody = sde::ensureBlock(mirror.getBody());
   while (mirrorBody.getNumArguments() < 1)
@@ -856,34 +890,41 @@ static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
 
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(&mirrorBody);
-  auto cuRegion = sde::SdeCuRegionOp::create(
-      builder, loc, /*resultTypes=*/TypeRange{},
-      sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  auto cuRegion = sde::buildCuRegion(
+      builder, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel));
   Block &compute = sde::ensureBlock(cuRegion.getBody());
   builder.setInsertionPointToStart(&compute);
 
+  Value row = mirrorBody.getArgument(0);
+  memref::StoreOp::create(builder, loc, diagonalValue, output,
+                          ValueRange{row, row});
   scf::ForOp::create(
-      builder, loc, lowerBound, upperBound, step, ValueRange{},
-      [&](OpBuilder &rowBuilder, Location rowLoc, Value row, ValueRange) {
-        memref::StoreOp::create(rowBuilder, rowLoc, diagonalValue, output,
-                                ValueRange{row, row});
-        scf::ForOp::create(
-            rowBuilder, rowLoc, lowerBound, row, step, ValueRange{},
-            [&](OpBuilder &colBuilder, Location colLoc, Value col, ValueRange) {
-              Value mirrored = memref::LoadOp::create(
-                  colBuilder, colLoc, output, ValueRange{col, row});
-              memref::StoreOp::create(colBuilder, colLoc, mirrored, output,
-                                      ValueRange{row, col});
-              scf::YieldOp::create(colBuilder, colLoc);
-            });
-        scf::YieldOp::create(rowBuilder, rowLoc);
+      builder, loc, lowerBound, row, step, ValueRange{},
+      [&](OpBuilder &colBuilder, Location colLoc, Value col, ValueRange) {
+        Value mirrored = memref::LoadOp::create(colBuilder, colLoc, output,
+                                                ValueRange{col, row});
+        memref::StoreOp::create(colBuilder, colLoc, mirrored, output,
+                                ValueRange{row, col});
+        scf::YieldOp::create(colBuilder, colLoc);
       });
   sde::SdeYieldOp::create(builder, loc, ValueRange{});
 
   builder.setInsertionPointAfter(cuRegion);
   sde::SdeYieldOp::create(builder, loc, ValueRange{});
   return mirror;
+}
+
+static void attachMirrorWriteFacts(sde::SdeSuIterateOp mirror, Value output,
+                                   MemRefType outputType, int64_t arrayId) {
+  MLIRContext *ctx = mirror.getContext();
+  mirror.setArrayLayoutAttr(buildRowOwnerWriteLayout(ctx, arrayId, outputType));
+
+  Block &body = mirror.getBody().front();
+  OpBuilder builder(&body, body.begin());
+  sde::SdeArrayLayoutRootOp::create(
+      builder, mirror.getLoc(), output,
+      sde::SdeAccessModeAttr::get(ctx, sde::SdeAccessMode::write),
+      IntegerAttr::get(IntegerType::get(ctx, 64), arrayId));
 }
 
 static bool splitSymmetricSelfGramStores(sde::SdeSuIterateOp op, Block &body) {
@@ -950,10 +991,17 @@ static bool splitSymmetricSelfGramStores(sde::SdeSuIterateOp op, Block &body) {
 
   Value output = upperStore.getMemref();
   Value diagonalValue = diagonalStore.getValueToStore();
+  std::optional<int64_t> outputArrayId = findCommittedWriteArrayId(op, output);
+  if (!outputArrayId)
+    return false;
+
   lowerStore.erase();
   diagonalStore.erase();
-  createSymmetricMirrorLoop(op, output, diagonalValue);
   commitRowOwnerShape(op, outputType);
+  sde::SdeSuIterateOp mirror =
+      createSymmetricMirrorLoop(op, output, diagonalValue);
+  attachMirrorWriteFacts(mirror, output, outputType, *outputArrayId);
+  commitRowOwnerShape(mirror, outputType);
   ARTS_INFO("LoopInterchange: split symmetric self-Gram lower-triangle store");
   return true;
 }

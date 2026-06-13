@@ -2,6 +2,7 @@
 #define CARTS_DIALECT_ARTS_UTILS_LOWERINGFACTUTILS_H
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
+#include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
@@ -154,6 +155,11 @@ bool shouldPreserveParentDepRange(const LoweringFactInfo &facts,
                                   DbAcquireOp acquire);
 
 void transferOperationFacts(Operation *source, Operation *target);
+
+/// Read physical DB block layout, preferring rank-expanded type recovery from
+/// the committed DB grid + payload element sizes over legacy grid-slot facts.
+std::optional<ArtsDbPhysicalLayout>
+readArtsDbPhysicalLayoutFromCommittedType(DbAllocOp alloc);
 
 } // namespace carts::arts
 } // namespace mlir

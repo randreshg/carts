@@ -6,9 +6,9 @@
 // boundary; ARTS must not rediscover or repair this root.
 
 // CHECK-LABEL: func.func @cu_result_root_realizes_visible_mu
-// CHECK: %[[MU:.*]] = sde.mu_alloc {{.*}}arrayId = 0 : i64{{.*}} : memref<4x16xf32>
+// CHECK: %[[MU:.*]] = sde.mu_alloc : memref<4x16xf32>
 // CHECK: sde.array_layout_root write %[[MU]] : memref<4x16xf32> array_id(0)
-// CHECK: sde.mu_access_window write %[[MU]] : memref<4x16xf32> array_id(0) owner_dims(1) block_lo [0] block_hi [4] valid [16]
+// CHECK: sde.mu_access_window write %[[MU]] : memref<4x16xf32> array_id(0)
 
 func.func @cu_result_root_realizes_visible_mu() {
   %c0 = arith.constant 0 : index

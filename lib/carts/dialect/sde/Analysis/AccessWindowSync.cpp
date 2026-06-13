@@ -6,6 +6,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/AccessWindowSync.h"
+#include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
@@ -60,15 +61,15 @@ bool collectWindows(SdeCuRegionOp cu, SmallVectorImpl<WindowFact> &out) {
     auto win = dyn_cast<SdeMuAccessWindowOp>(op);
     if (!win)
       continue;
-    std::optional<SmallVector<int64_t, 4>> lo =
-        readI64ArrayAttr(win.getBlockLo());
-    std::optional<SmallVector<int64_t, 4>> hi =
-        readI64ArrayAttr(win.getBlockHi());
-    if (!lo || !hi || lo->size() != hi->size())
+    std::optional<sde::MuAccessWindowGeometry> geom =
+        deriveMuAccessWindowGeometry(win);
+    if (!geom || geom->blockLo.size() != geom->blockHi.size())
       return false;
     out.push_back({win.getMu(), win.getMode(),
-                   SmallVector<int64_t, 2>(lo->begin(), lo->end()),
-                   SmallVector<int64_t, 2>(hi->begin(), hi->end())});
+                   SmallVector<int64_t, 2>(geom->blockLo.begin(),
+                                           geom->blockLo.end()),
+                   SmallVector<int64_t, 2>(geom->blockHi.begin(),
+                                           geom->blockHi.end())});
   }
   return true;
 }

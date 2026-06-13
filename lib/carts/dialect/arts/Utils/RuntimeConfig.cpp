@@ -155,8 +155,6 @@ bool RuntimeConfig::parseFromFile(const std::string &path) {
       routeTableSize = parseInt(val, 16);
     else if (key == "min_iterations_per_worker")
       minIterationsPerWorker = parseInt(val, 0);
-    else if (key == "min_distributed_tile_bytes")
-      minDistributedTileBytes = static_cast<int64_t>(parseInt(val, 0));
     else if (key == "core_dump")
       coreDump = parseBool(val, false);
     else if (key == "counter_folder")

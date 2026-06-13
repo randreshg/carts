@@ -93,11 +93,7 @@ struct RaiseToMuAccessWindowPass
           arrayIdAttr = builder.getI64IntegerAttr(*spec.arrayId);
         carts::sde::SdeMuAccessWindowOp::create(
             builder, mu.getLoc(), spec.mu,
-            carts::sde::SdeAccessModeAttr::get(ctx, spec.mode), arrayIdAttr,
-            builder.getI64IntegerAttr(spec.ownerDimCount),
-            builder.getI64ArrayAttr(spec.blockLo),
-            builder.getI64ArrayAttr(spec.blockHi),
-            builder.getI64ArrayAttr(spec.validExtents));
+            carts::sde::SdeAccessModeAttr::get(ctx, spec.mode), arrayIdAttr);
       }
     }
   }

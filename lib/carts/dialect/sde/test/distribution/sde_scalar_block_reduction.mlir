@@ -35,7 +35,7 @@ func.func @fp_stride_checksum_block_partials(%A: memref<1024xf64>) -> f64 {
     sde.cu_region <single> {
       memref.store %one, %A[%i] : memref<1024xf64>
       sde.yield
-    }
+    } {serialReason = #sde.serial_reason<residual_source>}
   } {physicalOwnerDims = [0], physicalBlockShape = [16]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c1024 step %c128 {
@@ -72,7 +72,7 @@ func.func @strict_fp_dense_checksum_ordered_partials(%A: memref<128xf64>) -> f64
     sde.cu_region <single> {
       memref.store %one, %A[%i] : memref<128xf64>
       sde.yield
-    }
+    } {serialReason = #sde.serial_reason<residual_source>}
   } {physicalOwnerDims = [0], physicalBlockShape = [16]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {
@@ -107,7 +107,7 @@ func.func @integer_dense_checksum_block_partials(%A: memref<128xi32>) -> i32 {
     sde.cu_region <single> {
       memref.store %one, %A[%i] : memref<128xi32>
       sde.yield
-    }
+    } {serialReason = #sde.serial_reason<residual_source>}
   } {physicalOwnerDims = [0], physicalBlockShape = [16]}
   sde.cu_region <single> {
     scf.for %i = %c0 to %c128 step %c1 {

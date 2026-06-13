@@ -3,11 +3,10 @@
 ///
 /// Committed SDE redistribution-edge query.
 ///
-/// `sde-layout-assignment` records temporary `layoutsDisagree` markers on
-/// accessing `sde.su_iterate` ops. This query resolves each marker into a
+/// Detects producer/consumer layout disagreement from committed layout facts
+/// and rank-expanded `mu_alloc` types, then resolves each edge into a
 /// concrete redistribution fact that `sde-redistribute` consumes into
-/// `sde.redist`, or a fail-closed failure with evidence. It reads committed
-/// facts verbatim and never recomputes owner dims, block shape, or family.
+/// movement ops, or a fail-closed failure with evidence.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_SDE_ANALYSIS_REDISTRIBUTIONEDGES_H
@@ -67,8 +66,7 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp);
 bool redistMatchesEdge(SdeRedistOp redist, const RedistributionEdge &edge);
 
 /// True iff an already-emitted `sde.redist` is grounded in committed SDE
-/// writer layout/provenance. Does not require the temporary `layoutsDisagree`
-/// marker to still be present.
+/// writer layout/provenance.
 bool redistGroundedInCommittedLayout(SdeRedistOp redist, std::string &reason);
 
 } // namespace mlir::carts::sde

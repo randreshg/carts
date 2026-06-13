@@ -3,6 +3,8 @@
 ///
 /// Forward constant-initialized rank-0 memref allocas across region
 /// boundaries that block standard mem2reg (omp.parallel, cu_region, etc.).
+/// It also removes exact rank-0 scratch store/load pairs left by frontend
+/// scalar temporaries, exposing the SSA value to SDE affine access analysis.
 ///
 /// For each rank-0 memref.alloca initialized with a constant C:
 ///   (A) loads inside nested regions are replaced with C if all stores
@@ -63,7 +65,7 @@ static bool isRankZeroAllocaRoot(Value memref, Value alloca) {
 }
 
 static bool getStoreToAlloca(Operation *op, Value alloca, Value &stored) {
-  auto store = dyn_cast<memref::StoreOp>(op);
+  auto store = dyn_cast_or_null<memref::StoreOp>(op);
   if (!store || !isRankZeroAllocaRoot(store.getMemref(), alloca))
     return false;
   stored = store.getValueToStore();
@@ -229,6 +231,43 @@ static void collectStructuredSameBlockLoads(
   }
 }
 
+static FailureOr<Value> findNearestStraightLineStore(memref::LoadOp load,
+                                                     Value alloca) {
+  for (Operation *cursor = load->getPrevNode(); cursor;
+       cursor = cursor->getPrevNode()) {
+    Value stored;
+    if (getStoreToAlloca(cursor, alloca, stored))
+      return stored;
+    if (isLoadFromAlloca(cursor, alloca))
+      continue;
+    if (!cursor->getRegions().empty() ||
+        hasUnexpectedAllocaOperand(cursor, alloca))
+      return failure();
+  }
+  return failure();
+}
+
+static void collectImmediateScratchLoads(
+    ModuleOp module,
+    SmallVectorImpl<std::pair<memref::LoadOp, Value>> &toForward) {
+  module.walk([&](memref::LoadOp load) {
+    if (!isScalarValueType(load.getResult().getType()))
+      return;
+
+    Value root = ValueAnalysis::stripMemrefViewOps(load.getMemref());
+    auto alloca = root ? root.getDefiningOp<memref::AllocaOp>() : nullptr;
+    if (!alloca || alloca.getType().getRank() != 0)
+      return;
+
+    FailureOr<Value> stored = findNearestStraightLineStore(load, root);
+    if (failed(stored))
+      return;
+    if ((*stored).getType() != load.getResult().getType())
+      return;
+    toForward.push_back({load, *stored});
+  });
+}
+
 /// Check whether every memref.store to \p alloca inside \p region writes
 /// a value whose constant attribute equals \p expected.
 static bool allStoresInRegionMatch(Value alloca, Region &region,
@@ -266,6 +305,14 @@ struct ScalarForwardingPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
     unsigned forwarded = 0;
+
+    SmallVector<std::pair<memref::LoadOp, Value>> immediateScratchLoads;
+    collectImmediateScratchLoads(module, immediateScratchLoads);
+    for (auto [load, value] : immediateScratchLoads) {
+      load.getResult().replaceAllUsesWith(value);
+      load.erase();
+      ++forwarded;
+    }
 
     module.walk([&](memref::AllocaOp alloca) {
       if (alloca.getType().getRank() != 0)

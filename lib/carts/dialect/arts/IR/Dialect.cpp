@@ -324,8 +324,8 @@ LogicalResult EdtOp::verify() {
         return WalkResult::interrupt();
       };
 
-      /// Stack allocas are sunk into EDTs later to keep task-local buffers
-      /// private.
+      /// Stack allocas are accepted only as input to EDT local-scratch
+      /// normalization.
       if (operand.getDefiningOp<memref::AllocaOp>())
         continue;
 

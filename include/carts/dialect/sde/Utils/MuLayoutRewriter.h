@@ -117,6 +117,11 @@ bool isBlockGridRealizable(SdeMuAllocOp muAlloc, MuPhysicalLayout &out);
 /// distinct writers disagree on the committed owner-dims/block-shape.
 SdeSuIterateOp findCommittedBlockLayoutWriter(SdeMuAllocOp muAlloc);
 
+/// Find the committed SU whose block-grid facts witness an expanded MU. Writer
+/// layout still wins; when no writer layout exists, agreed read-side
+/// block_parallel facts may witness read-only imported storage.
+SdeSuIterateOp findCommittedBlockLayoutWitness(SdeMuAllocOp muAlloc);
+
 /// True if `root` has a use a block-grid layout cannot localize — any user
 /// other than a direct `memref.load`/`store`/`dealloc`,
 /// `sde.array_layout_root` provenance, an `sde.mu_access_window` fact, or an

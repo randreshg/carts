@@ -550,6 +550,7 @@ def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
 ///===----------------------------------------------------------------------===///
 def EdtOp : Arts_Op<"edt", [
   AttrSizedOperandSegments,
+  AutomaticAllocationScope,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   SingleBlockImplicitTerminator<"arts::YieldOp">, RecursiveMemoryEffects,
   ArtsDistributedOpInterface
@@ -598,7 +599,7 @@ def EdtOp : Arts_Op<"edt", [
     4. MemRef-typed operands inside the body must be one of:
        - A block argument of this EDT (backed by a DbAcquire).
        - Defined within the EDT body region itself.
-       - An external `memref.alloca` (sunk into the EDT later in the pipeline).
+       - A task-local `memref.alloca` defined within the EDT body.
        - A `DbAcquireOp` source handle (`sourceGuid` or `sourcePtr`)
          referencing an outer-scope datablock for nested view derivation.
     5. External DbAcquire values must not be used directly inside the body;

@@ -1,25 +1,19 @@
 ///==========================================================================///
-/// File: Parallelize.cpp
+/// File: RaiseToSde.cpp
 ///
-/// SDE parallelization of embarrassingly-parallel SEQUENTIAL loop nests.
+/// SDE raise-to-sde CORE (partial Step 11): raises proven-independent
+/// sequential `scf.for` nests into bare `sde.su_iterate` + `sde.cu_region`
+/// skeletons via `buildSuIterate` / `buildCuRegion` with zero optional attrs.
 ///
-/// ConvertOpenMPToSde raises explicit OpenMP worksharing. SdeCuNormalization
-/// wraps remaining source loops as conservative `sde.cu_region <single>` work.
-/// This pass promotes only perfectly-nested rectangular loops whose memory
-/// effects prove independent:
-///   1. external array stores are indexed by the loop IVs, with no repeated
-///      physical dimension and no read from a written root;
-///   2. read-only external array inputs are allowed;
-///   3. scalar loop-carried state is limited to closed-form induction counters
-///      whose final mutable value is not observed after the loop.
-///
-/// Proven nests become `sde.su_iterate` work before LayoutAssignment.
-/// Unsupported nests stay unchanged.
+/// Subsumes the parallel-promotion slice of `sde-parallelize` and will
+/// eventually fold `sde-cu-normalization`. Re-entrancy guard: skip loop nests
+/// already under `sde.su_iterate`; allow direct children of residual
+/// `cu_region<single>` wrappers or raw host `scf.for` at function scope.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
 namespace mlir::carts::sde {
-#define GEN_PASS_DEF_PARALLELIZE
+#define GEN_PASS_DEF_RAISETOSDE
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
 
@@ -42,16 +36,13 @@ namespace mlir::carts::sde {
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallBitVector.h"
 
-ARTS_DEBUG_SETUP(sde_parallelize);
+ARTS_DEBUG_SETUP(sde_raise_to_sde);
 
 using namespace mlir;
 using namespace mlir::carts;
 
 namespace {
 
-// A recognized linear induction counter: a rank-0 scalar memref `mem`,
-// initialized to `init` before the nest, self-incremented by `step` once per
-// innermost iteration. Its value at row-major flat index t is init + step*t.
 struct Counter {
   Value mem;
   int64_t init;
@@ -59,14 +50,11 @@ struct Counter {
   Type elemType;
 };
 
-// A proven-parallel perfectly-nested rectangular scf.for nest (lb=0/step=1,
-// constant trips) whose external array stores are indexed exactly by the IVs,
-// plus any recognized linear-counter scalars to substitute.
 struct ParallelNest {
-  SmallVector<scf::ForOp, 4> loops; // outer..inner
-  SmallVector<int64_t, 4> extents;  // per-loop constant trip count
+  SmallVector<scf::ForOp, 4> loops;
+  SmallVector<int64_t, 4> extents;
   SmallVector<memref::StoreOp, 4> arrayStores;
-  SmallVector<Value, 4> roots; // stripped external memref roots written
+  SmallVector<Value, 4> roots;
   SmallVector<Counter, 2> counters;
   sde::SdeCuRegionOp enclosingSingleCu;
 };
@@ -94,7 +82,7 @@ static bool collectPerfectForChain(scf::ForOp outer,
       cur = next;
       continue;
     }
-    return true; // innermost reached
+    return true;
   }
 }
 
@@ -125,7 +113,6 @@ static std::optional<int64_t> matchConstInt(Value v) {
   return std::nullopt;
 }
 
-// A rank-0 scalar memref alloca used as scratch.
 static bool isScalarScratch(Value root) {
   auto def = root.getDefiningOp();
   if (!isa_and_nonnull<memref::AllocaOp, memref::AllocOp>(def))
@@ -166,12 +153,7 @@ static bool isLoopIndexedStore(memref::StoreOp store,
   return true;
 }
 
-// Find a constant init store to `mem` in the block containing `outer`, before
-// `outer`. Returns the init constant if exactly such a store exists.
 static std::optional<int64_t> findCounterInit(Value mem, scf::ForOp outer) {
-  // The LAST store to `mem` before the loop dominates loop entry; only it
-  // matters (earlier stores are overwritten). Require that last store to be a
-  // constant so the counter has a closed form at loop entry.
   Block *parent = outer->getBlock();
   Value lastStored;
   for (Operation &op : *parent) {
@@ -207,23 +189,22 @@ static bool rootIn(Value root, ArrayRef<Value> roots) {
   return false;
 }
 
-static bool enclosingFunctionHasSdeOp(Operation *op) {
-  auto fn = op ? op->getParentOfType<func::FuncOp>() : func::FuncOp();
-  if (!fn)
-    return false;
-  bool found = false;
-  fn.walk([&](Operation *nested) {
-    if (sde::isSdeDialectOp(nested)) {
-      found = true;
-      return WalkResult::interrupt();
-    }
-    return WalkResult::advance();
-  });
-  return found;
+/// Re-entrancy guard: skip nests already under `su_iterate`. Allow direct
+/// children of residual `cu_region<single>` or raw host loops at function scope.
+static bool nestHasReentrantAncestor(scf::ForOp outer) {
+  if (outer->getParentOfType<sde::SdeSuIterateOp>())
+    return true;
+  if (auto cu = outer->getParentOfType<sde::SdeCuRegionOp>()) {
+    if (outer->getParentOp() == cu.getOperation() &&
+        cu.getKind() == sde::SdeCuKind::single && cu.getIterArgs().empty())
+      return false;
+    return true;
+  }
+  return false;
 }
 
 static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
-  if (outer->getParentOfType<sde::SdeSuIterateOp>())
+  if (nestHasReentrantAncestor(outer))
     return std::nullopt;
   if (isa<scf::ForOp>(outer->getParentOp()))
     return std::nullopt;
@@ -234,8 +215,6 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
         cu.getKind() != sde::SdeCuKind::single || !cu.getIterArgs().empty())
       return std::nullopt;
     nest.enclosingSingleCu = cu;
-  } else if (!enclosingFunctionHasSdeOp(outer.getOperation())) {
-    return std::nullopt;
   }
 
   collectPerfectForChain(outer, nest.loops);
@@ -252,11 +231,6 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
 
   Block &innermost = nest.loops.back().getRegion().front();
 
-  // Classify every op in the innermost body. Allowed:
-  //  - one or more stores to EXTERNAL arrays at indices == IVs
-  //  - per counter: a self-increment store to a rank-0 scratch scalar
-  //  - loads from read-only external arrays, pure arith/math, scf.if/yield
-  // Reject anything else (calls, unknown effects, extra array stores, etc.).
   SmallVector<memref::StoreOp, 4> stores;
   SmallVector<memref::LoadOp, 8> loads;
   bool rejected = false;
@@ -279,14 +253,12 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
   if (rejected)
     return std::nullopt;
 
-  // Separate array stores from counter increment stores.
-  llvm::SmallDenseMap<Value, int64_t> counterStep; // counter mem -> step
+  llvm::SmallDenseMap<Value, int64_t> counterStep;
   std::optional<SmallVector<int64_t, 4>> selectedOwnerDims;
   std::optional<SmallVector<int64_t, 4>> selectedShape;
   for (memref::StoreOp st : stores) {
     Value r = ValueAnalysis::stripMemrefViewOps(st.getMemref());
     if (isScalarScratch(r)) {
-      // Must be a self-increment: store(addi(load(r), C), r) (or C+load).
       auto add = st.getValue().getDefiningOp<arith::AddIOp>();
       if (!add)
         return std::nullopt;
@@ -302,7 +274,7 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
       if (!kc)
         return std::nullopt;
       if (counterStep.count(r))
-        return std::nullopt; // more than one increment store -> bail
+        return std::nullopt;
       counterStep[r] = *kc;
       continue;
     }
@@ -339,12 +311,10 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
   if (nest.arrayStores.empty())
     return std::nullopt;
 
-  // No load may read the written array root (no cross-iteration RAW/WAR).
-  // Build the recognized-counter set; loads of counters are fine (substituted).
   for (auto &kv : counterStep) {
     std::optional<int64_t> init = findCounterInit(kv.first, outer);
     if (!init)
-      return std::nullopt; // counter without a provable constant init
+      return std::nullopt;
     if (!counterUsesAreLoopLocal(kv.first, outer))
       return std::nullopt;
     auto mt = dyn_cast<MemRefType>(kv.first.getType());
@@ -358,8 +328,6 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
         return true;
     return false;
   };
-  // Read-only array inputs are legal. Loads from any written root are rejected
-  // because they would need a data-dependence or reduction carrier.
   for (memref::LoadOp ld : loads) {
     Value r = ValueAnalysis::stripMemrefViewOps(ld.getMemref());
     if (!isCounter(r))
@@ -371,8 +339,6 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
   return nest;
 }
 
-// Compute the per-dim row-major linear stride: stride[d] =
-// prod(extents[d+1..]).
 static int64_t linearStride(ArrayRef<int64_t> extents, unsigned d) {
   int64_t s = 1;
   for (unsigned k = d + 1; k < extents.size(); ++k)
@@ -620,13 +586,6 @@ static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
 
   OpBuilder::InsertionGuard ig(builder);
   builder.setInsertionPointToStart(&dst);
-  // The enclosing nest was proven loop-carried-dependence-free by
-  // matchParallelNest (the sole caller path), so the leaf CU is genuinely
-  // parallel. Stamping `single` here silently discarded that proof:
-  // hasParallelLeafCu (SdeLoopPatternFacts) only sees `parallel`, so the nest
-  // was invisible to pattern-facts -> interchange -> tiling -> fusion ->
-  // layout-assignment. The kind is proof-derived. (Sibling/in-place residual
-  // serial wrappers at :438/:478 stay `single` -- they are not proven nests.)
   auto cuRegion = sde::buildCuRegion(
       builder, loc,
       sde::SdeCuKindAttr::get(builder.getContext(), sde::SdeCuKind::parallel));
@@ -669,9 +628,6 @@ static void substituteCounters(ParallelNest &nest, sde::SdeSuIterateOp suIter,
     }
   }
 
-  // Replace counter loads with init + step * (row-major linear index), and
-  // erase counter increment stores. The IVs are all in scope at the innermost
-  // body.
   for (const Counter &c : nest.counters) {
     SmallVector<memref::LoadOp, 4> ldToReplace;
     SmallVector<memref::StoreOp, 4> stToErase;
@@ -686,7 +642,6 @@ static void substituteCounters(ParallelNest &nest, sde::SdeSuIterateOp suIter,
     });
     for (memref::LoadOp ld : ldToReplace) {
       OpBuilder b(ld);
-      // lin = sum_d dimIv[d] * stride[d]
       Value lin = createConstantIndex(b, loc, 0);
       for (unsigned d = 0; d < dimIv.size(); ++d) {
         int64_t s = linearStride(nest.extents, d);
@@ -748,12 +703,12 @@ static std::optional<ParallelNest> findNextParallelNest(ModuleOp module) {
   return next;
 }
 
-struct ParallelizePass : public sde::impl::ParallelizeBase<ParallelizePass> {
+struct RaiseToSdePass : public sde::impl::RaiseToSdeBase<RaiseToSdePass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     OpBuilder builder(&getContext());
     while (std::optional<ParallelNest> nest = findNextParallelNest(module)) {
-      ARTS_DEBUG("Parallelizing+raising legal host/init/check nest");
+      ARTS_DEBUG("raise-to-sde: raising proven-independent host loop nest");
       raiseNest(*nest, builder);
     }
   }
@@ -763,8 +718,8 @@ struct ParallelizePass : public sde::impl::ParallelizeBase<ParallelizePass> {
 
 namespace mlir::carts::sde {
 
-std::unique_ptr<Pass> createParallelizePass() {
-  return std::make_unique<ParallelizePass>();
+std::unique_ptr<Pass> createRaiseToSdePass() {
+  return std::make_unique<RaiseToSdePass>();
 }
 
 } // namespace mlir::carts::sde

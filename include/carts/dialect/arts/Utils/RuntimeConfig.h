@@ -45,14 +45,6 @@ public:
   /// Optional compiler scheduling floor for SDE task grain.
   int getMinIterationsPerWorker() const { return minIterationsPerWorker; }
 
-  /// Optional output-tile byte floor for distributed layouts (0 = disabled).
-  /// Compiler tools may inject this from a CLI flag before passes run; the
-  /// arts.cfg parser also accepts `min_distributed_tile_bytes = N`.
-  int64_t getMinDistributedTileBytes() const { return minDistributedTileBytes; }
-  void setMinDistributedTileBytes(int64_t bytes) {
-    minDistributedTileBytes = bytes;
-  }
-
   /// Execution mode derived from runtime-visible worker concurrency.
   ExecutionMode getExecutionMode() const {
     if (nodeCount > 1)
@@ -114,7 +106,6 @@ private:
   int workerInitDequeSize = 2048;
   int routeTableSize = 16;
   int minIterationsPerWorker = 0;
-  int64_t minDistributedTileBytes = 0;
   bool coreDump = false;
 
   /// Performance Monitoring

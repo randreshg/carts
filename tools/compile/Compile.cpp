@@ -159,16 +159,10 @@ static cl::opt<bool> RuntimeStaticWorkers(
              "worker count when the module embeds a valid ARTS config"),
     cl::init(false));
 
-/// Output-tile byte floor for distributed layouts. When > 0, distribution
-/// writers coarsen the per-EDT output tile until it carries at least this
-/// many bytes; reduces remote DB-acquire round-trips on RTT-bound multinode
-/// runs at the cost of per-node load-balance slack. 0 (default) preserves the
-/// fine-grained block shape selected by SDE.
-static cl::opt<int64_t> MinDistributedTileBytes(
-    "min-distributed-tile-bytes",
-    cl::desc("Per-EDT output-tile byte floor for SDE distribution transforms; "
-             "0 disables (default)."),
-    cl::init(0));
+static cl::opt<bool> SdeUseLegacyParallelize(
+    "sde-use-legacy-parallelize",
+    cl::desc("Run legacy sde-parallelize after raise-to-sde (debug/fallback)"),
+    cl::init(false));
 
 ///===----------------------------------------------------------------------===///
 /// Pipeline Stop Options
@@ -274,17 +268,15 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 30> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 27> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
+    "RaiseToSde",
     "SdeCuNormalization",
     "Parallelize",
-    "SdeLoopPatternFacts",
     "LayoutAssignment",
     "LoopInterchange",
     "Tiling",
     "ElementwiseFusion",
-    "ScheduleRefinement",
-    "ChunkOpt",
     "ReductionStrategy",
     "DistributionPlanning",
     "IterationSpaceDecomposition",
@@ -292,7 +284,6 @@ static const std::array<llvm::StringLiteral, 30> kSdePlanningPasses = {
     "MemoryUnitRealization",
     "SdeAtomicReductionRealization",
     "SdeCuNormalization",
-    "VerifySdePhysicalConsistency",
     "SdeRankExpandMu",
     "SdeScalarBlockReduction",
     "VerifySdeMuLayout",
@@ -335,12 +326,13 @@ static const std::array<llvm::StringLiteral, 13> kPostDbRefinementPasses = {
 static const std::array<llvm::StringLiteral, 6> kLateConcurrencyCleanupPasses =
     {"Hoisting",         "PolygeistCanonicalize",   "CSE(arts.edt)",
      "EdtAllocaSinking", "ArtsDeadCodeElimination", "Mem2Reg"};
-static const std::array<llvm::StringLiteral, 7> kEpochsPasses = {
+static const std::array<llvm::StringLiteral, 8> kEpochsPasses = {
     "PolygeistCanonicalize",
     "CreateEpochs",
     "EpochAmortizeRepeatedLoop",
     "EpochTailContinuation",
     "PolygeistCanonicalize",
+    "EdtAllocaSinking",
     "DbCommitDistributedDeps (conditional)",
     "VerifyArtsCdag"};
 static const std::array<llvm::StringLiteral, 23> kPreLoweringPasses = {
@@ -1132,22 +1124,18 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
 void buildSdePlanningPipeline(PassManager &pm,
                               sde::SDECostModel *costModel = nullptr) {
   pm.addPass(sde::createConvertOpenMPToSdePass());
-  // Normalize non-OpenMP source work into CUs before proving host/init/check
-  // loop independence. Parallelize then raises legal single-CU loop nests into
-  // SDE scheduling units before LayoutAssignment can choose block-native facts.
+  // raise-to-sde CORE promotes proven-independent host nests before residual
+  // serial wrapping; legacy sde-parallelize remains behind a debug flag.
+  pm.addPass(sde::createRaiseToSdePass());
   pm.addPass(sde::createSdeCuNormalizationPass());
-  pm.addPass(sde::createParallelizePass());
-  // SdeLoopPatternFacts commits memref/ND pattern facts before dep/effect
-  // transforms query them.
-  pm.addPass(sde::createSdeLoopPatternFactsPass());
+  if (SdeUseLegacyParallelize)
+    pm.addPass(sde::createParallelizePass());
   // Module-scoped per-array BLOCK layout assignment. Runs before
   // Tiling/Interchange split the parallel axes.
   pm.addPass(sde::createLayoutAssignmentPass(costModel));
   pm.addPass(sde::createLoopInterchangePass());
   pm.addPass(sde::createTilingPass(costModel));
   pm.addPass(sde::createElementwiseFusionPass());
-  pm.addPass(sde::createScheduleRefinementPass(costModel));
-  pm.addPass(sde::createChunkOptPass(costModel));
   pm.addPass(sde::createReductionStrategyPass(costModel));
   pm.addPass(sde::createDistributionPlanningPass(costModel));
   pm.addPass(sde::createIterationSpaceDecompositionPass());
@@ -1155,12 +1143,6 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createMemoryUnitRealizationPass());
   pm.addPass(sde::createSdeAtomicReductionRealizationPass());
   pm.addPass(sde::createSdeCuNormalizationPass());
-  // Pre-window physical consistency gate: committed physical facts must agree
-  // with arrayLayout and SU schedule BEFORE the rank-expand transform consumes
-  // them. A stale grain (the jacobi-for row-strip-over-owner-tile class) fails
-  // closed here instead of being realized into a coarse grid or silently bailed
-  // to flat by SdeRankExpandMu.
-  pm.addPass(sde::createVerifySdePhysicalConsistencyPass());
   // Each real SDE grain transform is immediately gated by its companion
   // verifier in the production order, so a stale or mismatched physical grain
   // fails closed at the SDE boundary instead of being repaired downstream.
@@ -1260,6 +1242,7 @@ void buildEpochsPipeline(PassManager &pm, bool enableDistributedDb) {
   pm.addPass(arts::createEpochAmortizeRepeatedLoopPass());
   pm.addPass(arts::createEpochTailContinuationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createEdtAllocaSinkingPass());
   /// Commit distributed acquire DB modes / halo after epoch shaping, then
   /// verify the canonical-owner DAG fails closed before pre-lowering.
   if (enableDistributedDb) {
@@ -1596,9 +1579,6 @@ buildPassManager(ModuleOp module, MLIRContext &context,
                "or place a valid arts.cfg in the working directory.");
     return failure();
   }
-
-  if (MinDistributedTileBytes.getNumOccurrences() > 0)
-    machine.setMinDistributedTileBytes(MinDistributedTileBytes);
 
   arts::ARTSCostModel costModel(machine);
 

@@ -96,26 +96,26 @@ static bool isPrivateAllocationForSchedulingUnit(Value root,
 }
 
 static bool hasPhysicalOwnerSliceLayout(sde::SdeSuIterateOp op) {
-  return op.getPhysicalBlockShapeAttr() || op.getPhysicalOwnerDimsAttr();
-}
-
-static bool hasSameI64Values(ArrayAttr attr, ArrayRef<int64_t> values) {
-  std::optional<SmallVector<int64_t, 4>> attrValues = readI64ArrayAttr(attr);
-  return attrValues && ArrayRef<int64_t>(*attrValues) == values;
+  return sde::hasCommittedWriterBlockLayout(op);
 }
 
 static std::optional<sde::LoopIndexedOutputShape>
-getUnclassifiedOutputOnlyOwnerSliceLayout(sde::SdeSuIterateOp op) {
+getUnclassifiedOwnerSliceLayout(sde::SdeSuIterateOp op) {
   if (!op || !hasPhysicalOwnerSliceLayout(op) ||
       op.getStructuredClassificationAttr())
     return std::nullopt;
 
-  std::optional<sde::LoopIndexedOutputShape> outputShape =
-      sde::findConsistentLoopIndexedOutputShapeWithOwnerDims(op);
-  if (!outputShape || outputShape->ownerPhysicalDims.empty())
+  std::optional<SmallVector<int64_t, 4>> committedOwnerDims;
+  if (std::optional<sde::LayoutGraphFact> writeLayout =
+          sde::findSingleCommittedWriterBlockLayout(op))
+    committedOwnerDims = writeLayout->ownerDims;
+  else
+    committedOwnerDims = readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
+  if (!committedOwnerDims || committedOwnerDims->empty())
     return std::nullopt;
-  if (!hasSameI64Values(op.getPhysicalOwnerDimsAttr(),
-                        outputShape->ownerPhysicalDims))
+
+  SmallVector<Value, 4> ownerIndexValues = sde::collectOwnerIndexValues(op);
+  if (ownerIndexValues.size() < committedOwnerDims->size())
     return std::nullopt;
 
   sde::StructuredMemoryEffectSummary effects =
@@ -130,13 +130,54 @@ getUnclassifiedOutputOnlyOwnerSliceLayout(sde::SdeSuIterateOp op) {
       return std::nullopt;
   }
 
-  for (Value written : effects.writes) {
-    if (sde::isDefinedInside(op.getOperation(), written))
-      continue;
-    if (effects.reads.contains(written))
-      return std::nullopt;
-  }
+  bool rejected = false;
+  std::optional<sde::LoopIndexedOutputShape> outputShape;
+  op.getBody().walk([&](memref::StoreOp storeOp) {
+    if (rejected)
+      return;
+    Value base = ValueAnalysis::stripMemrefViewOps(storeOp.getMemref());
+    if (!base || sde::isDefinedInside(op.getOperation(), base))
+      return;
+    auto memRefType = dyn_cast<MemRefType>(base.getType());
+    if (!memRefType || memRefType.getRank() == 0 ||
+        !memRefType.hasStaticShape() || storeOp.getIndices().empty()) {
+      rejected = true;
+      return;
+    }
 
+    if (storeOp.getIndices().size() <
+        static_cast<size_t>(memRefType.getRank())) {
+      rejected = true;
+      return;
+    }
+    for (auto [slot, physicalDim] : llvm::enumerate(*committedOwnerDims)) {
+      if (physicalDim < 0 ||
+          static_cast<size_t>(physicalDim) >= storeOp.getIndices().size()) {
+        rejected = true;
+        return;
+      }
+      if (!sde::isOwnerDependentIndex(storeOp.getIndices()[physicalDim],
+                                      ownerIndexValues[slot])) {
+        rejected = true;
+        return;
+      }
+    }
+
+    SmallVector<int64_t, 4> shape(memRefType.getShape().begin(),
+                                  memRefType.getShape().end());
+    if (!outputShape) {
+      outputShape = sde::LoopIndexedOutputShape{
+          base, std::move(shape),
+          SmallVector<int64_t, 4>(committedOwnerDims->begin(),
+                                  committedOwnerDims->end())};
+      return;
+    }
+    if (outputShape->root != base || outputShape->shape != shape)
+      rejected = true;
+  });
+
+  if (rejected || !outputShape)
+    return std::nullopt;
   return outputShape;
 }
 
@@ -146,7 +187,7 @@ static bool canRealizeCommittedOwnerSlices(sde::SdeSuIterateOp op) {
 
   auto classification = op.getStructuredClassification();
   if (!classification)
-    return getUnclassifiedOutputOnlyOwnerSliceLayout(op).has_value();
+    return getUnclassifiedOwnerSliceLayout(op).has_value();
 
   switch (*classification) {
   case sde::SdeStructuredClassification::matmul:
@@ -180,15 +221,9 @@ static void collectSchedulingUnitMemrefRoots(
   if (!op || !canRealizeCommittedOwnerSlices(op))
     return;
 
-  bool collectWritesOnly =
-      !op.getStructuredClassificationAttr() &&
-      getUnclassifiedOutputOnlyOwnerSliceLayout(op).has_value();
-
   op.getBody().walk([&](Operation *nested) {
     Value memref;
     if (auto load = dyn_cast<memref::LoadOp>(nested)) {
-      if (collectWritesOnly)
-        return;
       if (isa<MemRefType>(load.getResult().getType()))
         return;
       memref = load.getMemref();
@@ -290,31 +325,6 @@ static void foldMuAllocNullChecks(Value muMemref, PatternRewriter &rewriter) {
   }
 }
 
-static std::optional<int64_t>
-lookupCommittedArrayId(Value root,
-                       const llvm::DenseMap<Value, int64_t> &arrayIdByRoot) {
-  root = ValueAnalysis::stripMemrefViewOps(root);
-  if (!root)
-    return std::nullopt;
-  if (auto it = arrayIdByRoot.find(root); it != arrayIdByRoot.end())
-    return it->second;
-  for (const auto &entry : arrayIdByRoot)
-    if (ValueAnalysis::sameMemrefRoot(entry.first, root))
-      return entry.second;
-  return std::nullopt;
-}
-
-static llvm::DenseMap<Value, int64_t> collectExplicitArrayIds(Operation *root) {
-  llvm::DenseMap<Value, int64_t> arrayIdByRoot;
-  root->walk([&](sde::SdeArrayLayoutRootOp provenance) {
-    Value memref = ValueAnalysis::stripMemrefViewOps(provenance.getRoot());
-    if (!memref)
-      return;
-    arrayIdByRoot.try_emplace(memref, provenance.getArrayId());
-  });
-  return arrayIdByRoot;
-}
-
 static Operation *findMuAllocInsertionPoint(Operation *def) {
   Operation *insertionPoint = def;
   for (Operation *parent = def->getParentOp(); parent;
@@ -338,7 +348,6 @@ findDominanceSafeMuAllocInsertionPoint(Operation *def,
 }
 
 static FailureOr<Value> createMuAllocForRoot(Value root,
-                                             std::optional<int64_t> arrayId,
                                              ArrayRef<Value> aliases,
                                              PatternRewriter &rewriter) {
   Operation *def = root.getDefiningOp();
@@ -363,8 +372,6 @@ static FailureOr<Value> createMuAllocForRoot(Value root,
   rewriter.setInsertionPoint(insertionPoint);
   auto muAlloc = sde::SdeMuAllocOp::create(rewriter, def->getLoc(), memrefType,
                                            ValueRange(dynamicSizes));
-  if (arrayId)
-    muAlloc.setArrayIdAttr(rewriter.getI64IntegerAttr(*arrayId));
 
   DenseMap<Type, Value> replacementByType;
   auto getReplacementForType = [&](Type type) -> FailureOr<Value> {
@@ -438,25 +445,14 @@ struct MemoryUnitRealizationPass
       return;
     }
 
-    llvm::DenseMap<Value, int64_t> arrayIdByRoot =
-        collectExplicitArrayIds(module);
-
     PatternRewriter rewriter(module.getContext());
     for (Value root : roots) {
       if (!isMuRealizableAllocation(root))
         continue;
-      std::optional<int64_t> arrayId =
-          lookupCommittedArrayId(root, arrayIdByRoot);
       SmallVector<Value, 4> aliases;
-      if (auto it = aliasesByRoot.find(root); it != aliasesByRoot.end()) {
+      if (auto it = aliasesByRoot.find(root); it != aliasesByRoot.end())
         aliases.append(it->second.begin(), it->second.end());
-        for (Value alias : it->second) {
-          if (arrayId)
-            break;
-          arrayId = lookupCommittedArrayId(alias, arrayIdByRoot);
-        }
-      }
-      if (failed(createMuAllocForRoot(root, arrayId, aliases, rewriter))) {
+      if (failed(createMuAllocForRoot(root, aliases, rewriter))) {
         if (Operation *def = root.getDefiningOp())
           def->emitError("failed to realize SDE memory unit");
         signalPassFailure();

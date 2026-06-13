@@ -23,18 +23,28 @@
 
 namespace mlir::carts::sde {
 
-/// The canonical per-CU access window for one rank-expanded MU, in block-grid
-/// coordinates. All values are static.
+/// Block-grid coordinates derived from a rank-expanded `mu_alloc` memref type.
+/// `validExtents` are the trailing tile dims (== committed blockExtent on owner
+/// dims), never halo-inflated.
+struct MuAccessWindowGeometry {
+  int64_t ownerDimCount = 0;
+  llvm::SmallVector<int64_t, 2> blockLo;
+  llvm::SmallVector<int64_t, 2> blockHi;
+  llvm::SmallVector<int64_t, 4> validExtents;
+};
+
+/// Derive access-window geometry from the committed rank-expanded MU type.
+/// Returns whole-object geometry (`ownerDimCount == 0`) when the MU is not a
+/// recognized block-grid expansion.
+std::optional<MuAccessWindowGeometry>
+deriveMuAccessWindowGeometry(SdeMuAccessWindowOp window);
+
+/// The canonical per-CU access window for one rank-expanded MU.
 struct RaisedWindowSpec {
   SdeCuRegionOp cu; ///< the CU this window describes
   mlir::Value mu;   ///< the rank-expanded mu_alloc result
   SdeAccessMode mode = SdeAccessMode::read; ///< read, write, or readwrite
   std::optional<int64_t> arrayId; ///< committed SDE array identity, if known
-  int64_t ownerDimCount = 0;      ///< leading grid (owner) dims
-  llvm::SmallVector<int64_t, 2> blockLo; ///< per-owner-dim block lo (==0)
-  llvm::SmallVector<int64_t, 2>
-      blockHi; ///< per-owner-dim block hi (grid count)
-  llvm::SmallVector<int64_t, 4> validExtents; ///< per-logical-dim tile extent
 };
 
 /// Query the access windows for one `sde.mu_alloc`. One window is returned for

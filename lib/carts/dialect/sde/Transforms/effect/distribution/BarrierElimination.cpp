@@ -137,12 +137,12 @@ static bool isUniformRepeatableStage(sde::SdeSuIterateOp op) {
   if (!op || !op.getReductionAccumulators().empty())
     return false;
 
-  if (auto family = op.getPattern()) {
+  if (auto family = sde::querySuPattern(op)) {
     return *family == sde::SdePattern::uniform ||
            *family == sde::SdePattern::elementwise_pipeline;
   }
 
-  auto classification = op.getStructuredClassification();
+  auto classification = sde::queryStructuredClassification(op);
   return classification &&
          (*classification == sde::SdeStructuredClassification::elementwise ||
           *classification ==
@@ -154,31 +154,20 @@ isOutOfPlaceStencilStage(sde::SdeSuIterateOp op,
                          const sde::StructuredMemoryEffectSummary &effects) {
   if (!op || effects.hasUnknownEffects)
     return false;
-  auto classification = op.getStructuredClassification();
+  auto classification = sde::queryStructuredClassification(op);
   if (!classification ||
       *classification != sde::SdeStructuredClassification::stencil)
     return false;
   if (sde::hasInPlaceSelfRead(effects))
     return false;
-  auto family = op.getPattern();
+  auto family = sde::querySuPattern(op);
   return !family || *family == sde::SdePattern::stencil_tiling_nd ||
          *family == sde::SdePattern::alternating_buffer_stencil;
 }
 
 static bool isWavefrontFrontierStage(sde::SdeSuIterateOp op) {
-  auto family = op.getPattern();
+  auto family = sde::querySuPattern(op);
   return family && *family == sde::SdePattern::wavefront_2d;
-}
-
-static void commitRepeatedTimestepStage(sde::SdeSuIterateOp op) {
-  if (!op)
-    return;
-  if (!op.getRepetitionStructureAttr())
-    op.setRepetitionStructureAttr(sde::SdeRepetitionStructureAttr::get(
-        op.getContext(), sde::SdeRepetitionStructure::full_timestep));
-  if (!op.getAsyncStrategyAttr())
-    op.setAsyncStrategyAttr(sde::SdeAsyncStrategyAttr::get(
-        op.getContext(), sde::SdeAsyncStrategy::advance_stage));
 }
 
 static bool
@@ -251,7 +240,7 @@ static bool haveSdeApprovedTiledTimestepPlan(sde::SdeSuIterateOp lhs,
 static bool isPipelineableStructuredClassification(sde::SdeSuIterateOp op) {
   if (!op || !op.getReductionAccumulators().empty())
     return false;
-  auto classification = op.getStructuredClassification();
+  auto classification = sde::queryStructuredClassification(op);
   if (!classification)
     return false;
   switch (*classification) {
@@ -480,8 +469,6 @@ static bool isTimestepInterstitialOp(Operation *op) {
 static void commitAlternatingBufferTimestepStages(
     sde::SdeSuIterateOp predecessor, sde::SdeSuIterateOp successor,
     bool predecessorIsStencil, bool successorIsStencil) {
-  commitRepeatedTimestepStage(predecessor);
-  commitRepeatedTimestepStage(successor);
   if (predecessorIsStencil)
     predecessor.setPatternAttr(sde::SdePatternAttr::get(
         predecessor.getContext(), sde::SdePattern::alternating_buffer_stencil));
@@ -508,8 +495,6 @@ static bool commitTimestepStagesIfRecognized(
       allowUniformUniformPlan &&
       writesIntersectReads(predEffects, succEffects) &&
       haveCompatiblePhysicalTimestepPlan(predecessor, successor)) {
-    commitRepeatedTimestepStage(predecessor);
-    commitRepeatedTimestepStage(successor);
     return true;
   }
 
@@ -522,8 +507,6 @@ static bool commitTimestepStagesIfRecognized(
 
   if (predStencil && succStencil && compatibleIterationPlan &&
       allowStencilStencilPlan) {
-    commitRepeatedTimestepStage(predecessor);
-    commitRepeatedTimestepStage(successor);
     return true;
   }
 
@@ -543,8 +526,8 @@ static bool commitAdjacentTimestepPair(Operation *predOp, Operation *succOp) {
   sde::SdeSuIterateOp successor = findSuIterate(succOp);
   if (!predecessor || !successor)
     return false;
-  if (!predecessor.getStructuredClassificationAttr() ||
-      !successor.getStructuredClassificationAttr())
+  if (!sde::queryStructuredClassification(predecessor) ||
+      !sde::queryStructuredClassification(successor))
     return false;
 
   auto predEffects =
@@ -629,8 +612,8 @@ struct BarrierEliminationPass
         return;
 
       // Both must have classification (analyzed)
-      if (!predecessor.getStructuredClassificationAttr() ||
-          !successor.getStructuredClassificationAttr())
+      if (!sde::queryStructuredClassification(predecessor) ||
+          !sde::queryStructuredClassification(successor))
         return;
 
       // Collect root-level memory accesses on both sides of the barrier.

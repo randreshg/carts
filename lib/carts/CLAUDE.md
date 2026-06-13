@@ -15,7 +15,7 @@ dialect/                     MLIR dialects (one subdirectory per CARTS dialect)
                               ScalarForwarding
       dep/loop/              LoopInterchange, Tiling, IterationSpaceDecomposition
       dep/fusion/            ElementwiseFusion
-      effect/scheduling/     ScheduleRefinement, ChunkOpt, ReductionStrategy
+      effect/scheduling/     ReductionStrategy, AtomicReductionRealization
       effect/distribution/   DistributionPlanning, BarrierElimination
     Utils/                   SDE-specific utilities (SDECostModel)
     Verify/                  VerifySdeLowered

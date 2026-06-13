@@ -37,9 +37,12 @@ namespace mlir::carts::sde {
 } // namespace mlir::carts::sde
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -61,6 +64,31 @@ static bool hasCuAncestor(Operation *op) {
     if (isCuOp(parent))
       return true;
   return false;
+}
+
+// Conservatively provably single-trip: every (lb,ub,step) constant, ceilDiv
+// trip count <= 1. Any dynamic bound is treated as multi-trip.
+static bool suIterateIsProvablySingleTrip(sde::SdeSuIterateOp it) {
+  auto lbs = it.getLowerBounds();
+  auto ubs = it.getUpperBounds();
+  auto steps = it.getSteps();
+  if (lbs.empty() || lbs.size() != ubs.size() || lbs.size() != steps.size())
+    return false;
+  for (auto [lb, ub, step] : llvm::zip(lbs, ubs, steps)) {
+    llvm::APInt lbv, ubv, stepv;
+    if (!matchPattern(lb, m_ConstantInt(&lbv)) ||
+        !matchPattern(ub, m_ConstantInt(&ubv)) ||
+        !matchPattern(step, m_ConstantInt(&stepv)))
+      return false;
+    if (stepv.isNonPositive())
+      return false;
+    llvm::APInt span = ubv - lbv;
+    if (span.isNonPositive())
+      continue;
+    if (((span + stepv - 1).sdiv(stepv)).sgt(1))
+      return false;
+  }
+  return true;
 }
 
 /// Per-CU set of MU storage roots read / written, derived locally from
@@ -234,6 +262,38 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
                  "ordering, or sde.su_barrier";
           failed = true;
         }
+    });
+
+    // Discarded-parallelism guard (companion to Parallelize.cpp:638): a
+    // source-compute cu_region<single> directly inside a multi-trip su_iterate
+    // must carry a serial_reason license; absence is the :638 regression shape.
+    // Gauss-Seidel / in-place self-read is licensed by SU-level inPlaceSharedState.
+    module.walk([&](sde::SdeSuIterateOp it) {
+      if (suIterateIsProvablySingleTrip(it) || it.getInPlaceSharedStateAttr() ||
+          it.getBody().empty())
+        return;
+      for (Operation &child : it.getBody().front()) {
+        auto cu = dyn_cast<sde::SdeCuRegionOp>(&child);
+        if (!cu || cu.getKind() != sde::SdeCuKind::single ||
+            cu.getSerialReasonAttr())
+          continue;
+        bool hasSource = false;
+        cu.getBody().walk([&](Operation *inner) {
+          if (isSourceComputeOp(inner)) {
+            hasSource = true;
+            return WalkResult::interrupt();
+          }
+          return WalkResult::advance();
+        });
+        if (!hasSource)
+          continue;
+        cu.emitOpError()
+            << "is a serial cu_region<single> directly inside a multi-trip "
+               "sde.su_iterate but carries no serial_reason license; Parallelize "
+               "must promote a proven-independent nest to <parallel> "
+               "(Parallelize.cpp:638) or the producer must assert a serial_reason";
+        failed = true;
+      }
     });
 
     if (failed)

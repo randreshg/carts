@@ -9,6 +9,7 @@
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/StencilAttributes.h"
+#include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -49,7 +50,11 @@ static void mergeDbGridSpatialFacts(Operation *op, LoweringFactInfo &info) {
   if (!op || !info.hasDistributionFacts())
     return;
 
-  std::optional<ArtsDbPhysicalLayout> layout = readArtsDbPhysicalLayout(op);
+  std::optional<ArtsDbPhysicalLayout> layout;
+  if (auto alloc = dyn_cast<DbAllocOp>(op))
+    layout = readArtsDbPhysicalLayoutFromCommittedType(alloc);
+  else
+    layout = readArtsDbPhysicalLayout(op);
   if (!layout)
     return;
 
@@ -547,4 +552,46 @@ void mlir::carts::arts::transferOperationFacts(Operation *source,
   if (!source || !target)
     return;
   copySemanticFactAttrs(source, target);
+}
+
+std::optional<ArtsDbPhysicalLayout>
+mlir::carts::arts::readArtsDbPhysicalLayoutFromCommittedType(DbAllocOp alloc) {
+  if (!alloc)
+    return std::nullopt;
+
+  auto partition = alloc.getPartitionMode();
+  if (!partition || !usesBlockLayout(*partition) || alloc.getSizes().empty() ||
+      alloc.getElementSizes().empty())
+    return readArtsDbPhysicalLayout(alloc.getOperation());
+
+  SmallVector<int64_t, 4> expandedShape;
+  expandedShape.reserve(alloc.getSizes().size() + alloc.getElementSizes().size());
+  for (Value size : alloc.getSizes()) {
+    std::optional<int64_t> constant = ValueAnalysis::tryFoldConstantIndex(
+        ValueAnalysis::stripNumericCasts(size));
+    if (!constant || *constant <= 0)
+      return readArtsDbPhysicalLayout(alloc.getOperation());
+    expandedShape.push_back(*constant);
+  }
+  for (Value size : alloc.getElementSizes()) {
+    std::optional<int64_t> constant = ValueAnalysis::tryFoldConstantIndex(
+        ValueAnalysis::stripNumericCasts(size));
+    if (!constant || *constant <= 0)
+      return readArtsDbPhysicalLayout(alloc.getOperation());
+    expandedShape.push_back(*constant);
+  }
+
+  if (std::optional<sde::RecoveredMuPhysicalLayout> recovered =
+          sde::recoverMuPhysicalLayoutFromExpandedShape(expandedShape,
+                                                        alloc.getElementType())) {
+    ArtsDbPhysicalLayout layout;
+    layout.ownerDims.reserve(recovered->ownerDims.size());
+    for (unsigned dim : recovered->ownerDims)
+      layout.ownerDims.push_back(static_cast<int64_t>(dim));
+    layout.physicalBlockShape.assign(recovered->physicalBlockShape.begin(),
+                                     recovered->physicalBlockShape.end());
+    return layout;
+  }
+
+  return readArtsDbPhysicalLayout(alloc.getOperation());
 }

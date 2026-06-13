@@ -26,6 +26,7 @@
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
+#include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/passes/Passes.h"
@@ -154,11 +155,19 @@ static std::optional<int64_t> inferSingleOwnerBlockExtent(DbAllocOp alloc) {
       return facts->blockShape.front();
 
   if (std::optional<ArtsDbPhysicalLayout> layout =
-          readArtsDbPhysicalLayout(alloc))
+          readArtsDbPhysicalLayoutFromCommittedType(alloc)) {
+    if (layout->ownerDims.size() == 1) {
+      int64_t ownerDim = layout->ownerDims.front();
+      if (ownerDim >= 0 &&
+          static_cast<size_t>(ownerDim) < layout->physicalBlockShape.size() &&
+          layout->physicalBlockShape[ownerDim] > 0)
+        return layout->physicalBlockShape[ownerDim];
+    }
     if (layout->ownerDims.size() == 1 &&
         layout->physicalBlockShape.size() == 1 &&
         layout->physicalBlockShape.front() > 0)
       return layout->physicalBlockShape.front();
+  }
 
   return std::nullopt;
 }

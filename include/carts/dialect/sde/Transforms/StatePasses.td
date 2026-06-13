@@ -25,15 +25,15 @@ def PromoteTargetAttrs
 }
 
 def ScalarForwarding : Pass<"scalar-forwarding", "mlir::ModuleOp"> {
-  let summary = "Forward constant-initialized scalar memrefs across region boundaries";
+  let summary = "Forward rank-0 scalar memref state into SSA values";
   let description = [{
-    Detects rank-0 memref.alloca ops initialized with a constant value and
-    replaces loads inside nested regions (omp.parallel, cu_region, etc.) with
-    the constant when all stores inside that region write the same value.
+    Detects rank-0 memref.alloca ops that carry scalar temporaries and forwards
+    provably exact loads back to SSA values.
 
     This eliminates Polygeist's continuation-boolean pattern where a memref<i1>
-    is used as a structured return guard, turning always-true scf.if conditions
-    into foldable constants.
+    is used as a structured return guard, and the frontend scratch-index pattern
+    where a computed scalar is stored and immediately reloaded before a memref
+    access.
   }];
   let dependentDialects = ["::mlir::memref::MemRefDialect",
                            "::mlir::arith::ArithDialect"];

@@ -347,16 +347,7 @@ static bool haveSameIterationSpace(sde::SdeSuIterateOp lhs,
 
 static bool haveCompatibleSchedule(sde::SdeSuIterateOp lhs,
                                    sde::SdeSuIterateOp rhs) {
-  if (lhs.getScheduleAttr() != rhs.getScheduleAttr())
-    return false;
-  if (lhs.getNowaitAttr() != rhs.getNowaitAttr())
-    return false;
-
-  Value lhsChunk = lhs.getChunkSize();
-  Value rhsChunk = rhs.getChunkSize();
-  if (!lhsChunk || !rhsChunk)
-    return lhsChunk == rhsChunk;
-  return ::mlir::carts::ValueAnalysis::areValuesEquivalent(lhsChunk, rhsChunk);
+  return lhs.getNowaitAttr() == rhs.getNowaitAttr();
 }
 
 static Value getWriteRoot(Value value) {
@@ -527,32 +518,14 @@ static sde::SdeSuIterateOp fuseStages(MutableArrayRef<ElementwiseStage> stages,
       mapValues(first.getUpperBounds(), fusedOperandMapping);
   SmallVector<Value, 4> steps =
       mapValues(first.getSteps(), fusedOperandMapping);
-  Value chunkSize =
-      first.getChunkSize()
-          ? fusedOperandMapping.lookupOrDefault(first.getChunkSize())
-          : Value{};
 
-  auto fused = sde::SdeSuIterateOp::create(
-      rewriter, loc, /*resultTypes=*/TypeRange{}, lowerBounds, upperBounds,
-      steps, first.getScheduleAttr(), chunkSize, first.getNowaitAttr(),
-      first.getReductionAccumulators(), first.getReductionKindsAttr(),
-      first.getReductionStrategyAttr(), first.getPartialReductionAttr(),
-      first.getPartialReductionDimsAttr(),
-      first.getPartialReductionOwnerDimsAttr(),
-      sde::SdeStructuredClassificationAttr::get(
-          first.getContext(),
-          sde::SdeStructuredClassification::elementwise_pipeline),
-      sde::SdePatternAttr::get(first.getContext(),
-                               sde::SdePattern::elementwise_pipeline),
-      first.getAccessMinOffsetsAttr(), first.getAccessMaxOffsetsAttr(),
-      first.getOwnerDimsAttr(), first.getSpatialDimsAttr(),
-      first.getWriteFootprintAttr(), first.getPhysicalOwnerDimsAttr(),
-      first.getPhysicalBlockShapeAttr(), first.getLogicalWorkerSliceAttr(),
-      first.getPhysicalHaloShapeAttr(), first.getIterationTopologyAttr(),
-      first.getRepetitionStructureAttr(), first.getAsyncStrategyAttr(),
-      first.getDistributionKindAttr(), first.getInPlaceSafeAttr(),
-      first.getInPlaceSharedStateAttr(), first.getArrayLayoutAttr(),
-      first.getLayoutsDisagreeAttr(), first.getCommVolumeBytesAttr());
+  sde::SuIterateAttrs suAttrs = sde::SuIterateAttrs::fromOp(first);
+  suAttrs.structuredClassification = sde::SdeStructuredClassificationAttr::get(
+      first.getContext(), sde::SdeStructuredClassification::elementwise_pipeline);
+  suAttrs.pattern = sde::SdePatternAttr::get(
+      first.getContext(), sde::SdePattern::elementwise_pipeline);
+  auto fused = sde::buildSuIterate(rewriter, loc, lowerBounds, upperBounds, steps,
+                                   suAttrs, first.getReductionAccumulators());
   fused->setAttrs(sde::getRewrittenAttrs(first));
   fused.setStructuredClassificationAttr(
       sde::SdeStructuredClassificationAttr::get(
@@ -581,11 +554,9 @@ static sde::SdeSuIterateOp fuseStages(MutableArrayRef<ElementwiseStage> stages,
     rewriter.setInsertionPointAfter(lastRoot);
   else
     rewriter.setInsertionPointToStart(&dst);
-  auto innerCuRegion = sde::SdeCuRegionOp::create(
-      rewriter, loc, /*resultTypes=*/TypeRange{},
-      sde::SdeCuKindAttr::get(rewriter.getContext(), sde::SdeCuKind::parallel),
-      /*nowait=*/nullptr,
-      /*iterArgs=*/ValueRange{});
+  auto innerCuRegion = sde::buildCuRegion(
+      rewriter, loc,
+      sde::SdeCuKindAttr::get(rewriter.getContext(), sde::SdeCuKind::parallel));
   Block &innerBlk = sde::ensureBlock(innerCuRegion.getBody());
   rewriter.setInsertionPointToStart(&innerBlk);
 

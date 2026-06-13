@@ -4,8 +4,8 @@
 // neighbor input and a halo_like redist projected onto the expanded grid dim.
 
 // CHECK-LABEL: func.func @owner_strip_three_ro_inputs
-// CHECK-COUNT-3: sde.redist <halo_like> %{{.*}} : memref<16x8x8x4xf32> array_id({{[0-9]+}}) from owner [0] block [1, 8, 8, 4] to owner [0] block [1, 8, 8, 4] halo [1, 0, 0, 0] cost 64
-// CHECK-COUNT-3: sde.mu_access_window read %{{.*}} : memref<16x8x8x4xf32> owner_dims(1) block_lo [0] block_hi [16] valid [8, 8, 4]
+// CHECK-COUNT-3: sde.su_halo %{{.*}} : memref<16x8x8x4xf32> array_id({{[0-9]+}}) owner [0] block [1, 8, 8, 4] halo [1, 0, 0, 0]
+// CHECK-COUNT-3: sde.mu_access_window read %{{.*}} : memref<16x8x8x4xf32> array_id({{[0-9]+}})
 
 func.func @owner_strip_three_ro_inputs() {
   %c0 = arith.constant 0 : index
@@ -40,6 +40,7 @@ func.func @owner_strip_three_ro_inputs() {
       {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write", commVolumeBytes = 0 : i64}
     ], physicalOwnerDims = [2], physicalBlockShape = [8, 8, 4]}
 
+  sde.su_distribute <owner_compute> {
   sde.su_iterate (%c0) to (%c64) step (%c1) classification(<stencil>) {
   ^bb0(%k: index):
     sde.array_layout_root read %B : memref<8x8x64xf32> array_id(0)
@@ -66,7 +67,8 @@ func.func @owner_strip_three_ro_inputs() {
       {arrayId = 1 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "read", commVolumeBytes = 64 : i64},
       {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "read", commVolumeBytes = 64 : i64},
       {arrayId = 3 : i64, kind = "block_parallel", ownerDims = [2], blockShape = [8, 8, 4], muBlockCount = 16 : i64, role = "write", commVolumeBytes = 0 : i64}
-    ], layoutsDisagree = [0, 1, 2], physicalOwnerDims = [2], physicalBlockShape = [8, 8, 4], physicalHaloShape = [1], accessMinOffsets = [-1], accessMaxOffsets = [1], inPlaceSafe}
+    ], physicalOwnerDims = [2], physicalBlockShape = [8, 8, 4], physicalHaloShape = [1], accessMinOffsets = [-1], accessMaxOffsets = [1], inPlaceSafe}
+  }
   memref.dealloc %B : memref<8x8x64xf32>
   memref.dealloc %C : memref<8x8x64xf32>
   memref.dealloc %D : memref<8x8x64xf32>
@@ -75,7 +77,7 @@ func.func @owner_strip_three_ro_inputs() {
 }
 
 // CHECK-LABEL: func.func @in_place_gauss_seidel_gets_readwrite_window
-// CHECK: sde.mu_access_window readwrite %{{.*}} : memref<16x8x8x4xf32> owner_dims(1) block_lo [0] block_hi [16] valid [8, 8, 4]
+// CHECK: sde.mu_access_window readwrite %{{.*}} : memref<16x8x8x4xf32> array_id(4)
 
 func.func @in_place_gauss_seidel_gets_readwrite_window() {
   %c0 = arith.constant 0 : index

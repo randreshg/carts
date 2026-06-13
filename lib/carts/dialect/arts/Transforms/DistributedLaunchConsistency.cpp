@@ -111,6 +111,9 @@ static bool equivalentIndexValues(Value lhs, Value rhs) {
   if (!lhs || !rhs)
     return false;
 
+  if (ValueAnalysis::areValuesEquivalent(lhs, rhs))
+    return true;
+
   int64_t lhsConstant = 0;
   int64_t rhsConstant = 0;
   bool lhsIsConstant = ValueAnalysis::getConstantIndex(

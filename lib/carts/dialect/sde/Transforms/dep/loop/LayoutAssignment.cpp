@@ -12,9 +12,10 @@
 /// It is strictly DATA-LAYOUT: pattern-agnostic (driven only by affine maps,
 /// iterator types, and static shapes), it NAMES NO COLLECTIVE, and it knows
 /// nothing about concrete storage, tasks, epochs, or runtime placement. It only
-/// adds the `arrayLayout`, `layoutsDisagree`, and `commVolumeBytes` SDE attrs.
-/// `arrayLayout` also carries the implied memory-block count for downstream
-/// CU/MU planning evidence.
+/// adds transitional `arrayLayout` and `commVolumeBytes` SDE attrs on
+/// disagreeing readers and writers. Redistribution edges are detected later by
+/// comparing committed producer/consumer layout facts (or rank-expanded
+/// `mu_alloc` types), not a `layoutsDisagree` marker.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
@@ -22,6 +23,7 @@
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
+#include "carts/dialect/sde/Utils/SdeOwnerLoopPromotion.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
@@ -510,6 +512,83 @@ static bool schedulingUnitWritesRoot(const sde::ArrayAccessProfile &profile,
   return false;
 }
 
+static bool schedulingUnitWritesAnyRoot(
+    const sde::ModuleSuAccessRelations &relations, unsigned suId) {
+  for (const auto &kv : relations.profiles) {
+    if (schedulingUnitWritesRoot(kv.second, suId))
+      return true;
+  }
+  return false;
+}
+
+static bool sameOwnerDimSet(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
+  if (lhs.size() != rhs.size())
+    return false;
+  SmallVector<int64_t, 4> lhsSorted(lhs.begin(), lhs.end());
+  SmallVector<int64_t, 4> rhsSorted(rhs.begin(), rhs.end());
+  llvm::sort(lhsSorted);
+  llvm::sort(rhsSorted);
+  return lhsSorted == rhsSorted;
+}
+
+static bool readerHasOwnerReduction(const sde::ArrayAccessProfile &profile,
+                                    unsigned suId,
+                                    ArrayRef<int64_t> ownerPositions) {
+  llvm::SmallBitVector ownerBits(profile.rank);
+  for (int64_t pos : ownerPositions)
+    if (pos >= 0 && static_cast<size_t>(pos) < profile.rank)
+      ownerBits.set(pos);
+  for (unsigned pos = 0; pos < profile.rank; ++pos) {
+    if (!ownerBits.test(pos))
+      continue;
+    for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
+      if (use.suId == suId && !use.isWrite &&
+          use.kind == sde::ArrayDimKind::reductionIndexed)
+        return true;
+    }
+  }
+  return false;
+}
+
+static bool readerParallelIndexesPosition(const sde::ArrayAccessProfile &profile,
+                                          unsigned suId, unsigned pos) {
+  for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
+    if (use.suId == suId && !use.isWrite &&
+        use.kind == sde::ArrayDimKind::parallelIndexed)
+      return true;
+  }
+  return false;
+}
+
+// The consumer's required read layout: the block geometry that aligns with how
+// this scheduling unit indexes the array. Cross-owner reductions and
+// owner-preserving halo reads keep the module home layout; repartition readers
+// commit the parallel axes they actually traverse.
+static sde::ArrayLayoutCandidate
+inferReaderRequiredLayout(const sde::ArrayAccessProfile &profile,
+                          unsigned suId,
+                          const sde::ArrayLayoutCandidate &homeLayout) {
+  if (readerHasOwnerReduction(profile, suId, homeLayout.ownerPositions)) {
+    sde::ArrayLayoutKind kind =
+        homeLayout.kind == sde::ArrayLayoutKind::blockContraction
+            ? sde::ArrayLayoutKind::blockContraction
+            : sde::ArrayLayoutKind::blockParallel;
+    return makeBlockCandidate(profile, homeLayout.ownerPositions, kind);
+  }
+
+  SmallVector<int64_t, 4> parallelOwner;
+  for (unsigned pos = 0; pos < profile.rank; ++pos)
+    if (readerParallelIndexesPosition(profile, suId, pos))
+      parallelOwner.push_back(static_cast<int64_t>(pos));
+
+  if (parallelOwner.empty() ||
+      sameOwnerDimSet(parallelOwner, homeLayout.ownerPositions))
+    return homeLayout;
+
+  return makeBlockCandidate(profile, parallelOwner,
+                            sde::ArrayLayoutKind::blockParallel);
+}
+
 static bool hasStencilReader(const sde::ArrayAccessProfile &profile,
                              ArrayRef<sde::SdeSuIterateOp> schedulingUnits) {
   for (const auto &posUses : profile.positionUses) {
@@ -517,7 +596,7 @@ static bool hasStencilReader(const sde::ArrayAccessProfile &profile,
       if (use.isWrite || use.suId >= schedulingUnits.size())
         continue;
       sde::SdeSuIterateOp reader = schedulingUnits[use.suId];
-      auto classification = reader.getStructuredClassification();
+      auto classification = sde::queryStructuredClassification(reader);
       if (classification &&
           *classification == sde::SdeStructuredClassification::stencil)
         return true;
@@ -532,6 +611,11 @@ struct LayoutAssignmentPass
       : costModel(costModel) {}
 
   void runOnOperation() override {
+    // Owner-loop promotion (rank-1→rank-N su_iterate rebuilds) runs here,
+    // after raise-to-sde / cu-normalization and before layout assignment.
+    if (auto module = dyn_cast<ModuleOp>(getOperation()))
+      sde::promoteModuleOwnerLoops(module);
+
     // Layout assignment is only meaningful when there is more than one logical
     // worker to distribute across. With no cost model (textual pass pipeline)
     // or a single worker, mirror the physical-layout committers and do nothing
@@ -590,7 +674,6 @@ struct LayoutAssignmentPass
     };
     struct SchedulingUnitLayoutUpdate {
       SmallVector<DictionaryAttr, 4> entries;
-      SmallVector<int64_t, 2> disagree;
       SmallVector<RootProvenance, 4> roots;
       int64_t commVolumeBytes = 0;
     };
@@ -634,18 +717,25 @@ struct LayoutAssignmentPass
           continue;
         bool isWrite = schedulingUnitWritesRoot(profile, suId);
         int64_t edgeBytes = edgeBytesByReader.lookup(suId);
+        sde::ArrayLayoutCandidate layoutForSu = chosen.layout;
+        if (!isWrite && edgeBytes > 0)
+          layoutForSu = inferReaderRequiredLayout(profile, suId, chosen.layout);
         DictionaryAttr entry = buildLayoutEntry(
-            ctx, arrayId, profile.staticShape, chosen.layout,
+            ctx, arrayId, profile.staticShape, layoutForSu,
             isWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
                     : sde::AttrNames::LayoutGraphValues::RoleRead,
             edgeBytes, std::max<int64_t>(1, elementBytes(profile.root)));
+        // Aligned readers carry no transitional arrayLayout unless they share a
+        // scheduling unit with a writer that still needs local block structure
+        // (e.g. coupled read/write in the same reduction nest).
+        if (!isWrite && edgeBytes == 0 &&
+            !schedulingUnitWritesAnyRoot(relations, suId))
+          continue;
         updates[suId].entries.push_back(entry);
         updates[suId].roots.push_back(
             {profile.root, arrayId,
              isWrite ? sde::SdeAccessMode::write : sde::SdeAccessMode::read});
         updates[suId].commVolumeBytes += edgeBytes;
-        if (edgeBytes > 0 && profile.hasWriter)
-          updates[suId].disagree.push_back(arrayId);
       }
     }
 
@@ -657,9 +747,6 @@ struct LayoutAssignmentPass
       SmallVector<Attribute, 4> entryAttrs(update.entries.begin(),
                                            update.entries.end());
       op.setArrayLayoutAttr(ArrayAttr::get(ctx, entryAttrs));
-      sde::reconcileArrayLayoutWithCommittedPhysicalShape(op);
-      if (!update.disagree.empty())
-        op.setLayoutsDisagreeAttr(buildI64ArrayAttr(ctx, update.disagree));
       op.setCommVolumeBytesAttr(
           IntegerAttr::get(IntegerType::get(ctx, 64), update.commVolumeBytes));
 

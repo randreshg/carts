@@ -46,6 +46,23 @@ def Tiling : Pass<"tiling", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createTilingPass()";
 }
 
+def RaiseToSde : Pass<"sde-raise-to-sde", "mlir::ModuleOp"> {
+  let summary = "Raise proven-independent sequential loop nests to bare SDE SU/CU skeletons";
+  let description = [{
+    CORE raise-to-sde pass (partial Step 11). Walks host `scf.for` nests that
+    are not already under `sde.su_iterate` and promotes dependence-free nests to
+    `sde.su_iterate` + proof-derived `sde.cu_region <parallel>` via
+    `buildSuIterate` / `buildCuRegion` with zero optional attrs. Re-entrancy
+    guard skips nests under committed SU/CU structure from OpenMP conversion.
+    Residual serial wrapping and full CU-normalization are future sub-steps.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor = "mlir::carts::sde::createRaiseToSdePass()";
+}
+
 def Parallelize : Pass<"sde-parallelize", "mlir::ModuleOp"> {
   let summary = "Parallelize + raise embarrassingly-parallel sequential loop nests to SDE scheduling units";
   let description = [{
@@ -68,23 +85,13 @@ def Parallelize : Pass<"sde-parallelize", "mlir::ModuleOp"> {
 
 def SdeLoopPatternFacts
     : Pass<"sde-loop-pattern-facts", "mlir::ModuleOp"> {
-  let summary = "Classify SDE loop patterns and commit SDE facts";
+  let summary = "[deprecated] Owner-loop promotion only (no fact stamping)";
   let description = [{
-    Uses SDE-owned loop/access analysis to identify approved structured pattern
-    families on eligible `sde.su_iterate` operations and commits classification,
-    pattern, and access-summary facts.
-
-    SdeLoopPatternFacts writes only SDE IR facts. It does not write
-    target-specific attributes and it does not cross the dialect boundary. Later
-    conversion may lower the final SDE shape, but raw pattern facts remain SDE
-    ownership.
-
-    The current implementation commits:
-    - `classification(<...>)` from the SDE loop/access summary
-    - approved `pattern` values for uniform, stencil, wavefront, matmul,
-      reduction, and elementwise-pipeline families
-    - generic access/owner/footprint summaries for recognized ND neighborhood
-      loops
+    Legacy pass retained for manual/test invocation. Production pipelines
+    run owner-loop promotion inside `raise-to-sde` and query loop-access facts
+    on demand via `SuLoopAccessAnalysis`. This pass performs rank-1→rank-N
+    `su_iterate` rebuilds only; it stamps zero classification/pattern/offset
+    attributes.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createSdeLoopPatternFactsPass()";

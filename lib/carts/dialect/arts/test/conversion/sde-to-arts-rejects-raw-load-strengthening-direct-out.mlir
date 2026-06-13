@@ -18,7 +18,11 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
     ^bb0(%i: index):
       sde.cu_region <parallel> {
         "arts.db_access_window"(%A) <{blockHi = [4], blockLo = [0], mode = #arts.mode<out>, ownerDimCount = 1 : i64, validExtents = [16]}> : (memref<4x16xf32>) -> ()
+        // The committed window is `out`; the matching store keeps the window
+        // well-formed, while the raw load strengthens it with an uncommitted
+        // read dependency the boundary must reject.
         %value = memref.load %A[%c0, %c0] : memref<4x16xf32>
+        memref.store %value, %A[%c0, %c0] : memref<4x16xf32>
       }
     } {logicalWorkerSlice = [16], physicalBlockShape = [16], physicalOwnerDims = [0]}
     return

@@ -7,6 +7,7 @@
 #include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include <functional>
 
 using namespace mlir;
 
@@ -180,6 +181,96 @@ recoverOwnerDims(MemRefType expandedType,
   if (owners.size() != numGrid)
     return std::nullopt; // ambiguous: grid dims without a matching tiled dim
   return owners;
+}
+
+std::optional<RecoveredMuPhysicalLayout>
+recoverMuPhysicalLayoutFromExpandedShape(ArrayRef<int64_t> shape,
+                                         Type elementType) {
+  if (shape.empty())
+    return std::nullopt;
+  MemRefType expandedType = MemRefType::get(shape, elementType);
+  return recoverMuPhysicalLayoutFromExpandedType(expandedType);
+}
+
+std::optional<RecoveredMuPhysicalLayout>
+recoverMuPhysicalLayoutFromExpandedType(MemRefType expandedType) {
+  if (!expandedType || !expandedType.hasStaticShape())
+    return std::nullopt;
+
+  const unsigned rank = expandedType.getRank();
+  if (rank <= 1)
+    return std::nullopt;
+  ArrayRef<int64_t> shape = expandedType.getShape();
+
+  auto tryOwnerAssignment = [&](unsigned logicalRank, unsigned numGrid,
+                                ArrayRef<int64_t> grid,
+                                ArrayRef<int64_t> tiles,
+                                ArrayRef<unsigned> owners)
+      -> std::optional<RecoveredMuPhysicalLayout> {
+    if (owners.size() != numGrid)
+      return std::nullopt;
+    SmallVector<unsigned, 4> sortedOwners(owners.begin(), owners.end());
+    llvm::sort(sortedOwners);
+
+    SmallVector<int64_t, 4> logicalShape(tiles.begin(), tiles.end());
+    for (auto [slot, dim] : llvm::enumerate(sortedOwners)) {
+      if (grid[slot] <= 0 || tiles[dim] <= 0)
+        return std::nullopt;
+      logicalShape[dim] = grid[slot] * tiles[dim];
+    }
+
+    std::optional<SmallVector<unsigned, 2>> recovered =
+        recoverOwnerDims(expandedType, logicalShape);
+    if (!recovered || *recovered != sortedOwners)
+      return std::nullopt;
+
+    for (auto [slot, dim] : llvm::enumerate(sortedOwners)) {
+      if (grid[slot] != ceilDivPositive(logicalShape[dim], tiles[dim]))
+        return std::nullopt;
+    }
+    for (unsigned dim = 0; dim < logicalRank; ++dim) {
+      if (llvm::is_contained(sortedOwners, dim))
+        continue;
+      if (tiles[dim] != logicalShape[dim])
+        return std::nullopt;
+    }
+
+    RecoveredMuPhysicalLayout result;
+    result.ownerDims.assign(sortedOwners.begin(), sortedOwners.end());
+    result.logicalShape = std::move(logicalShape);
+    result.physicalBlockShape.assign(tiles.begin(), tiles.end());
+    return result;
+  };
+
+  std::function<std::optional<RecoveredMuPhysicalLayout>(
+      unsigned, unsigned, SmallVector<unsigned, 4> &)>
+      searchOwners = [&](unsigned logicalRank, unsigned numGrid,
+                         SmallVector<unsigned, 4> &current)
+      -> std::optional<RecoveredMuPhysicalLayout> {
+    ArrayRef<int64_t> grid = shape.take_front(numGrid);
+    ArrayRef<int64_t> tiles = shape.drop_front(numGrid);
+    if (current.size() == numGrid)
+      return tryOwnerAssignment(logicalRank, numGrid, grid, tiles, current);
+    unsigned start = current.empty() ? 0 : current.back() + 1;
+    for (unsigned dim = start; dim < logicalRank; ++dim) {
+      current.push_back(dim);
+      if (std::optional<RecoveredMuPhysicalLayout> found =
+              searchOwners(logicalRank, numGrid, current))
+        return found;
+      current.pop_back();
+    }
+    return std::nullopt;
+  };
+
+  for (unsigned logicalRank = 1; logicalRank < rank; ++logicalRank) {
+    const unsigned numGrid = rank - logicalRank;
+    SmallVector<unsigned, 4> current;
+    if (std::optional<RecoveredMuPhysicalLayout> found =
+            searchOwners(logicalRank, numGrid, current))
+      return found;
+  }
+
+  return std::nullopt;
 }
 
 } // namespace mlir::carts::sde

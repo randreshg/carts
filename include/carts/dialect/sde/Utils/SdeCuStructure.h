@@ -49,7 +49,8 @@ inline bool isSuOp(Operation *op) {
 
 /// Scheduling operations that are forbidden anywhere inside a leaf CU.
 inline bool isCuForbiddenSchedulingOp(Operation *op) {
-  return isSuOp(op) || isa<SdeSuBarrierOp, SdeRedistOp>(op);
+  return isSuOp(op) ||
+         isa<SdeSuBarrierOp, SdeRedistOp, SdeSuHaloOp, SdeSuReduceScatterOp>(op);
 }
 
 /// True when `op` contains nested SU scheduling that must stay outside any CU.

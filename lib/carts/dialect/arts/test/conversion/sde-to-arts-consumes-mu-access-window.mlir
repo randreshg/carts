@@ -27,6 +27,8 @@
 // ARTS: arts.db_alloc
 // ARTS-SAME: <block>
 // ARTS-SAME: elementSizes[%{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %{{[^]]+}}]
+// ARTS: %[[GROUP:.*]] = arith.constant 4 : index
+// ARTS: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %[[GROUP]]
 // ARTS: arts.db_acquire
 // ARTS-SAME: partitioning(<block>)
 // ARTS: arts.edt
@@ -34,15 +36,35 @@
 
 // ARTS-LABEL: func.func @consume_rank_expanded_read_window_offsets
 // ARTS: scf.for %[[B:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
-// ARTS: %[[BLOCK:.*]] = arith.divui %{{.*}}, %{{.*}} : index
+// ARTS: %[[READ_BLOCK:.*]] = arith.divui %[[B]], %{{.*}} : index
 // ARTS: arts.db_acquire[<in>]
-// ARTS-SAME: offsets[%[[BLOCK]]]
+// ARTS-SAME: offsets[%[[READ_BLOCK]]]
 // ARTS-SAME: sizes[%{{.*}}]
 // ARTS-NOT: arts.db_acquire[<in>]
+// ARTS: %[[WRITE_BLOCK:.*]] = arith.divui %[[B]], %{{.*}} : index
 // ARTS: arts.db_acquire[<out>]
-// ARTS-SAME: offsets[%[[BLOCK]]]
+// ARTS-SAME: offsets[%[[WRITE_BLOCK]]]
 // ARTS: arts.edt
 // ARTS: memref.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<?x?xf32>
+
+// ARTS-LABEL: func.func @consume_nonleading_read_window_offsets
+// ARTS: scf.for %[[BASE:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
+// ARTS: %[[TWO:.*]] = arith.constant 2 : index
+// ARTS: %[[A_OFFSET:.*]] = arith.divui %{{.*}}, %[[TWO]] : index
+// ARTS: arts.db_acquire[<in>]
+// ARTS-SAME: offsets[%[[A_OFFSET]]]
+// ARTS: arts.edt
+// ARTS: %[[LOAD_BLOCK:.*]] = arith.divui %{{.*}}, %{{.*}} : index
+// ARTS: %[[LOCAL_BLOCK:.*]] = arith.subi %[[LOAD_BLOCK]], %{{.*}} : index
+// ARTS: arts.db_ref %{{.*}}[%[[LOCAL_BLOCK]]]
+
+// ARTS-LABEL: func.func @consume_affine_slot_read_window_offsets
+// ARTS: scf.for %[[BLOCK:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {
+// ARTS: %[[READ_OFFSET:.*]] = arith.divui %[[BLOCK]], %{{.*}} : index
+// ARTS: arts.db_acquire[<in>]
+// ARTS-SAME: offsets[%[[READ_OFFSET]]]
+// ARTS: arts.edt
+// ARTS: memref.load %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] : memref<?x?x?xf32>
 
 module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_workers = 4 : i64} {
   func.func @consume_window_1d() {
@@ -72,12 +94,12 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
     ^bb0(%b: index):
       sde.array_layout_root write %P : memref<8x1x16x1xf64> array_id(1)
       sde.cu_region <parallel> {
-        sde.mu_access_window write %P : memref<8x1x16x1xf64> array_id(1) owner_dims(1) block_lo [0] block_hi [8] valid [1, 16, 1]
+        sde.mu_access_window write %P : memref<8x1x16x1xf64> array_id(1)
         scf.for %slot = %c0 to %c16 step %c1 {
           memref.store %cst, %P[%b, %c0, %slot, %c0] : memref<8x1x16x1xf64>
         }
       }
-    } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16, 1], muBlockCount = 8 : i64, role = "write"}], iterationTopology = #sde.iteration_topology<owner_strip>, logicalWorkerSlice = [1], physicalOwnerDims = [0], physicalBlockShape = [1, 16, 1]}
+    } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16, 1], muBlockCount = 8 : i64, role = "write"}], iterationTopology = #sde.iteration_topology<owner_strip>, logicalWorkerSlice = [4, 16, 1], physicalOwnerDims = [0], physicalBlockShape = [1, 16, 1]}
     return
   }
 
@@ -93,8 +115,8 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
       sde.array_layout_root read %A : memref<8x16xf32> array_id(2)
       sde.array_layout_root write %P : memref<8x1x16x1xf64> array_id(3)
       sde.cu_region <parallel> {
-        sde.mu_access_window read %A : memref<8x16xf32> array_id(2) owner_dims(1) block_lo [0] block_hi [8] valid [16]
-        sde.mu_access_window write %P : memref<8x1x16x1xf64> array_id(3) owner_dims(1) block_lo [0] block_hi [8] valid [1, 16, 1]
+        sde.mu_access_window read %A : memref<8x16xf32> array_id(2)
+        sde.mu_access_window write %P : memref<8x1x16x1xf64> array_id(3)
         scf.for %slot = %c0 to %c16 step %c1 {
           %v = memref.load %A[%b, %slot] : memref<8x16xf32>
           %w = arith.extf %v : f32 to f64
@@ -102,6 +124,65 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
         }
       }
     } {arrayLayout = [{arrayId = 2 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16], muBlockCount = 8 : i64, role = "read"}, {arrayId = 3 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 16, 1], muBlockCount = 8 : i64, role = "write"}], iterationTopology = #sde.iteration_topology<owner_strip>, logicalWorkerSlice = [1], physicalOwnerDims = [0], physicalBlockShape = [1, 16, 1]}
+    return
+  }
+
+  func.func @consume_nonleading_read_window_offsets() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c8 = arith.constant 8 : index
+    %c16 = arith.constant 16 : index
+    %c32 = arith.constant 32 : index
+    %A = sde.mu_alloc {arrayId = 4 : i64} : memref<16x32x2xf32>
+    %P = sde.mu_alloc {arrayId = 5 : i64} : memref<4x8xf32>
+    sde.su_iterate (%c0) to (%c32) step (%c8) classification(<elementwise_pipeline>) {
+    ^bb0(%ch: index):
+      sde.array_layout_root read %A : memref<16x32x2xf32> array_id(4)
+      sde.array_layout_root write %P : memref<4x8xf32> array_id(5)
+      sde.cu_region <parallel> {
+        sde.mu_access_window read %A : memref<16x32x2xf32> array_id(4)
+        sde.mu_access_window write %P : memref<4x8xf32> array_id(5)
+        %hi = arith.addi %ch, %c8 : index
+        scf.for %i = %ch to %hi step %c1 {
+          %a_block = arith.divui %i, %c2 : index
+          %a_lane = arith.remui %i, %c2 : index
+          %v = memref.load %A[%a_block, %c0, %a_lane] : memref<16x32x2xf32>
+          %p_block = arith.divui %i, %c8 : index
+          %p_lane = arith.remui %i, %c8 : index
+          memref.store %v, %P[%p_block, %p_lane] : memref<4x8xf32>
+        }
+      }
+    } {arrayLayout = [{arrayId = 4 : i64, kind = "block_parallel", ownerDims = [1], blockShape = [32, 16], budgetBlockShape = [32, 2], muBlockCount = 16 : i64, role = "read"}, {arrayId = 5 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [8], muBlockCount = 4 : i64, role = "write"}], iterationTopology = #sde.iteration_topology<owner_strip>, logicalWorkerSlice = [8], physicalOwnerDims = [0], physicalBlockShape = [8]}
+    return
+  }
+
+  func.func @consume_affine_slot_read_window_offsets() {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %c16 = arith.constant 16 : index
+    %c32 = arith.constant 32 : index
+    %A = sde.mu_alloc {arrayId = 6 : i64} : memref<16x32x2xf32>
+    %P = sde.mu_alloc {arrayId = 7 : i64} : memref<16x1x2x1xf64>
+    sde.su_iterate (%c0) to (%c16) step (%c1) classification(<elementwise>) {
+    ^bb0(%b: index):
+      sde.array_layout_root read %A : memref<16x32x2xf32> array_id(6)
+      sde.array_layout_root write %P : memref<16x1x2x1xf64> array_id(7)
+      sde.cu_region <parallel> {
+        sde.mu_access_window read %A : memref<16x32x2xf32> array_id(6)
+        sde.mu_access_window write %P : memref<16x1x2x1xf64> array_id(7)
+        %base = arith.muli %b, %c2 : index
+        scf.for %slot = %c0 to %c2 step %c1 {
+          %sample = arith.addi %base, %slot : index
+          %a_block = arith.divui %sample, %c2 : index
+          %a_lane = arith.remui %sample, %c2 : index
+          %v = memref.load %A[%a_block, %sample, %a_lane] : memref<16x32x2xf32>
+          %w = arith.extf %v : f32 to f64
+          memref.store %w, %P[%b, %c0, %slot, %c0] : memref<16x1x2x1xf64>
+        }
+      }
+    } {arrayLayout = [{arrayId = 6 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [32, 2], muBlockCount = 16 : i64, role = "read"}, {arrayId = 7 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [1, 2, 1], muBlockCount = 16 : i64, role = "write"}], iterationTopology = #sde.iteration_topology<owner_strip>, logicalWorkerSlice = [1], physicalOwnerDims = [0], physicalBlockShape = [1, 2, 1]}
     return
   }
 }

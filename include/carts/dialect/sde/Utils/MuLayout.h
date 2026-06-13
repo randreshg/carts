@@ -100,6 +100,23 @@ std::optional<llvm::SmallVector<unsigned, 2>>
 recoverOwnerDims(mlir::MemRefType expandedType,
                  llvm::ArrayRef<int64_t> logicalShape);
 
+/// Physical layout recovered purely from a rank-expanded MU memref type (or
+/// equivalent static shape). Owner dims are ASCENDING logical payload indices;
+/// `physicalBlockShape` is rank-length with tile/block extents per payload dim.
+/// Returns nullopt for flat/unexpanded shapes or ambiguous splits.
+struct RecoveredMuPhysicalLayout {
+  llvm::SmallVector<unsigned, 4> ownerDims;
+  llvm::SmallVector<int64_t, 4> logicalShape;
+  llvm::SmallVector<int64_t, 4> physicalBlockShape;
+};
+
+std::optional<RecoveredMuPhysicalLayout>
+recoverMuPhysicalLayoutFromExpandedType(mlir::MemRefType expandedType);
+
+std::optional<RecoveredMuPhysicalLayout>
+recoverMuPhysicalLayoutFromExpandedShape(llvm::ArrayRef<int64_t> shape,
+                                         mlir::Type elementType);
+
 } // namespace mlir::carts::sde
 
 #endif // CARTS_DIALECT_SDE_UTILS_MULAYOUT_H

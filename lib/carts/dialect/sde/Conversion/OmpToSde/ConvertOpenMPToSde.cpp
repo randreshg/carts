@@ -114,10 +114,8 @@ static sde::SdeCuRegionOp cloneBodyIntoCuRegion(PatternRewriter &rewriter,
                                                 Location loc,
                                                 sde::SdeCuKind kind, Block &src,
                                                 IRMapping &mapper) {
-  auto cuRegion = sde::SdeCuRegionOp::create(
-      rewriter, loc, /*resultTypes=*/TypeRange{},
-      sde::SdeCuKindAttr::get(rewriter.getContext(), kind),
-      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{});
+  auto cuRegion = sde::buildCuRegion(
+      rewriter, loc, sde::SdeCuKindAttr::get(rewriter.getContext(), kind));
   Block &innerBlk = sde::ensureBlock(cuRegion.getBody());
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPointToStart(&innerBlk);
@@ -158,25 +156,6 @@ static void spliceRegionBodyBefore(Operation *target, Region &region) {
       old.getTerminator() ? old.getTerminator()->getIterator() : old.end();
   target->getBlock()->getOperations().splice(
       Block::iterator(target), old.getOperations(), old.begin(), end);
-}
-
-/// Map OMP schedule kind to SDE schedule kind.
-static std::optional<sde::SdeScheduleKind>
-convertScheduleKind(omp::ClauseScheduleKind kind) {
-  switch (kind) {
-  case omp::ClauseScheduleKind::Static:
-    return sde::SdeScheduleKind::static_;
-  case omp::ClauseScheduleKind::Dynamic:
-    return sde::SdeScheduleKind::dynamic;
-  case omp::ClauseScheduleKind::Guided:
-    return sde::SdeScheduleKind::guided;
-  case omp::ClauseScheduleKind::Auto:
-    return sde::SdeScheduleKind::auto_;
-  case omp::ClauseScheduleKind::Runtime:
-    return sde::SdeScheduleKind::runtime;
-  default:
-    return std::nullopt;
-  }
 }
 
 static std::optional<sde::SdeAccessMode>
@@ -432,11 +411,8 @@ struct OMPParallelToSdePattern : public OpRewritePattern<omp::ParallelOp> {
       return success();
     }
 
-    auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, /*resultTypes=*/TypeRange{},
-        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel),
-        /*nowait=*/nullptr,
-        /*iterArgs=*/ValueRange{});
+    auto cuRegion = sde::buildCuRegion(
+        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::parallel));
 
     Block &old = op.getRegion().front();
     Block &blk = sde::ensureBlock(cuRegion.getBody());
@@ -467,11 +443,10 @@ struct MasterToSdePattern : public OpRewritePattern<omp::MasterOp> {
       return success();
     }
 
-    auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, /*resultTypes=*/TypeRange{},
-        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
-        /*nowait=*/nullptr,
-        /*iterArgs=*/ValueRange{});
+    auto cuRegion = sde::buildCuRegion(
+        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single));
+    cuRegion.setSerialReasonAttr(sde::SdeSerialReasonAttr::get(
+        ctx, sde::SdeSerialReason::source_single));
     Block &old = op.getRegion().front();
     Block &blk = sde::ensureBlock(cuRegion.getBody());
     blk.getOperations().splice(blk.end(), old.getOperations());
@@ -504,11 +479,11 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
       return success();
     }
 
-    auto cuRegion = sde::SdeCuRegionOp::create(
-        rewriter, loc, /*resultTypes=*/TypeRange{},
-        sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
-        nowaitAttr(ctx, op.getNowait()),
-        /*iterArgs=*/ValueRange{});
+    auto cuRegion = sde::buildCuRegion(
+        rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
+        nowaitAttr(ctx, op.getNowait()));
+    cuRegion.setSerialReasonAttr(sde::SdeSerialReasonAttr::get(
+        ctx, sde::SdeSerialReason::source_single));
     Block &old = op.getRegion().front();
     Block &blk = sde::ensureBlock(cuRegion.getBody());
     blk.getOperations().splice(blk.end(), old.getOperations());
@@ -539,18 +514,6 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     auto ubs = ensureIndexRange(rewriter, loc, loopNest.getLoopUpperBounds());
     auto steps = ensureIndexRange(rewriter, loc, loopNest.getLoopSteps());
 
-    // Schedule
-    sde::SdeScheduleKindAttr schedAttr;
-    if (auto sched = op.getScheduleKind()) {
-      if (auto kind = convertScheduleKind(*sched))
-        schedAttr = sde::SdeScheduleKindAttr::get(ctx, *kind);
-    }
-
-    // Chunk size
-    Value chunkSize;
-    if (auto chunk = op.getScheduleChunk())
-      chunkSize = ensureIndex(rewriter, loc, chunk);
-
     // Nowait
     bool nw = op.getNowait();
 
@@ -573,27 +536,13 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
       }
     }
 
-    auto suIter = sde::SdeSuIterateOp::create(
-        rewriter, loc, /*resultTypes=*/TypeRange{}, ValueRange{lbs},
-        ValueRange{ubs}, ValueRange{steps}, schedAttr, chunkSize,
-        nowaitAttr(ctx, nw), ValueRange{redAccs},
-        reductionKinds.empty() ? nullptr
-                               : rewriter.getArrayAttr(reductionKinds),
-        /*reductionStrategy=*/nullptr, /*partialReduction=*/nullptr,
-        /*partialReductionDims=*/nullptr,
-        /*partialReductionOwnerDims=*/nullptr,
-        /*structuredClassification=*/nullptr,
-        /*pattern=*/nullptr,
-        /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
-        /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
-        /*writeFootprint=*/nullptr, /*physicalOwnerDims=*/nullptr,
-        /*physicalBlockShape=*/nullptr, /*logicalWorkerSlice=*/nullptr,
-        /*physicalHaloShape=*/nullptr, /*iterationTopology=*/nullptr,
-        /*repetitionStructure=*/nullptr, /*asyncStrategy=*/nullptr,
-        /*distributionKind=*/nullptr, /*inPlaceSafe=*/nullptr,
-        /*inPlaceSharedState=*/nullptr,
-        /*arrayLayout=*/nullptr, /*layoutsDisagree=*/nullptr,
-        /*commVolumeBytes=*/nullptr);
+    sde::SuIterateAttrs suAttrs;
+    suAttrs.nowait = nowaitAttr(ctx, nw);
+    suAttrs.reductionKinds =
+        reductionKinds.empty() ? nullptr : rewriter.getArrayAttr(reductionKinds);
+    auto suIter = sde::buildSuIterate(
+        rewriter, loc, ValueRange{lbs}, ValueRange{ubs}, ValueRange{steps},
+        suAttrs, ValueRange{redAccs});
 
     // Create body with one block argument per dimension.
     Region &dstRegion = suIter.getBody();
@@ -722,28 +671,8 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
     Value ub = ensureIndex(rewriter, loc, loopNest.getLoopUpperBounds()[0]);
     Value step = ensureIndex(rewriter, loc, loopNest.getLoopSteps()[0]);
 
-    auto suIter = sde::SdeSuIterateOp::create(
-        rewriter, loc, /*resultTypes=*/TypeRange{}, ValueRange{lb},
-        ValueRange{ub}, ValueRange{step},
-        /*schedule=*/nullptr, /*chunkSize=*/Value(),
-        /*nowait=*/nullptr,
-        /*reductionAccumulators=*/ValueRange{},
-        /*reductionKinds=*/nullptr,
-        /*reductionStrategy=*/nullptr, /*partialReduction=*/nullptr,
-        /*partialReductionDims=*/nullptr,
-        /*partialReductionOwnerDims=*/nullptr,
-        /*structuredClassification=*/nullptr,
-        /*pattern=*/nullptr,
-        /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
-        /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
-        /*writeFootprint=*/nullptr, /*physicalOwnerDims=*/nullptr,
-        /*physicalBlockShape=*/nullptr, /*logicalWorkerSlice=*/nullptr,
-        /*physicalHaloShape=*/nullptr, /*iterationTopology=*/nullptr,
-        /*repetitionStructure=*/nullptr, /*asyncStrategy=*/nullptr,
-        /*distributionKind=*/nullptr, /*inPlaceSafe=*/nullptr,
-        /*inPlaceSharedState=*/nullptr,
-        /*arrayLayout=*/nullptr, /*layoutsDisagree=*/nullptr,
-        /*commVolumeBytes=*/nullptr);
+    auto suIter = sde::buildSuIterate(rewriter, loc, ValueRange{lb},
+                                      ValueRange{ub}, ValueRange{step});
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())
@@ -788,28 +717,8 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
     Value ub = ensureIndex(rewriter, loc, op.getUpperBound().front());
     Value st = ensureIndex(rewriter, loc, op.getStep().front());
 
-    auto suIter = sde::SdeSuIterateOp::create(
-        rewriter, loc, /*resultTypes=*/TypeRange{}, ValueRange{lb},
-        ValueRange{ub}, ValueRange{st},
-        /*schedule=*/nullptr, /*chunkSize=*/Value(),
-        /*nowait=*/nullptr,
-        /*reductionAccumulators=*/ValueRange{},
-        /*reductionKinds=*/nullptr,
-        /*reductionStrategy=*/nullptr, /*partialReduction=*/nullptr,
-        /*partialReductionDims=*/nullptr,
-        /*partialReductionOwnerDims=*/nullptr,
-        /*structuredClassification=*/nullptr,
-        /*pattern=*/nullptr,
-        /*accessMinOffsets=*/nullptr, /*accessMaxOffsets=*/nullptr,
-        /*ownerDims=*/nullptr, /*spatialDims=*/nullptr,
-        /*writeFootprint=*/nullptr, /*physicalOwnerDims=*/nullptr,
-        /*physicalBlockShape=*/nullptr, /*logicalWorkerSlice=*/nullptr,
-        /*physicalHaloShape=*/nullptr, /*iterationTopology=*/nullptr,
-        /*repetitionStructure=*/nullptr, /*asyncStrategy=*/nullptr,
-        /*distributionKind=*/nullptr, /*inPlaceSafe=*/nullptr,
-        /*inPlaceSharedState=*/nullptr,
-        /*arrayLayout=*/nullptr, /*layoutsDisagree=*/nullptr,
-        /*commVolumeBytes=*/nullptr);
+    auto suIter = sde::buildSuIterate(rewriter, loc, ValueRange{lb},
+                                      ValueRange{ub}, ValueRange{st});
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())

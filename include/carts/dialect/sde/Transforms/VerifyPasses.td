@@ -12,29 +12,13 @@ def VerifySdeLowered : Pass<"verify-sde-lowered", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createVerifySdeLoweredPass()";
 }
 
-def VerifySdePhysicalConsistency
-    : Pass<"verify-sde-physical-consistency", "mlir::ModuleOp"> {
-  let summary = "Verify committed SDE physical facts before MU expansion";
-  let description = [{
-    Checks that `physicalOwnerDims` and `physicalBlockShape` are well formed,
-    match the realized SU rank, and do not coarsen past SDE's array-layout
-    budget grain. It writes nothing.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::memref::MemRefDialect"];
-  let constructor =
-      "mlir::carts::sde::createVerifySdePhysicalConsistencyPass()";
-}
-
 def VerifySdeMuLayout : Pass<"verify-sde-mu-layout", "mlir::ModuleOp"> {
   let summary = "Verify the structural block-grid carrier on sde.mu_alloc";
   let description = [{
     Checks the structural block-grid carrier invariants:
       * no stale logical-rank access (or rank-reducing view) against a converted
-        rank-expanded block-grid MU, and
-      * `ownerDims == recover(structure)` — the owner dim recovered purely from
-        a converted MU's expanded memref type equals the committed
-        `physicalOwnerDims` (the structure/committed-layout round-trip proof).
+        rank-expanded block-grid MU.
+
     Conservative (flat) MUs and out-of-scope layouts are skipped.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
@@ -56,12 +40,7 @@ def VerifySdeMuAccessWindow
            `sde.cu_region`. Zero means `raise-to-mu-access-window` did not run;
            more than one means the raiser's idempotency guard is broken.
 
-      R2 — window within allocation and consistent with the committed grain: for
-           every `sde.mu_access_window`, the block range is within the expanded
-           MU grid and `validExtents` within the tile dims, and `blockHi` is the
-           `ceilDiv` of a real iteration extent on the writer `sde.su_iterate`
-           (an INDEPENDENT fact — never re-derived from the same window), so the
-           window cannot silently encode a recomputed grain.
+      Block-grid bounds are type-derived and checked by the op's ODS verifier.
 
     Conservative (out-of-scope) MUs are skipped, never rejected.
   }];
@@ -133,9 +112,11 @@ def VerifySdeRedistribute
   let summary = "Fail closed unless redistribution is explicit SDE structure";
   let description = [{
     Companion of `sde-redistribute` after that pass has consumed temporary
-    layout-disagreement markers. It rejects residual `layoutsDisagree` attrs and
-    validates each explicit `sde.redist` geometry locally before the ARTS
-    boundary consumes it.
+    layout-disagreement markers. It rejects residual `layoutsDisagree` attrs,
+    validates `sde.su_halo`/`sde.su_reduce_scatter` geometry and grounding, and
+    validates remaining legacy `sde.redist` families before the ARTS boundary
+    consumes them. Halo and reduce-scatter movement must use the first-class
+    SU ops, not retired `sde.redist` families.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::memref::MemRefDialect"];

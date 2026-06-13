@@ -6,7 +6,7 @@
 
 // CHECK-LABEL: func.func @reduction_output_window
 // CHECK: %[[MU:.*]] = sde.mu_alloc : memref<4x256xf32>
-// CHECK: sde.mu_access_window write %[[MU]] : memref<4x256xf32> owner_dims(1) block_lo [0] block_hi [4] valid [256]
+// CHECK: sde.mu_access_window write %[[MU]] : memref<4x256xf32> array_id(0)
 
 func.func @reduction_output_window() {
   %c0 = arith.constant 0 : index

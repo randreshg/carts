@@ -2,14 +2,18 @@
 #define CARTS_DIALECT_SDE_UTILS_SDECOMMITTEDFACTUTILS_H
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
@@ -17,39 +21,69 @@
 
 namespace mlir::carts::sde {
 
+/// True when a writer SU has committed block layout in arrayLayout facts.
+inline bool hasCommittedWriterBlockLayout(SdeSuIterateOp op) {
+  if (!op)
+    return false;
+  for (const LayoutGraphFact &fact :
+       parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+    if (fact.role == LayoutGraphRole::write && !fact.ownerDims.empty() &&
+        !fact.blockShape.empty())
+      return true;
+  }
+  return false;
+}
+
+inline std::optional<LayoutGraphFact>
+findSingleCommittedWriterBlockLayout(SdeSuIterateOp op) {
+  if (!op)
+    return std::nullopt;
+  std::optional<LayoutGraphFact> selected;
+  for (const LayoutGraphFact &fact :
+       parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+    if (fact.role != LayoutGraphRole::write || fact.ownerDims.empty() ||
+        fact.blockShape.empty())
+      continue;
+    if (!selected) {
+      selected = fact;
+      continue;
+    }
+    if (selected->layoutKind != fact.layoutKind ||
+        selected->ownerDims != fact.ownerDims ||
+        selected->blockShape != fact.blockShape)
+      return std::nullopt;
+  }
+  return selected;
+}
+
 /// True once an op carries committed CU/MU physical layout facts.
 inline bool hasCommittedCuMuPartitionFacts(Operation *op) {
   auto iterate = dyn_cast_or_null<SdeSuIterateOp>(op);
   if (!iterate)
     return false;
-  return iterate.getPhysicalOwnerDimsAttr() ||
-         iterate.getPhysicalBlockShapeAttr() ||
-         iterate.getLogicalWorkerSliceAttr() ||
-         iterate.getPhysicalHaloShapeAttr() ||
-         iterate.getIterationTopologyAttr() ||
-         iterate.getDistributionKindAttr();
+  return iterate.getLogicalWorkerSliceAttr() ||
+         hasCommittedWriterBlockLayout(iterate);
 }
 
 /// True when a stencil carries N-D owner/access facts that cannot be realized
 /// by the current SDE loop rank. Physical tiling passes use this to fail closed
 /// instead of replacing those facts with one-dimensional fallback grain.
 inline bool requiresNestedStencilOwnerPromotion(SdeSuIterateOp op) {
-  auto classification = op.getStructuredClassification();
+  auto classification = queryStructuredClassification(op);
   if (!classification ||
       *classification != SdeStructuredClassification::stencil)
     return false;
 
   unsigned loopRank = op.getLowerBounds().size();
-  auto ownerDims = readI64ArrayAttr(op.getOwnerDimsAttr());
-  auto minOffsets = readI64ArrayAttr(op.getAccessMinOffsetsAttr());
-  auto maxOffsets = readI64ArrayAttr(op.getAccessMaxOffsetsAttr());
-  if (!ownerDims || !minOffsets || !maxOffsets)
+  auto neighborhood = queryNeighborhoodAccessInfo(op);
+  if (!neighborhood)
     return false;
 
-  if (ownerDims->size() > loopRank || minOffsets->size() > loopRank ||
-      maxOffsets->size() > loopRank)
+  if (neighborhood->ownerDims.size() > loopRank ||
+      neighborhood->minOffsets.size() > loopRank ||
+      neighborhood->maxOffsets.size() > loopRank)
     return true;
-  for (int64_t ownerDim : *ownerDims)
+  for (int64_t ownerDim : neighborhood->ownerDims)
     if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= loopRank)
       return true;
   return false;
@@ -58,6 +92,10 @@ inline bool requiresNestedStencilOwnerPromotion(SdeSuIterateOp op) {
 inline bool sameI64Values(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
   return lhs.size() == rhs.size() &&
          std::equal(lhs.begin(), lhs.end(), rhs.begin());
+}
+
+inline bool containsI64Value(ArrayRef<int64_t> values, int64_t needle) {
+  return llvm::is_contained(values, needle);
 }
 
 inline std::optional<SmallVector<int64_t, 4>>
@@ -76,6 +114,28 @@ findWriteArrayRootShape(SdeSuIterateOp op, int64_t arrayId) {
                                    type.getShape().end());
   }
   return std::nullopt;
+}
+
+/// Resolve module-stable array id from SSA-reachable layout-root facts.
+inline std::optional<int64_t> getMuArrayIdFromLayoutRoot(SdeMuAllocOp mu) {
+  for (Operation *user : mu.getMemref().getUsers()) {
+    if (auto root = dyn_cast<SdeArrayLayoutRootOp>(user))
+      return static_cast<int64_t>(root.getArrayId());
+  }
+  return std::nullopt;
+}
+
+inline Value findArrayLayoutRoot(SdeSuIterateOp op, int64_t arrayId,
+                                 SdeAccessMode mode) {
+  if (!op || op.getBody().empty())
+    return Value();
+  for (SdeArrayLayoutRootOp root :
+       op.getBody().front().getOps<SdeArrayLayoutRootOp>()) {
+    if (static_cast<int64_t>(root.getArrayId()) == arrayId &&
+        root.getMode() == mode)
+      return ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root.getRoot());
+  }
+  return Value();
 }
 
 inline std::optional<SmallVector<int64_t, 4>>
@@ -119,6 +179,7 @@ rewriteWriterArrayLayoutToPhysicalShape(SdeSuIterateOp op,
       builder.getStringAttr(AttrNames::LayoutGraph::BlockShape);
   StringAttr ownerDimsName =
       builder.getStringAttr(AttrNames::LayoutGraph::OwnerDims);
+  StringAttr kindName = builder.getStringAttr(AttrNames::LayoutGraph::Kind);
   StringAttr muBlockCountName =
       builder.getStringAttr(AttrNames::LayoutGraph::MuBlockCount);
   StringAttr budgetBlockShapeName =
@@ -132,7 +193,9 @@ rewriteWriterArrayLayoutToPhysicalShape(SdeSuIterateOp op,
     std::optional<LayoutGraphFact> fact =
         dict ? parseArrayLayoutFact(dict) : std::nullopt;
     if (!dict || !fact || fact->role != LayoutGraphRole::write ||
-        fact->layoutKind != ArrayLayoutKind::blockParallel) {
+        (fact->layoutKind != ArrayLayoutKind::blockParallel &&
+         fact->layoutKind != ArrayLayoutKind::blockContraction &&
+         fact->layoutKind != ArrayLayoutKind::replicated)) {
       rewritten.push_back(attr);
       continue;
     }
@@ -155,12 +218,15 @@ rewriteWriterArrayLayoutToPhysicalShape(SdeSuIterateOp op,
     fields.reserve(dict.size());
     for (NamedAttribute named : dict) {
       StringAttr name = named.getName();
-      if (name == ownerDimsName || name == blockShapeName ||
+      if (name == kindName || name == ownerDimsName || name == blockShapeName ||
           name == muBlockCountName || name == budgetBlockShapeName)
         continue;
       fields.push_back(named);
     }
 
+    fields.push_back(builder.getNamedAttr(
+        kindName,
+        builder.getStringAttr(AttrNames::LayoutGraph::BlockParallel)));
     fields.push_back(
         builder.getNamedAttr(ownerDimsName, buildI64ArrayAttr(ctx, ownerDims)));
     fields.push_back(builder.getNamedAttr(
@@ -179,14 +245,174 @@ rewriteWriterArrayLayoutToPhysicalShape(SdeSuIterateOp op,
   return changed;
 }
 
-inline bool reconcileArrayLayoutWithCommittedPhysicalShape(SdeSuIterateOp op) {
-  std::optional<SmallVector<int64_t, 4>> ownerDims =
-      readI64ArrayAttr(op.getPhysicalOwnerDimsAttr());
-  std::optional<SmallVector<int64_t, 4>> blockShape =
-      readI64ArrayAttr(op.getPhysicalBlockShapeAttr());
-  if (!ownerDims || ownerDims->empty() || !blockShape || blockShape->empty())
+inline bool reconcilePartialReductionOwnersWithCommittedShape(
+    SdeSuIterateOp op, ArrayRef<int64_t> committedOwnerDims) {
+  if (!op || committedOwnerDims.empty())
     return false;
-  return rewriteWriterArrayLayoutToPhysicalShape(op, *ownerDims, *blockShape);
+  auto classification = op.getStructuredClassification();
+  if (!classification ||
+      *classification != SdeStructuredClassification::elementwise_pipeline ||
+      !op.getPartialReductionAttr())
+    return false;
+
+  std::optional<SmallVector<int64_t, 4>> reductionOwnerDims =
+      readI64ArrayAttr(op.getPartialReductionOwnerDimsAttr());
+  if (!reductionOwnerDims || reductionOwnerDims->empty())
+    return false;
+
+  SmallVector<int64_t, 4> reconciled;
+  for (int64_t dim : *reductionOwnerDims) {
+    if (!containsI64Value(committedOwnerDims, dim))
+      continue;
+    if (!containsI64Value(reconciled, dim))
+      reconciled.push_back(dim);
+  }
+  if (reconciled.empty() || sameI64Values(reconciled, *reductionOwnerDims))
+    return false;
+
+  op.setPartialReductionOwnerDimsAttr(
+      buildI64ArrayAttr(op.getContext(), reconciled));
+  return true;
+}
+
+/// Commit physical grain to arrayLayout and logicalWorkerSlice only.
+inline bool commitWriterPhysicalLayoutFacts(
+    SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
+    ArrayRef<int64_t> physicalBlockShape,
+    ArrayRef<int64_t> logicalWorkerSlice = {}) {
+  if (!op || ownerDims.empty() || physicalBlockShape.empty())
+    return false;
+  ArrayRef<int64_t> logicalSlice =
+      logicalWorkerSlice.empty() ? physicalBlockShape : logicalWorkerSlice;
+  op.setLogicalWorkerSliceAttr(buildI64ArrayAttr(op.getContext(), logicalSlice));
+  bool changed =
+      rewriteWriterArrayLayoutToPhysicalShape(op, ownerDims, physicalBlockShape);
+  changed |=
+      reconcilePartialReductionOwnersWithCommittedShape(op, ownerDims);
+  return changed;
+}
+
+inline bool reconcileArrayLayoutWithCommittedPhysicalShape(SdeSuIterateOp op) {
+  std::optional<LayoutGraphFact> writeLayout =
+      findSingleCommittedWriterBlockLayout(op);
+  if (!writeLayout)
+    return false;
+  return rewriteWriterArrayLayoutToPhysicalShape(
+      op, writeLayout->ownerDims, writeLayout->blockShape);
+}
+
+inline bool factMatchesCommittedWriterShape(const LayoutGraphFact &fact,
+                                            const LayoutGraphFact &home) {
+  return fact.layoutKind == home.layoutKind &&
+         sameI64Values(fact.ownerDims, home.ownerDims) &&
+         sameI64Values(fact.blockShape, home.blockShape) &&
+         fact.muBlockCount == home.muBlockCount;
+}
+
+inline bool
+reconcileReaderArrayLayoutsWithCommittedWriterShapes(Operation *moduleOp) {
+  if (!moduleOp)
+    return false;
+
+  struct WriterHome {
+    LayoutGraphFact fact;
+    Value root;
+  };
+
+  llvm::DenseMap<int64_t, WriterHome> homes;
+  llvm::DenseSet<int64_t> conflictingHomes;
+  moduleOp->walk([&](SdeSuIterateOp op) {
+    for (const LayoutGraphFact &fact :
+         parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+      if (fact.role != LayoutGraphRole::write ||
+          fact.layoutKind != ArrayLayoutKind::blockParallel ||
+          fact.ownerDims.empty() || fact.blockShape.empty())
+        continue;
+      Value root = findArrayLayoutRoot(op, fact.id, SdeAccessMode::write);
+      if (!root)
+        continue;
+      auto inserted = homes.try_emplace(fact.id, WriterHome{fact, root});
+      if (!inserted.second && (!factMatchesCommittedWriterShape(
+                                   fact, inserted.first->second.fact) ||
+                               !::mlir::carts::ValueAnalysis::sameMemrefRoot(
+                                   root, inserted.first->second.root)))
+        conflictingHomes.insert(fact.id);
+    }
+  });
+
+  bool changed = false;
+  moduleOp->walk([&](SdeSuIterateOp op) {
+    ArrayAttr layout = op.getArrayLayoutAttr();
+    if (!layout)
+      return;
+    Builder builder(op.getContext());
+    StringAttr kindName = builder.getStringAttr(AttrNames::LayoutGraph::Kind);
+    StringAttr ownerDimsName =
+        builder.getStringAttr(AttrNames::LayoutGraph::OwnerDims);
+    StringAttr blockShapeName =
+        builder.getStringAttr(AttrNames::LayoutGraph::BlockShape);
+    StringAttr muBlockCountName =
+        builder.getStringAttr(AttrNames::LayoutGraph::MuBlockCount);
+    StringAttr budgetBlockShapeName =
+        builder.getStringAttr(AttrNames::LayoutGraph::BudgetBlockShape);
+
+    SmallVector<Attribute, 4> rewritten;
+    rewritten.reserve(layout.size());
+    bool opChanged = false;
+    for (Attribute attr : layout) {
+      auto dict = dyn_cast<DictionaryAttr>(attr);
+      std::optional<LayoutGraphFact> fact =
+          dict ? parseArrayLayoutFact(dict) : std::nullopt;
+      if (!dict || !fact || fact->role != LayoutGraphRole::read) {
+        rewritten.push_back(attr);
+        continue;
+      }
+      auto homeIt = homes.find(fact->id);
+      if (homeIt == homes.end() || conflictingHomes.contains(fact->id) ||
+          fact->commVolumeBytes != 0 ||
+          factMatchesCommittedWriterShape(*fact, homeIt->second.fact)) {
+        rewritten.push_back(attr);
+        continue;
+      }
+      Value readRoot = findArrayLayoutRoot(op, fact->id, SdeAccessMode::read);
+      if (!readRoot || !::mlir::carts::ValueAnalysis::sameMemrefRoot(
+                           readRoot, homeIt->second.root)) {
+        rewritten.push_back(attr);
+        continue;
+      }
+
+      SmallVector<NamedAttribute, 8> fields;
+      fields.reserve(dict.size());
+      for (NamedAttribute named : dict) {
+        StringAttr name = named.getName();
+        if (name == kindName || name == ownerDimsName ||
+            name == blockShapeName || name == muBlockCountName ||
+            name == budgetBlockShapeName)
+          continue;
+        fields.push_back(named);
+      }
+      fields.push_back(builder.getNamedAttr(
+          kindName, builder.getStringAttr(
+                        stringifyLayoutKind(homeIt->second.fact.layoutKind))));
+      fields.push_back(builder.getNamedAttr(
+          ownerDimsName,
+          buildI64ArrayAttr(op.getContext(), homeIt->second.fact.ownerDims)));
+      fields.push_back(builder.getNamedAttr(
+          blockShapeName,
+          buildI64ArrayAttr(op.getContext(), homeIt->second.fact.blockShape)));
+      fields.push_back(builder.getNamedAttr(
+          muBlockCountName,
+          builder.getI64IntegerAttr(homeIt->second.fact.muBlockCount)));
+      rewritten.push_back(builder.getDictionaryAttr(fields));
+      opChanged = true;
+    }
+
+    if (opChanged) {
+      op.setArrayLayoutAttr(ArrayAttr::get(op.getContext(), rewritten));
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 } // namespace mlir::carts::sde

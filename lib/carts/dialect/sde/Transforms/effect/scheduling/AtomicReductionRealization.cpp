@@ -11,10 +11,12 @@ namespace mlir::carts::sde {
 } // namespace mlir::carts::sde
 
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
+#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -31,6 +33,46 @@ struct AtomicReductionMatch {
 
 static bool isIntegerAdd(Operation *op) {
   return isa_and_nonnull<arith::AddIOp>(op);
+}
+
+static Type getAccumulatorElementType(Value accumulator) {
+  if (auto shapedType = dyn_cast<ShapedType>(accumulator.getType()))
+    return shapedType.getElementType();
+  return accumulator.getType();
+}
+
+static bool hasNestedSequentialLoop(sde::SdeSuIterateOp op) {
+  bool found = false;
+  op->walk([&](Operation *nested) {
+    if (isa<scf::ForOp, affine::AffineForOp>(nested)) {
+      found = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
+static bool isAtomicReductionCandidate(sde::SdeSuIterateOp op) {
+  if (op.getReductionAccumulators().empty() || op.getPartialReductionAttr())
+    return false;
+  if (std::optional<sde::SdeReductionStrategy> strategy =
+          op.getReductionStrategy())
+    return *strategy == sde::SdeReductionStrategy::atomic;
+  if (hasNestedSequentialLoop(op))
+    return false;
+  ArrayAttr kindsAttr = op.getReductionKindsAttr();
+  if (!kindsAttr || kindsAttr.size() != op.getReductionAccumulators().size())
+    return false;
+  return llvm::all_of(llvm::zip(kindsAttr, op.getReductionAccumulators()),
+                      [](auto pair) {
+                        auto [attr, accumulator] = pair;
+                        auto kindAttr = dyn_cast<sde::SdeReductionKindAttr>(attr);
+                        return kindAttr && kindAttr.getValue() ==
+                                               sde::SdeReductionKind::add &&
+                               !isa<FloatType>(
+                                   getAccumulatorElementType(accumulator));
+                      });
 }
 
 static LogicalResult
@@ -158,12 +200,11 @@ struct SdeAtomicReductionRealizationPass
     getOperation().walk([&](sde::SdeSuIterateOp op) { loops.push_back(op); });
 
     for (sde::SdeSuIterateOp op : loops) {
-      auto strategy = op.getReductionStrategy();
-      if (!strategy || *strategy != sde::SdeReductionStrategy::atomic)
+      if (!isAtomicReductionCandidate(op))
         continue;
       if (op.getReductionAccumulators().empty()) {
         op.emitOpError()
-            << "has atomic reduction strategy without reduction accumulators";
+            << "has atomic-eligible reduction without reduction accumulators";
         signalPassFailure();
         return;
       }

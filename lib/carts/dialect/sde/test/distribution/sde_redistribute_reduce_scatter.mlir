@@ -4,7 +4,8 @@
 // reduce_scatter_like movement and removes the marker before ARTS.
 
 // CHECK-LABEL: func.func @reduce_scatter_contraction
-// CHECK: sde.redist <reduce_scatter_like> %{{.*}} : memref<256x256xf32> array_id(0) from owner [0] block [128, 256] to owner [0] block [128, 256] cost 2097152
+// CHECK: sde.su_distribute <owner_compute>
+// CHECK: sde.su_reduce_scatter %{{.*}} : memref<256x256xf32> array_id(0) owner [0] block [128, 256] reduce 0 kind <add>
 // CHECK-NOT: layoutsDisagree
 
 func.func @reduce_scatter_contraction(%T: memref<256x256xf32>,
@@ -25,6 +26,7 @@ func.func @reduce_scatter_contraction(%T: memref<256x256xf32>,
   } {arrayLayout = [{arrayId = 0 : i64, kind = "block_contraction", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write", commVolumeBytes = 0 : i64}]}
   // Consumer reduces through %T on its row axis %k (a reduction read of the owned
   // dim) -> a cross-owner reduction redistribution edge.
+  sde.su_distribute <owner_compute> {
   sde.su_iterate (%c0, %c0) to (%c256, %c256) step (%c1, %c1) {
   ^bb0(%i: index, %j: index):
     sde.array_layout_root read %E : memref<256x256xf32> array_id(1)
@@ -41,6 +43,7 @@ func.func @reduce_scatter_contraction(%T: memref<256x256xf32>,
     }
       sde.yield
     }
-  } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read", commVolumeBytes = 0 : i64}, {arrayId = 0 : i64, kind = "block_contraction", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read", commVolumeBytes = 2097152 : i64}, {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write", commVolumeBytes = 0 : i64}], layoutsDisagree = [0]}
+  } {arrayLayout = [{arrayId = 1 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read", commVolumeBytes = 0 : i64}, {arrayId = 0 : i64, kind = "block_contraction", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "read", commVolumeBytes = 2097152 : i64}, {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [128, 256], muBlockCount = 2 : i64, role = "write", commVolumeBytes = 0 : i64}]}
+  }
   return
 }

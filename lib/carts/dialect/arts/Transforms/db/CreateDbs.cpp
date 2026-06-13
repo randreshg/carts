@@ -496,8 +496,12 @@ Operation *CreateDbsPass::findPhysicalLayoutFactsSource(Operation *alloc) {
     if (!memRefType || memRefType.getRank() == 0)
       return false;
 
+    auto dbAlloc = dyn_cast<DbAllocOp>(candidate);
+    if (!dbAlloc)
+      return false;
+
     std::optional<ArtsDbPhysicalLayout> layout =
-        readArtsDbPhysicalLayout(candidate);
+        readArtsDbPhysicalLayoutFromCommittedType(dbAlloc);
     if (!layout)
       return false;
     ArrayRef<int64_t> ownerDims = layout->ownerDims;
@@ -524,8 +528,14 @@ Operation *CreateDbsPass::findPhysicalLayoutFactsSource(Operation *alloc) {
   };
 
   auto equivalentLayout = [](Operation *lhs, Operation *rhs) {
-    std::optional<ArtsDbPhysicalLayout> left = readArtsDbPhysicalLayout(lhs);
-    std::optional<ArtsDbPhysicalLayout> right = readArtsDbPhysicalLayout(rhs);
+    auto leftAlloc = dyn_cast<DbAllocOp>(lhs);
+    auto rightAlloc = dyn_cast<DbAllocOp>(rhs);
+    if (!leftAlloc || !rightAlloc)
+      return false;
+    std::optional<ArtsDbPhysicalLayout> left =
+        readArtsDbPhysicalLayoutFromCommittedType(leftAlloc);
+    std::optional<ArtsDbPhysicalLayout> right =
+        readArtsDbPhysicalLayoutFromCommittedType(rightAlloc);
     return left && right && sameI64Values(left->ownerDims, right->ownerDims) &&
            sameI64Values(left->physicalBlockShape, right->physicalBlockShape);
   };

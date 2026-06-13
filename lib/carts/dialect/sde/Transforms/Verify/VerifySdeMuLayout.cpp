@@ -9,11 +9,6 @@
 ///        rank-reducing view (subview/collapse/cast) that would reintroduce a
 ///        logical-rank handle onto a converted block-grid MU.
 ///
-///   R2 — `ownerDims == recover(structure)`. For every converted MU governed by
-///        committed single-owner BLOCK facts, the owner dim recovered purely
-///        from the expanded memref type must equal the committed
-///        `physicalOwnerDims`.
-///
 /// Conservative (flat) MUs and out-of-scope cases are skipped, never rejected.
 ///==========================================================================///
 
@@ -37,9 +32,6 @@ using namespace mlir::carts;
 
 namespace {
 
-// Shared helpers keep shape recognition and grain checks consistent across
-// rank expansion, access-window raising, and verification.
-
 struct VerifySdeMuLayoutPass
     : public sde::impl::VerifySdeMuLayoutBase<VerifySdeMuLayoutPass> {
   void runOnOperation() override {
@@ -51,7 +43,6 @@ struct VerifySdeMuLayoutPass
       if (!muType)
         return;
       const int64_t muRank = muType.getRank();
-      sde::SdeSuIterateOp si = sde::findCommittedBlockLayoutWriter(mu);
       std::optional<sde::ExpandedBlockGridMu> expanded =
           sde::recognizeExpandedBlockGridMu(mu);
 
@@ -77,8 +68,6 @@ struct VerifySdeMuLayoutPass
           }
           continue;
         }
-        // A rank-reducing view of a CONVERTED MU reintroduces a logical-rank
-        // handle and bypasses the physical coordinate system.
         if (expanded) {
           for (Value res : user->getResults()) {
             auto resType = dyn_cast<MemRefType>(res.getType());
@@ -90,54 +79,6 @@ struct VerifySdeMuLayoutPass
             }
           }
         }
-      }
-
-      // R2: ownerDims == recover(structure) for converted MUs (ND).
-      if (!expanded)
-        return;
-      const unsigned numOwner = expanded->ownerDims.size();
-      ArrayRef<int64_t> eshape = muType.getShape();
-      // Expanded layout: K grid dims (owner order, ascending) then L logical
-      // tile dims.
-      ArrayRef<int64_t> tiles = eshape.drop_front(numOwner);
-      // Per-owner tile extent == committed block extent.
-      for (unsigned i = 0; i < numOwner; ++i) {
-        if (tiles[expanded->ownerDims[i]] != expanded->blockExtents[i]) {
-          mu.emitOpError()
-              << "expanded MU tile extent does not match committed block shape "
-                 "on owner dim "
-              << expanded->ownerDims[i];
-          failed = true;
-          return;
-        }
-      }
-      // Validate the grid counts against the writer's iteration domain — an
-      // INDEPENDENT fact — so recover() is given the real owner extents rather
-      // than ones reconstructed from the expanded type (which would make the
-      // proof tautological).
-      std::optional<SmallVector<int64_t, 4>> ownerExtents =
-          sde::findOwnerIterationExtents(si, expanded->blockExtents,
-                                         expanded->gridCounts);
-      if (!ownerExtents) {
-        mu.emitOpError()
-            << "rank-expanded block grid counts are not ceilDiv(extent, block) "
-               "of distinct committed iteration extents; structure does not "
-               "encode the committed grain";
-        failed = true;
-        return;
-      }
-      SmallVector<int64_t, 4> logicalShape(tiles.begin(), tiles.end());
-      for (unsigned i = 0; i < numOwner; ++i)
-        logicalShape[expanded->ownerDims[i]] = (*ownerExtents)[i];
-
-      std::optional<SmallVector<unsigned, 2>> recovered =
-          sde::recoverOwnerDims(muType, logicalShape);
-      if (!recovered || ArrayRef<unsigned>(*recovered) !=
-                            ArrayRef<unsigned>(expanded->ownerDims)) {
-        mu.emitOpError()
-            << "rank-expanded structure does not recover the committed owner "
-               "dims (ownerDims != recover(structure))";
-        failed = true;
       }
     });
 

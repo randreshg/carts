@@ -11,7 +11,7 @@
 // CHECK-LABEL: func.func @raise_window_stencil
 // CHECK: sde.mu_alloc : memref<128x16xf32>
 // CHECK: sde.mu_alloc : memref<8x16x16xf32>
-// CHECK: sde.mu_access_window write %{{.*}} : memref<8x16x16xf32> owner_dims(1) block_lo [0] block_hi [8] valid [16, 16]
+// CHECK: sde.mu_access_window write %{{.*}} : memref<8x16x16xf32> array_id(0)
 
 func.func @raise_window_stencil() {
   %c0 = arith.constant 0 : index

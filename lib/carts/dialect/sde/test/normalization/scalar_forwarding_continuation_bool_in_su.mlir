@@ -58,3 +58,23 @@ func.func @branch_local_same_constant(%failed: i1) -> i1 {
 // CHECK-NOT: memref.load
 // CHECK: %[[TRUE:.*]] = arith.constant true
 // CHECK: return %[[TRUE]] : i1
+
+func.func @immediate_scratch_index(%src: memref<64xf32>, %dst: memref<64xf32>,
+                                   %i: index) {
+  %c1 = arith.constant 1 : index
+  %idx = memref.alloca() : memref<index>
+  %next = arith.addi %i, %c1 : index
+  memref.store %next, %idx[] : memref<index>
+  %side = arith.addi %i, %i : index
+  %loaded = memref.load %idx[] : memref<index>
+  %v = memref.load %src[%loaded] : memref<64xf32>
+  %unused = arith.addi %side, %c1 : index
+  memref.store %v, %dst[%loaded] : memref<64xf32>
+  return
+}
+
+// CHECK-LABEL: func.func @immediate_scratch_index
+// CHECK: %[[NEXT:.*]] = arith.addi %arg2, %c1 : index
+// CHECK-NOT: memref.load {{.*}} : memref<index>
+// CHECK: memref.load %arg0[%[[NEXT]]] : memref<64xf32>
+// CHECK: memref.store {{.*}}, %arg1[%[[NEXT]]] : memref<64xf32>
