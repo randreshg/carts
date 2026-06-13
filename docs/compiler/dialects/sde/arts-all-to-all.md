@@ -146,7 +146,12 @@ parameterization):
 
 | Item | Location |
 | --- | --- |
-| `AllToAllRedistFacts` + `buildAllToAllRedistFacts` (inverse equality gate) | `SdeToArtsBoundary.cpp` ~:47 / ~:1540 |
+| `AllToAllRedistFacts` + `buildAllToAllRedistFacts` (inverse equality gate) | `MovementLoweringUtils.h` / `MovementLoweringUtils.cpp` |
+| `convertAllToAllMovement` + `realizeAllToAllMovements` | `MovementLoweringUtils.cpp` |
+| `staticCoordsFromLinearIndex` (inverse of `staticLinearIndex`) | `DistributedDbPlacementUtils.h` |
+| `createUnitBlockDbAcquireAtCoords` | `DbUtils.h` / `DbUtils.cpp` |
+| `resolveBoundaryDbAlloc` | `DbBackedMemrefUtils.h` / `DbBackedMemrefUtils.cpp` |
+| `buildWholeDbAcquireWindow` | `DbUtils.h` / `DbUtils.cpp` |
 | `all_to_all_like` arm replacing the hard error | `SdeToArtsBoundary.cpp` before :441 |
 | **per-target-block writer-EDT graph emitter** (enumerate target blocks → N writers → RO acquires of covering source blocks on the distinct source DB) + positive fold-constant fail-closed check | `SdeToArtsBoundary.cpp` (new) |
 | **source sub-block range enumeration** (affine range + element-grain windows) | `SdeToArtsBoundary.cpp` peer of :1341 |

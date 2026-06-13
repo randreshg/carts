@@ -363,7 +363,7 @@ PHASE 7 — ARTS no-contract audit (= design-revision Part 8). Per-attr 3-fates
   VerifyArtsCdag fold AND S13.
 
   CORRECT op-level-verification.md's false premise: ARTS does NOT have zero verify
-  passes (VerifyArtsCdag + VerifyArtsObjectsOnly, + 4 ARTS-RT verify passes). BUT
+  passes (VerifyArtsCdag + VerifyArtsObjectsOnly, + 5 ARTS-RT verify passes: verify-{pre,edt,db,epoch}-lowered + verify-lowered). BUT
   ARTS IS already adequately op-verified — the only action is (i) fix the false
   grep claim, (ii) note VerifyArtsCdag's whole-module physical-layout walk is the
   one irreducible ModuleOp verifier, gated on PHASE 7 (db_alloc layout->type). Do
@@ -382,13 +382,29 @@ PHASE 9 — ARTS local-executor (async) lowering [greenfield: 0 usage, 0 tests].
 
 ## Loose ends
 
-- **Cost model:** delete the `commBetween(types)` line (§5.9.3 proves there is no
-  edge cost). Write the exact post-revision `SDECostModel` signature; mark
-  `getReductionCost`/`getAtomicUpdateCost`/`getMinPipelineOwnerIterationsPerTask`/
-  `getOwnerLocalPipelineTargetTaskWaves`/`getInterLocalityTaskWaves` each
-  kept|folded|deleted; resolve `getL2CacheSize` (delete + retract proposed-passes
-  P0, or keep-probed). Add the `ARTSCostModel` end-state (`min_distributed_tile_bytes`
-  + vector virtuals + the EDT `vectorizeWidth`/`unrollFactor`/`interleaveCount` fate).
+- **Cost model — exact post-revision `SDECostModel`** (no fabricated costs; no edge
+  cost — `commBetween` does not exist, §5.9.3). Disposition of every current virtual
+  (`SDECostModel.h`):
+  - **Keep (real machine facts):** `getLogicalWorkerCapacity()`,
+    `getWorkerLocalityGroupCount()`.
+  - **Keep (structural, derived only from those two):** `getInterLocalityTaskWaves()`.
+  - **Replace with fixed constants** (today derived from fabricated costs):
+    `getMinIterationsPerWorker()`, `getMinPipelineOwnerIterationsPerTask()`,
+    `getOwnerLocalPipelineTargetTaskWaves()` → small fixed amortization floors
+    (~2–3 iters / a capacity-relative bound), **not** functions of task/access cost.
+  - **Delete (fabricated cost constants):** `getTaskCreationCost`, `getTaskSyncCost`,
+    `getReductionCost`, `getAtomicUpdateCost`, `getDataAccessCost`. The sole
+    `getReductionCost` consumer (ReductionStrategy tree-vs-linear) restates
+    structurally as `log2(W)` vs `W`.
+  - **Delete `getL2CacheSize`** — resolves the contradiction (`design-revision.md:1173`
+    vs `proposed-passes.md`): its only consumer was `sde-default-tile-floor`, which is
+    dropped, so the literal goes with no probe needed.
+  - **Final interface:** `{ getLogicalWorkerCapacity, getWorkerLocalityGroupCount,
+    getInterLocalityTaskWaves, + the three fixed iteration floors }`.
+  - **`ARTSCostModel` end-state:** drop the duplicate `getVectorWidth` family and
+    `min_distributed_tile_bytes` (`ARTSCostModel.h:83-84`); the EDT
+    `vectorizeWidth`/`unrollFactor`/`interleaveCount` fate is decided in **Part 8**
+    (ARTS-RT codegen hints — keep only if a live ARTS-RT consumer reads them).
 - **`arts-all-to-all.md`** must be rewritten to consume the `su.all_to_all` **op**,
   not `sde.redist family=all_to_all_like` + `commVolumeBytes` (deleted); sequence
   after S11.
@@ -399,6 +415,14 @@ PHASE 9 — ARTS local-executor (async) lowering [greenfield: 0 usage, 0 tests].
   lit + 2N repartition reproducer), S22–S25 (async lit), `D-b` (affine-in-CU
   consumer lit), S6 (D-a re-raise termination test), S18 (jacobi2d HaloSliceAttr
   reproducer) — each BLOCKED until its test exists.
+- **Inert passes — repair-or-delete (decide, don't leave dormant):**
+  `elementwise-fusion` fires on **0/21** (the `elementwise_pipeline` class is
+  authored upstream in `SuLoopAccessAnalysis`, not by the pass) → **delete** unless a
+  motivating kernel appears; `iteration-space-decomposition` is a **no-op despite the
+  boundary-guard structure being present** (its matcher wants an `andi` chain, the IR
+  has an `arith.select` fused predicate) → **fix the matcher or delete**;
+  `mu-access-window-sync-opt` (0 barriers removed) is **deleted with `mu_access_window`**
+  (S12). Add each as an explicit DAG step, not a silent survivor.
 
 ## Open items (honest residue)
 

@@ -347,6 +347,14 @@ block-native layout) and is **layout-free**.
 
 ## Part 4 — Migration / sequencing plan
 
+> **Authoritative order: [`architecture.md`](./architecture.md) "Migration — the
+> unified dependency DAG" (S0–S26).** This Part 4, the §5.8 "Landing order", and
+> Part 7's affine steps are the **per-area derivations** behind that DAG — consult
+> them for rationale, but follow the single DAG for ordering. Where they differ, the
+> DAG wins (it resolved the five-overlapping-orderings contradiction the gap audit
+> found, e.g. `commVolumeBytes` is deleted *early/independently* in the DAG, not
+> coupled to movement ops as the step below implies).
+
 The suite is **RED at HEAD** — every step gates on **delta-from-baseline**, not
 all-green. Cardinal rule: **convert readers to the type/op first, delete the
 attribute last.** Cross-dialect note: `SdeToArtsBoundary`, `LoweringFactUtils`,
@@ -1844,3 +1852,80 @@ a dependence-proof gap, not an IR-recovery gap.**" Both halves are now corrected
   `SuLoopAccessAnalysis` substrate, inherits the IR-recovery defect unless its
   access recovery is moved onto affine maps + `ValueBounds` as §5.9.2 / §7.2
   specify.
+
+## Part 8 — ARTS no-contract audit
+
+The redesign's principle applies equally to ARTS, which carries the **larger**
+stamped-contract surface: **69 `OptionalAttr` on the three core ops**
+(`arts.db_alloc` 19, `arts.db_acquire` 22, `arts.edt` 28) **+ 15 on
+`arts.epoch`(11) / `arts.barrier` / `arts.db_access_window` / `arts.db_release` =
+84 file-wide** (`ArtsOps.td`). The `ArtsDepPattern` docstring is the anti-pattern
+verbatim: *"records the semantic rewrite family so downstream passes do not need to
+rediscover it from raw memory accesses"* (`ArtsAttrs.td:188-191`).
+
+**The one discriminator vs SDE:** ARTS has the *access-neighborhood* analysis
+(so `stencil_*` offsets and `read_only_after_init` genuinely **recompute**), but it
+has **no pattern classifier** — `depPattern` is only ever a **1:1 translation of
+`sde::SdePattern`** at the boundary (`SdeToArtsBoundaryHelpers.cpp:79-135`). So the
+pattern channel is **gated-irreducible (boundary-translated, consume-and-erase)**,
+*not* recompute.
+
+### Fate of every core-op attr
+
+- **fate-2 TYPE** (already the DB grid in the `sizes`/`elementSizes` operands,
+  `DistributedDbPlacementUtils.h:241-271`): owner dims, block grain;
+  `stencil_owner_dims` is a redundant restatement.
+- **fate-1 RECOMPUTE** (ARTS has the analysis): `stencil_center_offset` /
+  `stencil_min_offsets` / `stencil_max_offsets` / `stencil_spatial_dims` /
+  `stencil_write_footprint` / `supported_block_halo` (memref access neighborhood);
+  `read_only_after_init` (`DbModeTightening.cpp:1000`); `partition_mode` (grain from
+  block count + access shape); `local_only`, `distributed`
+  (`evaluateDistributedDbEligibility` over grid + access modes); `distribution_pattern`
+  / `distribution_kind` (pure functions of `depPattern`, `LoweringFactUtils.cpp:147-149`).
+- **fate-3 IRREDUCIBLE RUNTIME** (value-branched placement/coherence — the honest
+  residue ARTS legitimately stamps): `route` (owner-map `ordinal % totalNodes`),
+  `concurrency` (intranode/internode, authored+normalized), `type`/`edt_type`,
+  `dbMode` (required), `runtime_db_mode` (per-acquire RO/EW/RW),
+  `element_offsets`/`element_sizes`/`bounds_valid` (realized halo byte-window),
+  `inPlaceSafe`/`inPlaceSharedState`, `perBlockReplicated`/`perBlockSingleWriterStencil`
+  (realization commitments over an identical grid type), `interleaveCount` (the one
+  wired source/cost codegen hint — slot live, producer currently absent).
+- **fate-3 GATED — boundary-translated, consume-and-erase, NOT durable:**
+  `depPattern` (translation of `sde::SdePattern`; read at the boundary, never
+  re-stamped onto alloc/acquire/edt/epoch as a cache).
+- **delete-dead** (zero branching readers): `compact_halo_payload`,
+  `perBlockSummingSettle`, `perBlockHaloExchange`, `compactHaloPack`,
+  `ownerLocalWriterSplit`, `distribution_version`, `vectorizeWidth`, `unrollFactor`.
+- **de-attribute — pass-local scratch, must NOT be an op attr:** the
+  `partialReductionSplit*` family (`partialReductionSplitRequired`/`...Dims`/
+  `...Factor`/`...OwnerTaskCount`/`...TargetWorkerCount`) — produced, consumed, and
+  erased entirely within `PartialReductionSplit`; move to an in-pass data structure
+  (the `EdtLowering.cpp:319` fail-closed guard stays as the leak backstop).
+
+**Coverage:** `arts.epoch` carries the *same* `depPattern`/`distribution_*`/
+`stencil_*` family (11 attrs, same fates as the `edt` copies); plus
+`arts.barrier.barrierReason` (recompute via `classifyBarrierSync`),
+`arts.db_access_window.{arrayId,haloShape}` (SSA-root / `su.halo`),
+`arts.db_release.release_type`.
+
+### ARTS / ARTS-RT verify passes (correcting the false "zero" premise)
+
+There are **7**, not zero: **2 ARTS** (`VerifyArtsCdag`, `VerifyArtsObjectsOnly`)
++ **5 ARTS-RT** (`verify-{pre,edt,db,epoch}-lowered`, `verify-lowered`).
+`VerifyArtsCdag`'s whole-module physical-layout walk is the one genuinely
+irreducible ModuleOp verifier — and it folds to op-level **only after** `db_alloc`'s
+layout becomes the type (gated on this Part). The ARTS-RT `verify-*-lowered` passes
+are lowering-stage gates (kept, re-pointed at the async form in PHASE 9). ARTS ops
+are otherwise already op-verified at the ODS level — do **not** retrofit SDE-8-style
+standalone verify passes onto ARTS.
+
+### Highest-value action + sequencing
+
+Replace the `acquireCarriesSubpartitionEvidence` **presence-OR**
+(`EdtUtils.cpp:138-167`) — which is what keeps `distribution_version`/
+`distribution_kind`/`distribution_pattern` alive as existence flags — with one
+recompute over grain + access pattern, and **read `depPattern` only at the
+boundary** (translate the surviving SDE fact, consume it). Convert readers
+(`LoweringFactUtils.cpp:67-151`, `PartialReductionSplit`) FIRST, delete the boundary
+stamps LAST. This is `architecture.md` **PHASE 7** and gates the `VerifyArtsCdag`
+fold and **S13**.

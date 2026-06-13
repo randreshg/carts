@@ -12,8 +12,8 @@ because two checks have no host op.
 > **Correction (gap audit).** An earlier draft claimed "ARTS is the existence proof:
 > zero standalone verify passes." That is **false** — it grepped only `include/` and
 > missed `lib/carts/dialect/arts/Transforms/Verify/`: ARTS has `VerifyArtsCdag` +
-> `VerifyArtsObjectsOnly` (two ModuleOp verify passes), and ARTS-RT has four
-> (`verify-{pre,edt,db,epoch}-lowered`). So the model below is a **shared goal**, not
+> `VerifyArtsObjectsOnly` (two ModuleOp verify passes), and ARTS-RT has five
+> (`verify-{pre,edt,db,epoch}-lowered` + `verify-lowered`). So the model below is a **shared goal**, not
 > a proof ARTS already achieves it. ARTS *is* heavily op-verified at the ODS level;
 > its one genuinely irreducible ModuleOp verifier is `VerifyArtsCdag`'s whole-module
 > physical-layout walk, which can only fold to op verifiers once `db_alloc`'s stamped
