@@ -129,7 +129,7 @@ static bool isSchedulingBoundaryOp(Operation *op) {
   return isa<omp::WsloopOp, omp::TaskloopOp, omp::TaskOp, omp::BarrierOp,
              omp::TaskwaitOp, omp::SingleOp, omp::MasterOp, scf::ParallelOp,
              sde::SdeCuRegionOp, sde::SdeCuTaskOp, sde::SdeSuIterateOp,
-             sde::SdeSuDistributeOp, sde::SdeSuBarrierOp, sde::SdeRedistOp>(op);
+             sde::SdeSuDistributeOp, sde::SdeSuBarrierOp>(op);
 }
 
 static bool regionContainsSchedulingBoundaryOp(Region &region) {

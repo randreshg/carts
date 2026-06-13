@@ -37,8 +37,7 @@ namespace {
 /// resort.
 static bool muHasExplicitMovement(carts::sde::SdeMuAllocOp mu) {
   for (Operation *user : mu.getMemref().getUsers())
-    if (isa<carts::sde::SdeSuHaloOp, carts::sde::SdeSuReduceScatterOp,
-            carts::sde::SdeRedistOp>(user))
+    if (isa<carts::sde::SdeSuHaloOp, carts::sde::SdeSuReduceScatterOp>(user))
       return true;
   return false;
 }

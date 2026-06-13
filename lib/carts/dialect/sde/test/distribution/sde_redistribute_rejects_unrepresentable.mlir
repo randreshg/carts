@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute)' 2>&1 | %FileCheck %s
 
 // Non-reduction layout mismatches fail closed until SDE commits a real
 // redistribution transform for that geometry.

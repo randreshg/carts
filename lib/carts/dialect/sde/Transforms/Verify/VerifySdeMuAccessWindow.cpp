@@ -203,10 +203,6 @@ static bool hasQueuedRedistributionForWindow(sde::SdeSuIterateOp su,
       if (reduce.getArrayIdAttr() &&
           reduce.getArrayIdAttr().getInt() == arrayId.getInt())
         return true;
-    if (auto redist = dyn_cast<sde::SdeRedistOp>(user))
-      if (redist.getArrayIdAttr() &&
-          redist.getArrayIdAttr().getInt() == arrayId.getInt())
-        return true;
   }
   return false;
 }
@@ -301,14 +297,26 @@ static void verifyWindowOwnerRankRepresentable(sde::SdeMuAccessWindowOp win,
       break;
     }
   }
-  if (!matched)
+
+  size_t committedOwnerDimCount = 0;
+  if (matched) {
+    committedOwnerDimCount = matched->ownerDims.size();
+  } else if (win.getMode() == sde::SdeAccessMode::write ||
+             win.getMode() == sde::SdeAccessMode::readwrite) {
+    if (std::optional<sde::CommittedSuPhysicalLayout> committed =
+            sde::recoverCommittedPhysicalLayout(su))
+      committedOwnerDimCount = committed->ownerDims.size();
+    else
+      return;
+  } else {
     return;
+  }
 
   std::optional<sde::MuAccessWindowGeometry> geom =
       sde::deriveMuAccessWindowGeometry(win);
   if (!geom)
     return;
-  if (static_cast<size_t>(geom->ownerDimCount) == matched->ownerDims.size())
+  if (static_cast<size_t>(geom->ownerDimCount) == committedOwnerDimCount)
     return;
   if (hasQueuedRedistributionForWindow(su, win))
     return;
@@ -321,7 +329,10 @@ static void verifyWindowOwnerRankRepresentable(sde::SdeMuAccessWindowOp win,
 }
 
 static bool hasCommittedBlockLayoutFacts(sde::SdeSuIterateOp op) {
-  if (sde::hasCommittedWriterBlockLayout(op))
+  if (sde::recoverCommittedPhysicalLayout(op))
+    return true;
+  if (sde::SdeCuRegionOp cu = sde::findSuComputeCuRegion(op);
+      cu && cu.getGroupBlockCountAttr())
     return true;
   for (const sde::LayoutGraphFact &fact :
        sde::parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
@@ -345,8 +356,8 @@ struct VerifySdeMuAccessWindowPass
       if (hasCommittedBlockLayoutFacts(op) || !hasAccessWindowFacts(op))
         return;
       op.emitOpError()
-          << "has SDE MU access-window facts but no committed block layout "
-             "in arrayLayout; SDE must author a physical layout shape or fail "
+          << "has SDE MU access-window facts but no committed block layout; "
+             "SDE must author a physical layout shape or fail "
              "before sde-to-arts";
       failed = true;
     });

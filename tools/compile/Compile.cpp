@@ -268,7 +268,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 3> kInitialCleanupPasses = {
     "LowerAffine(func)", "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 27> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 26> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
     "SdeCuNormalization",
@@ -292,7 +292,6 @@ static const std::array<llvm::StringLiteral, 27> kSdePlanningPasses = {
     "MuAccessWindowSyncOpt",
     "VerifySdeMuAccessWindowSync",
     "SdeRedistribute",
-    "VerifySdeRedistribute",
     "SdeCoarseAvoidance",
     "VerifySdeCoarseAvoidance",
     "VerifySde"};
@@ -1154,7 +1153,6 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createMuAccessWindowSyncOptPass());
   pm.addPass(sde::createVerifySdeMuAccessWindowSyncPass());
   pm.addPass(sde::createSdeRedistributePass());
-  pm.addPass(sde::createVerifySdeRedistributePass());
   pm.addPass(sde::createSdeCoarseAvoidancePass());
   pm.addPass(sde::createVerifySdeCoarseAvoidancePass());
   pm.addPass(sde::createVerifySdePass());

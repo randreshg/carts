@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute)' 2>&1 | %FileCheck %s
 
 // CHECK-LABEL: func.func @expanded_halo_permuted_owner_order
 // CHECK: sde.su_distribute <owner_compute>

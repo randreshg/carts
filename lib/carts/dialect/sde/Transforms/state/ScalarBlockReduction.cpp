@@ -456,33 +456,11 @@ static int64_t nextInternalArrayId(Operation *anchor) {
   });
   scope->walk(
       [&](sde::SdeMuAccessWindowOp win) { record(win.getArrayIdAttr()); });
-  scope->walk(
-      [&](sde::SdeRedistOp redist) { record(redist.getArrayIdAttr()); });
+  scope->walk([&](sde::SdeSuHaloOp halo) { record(halo.getArrayIdAttr()); });
+  scope->walk([&](sde::SdeSuReduceScatterOp reduce) {
+    record(reduce.getArrayIdAttr());
+  });
   return maxId + 1;
-}
-
-static ArrayAttr buildPartialArrayLayout(MLIRContext *ctx, int64_t arrayId,
-                                         const ReductionCandidate &candidate) {
-  Builder builder(ctx);
-  SmallVector<NamedAttribute, 6> fields;
-  fields.push_back(builder.getNamedAttr(sde::AttrNames::LayoutGraph::ArrayId,
-                                        builder.getI64IntegerAttr(arrayId)));
-  fields.push_back(builder.getNamedAttr(
-      sde::AttrNames::LayoutGraph::Kind,
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::BlockParallel)));
-  fields.push_back(
-      builder.getNamedAttr(sde::AttrNames::LayoutGraph::OwnerDims,
-                           buildI64ArrayAttr(ctx, SmallVector<int64_t, 1>{0})));
-  fields.push_back(builder.getNamedAttr(
-      sde::AttrNames::LayoutGraph::BlockShape,
-      buildI64ArrayAttr(ctx, partialPhysicalBlockShape(candidate))));
-  fields.push_back(builder.getNamedAttr(
-      sde::AttrNames::LayoutGraph::MuBlockCount,
-      builder.getI64IntegerAttr(candidate.sourceGeometry.blockCount)));
-  fields.push_back(builder.getNamedAttr(
-      sde::AttrNames::LayoutGraph::Role,
-      builder.getStringAttr(sde::AttrNames::LayoutGraphValues::RoleWrite)));
-  return builder.getArrayAttr({builder.getDictionaryAttr(fields)});
 }
 
 static SmallVector<Value, 4> partialIndices(const ReductionCandidate &candidate,
@@ -598,9 +576,6 @@ static sde::SdeSuIterateOp createProducer(ReductionCandidate &candidate,
   sde::SuIterateAttrs suAttrs;
   suAttrs.structuredClassification = sde::SdeStructuredClassificationAttr::get(
       ctx, sde::SdeStructuredClassification::elementwise);
-  suAttrs.arrayLayout =
-      partialArrayId ? buildPartialArrayLayout(ctx, *partialArrayId, candidate)
-                     : ArrayAttr{};
   auto su = sde::buildSuIterate(builder, loc, ValueRange{zero},
                                 ValueRange{blockCount}, ValueRange{one}, suAttrs);
 

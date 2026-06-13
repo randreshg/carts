@@ -107,20 +107,6 @@ def VerifySdeCoarseAvoidance
   let constructor = "mlir::carts::sde::createVerifySdeCoarseAvoidancePass()";
 }
 
-def VerifySdeRedistribute
-    : Pass<"verify-sde-redistribute", "mlir::ModuleOp"> {
-  let summary = "Fail closed unless redistribution is explicit SU structure";
-  let description = [{
-    Companion of `sde-redistribute` after that pass has materialized movement
-    edges. It rejects any retired `sde.redist` carrier and validates grounding
-    and consumer anchoring for the live `sde.su_halo`/`sde.su_reduce_scatter`
-    movement ops.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::carts::sde::createVerifySdeRedistributePass()";
-}
-
 def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
   let summary = "Verify SDE MU/CU/SU structural legality at the SDE boundary";
   let description = [{
@@ -130,7 +116,7 @@ def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
       enforce direct SU body shape: `sde.su_iterate` directly contains only
       direct-boundary CUs, `sde.array_layout_root`, `sde.su_barrier`, and
       `sde.yield`, while `sde.su_distribute` directly contains only nested SUs,
-      `sde.redist`, or `sde.su_barrier`; raw scf/source compute is legal under
+      `sde.su_halo`, `sde.su_reduce_scatter`, or `sde.su_barrier`; raw scf/source compute is legal under
       SDE only inside a CU;
     - SDE carries no target dependency graph: no consumed sde.mu_dep dependency
       graph and no generic token/dataflow

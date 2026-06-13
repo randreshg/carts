@@ -8,7 +8,8 @@
 /// and verification. `verify-sde` applies one stricter boundary rule on top:
 /// an `sde.su_iterate` body directly contains direct-boundary CUs,
 /// `sde.array_layout_root` provenance, barriers, and its terminator only; an
-/// `sde.su_distribute` body directly contains nested SUs, `sde.redist`, or
+/// `sde.su_distribute` body directly contains nested SUs, `sde.su_halo`,
+/// `sde.su_reduce_scatter`, or
 /// barriers only. Scalar/index plumbing that belongs to scheduled work must be
 /// inside a CU even when it is memory-effect-free.
 ///==========================================================================///
@@ -50,7 +51,7 @@ inline bool isSuOp(Operation *op) {
 /// Scheduling operations that are forbidden anywhere inside a leaf CU.
 inline bool isCuForbiddenSchedulingOp(Operation *op) {
   return isSuOp(op) ||
-         isa<SdeSuBarrierOp, SdeRedistOp, SdeSuHaloOp, SdeSuReduceScatterOp>(op);
+         isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp>(op);
 }
 
 /// True when `op` contains nested SU scheduling that must stay outside any CU.

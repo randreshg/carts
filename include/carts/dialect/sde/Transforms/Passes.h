@@ -181,7 +181,6 @@ std::unique_ptr<Pass> createVerifySdeMuLayoutPass();
 std::unique_ptr<Pass> createVerifySdeMuAccessWindowPass();
 std::unique_ptr<Pass> createVerifySdeMuAccessWindowSyncPass();
 std::unique_ptr<Pass> createVerifySdeCoarseAvoidancePass();
-std::unique_ptr<Pass> createVerifySdeRedistributePass();
 std::unique_ptr<Pass> createVerifySdePass();
 
 } // namespace mlir::carts::sde

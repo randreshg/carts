@@ -120,6 +120,19 @@ static std::optional<LayoutGraphFact> findWriteLayoutFact(SdeSuIterateOp si,
         !fact.ownerDims.empty())
       return fact;
   }
+  Value writeRoot = findArrayLayoutRoot(si, arrayId, SdeAccessMode::write);
+  if (!writeRoot)
+    return std::nullopt;
+  if (std::optional<CommittedSuPhysicalLayout> committed =
+          recoverCommittedPhysicalLayout(si)) {
+    LayoutGraphFact fact;
+    fact.id = arrayId;
+    fact.role = LayoutGraphRole::write;
+    fact.layoutKind = ArrayLayoutKind::blockParallel;
+    fact.ownerDims = committed->ownerDims;
+    fact.blockShape = committed->blockShape;
+    return fact;
+  }
   return std::nullopt;
 }
 
@@ -174,6 +187,10 @@ resolveMuPhysicalLayoutForWriter(MemRefType logicalType,
   if (std::optional<LayoutGraphFact> fact = findSingleWriteBlockLayoutFact(writer))
     return resolveMuPhysicalLayout(logicalType, fact->ownerDims,
                                    fact->blockShape);
+  if (std::optional<CommittedSuPhysicalLayout> committed =
+          recoverCommittedPhysicalLayout(writer))
+    return resolveMuPhysicalLayout(logicalType, committed->ownerDims,
+                                   committed->blockShape);
   return std::nullopt;
 }
 
@@ -246,6 +263,12 @@ recognizeExpandedBlockGridMuForWriter(SdeSuIterateOp writer,
                                                   muType))
       return expanded;
   }
+  if (std::optional<CommittedSuPhysicalLayout> committed =
+          recoverCommittedPhysicalLayout(writer))
+    if (std::optional<ExpandedBlockGridMu> expanded =
+            recognizeExpandedBlockGridMuFromShape(committed->ownerDims,
+                                                  committed->blockShape, muType))
+      return expanded;
   if (std::optional<RecoveredMuPhysicalLayout> recovered =
           recoverMuPhysicalLayoutFromExpandedType(muType))
     return recognizeExpandedBlockGridMuFromShape(
@@ -579,7 +602,7 @@ static bool isLayoutInvariantBasePointer(polygeist::Memref2PointerOp m2p) {
 bool muRootHasUnsupportedUse(Value root) {
   for (Operation *user : root.getUsers()) {
     if (isa<memref::LoadOp, memref::StoreOp, memref::DeallocOp,
-            SdeArrayLayoutRootOp, SdeMuAccessWindowOp, SdeRedistOp>(user))
+            SdeArrayLayoutRootOp, SdeMuAccessWindowOp, SdeSuHaloOp, SdeSuReduceScatterOp>(user))
       continue;
     if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(user))
       if (isLayoutInvariantBasePointer(m2p))

@@ -6,8 +6,7 @@
 // CHECK: sde.array_layout_root write %[[PARTIAL]] : memref<8x1x16x1xf64> array_id(2)
 // CHECK: sde.mu_access_window write %[[PARTIAL]] : memref<8x1x16x1xf64> array_id(2)
 // CHECK: memref.store %{{.*}}, %[[PARTIAL]][%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<8x1x16x1xf64>
-// CHECK: arrayLayout = [{arrayId = 2 : i64, blockShape = [1, 16, 1], kind = "block_parallel"
-// CHECK-SAME: ownerDims = [0]
+// CHECK-NOT: arrayLayout = [{arrayId = 2
 // CHECK: sde.mu_access_window read %[[PARTIAL]] : memref<8x1x16x1xf64> array_id(2)
 // CHECK: memref.load %[[PARTIAL]][%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<8x1x16x1xf64>
 
@@ -51,8 +50,7 @@ func.func @rank_expanded_source_checksum_partials() -> f64 {
 // CHECK: sde.su_iterate (%{{.*}}) to (%{{.*}}) step (%{{.*}}) classification(<elementwise>)
 // CHECK: memref.load %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<4x8x2x16xf64>
 // CHECK: memref.store %{{.*}}, %[[PARTIAL]][%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<4x1x2x1xf64>
-// CHECK: arrayLayout = [{arrayId = 3 : i64, blockShape = [1, 2, 1], kind = "block_parallel"
-// CHECK-SAME: ownerDims = [0]
+// CHECK-NOT: arrayLayout = [{arrayId = 3
 // CHECK: sde.mu_access_window read %[[PARTIAL]] : memref<4x1x2x1xf64> array_id(3)
 
 func.func @rank_expanded_nonleading_owner_checksum_partials() -> f64 {

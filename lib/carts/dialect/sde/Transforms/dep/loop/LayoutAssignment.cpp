@@ -672,6 +672,11 @@ struct LayoutAssignmentPass
       int64_t arrayId = -1;
       sde::SdeAccessMode mode = sde::SdeAccessMode::read;
     };
+    struct WriterPhysicalCommit {
+      SmallVector<int64_t, 4> ownerDims;
+      SmallVector<int64_t, 4> blockShape;
+      SmallVector<int64_t, 4> logicalShape;
+    };
     struct SchedulingUnitLayoutUpdate {
       SmallVector<DictionaryAttr, 4> entries;
       SmallVector<RootProvenance, 4> roots;
@@ -679,6 +684,8 @@ struct LayoutAssignmentPass
     };
     SmallVector<SchedulingUnitLayoutUpdate> updates(
         relations.schedulingUnits.size());
+    llvm::SmallDenseMap<unsigned, SmallVector<WriterPhysicalCommit, 2>>
+        writerCommits;
 
     for (auto &kv : relations.profiles) {
       const sde::ArrayAccessProfile &profile = kv.second;
@@ -731,7 +738,21 @@ struct LayoutAssignmentPass
         if (!isWrite && edgeBytes == 0 &&
             !schedulingUnitWritesAnyRoot(relations, suId))
           continue;
-        updates[suId].entries.push_back(entry);
+        bool writerViaMuType =
+            isWrite && !layoutForSu.ownerPositions.empty() &&
+            (layoutForSu.kind == sde::ArrayLayoutKind::blockParallel ||
+             layoutForSu.kind == sde::ArrayLayoutKind::blockContraction);
+        if (writerViaMuType) {
+          writerCommits[suId].push_back(
+              {SmallVector<int64_t, 4>(layoutForSu.ownerPositions.begin(),
+                                       layoutForSu.ownerPositions.end()),
+               SmallVector<int64_t, 4>(layoutForSu.blockShape.begin(),
+                                       layoutForSu.blockShape.end()),
+               SmallVector<int64_t, 4>(profile.staticShape.begin(),
+                                       profile.staticShape.end())});
+        } else {
+          updates[suId].entries.push_back(entry);
+        }
         updates[suId].roots.push_back(
             {profile.root, arrayId,
              isWrite ? sde::SdeAccessMode::write : sde::SdeAccessMode::read});
@@ -742,13 +763,17 @@ struct LayoutAssignmentPass
     // Apply accumulated layout updates.
     for (auto [suId, op] : llvm::enumerate(relations.schedulingUnits)) {
       SchedulingUnitLayoutUpdate &update = updates[suId];
-      if (update.entries.empty())
+      if (update.entries.empty() && !writerCommits.count(suId) &&
+          update.roots.empty())
         continue;
-      SmallVector<Attribute, 4> entryAttrs(update.entries.begin(),
-                                           update.entries.end());
-      op.setArrayLayoutAttr(ArrayAttr::get(ctx, entryAttrs));
-      op.setCommVolumeBytesAttr(
-          IntegerAttr::get(IntegerType::get(ctx, 64), update.commVolumeBytes));
+      if (!update.entries.empty()) {
+        SmallVector<Attribute, 4> entryAttrs(update.entries.begin(),
+                                             update.entries.end());
+        op.setArrayLayoutAttr(ArrayAttr::get(ctx, entryAttrs));
+      }
+      if (update.commVolumeBytes > 0)
+        op.setCommVolumeBytesAttr(
+            IntegerAttr::get(IntegerType::get(ctx, 64), update.commVolumeBytes));
 
       OpBuilder builder(&op.getBody().front(), op.getBody().front().begin());
       for (const RootProvenance &root : update.roots) {
@@ -767,6 +792,11 @@ struct LayoutAssignmentPass
             sde::SdeAccessModeAttr::get(ctx, root.mode),
             IntegerAttr::get(IntegerType::get(ctx, 64), root.arrayId));
       }
+      auto writerCommitIt = writerCommits.find(suId);
+      if (writerCommitIt != writerCommits.end())
+        for (const WriterPhysicalCommit &commit : writerCommitIt->second)
+          (void)sde::commitWriterPhysicalLayoutViaMuType(
+              op, commit.ownerDims, commit.blockShape, commit.logicalShape);
     }
   }
 

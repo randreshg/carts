@@ -81,7 +81,7 @@ func.func @owner_local_pipeline_budget_retiled() {
 // CHECK: sde.array_layout_root read %[[A]] : memref<2x2x256x128x3136xf32> array_id(3)
 // CHECK: sde.mu_access_window read %[[A]] : memref<2x2x256x128x3136xf32> array_id(3)
 // CHECK: sde.mu_access_window write %[[B]] : memref<2x2x256x128xf32> array_id(2)
-// CHECK: arrayLayout = [{arrayId = 2 : i64, blockShape = [256, 128]
+// CHECK-NOT: arrayLayout =
 
 func.func @promoted_reduction_budget_retiled() {
   %c0 = arith.constant 0 : index

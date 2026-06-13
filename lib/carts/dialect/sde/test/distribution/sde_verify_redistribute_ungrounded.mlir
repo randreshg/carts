@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(verify-sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(canonicalize)' 2>&1 | %FileCheck %s
 
 // GROUNDING gate: a well-formed sde.su_reduce_scatter whose array has no
 // committed writer layout/provenance is rejected before ARTS.

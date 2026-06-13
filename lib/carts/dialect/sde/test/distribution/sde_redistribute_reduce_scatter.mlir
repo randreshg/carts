@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute,verify-sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute)' 2>&1 | %FileCheck %s
 
 // sde-redistribute consumes the temporary mismatch marker into one explicit
 // reduce_scatter_like movement and removes the marker before ARTS.

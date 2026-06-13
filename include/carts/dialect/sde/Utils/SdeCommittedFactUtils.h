@@ -33,32 +33,83 @@ struct CommittedSuPhysicalLayout {
 };
 
 inline std::optional<CommittedSuPhysicalLayout>
+recoverPhysicalLayoutFromCuGroupCounts(SdeSuIterateOp op);
+
+
+inline std::optional<CommittedSuPhysicalLayout>
 recoverCommittedPhysicalLayout(SdeSuIterateOp op) {
   if (!op)
     return std::nullopt;
+  if (!op.getBody().empty()) {
+    for (SdeArrayLayoutRootOp root :
+         op.getBody().front().getOps<SdeArrayLayoutRootOp>()) {
+      if (root.getMode() != SdeAccessMode::write)
+        continue;
+      auto muType = dyn_cast<MemRefType>(root.getRoot().getType());
+      if (!muType || !isCommittedRankExpandedMuType(muType))
+        continue;
+      if (std::optional<RecoveredMuPhysicalLayout> recovered =
+              recoverMuPhysicalLayoutFromExpandedType(muType)) {
+        CommittedSuPhysicalLayout layout;
+        layout.ownerDims.reserve(recovered->ownerDims.size());
+        for (unsigned dim : recovered->ownerDims)
+          layout.ownerDims.push_back(static_cast<int64_t>(dim));
+        layout.blockShape.assign(recovered->physicalBlockShape.begin(),
+                                 recovered->physicalBlockShape.end());
+        return layout;
+      }
+    }
+  }
+  if (std::optional<CommittedSuPhysicalLayout> fromCu =
+          recoverPhysicalLayoutFromCuGroupCounts(op))
+    return fromCu;
   if (std::optional<LayoutGraphFact> writeLayout =
           findSingleCommittedWriterBlockLayout(op))
     return CommittedSuPhysicalLayout{writeLayout->ownerDims,
                                      writeLayout->blockShape};
-  if (op.getBody().empty())
-    return std::nullopt;
-  for (SdeArrayLayoutRootOp root :
-       op.getBody().front().getOps<SdeArrayLayoutRootOp>()) {
-    auto muType = dyn_cast<MemRefType>(root.getRoot().getType());
-    if (!muType)
-      continue;
-    if (std::optional<RecoveredMuPhysicalLayout> recovered =
-            recoverMuPhysicalLayoutFromExpandedType(muType)) {
-      CommittedSuPhysicalLayout layout;
-      layout.ownerDims.reserve(recovered->ownerDims.size());
-      for (unsigned dim : recovered->ownerDims)
-        layout.ownerDims.push_back(static_cast<int64_t>(dim));
-      layout.blockShape.assign(recovered->physicalBlockShape.begin(),
-                               recovered->physicalBlockShape.end());
-      return layout;
-    }
-  }
   return std::nullopt;
+}
+
+inline std::optional<CommittedSuPhysicalLayout>
+recoverPhysicalLayoutFromCuGroupCounts(SdeSuIterateOp op) {
+  SdeCuRegionOp cu = findSuComputeCuRegion(op);
+  if (!cu)
+    return std::nullopt;
+  auto groupCounts = readI64ArrayAttr(cu.getGroupBlockCountAttr());
+  if (!groupCounts || groupCounts->empty())
+    return std::nullopt;
+
+  std::optional<LoopIndexedOutputShape> outputPlan =
+      findConsistentLoopIndexedOutputShapeWithOwnerDims(op);
+  if (!outputPlan)
+    outputPlan = findLoopIndexedOutputShape(op);
+  if (!outputPlan || outputPlan->shape.empty())
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> ownerDims;
+  if (!outputPlan->ownerPhysicalDims.empty())
+    ownerDims.assign(outputPlan->ownerPhysicalDims.begin(),
+                     outputPlan->ownerPhysicalDims.end());
+  if (ownerDims.empty()) {
+    if (std::optional<SuNeighborhoodAccessInfo> neighborhood =
+            queryNeighborhoodAccessInfo(op))
+      ownerDims.assign(neighborhood->ownerDims.begin(),
+                       neighborhood->ownerDims.end());
+  }
+  if (ownerDims.size() != groupCounts->size())
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> blockShape(outputPlan->shape.begin(),
+                                     outputPlan->shape.end());
+  for (auto [slot, ownerDim] : llvm::enumerate(ownerDims)) {
+    if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= blockShape.size())
+      return std::nullopt;
+    int64_t gridCount = (*groupCounts)[slot];
+    if (gridCount <= 0 || blockShape[ownerDim] % gridCount != 0)
+      return std::nullopt;
+    blockShape[ownerDim] = blockShape[ownerDim] / gridCount;
+  }
+  return CommittedSuPhysicalLayout{ownerDims, blockShape};
 }
 
 inline bool hasCommittedSuPhysicalLayout(SdeSuIterateOp op) {
@@ -97,17 +148,10 @@ deriveCommittedHaloShape(SdeSuIterateOp op) {
                  : std::nullopt;
 }
 
-/// True when a writer SU has committed block layout in arrayLayout facts.
+/// True when a writer SU has committed block layout recoverable from MU type or
+/// transitional arrayLayout facts.
 inline bool hasCommittedWriterBlockLayout(SdeSuIterateOp op) {
-  if (!op)
-    return false;
-  for (const LayoutGraphFact &fact :
-       parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
-    if (fact.role == LayoutGraphRole::write && !fact.ownerDims.empty() &&
-        !fact.blockShape.empty())
-      return true;
-  }
-  return false;
+  return hasCommittedSuPhysicalLayout(op);
 }
 
 inline std::optional<LayoutGraphFact>
@@ -140,7 +184,7 @@ inline bool hasCommittedCuMuPartitionFacts(Operation *op) {
   if (SdeCuRegionOp cu = findSuComputeCuRegion(iterate))
     if (cu.getGroupBlockCountAttr())
       return true;
-  return hasCommittedWriterBlockLayout(iterate);
+  return hasCommittedSuPhysicalLayout(iterate);
 }
 
 /// Commit CU grouping as per-owner-dim block counts on the compute `cu_region`.
@@ -393,8 +437,9 @@ inline bool reconcilePartialReductionOwnersWithCommittedShape(
   return true;
 }
 
-/// Commit physical grain to arrayLayout and CU group-block counts only.
-inline bool commitWriterPhysicalLayoutFacts(
+/// Commit physical grain via CU group counts only; rank expansion stays in
+/// RankExpandMu / MemoryUnitRealization.
+inline bool commitWriterPhysicalLayoutViaMuType(
     SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
     ArrayRef<int64_t> physicalBlockShape,
     ArrayRef<int64_t> logicalWorkerSlice = {}) {
@@ -402,11 +447,15 @@ inline bool commitWriterPhysicalLayoutFacts(
     return false;
   commitCuGroupBlockCounts(op, ownerDims, physicalBlockShape,
                            logicalWorkerSlice);
-  bool changed =
-      rewriteWriterArrayLayoutToPhysicalShape(op, ownerDims, physicalBlockShape);
-  changed |=
-      reconcilePartialReductionOwnersWithCommittedShape(op, ownerDims);
-  return changed;
+  return reconcilePartialReductionOwnersWithCommittedShape(op, ownerDims);
+}
+
+inline bool commitWriterPhysicalLayoutFacts(
+    SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
+    ArrayRef<int64_t> physicalBlockShape,
+    ArrayRef<int64_t> logicalWorkerSlice = {}) {
+  return commitWriterPhysicalLayoutViaMuType(op, ownerDims, physicalBlockShape,
+                                             logicalWorkerSlice);
 }
 
 inline bool reconcileArrayLayoutWithCommittedPhysicalShape(SdeSuIterateOp op) {

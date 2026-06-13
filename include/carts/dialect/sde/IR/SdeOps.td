@@ -153,23 +153,7 @@ def SdeResourceQueryKind
 def SdeResourceQueryKindAttr
     : CartsSde_I32EnumAttr<"resource_query_kind", SdeResourceQueryKind>;
 
-// Geometric redistribution movement family authored by SDE from committed
-// per-array layout facts. It names a GEOMETRIC movement shape (how owner blocks
-// move between two layouts), never a concrete collective, transport algorithm,
-// route, or runtime object.
-def SdeMovementFamily
-    : CartsSde_I32Enum<"SdeMovementFamily",
-                      "SDE geometric redistribution movement family", [
-      I32EnumAttrCase<"broadcast_like", 0, "broadcast_like">,
-      I32EnumAttrCase<"all_gather_like", 1, "all_gather_like">,
-      I32EnumAttrCase<"all_to_all_like", 2, "all_to_all_like">,
-      I32EnumAttrCase<"reduce_scatter_like", 3, "reduce_scatter_like">,
-      I32EnumAttrCase<"allreduce_like", 4, "allreduce_like">,
-      I32EnumAttrCase<"halo_like", 5, "halo_like">,
-      I32EnumAttrCase<"phase_redist", 6, "phase_redist">
-    ]>;
-def SdeMovementFamilyAttr
-    : CartsSde_I32EnumAttr<"movement_family", SdeMovementFamily>;
+// Retired: SdeMovementFamily / sde.redist.
 
 //===----------------------------------------------------------------------===//
 // Resource Ops
@@ -218,7 +202,7 @@ def SdeCuRegionOp
     A compute unit is an executable leaf in the SDE MU/CU/SU structure. It may
     contain local compute/control-flow and SDE memory/access-window facts, but
     it must not contain SU scheduling operations such as `sde.su_iterate`,
-    `sde.su_distribute`, `sde.su_barrier`, or `sde.redist`. SU ops compose and
+    `sde.su_distribute`, `sde.su_barrier`, or `sde.su_halo`, or `sde.su_reduce_scatter`. SU ops compose and
     schedule CUs; CUs do not schedule SUs.
 
     The `nowait` attribute preserves OpenMP nowait semantics. Optional
@@ -423,7 +407,7 @@ def SdeSuDistributeOp
   let description = [{
     Wraps a scheduling-unit region with a runtime-neutral distribution kind.
     It does not encode concrete worker, route, or node identifiers.
-    Direct children are nested SUs, `sde.redist`, or `sde.su_barrier`; compute
+    Direct children are nested SUs, `sde.su_halo`, `sde.su_reduce_scatter`, or `sde.su_barrier`; compute
     remains in leaf CUs under the nested SUs.
   }];
 
@@ -672,71 +656,8 @@ def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
   let hasVerifier = 1;
 }
 
-def SdeRedistOp : CartsSde_Op<"redist", [
-      // NOT Pure: a zero-result structural fact must survive DCE until a
-      // verifier or lowering consumes it.
-      MemoryEffects<[MemWrite]>
-    ]> {
-  let summary = "SDE layout-to-layout redistribution boundary on one array";
-  let description = [{
-    Makes an array's redistribution edge explicit SDE structure. For one array
-    root whose committed home (writer) BLOCK layout differs from a consumer's
-    required layout, `sde.redist` commits the concrete source layout, target
-    layout, and geometric movement family, derived VERBATIM from the committed
-    `arrayLayout` facts — never re-deriving owner dims, block shape, or the
-    family.
-
-    It names a GEOMETRIC movement family only (`broadcast_like`,
-    `all_gather_like`, `all_to_all_like`, `reduce_scatter_like`,
-    `allreduce_like`, `halo_like`, `phase_redist`). It names no collective,
-    transport algorithm, DB, EDT, runtime ownership route, GUID, or runtime policy:
-    like `sde.mu_dep`/`sde.mu_access_window` it is consumed by
-    SDE-to-ARTS lowering and does NOT survive the dialect boundary.
-
-    Attributes (element-space geometry, all static `I64 ArrayAttr`):
-      - `family`            : the geometric movement family.
-      - `arrayId`           : committed SDE array identity for `mu`.
-      - `sourceOwnerDims`/`sourceBlockShape` : the home (writer) layout. Empty
-                              `sourceOwnerDims` with a full-extent block means a
-                              replicated source.
-      - `targetOwnerDims`/`targetBlockShape` : the consumer's required layout.
-                              Empty `targetOwnerDims` means a replicated target.
-      - `haloShape` (opt)   : per-logical-dim ghost width; present only for
-                              `halo_like`.
-      - `commVolumeBytes` (opt) : the committed abstract edge cost.
-
-    A reduction family (`reduce_scatter_like`/`allreduce_like`) may keep an
-    identical source/target layout (the movement is the reduction over the owned
-    axis, not a re-layout); a re-layout family requires the two layouts to
-    differ. The `mu` operand is the array root (an `sde.mu_alloc` result or a
-    block-argument memref); `sde.cu_region`/`su_iterate` are not
-    `IsolatedFromAbove`, so it is visible at the redistribution site.
-
-    Production SDE shaping emits this carrier for representable movement edges
-    before SDE-to-ARTS conversion consumes it.
-  }];
-
-  let arguments = (ins
-    AnyMemRef:$mu,
-    SdeMovementFamilyAttr:$family,
-    OptionalAttr<I64Attr>:$arrayId,
-    ArrayAttr:$sourceOwnerDims,
-    ArrayAttr:$sourceBlockShape,
-    ArrayAttr:$targetOwnerDims,
-    ArrayAttr:$targetBlockShape,
-    OptionalAttr<ArrayAttr>:$haloShape,
-    OptionalAttr<I64Attr>:$commVolumeBytes
-  );
-
-  // No results: a structural fact op, not a value producer.
-  let results = (outs);
-
-  let hasCustomAssemblyFormat = 1;
-  let hasVerifier = 1;
-}
-
 def SdeSuHaloOp : CartsSde_Op<"su_halo", [
-      // Mirror SdeRedistOp: a zero-result structural fact, NOT Pure, MemWrite so
+      // Mirror other SU movement ops: a zero-result structural fact, NOT Pure, MemWrite so
       // it survives DCE until SDE-to-ARTS lowering consumes it.
       MemoryEffects<[MemWrite]>
     ]> {
@@ -750,7 +671,7 @@ def SdeSuHaloOp : CartsSde_Op<"su_halo", [
     erased by SDE-to-ARTS lowering and does NOT survive the dialect boundary.
 
     `mu` is the array root. `ownerDims`/`blockShape` are element-space geometry
-    (same convention as `sde.redist`'s source endpoint). `haloShape` is the
+    `haloShape` is the
     per-MU-dim ghost width: MU-rank-length, owner (grid) dims carry the ghost
     radius, non-owner dims carry 0.
   }];

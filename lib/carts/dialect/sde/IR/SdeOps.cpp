@@ -4,13 +4,16 @@
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
+#include "carts/dialect/sde/Analysis/RedistributionEdges.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/dialect/sde/Utils/SdeCuStructure.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Matchers.h"
@@ -50,7 +53,7 @@ static bool hasExternalWriteRoot(SdeSuIterateOp op) {
 
 static bool isAllowedSuDistributeChild(Operation *op) {
   return sde::isSuOp(op) ||
-         isa<SdeRedistOp, SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp>(op);
+         isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp>(op);
 }
 
 static LogicalResult verifyCuContainsNoScheduling(Operation *cu) {
@@ -632,7 +635,7 @@ LogicalResult SdeSuIterateOp::verify() {
   if (layout)
     facts = parseArrayLayoutFacts(layout);
 
-  bool hasCommittedPhysicalLayout = hasCommittedWriterBlockLayout(*this);
+  bool hasCommittedPhysicalLayout = hasCommittedCuMuPartitionFacts(*this);
 
   SmallVector<SdeArrayLayoutRootOp, 4> roots;
   for (SdeArrayLayoutRootOp root : entry.getOps<SdeArrayLayoutRootOp>())
@@ -899,130 +902,193 @@ LogicalResult SdeMuAccessWindowOp::verify() {
   return success();
 }
 
-//===----------------------------------------------------------------------===//
-// SdeRedistOp — custom assembly format + verifier
-//===----------------------------------------------------------------------===//
 
-// Print: sde.redist <family> %mu : type(%mu)
-//        from owner [..] block [..] to owner [..] block [..]
-//        [halo [..]] [cost N] [attr-dict]
-void SdeRedistOp::print(OpAsmPrinter &p) {
-  auto printArr = [&](StringRef kw, ArrayAttr arr) {
-    p << " " << kw << " [";
-    llvm::interleaveComma(
-        arr, p, [&](Attribute a) { p << cast<IntegerAttr>(a).getInt(); });
-    p << "]";
-  };
-  p << " <" << stringifySdeMovementFamily(getFamily()) << "> " << getMu()
-    << " : " << getMu().getType();
-  if (IntegerAttr arrayId = getArrayIdAttr())
-    p << " array_id(" << arrayId.getInt() << ")";
-  p << " from";
-  printArr("owner", getSourceOwnerDims());
-  printArr("block", getSourceBlockShape());
-  p << " to";
-  printArr("owner", getTargetOwnerDims());
-  printArr("block", getTargetBlockShape());
-  if (ArrayAttr halo = getHaloShapeAttr())
-    printArr("halo", halo);
-  if (IntegerAttr cost = getCommVolumeBytesAttr())
-    p << " cost " << cost.getInt();
-  p.printOptionalAttrDict((*this)->getAttrs(),
-                          {"family", "arrayId", "sourceOwnerDims",
-                           "sourceBlockShape", "targetOwnerDims",
-                           "targetBlockShape", "haloShape", "commVolumeBytes"});
+static bool moduleUsesCommittedLayoutFacts(Operation *scope) {
+  bool found = false;
+  scope->walk([&](SdeSuIterateOp su) {
+    if (su.getArrayLayoutAttr())
+      found = true;
+  });
+  return found;
 }
 
-ParseResult SdeRedistOp::parse(OpAsmParser &parser, OperationState &result) {
-  MLIRContext *ctx = parser.getContext();
-  IntegerType i64 = IntegerType::get(ctx, 64);
-
-  StringRef famKw;
-  if (parser.parseLess() || parser.parseKeyword(&famKw) ||
-      parser.parseGreater())
-    return failure();
-  std::optional<SdeMovementFamily> fam = symbolizeSdeMovementFamily(famKw);
-  if (!fam)
-    return parser.emitError(parser.getNameLoc(),
-                            "expected sde movement family");
-  result.addAttribute("family", SdeMovementFamilyAttr::get(ctx, *fam));
-
-  OpAsmParser::UnresolvedOperand muOperand;
-  Type muType;
-  if (parser.parseOperand(muOperand) || parser.parseColon() ||
-      parser.parseType(muType) ||
-      parser.resolveOperand(muOperand, muType, result.operands))
-    return failure();
-
-  if (succeeded(parser.parseOptionalKeyword("array_id"))) {
-    int64_t arrayId = -1;
-    if (parser.parseLParen() || parser.parseInteger(arrayId) ||
-        parser.parseRParen())
-      return failure();
-    result.addAttribute("arrayId", IntegerAttr::get(i64, arrayId));
-  }
-
-  // Parse a bare `[i64, ...]` list (no leading keyword).
-  auto parseList = [&](SmallVectorImpl<Attribute> &vals) -> ParseResult {
-    if (parser.parseLSquare())
-      return failure();
-    if (failed(parser.parseOptionalRSquare())) {
-      do {
-        int64_t v;
-        if (parser.parseInteger(v))
-          return failure();
-        vals.push_back(IntegerAttr::get(i64, v));
-      } while (succeeded(parser.parseOptionalComma()));
-      if (parser.parseRSquare())
-        return failure();
-    }
-    return success();
-  };
-  auto parseKwArr = [&](StringRef kw, StringRef name) -> ParseResult {
-    SmallVector<Attribute> vals;
-    if (parser.parseKeyword(kw) || parseList(vals))
-      return failure();
-    result.addAttribute(name, ArrayAttr::get(ctx, vals));
-    return success();
-  };
-
-  if (parser.parseKeyword("from") || parseKwArr("owner", "sourceOwnerDims") ||
-      parseKwArr("block", "sourceBlockShape"))
-    return failure();
-  if (parser.parseKeyword("to") || parseKwArr("owner", "targetOwnerDims") ||
-      parseKwArr("block", "targetBlockShape"))
-    return failure();
-
-  if (succeeded(parser.parseOptionalKeyword("halo"))) {
-    SmallVector<Attribute> vals;
-    if (parseList(vals))
-      return failure();
-    result.addAttribute("haloShape", ArrayAttr::get(ctx, vals));
-  }
-  if (succeeded(parser.parseOptionalKeyword("cost"))) {
-    int64_t cost;
-    if (parser.parseInteger(cost))
-      return failure();
-    result.addAttribute("commVolumeBytes", IntegerAttr::get(i64, cost));
-  }
-
-  return parser.parseOptionalAttrDict(result.attributes);
+static Operation *movementVerificationScope(Operation *op) {
+  if (auto func = op->getParentOfType<func::FuncOp>())
+    return func;
+  if (auto module = op->getParentOfType<ModuleOp>())
+    return module.getOperation();
+  return op;
 }
 
-LogicalResult SdeRedistOp::verify() {
-  auto muType = dyn_cast<MemRefType>(getMu().getType());
-  if (!muType)
-    return emitOpError("sde.redist: mu operand must be a memref");
-  if (!muType.hasStaticShape())
-    return emitOpError(
-        "sde.redist: dynamic MU shape has no static redistribution layout");
-  if (IntegerAttr arrayId = getArrayIdAttr()) {
-    if (arrayId.getInt() < 0)
-      return emitOpError(
-          "sde.redist: arrayId must be non-negative when present");
+static bool hasNegative(ArrayRef<int64_t> values) {
+  return llvm::any_of(values, [](int64_t value) { return value < 0; });
+}
+
+static bool hasNonPositive(ArrayRef<int64_t> values) {
+  return llvm::any_of(values, [](int64_t value) { return value <= 0; });
+}
+
+static bool ownerDimsFitRank(ArrayRef<int64_t> ownerDims, unsigned rank) {
+  return llvm::all_of(ownerDims, [&](int64_t dim) {
+    return dim >= 0 && static_cast<unsigned>(dim) < rank;
+  });
+}
+
+static bool blockShapeFitsType(ArrayRef<int64_t> blockShape,
+                               MemRefType memrefType) {
+  if (blockShape.size() != static_cast<size_t>(memrefType.getRank()) ||
+      hasNonPositive(blockShape))
+    return false;
+  if (!memrefType.hasStaticShape())
+    return true;
+  ArrayRef<int64_t> shape = memrefType.getShape();
+  for (auto [extent, dimExtent] : llvm::zip_equal(blockShape, shape))
+    if (ShapedType::isStatic(dimExtent) && extent > dimExtent)
+      return false;
+  return true;
+}
+
+static LogicalResult verifyMovementEndpointGeometry(
+    Operation *movement, Value root, ArrayAttr ownerDimsAttr,
+    ArrayAttr blockShapeAttr, std::optional<ArrayAttr> haloShapeAttr) {
+  auto memrefType = dyn_cast<MemRefType>(root.getType());
+  if (!memrefType)
+    return movement->emitOpError("redistribution root is not a memref");
+  unsigned rank = static_cast<unsigned>(memrefType.getRank());
+  std::optional<SmallVector<int64_t, 4>> ownerDims =
+      readI64ArrayAttr(ownerDimsAttr);
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      readI64ArrayAttr(blockShapeAttr);
+  if (!ownerDims)
+    return movement->emitOpError("owner dimensions are not a static i64 array");
+  if (!blockShape)
+    return movement->emitOpError("block shape is not a static i64 array");
+  if (!ownerDimsFitRank(*ownerDims, rank))
+    return movement->emitOpError(
+        "owner dimensions do not fit the redistribution root rank");
+  if (!blockShapeFitsType(*blockShape, memrefType))
+    return movement->emitOpError(
+        "block shape does not fit the redistribution root type");
+  if (haloShapeAttr) {
+    std::optional<SmallVector<int64_t, 4>> haloShape =
+        readI64ArrayAttr(*haloShapeAttr);
+    if (!haloShape)
+      return movement->emitOpError("haloShape is not a static i64 array");
+    if (haloShape->size() != rank || hasNegative(*haloShape))
+      return movement->emitOpError(
+          "haloShape is not a non-negative rank-length i64 array");
   }
-  return emitOpError("sde.redist is retired on all movement families; use ")
-         << suMovementReplacementForFamily(getFamily());
+  return success();
+}
+
+static bool hasNonZero(ArrayAttr attr) {
+  if (!attr)
+    return false;
+  return llvm::any_of(attr, [](Attribute value) {
+    auto integer = dyn_cast<IntegerAttr>(value);
+    return integer && integer.getInt() != 0;
+  });
+}
+
+static bool consumerHasReadRoot(SdeSuIterateOp consumer, int64_t arrayId,
+                                Value movementRoot) {
+  Value root = carts::ValueAnalysis::stripMemrefViewOps(movementRoot);
+  for (SdeArrayLayoutRootOp provenance :
+       consumer.getBody().getOps<SdeArrayLayoutRootOp>()) {
+    if (static_cast<int64_t>(provenance.getArrayId()) != arrayId ||
+        provenance.getMode() != SdeAccessMode::read)
+      continue;
+    Value consumerRoot =
+        carts::ValueAnalysis::stripMemrefViewOps(provenance.getRoot());
+    if (carts::ValueAnalysis::sameMemrefRoot(root, consumerRoot))
+      return true;
+  }
+  return false;
+}
+
+static std::optional<LayoutGraphFact>
+findConsumerReadFact(SdeSuIterateOp consumer, int64_t arrayId) {
+  if (ArrayAttr layout = consumer.getArrayLayoutAttr())
+    for (const LayoutGraphFact &fact : parseArrayLayoutFacts(layout))
+      if (fact.id == arrayId && fact.role == LayoutGraphRole::read)
+        return fact;
+  return std::nullopt;
+}
+
+static SdeSuIterateOp findAnchoredConsumer(Operation *movement) {
+  for (Operation *next = movement->getNextNode(); next;
+       next = next->getNextNode()) {
+    if (isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp>(next))
+      continue;
+    return dyn_cast<SdeSuIterateOp>(next);
+  }
+  return {};
+}
+
+static LogicalResult verifyMovementAnchoredInConsumer(
+    Operation *movement, int64_t arrayId, Value movementRoot,
+    bool requireHaloBacking, bool requireReductionBacking) {
+  SdeSuIterateOp consumer = findAnchoredConsumer(movement);
+  if (!consumer)
+    return movement->emitOpError()
+           << "movement op is not anchored before a consumer sde.su_iterate";
+  if (!consumerHasReadRoot(consumer, arrayId, movementRoot))
+    return movement->emitOpError()
+           << "anchored consumer has no matching read provenance for this "
+              "redistribution root";
+  std::optional<LayoutGraphFact> readFact = findConsumerReadFact(consumer, arrayId);
+  if (!readFact)
+    return movement->emitOpError()
+           << "anchored consumer has no committed read layout for this "
+              "redistribution array";
+  if (requireHaloBacking) {
+    if (!deriveCommittedHaloShape(consumer) &&
+        !hasNonZero(consumer.getAccessMinOffsetsAttr()) &&
+        !hasNonZero(consumer.getAccessMaxOffsetsAttr()))
+      return movement->emitOpError()
+             << "halo movement is not backed by consumer halo/access-window "
+                "facts";
+  }
+  if (requireReductionBacking) {
+    if (readFact->layoutKind == ArrayLayoutKind::blockContraction ||
+        consumer.getPartialReductionAttr())
+      return success();
+    return movement->emitOpError()
+           << "reduce-scatter movement is not backed by a contraction/"
+              "reduction consumer";
+  }
+  return success();
+}
+
+static LogicalResult verifyMovementGroundedAndAnchored(
+    Operation *movement, int64_t arrayId, Value movementRoot,
+    ArrayAttr ownerDimsAttr, ArrayAttr blockShapeAttr,
+    std::optional<ArrayAttr> haloShapeAttr, bool allowExpandedFull,
+    bool requireHaloBacking, bool requireReductionBacking) {
+  Operation *scope = movementVerificationScope(movement);
+  if (!moduleUsesCommittedLayoutFacts(scope))
+    return success();
+  auto muType = dyn_cast<MemRefType>(movementRoot.getType());
+  if (!muType || !muType.hasStaticShape())
+    return success();
+  if (failed(verifyMovementEndpointGeometry(movement, movementRoot, ownerDimsAttr,
+                                            blockShapeAttr, haloShapeAttr)))
+    return failure();
+  std::optional<SmallVector<int64_t, 4>> ownerDims =
+      readI64ArrayAttr(ownerDimsAttr);
+  std::optional<SmallVector<int64_t, 4>> blockShape =
+      readI64ArrayAttr(blockShapeAttr);
+  if (!ownerDims || !blockShape)
+    return failure();
+  std::string reason;
+  if (!movementEndpointGroundedInCommittedLayout(
+          scope, movementRoot, arrayId, *ownerDims, *blockShape,
+          allowExpandedFull, reason))
+    return movement->emitOpError()
+           << "is not grounded in committed SDE layout: " << reason;
+  return verifyMovementAnchoredInConsumer(movement, arrayId, movementRoot,
+                                        requireHaloBacking,
+                                        requireReductionBacking);
 }
 
 // Shared endpoint check for SU-scope movement ops: owner dims in range + unique;
@@ -1113,6 +1179,14 @@ LogicalResult SdeSuHaloOp::verify() {
   }
   if (!anyGhost)
     return emitOpError("sde.su_halo: a zero-radius halo is an identity move");
+  if (IntegerAttr arrayId = getArrayIdAttr()) {
+    if (failed(verifyMovementGroundedAndAnchored(
+            getOperation(), arrayId.getInt(), getMu(), getOwnerDims(),
+            getBlockShape(), getHaloShape(),
+            /*allowExpandedFull=*/true, /*requireHaloBacking=*/true,
+            /*requireReductionBacking=*/false)))
+      return failure();
+  }
   return success();
 }
 
@@ -1138,6 +1212,14 @@ LogicalResult SdeSuReduceScatterOp::verify() {
     return emitOpError()
            << "sde.su_reduce_scatter: reduceDim " << reduceDim
            << " is outside the owner-dim range [0, " << owner->size() << ")";
+  if (IntegerAttr arrayId = getArrayIdAttr()) {
+    if (failed(verifyMovementGroundedAndAnchored(
+            getOperation(), arrayId.getInt(), getMu(), getOwnerDims(),
+            getBlockShape(), std::nullopt,
+            /*allowExpandedFull=*/false, /*requireHaloBacking=*/false,
+            /*requireReductionBacking=*/true)))
+      return failure();
+  }
   return success();
 }
 
@@ -1404,25 +1486,4 @@ LogicalResult SdeMuReductionDeclOp::verify() {
                             "sde.yield of the reduction type";
 
   return success();
-}
-
-StringRef mlir::carts::sde::suMovementReplacementForFamily(
-    SdeMovementFamily family) {
-  switch (family) {
-  case SdeMovementFamily::halo_like:
-    return "sde.su_halo";
-  case SdeMovementFamily::reduce_scatter_like:
-    return "sde.su_reduce_scatter";
-  case SdeMovementFamily::broadcast_like:
-    return "sde.su_broadcast";
-  case SdeMovementFamily::all_gather_like:
-    return "sde.su_gather";
-  case SdeMovementFamily::all_to_all_like:
-    return "sde.su_all_to_all";
-  case SdeMovementFamily::allreduce_like:
-    return "sde.su_reduce_scatter followed by sde.su_broadcast";
-  case SdeMovementFamily::phase_redist:
-    return "a future first-class SU movement op";
-  }
-  llvm_unreachable("unknown SDE movement family");
 }

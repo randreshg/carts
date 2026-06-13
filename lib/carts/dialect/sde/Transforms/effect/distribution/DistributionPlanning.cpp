@@ -1023,14 +1023,28 @@ static SmallVector<int64_t, 4> buildLogicalWorkerSliceOrPhysical(
 }
 
 static bool hasCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
-  return sde::hasCommittedWriterBlockLayout(op);
+  return sde::hasCommittedSuPhysicalLayout(op);
+}
+
+static std::optional<sde::LayoutGraphFact>
+layoutFactFromCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
+  std::optional<sde::CommittedSuPhysicalLayout> layout =
+      sde::recoverCommittedPhysicalLayout(op);
+  if (!layout || layout->ownerDims.empty() || layout->blockShape.empty())
+    return std::nullopt;
+  sde::LayoutGraphFact fact;
+  fact.role = sde::LayoutGraphRole::write;
+  fact.layoutKind = sde::ArrayLayoutKind::blockParallel;
+  fact.ownerDims = layout->ownerDims;
+  fact.blockShape = layout->blockShape;
+  return fact;
 }
 
 static std::optional<sde::LayoutGraphFact>
 selectSingleWriteLayoutFact(sde::SdeSuIterateOp op) {
   ArrayAttr layout = op.getArrayLayoutAttr();
   if (!layout)
-    return std::nullopt;
+    return layoutFactFromCommittedPhysicalLayout(op);
 
   std::optional<sde::LayoutGraphFact> selected;
   llvm::SmallDenseSet<int64_t, 4> writtenIds;
@@ -1050,6 +1064,8 @@ selectSingleWriteLayoutFact(sde::SdeSuIterateOp op) {
         selected->budgetBlockShape != fact.budgetBlockShape)
       return std::nullopt;
   }
+  if (!selected)
+    return layoutFactFromCommittedPhysicalLayout(op);
   return selected;
 }
 

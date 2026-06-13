@@ -117,6 +117,19 @@ std::optional<RecoveredMuPhysicalLayout>
 recoverMuPhysicalLayoutFromExpandedShape(llvm::ArrayRef<int64_t> shape,
                                          mlir::Type elementType);
 
+inline bool isCommittedRankExpandedMuType(mlir::MemRefType muType) {
+  if (std::optional<RecoveredMuPhysicalLayout> recovered =
+          recoverMuPhysicalLayoutFromExpandedType(muType)) {
+    if (muType.getRank() > recovered->logicalShape.size())
+      return true;
+    for (unsigned dim : recovered->ownerDims) {
+      if (recovered->physicalBlockShape[dim] < recovered->logicalShape[dim])
+        return true;
+    }
+  }
+  return false;
+}
+
 } // namespace mlir::carts::sde
 
 #endif // CARTS_DIALECT_SDE_UTILS_MULAYOUT_H

@@ -44,6 +44,36 @@ struct RedistEndpoint {
   SmallVector<int64_t, 4> blockShape;
 };
 
+
+static std::optional<HomeLayout>
+homeLayoutFromCommittedPhysical(SdeSuIterateOp su) {
+  std::optional<CommittedSuPhysicalLayout> committed =
+      recoverCommittedPhysicalLayout(su);
+  if (!committed || committed->ownerDims.empty() ||
+      committed->blockShape.empty())
+    return std::nullopt;
+  HomeLayout home;
+  home.writer = su;
+  home.layoutKind = ArrayLayoutKind::blockParallel;
+  home.ownerDims.assign(committed->ownerDims.begin(), committed->ownerDims.end());
+  home.blockShape.assign(committed->blockShape.begin(),
+                         committed->blockShape.end());
+  return home;
+}
+
+static void recordHomeLayout(llvm::DenseMap<int64_t, HomeLayout> &homeByArrayId,
+                             llvm::DenseSet<int64_t> &conflictingHome,
+                             int64_t arrayId, HomeLayout home) {
+  auto it = homeByArrayId.find(arrayId);
+  if (it == homeByArrayId.end()) {
+    homeByArrayId[arrayId] = std::move(home);
+    return;
+  }
+  if (it->second.ownerDims != home.ownerDims ||
+      it->second.blockShape != home.blockShape)
+    conflictingHome.insert(arrayId);
+}
+
 static std::optional<LayoutGraphFact> findLayoutFact(SdeSuIterateOp su,
                                                      int64_t arrayId) {
   if (ArrayAttr layout = su.getArrayLayoutAttr())
@@ -299,20 +329,15 @@ static ArrayRef<int64_t> committedBlockShape(const LayoutGraphFact &fact) {
                                        : ArrayRef<int64_t>(fact.budgetBlockShape);
 }
 
-static SdeMovementFamily repartitionMovementFamily(const HomeLayout &home,
-                                                   const LayoutGraphFact &readerFact) {
+static std::string repartitionMovementReplacement(
+    const HomeLayout &home, const LayoutGraphFact &readerFact) {
   if (home.ownerDims.empty() && !readerFact.ownerDims.empty())
-    return SdeMovementFamily::broadcast_like;
+    return "sde.su_broadcast";
   if (!home.ownerDims.empty() && readerFact.ownerDims.empty())
-    return SdeMovementFamily::all_gather_like;
+    return "sde.su_gather";
   if (!sameOwnerDimSet(home.ownerDims, readerFact.ownerDims))
-    return SdeMovementFamily::all_to_all_like;
-  return SdeMovementFamily::phase_redist;
-}
-
-static std::string unrepresentableMovementMessage(SdeMovementFamily family) {
-  return "not yet realizable as " +
-         suMovementReplacementForFamily(family).str();
+    return "sde.su_all_to_all";
+  return "a future first-class SU movement op";
 }
 
 static void commitConsumerTargetGeometry(RedistributionEdge &edge,
@@ -580,15 +605,13 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         else {
           fail(
               "cross-owner reduction of a rank-expanded distributed "
-              "intermediate is recognized but not yet realizable as " +
-              unrepresentableMovementMessage(SdeMovementFamily::reduce_scatter_like));
+              "intermediate is recognized but not yet realizable as sde.su_reduce_scatter");
           continue;
         }
       }
       if (hasOwnerReduction && !geometryFitsRoot && !expandedEndpoint) {
         fail("cross-owner reduction of a rank-expanded distributed "
-             "intermediate is recognized but not yet realizable as " +
-             unrepresentableMovementMessage(SdeMovementFamily::reduce_scatter_like));
+             "intermediate is recognized but not yet realizable as sde.su_reduce_scatter");
         continue;
       }
       bool committedContractionLayout =
@@ -611,9 +634,8 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       }
       if (!hasOwnerReduction && !committedContractionLayout) {
         if (committedRepartitionLayout) {
-          fail("repartition redistribution edge is " +
-               unrepresentableMovementMessage(
-                   repartitionMovementFamily(home, *readerFact)) +
+          fail("repartition redistribution edge is not yet realizable as " +
+               repartitionMovementReplacement(home, *readerFact) +
                " (consumer required-read layout differs from the committed "
                "home layout)");
           continue;
@@ -630,10 +652,10 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       edge.root = root;
       edge.arrayId = arrayId;
       edge.consumer = reader;
-      edge.family = committedHaloLayout && !hasOwnerReduction &&
+      edge.kind = committedHaloLayout && !hasOwnerReduction &&
                             !committedContractionLayout
-                        ? SdeMovementFamily::halo_like
-                        : SdeMovementFamily::reduce_scatter_like;
+                        ? RedistributionEdgeKind::Halo
+                        : RedistributionEdgeKind::ReduceScatter;
       if ((hasOwnerReduction || committedContractionLayout) &&
           expandedEndpoint && !geometryFitsRoot) {
         edge.sourceOwnerDims.assign(expandedEndpoint->ownerDims.begin(),
@@ -646,7 +668,7 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         edge.sourceBlockShape.assign(home.blockShape.begin(),
                                      home.blockShape.end());
       }
-      if (edge.family == SdeMovementFamily::halo_like) {
+      if (edge.kind == RedistributionEdgeKind::Halo) {
         if (recognizeExpandedBlockGridMu(home.writer, muType)) {
           std::string haloFail;
           if (!projectRankExpandedHaloEdge(edge, home.writer, muType,
@@ -675,8 +697,8 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         }
       }
 
-      if (edge.family == SdeMovementFamily::halo_like ||
-          edge.family == SdeMovementFamily::reduce_scatter_like) {
+      if (edge.kind == RedistributionEdgeKind::Halo ||
+          edge.kind == RedistributionEdgeKind::ReduceScatter) {
         if (edge.targetOwnerDims.empty())
           commitOwnerPreservingTarget(edge);
       } else if (readerFact) {
@@ -701,44 +723,19 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
   return result;
 }
 
-bool redistMatchesEdge(SdeRedistOp redist, const RedistributionEdge &edge) {
-  if (redist.getMu() != edge.root || redist.getFamily() != edge.family)
-    return false;
-  IntegerAttr arrayId = redist.getArrayIdAttr();
-  if (!arrayId || arrayId.getInt() != edge.arrayId)
-    return false;
-  std::optional<SmallVector<int64_t, 4>> so =
-      readI64ArrayAttr(redist.getSourceOwnerDims());
-  std::optional<SmallVector<int64_t, 4>> sb =
-      readI64ArrayAttr(redist.getSourceBlockShape());
-  std::optional<SmallVector<int64_t, 4>> to =
-      readI64ArrayAttr(redist.getTargetOwnerDims());
-  std::optional<SmallVector<int64_t, 4>> tb =
-      readI64ArrayAttr(redist.getTargetBlockShape());
-  std::optional<SmallVector<int64_t, 4>> halo =
-      readI64ArrayAttr(redist.getHaloShapeAttr());
-  return so && sb && to && tb &&
-         ArrayRef<int64_t>(*so) == ArrayRef<int64_t>(edge.sourceOwnerDims) &&
-         ArrayRef<int64_t>(*sb) == ArrayRef<int64_t>(edge.sourceBlockShape) &&
-         ArrayRef<int64_t>(*to) == ArrayRef<int64_t>(edge.targetOwnerDims) &&
-         ArrayRef<int64_t>(*tb) == ArrayRef<int64_t>(edge.targetBlockShape) &&
-         (edge.family != SdeMovementFamily::halo_like ||
-          (halo &&
-           ArrayRef<int64_t>(*halo) == ArrayRef<int64_t>(edge.haloShape)));
-}
-
 bool movementEndpointGroundedInCommittedLayout(
-    Operation *moduleOp, Value movementRoot, int64_t arrayId,
+    Operation *scopeOp, Value movementRoot, int64_t arrayId,
     ArrayRef<int64_t> ownerDims, ArrayRef<int64_t> blockShape,
     bool allowExpandedFull, std::string &reason) {
+  auto operandMuType = dyn_cast<MemRefType>(movementRoot.getType());
   movementRoot =
       ::mlir::carts::ValueAnalysis::stripMemrefViewOps(movementRoot);
   if (!movementRoot) {
     reason = "missing redistribution root";
     return false;
   }
-  if (!moduleOp) {
-    reason = "not inside a module";
+  if (!scopeOp) {
+    reason = "not inside a verification scope";
     return false;
   }
 
@@ -755,7 +752,7 @@ bool movementEndpointGroundedInCommittedLayout(
     if (!::mlir::carts::ValueAnalysis::sameMemrefRoot(provenanceRoot, root))
       conflictingRoot = true;
   };
-  moduleOp->walk([&](SdeArrayLayoutRootOp provenance) {
+  scopeOp->walk([&](SdeArrayLayoutRootOp provenance) {
     if (static_cast<int64_t>(provenance.getArrayId()) == arrayId)
       recordRoot(provenance.getRoot());
   });
@@ -775,28 +772,45 @@ bool movementEndpointGroundedInCommittedLayout(
 
   std::optional<HomeLayout> home;
   bool conflictingHome = false;
-  moduleOp->walk([&](SdeSuIterateOp su) {
+  scopeOp->walk([&](SdeSuIterateOp su) {
     ArrayAttr layout = su.getArrayLayoutAttr();
-    if (!layout)
-      return;
-    for (const LayoutGraphFact &f : parseArrayLayoutFacts(layout)) {
-      if (f.id != arrayId || f.role != LayoutGraphRole::write)
-        continue;
-      HomeLayout candidate;
-      candidate.writer = su;
-      candidate.layoutKind = f.layoutKind;
-      candidate.ownerDims.assign(f.ownerDims.begin(), f.ownerDims.end());
-      ArrayRef<int64_t> homeBlock = f.budgetBlockShape.empty()
-                                        ? ArrayRef<int64_t>(f.blockShape)
-                                        : ArrayRef<int64_t>(f.budgetBlockShape);
-      candidate.blockShape.assign(homeBlock.begin(), homeBlock.end());
-      if (!home) {
-        home = std::move(candidate);
-        continue;
+    if (layout) {
+      for (const LayoutGraphFact &f : parseArrayLayoutFacts(layout)) {
+        if (f.id != arrayId || f.role != LayoutGraphRole::write)
+          continue;
+        HomeLayout candidate;
+        candidate.writer = su;
+        candidate.layoutKind = f.layoutKind;
+        candidate.ownerDims.assign(f.ownerDims.begin(), f.ownerDims.end());
+        ArrayRef<int64_t> homeBlock = f.budgetBlockShape.empty()
+                                          ? ArrayRef<int64_t>(f.blockShape)
+                                          : ArrayRef<int64_t>(f.budgetBlockShape);
+        candidate.blockShape.assign(homeBlock.begin(), homeBlock.end());
+        if (!home) {
+          home = std::move(candidate);
+          continue;
+        }
+        if (home->ownerDims != candidate.ownerDims ||
+            home->blockShape != candidate.blockShape)
+          conflictingHome = true;
       }
-      if (home->ownerDims != candidate.ownerDims ||
-          home->blockShape != candidate.blockShape)
-        conflictingHome = true;
+    }
+    if (home || conflictingHome || su.getBody().empty())
+      return;
+    for (SdeArrayLayoutRootOp root :
+         su.getBody().front().getOps<SdeArrayLayoutRootOp>()) {
+      if (root.getMode() != SdeAccessMode::write ||
+          static_cast<int64_t>(root.getArrayId()) != arrayId)
+        continue;
+      if (std::optional<HomeLayout> candidate = homeLayoutFromCommittedPhysical(su)) {
+        if (!home) {
+          home = std::move(*candidate);
+          continue;
+        }
+        if (home->ownerDims != candidate->ownerDims ||
+            home->blockShape != candidate->blockShape)
+          conflictingHome = true;
+      }
     }
   });
   if (conflictingHome) {
@@ -808,11 +822,9 @@ bool movementEndpointGroundedInCommittedLayout(
     return false;
   }
 
-  auto muType = dyn_cast<MemRefType>(movementRoot.getType());
-  if (!muType || !muType.hasStaticShape()) {
-    reason = "redistribution root has no static memref shape";
-    return false;
-  }
+  auto muType = operandMuType;
+  if (!muType || !muType.hasStaticShape())
+    return true;
 
   bool sourceMatchesHome =
       ownerDims == ArrayRef<int64_t>(home->ownerDims) &&
@@ -835,48 +847,6 @@ bool movementEndpointGroundedInCommittedLayout(
       !(allowExpandedFull && sourceMatchesExpandedFull)) {
     reason = "source geometry is not grounded in the committed writer layout";
     return false;
-  }
-  return true;
-}
-
-bool redistGroundedInCommittedLayout(SdeRedistOp redist, std::string &reason) {
-  IntegerAttr arrayIdAttr = redist.getArrayIdAttr();
-  if (!arrayIdAttr) {
-    reason = "missing array_id";
-    return false;
-  }
-  int64_t arrayId = arrayIdAttr.getInt();
-  ModuleOp module = redist->getParentOfType<ModuleOp>();
-  if (!module) {
-    reason = "not inside a module";
-    return false;
-  }
-
-  std::optional<SmallVector<int64_t, 4>> sourceOwner =
-      readI64ArrayAttr(redist.getSourceOwnerDims());
-  std::optional<SmallVector<int64_t, 4>> sourceBlock =
-      readI64ArrayAttr(redist.getSourceBlockShape());
-  std::optional<SmallVector<int64_t, 4>> targetOwner =
-      readI64ArrayAttr(redist.getTargetOwnerDims());
-  std::optional<SmallVector<int64_t, 4>> targetBlock =
-      readI64ArrayAttr(redist.getTargetBlockShape());
-  if (!sourceOwner || !sourceBlock || !targetOwner || !targetBlock) {
-    reason = "redistribution geometry is not static";
-    return false;
-  }
-
-  if (!movementEndpointGroundedInCommittedLayout(
-          module, redist.getMu(), arrayId, *sourceOwner, *sourceBlock,
-          redist.getFamily() == SdeMovementFamily::halo_like, reason))
-    return false;
-
-  if (redist.getFamily() == SdeMovementFamily::reduce_scatter_like ||
-      redist.getFamily() == SdeMovementFamily::halo_like) {
-    if (ArrayRef<int64_t>(*sourceOwner) != ArrayRef<int64_t>(*targetOwner) ||
-        ArrayRef<int64_t>(*sourceBlock) != ArrayRef<int64_t>(*targetBlock)) {
-      reason = "target geometry does not match the committed source geometry";
-      return false;
-    }
   }
   return true;
 }

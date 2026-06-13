@@ -521,13 +521,6 @@ validateAndCollectStorageRedists(ModuleOp module,
     redists.push_back(op);
   };
 
-  module.walk([&](sde::SdeRedistOp redist) {
-    redist.emitOpError()
-        << "commits retired movement on sde.redist; use "
-        << sde::suMovementReplacementForFamily(redist.getFamily());
-    foundError = true;
-  });
-
   module.walk([&](sde::SdeSuHaloOp halo) {
     recordHalo(halo.getOperation(), halo.getMu(), halo.getOwnerDims(),
                halo.getBlockShape(), halo.getHaloShape());
@@ -1697,8 +1690,7 @@ static LogicalResult collectPrecedingReduceScatterRedists(
       consumedRedists.push_back(reduce.getOperation());
       continue;
     }
-    if (!isa<sde::SdeRedistOp>(op))
-      break;
+    break;
   }
   return success();
 }
