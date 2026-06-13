@@ -2,8 +2,39 @@
 
 The single coherent statement of the redesign. It supersedes, as *narrative*, the
 accreted Parts 5/6/7 of [`design-revision.md`](./design-revision.md) (kept as the
-detailed file:line derivations). Status: design target, not yet implemented; the
-suite is RED at HEAD, so migration gates on delta-from-baseline.
+detailed file:line derivations).
+
+## Implementation status (live checklist — `v4`, scanned @ `5010dc38f`)
+
+The structural/no-contract SDE work is **substantially implemented**; the
+analysis-modernization, two attribute deletions, ARTS audit, and scaling levers
+remain. Verified by tree scan (markers in parentheses).
+
+**✅ DONE**
+- `raise-to-sde` exists; standalone `sde-parallelize` dropped (`RaiseToSde.cpp` present, `Parallelize.cpp` gone).
+- `sde.redist` retired; **movement is ops** — `su.halo`, `su.reduce_scatter`, `su.all_to_all` all in `SdeOps.td` (`SdeRedistOp` def = 0).
+- Layout attrs deleted from the op: `physicalOwnerDims`, `physicalBlockShape`, `iterationTopology`, `logicalWorkerSlice` (all 0 in `SdeOps.td`) → grain is the type.
+- Verify passes reduced 8 → **6** (op-level migration started).
+
+**◑ PARTIAL**
+- Op-level verification: 6 SDE verify passes remain (target ≈2 + the residuals) — finish the fold.
+- `SdeMovementFamily` enum: 1 residual reference to clean up.
+- Shared `buildSuIterate` helper: present in `ConvertOpenMPToSde` only — confirm it's the single shared builder.
+
+**☐ TODO (what to work on)**
+1. **AFFINE modernization (biggest, not started):** `tryGetAffineExpr`/`extractDimOffset` still present (9); `LowerAffine` still runs early (`Compile.cpp` ×3); **0** `MemRefAccess`/`isLoopParallel` uses in SDE. → delete the hand-rolled parser, stop lowering affine early, adopt upstream affine + `ValueBounds` (DAG S3/S4 + Part 7). Unblocks re-runnable parallelize-after-tiling.
+2. **`mu_access_window` elimination** — op still present (S12).
+3. **`commVolumeBytes` deletion** — still present (S7).
+4. **`arrayLayout` dict deletion** — still present ×5 (S14; → SSA-root identity).
+5. **ARTS no-contract audit (PHASE 7 / Part 8)** — 84 ARTS `OptionalAttr` untouched; the largest remaining contract surface.
+6. **Scaling levers (PHASE 8, S17–S21)** — reader-grain reconcile, halo read windows, FEM one-owner-grid, cross-owner repartition, K-grain split — *the steps that actually fix 2n scaling* (cleanup alone does not).
+7. **async executor (PHASE 9)** — greenfield, 0 usage.
+8. **Second boundary parser port** (`analyzeDepOwnerAccessIndex`) and **cost-model deletion** (fabricated costs).
+
+> Status line was "not yet implemented" — corrected: the structural redesign is
+> live on `v4`. Re-scan the markers above to refresh this checklist. The migration
+> DAG below is the ordered plan for the ☐ items; gates still measure
+> delta-from-baseline (RED at HEAD).
 
 ## The one principle
 
