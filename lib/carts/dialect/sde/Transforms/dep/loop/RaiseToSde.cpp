@@ -12,7 +12,8 @@
 /// reassoc on float); plain sequential float `+=` fails closed.
 ///
 /// Subsumes the parallel-promotion slice of `sde-parallelize` and will
-/// eventually fold `sde-cu-normalization`. Re-entrancy guard: skip loop nests
+/// eventually fold the initial `sde-cu-normalization` pipeline stage (the
+/// post-realization re-normalization remains a separate pass). Re-entrancy guard: skip loop nests
 /// already under `sde.su_iterate`; allow direct children of residual
 /// `cu_region<single>` wrappers or raw host `scf.for` at function scope.
 ///==========================================================================///
@@ -25,6 +26,7 @@ namespace mlir::carts::sde {
 
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
+#include "carts/dialect/sde/Utils/SdeCuNormalizationUtils.h"
 #include "carts/dialect/sde/Utils/SdeCuStructure.h"
 #include "carts/utils/Debug.h"
 #include "carts/utils/Utils.h"
@@ -848,6 +850,8 @@ struct RaiseToSdePass : public sde::impl::RaiseToSdeBase<RaiseToSdePass> {
       ARTS_DEBUG("raise-to-sde: raising proven-independent host loop nest");
       raiseNest(*nest, builder);
     }
+    if (!sde::normalizeSdeCuStructure(module))
+      signalPassFailure();
   }
 };
 

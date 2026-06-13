@@ -46,12 +46,10 @@ func.func @rank_expanded_source_checksum_partials() -> f64 {
 }
 
 // CHECK-LABEL: func.func @rank_expanded_nonleading_owner_checksum_partials
-// CHECK: %[[PARTIAL:.*]] = sde.mu_alloc : memref<4x1x2x1xf64>
+// CHECK: %[[PARTIAL:.*]] = sde.mu_alloc : memref<4x8x2x16xf64>
 // CHECK: sde.su_iterate (%{{.*}}) to (%{{.*}}) step (%{{.*}}) classification(<elementwise>)
+// CHECK: sde.mu_access_window read %[[PARTIAL]] : memref<4x8x2x16xf64> array_id(1)
 // CHECK: memref.load %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<4x8x2x16xf64>
-// CHECK: memref.store %{{.*}}, %[[PARTIAL]][%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<4x1x2x1xf64>
-// CHECK-NOT: arrayLayout = [{arrayId = 3
-// CHECK: sde.mu_access_window read %[[PARTIAL]] : memref<4x1x2x1xf64> array_id(3)
 
 func.func @rank_expanded_nonleading_owner_checksum_partials() -> f64 {
   %c0 = arith.constant 0 : index

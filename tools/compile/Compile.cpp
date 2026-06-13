@@ -1123,10 +1123,9 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
 void buildSdePlanningPipeline(PassManager &pm,
                               sde::SDECostModel *costModel = nullptr) {
   pm.addPass(sde::createConvertOpenMPToSdePass());
-  // raise-to-sde CORE promotes proven-independent host nests before residual
-  // serial wrapping; legacy sde-parallelize remains behind a debug flag.
+  // raise-to-sde CORE promotes proven-independent host nests and folds the
+  // initial cu-normalization; legacy sde-parallelize remains behind a debug flag.
   pm.addPass(sde::createRaiseToSdePass());
-  pm.addPass(sde::createSdeCuNormalizationPass());
   if (SdeUseLegacyParallelize)
     pm.addPass(sde::createParallelizePass());
   // Module-scoped per-array BLOCK layout assignment. Runs before

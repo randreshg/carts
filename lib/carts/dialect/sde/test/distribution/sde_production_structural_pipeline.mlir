@@ -32,7 +32,7 @@ func.func @production_window_1d() {
 // CHECK: sde.su_distribute <blocked>
 // CHECK: sde.su_iterate (%{{.*}}) to (%c65536) step (%{{.*}}) {{.*}}classification(<elementwise_pipeline>)
 // CHECK: sde.mu_access_window readwrite %[[A]] : memref<2x32768x8192xf32> array_id(1)
-// CHECK: partialReductionOwnerDims = [0, 1]
+// CHECK: partialReductionOwnerDims = [0]
 
 func.func @owner_local_pipeline_budget_retiled() {
   %c0 = arith.constant 0 : index
@@ -76,12 +76,13 @@ func.func @owner_local_pipeline_budget_retiled() {
 
 // CHECK-LABEL: func.func @promoted_reduction_budget_retiled
 // CHECK: %[[A:.*]] = sde.mu_alloc : memref<2x2x256x128x3136xf32>
-// CHECK: %[[B:.*]] = sde.mu_alloc : memref<2x2x256x128xf32>
+// CHECK: %[[B:.*]] = sde.mu_alloc : memref<2x256x256xf32>
 // CHECK: sde.su_iterate (%{{.*}}, %{{.*}}) to (%c512, %c256) step (%{{.*}}, %{{.*}}) {{.*}}classification(<reduction>)
 // CHECK: sde.array_layout_root read %[[A]] : memref<2x2x256x128x3136xf32> array_id(3)
 // CHECK: sde.mu_access_window read %[[A]] : memref<2x2x256x128x3136xf32> array_id(3)
-// CHECK: sde.mu_access_window write %[[B]] : memref<2x2x256x128xf32> array_id(2)
-// CHECK-NOT: arrayLayout =
+// CHECK: sde.mu_access_window write %[[B]] : memref<2x256x256xf32> array_id(2)
+// CHECK: } {groupBlockCount = [2, 2]}
+// CHECK: } {arrayLayout = [{arrayId = 3 : i64
 
 func.func @promoted_reduction_budget_retiled() {
   %c0 = arith.constant 0 : index

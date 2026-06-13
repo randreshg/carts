@@ -1023,7 +1023,7 @@ static SmallVector<int64_t, 4> buildLogicalWorkerSliceOrPhysical(
 }
 
 static bool hasCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
-  return sde::hasCommittedSuPhysicalLayout(op);
+  return sde::hasCommittedWriterBlockLayout(op);
 }
 
 static std::optional<sde::LayoutGraphFact>
@@ -1067,6 +1067,57 @@ selectSingleWriteLayoutFact(sde::SdeSuIterateOp op) {
   if (!selected)
     return layoutFactFromCommittedPhysicalLayout(op);
   return selected;
+}
+
+static std::optional<sde::LayoutGraphFact>
+findSingleLoopStepWriteLayoutFact(sde::SdeSuIterateOp op) {
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout || op.getSteps().empty())
+    return std::nullopt;
+
+  std::optional<sde::LayoutGraphFact> selected;
+  for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
+    if (fact.role != sde::LayoutGraphRole::write || fact.blockShape.empty())
+      continue;
+    if (fact.layoutKind != sde::ArrayLayoutKind::replicated &&
+        fact.layoutKind != sde::ArrayLayoutKind::blockContraction)
+      continue;
+    if (fact.id < 0)
+      return std::nullopt;
+    if (!selected) {
+      selected = fact;
+      continue;
+    }
+    if (selected->id != fact.id || selected->layoutKind != fact.layoutKind ||
+        selected->blockShape != fact.blockShape)
+      return std::nullopt;
+  }
+  return selected;
+}
+
+static void commitLoopStepRealizedReplicatedLayout(sde::SdeSuIterateOp op) {
+  if (!op || op.getSteps().size() != 1 ||
+      sde::hasCommittedWriterBlockLayout(op))
+    return;
+  std::optional<sde::LayoutGraphFact> writeLayout =
+      findSingleLoopStepWriteLayoutFact(op);
+  if (!writeLayout || !writeLayout->ownerDims.empty())
+    return;
+  Value root =
+      findArrayLayoutRoot(op, writeLayout->id, sde::SdeAccessMode::write);
+  auto muType = root ? dyn_cast<MemRefType>(root.getType()) : MemRefType();
+  if (!muType || !muType.hasStaticShape() || muType.getShape().empty())
+    return;
+  std::optional<int64_t> step = getPositiveConstantIndex(op.getSteps()[0]);
+  if (!step || *step <= 1 || muType.getShape()[0] <= *step)
+    return;
+
+  SmallVector<int64_t, 4> physicalBlockShape(muType.getShape().begin(),
+                                             muType.getShape().end());
+  physicalBlockShape[0] = *step;
+  SmallVector<int64_t, 4> ownerDims{0};
+  (void)sde::commitWriterPhysicalLayoutFacts(op, ownerDims, physicalBlockShape,
+                                             physicalBlockShape);
 }
 
 static bool
@@ -1927,7 +1978,8 @@ requiresUnimplementedStencilWavefront(sde::SdeSuIterateOp op,
     return false;
   if (op->getParentOfType<sde::SdeSuDistributeOp>())
     return false;
-  return sde::queryInPlaceSharedState(op) && !hasCommittedPhysicalLayout(op);
+  return sde::queryInPlaceSharedState(op) &&
+         !sde::hasCommittedCuMuPartitionFacts(op);
 }
 
 static std::string formatI64Array(ArrayAttr attr) {
@@ -1992,7 +2044,9 @@ struct DistributionPlanningPass
         continue;
       }
 
-      if (hasCommittedPhysicalLayout(op)) {
+      commitLoopStepRealizedReplicatedLayout(op);
+
+      if (sde::hasCommittedCuMuPartitionFacts(op)) {
         chooseDistributionOrFailClosed(op);
         continue;
       }

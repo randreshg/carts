@@ -63,6 +63,14 @@ struct SdeRankExpandMuPass
       if (!committed ||
           !carts::sde::supportsRankExpandedAccessWindows(committed->writer))
         continue; // out of scope -> leave flat, add NO attrs
+      bool hasExplicitWindow = false;
+      for (Operation *user : mu.getMemref().getUsers())
+        if (isa<carts::sde::SdeMuAccessWindowOp>(user)) {
+          hasExplicitWindow = true;
+          break;
+        }
+      if (hasExplicitWindow)
+        continue; // pre-windowed MUs keep their explicit grain
 
       std::unique_ptr<carts::sde::MuAccessIndexer> indexer =
           carts::sde::makeMuAccessIndexer(
@@ -77,6 +85,15 @@ struct SdeRankExpandMuPass
         failed = true;
         continue;
       }
+      SmallVector<int64_t, 4> ownerDims;
+      ownerDims.reserve(committed->layout.ownerDims.size());
+      for (unsigned dim : committed->layout.ownerDims)
+        ownerDims.push_back(static_cast<int64_t>(dim));
+      SmallVector<int64_t, 4> blockShape = committed->layout.logicalShape;
+      for (auto [slot, dim] : llvm::enumerate(committed->layout.ownerDims))
+        blockShape[dim] = committed->layout.blockExtents[slot];
+      carts::sde::rewriteWriterArrayLayoutToPhysicalShape(
+          committed->writer, ownerDims, blockShape);
     }
     carts::sde::reconcileReaderArrayLayoutsWithCommittedWriterShapes(module);
 

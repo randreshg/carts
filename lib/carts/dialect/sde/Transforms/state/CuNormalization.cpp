@@ -41,6 +41,7 @@
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Utils/SdeCuNormalizationUtils.h"
 #include "carts/dialect/sde/Utils/SdeCuStructure.h"
 #include "carts/dialect/sde/Utils/SdeOwnerLoopPromotion.h"
 
@@ -196,40 +197,43 @@ static bool normalizeSchedulingCarrierRegions(Operation *op) {
   return ok;
 }
 
+} // namespace
+
+namespace mlir::carts::sde {
+
+bool normalizeSdeCuStructure(ModuleOp module) {
+  promoteModuleOwnerLoops(module);
+
+  SmallVector<Block *> targets;
+  llvm::DenseSet<Block *> suTargets;
+  module.walk([&](SdeSuIterateOp op) {
+    Region &body = op.getBody();
+    if (!body.empty()) {
+      targets.push_back(&body.front());
+      suTargets.insert(&body.front());
+    }
+  });
+  module.walk([&](func::FuncOp fn) {
+    if (!funcHasSdeOp(fn))
+      return;
+    for (Block &block : fn.getBody())
+      targets.push_back(&block);
+  });
+
+  bool ok = true;
+  for (Block *block : targets)
+    ok &= normalizeBlock(block, suTargets.contains(block));
+  return ok;
+}
+
+} // namespace mlir::carts::sde
+
+namespace {
+
 struct SdeCuNormalizationPass
     : public sde::impl::SdeCuNormalizationBase<SdeCuNormalizationPass> {
   void runOnOperation() override {
-    ModuleOp module = getOperation();
-    promoteModuleOwnerLoops(module);
-
-    // Collect target blocks before mutating.
-    //   * the body block of every su_iterate (raw compute directly in an
-    //     iterate SU body is illegal — the SU must be scheduling-only), and
-    //   * every block of every SDE-bearing func (source work outside any CU is
-    //     illegal there).
-    // The cu_regions this pass inserts never move an SU/CU boundary op, so
-    // these collected block pointers stay valid across all wrapping.
-    SmallVector<Block *> targets;
-    llvm::DenseSet<Block *> suTargets;
-    module.walk([&](sde::SdeSuIterateOp op) {
-      Region &body = op.getBody();
-      if (!body.empty()) {
-        targets.push_back(&body.front());
-        suTargets.insert(&body.front());
-      }
-    });
-    module.walk([&](func::FuncOp fn) {
-      if (!funcHasSdeOp(fn))
-        return;
-      for (Block &block : fn.getBody())
-        targets.push_back(&block);
-    });
-
-    bool ok = true;
-    for (Block *block : targets)
-      ok &= normalizeBlock(block, suTargets.contains(block));
-
-    if (!ok)
+    if (!normalizeSdeCuStructure(getOperation()))
       signalPassFailure();
   }
 };

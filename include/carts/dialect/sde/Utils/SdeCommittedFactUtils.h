@@ -148,10 +148,19 @@ deriveCommittedHaloShape(SdeSuIterateOp op) {
                  : std::nullopt;
 }
 
-/// True when a writer SU has committed block layout recoverable from MU type or
-/// transitional arrayLayout facts.
+/// True when a writer SU has committed block layout in transitional arrayLayout
+/// facts with explicit owner dims (replicated/contraction-without-owner stay
+/// uncommitted until DistributionPlanning realizes loop-step grain).
 inline bool hasCommittedWriterBlockLayout(SdeSuIterateOp op) {
-  return hasCommittedSuPhysicalLayout(op);
+  if (!op)
+    return false;
+  for (const LayoutGraphFact &fact :
+       parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+    if (fact.role == LayoutGraphRole::write && !fact.ownerDims.empty() &&
+        !fact.blockShape.empty())
+      return true;
+  }
+  return false;
 }
 
 inline std::optional<LayoutGraphFact>
@@ -447,7 +456,11 @@ inline bool commitWriterPhysicalLayoutViaMuType(
     return false;
   commitCuGroupBlockCounts(op, ownerDims, physicalBlockShape,
                            logicalWorkerSlice);
-  return reconcilePartialReductionOwnersWithCommittedShape(op, ownerDims);
+  bool changed =
+      reconcilePartialReductionOwnersWithCommittedShape(op, ownerDims);
+  changed |= rewriteWriterArrayLayoutToPhysicalShape(op, ownerDims,
+                                                       physicalBlockShape);
+  return changed;
 }
 
 inline bool commitWriterPhysicalLayoutFacts(
