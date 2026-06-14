@@ -34,6 +34,10 @@ bool hasConstantOffsets(AffineMap map);
 std::optional<AffineExpr> tryGetAffineExpr(Value value, ArrayRef<Value> ivs,
                                              MLIRContext *ctx);
 
+/// Return -1, 0, or +1 when `expr` is exactly `iv` plus a unit
+/// neighborhood offset after affine simplification.
+std::optional<int64_t> tryGetUnitNeighborhoodOffset(Value expr, Value iv);
+
 } // namespace carts::sde
 } // namespace mlir
 

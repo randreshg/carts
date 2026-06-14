@@ -132,4 +132,30 @@ bool hasConstantOffsets(AffineMap map) {
   return false;
 }
 
+std::optional<int64_t> tryGetUnitNeighborhoodOffset(Value expr, Value iv) {
+  MLIRContext *ctx = expr.getContext();
+  std::optional<AffineExpr> affine = tryGetAffineExpr(expr, {iv}, ctx);
+  if (!affine)
+    return std::nullopt;
+  *affine = simplifyAffineExpr(*affine, 1, 0);
+  AffineExpr dim = getAffineDimExpr(0, ctx);
+  if (*affine == dim)
+    return 0;
+  if (auto add = dyn_cast<AffineBinaryOpExpr>(*affine)) {
+    if (add.getKind() != AffineExprKind::Add)
+      return std::nullopt;
+    if (add.getLHS() == dim) {
+      if (auto cst = dyn_cast<AffineConstantExpr>(add.getRHS()))
+        if (cst.getValue() >= -1 && cst.getValue() <= 1)
+          return cst.getValue();
+    }
+    if (add.getRHS() == dim) {
+      if (auto cst = dyn_cast<AffineConstantExpr>(add.getLHS()))
+        if (cst.getValue() >= -1 && cst.getValue() <= 1)
+          return -cst.getValue();
+    }
+  }
+  return std::nullopt;
+}
+
 } // namespace mlir::carts::sde
