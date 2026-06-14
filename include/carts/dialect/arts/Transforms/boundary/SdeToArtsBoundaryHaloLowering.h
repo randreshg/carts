@@ -10,6 +10,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 
 namespace mlir {
 namespace carts::arts::boundary {
@@ -51,6 +52,16 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
 
 FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
                                       DirectDepSpec dep, Block *computeBlock);
+
+LogicalResult rewriteCloned2DUnitHaloLoads(
+    arts::EdtOp task, const DenseMap<Operation *, HaloLoadRewrite> &rewrites,
+    ArrayRef<Halo2DTaskWork> haloWorks, ArrayRef<Value> payloads,
+    ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs);
+
+LogicalResult rewriteClonedNdUnitHaloLoads(
+    arts::EdtOp task, const DenseMap<Operation *, HaloNdLoadRewrite> &rewrites,
+    ArrayRef<HaloNdTaskWork> haloWorks, ArrayRef<Value> payloads,
+    ArrayRef<SmallVector<Value, 4>> depBlockOffsetArgs);
 
 } // namespace carts::arts::boundary
 } // namespace mlir
