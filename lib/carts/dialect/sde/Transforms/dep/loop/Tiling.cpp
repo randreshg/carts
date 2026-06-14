@@ -1350,34 +1350,7 @@ static bool stripMineLoop(scf::ForOp loop, Value tileIterations) {
       tileConstant <= 1)
     return false;
 
-  OpBuilder builder(loop);
-  Location loc = loop.getLoc();
-  Value originalStep = loop.getStep();
-  Value tileStep =
-      arith::MulIOp::create(builder, loc, originalStep, tileIterations);
-
-  auto outerLoop = scf::ForOp::create(builder, loc, loop.getLowerBound(),
-                                      loop.getUpperBound(), tileStep);
-  outerLoop->setAttrs(loop->getAttrs());
-
-  OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPointToStart(outerLoop.getBody());
-  Value tileBase = outerLoop.getInductionVar();
-  Value tileLimit = arith::AddIOp::create(builder, loc, tileBase, tileStep);
-  Value tileUpper =
-      arith::MinUIOp::create(builder, loc, tileLimit, loop.getUpperBound());
-  auto innerLoop =
-      scf::ForOp::create(builder, loc, tileBase, tileUpper, originalStep);
-  innerLoop->setAttrs(loop->getAttrs());
-
-  IRMapping mapping;
-  mapping.map(loop.getInductionVar(), innerLoop.getInductionVar());
-  builder.setInsertionPointToStart(innerLoop.getBody());
-  for (Operation &op : loop.getBody()->without_terminator())
-    builder.clone(op, mapping);
-
-  loop.erase();
-  return true;
+  return !mlir::tilePerfectlyNested(loop, {tileIterations}).empty();
 }
 
 static bool stripMineAffineLoop(affine::AffineForOp loop, int64_t tileSize) {
