@@ -253,7 +253,7 @@ static const std::array<llvm::StringLiteral, 12> kSdeInputNormalizationPasses =
     {"PromoteTargetAttrs",
      "SimplifyAffineStructures(func)",
      "CSE",
-     "PolygeistCanonicalize",
+     "SCCP",
      "SdeInputInliner",
      "PolygeistCanonicalize",
      "ScalarForwarding",
@@ -1098,14 +1098,15 @@ void buildSdeInputNormalizationPipeline(PassManager &pm) {
   // lowering so memref normalization can read affine.load/store maps natively.
   optPM.addPass(affine::createSimplifyAffineStructuresPass());
   pm.addPass(createCSEPass());
-  // Fold constant control flow (e.g. cgeist's `scf.if %true` / execute_region
-  // nests around a `min(NI,NJ)` loop bound) BEFORE inlining. Otherwise a helper
-  // whose `affine.for` bound is such a non-constant value is a valid affine
-  // symbol only at the callee's top level, and inlining it produces invalid
-  // affine IR ("operand cannot be used as a symbol"). Folding the bound to a
-  // constant keeps the helper inlinable (its accesses must land on the caller's
-  // DB-backed storage for SDE-to-ARTS realization).
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  // Constant-propagate BEFORE inlining so a helper's `min(NI,NJ)` loop bound
+  // (emitted by cgeist as a constant `scf.if`/execute_region nest) becomes a
+  // constant. Such a bound is a valid affine symbol only at the callee's top
+  // level; inlining a non-constant one yields invalid affine IR ("operand
+  // cannot be used as a symbol"), while a constant stays a valid symbol after
+  // inlining. SCCP is used rather than full canonicalization so the nested
+  // pointer-allocation (`float **`) alloca/store/load wrapper chain that
+  // SdeMemrefNormalization's pattern detector traces is left intact.
+  pm.addPass(mlir::createSCCPPass());
   pm.addPass(sde::createSdeInputInlinerPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(sde::createScalarForwardingPass());
