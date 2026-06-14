@@ -37,8 +37,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AffineMap.h"
 #include <algorithm>
-#include <functional>
-#include <limits>
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -452,88 +450,6 @@ arts::DbAcquireOp create2DUnitCompactColumnAcquire(
       SmallVector<Value>{}, SmallVector<Value>{});
   acquire.setPreserveAccessMode();
   return acquire;
-}
-
-void enumerateUnitHaloSourceOffsets(
-    unsigned rank, SmallVectorImpl<SmallVector<int64_t, 4>> &offsets) {
-  SmallVector<int64_t, 4> current(rank, 0);
-  std::function<void(unsigned, bool)> visit = [&](unsigned dim, bool nonzero) {
-    if (dim == rank) {
-      if (nonzero)
-        offsets.push_back(current);
-      return;
-    }
-    for (int64_t value : {-1, 0, 1}) {
-      current[dim] = value;
-      visit(dim + 1, nonzero || value != 0);
-    }
-  };
-  visit(/*dim=*/0, /*nonzero=*/false);
-}
-
-SmallVector<Value, 4>
-buildRankExpandedElementIndices(OpBuilder &builder, Location loc,
-                                ArrayRef<Value> elementIndices) {
-  SmallVector<Value, 4> indices;
-  indices.reserve(elementIndices.size() * 2);
-  for (unsigned idx = 0; idx < elementIndices.size(); ++idx)
-    indices.push_back(createZeroIndex(builder, loc));
-  indices.append(elementIndices.begin(), elementIndices.end());
-  return indices;
-}
-
-void emitCompactHaloCopy(OpBuilder &builder, Location loc,
-                         ArrayRef<int64_t> sourceOffsets,
-                         ArrayRef<Value> elementExtents, Value sourcePayload,
-                         Value compactPayload) {
-  unsigned rank = sourceOffsets.size();
-  SmallVector<Value, 4> loopIvs(rank);
-
-  std::function<void(unsigned)> emitAtDim = [&](unsigned dim) {
-    if (dim == rank) {
-      SmallVector<Value, 4> sourceElementIndices;
-      SmallVector<Value, 4> compactElementIndices;
-      sourceElementIndices.reserve(rank);
-      compactElementIndices.reserve(rank);
-      for (unsigned slot = 0; slot < rank; ++slot) {
-        if (sourceOffsets[slot] == 0) {
-          sourceElementIndices.push_back(loopIvs[slot]);
-          compactElementIndices.push_back(loopIvs[slot]);
-          continue;
-        }
-        Value compactCoord = createZeroIndex(builder, loc);
-        compactElementIndices.push_back(compactCoord);
-        if (sourceOffsets[slot] > 0) {
-          sourceElementIndices.push_back(createZeroIndex(builder, loc));
-          continue;
-        }
-        Value last = arith::SubIOp::create(builder, loc, elementExtents[slot],
-                                           createOneIndex(builder, loc));
-        sourceElementIndices.push_back(last);
-      }
-      Value value = memref::LoadOp::create(
-          builder, loc, sourcePayload,
-          buildRankExpandedElementIndices(builder, loc, sourceElementIndices));
-      memref::StoreOp::create(
-          builder, loc, value, compactPayload,
-          buildRankExpandedElementIndices(builder, loc, compactElementIndices));
-      return;
-    }
-
-    if (sourceOffsets[dim] != 0) {
-      emitAtDim(dim + 1);
-      return;
-    }
-
-    auto loop =
-        scf::ForOp::create(builder, loc, createZeroIndex(builder, loc),
-                           elementExtents[dim], createOneIndex(builder, loc));
-    builder.setInsertionPointToStart(loop.getBody());
-    loopIvs[dim] = loop.getInductionVar();
-    emitAtDim(dim + 1);
-  };
-
-  emitAtDim(/*dim=*/0);
 }
 
 FailureOr<CompactHaloNdSpec>
