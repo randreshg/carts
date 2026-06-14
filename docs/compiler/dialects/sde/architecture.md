@@ -39,8 +39,9 @@ attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21
 - **S4:** `SuLoopAccessAnalysis` uses upstream `MemRefAccess`/`affine.load/store` when IR
   is affine; `RaiseSCFToAffine` + `SimplifyAffineStructures` run after Tiling (S4d);
   `raise-to-sde` promotes `affine.for` via `isLoopParallel`; planning keeps affine
-  through Interchange/Tiling (no bridge `LowerAffine`); Tiling still emits scf owner
-  tile loops while inner `affine.for` strip-mine migration is in progress. Shared
+  through Interchange/Tiling (no bridge `LowerAffine`); Tiling strip-mines direct
+  matmul column loops via upstream `tilePerfectlyNested` when inner nests are
+  `affine.for` (owner tile loops still scf). Shared
   `AffineIndexUtils::tryGetAffineExpr` replaces the duplicated SDE parser;
   `appendNestedForIvs` collects `affine.for` IVs; hand-rolled
   `extractDimOffset` still used for lowered `memref` paths; stencil halo
