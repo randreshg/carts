@@ -33,6 +33,7 @@ namespace mlir::carts::sde {
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/LoopUtils.h"
+#include "mlir/Dialect/SCF/Utils/Utils.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/MathExtras.h"
@@ -332,20 +333,25 @@ static bool hasPerfectNestedScalarLoopNest(Block &body, unsigned numLoops) {
   if (numLoops == 1)
     return isExecutableInnermostBody(body);
 
-  Block *current = &body;
-  for (unsigned depth = 1; depth < numLoops; ++depth) {
-    scf::ForOp nestedLoop;
-    for (Operation &op : current->without_terminator()) {
-      if (!isa<scf::ForOp>(op) || nestedLoop)
-        return false;
-      nestedLoop = cast<scf::ForOp>(op);
-    }
-    if (!nestedLoop || !nestedLoop.getInitArgs().empty())
+  Operation *root = nullptr;
+  for (Operation &op : body.without_terminator()) {
+    if (!isa<scf::ForOp>(op) || root)
       return false;
-    current = nestedLoop.getBody();
+    root = &op;
   }
+  auto rootLoop = dyn_cast_or_null<scf::ForOp>(root);
+  if (!rootLoop || !rootLoop.getInitArgs().empty())
+    return false;
 
-  return isExecutableInnermostBody(*current);
+  SmallVector<scf::ForOp, 4> loops;
+  mlir::getPerfectlyNestedLoops(loops, rootLoop);
+  if (loops.size() != numLoops - 1)
+    return false;
+  if (llvm::any_of(loops, [](scf::ForOp loop) {
+        return !loop.getInitArgs().empty();
+      }))
+    return false;
+  return isExecutableInnermostBody(*loops.back().getBody());
 }
 
 static bool hasPerfectNestedAffineLoopNest(Block &body, unsigned numLoops) {
@@ -354,20 +360,20 @@ static bool hasPerfectNestedAffineLoopNest(Block &body, unsigned numLoops) {
   if (numLoops == 1)
     return isExecutableInnermostBody(body);
 
-  Block *current = &body;
-  for (unsigned depth = 1; depth < numLoops; ++depth) {
-    affine::AffineForOp nestedLoop;
-    for (Operation &op : current->without_terminator()) {
-      if (!isa<affine::AffineForOp>(op) || nestedLoop)
-        return false;
-      nestedLoop = cast<affine::AffineForOp>(op);
-    }
-    if (!nestedLoop)
+  Operation *root = nullptr;
+  for (Operation &op : body.without_terminator()) {
+    if (!isa<affine::AffineForOp>(op) || root)
       return false;
-    current = nestedLoop.getBody();
+    root = &op;
   }
+  auto rootLoop = dyn_cast_or_null<affine::AffineForOp>(root);
+  if (!rootLoop)
+    return false;
 
-  return isExecutableInnermostBody(*current);
+  SmallVector<affine::AffineForOp, 4> loops;
+  affine::getPerfectlyNestedLoops(loops, rootLoop);
+  return loops.size() == numLoops - 1 &&
+         isExecutableInnermostBody(*loops.back().getBody());
 }
 
 static bool loopWritesOwnerColumn(scf::ForOp loop, Value outputRoot,
