@@ -50,8 +50,9 @@ attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21
 - Op-level verify fold: 5 SDE verify passes remain (target ≈2 + residuals).
 
 **Open (DAG order)**
-1. **S4 main** — delete `extractDimOffset`; migrate owner-level Tiling off scf
-   `stripMineLoop` where possible.
+1. **S4 main** — replace `AffineIndexUtils::extractDimOffset` callers with upstream
+   `MemRefAccess`/`ValueBounds`; migrate owner-level Tiling off scf
+   `stripMineLoop` where possible (matmul column path still scf until re-raise).
 2. **S13 / S14** — physical attr collapse; `arrayLayout` dict deletion.
 3. **Part 8** — ARTS 84 `OptionalAttr` audit.
 4. **S17–S21** — scaling levers + megalarge 1n→2n gates.
