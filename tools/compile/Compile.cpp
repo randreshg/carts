@@ -253,7 +253,7 @@ static const std::array<llvm::StringLiteral, 14> kSdeInputNormalizationPasses =
     {"PromoteTargetAttrs",
      "SimplifyAffineStructures(func)",
      "CSE",
-     "SCCP",
+     "LowerAffine(func)",
      "SdeInputInliner",
      "PolygeistCanonicalize",
      "ScalarForwarding",
@@ -1100,15 +1100,15 @@ void buildSdeInputNormalizationPipeline(PassManager &pm) {
   // lowering so memref normalization can read affine.load/store maps natively.
   optPM.addPass(affine::createSimplifyAffineStructuresPass());
   pm.addPass(createCSEPass());
-  // Constant-propagate BEFORE inlining so a helper's `min(NI,NJ)` loop bound
-  // (emitted by cgeist as a constant `scf.if`/execute_region nest) becomes a
-  // constant. Such a bound is a valid affine symbol only at the callee's top
-  // level; inlining a non-constant one yields invalid affine IR ("operand
-  // cannot be used as a symbol"), while a constant stays a valid symbol after
-  // inlining. SCCP is used rather than full canonicalization so the nested
-  // pointer-allocation (`float **`) alloca/store/load wrapper chain that
-  // SdeMemrefNormalization's pattern detector traces is left intact.
-  pm.addPass(mlir::createSCCPPass());
+  // Lower affine to memref/scf BEFORE inlining and the scf/memref-based
+  // normalization passes. SdeInputInliner, SdeMemrefNormalization, etc. are
+  // keyed on the memref dialect, and an `affine.for` whose bound is an operand
+  // symbol valid only at the callee's top level (a helper loop `0 .. n`, or a
+  // `min(NI,NJ)` bound) becomes invalid affine IR once inlined ("operand cannot
+  // be used as a symbol"). scf.for carries no such symbol restriction, so input
+  // normalization runs in memref/scf form (as it did pre-S4); the planning
+  // pipeline re-raises affine immediately after (S4d, addAffineRecoveryBundle).
+  pm.addNestedPass<func::FuncOp>(createLowerAffinePass());
   pm.addPass(sde::createSdeInputInlinerPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(sde::createScalarForwardingPass());
