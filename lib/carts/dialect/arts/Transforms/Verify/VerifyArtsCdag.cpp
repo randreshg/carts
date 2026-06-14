@@ -39,11 +39,6 @@ using namespace mlir::carts::arts;
 
 namespace {
 
-static DbAllocOp underlyingAlloc(DbAcquireOp acquire) {
-  return dyn_cast_or_null<DbAllocOp>(
-      DbUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()));
-}
-
 static bool isWriterAcquire(DbAcquireOp acquire) {
   if (auto verdict = acquire.getRuntimeDbMode())
     return *verdict != RuntimeDbMode::ro;
@@ -281,7 +276,7 @@ static LogicalResult verifyCdagWriterLaunch(DbAcquireOp acquire,
                                             bool requiresInterNodeRouting) {
   if (!isWriterAcquire(acquire))
     return success();
-  DbAllocOp alloc = underlyingAlloc(acquire);
+  DbAllocOp alloc = DbUtils::getUnderlyingDbAllocOp(acquire.getSourcePtr());
   if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
     return success();
   CommittedDbUseSummary uses = summarizeAcquireUses(acquire);
@@ -309,7 +304,7 @@ static LogicalResult verifyCdagWriterLaunch(DbAcquireOp acquire,
 /// (A) Every distributed acquire carries a committed DB mode; missing modes are
 /// rejected here, before ARTS-RT, instead of inferred at lowering.
 static LogicalResult verifyCdagAcquireMode(DbAcquireOp acquire) {
-  DbAllocOp alloc = underlyingAlloc(acquire);
+  DbAllocOp alloc = DbUtils::getUnderlyingDbAllocOp(acquire.getSourcePtr());
   if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
     return success();
   if (!acquire.getRuntimeDbMode())
@@ -323,7 +318,7 @@ static LogicalResult verifyCdagAcquireMode(DbAcquireOp acquire) {
 /// operands. A halo_slice is diagnostic reach metadata only; ARTS-RT must not
 /// reconstruct byte slices from it. Reject here, before ARTS-RT.
 static LogicalResult verifyCdagAcquireWindow(DbAcquireOp acquire) {
-  DbAllocOp alloc = underlyingAlloc(acquire);
+  DbAllocOp alloc = DbUtils::getUnderlyingDbAllocOp(acquire.getSourcePtr());
   if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
     return success();
   if (!DbUtils::acquiresPartialHaloWindow(acquire))
@@ -343,7 +338,7 @@ static bool hasCleanupOnlyAcquireUses(DbAcquireOp acquire) {
 }
 
 static LogicalResult verifyCdagCommittedAcquireUser(DbAcquireOp acquire) {
-  DbAllocOp alloc = underlyingAlloc(acquire);
+  DbAllocOp alloc = DbUtils::getUnderlyingDbAllocOp(acquire.getSourcePtr());
   if (!alloc || !hasArtsDbPhysicalLayout(alloc.getOperation()))
     return success();
   CommittedDbUseSummary uses = summarizeAcquireUses(acquire);
@@ -375,7 +370,7 @@ static void verifyCdagSwmr(ModuleOp module, bool &failed) {
   module.walk([&](DbAcquireOp acquire) {
     if (!isWriterAcquire(acquire))
       return;
-    DbAllocOp alloc = underlyingAlloc(acquire);
+    DbAllocOp alloc = DbUtils::getUnderlyingDbAllocOp(acquire.getSourcePtr());
     if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
       return;
     auto key = blockKey(acquire);

@@ -482,6 +482,10 @@ Operation *DbUtils::getUnderlyingDbAlloc(Value v) {
   return nullptr;
 }
 
+DbAllocOp DbUtils::getUnderlyingDbAllocOp(Value v) {
+  return dyn_cast_or_null<DbAllocOp>(getUnderlyingDbAlloc(v));
+}
+
 DbAllocOp DbUtils::getAllocOpFromGuid(Value dbGuid) {
   if (!dbGuid)
     return nullptr;

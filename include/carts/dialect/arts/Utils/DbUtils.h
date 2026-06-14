@@ -68,6 +68,9 @@ public:
   /// Traces through DbAcquireOp chains to find the root allocation.
   static Operation *getUnderlyingDbAlloc(Value v);
 
+  /// Typed wrapper for getUnderlyingDbAlloc.
+  static DbAllocOp getUnderlyingDbAllocOp(Value v);
+
   /// Trace a GUID value through acquire chains to find the originating
   /// DbAllocOp. Returns nullptr if the GUID does not trace to an allocation.
   static DbAllocOp getAllocOpFromGuid(Value dbGuid);
