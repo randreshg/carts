@@ -209,6 +209,24 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
       // one diagnostic at its root.
       if (!isSourceComputeOp(op))
         return;
+      // A control-flow container (e.g. an NREPS rep `affine.for`, a stencil time
+      // loop, or an `scf.if` guard) whose body holds SDE CUs/su_iterates is
+      // scheduling structure, not leaf source compute: its compute already lives
+      // in CUs. Recurse past it -- the walk still flags any genuinely-raw
+      // compute nested deeper outside a CU.
+      if (op->getNumRegions() > 0) {
+        bool wrapsSdeWork = false;
+        op->walk([&](Operation *nested) {
+          if (nested != op &&
+              isa<sde::SdeCuRegionOp, sde::SdeSuIterateOp>(nested)) {
+            wrapsSdeWork = true;
+            return WalkResult::interrupt();
+          }
+          return WalkResult::advance();
+        });
+        if (wrapsSdeWork)
+          return;
+      }
       Operation *parent = op->getParentOp();
       if (parent && isSourceComputeOp(parent))
         return; // inner op of a compute nest; root carries the diagnostic
