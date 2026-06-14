@@ -632,8 +632,6 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<UnitAttr>:$compactHaloPack,
     UnitAttr:$inPlaceSafe,
     UnitAttr:$inPlaceSharedState,
-    OptionalAttr<I64Attr>:$vectorizeWidth,
-    OptionalAttr<I64Attr>:$unrollFactor,
     OptionalAttr<I64Attr>:$interleaveCount,
     OptionalAttr<ArtsDepPatternAttr>:$depPattern,
     OptionalAttr<EdtDistributionKindAttr>:$distribution_kind,

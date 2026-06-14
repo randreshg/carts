@@ -449,10 +449,6 @@ static void copySplitEdtFacts(EdtOp source, EdtOp dest) {
     dest.setInPlaceSafeAttr(UnitAttr::get(ctx));
   if (source.getInPlaceSharedStateAttr())
     dest.setInPlaceSharedStateAttr(UnitAttr::get(ctx));
-  if (auto attr = source.getVectorizeWidthAttr())
-    dest.setVectorizeWidthAttr(attr);
-  if (auto attr = source.getUnrollFactorAttr())
-    dest.setUnrollFactorAttr(attr);
   if (auto attr = source.getInterleaveCountAttr())
     dest.setInterleaveCountAttr(attr);
   if (auto attr = source.getDepPatternAttr())
