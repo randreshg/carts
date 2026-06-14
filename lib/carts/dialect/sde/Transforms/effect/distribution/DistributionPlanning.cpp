@@ -69,7 +69,6 @@ static SmallVector<int64_t, 4> buildLogicalWorkerSliceOrPhysical(
 static bool physicalLayoutMatchesRealizedLoopSteps(
     sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
     ArrayRef<int64_t> physicalBlockShape, ArrayRef<int64_t> logicalWorkerSlice);
-static std::optional<int64_t> getPositiveConstantIndex(Value value);
 
 static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
   return saturatingMultiplyPositive(costModel.getLogicalWorkerCapacity(),
@@ -431,7 +430,7 @@ buildWavefrontOwnerStoragePlan(const WavefrontSkewPlan &plan) {
 
   for (auto [slot, ownerDim] : llvm::enumerate(storage.ownerPhysicalDims)) {
     std::optional<int64_t> step =
-        getPositiveConstantIndex(plan.shape.steps[slot]);
+        ValueAnalysis::getPositiveConstantIndex(plan.shape.steps[slot]);
     if (!step || *step <= 0)
       return std::nullopt;
     if (ownerDim < 0 ||
@@ -1108,7 +1107,8 @@ static void commitLoopStepRealizedReplicatedLayout(sde::SdeSuIterateOp op) {
   auto muType = root ? dyn_cast<MemRefType>(root.getType()) : MemRefType();
   if (!muType || !muType.hasStaticShape() || muType.getShape().empty())
     return;
-  std::optional<int64_t> step = getPositiveConstantIndex(op.getSteps()[0]);
+  std::optional<int64_t> step =
+      ValueAnalysis::getPositiveConstantIndex(op.getSteps()[0]);
   if (!step || *step <= 1 || muType.getShape()[0] <= *step)
     return;
 
@@ -1379,18 +1379,6 @@ static bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
                                        logicalWorkerSlice);
 }
 
-static std::optional<int64_t> getPositiveConstantIndex(Value value) {
-  int64_t constant = 0;
-  if (::mlir::carts::ValueAnalysis::getConstantIndex(value, constant) &&
-      constant > 0)
-    return constant;
-  std::optional<int64_t> folded =
-      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value);
-  if (folded && *folded > 0)
-    return folded;
-  return std::nullopt;
-}
-
 static void
 alignLateOwnerShapeToExistingStep(sde::SdeSuIterateOp op,
                                   ArrayRef<int64_t> ownerDims,
@@ -1419,7 +1407,7 @@ alignLateOwnerShapeToExistingStep(sde::SdeSuIterateOp op,
       return;
 
     std::optional<int64_t> ownerStep =
-        getPositiveConstantIndex(op.getSteps()[stepSlot]);
+        ValueAnalysis::getPositiveConstantIndex(op.getSteps()[stepSlot]);
     if (!ownerStep || *ownerStep <= 1)
       continue;
 
@@ -1452,7 +1440,7 @@ physicalLayoutMatchesRealizedLoopSteps(sde::SdeSuIterateOp op,
       return false;
 
     std::optional<int64_t> realizedStep =
-        getPositiveConstantIndex(op.getSteps()[loopDim]);
+        ValueAnalysis::getPositiveConstantIndex(op.getSteps()[loopDim]);
     int64_t workerSpan = physicalBlockShape[rawPhysicalDim];
     if (!logicalWorkerSlice.empty()) {
       if (logicalWorkerSlice.size() != physicalBlockShape.size())

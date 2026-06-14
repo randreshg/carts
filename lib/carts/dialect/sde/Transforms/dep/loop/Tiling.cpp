@@ -234,7 +234,6 @@ struct PhysicalTileShape {
   sde::SdeIterationTopology topology = sde::SdeIterationTopology::owner_strip;
 };
 
-static std::optional<int64_t> getPositiveConstantIndex(Value value);
 static std::optional<sde::LayoutGraphFact>
 selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
                                   bool allowSingleOwnerDim);
@@ -603,7 +602,7 @@ buildPromotedMatmulPhysicalTileShape(sde::SdeSuIterateOp op,
     if (tile <= 0)
       return std::nullopt;
     std::optional<int64_t> step =
-        getPositiveConstantIndex(op.getSteps()[loopDim]);
+        ValueAnalysis::getPositiveConstantIndex(op.getSteps()[loopDim]);
     if (!step || *step != 1)
       return std::nullopt;
     plan.tileIterations[loopDim] = tile;
@@ -929,18 +928,6 @@ static void commitPhysicalTileShape(sde::SdeSuIterateOp op,
                                        plan.blockShape, logicalSlice);
 }
 
-static std::optional<int64_t> getPositiveConstantIndex(Value value) {
-  int64_t constant = 0;
-  if (::mlir::carts::ValueAnalysis::getConstantIndex(value, constant) &&
-      constant > 0)
-    return constant;
-  std::optional<int64_t> folded =
-      ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(value);
-  if (folded && *folded > 0)
-    return folded;
-  return std::nullopt;
-}
-
 static std::optional<unsigned> mapLoopDimToPhysicalDim(sde::SdeSuIterateOp op,
                                                        unsigned loopDim) {
   if (std::optional<sde::LayoutGraphFact> writeLayout =
@@ -1182,7 +1169,7 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
     if (tile <= 0)
       return std::nullopt;
     std::optional<int64_t> step =
-        getPositiveConstantIndex(op.getSteps()[loopDim]);
+        ValueAnalysis::getPositiveConstantIndex(op.getSteps()[loopDim]);
     if (!step || *step != 1)
       return std::nullopt;
     plan.tileIterations[loopDim] = tile;
@@ -1221,7 +1208,8 @@ alignStaticShapeAttrToSteps(sde::SdeSuIterateOp op, ArrayAttr attr,
        dim < e; ++dim) {
     if (!parallelMask[dim])
       continue;
-    std::optional<int64_t> step = getPositiveConstantIndex(tiledSteps[dim]);
+    std::optional<int64_t> step =
+        ValueAnalysis::getPositiveConstantIndex(tiledSteps[dim]);
     if (!step || *step <= 1)
       continue;
     std::optional<unsigned> physicalDim = mapLoopDimToPhysicalDim(op, dim);
@@ -1255,7 +1243,8 @@ alignExistingStaticPhysicalPlanToSteps(sde::SdeSuIterateOp op,
        dim < e; ++dim) {
     if (!parallelMask[dim])
       continue;
-    std::optional<int64_t> step = getPositiveConstantIndex(tiledSteps[dim]);
+    std::optional<int64_t> step =
+        ValueAnalysis::getPositiveConstantIndex(tiledSteps[dim]);
     if (!step || *step <= 1)
       continue;
     std::optional<unsigned> physicalDim = mapLoopDimToPhysicalDim(op, dim);

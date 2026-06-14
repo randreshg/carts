@@ -54,6 +54,9 @@ public:
   static std::optional<int64_t> tryFoldConstantIndex(Value v,
                                                      unsigned depth = 0);
 
+  /// Return a folded positive constant index value, if one can be proven.
+  static std::optional<int64_t> getPositiveConstantIndex(Value v);
+
   /// Recursively fold constant index expressions with a dialect-owned
   /// extension hook. The hook may fold dialect-specific values, while this
   /// utility remains responsible for generic arithmetic recursion.

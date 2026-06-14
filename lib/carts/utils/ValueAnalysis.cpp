@@ -332,6 +332,16 @@ std::optional<int64_t> ValueAnalysis::getConstantValue(Value v) {
   return std::nullopt;
 }
 
+std::optional<int64_t> ValueAnalysis::getPositiveConstantIndex(Value v) {
+  int64_t constant = 0;
+  if (ValueAnalysis::getConstantIndex(v, constant) && constant > 0)
+    return constant;
+  std::optional<int64_t> folded = ValueAnalysis::tryFoldConstantIndex(v);
+  if (folded && *folded > 0)
+    return folded;
+  return std::nullopt;
+}
+
 Value ValueAnalysis::getValueFromFoldResult(OpFoldResult ofr) {
   if (auto value = llvm::dyn_cast<Value>(ofr))
     return value;
