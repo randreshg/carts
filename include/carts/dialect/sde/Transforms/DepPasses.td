@@ -43,7 +43,8 @@ def Tiling : Pass<"tiling", "mlir::ModuleOp"> {
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
                            "::mlir::arith::ArithDialect",
                            "::mlir::memref::MemRefDialect",
-                           "::mlir::scf::SCFDialect"];
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::affine::AffineDialect"];
   let constructor = "mlir::carts::sde::createTilingPass()";
 }
 

@@ -31,6 +31,9 @@ namespace mlir::carts::sde {
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/LoopUtils.h"
+
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -346,10 +349,62 @@ static bool hasPerfectNestedScalarLoopNest(Block &body, unsigned numLoops) {
   return isExecutableInnermostBody(*current);
 }
 
+static bool hasPerfectNestedAffineLoopNest(Block &body, unsigned numLoops) {
+  if (numLoops == 0)
+    return false;
+  if (numLoops == 1)
+    return isExecutableInnermostBody(body);
+
+  Block *current = &body;
+  for (unsigned depth = 1; depth < numLoops; ++depth) {
+    affine::AffineForOp nestedLoop;
+    for (Operation &op : current->without_terminator()) {
+      if (!isa<affine::AffineForOp>(op) || nestedLoop)
+        return false;
+      nestedLoop = cast<affine::AffineForOp>(op);
+    }
+    if (!nestedLoop)
+      return false;
+    current = nestedLoop.getBody();
+  }
+
+  return isExecutableInnermostBody(*current);
+}
+
 static bool loopWritesOwnerColumn(scf::ForOp loop, Value outputRoot,
                                   Value ownerIv) {
   if (!loop || !outputRoot || !ownerIv || loop.getNumResults() != 0 ||
       !loop.getInitArgs().empty())
+    return false;
+
+  Value loopIv = loop.getInductionVar();
+  bool matched = false;
+  loop.walk([&](memref::StoreOp store) {
+    Value root =
+        ::mlir::carts::ValueAnalysis::stripMemrefViewOps(store.getMemref());
+    if (root != outputRoot)
+      return WalkResult::advance();
+
+    ValueRange indices = store.getIndices();
+    if (indices.size() < 2)
+      return WalkResult::advance();
+    if (!::mlir::carts::ValueAnalysis::dependsOn(indices.front(), ownerIv))
+      return WalkResult::advance();
+
+    for (Value index : indices.drop_front()) {
+      if (::mlir::carts::ValueAnalysis::dependsOn(index, loopIv)) {
+        matched = true;
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  return matched;
+}
+
+static bool loopWritesOwnerColumn(affine::AffineForOp loop, Value outputRoot,
+                                  Value ownerIv) {
+  if (!loop || !outputRoot || !ownerIv || loop.getNumResults() != 0)
     return false;
 
   Value loopIv = loop.getInductionVar();
@@ -386,6 +441,15 @@ collectDirectMatmulColumnLoops(Block &body, Value outputRoot, Value ownerIv,
   });
 }
 
+static void collectDirectMatmulColumnAffineLoops(
+    Block &body, Value outputRoot, Value ownerIv,
+    SmallVectorImpl<affine::AffineForOp> &columnLoops) {
+  body.walk([&](affine::AffineForOp loop) {
+    if (loopWritesOwnerColumn(loop, outputRoot, ownerIv))
+      columnLoops.push_back(loop);
+  });
+}
+
 static bool isDirectMemoryMatmulCandidate(sde::SdeSuIterateOp op, Block &body) {
   if (op.getLowerBounds().size() != 1 ||
       op.getReductionAccumulators().size() != 0)
@@ -404,7 +468,12 @@ static bool isDirectMemoryMatmulCandidate(sde::SdeSuIterateOp op, Block &body) {
   Value ownerIv = suBody.getArgument(0);
   SmallVector<scf::ForOp, 4> columnLoops;
   collectDirectMatmulColumnLoops(body, outputPlan->root, ownerIv, columnLoops);
-  return !columnLoops.empty();
+  if (!columnLoops.empty())
+    return true;
+  SmallVector<affine::AffineForOp, 4> affineColumnLoops;
+  collectDirectMatmulColumnAffineLoops(body, outputPlan->root, ownerIv,
+                                       affineColumnLoops);
+  return !affineColumnLoops.empty();
 }
 
 /// Return a per-SDE-dim mask: true = parallel (should tile), false = reduction
@@ -1242,12 +1311,14 @@ static bool isTilingCandidate(sde::SdeSuIterateOp op, Block &body) {
     if (op.getReductionAccumulators().size() != 0)
       return false;
     return isExecutableInnermostBody(body) ||
-           hasPerfectNestedScalarLoopNest(body, /*numLoops=*/2);
+           hasPerfectNestedScalarLoopNest(body, /*numLoops=*/2) ||
+           hasPerfectNestedAffineLoopNest(body, /*numLoops=*/2);
   case sde::SdeStructuredClassification::elementwise_pipeline:
     if (op.getReductionAccumulators().size() != 0)
       return false;
     return isExecutableInnermostBody(body) ||
            hasPerfectNestedScalarLoopNest(body, /*numLoops=*/2) ||
+           hasPerfectNestedAffineLoopNest(body, /*numLoops=*/2) ||
            sde::isOwnerLocalPipelineReduction(op);
   case sde::SdeStructuredClassification::matmul:
     if (op.getReductionAccumulators().size() != 0)
@@ -1260,7 +1331,8 @@ static bool isTilingCandidate(sde::SdeSuIterateOp op, Block &body) {
     if (!sde::isOwnerLocalPipelineReduction(op))
       return hasPromotedParallelOutputSchedule(op);
     return isExecutableInnermostBody(body) ||
-           hasPerfectNestedScalarLoopNest(body, /*numLoops=*/2);
+           hasPerfectNestedScalarLoopNest(body, /*numLoops=*/2) ||
+           hasPerfectNestedAffineLoopNest(body, /*numLoops=*/2);
   }
   return false;
 }
@@ -1313,6 +1385,16 @@ static bool stripMineLoop(scf::ForOp loop, Value tileIterations) {
   return true;
 }
 
+static bool stripMineAffineLoop(affine::AffineForOp loop, int64_t tileSize) {
+  if (!loop || tileSize <= 1 || loop.getNumResults() != 0)
+    return false;
+
+  SmallVector<affine::AffineForOp, 1> band = {loop};
+  if (failed(affine::tilePerfectlyNested(band, {static_cast<unsigned>(tileSize)})))
+    return false;
+  return true;
+}
+
 static Value buildAlignedTileLowerBound(OpBuilder &builder, Location loc,
                                         Value lowerBound, Value tileStep) {
   if (!lowerBound || !tileStep)
@@ -1340,14 +1422,34 @@ static bool shouldAlignOuterTileGrid(bool alignTileGrid,
 static unsigned stripMineDirectMatmulColumnLoops(Block &body, Value outputRoot,
                                                  Value ownerIv,
                                                  Value columnTileIterations) {
+  int64_t tileConstant = 0;
+  const bool hasConstantTile =
+      ::mlir::carts::ValueAnalysis::getConstantIndex(columnTileIterations,
+                                                    tileConstant);
+  if (hasConstantTile && tileConstant <= 1)
+    return 0;
+
+  unsigned tiled = 0;
   SmallVector<scf::ForOp, 4> columnLoops;
   collectDirectMatmulColumnLoops(body, outputRoot, ownerIv, columnLoops);
 
-  unsigned tiled = 0;
   for (scf::ForOp loop : llvm::reverse(columnLoops)) {
     if (!loop || loop->getParentRegion() == nullptr)
       continue;
     if (stripMineLoop(loop, columnTileIterations))
+      ++tiled;
+  }
+
+  if (!hasConstantTile)
+    return tiled;
+
+  SmallVector<affine::AffineForOp, 4> affineColumnLoops;
+  collectDirectMatmulColumnAffineLoops(body, outputRoot, ownerIv,
+                                       affineColumnLoops);
+  for (affine::AffineForOp loop : llvm::reverse(affineColumnLoops)) {
+    if (!loop || loop->getParentRegion() == nullptr)
+      continue;
+    if (stripMineAffineLoop(loop, tileConstant))
       ++tiled;
   }
   return tiled;
