@@ -760,11 +760,6 @@ static LogicalResult createFinalCombineEdt(OpBuilder &builder, Location loc,
   copyCombineMetadata(sourceEdt, combineEdt);
   markReductionSplitDistribution(combineEdt.getOperation(),
                                  concurrency == EdtConcurrency::internode);
-  // The final combine RO-acquires the per-tile partials and writes the result
-  // block once, so downstream lowering can treat it as a block-native settle
-  // rather than a shared-frontier <inout> accumulate.
-  combineEdt.setPerBlockSummingSettleAttr(
-      UnitAttr::get(combineEdt.getContext()));
   return createFinalCombineBody(combineEdt, scalarType, elementCount,
                                 inputCount == 2);
 }

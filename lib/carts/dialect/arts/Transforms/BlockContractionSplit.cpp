@@ -723,7 +723,6 @@ static LogicalResult emitSettle(OpBuilder &builder, Location loc,
   auto settle = EdtOp::create(builder, loc, EdtType::task, launch.concurrency,
                               route, deps, params);
   settle.setStorageBridgeCopyAttr(UnitAttr::get(settle.getContext()));
-  settle.setPerBlockSummingSettleAttr(UnitAttr::get(settle.getContext()));
 
   Block &body = settle.getBody().front();
   for (Value dep : deps)
