@@ -30,6 +30,7 @@
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/LoweringFactUtils.h"
+#include "carts/dialect/arts/Utils/LoopStructureUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/PartitionPredicates.h"
 #include "carts/dialect/arts/Utils/ValueAnalysisUtils.h"
@@ -90,7 +91,7 @@ struct LoopInfo {
   Value lowerBound;
   Value upperBound;
   Value step;
-  int depth = 0;
+  unsigned depth = 0;
 };
 
 using AcquireAccessOperationMap = DenseMap<DbRefOp, SetVector<Operation *>>;
@@ -248,16 +249,6 @@ getOrderedAcquiresForAlloc(DbAllocOp alloc) {
     ++order;
   });
   return ordered;
-}
-
-static int getLoopDepth(Operation *op) {
-  int depth = 0;
-  for (Operation *parent = op ? op->getParentOp() : nullptr; parent;
-       parent = parent->getParentOp())
-    if (isa<scf::ForOp, affine::AffineForOp, scf::ParallelOp, scf::ForallOp,
-            scf::WhileOp>(parent))
-      ++depth;
-  return depth;
 }
 
 static void collectLoops(Operation *scope, SmallVectorImpl<LoopInfo> &loops) {

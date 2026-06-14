@@ -12,6 +12,7 @@
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
+#include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -78,19 +79,14 @@ static bool isSupportedStaticSourceMemref(Value value) {
   return false;
 }
 
-static std::optional<int64_t> getConstantIndex(Value value) {
-  return ValueAnalysis::tryFoldConstantIndex(value);
-}
-
-static int64_t ceilDiv(int64_t lhs, int64_t rhs) {
-  return (lhs + rhs - 1) / rhs;
-}
-
 static bool isZeroBasedStaticLoop(scf::ForOp loop, int64_t &upper,
                                   int64_t &step) {
-  std::optional<int64_t> lb = getConstantIndex(loop.getLowerBound());
-  std::optional<int64_t> ub = getConstantIndex(loop.getUpperBound());
-  std::optional<int64_t> st = getConstantIndex(loop.getStep());
+  std::optional<int64_t> lb =
+      ValueAnalysis::tryFoldConstantIndex(loop.getLowerBound());
+  std::optional<int64_t> ub =
+      ValueAnalysis::tryFoldConstantIndex(loop.getUpperBound());
+  std::optional<int64_t> st =
+      ValueAnalysis::tryFoldConstantIndex(loop.getStep());
   if (!lb || !ub || !st || *lb != 0 || *ub <= 0 || *st <= 0)
     return false;
   upper = *ub;
@@ -136,14 +132,6 @@ matchAccumulatorStore(memref::StoreOp store) {
                            elementType, isa<FloatType>(elementType)};
 }
 
-static std::optional<SmallVector<int64_t, 2>> readI64Vector(ArrayAttr attr) {
-  std::optional<SmallVector<int64_t, 4>> values = readI64ArrayAttr(attr);
-  if (!values)
-    return std::nullopt;
-  SmallVector<int64_t, 2> out(values->begin(), values->end());
-  return out;
-}
-
 static std::optional<BlockGeometry1D>
 findCommittedBlockGeometryForRoot(Value root) {
   root = ValueAnalysis::stripMemrefViewOps(root);
@@ -174,7 +162,7 @@ findCommittedBlockGeometryForRoot(Value root) {
     int64_t blockExtent = layout->blockShape[ownerDim];
     if (blockExtent <= 0)
       continue;
-    int64_t blockCount = ceilDiv(type.getDimSize(0), blockExtent);
+    int64_t blockCount = sde::ceilDivPositive(type.getDimSize(0), blockExtent);
     if (rankExpandedMu) {
       unsigned logicalRank = type.getRank() - 1;
       if (layout->blockShape.size() != logicalRank ||
@@ -356,7 +344,8 @@ static std::optional<ReductionCandidate> matchReductionLoop(scf::ForOp loop) {
   if (hasFloat && candidate.step < candidate.sourceGeometry.blockExtent) {
     candidate.preserveFloatOrder = true;
     candidate.partialSlots =
-        ceilDiv(candidate.sourceGeometry.blockExtent, candidate.step);
+        sde::ceilDivPositive(candidate.sourceGeometry.blockExtent,
+                             candidate.step);
   }
 
   return candidate;
