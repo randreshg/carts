@@ -410,3 +410,103 @@ Insert a real producer-side `su.all_to_all`/repartition when a consumer reads a 
 ### Excluded from in-bounds fixes
 
 **seidel-2d scaling** (genuine loop-carried Gauss-Seidel dependence — wavefront is the only legal parallelism; the win is correctness + block distribution via P1/P3, not strong scaling) and the **residual single-node ~3× stream gap** (runtime/codegen: AVX2/NUMA, orthogonal to the 2n distribution fixes).
+---
+
+## Appendix M — Category-A 2n realizability chain: measured root cause (matmul / init-writer class)
+
+This appendix records the **measured** (not inferred) failure chain for the
+Category-A kernels (gemm, 2mm, 3mm, correlation, bicg) at 2 nodes, established
+by instrumenting the live v4 passes at HEAD `6194f3549`. The experimental
+patches that produced this trace were **reverted** — the baseline (1n 21/21,
+SDE lit 29/29) is preserved. This is the evidence base for any future attempt;
+it supersedes the earlier inference that Category-A is a single init-writer
+owner-rank fix.
+
+### The chain (each layer was reached only after fixing the one above it)
+
+1. **LayoutAssignment does not author the write-role `arrayLayout` for a
+   `writerViaMu` block-parallel writer.**
+   `LayoutAssignment.cpp:656-668` routes such a writer to `writerCommits[suId]`
+   and skips `updates[suId].entries.push_back(entry)`, so
+   `op.setArrayLayoutAttr` never emits the write-role layout. The committer
+   `commitWriterPhysicalLayoutViaMuType` only *rewrites* an existing layout
+   (`rewriteWriterArrayLayoutToPhysicalShape` early-returns on a null attr,
+   `SdeCommittedFactUtils.h:352-354`), so the init writer's owner-dim identity
+   is never durably recorded. *Authoring it advances the compile past the init
+   owner-rank error — but exposes layer 2. It also changes the structural-
+   pipeline lit IR (an identity arrayLayout entry now appears at 1n), so it is
+   not byte-identical even though 1n behaviour is unchanged (21/21 held).*
+
+2. **`MemoryUnitRealization` fail-closes on the now-distributed matmul kernel.**
+   `canRealizeCommittedOwnerSlices` (`MemoryUnitRealization.cpp:185-206`) admits
+   matmul/elementwise/stencil by classification, but the Category-A compute and
+   init kernels are **classification = none** (measured). The unclassified path
+   `getUnclassifiedOwnerSliceLayout` (`:102-182`) requires every external read
+   to also be a write (in-place elementwise), which a matmul (reads A,B; writes
+   C) violates — even though `findConsistentLoopIndexedOutputShapeWithOwnerDims`
+   returns true (the output C is provably owner-local). *Relaxing the gate to
+   admit owner-consistent, accumulator-free unclassified output advances past
+   this — but exposes layer 3.*
+
+3. **The ARTS boundary refuses coarse realization of a now-distributed DB.**
+   `recordCoarseSuAccess` (`SdeToArtsBoundaryDepAnalysis.cpp:1104-1113`) errors
+   "touches a non-coarse DB without committed SDE access windows; refusing
+   coarse SU realization" because RankExpandMu authored **no access windows**
+   for the init/matmul SU.
+
+4. **RankExpandMu authors no windows because the kernel is unclassified.**
+   `supportsRankExpandedAccessWindows` (`MuLayoutRewriter.cpp:51-70`) returns
+   false when `queryStructuredClassification` yields none (`:58-59`).
+
+### Root cause (single, foundational)
+
+All four layers reduce to one fact: **the Category-A kernels are unclassified
+by the v4 SDE structured-op classifier.** `queryStructuredClassification`
+(`SuLoopAccessQuery.cpp:274`) returns none because `analyzeSuLoopAccesses`
+(`SuLoopAccessAnalysis.cpp:1173`) bails at **`collectMemrefAccesses`**
+(measured: `bail=collectMemrefAccesses ivs=3`, 10×). The bail is **not** a
+`tryBuildIndexingMap` failure and **not** `float**` indirection — cgeist has
+already flattened the arrays to clean `memref<128x128xf32>` with 2-D affine
+indices. It is `sawAccess == false`: the kernels use a **scalar-accumulator
+matmul/reduction** structure —
+
+```
+for i:                          # arg0  (owner)
+  for j:                        # arg1  (owner)
+    %acc = memref.alloca() : memref<f32>     # scalar temp
+    for k:                      # arg2  (contraction, innermost)
+      %a = load A[i,k]; %b = load B[k,j]
+      %t = load %acc[]; store (%t + %a*%b), %acc[]   # rank-0, skipped
+    store (beta*C[i,j] + alpha*%acc), C[i,j]         # output store at j-level
+```
+
+`collectPerfectNest` stops at the `j` level (the `alloca` breaks perfect
+nesting), so the analyzer's `innermostBody` holds only the rank-0 accumulator
+accesses (all skipped at `collectMemrefAccessesImpl`'s rank-0 guard) — the real
+A/B reads sit one loop deeper and the real C store sits one loop shallower.
+`sawAccess` stays false → no summary → no classification → the whole chain
+above fails closed at 2n.
+
+### Why 1n is unaffected
+
+At 1 node nothing is distributed, so no kernel ever acquires a committed owner
+slice; `hasPhysicalOwnerSliceLayout` is false and every gate above
+short-circuits to success. The classifier gap is **2n-only**, which is why the
+1n recovery (21/21) is blind to it.
+
+### What this means for the fix
+
+Category-A 2n is **not** an init-writer owner-rank fix and **not** a per-gate
+relaxation — relaxing layers 1+2 only walks the error down to layers 3+4. The
+load-bearing change is in the **classifier**: `collectPerfectNest` /
+`collectMemrefAccesses` must recognise the scalar-accumulator matmul/reduction
+pattern (imperfect nest with a rank-0 accumulator temp), so these kernels
+classify as `matmul` / `reduction` with the real A/B reads and the real C
+output store attributed to the correct loop levels. Once classified, layers
+1-4 admit them by their existing classification arms — no per-gate relaxation
+needed. This is foundational SDE-analysis work (its own work item), not a
+scaling-lever patch, and must be validated by 2n checksum (not just compile)
+because a mis-attributed accumulator would miscompile silently.
+
+This is consistent with the standing classification of the matmul 2n scalers as
+architecture-scale (see §P6 and the megalarge scaling history).
