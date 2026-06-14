@@ -11,6 +11,11 @@ attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21
 **Gate:** 51/51 SDE + ARTS dialect lit tests pass.
 
 **Done**
+- *(post-`b63e4304d`)* Inert `elementwise-fusion` + `iteration-space-decomposition`
+  passes deleted (fired 0/21; commit `27844b9c6`). `verify-sde-mu-layout` folded
+  into `SdeMuAllocOp::verify` (rank-reducing-view arm; arity arm dropped as
+  redundant with core memref verifiers) and deleted — **verify passes 5 → 4**
+  (commit `d11a7844e`). Build green; lit SDE 29 / ARTS 21 / ARTS-RT 10.
 - `raise-to-sde` subsumes dropped `sde-parallelize`; movement is ops (`su.halo`,
   `su.reduce_scatter`, `su.all_to_all`); `sde.redist` / `SdeMovementFamily` retired.
 - Op-level layout attrs removed (`physicalOwnerDims`, `physicalBlockShape`,
@@ -47,7 +52,22 @@ attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21
   (pending upstream `MemRefAccess`/`ValueBounds` replacement); stencil halo
   interchange uses upstream `permuteLoops` on `affine.for` nests; Interchange/Tiling
   skip waits on committed CU `groupBlockCount`, not layout-root shape recovery alone.
-- Op-level verify fold: 5 SDE verify passes remain (target ≈2 + residuals).
+- Op-level verify fold: **4 SDE verify passes remain** (`verify-sde`,
+  `verify-sde-lowered`, `verify-sde-mu-access-window-sync`,
+  `verify-sde-coarse-avoidance`). The original "≈2" target is **over-optimistic**:
+  - `verify-sde-mu-layout` — **DONE** (folded to op verifier).
+  - `verify-sde-mu-access-window-sync` (Phase C) — **blocked from op-verifier fold.**
+    It errors on the `Redundant` verdict, i.e. it asserts the optional
+    `MuAccessWindowSyncOpt` rewrite fired. An op verifier runs at *every* pass
+    boundary, so it would reject the legitimate intermediate state between
+    window-raise and sync-opt where redundant barriers still await removal. By
+    the plan's own "a verifier must not assert an optional rewrite fired"
+    principle, the `Redundant` arm should be *deleted*, not folded; the
+    remaining arms (`Malformed`/`Misaligned`/`RankMismatch`/`Unprovable`) are
+    of unproven stage-independence. Kept as a standalone pass pending that call.
+  - `verify-sde-coarse-avoidance` (Phase E) — same "opt-fired assertion" class;
+    deletion gated on the S13/S14 type-borne grid (unchanged).
+  - `verify-sde` + `verify-sde-lowered` — irreducible (Phase F), kept.
 
 **Open (DAG order)**
 1. **S4 main** — replace `AffineIndexUtils::extractDimOffset` callers with upstream
