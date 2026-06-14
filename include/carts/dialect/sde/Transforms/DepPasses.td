@@ -114,41 +114,4 @@ def LayoutAssignment
   let constructor = "mlir::carts::sde::createLayoutAssignmentPass()";
 }
 
-def ElementwiseFusion
-    : Pass<"elementwise-fusion", "mlir::ModuleOp"> {
-  let summary = "Fuse consecutive SDE elementwise scheduling units";
-  let description = [{
-    Fuses consecutive sibling `sde.su_iterate` operations that already
-    carry an SDE-owned `classification(<elementwise>)`, share the same
-    iteration space and scheduling policy, and write disjoint destinations.
-    The fused scheduling unit is reclassified as
-    `classification(<elementwise_pipeline>)`, keeping elementwise pipeline
-    ownership on the SDE side of the boundary instead of inventing that family
-    later in target IR.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
-  let constructor = "mlir::carts::sde::createElementwiseFusionPass()";
-}
-
-def IterationSpaceDecomposition
-    : Pass<"iteration-space-decomposition", "mlir::ModuleOp"> {
-  let summary = "Decompose scheduling-unit iteration spaces into interior and boundary regions";
-  let description = [{
-    Splits scheduling-unit inner loops that mix interior and boundary
-    computations behind control flow into separate loops: a branch-free
-    interior loop suitable for tiling and distribution, plus dedicated
-    boundary loops that preserve the original edge behavior.
-
-    The current implementation handles the neighborhood boundary pattern
-    where row/column boundary checks guard stencil-like inner loops.
-    Future decompositions (e.g., triangular peeling, remainder splitting)
-    can be added as additional matchers within this pass.
-  }];
-  let dependentDialects = ["::mlir::func::FuncDialect",
-                           "::mlir::arith::ArithDialect",
-                           "::mlir::scf::SCFDialect",
-                           "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::carts::sde::createIterationSpaceDecompositionPass()";
-}
-
 #endif // CARTS_DIALECT_SDE_TRANSFORMS_DEP_PASSES

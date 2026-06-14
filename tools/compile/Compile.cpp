@@ -263,7 +263,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 2> kInitialCleanupPasses = {
     "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 25> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
     "LayoutAssignment",
@@ -273,9 +273,7 @@ static const std::array<llvm::StringLiteral, 25> kSdePlanningPasses = {
     "RaiseSCFToAffine(func)",
     "SimplifyAffineStructures(func)",
     "RaiseToSde",
-    "ElementwiseFusion",
     "DistributionPlanning",
-    "IterationSpaceDecomposition",
     "BarrierElimination",
     "MemoryUnitRealization",
     "SdeAtomicReductionRealization",
@@ -1137,9 +1135,7 @@ void buildSdePlanningPipeline(PassManager &pm,
   addAffineRecoveryBundle(pm.nest<func::FuncOp>());
   // S6: re-run raise-to-sde after shape transforms expose new parallelism.
   pm.addPass(sde::createRaiseToSdePass());
-  pm.addPass(sde::createElementwiseFusionPass());
   pm.addPass(sde::createDistributionPlanningPass(costModel));
-  pm.addPass(sde::createIterationSpaceDecompositionPass());
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createMemoryUnitRealizationPass());
   pm.addPass(sde::createSdeAtomicReductionRealizationPass());

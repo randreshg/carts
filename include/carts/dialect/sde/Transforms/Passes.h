@@ -154,8 +154,6 @@ std::unique_ptr<Pass>
 createLayoutAssignmentPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createLoopInterchangePass();
 std::unique_ptr<Pass> createTilingPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass> createElementwiseFusionPass();
-std::unique_ptr<Pass> createIterationSpaceDecompositionPass();
 
 // --- Effect passes (scheduling decisions) ---
 std::unique_ptr<Pass>
