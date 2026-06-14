@@ -25,7 +25,6 @@ static LogicalResult realizePerBlockHaloDependencies(arts::EdtOp edt) {
   bool canRealizeHaloDeps =
       edt->hasAttr(edt.getStencilSupportedBlockHaloAttrName());
 
-  bool hasCommittedHaloRead = false;
   for (Value dep : edt.getDependencies()) {
     auto acquire = dyn_cast_or_null<arts::DbAcquireOp>(
         arts::DbUtils::getUnderlyingDb(dep));
@@ -48,13 +47,7 @@ static LogicalResult realizePerBlockHaloDependencies(arts::EdtOp edt) {
     if (alloc && arts::hasArtsDbPhysicalLayout(alloc.getOperation()))
       alloc.setPerBlockSingleWriterStencilAttr(
           UnitAttr::get(alloc.getContext()));
-    hasCommittedHaloRead = true;
   }
-
-  if (hasCommittedHaloRead)
-    edt.setPerBlockHaloExchangeAttr(UnitAttr::get(edt.getContext()));
-  else
-    edt.removePerBlockHaloExchangeAttr();
 
   return success();
 }

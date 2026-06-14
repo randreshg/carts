@@ -624,8 +624,6 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<UnitAttr>:$storageBridgeCopy,
     // Per-block all-gather copy EDT.
     OptionalAttr<UnitAttr>:$perBlockAllGather,
-    // Per-block nearest-neighbor halo exchange EDT.
-    OptionalAttr<UnitAttr>:$perBlockHaloExchange,
     // Pack a non-contiguous source halo face into a compact payload DB.
     OptionalAttr<UnitAttr>:$compactHaloPack,
     UnitAttr:$inPlaceSafe,
