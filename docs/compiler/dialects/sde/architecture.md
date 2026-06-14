@@ -6,40 +6,55 @@ detailed file:line derivations).
 
 ## Implementation status (`v4`, post S3–S7 + boundary split)
 
-Structural SDE redesign is **live**. Remaining work is affine modernization (S4),
-attribute collapse (S12/S14), ARTS audit (Part 8), and scaling levers (S17–S21).
-**Gate:** 48/48 SDE + ARTS dialect lit tests pass.
+Structural SDE redesign is **live**. Remaining work is affine modernization (S4 main),
+attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21).
+**Gate:** 49/49 SDE + ARTS dialect lit tests pass.
 
 **Done**
 - `raise-to-sde` subsumes dropped `sde-parallelize`; movement is ops (`su.halo`,
   `su.reduce_scatter`, `su.all_to_all`); `sde.redist` / `SdeMovementFamily` retired.
 - Op-level layout attrs removed (`physicalOwnerDims`, `physicalBlockShape`,
   `iterationTopology`, `logicalWorkerSlice`); grain is the rank-expanded type.
-- Verify passes 8 → **6** (op-level fold in progress).
+- Verify passes 8 → **5** (op-level fold in progress).
 - **S3:** pre-planning `LowerAffine` removed; `SimplifyAffineStructures` in input
-  normalization; planning-head `LowerAffine` bridge until S4.
+  normalization; planning-head `LowerAffine` bridge after `LayoutAssignment` removed
+  (S4, 2025-06); final lowering remains in ARTS-RT (`Compile.cpp:1277`).
 - **S5:** proof-derived `cu_region<parallel>`; residual serial wrappers keep
   `serial_reason`; `verify-sde` rejects untagged `<single>` in multi-trip SU.
 - **S6:** second `raise-to-sde` after Tiling; re-entrancy allows promotion inside
   residual `cu_region<single>`.
 - **S7:** `commVolumeBytes` deleted; structural `assignLayout`; consumers use layout
   geometry / `muBlockCount > 1`.
+- **Cost model:** fabricated cycle costs removed from `SDECostModel` / `ARTSCostModel`;
+  only capacity, locality, and fixed iteration floors remain.
 - **Boundary:** `SdeToArtsBoundary.cpp` is pass registration only; lowering lives in
   `Transforms/boundary/*` with shared helpers in `DbUtils` / `MovementLoweringUtils`.
+- **S12:** `SdeMuAccessWindowOp` + `RaiseToMuAccessWindow` + `VerifySdeMuAccessWindow`
+  deleted; boundary storage, sync analysis, and verify are query-only via
+  `queryAccessWindows` on rank-expanded MUs and in-CU `affine.load/store`.
+- **S4b (halo):** halo neighborhood classifiers use `tryGetUnitNeighborhoodOffset`
+  (affine); legacy `analyzeIndexExpr` peel-div path removed from boundary index/halo.
 
 **Partial**
-- **S4:** hand-rolled `tryGetAffineExpr`/`extractDimOffset` (+ div/mod bridge);
-  planning-head `LowerAffine` remains; no upstream `MemRefAccess` in SDE yet.
-- Op-level verify fold: 6 SDE verify passes remain (target ≈2 + residuals).
+- **S4:** `SuLoopAccessAnalysis` uses upstream `MemRefAccess`/`affine.load/store` when IR
+  is affine; `RaiseSCFToAffine` + `SimplifyAffineStructures` run after Tiling (S4d);
+  `raise-to-sde` promotes `affine.for` via `isLoopParallel`; planning keeps affine
+  through Interchange/Tiling (no bridge `LowerAffine`); Tiling still emits scf owner
+  tile loops while inner `affine.for` strip-mine migration is in progress. Shared
+  `AffineIndexUtils::tryGetAffineExpr` replaces the duplicated SDE parser;
+  `appendNestedForIvs` collects `affine.for` IVs; hand-rolled
+  `extractDimOffset` still used for lowered `memref` paths; stencil halo
+  interchange uses upstream `permuteLoops` on `affine.for` nests; Interchange/Tiling
+  skip waits on committed CU `groupBlockCount`, not layout-root shape recovery alone.
+- Op-level verify fold: 5 SDE verify passes remain (target ≈2 + residuals).
 
 **Open (DAG order)**
-1. **S4 main** — upstream affine + `ValueBounds`; delete hand parser; drop bridge.
-2. **S4b** — port `analyzeDepOwnerAccessIndex` at the ARTS boundary.
-3. **S12 / S14** — collapse `mu_access_window`; delete `arrayLayout` dict.
-4. **Part 8** — ARTS 84 `OptionalAttr` audit.
-5. **S17–S21** — scaling levers + megalarge 1n→2n gates.
-6. **PHASE 9** — async local executor (greenfield).
-7. **Loose ends** — fabricated `SDECostModel` cost deletion.
+1. **S4 main** — migrate Tiling inner strip-mine to upstream affine; matmul
+   Interchange on affine; delete `extractDimOffset`.
+2. **S13 / S14** — physical attr collapse; `arrayLayout` dict deletion.
+3. **Part 8** — ARTS 84 `OptionalAttr` audit.
+4. **S17–S21** — scaling levers + megalarge 1n→2n gates.
+5. **PHASE 9** — async local executor (greenfield).
 
 ## The one principle
 
@@ -311,13 +326,11 @@ PHASE 2 — STRUCTURE (affine + parallelize)
   S4  Swap SuLoopAccessAnalysis/Parallelize/Tiling/Interchange onto upstream affine
       (MemRefAccess/checkMemrefAccessDependence/ValueBounds/tilePerfectlyNested);
       DELETE tryGetAffineExpr/extractDimOffset/stripMineLoop. blockedBy S3.
-      [PARTIAL: div/mod bridge only; bridge LowerAffine remains]
-  S4b PORT analyzeDepOwnerAccessIndex (the SECOND parser) onto MemRefAccess/
-      ValueBounds — BOTH its analysis half (:1340) AND its div/rem EMISSION half
-      (:4102/:4229). **Forced to the PORT branch (not a bounded fail-closed
-      fallback) whenever S18 is in scope**, since ARTS-side affine is gone post-D-a.
-      blockedBy S4; BEFORE SuLoopAccessAnalysis deletion makes the boundary the sole
-      authority.  [test-debt: boundary-vs-front agreement on the 21]
+      [PARTIAL: MemRefAccess + affine nest in SuLoopAccessAnalysis; S4d re-raise after
+      Tiling; planning-head LowerAffine bridge removed; hand parser for scf/memref
+      and Tiling scf owner loops remain]
+  S4b PORT analyzeDepOwnerAccessIndex + halo classifiers onto upstream affine.
+      [DONE]
   S5  Parallelize single->parallel leaf-kind fix + verifier. **Re-DERIVE the leaf
       site empirically — the cited Parallelize.cpp:638 is a `builder.clone` body
       loop at the real path Transforms/dep/loop/, NOT the leaf-kind site.**
@@ -340,7 +353,8 @@ PHASE 4 — MOVEMENT OPS
       + op-level Phase E.
 
 PHASE 5 — WINDOW / PHYSICAL COLLAPSE
-  S12 Collapse mu_access_window to a typed value (validExtents==blockExtent). blockedBy S4b.
+  S12 Collapse mu_access_window to query-only boundary access (validExtents==blockExtent).
+      blockedBy S4b.  [DONE: op + raise/verify passes deleted; queryAccessWindows only]
   S13 Delete physicalOwnerDims/physicalBlockShape (×N). Convert ARTS readers
       (LoweringFactUtils/CreateDbs/BlockContractionSplit/SdeToArtsBoundary +
       resolveArtsOwnerSlotMapping) FIRST. blockedBy A1+S12.
@@ -420,29 +434,11 @@ PHASE 9 — ARTS local-executor (async) lowering [greenfield: 0 usage, 0 tests].
 
 ## Loose ends
 
-- **Cost model — exact post-revision `SDECostModel`** (no fabricated costs; no edge
-  cost — `commBetween` does not exist, §5.9.3). Disposition of every current virtual
-  (`SDECostModel.h`):
-  - **Keep (real machine facts):** `getLogicalWorkerCapacity()`,
-    `getWorkerLocalityGroupCount()`.
-  - **Keep (structural, derived only from those two):** `getInterLocalityTaskWaves()`.
-  - **Replace with fixed constants** (today derived from fabricated costs):
-    `getMinIterationsPerWorker()`, `getMinPipelineOwnerIterationsPerTask()`,
-    `getOwnerLocalPipelineTargetTaskWaves()` → small fixed amortization floors
-    (~2–3 iters / a capacity-relative bound), **not** functions of task/access cost.
-  - **Delete (fabricated cost constants):** `getTaskCreationCost`, `getTaskSyncCost`,
-    `getReductionCost`, `getAtomicUpdateCost`, `getDataAccessCost`. The sole
-    `getReductionCost` consumer (ReductionStrategy tree-vs-linear) restates
-    structurally as `log2(W)` vs `W`.
-  - **Delete `getL2CacheSize`** — resolves the contradiction (`design-revision.md:1173`
-    vs `proposed-passes.md`): its only consumer was `sde-default-tile-floor`, which is
-    dropped, so the literal goes with no probe needed.
-  - **Final interface:** `{ getLogicalWorkerCapacity, getWorkerLocalityGroupCount,
-    getInterLocalityTaskWaves, + the three fixed iteration floors }`.
-  - **`ARTSCostModel` end-state:** drop the duplicate `getVectorWidth` family and
-    `min_distributed_tile_bytes` (`ARTSCostModel.h:83-84`); the EDT
-    `vectorizeWidth`/`unrollFactor`/`interleaveCount` fate is decided in **Part 8**
-    (ARTS-RT codegen hints — keep only if a live ARTS-RT consumer reads them).
+- **Cost model — `SDECostModel` / `ARTSCostModel`:** [DONE] fabricated
+  `getTaskCreationCost` / `getTaskSyncCost` / `getReductionCost` /
+  `getAtomicUpdateCost` / `getDataAccessCost` deleted; fixed iteration floors
+  replace cost-derived thresholds. `getL2CacheSize` was already gone with
+  `sde-default-tile-floor`.
 - **`arts-all-to-all.md`** must be rewritten to consume the `su.all_to_all` **op**,
   not `sde.redist family=all_to_all_like` + `commVolumeBytes` (deleted); sequence
   after S11.
