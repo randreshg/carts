@@ -8,7 +8,7 @@ detailed file:line derivations).
 
 Structural SDE redesign is **live**. Remaining work is affine modernization (S4 main),
 attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21).
-**Gate:** 49/49 SDE + ARTS dialect lit tests pass.
+**Gate:** 51/51 SDE + ARTS dialect lit tests pass.
 
 **Done**
 - `raise-to-sde` subsumes dropped `sde-parallelize`; movement is ops (`su.halo`,
@@ -43,15 +43,16 @@ attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21
   matmul column loops via upstream `tilePerfectlyNested` when inner nests are
   `affine.for` (owner tile loops still scf). Shared
   `AffineIndexUtils::tryGetAffineExpr` replaces the duplicated SDE parser;
-  `appendNestedForIvs` collects `affine.for` IVs; hand-rolled
+  `appendNestedForIvs` collects `affine.for` IVs; direct matmul Interchange
+  rewrites affine j-k nests to scf k-j (S4d re-raise recovers affine); hand-rolled
   `extractDimOffset` still used for lowered `memref` paths; stencil halo
   interchange uses upstream `permuteLoops` on `affine.for` nests; Interchange/Tiling
   skip waits on committed CU `groupBlockCount`, not layout-root shape recovery alone.
 - Op-level verify fold: 5 SDE verify passes remain (target ≈2 + residuals).
 
 **Open (DAG order)**
-1. **S4 main** — migrate Tiling inner strip-mine to upstream affine; matmul
-   Interchange on affine; delete `extractDimOffset`.
+1. **S4 main** — delete `extractDimOffset`; migrate owner-level Tiling off scf
+   `stripMineLoop` where possible.
 2. **S13 / S14** — physical attr collapse; `arrayLayout` dict deletion.
 3. **Part 8** — ARTS 84 `OptionalAttr` audit.
 4. **S17–S21** — scaling levers + megalarge 1n→2n gates.
