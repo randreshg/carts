@@ -11,6 +11,7 @@
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
+#include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
 #include "carts/utils/ArrayAttrUtils.h"
@@ -100,10 +101,6 @@ static std::optional<int64_t> getRuntimeWorkersPerNode(EdtOp edt) {
   return (*totalWorkers + *totalNodes - 1) / *totalNodes;
 }
 
-static int64_t ceilDivPositiveI64(int64_t lhs, int64_t rhs) {
-  return (lhs + rhs - 1) / rhs;
-}
-
 static LogicalResult inferResultElementCount(EdtOp edt, SplitFacts &facts) {
   if (facts.resultDepIndex >= edt.getDependencies().size())
     return failure();
@@ -164,7 +161,7 @@ static bool reconcileSplitTopology(EdtOp edt, SplitFacts &facts,
   }
 
   int64_t requestedFactor =
-      ceilDivPositiveI64(effectiveTarget, facts.ownerTaskCount);
+      sde::ceilDivPositive(effectiveTarget, facts.ownerTaskCount);
   if (requestedFactor <= 1) {
     clearSplitAttrs(edt);
     return false;
