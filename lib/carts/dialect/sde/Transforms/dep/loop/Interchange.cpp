@@ -25,6 +25,7 @@ namespace mlir::carts::sde {
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/LoopUtils.h"
+#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -167,6 +168,46 @@ static bool findInnerLoopPair(Block &body, scf::ForOp &jLoop, scf::ForOp &kLoop,
         initOps.push_back(&op);
       else
         return false; // ops after the inner loop
+    }
+  }
+  return kLoop != nullptr;
+}
+
+/// Like findInnerLoopPair for affine.for nests (optional init prefix in j).
+static bool findInnerAffineLoopPair(
+    Block &body, affine::AffineForOp &jLoop, affine::AffineForOp &kLoop,
+    SmallVectorImpl<Operation *> &initOps) {
+  jLoop = nullptr;
+  kLoop = nullptr;
+  initOps.clear();
+
+  for (Operation &op : body) {
+    if (isTerminatorOp(op))
+      continue;
+    if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
+      if (jLoop)
+        return false;
+      jLoop = forOp;
+    } else {
+      return false;
+    }
+  }
+  if (!jLoop)
+    return false;
+
+  Block *jBody = jLoop.getBody();
+  for (Operation &op : *jBody) {
+    if (isTerminatorOp(op))
+      continue;
+    if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
+      if (kLoop)
+        return false;
+      kLoop = forOp;
+    } else {
+      if (!kLoop)
+        initOps.push_back(&op);
+      else
+        return false;
     }
   }
   return kLoop != nullptr;
@@ -625,8 +666,7 @@ static bool interchangePromotedScalarMatmulAccumulator(Block &body) {
 /// Collect prefix ops from initOps that are used by kLoop's body.
 /// These must be rematerialized into the rebuilt loop nest.
 static bool
-collectRematerializablePrefixOps(ArrayRef<Operation *> initOps,
-                                 scf::ForOp kLoop,
+collectRematerializablePrefixOps(ArrayRef<Operation *> initOps, Operation *kLoop,
                                  SmallVectorImpl<Operation *> &out) {
   DenseSet<Operation *> prefixSet(initOps.begin(), initOps.end());
   DenseSet<Operation *> needed;
@@ -648,7 +688,7 @@ collectRematerializablePrefixOps(ArrayRef<Operation *> initOps,
       visitValue(operand);
   };
 
-  kLoop.walk([&](Operation *op) {
+  kLoop->walk([&](Operation *op) {
     for (Value operand : op->getOperands())
       visitValue(operand);
   });
@@ -661,6 +701,44 @@ collectRematerializablePrefixOps(ArrayRef<Operation *> initOps,
       out.push_back(op);
   }
   return true;
+}
+
+static bool
+collectRematerializablePrefixOps(ArrayRef<Operation *> initOps,
+                                 scf::ForOp kLoop,
+                                 SmallVectorImpl<Operation *> &out) {
+  return collectRematerializablePrefixOps(initOps, kLoop.getOperation(), out);
+}
+
+static bool
+collectRematerializablePrefixOps(ArrayRef<Operation *> initOps,
+                                 affine::AffineForOp kLoop,
+                                 SmallVectorImpl<Operation *> &out) {
+  return collectRematerializablePrefixOps(initOps, kLoop.getOperation(), out);
+}
+
+static Value materializeAffineBound(OpBuilder &builder, Location loc,
+                                    AffineMap map, ValueRange operands,
+                                    bool isUpper) {
+  std::optional<SmallVector<Value, 8>> expanded =
+      affine::expandAffineMap(builder, loc, map, operands);
+  if (!expanded || expanded->empty())
+    return Value();
+
+  Value bound = (*expanded)[0];
+  for (Value candidate : llvm::drop_begin(*expanded, 1)) {
+    if (isUpper)
+      bound = arith::MinSIOp::create(builder, loc, bound, candidate);
+    else
+      bound = arith::MaxSIOp::create(builder, loc, bound, candidate);
+  }
+  return bound;
+}
+
+static Value materializeAffineLoopStep(OpBuilder &builder,
+                                       affine::AffineForOp loop) {
+  return arith::ConstantIndexOp::create(builder, loop.getLoc(),
+                                        loop.getStepAsInt());
 }
 
 /// Apply the j-k to k-j interchange with init loop distribution.
@@ -833,7 +911,171 @@ static bool isDirectMemoryMatmulAccumulator(scf::ForOp jLoop, scf::ForOp kLoop,
          hasAccumulatingStore;
 }
 
+static bool isDirectMemoryMatmulAccumulator(affine::AffineForOp jLoop,
+                                            affine::AffineForOp kLoop,
+                                            ArrayRef<Operation *> initOps) {
+  if (initOps.empty())
+    return false;
+
+  memref::StoreOp initStore;
+  for (Operation *op : llvm::reverse(initOps)) {
+    initStore = dyn_cast<memref::StoreOp>(op);
+    if (initStore)
+      break;
+  }
+  if (!initStore)
+    return false;
+
+  auto outputType = dyn_cast<MemRefType>(initStore.getMemRefType());
+  if (!outputType || outputType.getRank() < 2)
+    return false;
+
+  Value oldJ = jLoop.getInductionVar();
+  Value oldK = kLoop.getInductionVar();
+  Value output = initStore.getMemref();
+  ValueRange outputIndices = initStore.getIndices();
+  if (!indicesContain(outputIndices, oldJ) ||
+      indicesContain(outputIndices, oldK))
+    return false;
+
+  unsigned outputLoads = 0;
+  unsigned outputStores = 0;
+  bool hasKJInputLoad = false;
+  bool hasAccumulatingStore = false;
+
+  for (Operation &op : *kLoop.getBody()) {
+    if (isTerminatorOp(op))
+      continue;
+
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (load.getMemref() == output) {
+        if (!::mlir::carts::ValueAnalysis::areValueRangesIdentical(
+                load.getIndices(), outputIndices))
+          return false;
+        ++outputLoads;
+      } else if (indicesContain(load.getIndices(), oldK) &&
+                 indicesContain(load.getIndices(), oldJ)) {
+        hasKJInputLoad = true;
+      }
+      continue;
+    }
+
+    if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (store.getMemref() != output)
+        return false;
+      if (!::mlir::carts::ValueAnalysis::areValueRangesIdentical(
+              store.getIndices(), outputIndices))
+        return false;
+      ++outputStores;
+
+      if (auto add = store.getValueToStore().getDefiningOp<arith::AddFOp>()) {
+        if (auto load = add.getLhs().getDefiningOp<memref::LoadOp>();
+            load && load.getMemref() == output &&
+            ::mlir::carts::ValueAnalysis::areValueRangesIdentical(
+                load.getIndices(), outputIndices))
+          hasAccumulatingStore = true;
+        if (auto load = add.getRhs().getDefiningOp<memref::LoadOp>();
+            load && load.getMemref() == output &&
+            ::mlir::carts::ValueAnalysis::areValueRangesIdentical(
+                load.getIndices(), outputIndices))
+          hasAccumulatingStore = true;
+      }
+      continue;
+    }
+  }
+
+  return outputLoads == 1 && outputStores == 1 && hasKJInputLoad &&
+         hasAccumulatingStore;
+}
+
+/// Rebuild a k-j matmul nest as scf loops from an affine j-k source. S4d
+/// re-raise recovers affine form after interchange/tiling.
+static bool interchangeAffineMatmulLoops(affine::AffineForOp jLoop,
+                                         affine::AffineForOp kLoop,
+                                         ArrayRef<Operation *> initOps) {
+  if (kLoop->getParentOp() != jLoop.getOperation())
+    return false;
+  if (jLoop.getNumResults() != 0 || kLoop.getNumResults() != 0)
+    return false;
+
+  SmallVector<Operation *, 8> rematerializedPrefixOps;
+  if (!collectRematerializablePrefixOps(initOps, kLoop,
+                                        rematerializedPrefixOps))
+    return false;
+
+  OpBuilder builder(jLoop);
+  Location loc = jLoop.getLoc();
+
+  Value lb1 = materializeAffineBound(builder, loc, jLoop.getLowerBoundMap(),
+                                     jLoop.getLowerBoundOperands(), false);
+  Value ub1 = materializeAffineBound(builder, loc, jLoop.getUpperBoundMap(),
+                                     jLoop.getUpperBoundOperands(), true);
+  Value step1 = materializeAffineLoopStep(builder, jLoop);
+  Value iv1 = jLoop.getInductionVar();
+
+  Value lb2 = materializeAffineBound(builder, loc, kLoop.getLowerBoundMap(),
+                                     kLoop.getLowerBoundOperands(), false);
+  Value ub2 = materializeAffineBound(builder, loc, kLoop.getUpperBoundMap(),
+                                     kLoop.getUpperBoundOperands(), true);
+  Value step2 = materializeAffineLoopStep(builder, kLoop);
+  Value iv2 = kLoop.getInductionVar();
+  if (!lb1 || !ub1 || !lb2 || !ub2)
+    return false;
+
+  bool needsInitLoop = llvm::any_of(
+      initOps, [](Operation *op) { return !isMemoryEffectFree(op); });
+
+  if (needsInitLoop) {
+    scf::ForOp::create(builder, jLoop.getLoc(), lb1, ub1, step1, ValueRange{},
+                       [&](OpBuilder &nestedBuilder, Location loc,
+                           Value initLoopIV, ValueRange) {
+                         IRMapping mapping;
+                         mapping.map(iv1, initLoopIV);
+                         for (Operation *op : initOps)
+                           nestedBuilder.clone(*op, mapping);
+                         scf::YieldOp::create(nestedBuilder, loc);
+                       });
+  }
+
+  scf::ForOp::create(
+      builder, jLoop.getLoc(), lb2, ub2, step2, ValueRange{},
+      [&](OpBuilder &outerBuilder, Location loc, Value newOuterIV, ValueRange) {
+        scf::ForOp::create(
+            outerBuilder, loc, lb1, ub1, step1, ValueRange{},
+            [&](OpBuilder &innerBuilder, Location innerLoc, Value newInnerIV,
+                ValueRange) {
+              IRMapping mapping;
+              mapping.map(iv1, newInnerIV);
+              mapping.map(iv2, newOuterIV);
+
+              for (Operation *op : rematerializedPrefixOps)
+                innerBuilder.clone(*op, mapping);
+
+              for (Operation &op : *kLoop.getBody()) {
+                if (isTerminatorOp(op))
+                  continue;
+                innerBuilder.clone(op, mapping);
+              }
+
+              scf::YieldOp::create(innerBuilder, innerLoc);
+            });
+        scf::YieldOp::create(outerBuilder, loc);
+      });
+
+  ARTS_INFO("SDE loop interchange applied: affine source, scf k-j order (was j-k)");
+
+  jLoop->erase();
+  return true;
+}
+
 static bool interchangeDirectMemoryMatmulAccumulator(Block &body) {
+  affine::AffineForOp ajLoop;
+  affine::AffineForOp akLoop;
+  SmallVector<Operation *, 4> affineInitOps;
+  if (findInnerAffineLoopPair(body, ajLoop, akLoop, affineInitOps) &&
+      isDirectMemoryMatmulAccumulator(ajLoop, akLoop, affineInitOps))
+    return interchangeAffineMatmulLoops(ajLoop, akLoop, affineInitOps);
+
   scf::ForOp jLoop;
   scf::ForOp kLoop;
   SmallVector<Operation *> initOps;
