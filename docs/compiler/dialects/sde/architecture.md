@@ -10,6 +10,24 @@ Structural SDE redesign is **live**. Remaining work is affine modernization (S4 
 attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21).
 **Gate:** 51/51 SDE + ARTS dialect lit tests pass.
 
+**E2E RECOVERY (post-`b63e4304d`, commits `27844b9c6`..`d32acbbb5`)** — HEAD was
+lit-green but **e2e-RED: no benchmark compiled** (lit feeds pre-flattened IR). Root
+cause: S4's "keep affine" fed `affine.load/store` to `SdeMemrefNormalization`, whose
+`float**` per-row-malloc detector is memref-dialect-keyed (scf loops + direct
+`memref.store %row, %root[%iv]`), so it silently no-opped → no `mu_alloc` → no
+`arts.db` → `sde.su_iterate` "no DB-backed accesses". Fixes:
+- `103b774e2` — SCCP before SdeInputInliner (folds the checksum `min(NI,NJ)` bound
+  so the inlined `affine.for` stays a valid symbol).
+- `03fc687fd` — `lower-affine` + `PolygeistCanonicalize` before SdeMemrefNormalization
+  restores the direct `root[%iv]` form (folding `polygeist.subindex`); S4d re-raises
+  affine after. Flattening fires again.
+- `d32acbbb5` — guard `findSuComputeCuRegion` vs an empty su_iterate body (Tiling on
+  flattened stencil/reduction kernels transiently creates one).
+Result: **gemm, 2mm, layernorm, atax, correlation = Correct=YES** (1n/small/local),
+up from 0. Remaining e2e: jacobi-for + stream fail `verify-sde` "source executable
+work outside any CU" — the NREPS rep-loop / `scf.if` repetition-structure CU-coverage
+gap (RaiseToSde, deep; RepeatSink-related). Lit stays SDE 29 / ARTS 21 / ARTS-RT 10.
+
 **Done**
 - *(post-`b63e4304d`)* Inert `elementwise-fusion` + `iteration-space-decomposition`
   passes deleted (fired 0/21; commit `27844b9c6`). `verify-sde-mu-layout` folded
