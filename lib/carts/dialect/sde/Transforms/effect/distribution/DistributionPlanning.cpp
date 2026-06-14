@@ -42,6 +42,7 @@ namespace mlir::carts::sde {
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -69,6 +70,14 @@ static SmallVector<int64_t, 4> buildLogicalWorkerSliceOrPhysical(
 static bool physicalLayoutMatchesRealizedLoopSteps(
     sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
     ArrayRef<int64_t> physicalBlockShape, ArrayRef<int64_t> logicalWorkerSlice);
+static bool
+allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
+                                ArrayRef<int64_t> ownerDims,
+                                ArrayRef<int64_t> physicalDimToLoopDim);
+static std::optional<SmallVector<int64_t, 4>>
+orderPhysicalOwnerDimsByLoop(const sde::SuOutputLayoutFacts &outputPlan,
+                             ArrayRef<int64_t> layoutOwnerDims,
+                             unsigned loopRank);
 
 static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
   return saturatingMultiplyPositive(costModel.getLogicalWorkerCapacity(),
@@ -81,21 +90,6 @@ static int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
 // a concrete halo path.
 static int64_t getStencilWorkerTarget(sde::SDECostModel &costModel) {
   return costModel.getLogicalWorkerCapacity();
-}
-
-// Element-byte width derived from the output facts' underlying memref. Returns
-// 0 for non-numeric types or shapeless roots; callers should treat 0 as
-// "cannot reason about tile bytes" and skip the floor.
-static int64_t outputElementBytes(Value root) {
-  auto memrefTy = dyn_cast_or_null<MemRefType>(root.getType());
-  if (!memrefTy)
-    return 0;
-  Type elt = memrefTy.getElementType();
-  while (auto nested = dyn_cast<MemRefType>(elt))
-    elt = nested.getElementType();
-  if (!elt.isIntOrFloat())
-    return 0;
-  return llvm::divideCeil(elt.getIntOrFloatBitWidth(), 8);
 }
 
 struct StaticOutputStorageFacts {
@@ -170,9 +164,8 @@ static int64_t readStencilHaloForOwnerDim(sde::SdeSuIterateOp op,
     if (idx >= neighborhood->minOffsets.size() ||
         idx >= neighborhood->maxOffsets.size())
       return 0;
-    return std::max<int64_t>(
-        0, std::max(-neighborhood->minOffsets[idx],
-                    neighborhood->maxOffsets[idx]));
+    return std::max<int64_t>(0, std::max(-neighborhood->minOffsets[idx],
+                                         neighborhood->maxOffsets[idx]));
   }
   return 0;
 }
@@ -300,8 +293,8 @@ collectRectangularWavefrontLoopNest(sde::SdeSuIterateOp op,
       op.getLowerBounds().size() != op.getUpperBounds().size() ||
       op.getLowerBounds().size() != op.getSteps().size())
     return false;
-  if (op.getNumResults() != 0 ||
-      !op.getReductionAccumulators().empty() || op.getReductionKindsAttr())
+  if (op.getNumResults() != 0 || !op.getReductionAccumulators().empty() ||
+      op.getReductionKindsAttr())
     return false;
 
   Block *computeBlock = sde::getSuIterateComputeBlock(op);
@@ -585,18 +578,20 @@ static sde::SdeSuIterateOp realizeWavefrontSkew(sde::SdeSuIterateOp op,
   sde::SuIterateAttrs suAttrs = sde::SuIterateAttrs::fromOp(op);
   suAttrs.pattern =
       sde::SdePatternAttr::get(ctx, sde::SdePattern::stencil_tiling_nd);
-  suAttrs.accessMinOffsets = buildI64ArrayAttr(ctx, plan.neighborhood.minOffsets);
-  suAttrs.accessMaxOffsets = buildI64ArrayAttr(ctx, plan.neighborhood.maxOffsets);
+  suAttrs.accessMinOffsets =
+      buildI64ArrayAttr(ctx, plan.neighborhood.minOffsets);
+  suAttrs.accessMaxOffsets =
+      buildI64ArrayAttr(ctx, plan.neighborhood.maxOffsets);
   suAttrs.ownerDims = ownerDimsAttr;
   suAttrs.spatialDims = spatialDimsAttr;
   suAttrs.writeFootprint = writeFootprintAttr;
   // Distribution/in-place predicates are intentionally re-derived downstream.
   suAttrs.inPlaceSafe = nullptr;
   suAttrs.inPlaceSharedState = nullptr;
-  auto newOp = sde::buildSuIterate(
-      builder, loc, ValueRange(leadingLowerBounds),
-      ValueRange(leadingUpperBounds), ValueRange(leadingSteps), suAttrs,
-      op.getReductionAccumulators());
+  auto newOp = sde::buildSuIterate(builder, loc, ValueRange(leadingLowerBounds),
+                                   ValueRange(leadingUpperBounds),
+                                   ValueRange(leadingSteps), suAttrs,
+                                   op.getReductionAccumulators());
 
   Block &newBody = sde::ensureBlock(newOp.getBody());
   while (newBody.getNumArguments() < leadingLowerBounds.size())
@@ -1068,6 +1063,117 @@ selectSingleWriteLayoutFact(sde::SdeSuIterateOp op) {
   return selected;
 }
 
+static ArrayRef<int64_t>
+assignedPhysicalBlockShape(const sde::LayoutGraphFact &fact) {
+  return fact.budgetBlockShape.empty()
+             ? ArrayRef<int64_t>(fact.blockShape)
+             : ArrayRef<int64_t>(fact.budgetBlockShape);
+}
+
+static std::optional<sde::LayoutGraphFact>
+selectSingleAssignedWriteLayoutFact(sde::SdeSuIterateOp op) {
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return std::nullopt;
+
+  std::optional<sde::LayoutGraphFact> selected;
+  llvm::SmallDenseSet<int64_t, 4> writtenIds;
+  for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
+    if (fact.role != sde::LayoutGraphRole::write || fact.blockShape.empty())
+      continue;
+    if (fact.id < 0 || !writtenIds.insert(fact.id).second)
+      return std::nullopt;
+    if (!selected) {
+      selected = fact;
+      continue;
+    }
+    if (selected->layoutKind != fact.layoutKind ||
+        selected->ownerDims != fact.ownerDims ||
+        selected->blockShape != fact.blockShape ||
+        selected->budgetBlockShape != fact.budgetBlockShape)
+      return std::nullopt;
+  }
+  return selected;
+}
+
+static std::optional<sde::LayoutGraphFact> selectCompatibleCoiteratedReadLayout(
+    sde::SdeSuIterateOp op, const sde::LayoutGraphFact &writeLayout,
+    const sde::SuOutputLayoutFacts &outputPlan) {
+  ArrayRef<int64_t> writeBlock = assignedPhysicalBlockShape(writeLayout);
+  if (writeBlock.size() != outputPlan.shape.size())
+    return std::nullopt;
+
+  std::optional<sde::LayoutGraphFact> selected;
+  for (const sde::LayoutGraphFact &fact :
+       sde::parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+    if (fact.role != sde::LayoutGraphRole::read || fact.ownerDims.empty())
+      continue;
+    if (fact.layoutKind != sde::ArrayLayoutKind::blockParallel)
+      continue;
+    if (fact.ownerDims.size() != op.getLowerBounds().size())
+      continue;
+    if (assignedPhysicalBlockShape(fact) != writeBlock)
+      continue;
+    std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
+        orderPhysicalOwnerDimsByLoop(outputPlan, fact.ownerDims,
+                                     op.getLowerBounds().size());
+    if (!orderedOwnerDims)
+      continue;
+    if (!allExternalStoresCoverOwnerDims(op, *orderedOwnerDims,
+                                         outputPlan.physicalDimToLoopDim))
+      continue;
+    if (!selected) {
+      selected = fact;
+      continue;
+    }
+    if (selected->ownerDims != fact.ownerDims ||
+        assignedPhysicalBlockShape(*selected) !=
+            assignedPhysicalBlockShape(fact))
+      return std::nullopt;
+  }
+  return selected;
+}
+
+static bool commitWriterLayoutFromCoiteratedRead(sde::SdeSuIterateOp op) {
+  if (!op || hasCommittedPhysicalLayout(op))
+    return false;
+
+  auto classification = sde::queryStructuredClassification(op);
+  if (!classification ||
+      (*classification != sde::SdeStructuredClassification::stencil &&
+       *classification != sde::SdeStructuredClassification::elementwise &&
+       *classification !=
+           sde::SdeStructuredClassification::elementwise_pipeline))
+    return false;
+
+  std::optional<sde::LayoutGraphFact> writeLayout =
+      selectSingleAssignedWriteLayoutFact(op);
+  if (!writeLayout || !writeLayout->ownerDims.empty())
+    return false;
+
+  std::optional<sde::SuOutputLayoutFacts> outputPlan =
+      sde::findCompatibleSuOutputLayoutFacts(op);
+  if (!outputPlan || outputPlan->shape.empty() ||
+      outputPlan->loopDimToPhysicalDim.size() < op.getLowerBounds().size())
+    return false;
+
+  std::optional<sde::LayoutGraphFact> readLayout =
+      selectCompatibleCoiteratedReadLayout(op, *writeLayout, *outputPlan);
+  if (!readLayout)
+    return false;
+  std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
+      orderPhysicalOwnerDimsByLoop(*outputPlan, readLayout->ownerDims,
+                                   op.getLowerBounds().size());
+  if (!orderedOwnerDims)
+    return false;
+
+  ArrayRef<int64_t> assignedBlock = assignedPhysicalBlockShape(*writeLayout);
+  SmallVector<int64_t, 4> physicalBlockShape(assignedBlock.begin(),
+                                             assignedBlock.end());
+  return applyPhysicalLayoutIfRealized(op, *orderedOwnerDims,
+                                       physicalBlockShape);
+}
+
 static std::optional<sde::LayoutGraphFact>
 findSingleLoopStepWriteLayoutFact(sde::SdeSuIterateOp op) {
   ArrayAttr layout = op.getArrayLayoutAttr();
@@ -1231,11 +1337,6 @@ commitPhysicalLayoutFromAssignedLayout(sde::SdeSuIterateOp op,
   if (!op || hasCommittedPhysicalLayout(op))
     return false;
 
-  auto classification = sde::queryStructuredClassification(op);
-  if (classification &&
-      *classification == sde::SdeStructuredClassification::stencil)
-    return false;
-
   std::optional<sde::LayoutGraphFact> writeLayout =
       selectSingleWriteLayoutFact(op);
   if (!writeLayout)
@@ -1296,87 +1397,98 @@ commitPhysicalLayoutFromAssignedLayout(sde::SdeSuIterateOp op,
                                        /*haloShape=*/{}, logicalWorkerSlice);
 }
 
-// Consume the one committed node-agnostic budget layout for every SU that
-// writes a multi-owner-distributed data-parallel array, committing identical
-// physicalOwnerDims + physicalBlockShape (+ logicalWorkerSlice) across all
-// writers of that array. That equality lets the per-timestep host bridge hoist
-// once and keeps iterative double-buffer stencils from realizing a coarse
-// per-timestep copy. Runs first in the layout commit dispatch and is the
-// default for the multi-owner data-parallel family (matmul/contraction
-// excluded). The commit is accepted only when the current SU step already
-// realizes the block shape selected here.
-static bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
-                                         sde::SDECostModel &costModel) {
+struct BlockGrainPlan {
+  SmallVector<int64_t, 4> ownerDims;
+  SmallVector<int64_t, 4> physicalBlockShape;
+  SmallVector<int64_t, 4> logicalWorkerSlice;
+  SmallVector<int64_t, 4> haloShape;
+};
+
+// Choose the one committed node-agnostic budget grain for every SU that writes
+// a multi-owner-distributed data-parallel array. The caller only commits it
+// when the current SU step already realizes the selected block grain.
+static std::optional<BlockGrainPlan>
+buildBudgetReconciledBlockGrainPlan(sde::SdeSuIterateOp op,
+                                    sde::SDECostModel &costModel) {
   if (!op || hasCommittedPhysicalLayout(op))
-    return false;
+    return std::nullopt;
   // Matmul/contraction keeps its dedicated contraction-tiling plan: its CU-task
   // grain is the reduction-aware worker grain, not the data-parallel block
   // grain reconciled here. This is the one genuinely layout-irreducible family.
   if (auto cls = sde::queryStructuredClassification(op);
       cls && *cls == sde::SdeStructuredClassification::matmul)
-    return false;
+    return std::nullopt;
   if (auto cls = sde::queryStructuredClassification(op);
       cls && *cls == sde::SdeStructuredClassification::stencil)
-    return false;
+    return std::nullopt;
   if (auto cls = sde::queryStructuredClassification(op);
       cls &&
       (*cls == sde::SdeStructuredClassification::elementwise ||
        *cls == sde::SdeStructuredClassification::elementwise_pipeline) &&
       sde::queryInPlaceSafe(op))
-    return false;
-  if (auto pat = sde::querySuPattern(op); pat && *pat == sde::SdePattern::matmul)
-    return false;
+    return std::nullopt;
+  if (auto pat = sde::querySuPattern(op);
+      pat && *pat == sde::SdePattern::matmul)
+    return std::nullopt;
   std::optional<sde::LayoutGraphFact> writeLayout =
       selectSingleWriteLayoutFact(op);
   if (!writeLayout || writeLayout->ownerDims.size() < 2 ||
       writeLayout->budgetBlockShape.empty())
-    return false;
+    return std::nullopt;
   // owner_tile needs one realized SDE loop dimension per owner dim. A 1-D loop
   // (e.g. a residual/reduction loop over the same array) that did not get
   // promoted cannot carry a multi-owner tile; leave it to the pattern
   // committers rather than committing unverifiable owner_tile facts.
   if (op.getLowerBounds().size() < writeLayout->ownerDims.size())
-    return false;
+    return std::nullopt;
   std::optional<sde::SuOutputLayoutFacts> outputPlan =
       sde::findCompatibleSuOutputLayoutFacts(op);
   if (!outputPlan)
-    return false;
+    return std::nullopt;
   std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
       orderPhysicalOwnerDimsByLoop(*outputPlan, writeLayout->ownerDims,
                                    op.getLowerBounds().size());
   if (!orderedOwnerDims)
-    return false;
-  SmallVector<int64_t, 4> ownerDims(orderedOwnerDims->begin(),
-                                    orderedOwnerDims->end());
-  if (!allExternalStoresCoverOwnerDims(op, ownerDims,
+    return std::nullopt;
+  BlockGrainPlan plan;
+  plan.ownerDims.assign(orderedOwnerDims->begin(), orderedOwnerDims->end());
+  if (!allExternalStoresCoverOwnerDims(op, plan.ownerDims,
                                        outputPlan->physicalDimToLoopDim))
-    return false;
-  SmallVector<int64_t, 4> blockShape(writeLayout->budgetBlockShape.begin(),
-                                     writeLayout->budgetBlockShape.end());
+    return std::nullopt;
+  plan.physicalBlockShape.assign(writeLayout->budgetBlockShape.begin(),
+                                 writeLayout->budgetBlockShape.end());
   if (!sde::enforceOwnerBlockConcurrencyFloor(
-          outputPlan->shape, ownerDims,
-          getInterLocalityTargetWorkers(costModel), blockShape))
-    return false;
+          outputPlan->shape, plan.ownerDims,
+          getInterLocalityTargetWorkers(costModel), plan.physicalBlockShape))
+    return std::nullopt;
   // Per-owner-dim halo from the op's stencil access offsets (0 for
   // non-stencils). Not compared by hasSameHostBridgePlan, but needed for
   // correct halo exchange.
-  SmallVector<int64_t, 4> haloShape;
   bool anyHalo = false;
-  for (int64_t od : ownerDims) {
+  for (int64_t od : plan.ownerDims) {
     int64_t h =
         od >= 0 ? readStencilHaloForOwnerDim(op, static_cast<unsigned>(od)) : 0;
-    haloShape.push_back(std::max<int64_t>(0, h));
+    plan.haloShape.push_back(std::max<int64_t>(0, h));
     anyHalo |= h > 0;
   }
-  SmallVector<int64_t, 4> logicalWorkerSlice =
-      buildLogicalWorkerSliceOrPhysical(
-          op, outputPlan->shape, ownerDims, blockShape,
-          costModel.getLogicalWorkerCapacity(),
-          anyHalo ? ArrayRef<int64_t>(haloShape) : ArrayRef<int64_t>{});
-  return applyPhysicalLayoutIfRealized(op, ownerDims, blockShape,
-                                       anyHalo ? ArrayRef<int64_t>(haloShape)
-                                               : ArrayRef<int64_t>{},
-                                       logicalWorkerSlice);
+  plan.logicalWorkerSlice = buildLogicalWorkerSliceOrPhysical(
+      op, outputPlan->shape, plan.ownerDims, plan.physicalBlockShape,
+      costModel.getLogicalWorkerCapacity(),
+      anyHalo ? ArrayRef<int64_t>(plan.haloShape) : ArrayRef<int64_t>{});
+  if (!anyHalo)
+    plan.haloShape.clear();
+  return plan;
+}
+
+static bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
+                                         sde::SDECostModel &costModel) {
+  std::optional<BlockGrainPlan> plan =
+      buildBudgetReconciledBlockGrainPlan(op, costModel);
+  if (!plan)
+    return false;
+  return applyPhysicalLayoutIfRealized(
+      op, plan->ownerDims, plan->physicalBlockShape, plan->haloShape,
+      plan->logicalWorkerSlice);
 }
 
 static void
@@ -1883,10 +1995,50 @@ commitInPlaceSharedStencilSerialSlice(sde::SdeSuIterateOp op,
   if (slice <= 1)
     return;
 
-  sde::commitWriterPhysicalLayoutFacts(
-      op, SmallVector<int64_t, 1>{0},
-      SmallVector<int64_t, 1>{slice},
-      SmallVector<int64_t, 1>{slice});
+  sde::commitWriterPhysicalLayoutFacts(op, SmallVector<int64_t, 1>{0},
+                                       SmallVector<int64_t, 1>{slice},
+                                       SmallVector<int64_t, 1>{slice});
+}
+
+static bool hasLoopCarriedNeighborOffsets(sde::SdeSuIterateOp op) {
+  std::optional<sde::SuNeighborhoodAccessInfo> neighborhood =
+      sde::queryNeighborhoodAccessInfo(op);
+  if (neighborhood) {
+    for (auto [minOffset, maxOffset] :
+         llvm::zip_equal(neighborhood->minOffsets, neighborhood->maxOffsets))
+      if (minOffset < 0 || maxOffset > 0)
+        return true;
+    return false;
+  }
+
+  std::optional<SmallVector<int64_t, 4>> mins =
+      readI64ArrayAttr(op.getAccessMinOffsetsAttr());
+  std::optional<SmallVector<int64_t, 4>> maxs =
+      readI64ArrayAttr(op.getAccessMaxOffsetsAttr());
+  if (!mins || !maxs || mins->size() != maxs->size())
+    return false;
+  for (auto [minOffset, maxOffset] : llvm::zip_equal(*mins, *maxs))
+    if (minOffset < 0 || maxOffset > 0)
+      return true;
+  return false;
+}
+
+static bool
+requiresInPlaceSelfRawWavefrontFailClosed(sde::SdeSuIterateOp op,
+                                          sde::SDECostModel &costModel) {
+  if (costModel.getLogicalWorkerCapacity() <= 1)
+    return false;
+  if (sde::queryInPlaceSafe(op))
+    return false;
+  auto classification = sde::queryStructuredClassification(op);
+  if (!classification ||
+      *classification != sde::SdeStructuredClassification::stencil)
+    return false;
+  if (!sde::queryInPlaceSharedState(op))
+    return false;
+  if (!hasLoopCarriedNeighborOffsets(op))
+    return false;
+  return true;
 }
 
 static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
@@ -1962,12 +2114,7 @@ chooseDistributionKind(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
 static bool
 requiresUnimplementedStencilWavefront(sde::SdeSuIterateOp op,
                                       sde::SDECostModel &costModel) {
-  if (costModel.getLogicalWorkerCapacity() <= 1)
-    return false;
-  if (op->getParentOfType<sde::SdeSuDistributeOp>())
-    return false;
-  return sde::queryInPlaceSharedState(op) &&
-         !sde::hasCommittedCuMuPartitionFacts(op);
+  return requiresInPlaceSelfRawWavefrontFailClosed(op, costModel);
 }
 
 static std::string formatI64Array(ArrayAttr attr) {
@@ -1995,6 +2142,156 @@ static void emitStencilWavefrontFailClosed(sde::SdeSuIterateOp op) {
          "Implement the SDE wavefront/skew transform, "
          "prove the loop in-place-safe, or compile with a single logical "
          "worker.";
+}
+
+// A1 grain unification. Producer and consumer SUs of the same distributed array
+// can commit different block grains for purely scheduling reasons (e.g. a
+// matmul writer at [512,*] and its consumer at budget [256,*]).
+// RedistributionEdges then reads a same-owner re-tile and fails closed
+// ("refusing to emit degenerate all_to_all") because no movement op realizes a
+// within-owner re-block. The grain is a planning artifact, not a data-location
+// difference: commit ONE grain (the per-dim GCD, finest both already realize)
+// on every block_parallel fact of the array so home==reader and no
+// redistribution edge exists. Node-agnostic; runs after per-SU commit so
+// RankExpandMu/RedistributionEdges consume unified facts.
+static void reconcileSameOwnerArrayGrain(Operation *moduleOp) {
+  auto committedGrain = [](const sde::LayoutGraphFact &f) -> ArrayRef<int64_t> {
+    return f.budgetBlockShape.empty() ? ArrayRef<int64_t>(f.blockShape)
+                                      : ArrayRef<int64_t>(f.budgetBlockShape);
+  };
+  struct GrainInfo {
+    SmallVector<int64_t, 4> ownerDims;
+    SmallVector<int64_t, 4> unified;
+    SmallVector<int64_t, 4> rootShape;
+    SmallVector<sde::SdeSuIterateOp, 2> writerOps;
+    bool eligible = true;
+    bool seen = false;
+    bool differs = false;
+  };
+  llvm::DenseMap<int64_t, GrainInfo> byId;
+
+  moduleOp->walk([&](sde::SdeSuIterateOp op) {
+    ArrayAttr layout = op.getArrayLayoutAttr();
+    if (!layout)
+      return;
+    for (const sde::LayoutGraphFact &f : sde::parseArrayLayoutFacts(layout)) {
+      if (f.id < 0)
+        continue;
+      GrainInfo &info = byId[f.id];
+      if (f.layoutKind != sde::ArrayLayoutKind::blockParallel ||
+          f.ownerDims.empty()) {
+        info.eligible = false;
+        continue;
+      }
+      ArrayRef<int64_t> grain = committedGrain(f);
+      if (grain.empty()) {
+        info.eligible = false;
+        continue;
+      }
+      if (!info.seen) {
+        info.seen = true;
+        info.ownerDims.assign(f.ownerDims.begin(), f.ownerDims.end());
+        info.unified.assign(grain.begin(), grain.end());
+      } else if (ArrayRef<int64_t>(info.ownerDims) !=
+                     ArrayRef<int64_t>(f.ownerDims) ||
+                 info.unified.size() != grain.size()) {
+        info.eligible = false;
+      } else {
+        for (size_t i = 0; i < grain.size(); ++i) {
+          if (grain[i] != info.unified[i])
+            info.differs = true;
+          int64_t g = std::gcd(info.unified[i], grain[i]);
+          info.unified[i] = g > 0 ? g : info.unified[i];
+        }
+      }
+      if (f.role == sde::LayoutGraphRole::write) {
+        info.writerOps.push_back(op);
+        if (info.rootShape.empty())
+          if (auto rs = sde::findWriteArrayRootShape(op, f.id))
+            info.rootShape.assign(rs->begin(), rs->end());
+      }
+    }
+  });
+
+  llvm::DenseMap<int64_t, SmallVector<int64_t, 4>> targetById;
+  for (auto &kv : byId) {
+    GrainInfo &info = kv.second;
+    if (info.eligible && info.seen && info.differs && !info.ownerDims.empty())
+      targetById[kv.first] = info.unified;
+  }
+  if (targetById.empty())
+    return;
+
+  // Re-commit each writer's physical layout at the unified grain. The physical
+  // CU-group block counts (not the arrayLayout fact) are what RankExpandMu
+  // reads to shape the MU and re-author the write fact, so unifying only the
+  // fact is not enough — the producer must realize the finer grain.
+  for (auto &kv : targetById) {
+    GrainInfo &info = byId[kv.first];
+    for (sde::SdeSuIterateOp writer : info.writerOps)
+      if (writer)
+        (void)sde::commitWriterPhysicalLayoutFacts(writer, info.ownerDims,
+                                                   kv.second);
+  }
+
+  MLIRContext *ctx = moduleOp->getContext();
+  Builder builder(ctx);
+  StringAttr blockShapeName =
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::BlockShape);
+  StringAttr budgetName =
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::BudgetBlockShape);
+  StringAttr muCountName =
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::MuBlockCount);
+
+  moduleOp->walk([&](sde::SdeSuIterateOp op) {
+    ArrayAttr layout = op.getArrayLayoutAttr();
+    if (!layout)
+      return;
+    bool changed = false;
+    SmallVector<Attribute, 4> rewritten;
+    rewritten.reserve(layout.size());
+    for (Attribute attr : layout) {
+      auto dict = dyn_cast<DictionaryAttr>(attr);
+      std::optional<sde::LayoutGraphFact> f =
+          dict ? sde::parseArrayLayoutFact(dict) : std::nullopt;
+      if (!dict || !f) {
+        rewritten.push_back(attr);
+        continue;
+      }
+      auto it = targetById.find(f->id);
+      const GrainInfo &info = byId[f->id];
+      if (it == targetById.end() || f->role != sde::LayoutGraphRole::read ||
+          f->layoutKind != sde::ArrayLayoutKind::blockParallel ||
+          ArrayRef<int64_t>(f->ownerDims) !=
+              ArrayRef<int64_t>(info.ownerDims) ||
+          it->second.size() != committedGrain(*f).size() ||
+          committedGrain(*f) == ArrayRef<int64_t>(it->second)) {
+        rewritten.push_back(attr);
+        continue;
+      }
+      ArrayRef<int64_t> target = it->second;
+      SmallVector<NamedAttribute, 8> fields;
+      for (NamedAttribute named : dict)
+        if (named.getName() != blockShapeName &&
+            named.getName() != budgetName && named.getName() != muCountName)
+          fields.push_back(named);
+      fields.push_back(
+          builder.getNamedAttr(blockShapeName, buildI64ArrayAttr(ctx, target)));
+      fields.push_back(
+          builder.getNamedAttr(budgetName, buildI64ArrayAttr(ctx, target)));
+      if (!info.rootShape.empty() && info.rootShape.size() == target.size()) {
+        int64_t count = sde::inferCuCountFromMuPartition(
+            info.rootShape, info.ownerDims, target);
+        if (count > 0)
+          fields.push_back(builder.getNamedAttr(
+              muCountName, builder.getI64IntegerAttr(count)));
+      }
+      rewritten.push_back(builder.getDictionaryAttr(fields));
+      changed = true;
+    }
+    if (changed)
+      op.setArrayLayoutAttr(ArrayAttr::get(ctx, rewritten));
+  });
 }
 
 struct DistributionPlanningPass
@@ -2026,6 +2323,11 @@ struct DistributionPlanningPass
       if (!original || !original->getBlock())
         continue;
       sde::SdeSuIterateOp op = original;
+      if (requiresInPlaceSelfRawWavefrontFailClosed(op, *costModel)) {
+        emitStencilWavefrontFailClosed(op);
+        failed = true;
+        continue;
+      }
       if (std::optional<sde::SdeSuIterateOp> wavefront =
               tryRealizeWavefrontSkew(op, *costModel)) {
         (void)*wavefront;
@@ -2044,6 +2346,7 @@ struct DistributionPlanningPass
       // and skip it; they still run for the families budget declines
       // (single-owner, matmul, reduction, in-place). The committed budget
       // layout is the authority.
+      commitWriterLayoutFromCoiteratedRead(op);
       commitBudgetReconciledLayout(op, *costModel);
       commitStencilPhysicalLayout(op, *costModel);
       commitDirectRowMatmulPhysicalLayout(op, *costModel);
@@ -2059,6 +2362,11 @@ struct DistributionPlanningPass
       signalPassFailure();
       return;
     }
+
+    // Unify producer/consumer block grain per array so a same-owner re-tile is
+    // never left for RedistributionEdges to reject (A1). Runs after all per-SU
+    // facts are committed; downstream passes consume the unified facts.
+    reconcileSameOwnerArrayGrain(getOperation());
 
     for (DistributionRewrite rewrite : rewrites) {
       if (rewrite.op.getNumResults() > 0)

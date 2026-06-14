@@ -19,6 +19,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Operation.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -31,6 +32,15 @@ namespace mlir::carts::sde {
 
 static std::optional<MuPhysicalLayout>
 resolveMuPhysicalLayoutForWriter(MemRefType logicalType, SdeSuIterateOp writer);
+
+static bool hasCommittedBlockAccessLayout(SdeSuIterateOp si) {
+  for (const LayoutGraphFact &fact :
+       parseArrayLayoutFacts(si.getArrayLayoutAttr()))
+    if (fact.layoutKind == ArrayLayoutKind::blockParallel &&
+        !fact.ownerDims.empty() && !fact.blockShape.empty())
+      return true;
+  return false;
+}
 
 std::unique_ptr<MuAccessIndexer>
 makeMuAccessIndexer(SdeStructuredClassification cls,
@@ -48,6 +58,18 @@ makeMuAccessIndexer(SdeStructuredClassification cls,
   return std::make_unique<MuBlockIndexer>(layout);
 }
 
+std::unique_ptr<MuAccessIndexer>
+makeMuAccessIndexerForCommittedLayout(SdeSuIterateOp si,
+                                      const MuPhysicalLayout &layout) {
+  std::optional<SdeStructuredClassification> cls =
+      queryStructuredClassification(si);
+  if (!cls)
+    cls = si.getStructuredClassification();
+  if (cls)
+    return makeMuAccessIndexer(*cls, layout);
+  return std::make_unique<MuBlockIndexer>(layout);
+}
+
 bool supportsRankExpandedAccessWindows(SdeSuIterateOp si) {
   if (!si)
     return false;
@@ -56,7 +78,8 @@ bool supportsRankExpandedAccessWindows(SdeSuIterateOp si) {
   if (!cls)
     cls = si.getStructuredClassification();
   if (!cls)
-    return false;
+    return si.getReductionAccumulators().empty() &&
+           hasCommittedBlockAccessLayout(si);
   switch (*cls) {
   case SdeStructuredClassification::elementwise:
   case SdeStructuredClassification::elementwise_pipeline:
@@ -332,6 +355,120 @@ llvm::SmallVector<Value, 6> MuBlockIndexer::localize(ValueRange logicalIndices,
   }
 
   return result;
+}
+
+struct GeneratedIndexSplits {
+  SmallVector<arith::DivUIOp, 8> divs;
+  SmallVector<arith::RemUIOp, 8> rems;
+};
+
+static bool isIndexTyped(Value value) {
+  return value && value.getType().isIndex();
+}
+
+static std::optional<int64_t> definingConstantIndexValue(Value value) {
+  if (!value || !value.getDefiningOp<arith::ConstantIndexOp>())
+    return std::nullopt;
+  return ValueAnalysis::tryFoldConstantIndex(value);
+}
+
+static bool sameGeneratedBlockExtent(Value lhs, Value rhs) {
+  if (lhs == rhs)
+    return true;
+  std::optional<int64_t> lhsConst = definingConstantIndexValue(lhs);
+  std::optional<int64_t> rhsConst = definingConstantIndexValue(rhs);
+  return lhsConst && rhsConst && *lhsConst == *rhsConst;
+}
+
+static bool sameGeneratedIndexSplitOperands(Value priorLhs, Value priorRhs,
+                                            Value currentLhs,
+                                            Value currentRhs) {
+  return priorLhs == currentLhs &&
+         sameGeneratedBlockExtent(priorRhs, currentRhs);
+}
+
+static bool canReuseGeneratedIndexSplit(arith::DivUIOp prior,
+                                        arith::DivUIOp current) {
+  return prior->getBlock() == current->getBlock() &&
+         prior->isBeforeInBlock(current) &&
+         prior.getResult().getType() == current.getResult().getType() &&
+         isIndexTyped(prior.getResult()) && isIndexTyped(current.getResult()) &&
+         isIndexTyped(prior.getLhs()) && isIndexTyped(prior.getRhs()) &&
+         isIndexTyped(current.getLhs()) && isIndexTyped(current.getRhs()) &&
+         sameGeneratedIndexSplitOperands(prior.getLhs(), prior.getRhs(),
+                                         current.getLhs(), current.getRhs());
+}
+
+static bool canReuseGeneratedIndexSplit(arith::RemUIOp prior,
+                                        arith::RemUIOp current) {
+  return prior->getBlock() == current->getBlock() &&
+         prior->isBeforeInBlock(current) &&
+         prior.getResult().getType() == current.getResult().getType() &&
+         isIndexTyped(prior.getResult()) && isIndexTyped(current.getResult()) &&
+         isIndexTyped(prior.getLhs()) && isIndexTyped(prior.getRhs()) &&
+         isIndexTyped(current.getLhs()) && isIndexTyped(current.getRhs()) &&
+         sameGeneratedIndexSplitOperands(prior.getLhs(), prior.getRhs(),
+                                         current.getLhs(), current.getRhs());
+}
+
+static void recordGeneratedIndexSplits(ValueRange indices,
+                                       const MuPhysicalLayout &layout,
+                                       GeneratedIndexSplits &splits) {
+  unsigned ownerCount = layout.ownerDims.size();
+  for (unsigned pos = 0; pos < ownerCount && pos < indices.size(); ++pos)
+    if (auto div = indices[pos].getDefiningOp<arith::DivUIOp>())
+      splits.divs.push_back(div);
+
+  for (unsigned dim : layout.ownerDims) {
+    unsigned pos = ownerCount + dim;
+    if (pos >= indices.size())
+      continue;
+    if (auto rem = indices[pos].getDefiningOp<arith::RemUIOp>())
+      splits.rems.push_back(rem);
+  }
+}
+
+template <typename OpT, typename CanReuseFn>
+static void coalesceGeneratedIndexSplitOps(ArrayRef<OpT> ops,
+                                           CanReuseFn canReuse) {
+  llvm::SmallPtrSet<Operation *, 16> eraseSet;
+  SmallVector<std::pair<OpT, Value>, 8> replacements;
+
+  for (OpT current : ops) {
+    if (eraseSet.contains(current.getOperation()))
+      continue;
+    for (OpT prior : ops) {
+      if (prior == current)
+        continue;
+      if (eraseSet.contains(prior.getOperation()))
+        continue;
+      if (!canReuse(prior, current))
+        continue;
+      replacements.push_back({current, prior.getResult()});
+      eraseSet.insert(current.getOperation());
+      break;
+    }
+  }
+
+  for (auto [op, replacement] : replacements)
+    op.getResult().replaceAllUsesWith(replacement);
+  for (Operation *op : eraseSet)
+    op->erase();
+}
+
+static void coalesceGeneratedIndexSplits(const GeneratedIndexSplits &splits) {
+  coalesceGeneratedIndexSplitOps(ArrayRef<arith::DivUIOp>(splits.divs),
+                                 [](arith::DivUIOp prior,
+                                    arith::DivUIOp current) {
+                                   return canReuseGeneratedIndexSplit(prior,
+                                                                      current);
+                                 });
+  coalesceGeneratedIndexSplitOps(ArrayRef<arith::RemUIOp>(splits.rems),
+                                 [](arith::RemUIOp prior,
+                                    arith::RemUIOp current) {
+                                   return canReuseGeneratedIndexSplit(prior,
+                                                                      current);
+                                 });
 }
 
 // A writer whose entire iteration domain folds to constants is the strongest
@@ -845,11 +982,14 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
   for (SdeArrayLayoutRootOp root : provenance)
     root->setOperand(0, newMemref);
 
+  GeneratedIndexSplits generatedSplits;
+
   // Rewrite reads.
   for (memref::LoadOp load : loads) {
     OpBuilder b(load);
     llvm::SmallVector<Value, 6> idx =
         indexer.localize(load.getIndices(), b, load.getLoc());
+    recordGeneratedIndexSplits(idx, layout, generatedSplits);
     auto newLoad =
         memref::LoadOp::create(b, load.getLoc(), newMemref, ValueRange(idx));
     load.getResult().replaceAllUsesWith(newLoad.getResult());
@@ -864,6 +1004,7 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
       return failure();
     llvm::SmallVector<Value, 6> idx =
         indexer.localize(*expanded, b, read->getLoc());
+    recordGeneratedIndexSplits(idx, layout, generatedSplits);
     auto newLoad =
         memref::LoadOp::create(b, read->getLoc(), newMemref, ValueRange(idx));
     read.getValue().replaceAllUsesWith(newLoad.getResult());
@@ -875,6 +1016,7 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
     OpBuilder b(store);
     llvm::SmallVector<Value, 6> idx =
         indexer.localize(store.getIndices(), b, store.getLoc());
+    recordGeneratedIndexSplits(idx, layout, generatedSplits);
     memref::StoreOp::create(b, store.getLoc(), store.getValueToStore(),
                             newMemref, ValueRange(idx));
     store.erase();
@@ -888,6 +1030,7 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
       return failure();
     llvm::SmallVector<Value, 6> idx =
         indexer.localize(*expanded, b, write->getLoc());
+    recordGeneratedIndexSplits(idx, layout, generatedSplits);
     memref::StoreOp::create(b, write->getLoc(), write.getValueToStore(),
                             newMemref, ValueRange(idx));
     write->erase();
@@ -904,6 +1047,8 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
 
   for (memref::DeallocOp dealloc : deallocs)
     dealloc.erase();
+
+  coalesceGeneratedIndexSplits(generatedSplits);
 
   muAlloc.erase();
   return success();

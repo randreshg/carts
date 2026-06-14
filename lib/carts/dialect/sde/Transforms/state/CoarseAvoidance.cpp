@@ -79,8 +79,8 @@ struct SdeCoarseAvoidancePass
         continue;
 
       std::unique_ptr<carts::sde::MuAccessIndexer> indexer =
-          carts::sde::makeMuAccessIndexer(
-              *committed->writer.getStructuredClassification(), layout);
+          carts::sde::makeMuAccessIndexerForCommittedLayout(committed->writer,
+                                                            layout);
       carts::sde::MuLayoutRewriter rewriter(layout, *indexer);
       if (mlir::failed(rewriter.apply(mu))) {
         // The committed layout cannot be realized end to end. Fail closed with

@@ -3,8 +3,8 @@
 /// SDE→ARTS boundary lowering unit.
 ///==========================================================================///
 
-#include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryHelpers.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryCommon.h"
+#include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryHelpers.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
@@ -30,7 +30,6 @@
 #include <functional>
 #include <limits>
 
-
 using namespace mlir;
 using namespace mlir::carts;
 using namespace mlir::carts::arts;
@@ -51,9 +50,9 @@ readPhysicalLayoutFromExpandedType(MemRefType memrefType) {
   return layout;
 }
 
-LogicalResult
-requireCompatibleWindows(sde::SdeMuAllocOp op,
-                         ArrayAttr &ownerDims, ArrayAttr &blockShape) {
+LogicalResult requireCompatibleWindows(sde::SdeMuAllocOp op,
+                                       ArrayAttr &ownerDims,
+                                       ArrayAttr &blockShape) {
   auto memrefType = dyn_cast<MemRefType>(op.getMemref().getType());
   if (!memrefType)
     return op.emitOpError() << "requires a memref type for ARTS DB lowering";
@@ -91,8 +90,8 @@ requireCompatibleWindows(sde::SdeMuAllocOp op,
                             expandedTypeLayout->blockShape.end());
     blockShape = Builder(op.getContext()).getI64ArrayAttr(paddedBlockShape);
   } else {
-    FailureOr<ArrayAttr> maybeBlockShape = blockShapeForExpandedWindow(
-        *firstGeom, memrefType, op.getContext());
+    FailureOr<ArrayAttr> maybeBlockShape =
+        blockShapeForExpandedWindow(*firstGeom, memrefType, op.getContext());
     if (failed(maybeBlockShape))
       return op.emitOpError()
              << "has access-window shape incompatible with the rank-expanded "
@@ -121,14 +120,175 @@ getDynamicSizesForTaskDepRoot(Operation *root) {
   if (auto alloca = dyn_cast_or_null<memref::AllocaOp>(root))
     return SmallVector<Value>(alloca.getDynamicSizes().begin(),
                               alloca.getDynamicSizes().end());
+  if (auto muAlloc = dyn_cast_or_null<sde::SdeMuAllocOp>(root))
+    return SmallVector<Value>(muAlloc.getDynamicSizes().begin(),
+                              muAlloc.getDynamicSizes().end());
   return std::nullopt;
 }
 
-std::optional<SmallVector<Value>>
-getDynamicSizesForTaskDepRoot(Value root) {
+std::optional<SmallVector<Value>> getDynamicSizesForTaskDepRoot(Value root) {
   if (!root)
     return std::nullopt;
   return getDynamicSizesForTaskDepRoot(root.getDefiningOp());
+}
+
+static bool sameValues(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
+  return lhs.size() == rhs.size() &&
+         std::equal(lhs.begin(), lhs.end(), rhs.begin());
+}
+
+enum class TaskDepLayoutLookupKind {
+  NoCommittedRoot,
+  Found,
+  DeferToGenericMuLowering,
+  Failure
+};
+
+struct TaskDepLayoutLookup {
+  TaskDepLayoutLookupKind kind = TaskDepLayoutLookupKind::NoCommittedRoot;
+  sde::CommittedSuPhysicalLayout layout;
+};
+
+static bool isSupportedTaskDepLayoutKind(sde::ArrayLayoutKind kind) {
+  return kind == sde::ArrayLayoutKind::blockParallel ||
+         kind == sde::ArrayLayoutKind::blockContraction;
+}
+
+static FailureOr<sde::CommittedSuPhysicalLayout>
+readCommittedBlockLayoutForRootFact(sde::SdeArrayLayoutRootOp layoutRoot,
+                                    sde::SdeSuIterateOp iterate) {
+  if (!iterate || !iterate.getArrayLayoutAttr())
+    return layoutRoot.emitOpError()
+           << "references a write layout root without arrayLayout facts";
+
+  std::optional<sde::LayoutGraphFact> selected;
+  for (const sde::LayoutGraphFact &fact :
+       sde::parseArrayLayoutFacts(iterate.getArrayLayoutAttr())) {
+    if (fact.id != static_cast<int64_t>(layoutRoot.getArrayId()) ||
+        fact.role != sde::LayoutGraphRole::write)
+      continue;
+    if (selected)
+      return layoutRoot.emitOpError()
+             << "matches multiple committed SDE arrayLayout facts";
+    selected = fact;
+  }
+
+  if (!selected)
+    return layoutRoot.emitOpError()
+           << "has no matching committed SDE arrayLayout fact";
+  if (!isSupportedTaskDepLayoutKind(selected->layoutKind) ||
+      selected->ownerDims.empty() || selected->blockShape.empty())
+    return layoutRoot.emitOpError()
+           << "has malformed committed SDE block layout for ARTS task-dep "
+              "storage realization";
+
+  for (int64_t ownerDim : selected->ownerDims) {
+    if (ownerDim < 0 ||
+        static_cast<size_t>(ownerDim) >= selected->blockShape.size())
+      return layoutRoot.emitOpError()
+             << "committed SDE block layout owner dimension is outside "
+                "blockShape rank";
+  }
+
+  return sde::CommittedSuPhysicalLayout{selected->ownerDims,
+                                        selected->blockShape};
+}
+
+static bool taskDepRootRequiresGenericMuLowering(
+    Value root, const llvm::DenseMap<Value, HaloRedistFacts> &haloFactsByMu) {
+  if (!root)
+    return false;
+  if (auto muAlloc = root.getDefiningOp<sde::SdeMuAllocOp>()) {
+    if (haloFactsByMu.contains(muAlloc.getMemref()))
+      return true;
+    return !sde::queryAccessWindows(muAlloc).empty();
+  }
+  return false;
+}
+
+static bool taskDepRootHasNonTaskDirectMemoryUse(Value root) {
+  root = ValueAnalysis::stripMemrefViewOps(root);
+  if (!root)
+    return false;
+  for (Operation *user : root.getUsers()) {
+    auto access = DbUtils::getMemoryAccessInfo(user);
+    if (!access || ValueAnalysis::stripMemrefViewOps(access->memref) != root)
+      continue;
+    if (user->getParentOfType<sde::SdeCuTaskOp>())
+      continue;
+    return true;
+  }
+  return false;
+}
+
+static TaskDepLayoutLookup findCommittedBlockLayoutForRoot(
+    Value root, Operation *context,
+    const llvm::DenseMap<Value, HaloRedistFacts> &haloFactsByMu) {
+  root = ValueAnalysis::stripMemrefViewOps(root);
+  if (!root)
+    return {};
+
+  std::optional<sde::CommittedSuPhysicalLayout> selected;
+  Operation *searchRoot = context->getParentOfType<func::FuncOp>();
+  if (!searchRoot)
+    searchRoot = context->getParentOfType<ModuleOp>();
+  if (!searchRoot)
+    searchRoot = context;
+
+  WalkResult walkResult = searchRoot->walk([&](sde::SdeArrayLayoutRootOp layoutRoot) {
+    if (layoutRoot.getMode() != sde::SdeAccessMode::write ||
+        !ValueAnalysis::sameMemrefRoot(layoutRoot.getRoot(), root))
+      return WalkResult::advance();
+    auto iterate = layoutRoot->getParentOfType<sde::SdeSuIterateOp>();
+    FailureOr<sde::CommittedSuPhysicalLayout> layout =
+        readCommittedBlockLayoutForRootFact(layoutRoot, iterate);
+    if (failed(layout))
+      return WalkResult::interrupt();
+    if (!selected) {
+      selected = *layout;
+      return WalkResult::advance();
+    }
+    if (sameValues(selected->ownerDims, layout->ownerDims) &&
+        sameValues(selected->blockShape, layout->blockShape))
+      return WalkResult::advance();
+    InFlightDiagnostic diag =
+        context->emitError("conflicting committed block layouts for task "
+                           "dependency storage root");
+    diag.attachNote(iterate.getLoc()) << "conflicting layout source";
+    return WalkResult::interrupt();
+  });
+  if (walkResult.wasInterrupted())
+    return {TaskDepLayoutLookupKind::Failure, {}};
+
+  if (!selected) {
+    if (taskDepRootRequiresGenericMuLowering(root, haloFactsByMu))
+      return {TaskDepLayoutLookupKind::DeferToGenericMuLowering, {}};
+    return {};
+  }
+  if (taskDepRootHasNonTaskDirectMemoryUse(root)) {
+    context->emitError()
+        << "task dependency root also has SDE memory accesses that require "
+           "access-window realization; split the task dependency from the "
+           "windowed MU root before ARTS storage lowering";
+    return {TaskDepLayoutLookupKind::Failure, {}};
+  }
+  // Halo/query-window roots must stay on generic MU lowering so it can emit or
+  // reject the corresponding db_access_window/halo facts before storage rewrite.
+  if (taskDepRootRequiresGenericMuLowering(root, haloFactsByMu))
+    return {TaskDepLayoutLookupKind::DeferToGenericMuLowering, {}};
+  return {TaskDepLayoutLookupKind::Found, *selected};
+}
+
+static LogicalResult createCommittedLayoutDbBackedMemref(
+    OpBuilder &builder, Location loc, MemRefType memrefType,
+    ValueRange dynamicSizes, const sde::CommittedSuPhysicalLayout &layout,
+    Value &replacement) {
+  ArrayAttr ownerDims =
+      buildI64ArrayAttr(builder.getContext(), layout.ownerDims);
+  ArrayAttr blockShape =
+      buildI64ArrayAttr(builder.getContext(), layout.blockShape);
+  return arts::createBlockDbBackedMemref(builder, loc, memrefType, dynamicSizes,
+                                         ownerDims, blockShape, replacement);
 }
 
 LogicalResult exposeTaskDepMemrefRoots(ModuleOp module) {
@@ -164,7 +324,8 @@ LogicalResult exposeTaskDepMemrefRoots(ModuleOp module) {
   return success();
 }
 
-LogicalResult realizeTaskDepMemrefStorage(ModuleOp module) {
+LogicalResult realizeTaskDepMemrefStorage(
+    ModuleOp module, const llvm::DenseMap<Value, HaloRedistFacts> &haloFactsByMu) {
   if (failed(exposeTaskDepMemrefRoots(module)))
     return failure();
 
@@ -217,8 +378,22 @@ LogicalResult realizeTaskDepMemrefStorage(ModuleOp module) {
     OpBuilder builder(rootOp);
     builder.setInsertionPointAfter(rootOp);
     Value replacement;
-    if (failed(arts::createCoarseDbBackedMemref(
-            builder, rootOp->getLoc(), memrefType, *dynamicSizes, replacement)))
+    TaskDepLayoutLookup committedLayout =
+        findCommittedBlockLayoutForRoot(root, rootOp, haloFactsByMu);
+    if (committedLayout.kind == TaskDepLayoutLookupKind::Failure)
+      return failure();
+    if (committedLayout.kind == TaskDepLayoutLookupKind::DeferToGenericMuLowering)
+      continue;
+
+    LogicalResult realized = committedLayout.kind == TaskDepLayoutLookupKind::Found
+                                 ? createCommittedLayoutDbBackedMemref(
+                                       builder, rootOp->getLoc(), memrefType,
+                                       *dynamicSizes, committedLayout.layout,
+                                       replacement)
+                                 : arts::createCoarseDbBackedMemref(
+                                       builder, rootOp->getLoc(), memrefType,
+                                       *dynamicSizes, replacement);
+    if (failed(realized))
       return rootOp->emitError()
              << "could not realize task dependency memref as an ARTS DB";
     if (replacement.getType() != memrefType)
@@ -263,7 +438,7 @@ static LogicalResult createDbBackedReplacement(
     const sde::MuAccessWindowGeometry &geom, Value &replacement) {
   if (geom.ownerDimCount == 0)
     return arts::createCoarseDbBackedMemref(builder, op.getLoc(), memrefType,
-                                          op.getDynamicSizes(), replacement);
+                                            op.getDynamicSizes(), replacement);
   return arts::createBlockDbBackedMemref(builder, op.getLoc(), memrefType,
                                          op.getDynamicSizes(), ownerDims,
                                          blockShape, replacement);
@@ -285,10 +460,11 @@ static ArrayAttr getCommittedHaloShapeForCu(sde::SdeCuRegionOp cu, Value mu,
   return {};
 }
 
-static LogicalResult emitDbAccessWindowFromSpec(
-    OpBuilder &builder, Location loc, Value replacement,
-    sde::RaisedWindowSpec spec, ArrayAttr committedHaloShape,
-    MLIRContext *ctx) {
+static LogicalResult emitDbAccessWindowFromSpec(OpBuilder &builder,
+                                                Location loc, Value replacement,
+                                                sde::RaisedWindowSpec spec,
+                                                ArrayAttr committedHaloShape,
+                                                MLIRContext *ctx) {
   std::optional<sde::MuAccessWindowGeometry> geom =
       sde::deriveMuAccessWindowGeometry(spec.mu);
   if (!geom)
@@ -306,7 +482,8 @@ static LogicalResult emitDbAccessWindowFromSpec(
               "halo and write access before ARTS realization";
   }
 
-  FailureOr<ArtsMode> mode = convertAccessMode(spec.mode, spec.cu.getOperation());
+  FailureOr<ArtsMode> mode =
+      convertAccessMode(spec.mode, spec.cu.getOperation());
   if (failed(mode))
     return failure();
 
@@ -323,8 +500,7 @@ static LogicalResult emitDbAccessWindowFromSpec(
   return success();
 }
 
-LogicalResult
-lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr committedHaloShape) {
+LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr committedHaloShape) {
   auto memrefType = dyn_cast<MemRefType>(op.getMemref().getType());
   if (!memrefType)
     return op.emitOpError()
@@ -347,17 +523,17 @@ lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr committedHaloShape) {
     std::optional<sde::MuAccessWindowGeometry> geom =
         sde::deriveMuAccessWindowGeometry(op.getMemref());
     if (!geom)
-      return op.emitOpError()
-             << "could not derive access-window geometry from the rank-expanded "
-                "MU type";
+      return op.emitOpError() << "could not derive access-window geometry from "
+                                 "the rank-expanded "
+                                 "MU type";
     if (failed(createDbBackedReplacement(builder, op, memrefType, ownerDims,
                                          blockShape, *geom, replacement)))
       return op.emitOpError()
              << "could not realize query-derived SDE layout as ARTS DB";
   } else if (committedHaloShape) {
-    return op.emitOpError()
-           << "commits halo movement but has no query-derived SDE access-window "
-              "layout for ARTS DB realization";
+    return op.emitOpError() << "commits halo movement but has no query-derived "
+                               "SDE access-window "
+                               "layout for ARTS DB realization";
   } else if (failed(arts::createCoarseDbBackedMemref(
                  builder, op.getLoc(), memrefType, op.getDynamicSizes(),
                  replacement))) {

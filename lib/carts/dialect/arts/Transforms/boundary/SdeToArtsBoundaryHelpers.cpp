@@ -3,6 +3,7 @@
 /// SDE→ARTS boundary lowering unit.
 ///==========================================================================///
 
+#include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryHelpers.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
@@ -27,7 +28,6 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
-
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -56,13 +56,98 @@ bool isDefinedInside(Value value, Operation *scope) {
   return false;
 }
 
+LogicalResult collectExternalScalarCaptures(sde::SdeSuIterateOp source,
+                                            SetVector<Value> &captures) {
+  auto addIfExternalScalar = [&](Value value) {
+    if (!value || !isScalarParamType(value.getType()))
+      return;
+    if (!isDefinedInside(value, source.getOperation()))
+      captures.insert(value);
+  };
+
+  for (Value value : source.getLowerBounds())
+    addIfExternalScalar(value);
+  for (Value value : source.getUpperBounds())
+    addIfExternalScalar(value);
+  for (Value value : source.getSteps())
+    addIfExternalScalar(value);
+
+  Block *computeBlock = sde::getSuIterateComputeBlock(source);
+  if (!computeBlock)
+    return source.emitOpError() << "has no computable body";
+  computeBlock->walk([&](Operation *op) {
+    for (Value operand : op->getOperands())
+      addIfExternalScalar(operand);
+  });
+  return success();
+}
+
+LogicalResult collectExternalScalarCaptures(sde::SdeCuTaskOp source,
+                                            SetVector<Value> &captures) {
+  auto addIfExternalScalar = [&](Value value) {
+    if (!value || !isScalarParamType(value.getType()) ||
+        isConstantLikeValue(value))
+      return;
+    if (!isDefinedInside(value, source.getOperation()))
+      captures.insert(value);
+  };
+
+  source.getBody().walk([&](Operation *op) {
+    if (isa<sde::SdeMuDepOp>(op))
+      return;
+    for (Value operand : op->getOperands())
+      addIfExternalScalar(operand);
+  });
+  return success();
+}
+
+LogicalResult collectExternalScalarCaptures(sde::SdeCuRegionOp source,
+                                            SetVector<Value> &captures) {
+  auto addIfExternalScalar = [&](Value value) {
+    if (!value || !isScalarParamType(value.getType()) ||
+        isConstantLikeValue(value))
+      return;
+    if (!isDefinedInside(value, source.getOperation()))
+      captures.insert(value);
+  };
+
+  source.getBody().walk([&](Operation *op) {
+    if (isa<arts::DbAccessWindowOp, sde::SdeMuDepOp>(op))
+      return;
+    for (Value operand : op->getOperands())
+      addIfExternalScalar(operand);
+  });
+  return success();
+}
+
+Value remapOrSelf(IRMapping &mapper, Value value) {
+  if (Value mapped = mapper.lookupOrNull(value))
+    return mapped;
+  return value;
+}
+
+LogicalResult translateSdeAtomicsToArts(Region &region) {
+  SmallVector<sde::SdeCuAtomicOp> atomics;
+  region.walk([&](sde::SdeCuAtomicOp op) { atomics.push_back(op); });
+  for (sde::SdeCuAtomicOp atomic : atomics) {
+    if (atomic.getReductionKind() != sde::SdeReductionKind::add)
+      return atomic.emitOpError()
+             << "cannot realize non-add SDE atomic at the ARTS boundary";
+    OpBuilder builder(atomic);
+    arts::AtomicAddOp::create(builder, atomic.getLoc(), atomic.getAddr(),
+                              atomic.getValue());
+    atomic.erase();
+  }
+  return success();
+}
+
 bool isStackScratchMemref(Value memref) {
   Value root = ValueAnalysis::stripMemrefViewOps(memref);
   return root && isa<memref::AllocaOp>(root.getDefiningOp());
 }
 
 FailureOr<ArtsMode> convertAccessMode(sde::SdeAccessMode mode,
-                                             Operation *context) {
+                                      Operation *context) {
   switch (mode) {
   case sde::SdeAccessMode::read:
     return ArtsMode::in;
@@ -77,7 +162,7 @@ FailureOr<ArtsMode> convertAccessMode(sde::SdeAccessMode mode,
 }
 
 FailureOr<ArtsDepPattern> convertPattern(sde::SdePattern pattern,
-                                                Operation *context) {
+                                         Operation *context) {
   switch (pattern) {
   case sde::SdePattern::uniform:
     return ArtsDepPattern::uniform;
@@ -122,7 +207,7 @@ bool hasCommittedPartialReductionFacts(sde::SdeSuIterateOp source) {
 }
 
 LogicalResult attachCommittedSdeFacts(sde::SdeSuIterateOp source,
-                                             arts::EdtOp task) {
+                                      arts::EdtOp task) {
   MLIRContext *ctx = source.getContext();
   Operation *taskOp = task.getOperation();
   if (auto pattern = source.getPatternAttr()) {
@@ -163,7 +248,7 @@ LogicalResult attachCommittedSdeFacts(sde::SdeSuIterateOp source,
 }
 
 LogicalResult attachUnpartitionedSdeFacts(sde::SdeSuIterateOp source,
-                                                 arts::EdtOp task) {
+                                          arts::EdtOp task) {
   MLIRContext *ctx = source.getContext();
   Operation *taskOp = task.getOperation();
   if (auto pattern = source.getPatternAttr()) {
@@ -180,8 +265,7 @@ LogicalResult attachUnpartitionedSdeFacts(sde::SdeSuIterateOp source,
   return success();
 }
 
-ArrayAttr ownerDimsForExpandedWindow(MLIRContext *ctx,
-                                            unsigned ownerDimCount) {
+ArrayAttr ownerDimsForExpandedWindow(MLIRContext *ctx, unsigned ownerDimCount) {
   SmallVector<int64_t, 4> ownerDims;
   ownerDims.reserve(ownerDimCount);
   for (unsigned idx = 0; idx < ownerDimCount; ++idx)
@@ -202,8 +286,7 @@ blockShapeForExpandedWindow(const sde::MuAccessWindowGeometry &geom,
   return Builder(ctx).getI64ArrayAttr(blockShape);
 }
 
-std::optional<SmallVector<int64_t, 4>>
-readCommittedPhysicalOwnerDims(
+std::optional<SmallVector<int64_t, 4>> readCommittedPhysicalOwnerDims(
     sde::SdeSuIterateOp source,
     const std::optional<SmallVector<int64_t, 4>> &arrayOwnerDims) {
   if (arrayOwnerDims && !arrayOwnerDims->empty())

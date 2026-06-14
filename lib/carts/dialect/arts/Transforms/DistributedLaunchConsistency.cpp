@@ -583,8 +583,8 @@ struct DistributedLaunchConsistencyPass
           hasDistributedWriterDependency(edt) && requiresInterNodeRouting) {
         edt.emitError()
             << "mixes a local-only distributed dependency with a distributed "
-               "writer; ARTS must split or explicitly sequence the codelet "
-               "instead of localizing distributed writes";
+               "writer; preserving the original EDT join would require an "
+               "explicit ordering dependency before ARTS can split the codelet";
         failed = true;
         return;
       }

@@ -471,13 +471,26 @@ static bool readerHasOwnerReduction(const sde::ArrayAccessProfile &profile,
 }
 
 static bool readerParallelIndexesPosition(const sde::ArrayAccessProfile &profile,
-                                          unsigned suId, unsigned pos) {
+                                          unsigned suId, unsigned pos,
+                                          bool includeHalo = false) {
   for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
-    if (use.suId == suId && !use.isWrite &&
-        use.kind == sde::ArrayDimKind::parallelIndexed)
+    if (use.suId != suId || use.isWrite)
+      continue;
+    if (use.kind == sde::ArrayDimKind::parallelIndexed)
+      return true;
+    if (includeHalo && use.kind == sde::ArrayDimKind::parallelHalo)
       return true;
   }
   return false;
+}
+
+static bool isStencilReader(ArrayRef<sde::SdeSuIterateOp> schedulingUnits,
+                            unsigned suId) {
+  if (suId >= schedulingUnits.size())
+    return false;
+  auto classification = sde::queryStructuredClassification(schedulingUnits[suId]);
+  return classification &&
+         *classification == sde::SdeStructuredClassification::stencil;
 }
 
 // The consumer's required read layout: the block geometry that aligns with how
@@ -487,18 +500,17 @@ static bool readerParallelIndexesPosition(const sde::ArrayAccessProfile &profile
 static sde::ArrayLayoutCandidate
 inferReaderRequiredLayout(const sde::ArrayAccessProfile &profile,
                           unsigned suId,
+                          ArrayRef<sde::SdeSuIterateOp> schedulingUnits,
                           const sde::ArrayLayoutCandidate &homeLayout) {
   if (readerHasOwnerReduction(profile, suId, homeLayout.ownerPositions)) {
-    sde::ArrayLayoutKind kind =
-        homeLayout.kind == sde::ArrayLayoutKind::blockContraction
-            ? sde::ArrayLayoutKind::blockContraction
-            : sde::ArrayLayoutKind::blockParallel;
-    return makeBlockCandidate(profile, homeLayout.ownerPositions, kind);
+    return makeBlockCandidate(profile, homeLayout.ownerPositions,
+                              sde::ArrayLayoutKind::blockContraction);
   }
 
   SmallVector<int64_t, 4> parallelOwner;
+  bool includeHalo = isStencilReader(schedulingUnits, suId);
   for (unsigned pos = 0; pos < profile.rank; ++pos)
-    if (readerParallelIndexesPosition(profile, suId, pos))
+    if (readerParallelIndexesPosition(profile, suId, pos, includeHalo))
       parallelOwner.push_back(static_cast<int64_t>(pos));
 
   if (parallelOwner.empty() ||
@@ -641,7 +653,8 @@ struct LayoutAssignmentPass
         bool readerDisagrees = chosen.disagreeingReaders.contains(suId);
         sde::ArrayLayoutCandidate layoutForSu = chosen.layout;
         if (!isWrite && readerDisagrees)
-          layoutForSu = inferReaderRequiredLayout(profile, suId, chosen.layout);
+          layoutForSu = inferReaderRequiredLayout(
+              profile, suId, relations.schedulingUnits, chosen.layout);
         DictionaryAttr entry = buildLayoutEntry(
             ctx, arrayId, profile.staticShape, layoutForSu,
             isWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite

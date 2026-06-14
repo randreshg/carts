@@ -44,6 +44,12 @@ struct RedistEndpoint {
   SmallVector<int64_t, 4> blockShape;
 };
 
+enum class EdgeClassify {
+  None,
+  Halo,
+  ReduceScatter,
+  AllToAll,
+};
 
 static std::optional<HomeLayout>
 homeLayoutFromCommittedPhysical(SdeSuIterateOp su) {
@@ -55,7 +61,8 @@ homeLayoutFromCommittedPhysical(SdeSuIterateOp su) {
   HomeLayout home;
   home.writer = su;
   home.layoutKind = ArrayLayoutKind::blockParallel;
-  home.ownerDims.assign(committed->ownerDims.begin(), committed->ownerDims.end());
+  home.ownerDims.assign(committed->ownerDims.begin(),
+                        committed->ownerDims.end());
   home.blockShape.assign(committed->blockShape.begin(),
                          committed->blockShape.end());
   return home;
@@ -247,7 +254,7 @@ static bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
     std::optional<int64_t> radius = getOwnerHaloRadius(
         ownerHaloShape, expanded->logicalRank, rawSourceOwner,
         /*ownerSlot=*/i, /*logicalOwnerDim=*/expanded->ownerDims[i]);
-    if (!radius || *radius <= 0) {
+    if (!radius || *radius < 0) {
       failReason = "rank-expanded halo redistribution has no recoverable ghost "
                    "width for a committed owner grid dim";
       return false;
@@ -325,12 +332,14 @@ getRankExpandedReductionEndpoint(const HomeLayout &home, MemRefType muType) {
 }
 
 static ArrayRef<int64_t> committedBlockShape(const LayoutGraphFact &fact) {
-  return fact.budgetBlockShape.empty() ? ArrayRef<int64_t>(fact.blockShape)
-                                       : ArrayRef<int64_t>(fact.budgetBlockShape);
+  return fact.budgetBlockShape.empty()
+             ? ArrayRef<int64_t>(fact.blockShape)
+             : ArrayRef<int64_t>(fact.budgetBlockShape);
 }
 
-static std::string repartitionMovementReplacement(
-    const HomeLayout &home, const LayoutGraphFact &readerFact) {
+static std::string
+repartitionMovementReplacement(const HomeLayout &home,
+                               const LayoutGraphFact &readerFact) {
   if (home.ownerDims.empty() && !readerFact.ownerDims.empty())
     return "sde.su_broadcast";
   if (!home.ownerDims.empty() && readerFact.ownerDims.empty())
@@ -352,7 +361,7 @@ static void commitOwnerPreservingTarget(RedistributionEdge &edge) {
   edge.targetOwnerDims.assign(edge.sourceOwnerDims.begin(),
                               edge.sourceOwnerDims.end());
   edge.targetBlockShape.assign(edge.sourceBlockShape.begin(),
-                              edge.sourceBlockShape.end());
+                               edge.sourceBlockShape.end());
 }
 
 static std::optional<RedistEndpoint>
@@ -378,8 +387,9 @@ getRankExpandedFullEndpoint(const HomeLayout &home, MemRefType muType) {
   return endpoint;
 }
 
-static void collectReaderRedistributionCandidates(
-    SdeSuIterateOp reader, llvm::SmallVector<int64_t, 4> &arrayIds) {
+static void
+collectReaderRedistributionCandidates(SdeSuIterateOp reader,
+                                      llvm::SmallVector<int64_t, 4> &arrayIds) {
   llvm::DenseSet<int64_t> seen;
   if (reader.getBody().empty())
     return;
@@ -401,11 +411,10 @@ static void collectReaderRedistributionCandidates(
   }
 }
 
-static bool producerConsumerMuTypesDisagree(Value writerRoot, Value readerRoot) {
-  writerRoot =
-      ::mlir::carts::ValueAnalysis::stripMemrefViewOps(writerRoot);
-  readerRoot =
-      ::mlir::carts::ValueAnalysis::stripMemrefViewOps(readerRoot);
+static bool producerConsumerMuTypesDisagree(Value writerRoot,
+                                            Value readerRoot) {
+  writerRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(writerRoot);
+  readerRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(readerRoot);
   if (!writerRoot || !readerRoot)
     return false;
   auto writerType = dyn_cast<MemRefType>(writerRoot.getType());
@@ -422,14 +431,38 @@ static bool readerCommittedLayoutDisagreesWithHome(
     return false;
   if (!sameOwnerDimSet(readerFact->ownerDims, home.ownerDims))
     return true;
-  return committedBlockShape(*readerFact) !=
-         ArrayRef<int64_t>(home.blockShape);
+  return committedBlockShape(*readerFact) != ArrayRef<int64_t>(home.blockShape);
+}
+
+static bool
+readerOnlyRetilesSameOwners(const std::optional<LayoutGraphFact> &readerFact,
+                            const HomeLayout &home) {
+  if (!readerFact || readerFact->role != LayoutGraphRole::read)
+    return false;
+  if (!sameOwnerDimSet(readerFact->ownerDims, home.ownerDims))
+    return false;
+  return committedBlockShape(*readerFact) != ArrayRef<int64_t>(home.blockShape);
+}
+
+static EdgeClassify classifyRedistributionEdge(
+    const HomeLayout &home, const std::optional<LayoutGraphFact> &readerFact,
+    bool hasOwnerReduction, bool committedContractionLayout,
+    bool committedHaloLayout) {
+  if (hasOwnerReduction || committedContractionLayout)
+    return EdgeClassify::ReduceScatter;
+  if (committedHaloLayout)
+    return EdgeClassify::Halo;
+  if (!readerFact || readerFact->role != LayoutGraphRole::read)
+    return EdgeClassify::None;
+  if (!sameOwnerDimSet(home.ownerDims, readerFact->ownerDims))
+    return EdgeClassify::AllToAll;
+  return EdgeClassify::None;
 }
 
 static bool readerNeedsRedistributionMovement(
     SdeSuIterateOp reader, int64_t arrayId, const HomeLayout &home,
-    const ModuleSuAccessRelations &relations, std::optional<unsigned> readerSuId,
-    Value root) {
+    const ModuleSuAccessRelations &relations,
+    std::optional<unsigned> readerSuId, Value root) {
   if (home.writer == reader)
     return false;
 
@@ -457,8 +490,7 @@ static bool readerNeedsRedistributionMovement(
 
   Value writerRoot =
       findArrayLayoutRoot(home.writer, arrayId, SdeAccessMode::write);
-  Value readerRoot =
-      findArrayLayoutRoot(reader, arrayId, SdeAccessMode::read);
+  Value readerRoot = findArrayLayoutRoot(reader, arrayId, SdeAccessMode::read);
   return producerConsumerMuTypesDisagree(writerRoot, readerRoot);
 }
 
@@ -527,7 +559,8 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       return;
 
     std::optional<unsigned> readerSuId;
-    if (auto suIdIt = suIdOf.find(reader.getOperation()); suIdIt != suIdOf.end())
+    if (auto suIdIt = suIdOf.find(reader.getOperation());
+        suIdIt != suIdOf.end())
       readerSuId = suIdIt->second;
 
     for (int64_t arrayId : candidateArrayIds) {
@@ -601,15 +634,16 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         if (geometryFitsRoot || expandedEndpoint)
           hasOwnerReduction = true;
         else {
-          fail(
-              "cross-owner reduction of a rank-expanded distributed "
-              "intermediate is recognized but not yet realizable as sde.su_reduce_scatter");
+          fail("cross-owner reduction of a rank-expanded distributed "
+               "intermediate is recognized but not yet realizable as "
+               "sde.su_reduce_scatter");
           continue;
         }
       }
       if (hasOwnerReduction && !geometryFitsRoot && !expandedEndpoint) {
         fail("cross-owner reduction of a rank-expanded distributed "
-             "intermediate is recognized but not yet realizable as sde.su_reduce_scatter");
+             "intermediate is recognized but not yet realizable as "
+             "sde.su_reduce_scatter");
         continue;
       }
       bool committedContractionLayout =
@@ -619,11 +653,9 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       bool committedHaloLayout =
           haloShape && readerFact &&
           sameOwnerDimSet(home.ownerDims, readerFact->ownerDims);
-      bool committedRepartitionLayout =
-          readerFact && !committedHaloLayout &&
-          (!sameOwnerDimSet(home.ownerDims, readerFact->ownerDims) ||
-           committedBlockShape(*readerFact) !=
-               ArrayRef<int64_t>(home.blockShape));
+      EdgeClassify edgeClass = classifyRedistributionEdge(
+          home, readerFact, hasOwnerReduction, committedContractionLayout,
+          committedHaloLayout);
       if (committedContractionLayout && !geometryFitsRoot &&
           !expandedEndpoint) {
         fail("contraction redistribution of a rank-expanded distributed "
@@ -631,9 +663,14 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         continue;
       }
       if (!hasOwnerReduction && !committedContractionLayout) {
-        if (committedRepartitionLayout) {
+        if (edgeClass == EdgeClassify::AllToAll) {
           // Genuine cross-owner repartition: emit an all_to_all edge instead of
           // failing closed once the SU movement op exists.
+        } else if (edgeClass == EdgeClassify::None &&
+                   readerOnlyRetilesSameOwners(readerFact, home)) {
+          fail("same-owner block-grain mismatch must be reconciled before "
+               "redistribution; refusing to emit degenerate all_to_all");
+          continue;
         } else if (!committedHaloLayout) {
           fail("redistribution edge is not a cross-owner reduction or halo; "
                "the consumer required-read layout is not committed or does "
@@ -646,14 +683,11 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       edge.root = root;
       edge.arrayId = arrayId;
       edge.consumer = reader;
-      edge.kind =
-          committedRepartitionLayout && !hasOwnerReduction &&
-                  !committedContractionLayout
-              ? RedistributionEdgeKind::AllToAll
-          : committedHaloLayout && !hasOwnerReduction &&
-                    !committedContractionLayout
-                ? RedistributionEdgeKind::Halo
-                : RedistributionEdgeKind::ReduceScatter;
+      edge.kind = edgeClass == EdgeClassify::AllToAll
+                      ? RedistributionEdgeKind::AllToAll
+                  : edgeClass == EdgeClassify::Halo
+                      ? RedistributionEdgeKind::Halo
+                      : RedistributionEdgeKind::ReduceScatter;
       if ((hasOwnerReduction || committedContractionLayout) &&
           expandedEndpoint && !geometryFitsRoot) {
         edge.sourceOwnerDims.assign(expandedEndpoint->ownerDims.begin(),
@@ -721,8 +755,7 @@ bool movementEndpointGroundedInCommittedLayout(
     ArrayRef<int64_t> ownerDims, ArrayRef<int64_t> blockShape,
     bool allowExpandedFull, std::string &reason) {
   auto operandMuType = dyn_cast<MemRefType>(movementRoot.getType());
-  movementRoot =
-      ::mlir::carts::ValueAnalysis::stripMemrefViewOps(movementRoot);
+  movementRoot = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(movementRoot);
   if (!movementRoot) {
     reason = "missing redistribution root";
     return false;
@@ -775,9 +808,9 @@ bool movementEndpointGroundedInCommittedLayout(
         candidate.writer = su;
         candidate.layoutKind = f.layoutKind;
         candidate.ownerDims.assign(f.ownerDims.begin(), f.ownerDims.end());
-        ArrayRef<int64_t> homeBlock = f.budgetBlockShape.empty()
-                                          ? ArrayRef<int64_t>(f.blockShape)
-                                          : ArrayRef<int64_t>(f.budgetBlockShape);
+        ArrayRef<int64_t> homeBlock =
+            f.budgetBlockShape.empty() ? ArrayRef<int64_t>(f.blockShape)
+                                       : ArrayRef<int64_t>(f.budgetBlockShape);
         candidate.blockShape.assign(homeBlock.begin(), homeBlock.end());
         if (!home) {
           home = std::move(candidate);
@@ -795,7 +828,8 @@ bool movementEndpointGroundedInCommittedLayout(
       if (root.getMode() != SdeAccessMode::write ||
           static_cast<int64_t>(root.getArrayId()) != arrayId)
         continue;
-      if (std::optional<HomeLayout> candidate = homeLayoutFromCommittedPhysical(su)) {
+      if (std::optional<HomeLayout> candidate =
+              homeLayoutFromCommittedPhysical(su)) {
         if (!home) {
           home = std::move(*candidate);
           continue;
@@ -819,9 +853,8 @@ bool movementEndpointGroundedInCommittedLayout(
   if (!muType || !muType.hasStaticShape())
     return true;
 
-  bool sourceMatchesHome =
-      ownerDims == ArrayRef<int64_t>(home->ownerDims) &&
-      blockShape == ArrayRef<int64_t>(home->blockShape);
+  bool sourceMatchesHome = ownerDims == ArrayRef<int64_t>(home->ownerDims) &&
+                           blockShape == ArrayRef<int64_t>(home->blockShape);
   bool sourceMatchesExpandedReduction = false;
   if (std::optional<RedistEndpoint> expanded =
           getRankExpandedReductionEndpoint(*home, muType))

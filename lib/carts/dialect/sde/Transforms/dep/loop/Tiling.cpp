@@ -1079,6 +1079,120 @@ allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
   return sawExternalStore && !rejected;
 }
 
+static ArrayRef<int64_t> assignedPhysicalBlockShape(
+    const sde::LayoutGraphFact &fact) {
+  return fact.budgetBlockShape.empty() ? ArrayRef<int64_t>(fact.blockShape)
+                                       : ArrayRef<int64_t>(fact.budgetBlockShape);
+}
+
+static std::optional<sde::LayoutGraphFact>
+selectSingleUnownedAssignedWriteLayoutFact(sde::SdeSuIterateOp op) {
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return std::nullopt;
+
+  std::optional<sde::LayoutGraphFact> selected;
+  llvm::SmallDenseSet<int64_t, 4> writtenIds;
+  for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
+    if (fact.role != sde::LayoutGraphRole::write)
+      continue;
+    if (fact.id < 0 || fact.layoutKind != sde::ArrayLayoutKind::blockParallel ||
+        !fact.ownerDims.empty() || fact.blockShape.empty())
+      return std::nullopt;
+    if (!writtenIds.insert(fact.id).second)
+      return std::nullopt;
+    if (!selected) {
+      selected = fact;
+      continue;
+    }
+    if (assignedPhysicalBlockShape(*selected) !=
+        assignedPhysicalBlockShape(fact))
+      return std::nullopt;
+  }
+  return selected;
+}
+
+static std::optional<PhysicalTileShape>
+buildCoiteratedReadWriterTilePlan(sde::SdeSuIterateOp op) {
+  if (!op || sde::hasCommittedWriterBlockLayout(op))
+    return std::nullopt;
+  auto classification = sde::queryStructuredClassification(op);
+  if (!classification ||
+      (*classification != sde::SdeStructuredClassification::stencil &&
+       *classification != sde::SdeStructuredClassification::elementwise &&
+       *classification !=
+           sde::SdeStructuredClassification::elementwise_pipeline))
+    return std::nullopt;
+  if (*classification == sde::SdeStructuredClassification::stencil &&
+      sde::queryInPlaceSharedState(op))
+    return std::nullopt;
+
+  std::optional<sde::LayoutGraphFact> writeLayout =
+      selectSingleUnownedAssignedWriteLayoutFact(op);
+  if (!writeLayout)
+    return std::nullopt;
+  std::optional<sde::SuOutputLayoutFacts> outputPlan =
+      sde::findCompatibleSuOutputLayoutFacts(op);
+  if (!outputPlan || outputPlan->shape.empty() ||
+      outputPlan->loopDimToPhysicalDim.size() < op.getLowerBounds().size() ||
+      outputPlan->physicalDimToLoopDim.size() != outputPlan->shape.size())
+    return std::nullopt;
+
+  ArrayRef<int64_t> writeBlock = assignedPhysicalBlockShape(*writeLayout);
+  if (writeBlock.size() != outputPlan->shape.size())
+    return std::nullopt;
+
+  std::optional<sde::LayoutGraphFact> selectedRead;
+  for (const sde::LayoutGraphFact &fact :
+       sde::parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+    if (fact.role != sde::LayoutGraphRole::read ||
+        fact.layoutKind != sde::ArrayLayoutKind::blockParallel ||
+        fact.ownerDims.size() != op.getLowerBounds().size())
+      continue;
+    if (assignedPhysicalBlockShape(fact) != writeBlock)
+      continue;
+    if (!allExternalStoresCoverOwnerDims(op, fact.ownerDims,
+                                         outputPlan->physicalDimToLoopDim))
+      continue;
+    if (!selectedRead) {
+      selectedRead = fact;
+      continue;
+    }
+    if (selectedRead->ownerDims != fact.ownerDims)
+      return std::nullopt;
+  }
+  if (!selectedRead)
+    return std::nullopt;
+
+  PhysicalTileShape plan;
+  plan.ownerPhysicalDims.assign(selectedRead->ownerDims.begin(),
+                                selectedRead->ownerDims.end());
+  plan.blockShape.assign(writeBlock.begin(), writeBlock.end());
+  plan.tileIterations.assign(op.getLowerBounds().size(), 1);
+  for (unsigned loopDim = 0; loopDim < op.getLowerBounds().size(); ++loopDim) {
+    if (loopDim >= outputPlan->loopDimToPhysicalDim.size())
+      return std::nullopt;
+    int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
+    if (physicalDim < 0 || static_cast<size_t>(physicalDim) >= plan.blockShape.size())
+      return std::nullopt;
+    std::optional<int64_t> step =
+        ValueAnalysis::getPositiveConstantIndex(op.getSteps()[loopDim]);
+    if (!step || *step != 1)
+      return std::nullopt;
+    plan.tileIterations[loopDim] = plan.blockShape[physicalDim];
+  }
+  if (llvm::all_of(plan.tileIterations, [](int64_t tile) { return tile <= 1; }))
+    return std::nullopt;
+  plan.logicalWorkerSlice.assign(plan.blockShape.begin(), plan.blockShape.end());
+  if (*classification == sde::SdeStructuredClassification::stencil)
+    plan.haloShape =
+        getStencilHaloRadiiForOwnerDims(op, plan.ownerPhysicalDims.size());
+  plan.topology = plan.ownerPhysicalDims.size() > 1
+                      ? sde::SdeIterationTopology::owner_tile
+                      : sde::SdeIterationTopology::owner_strip;
+  return plan;
+}
+
 static std::optional<PhysicalTileShape>
 buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
                                          sde::SDECostModel &costModel) {
@@ -1481,10 +1595,13 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
 
       std::optional<PhysicalTileShape> physicalTileShape;
       if (!directMatmul) {
-        if (auto cls = sde::queryStructuredClassification(op);
-            cls && *cls == sde::SdeStructuredClassification::matmul)
-          physicalTileShape =
-              buildPromotedMatmulPhysicalTileShape(op, *costModel);
+        physicalTileShape = buildCoiteratedReadWriterTilePlan(op);
+        if (!physicalTileShape) {
+          if (auto cls = sde::queryStructuredClassification(op);
+              cls && *cls == sde::SdeStructuredClassification::matmul)
+            physicalTileShape =
+                buildPromotedMatmulPhysicalTileShape(op, *costModel);
+        }
         if (!physicalTileShape)
           physicalTileShape =
               buildBudgetReconciledElementwiseTilePlan(op, *costModel);

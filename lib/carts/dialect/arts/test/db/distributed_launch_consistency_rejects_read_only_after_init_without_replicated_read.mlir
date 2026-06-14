@@ -1,14 +1,14 @@
 // RUN: not %carts-compile %s --pass-pipeline='builtin.module(distributed-launch-consistency)' 2>&1 | %FileCheck %s
 
-// Localizing an EDT that also writes a distributed DB violates committed
-// ownership. Without an explicit ordering dependency to preserve the original
-// join, the codelet must fail closed instead of being split.
+// read_only_after_init proves the coarse DB is immutable after initialization,
+// but it does not prove the DB is available on every node. Without an explicit
+// replicatedRead acquire, an internode writer cannot safely consume it.
 
 // CHECK: mixes a local-only distributed dependency with a distributed writer
 // CHECK: preserving the original EDT join would require an explicit ordering dependency
 
 module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_workers = 8 : i64} {
-  func.func @local_only_with_distributed_writer_rejected() {
+  func.func @read_only_after_init_without_replicated_read_rejected() {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
@@ -19,13 +19,16 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
     %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c4] {distributed} : (memref<?xi64>, memref<?xmemref<?xf64>>)
     %write_guid, %write_ptr = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] {runtime_db_mode = #arts.runtime_db_mode<ew>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
 
-    %coarse_guid, %coarse_ptr = arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%route : i32) sizes[%c1] elementType(f64) elementSizes[%c1048576] {local_only} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %coarse_guid, %coarse_ptr = arts.db_alloc[<inout>, <heap>, <write>, <coarse>] route(%route : i32) sizes[%c1] elementType(f64) elementSizes[%c1048576] {local_only, read_only_after_init} : (memref<?xi64>, memref<?xmemref<?xf64>>)
     %read_guid, %read_ptr = arts.db_acquire[<in>] (%coarse_guid : memref<?xi64>, %coarse_ptr : memref<?xmemref<?xf64>>) partitioning(<coarse>), indices[], offsets[%c0], sizes[%c1] -> (memref<?xi64>, memref<?xmemref<?xf64>>)
 
     arts.edt <task> <internode> route(%route) (%write_ptr, %read_ptr) : memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>> {
     ^bb0(%out: memref<?xmemref<?xf64>>, %in: memref<?xmemref<?xf64>>):
-      %payload = arts.db_ref %out[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
-      memref.store %value, %payload[%c0] : memref<?xf64>
+      %out_payload = arts.db_ref %out[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      %in_payload = arts.db_ref %in[%c0] : memref<?xmemref<?xf64>> -> memref<?xf64>
+      %loaded = memref.load %in_payload[%c0] : memref<?xf64>
+      %sum = arith.addf %loaded, %value : f64
+      memref.store %sum, %out_payload[%c0] : memref<?xf64>
       arts.db_release(%out) : memref<?xmemref<?xf64>>
       arts.db_release(%in) : memref<?xmemref<?xf64>>
       arts.yield

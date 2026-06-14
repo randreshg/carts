@@ -69,18 +69,17 @@ struct SdeRankExpandMuPass
           carts::sde::queryStructuredClassification(committed->writer);
       if (!classification)
         classification = committed->writer.getStructuredClassification();
-      if (!classification)
-        continue;
 
       // Commit classification durably before the rewrite makes the body div/rem
       // (un-re-derivable). 1n-inert: only runs for committed block layouts.
-      if (!committed->writer.getStructuredClassificationAttr())
+      if (classification && !committed->writer.getStructuredClassificationAttr())
         committed->writer.setStructuredClassificationAttr(
             carts::sde::SdeStructuredClassificationAttr::get(
                 committed->writer.getContext(), *classification));
 
       std::unique_ptr<carts::sde::MuAccessIndexer> indexer =
-          carts::sde::makeMuAccessIndexer(*classification, committed->layout);
+          carts::sde::makeMuAccessIndexerForCommittedLayout(committed->writer,
+                                                            committed->layout);
       carts::sde::MuLayoutRewriter rewriter(committed->layout, *indexer);
       if (mlir::failed(rewriter.apply(mu))) {
         mu.emitOpError()

@@ -10,7 +10,9 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LogicalResult.h"
+#include "llvm/ADT/SetVector.h"
 
 namespace mlir {
 namespace carts::arts::boundary {
@@ -20,7 +22,18 @@ bool isConstantLikeValue(Value value);
 bool isDefinedInside(Value value, Operation *scope);
 bool isStackScratchMemref(Value memref);
 
-FailureOr<ArtsMode> convertAccessMode(sde::SdeAccessMode mode, Operation *context);
+LogicalResult collectExternalScalarCaptures(sde::SdeSuIterateOp source,
+                                            SetVector<Value> &captures);
+LogicalResult collectExternalScalarCaptures(sde::SdeCuTaskOp source,
+                                            SetVector<Value> &captures);
+LogicalResult collectExternalScalarCaptures(sde::SdeCuRegionOp source,
+                                            SetVector<Value> &captures);
+
+Value remapOrSelf(IRMapping &mapper, Value value);
+LogicalResult translateSdeAtomicsToArts(Region &region);
+
+FailureOr<ArtsMode> convertAccessMode(sde::SdeAccessMode mode,
+                                      Operation *context);
 FailureOr<ArtsDepPattern> convertPattern(sde::SdePattern pattern,
                                          Operation *context);
 FailureOr<EdtDistributionKind>
@@ -37,10 +50,10 @@ FailureOr<ArrayAttr>
 blockShapeForExpandedWindow(const sde::MuAccessWindowGeometry &geom,
                             MemRefType memrefType, MLIRContext *ctx);
 
-std::optional<SmallVector<int64_t, 4>>
-readCommittedPhysicalOwnerDims(
+std::optional<SmallVector<int64_t, 4>> readCommittedPhysicalOwnerDims(
     sde::SdeSuIterateOp source,
-    const std::optional<SmallVector<int64_t, 4>> &arrayOwnerDims = std::nullopt);
+    const std::optional<SmallVector<int64_t, 4>> &arrayOwnerDims =
+        std::nullopt);
 
 } // namespace carts::arts::boundary
 } // namespace mlir

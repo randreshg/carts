@@ -21,7 +21,8 @@ namespace mlir::carts::arts::boundary {
 
 LogicalResult lowerMuData(sde::SdeMuDataOp op);
 LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr haloShape);
-LogicalResult realizeTaskDepMemrefStorage(ModuleOp module);
+LogicalResult realizeTaskDepMemrefStorage(
+    ModuleOp module, const llvm::DenseMap<Value, HaloRedistFacts> &haloFactsByMu);
 
 LogicalResult runSdeStorageToArtsDb(ModuleOp module) {
   llvm::DenseMap<Value, HaloRedistFacts> haloFactsByMu;
@@ -38,6 +39,9 @@ LogicalResult runSdeStorageToArtsDb(ModuleOp module) {
     if (failed(lowerMuData(op)))
       return failure();
 
+  if (failed(realizeTaskDepMemrefStorage(module, haloFactsByMu)))
+    return failure();
+
   SmallVector<sde::SdeMuAllocOp> muAllocs;
   module.walk([&](sde::SdeMuAllocOp op) { muAllocs.push_back(op); });
   for (sde::SdeMuAllocOp op : muAllocs) {
@@ -48,9 +52,6 @@ LogicalResult runSdeStorageToArtsDb(ModuleOp module) {
     if (failed(lowerMuAlloc(op, haloShape)))
       return failure();
   }
-
-  if (failed(realizeTaskDepMemrefStorage(module)))
-    return failure();
 
   for (Operation *redist : redists)
     if (redist && redist->getBlock())
