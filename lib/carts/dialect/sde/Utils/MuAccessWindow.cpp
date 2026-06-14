@@ -225,11 +225,8 @@ queryReplicatedReadAccessWindows(SdeMuAllocOp mu, MemRefType muType) {
     if (isLoad && !hasReplicatedReadFact(cu, *arrayId, mu.getMemref()))
       return {};
     if (isStore) {
-      // A fully-replicated write (no committed owner dims) is legal for a
-      // replicated array: every node writes the whole array (e.g. a deterministic
-      // init), so it stays a coarse-backed-but-windowed DB and each EDT writes
-      // its local copy. Bail only on a committed BLOCK write fact, which would
-      // contradict replication.
+      // A fully-replicated write is legal (every node writes the whole array);
+      // bail only on a committed BLOCK write fact, which contradicts replication.
       if (SdeSuIterateOp writerSu = cu->getParentOfType<SdeSuIterateOp>()) {
         std::optional<LayoutGraphFact> wfact =
             findArrayLayoutFact(writerSu, *arrayId, LayoutGraphRole::write);
@@ -449,10 +446,8 @@ deriveMuAccessWindowGeometry(Value mu) {
       return fillFromExpanded(exp->ownerDims.size(),
                               muType.getShape().drop_front(exp->ownerDims.size()));
     }
-    // A committed replicated array is whole-array (no owner grid). Return an
-    // owner-dim-count-0 (coarse-backed but windowed) geometry instead of letting
-    // the rank>=2 type-shape fallback below misread a square logical shape as a
-    // 1-D owner grid.
+    // A committed replicated array is whole-array (ownerDimCount==0); avoid the
+    // type-shape fallback misreading a square logical shape as a 1-D owner grid.
     if (std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc))
       if (hasReplicatedReadFact(muAlloc, *arrayId)) {
         MuAccessWindowGeometry geom;

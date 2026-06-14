@@ -71,15 +71,8 @@ readPhysicalLayoutFromDepWindow(sde::SdeSuIterateOp source,
                             committed->ownerDims.end());
     return layout;
   }
-  // Fall back to the canonical leading owner dims — the implicit identity that
-  // dropIdentityArrayOwnerDims elides. A window with ownerDimCount>0 and no
-  // surviving explicit owner-dim list (typical for a separate block-parallel
-  // init writer whose committed arrayLayout was consumed by RankExpandMu) owns
-  // its leading ownerDimCount dims. Recovering owner identity here, per
-  // dependency, replaces the old shared ownerDims SU attr (which disturbed
-  // stencils via SdeRedistribute and the halo path). A non-leading owner layout
-  // is never elided to identity, so it still arrives as explicit arrayOwnerDims
-  // above and never reaches this fallback.
+  // Fall back to the leading owner dims (the implicit identity elided by
+  // dropIdentityArrayOwnerDims); non-leading owners arrive explicit above.
   if (dep.ownerDimCount > 0 &&
       static_cast<size_t>(dep.ownerDimCount) <= layout.blockShape.size()) {
     for (unsigned i = 0; i < dep.ownerDimCount; ++i)

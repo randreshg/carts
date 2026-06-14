@@ -1641,11 +1641,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
         Value remaining = arith::SubIOp::create(
             builder, loc, dep.alloc.getSizes()[slot], offset);
         Value count = arith::SubIOp::create(builder, loc, end, offset);
-        // Bound the dynamic span by the static per-dispatch group count so the
-        // distributed-launch consistency check can prove the acquire's span
-        // upper bound (and thus its owner-local routing) — otherwise the purely
-        // dynamic min(remaining, end-offset) has no statically known bound and
-        // an owner-local writer is conservatively rejected as multi-owner.
+        // Bound the span by the static group count so DistributedLaunchConsistency
+        // can prove owner-local routing (a dynamic-only span has no known bound).
         Value staticBound =
             createConstantIndex(builder, loc, staticGroupCount);
         count = arith::MinUIOp::create(builder, loc, count, staticBound);

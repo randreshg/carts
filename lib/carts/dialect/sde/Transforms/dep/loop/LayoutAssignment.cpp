@@ -666,21 +666,8 @@ struct LayoutAssignmentPass
                SmallVector<int64_t, 4>(profile.staticShape.begin(),
                                        profile.staticShape.end())});
         }
-        // Original behavior: non-writerViaMu accessors (readers, replicated
-        // writers) author their arrayLayout entry. ADDITIONALLY (Class-A), a pure
-        // block-parallel writer-via-MU authors its write entry so its owner rank
-        // is pinned for the 2n boundary — but NOT a stencil-read array's writer:
-        // that array keeps its committed halo/movement realization, and authoring
-        // a plain write arrayLayout for it diverts SdeRedistribute (movement edge
-        // ends up unscoped). block-contraction (matmul k-reduction) writers also
-        // stay on the writerCommits-only path. 1n-inert.
-        // ADDITIONALLY (Class-A), a pure block-parallel ELEMENTWISE writer
-        // authors its write entry so its owner rank is pinned for the 2n boundary
-        // (e.g. a separate init writer whose committed witness is a different
-        // reader SU). Restrict to elementwise: a reduction output carries
-        // partial-reduction owner facts and authoring a plain write arrayLayout
-        // for it changes its committed owner grain; a stencil array keeps its
-        // halo/movement realization. Both are excluded.
+        // Block-parallel non-reduction, non-stencil writers also pin their owner
+        // rank for the 2n boundary; reductions/stencils keep their own grain.
         bool blockParallelWriter =
             writerViaMuType &&
             layoutForSu.kind == sde::ArrayLayoutKind::blockParallel;
