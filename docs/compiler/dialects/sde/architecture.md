@@ -23,10 +23,15 @@ cause: S4's "keep affine" fed `affine.load/store` to `SdeMemrefNormalization`, w
   affine after. Flattening fires again.
 - `d32acbbb5` — guard `findSuComputeCuRegion` vs an empty su_iterate body (Tiling on
   flattened stencil/reduction kernels transiently creates one).
-Result: **gemm, 2mm, layernorm, atax, correlation = Correct=YES** (1n/small/local),
-up from 0. Remaining e2e: jacobi-for + stream fail `verify-sde` "source executable
-work outside any CU" — the NREPS rep-loop / `scf.if` repetition-structure CU-coverage
-gap (RaiseToSde, deep; RepeatSink-related). Lit stays SDE 29 / ARTS 21 / ARTS-RT 10.
+- `91e9b26fd` — `verify-sde` treats CU-wrapping control flow (NREPS rep-loop, stencil
+  time loop, `scf.if` guard) as scheduling structure, not leaf source compute → fixes
+  jacobi-for + stream.
+- `2ed1ded79` / `a2860d211` — final form: **lower-affine before the inliner** so the
+  whole input-normalization window runs memref/scf (the inliner/MemrefNormalization
+  are memref-based); fixes every affine-symbol-on-inline variant (incl. activations'
+  `init_data 0..n`) and subsumes the SCCP/late-lower steps. Planning re-raises affine.
+Result: **ALL 21 benchmark kernels compile AND run Correct=YES** (1n/small/local),
+up from 0 at the RED baseline. Lit stays SDE 29 / ARTS 21 / ARTS-RT 10.
 
 **Done**
 - *(post-`b63e4304d`)* Inert `elementwise-fusion` + `iteration-space-decomposition`
