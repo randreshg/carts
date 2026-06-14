@@ -60,6 +60,17 @@ readI64ArrayAttr(Operation *op, StringAttr name) {
   return readI64ArrayAttr(op->getAttrOfType<ArrayAttr>(name));
 }
 
+inline bool i64ArrayAttrEquals(ArrayAttr attr, ArrayRef<int64_t> values) {
+  std::optional<SmallVector<int64_t, 4>> parsed = readI64ArrayAttr(attr);
+  return parsed && llvm::equal(*parsed, values);
+}
+
+inline bool sameI64ArrayAttr(ArrayAttr lhs, ArrayAttr rhs) {
+  std::optional<SmallVector<int64_t, 4>> lhsValues = readI64ArrayAttr(lhs);
+  std::optional<SmallVector<int64_t, 4>> rhsValues = readI64ArrayAttr(rhs);
+  return lhsValues && rhsValues && llvm::equal(*lhsValues, *rhsValues);
+}
+
 } // namespace carts
 } // namespace mlir
 

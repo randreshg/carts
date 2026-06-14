@@ -39,11 +39,6 @@ static bool hasSelfRead(const SuLoopAccessSummary &summary) {
   return false;
 }
 
-static bool attrMatchesValues(ArrayAttr attr, ArrayRef<int64_t> values) {
-  std::optional<SmallVector<int64_t, 4>> parsed = readI64ArrayAttr(attr);
-  return parsed && llvm::equal(*parsed, values);
-}
-
 static bool hasExplicitStencilFacts(SdeSuIterateOp op) {
   auto classification = op.getStructuredClassification();
   return classification &&

@@ -113,21 +113,16 @@ collectStructuredDataMemoryEffects(sde::SdeSuIterateOp op) {
   return summary;
 }
 
-static bool attrMatchesValues(ArrayAttr attr, ArrayRef<int64_t> values) {
-  std::optional<SmallVector<int64_t, 4>> parsed = readI64ArrayAttr(attr);
-  return parsed && llvm::equal(*parsed, values);
-}
-
 static bool
 explicitStencilFactsMatch(sde::SdeSuIterateOp op,
                           const sde::SuNeighborhoodAccessInfo &info) {
-  if (!attrMatchesValues(op.getAccessMinOffsetsAttr(), info.minOffsets) ||
-      !attrMatchesValues(op.getAccessMaxOffsetsAttr(), info.maxOffsets) ||
-      !attrMatchesValues(op.getOwnerDimsAttr(), info.ownerDims) ||
-      !attrMatchesValues(op.getWriteFootprintAttr(), info.writeFootprint))
+  if (!i64ArrayAttrEquals(op.getAccessMinOffsetsAttr(), info.minOffsets) ||
+      !i64ArrayAttrEquals(op.getAccessMaxOffsetsAttr(), info.maxOffsets) ||
+      !i64ArrayAttrEquals(op.getOwnerDimsAttr(), info.ownerDims) ||
+      !i64ArrayAttrEquals(op.getWriteFootprintAttr(), info.writeFootprint))
     return false;
   if (op.getSpatialDimsAttr() &&
-      !attrMatchesValues(op.getSpatialDimsAttr(), info.spatialDims))
+      !i64ArrayAttrEquals(op.getSpatialDimsAttr(), info.spatialDims))
     return false;
   return true;
 }

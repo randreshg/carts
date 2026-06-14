@@ -185,18 +185,6 @@ hasAlternatingBufferExchange(const sde::StructuredMemoryEffectSummary &lhs,
   return writesIntersectReads(lhs, rhs) && writesIntersectReads(rhs, lhs);
 }
 
-static bool sameI64ArrayAttr(ArrayAttr lhs, ArrayAttr rhs) {
-  if (!lhs || !rhs || lhs.size() != rhs.size())
-    return false;
-  for (auto [lhsAttr, rhsAttr] : llvm::zip(lhs, rhs)) {
-    auto lhsInt = dyn_cast<IntegerAttr>(lhsAttr);
-    auto rhsInt = dyn_cast<IntegerAttr>(rhsAttr);
-    if (!lhsInt || !rhsInt || lhsInt.getInt() != rhsInt.getInt())
-      return false;
-  }
-  return true;
-}
-
 static bool sameCommittedPhysicalLayout(sde::SdeSuIterateOp lhs,
                                         sde::SdeSuIterateOp rhs) {
   std::optional<sde::CommittedSuPhysicalLayout> lhsLayout =
