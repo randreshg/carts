@@ -617,8 +617,7 @@ computeIteratorTypes(unsigned numDims, ArrayRef<AffineMap> outputMaps,
   }
 }
 
-// AffineDimOffset and extractDimOffset are defined below the anonymous
-// namespace as public functions declared in SuLoopAccessAnalysis.h.
+// AffineDimOffset and extractDimOffset live in AffineIndexUtils.
 
 static void appendNestedForIvs(Block &body, SmallVectorImpl<Value> &ivs) {
   llvm::SmallPtrSet<Value, 8> seen;
@@ -1168,53 +1167,6 @@ findContractionTilingCandidate(SdeSuIterateOp iterOp) {
   }
 
   return candidate;
-}
-
-std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr) {
-  if (auto dimExpr = dyn_cast<AffineDimExpr>(expr))
-    return AffineDimOffset{dimExpr.getPosition(), 0};
-  if (auto cstExpr = dyn_cast<AffineConstantExpr>(expr))
-    return AffineDimOffset{std::nullopt, cstExpr.getValue()};
-
-  auto binExpr = dyn_cast<AffineBinaryOpExpr>(expr);
-  if (!binExpr)
-    return std::nullopt;
-
-  auto lhs = extractDimOffset(binExpr.getLHS());
-  auto rhs = extractDimOffset(binExpr.getRHS());
-  if (!lhs || !rhs)
-    return std::nullopt;
-
-  switch (binExpr.getKind()) {
-  case AffineExprKind::Add:
-    if (lhs->dim && rhs->dim)
-      return std::nullopt;
-    return AffineDimOffset{lhs->dim ? lhs->dim : rhs->dim,
-                           lhs->offset + rhs->offset};
-  case AffineExprKind::Mul: {
-    if (lhs->dim && !rhs->dim)
-      return AffineDimOffset{*lhs->dim, lhs->offset * rhs->offset};
-    if (rhs->dim && !lhs->dim)
-      return AffineDimOffset{*rhs->dim, rhs->offset * lhs->offset};
-    return std::nullopt;
-  }
-  case AffineExprKind::FloorDiv:
-  case AffineExprKind::Mod:
-    if (!lhs->dim || rhs->dim || rhs->offset == 0)
-      return std::nullopt;
-    return AffineDimOffset{*lhs->dim, 0};
-  default:
-    return std::nullopt;
-  }
-}
-
-bool hasConstantOffsets(AffineMap map) {
-  for (AffineExpr result : map.getResults()) {
-    auto dimOffset = extractDimOffset(result);
-    if (dimOffset && dimOffset->dim && dimOffset->offset != 0)
-      return true;
-  }
-  return false;
 }
 
 std::optional<SuLoopAccessSummary>

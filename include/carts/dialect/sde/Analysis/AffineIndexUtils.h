@@ -17,6 +17,19 @@
 namespace mlir {
 namespace carts::sde {
 
+/// Affine expression normalized to one loop dim plus a constant offset.
+struct AffineDimOffset {
+  std::optional<unsigned> dim;
+  int64_t offset = 0;
+};
+
+/// Extract a single-dim + constant form from an affine expression.
+std::optional<AffineDimOffset> extractDimOffset(AffineExpr expr);
+
+/// Check whether an indexing map contains any non-zero constant stencil
+/// offsets of the form `dim + c` where c != 0.
+bool hasConstantOffsets(AffineMap map);
+
 /// Best-effort affine expression for `value` over dispatch `ivs`.
 std::optional<AffineExpr> tryGetAffineExpr(Value value, ArrayRef<Value> ivs,
                                              MLIRContext *ctx);

@@ -43,9 +43,8 @@ attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21
   matmul column loops via upstream `tilePerfectlyNested` when inner nests are
   `affine.for` (owner tile loops still scf). Shared
   `AffineIndexUtils::tryGetAffineExpr` replaces the duplicated SDE parser;
-  `appendNestedForIvs` collects `affine.for` IVs; direct matmul Interchange
-  rewrites affine j-k nests to scf k-j (S4d re-raise recovers affine); hand-rolled
-  `extractDimOffset` still used for lowered `memref` paths; stencil halo
+  `extractDimOffset`/`hasConstantOffsets` consolidated into `AffineIndexUtils`
+  (pending upstream `MemRefAccess`/`ValueBounds` replacement); stencil halo
   interchange uses upstream `permuteLoops` on `affine.for` nests; Interchange/Tiling
   skip waits on committed CU `groupBlockCount`, not layout-root shape recovery alone.
 - Op-level verify fold: 5 SDE verify passes remain (target ≈2 + residuals).
