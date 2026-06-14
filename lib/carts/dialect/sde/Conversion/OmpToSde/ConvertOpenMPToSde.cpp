@@ -51,8 +51,8 @@ ARTS_DEBUG_SETUP(convert_openmp_to_sde);
 
 #include <optional>
 
+#include "carts/dialect/sde/Utils/PolygeistToSdeUtils.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
-#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 static llvm::Statistic numParallelConverted{
@@ -89,13 +89,6 @@ static SmallVector<Value> ensureIndexRange(OpBuilder &b, Location loc,
   for (Value v : vals)
     result.push_back(ensureIndex(b, loc, v));
   return result;
-}
-
-static bool isInsideHostOpenMPIsland(Operation *op) {
-  for (Operation *cur = op; cur; cur = cur->getParentOp())
-    if (cur->hasAttr(sde::AttrNames::KeepHostOpenMP))
-      return true;
-  return false;
 }
 
 static bool hasWorkAfterInParentBlock(Operation *op) {
@@ -400,7 +393,7 @@ struct OMPParallelToSdePattern : public OpRewritePattern<omp::ParallelOp> {
 
   LogicalResult matchAndRewrite(omp::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     ARTS_INFO("Converting omp.parallel to SDE");
     auto loc = op.getLoc();
@@ -433,7 +426,7 @@ struct MasterToSdePattern : public OpRewritePattern<omp::MasterOp> {
 
   LogicalResult matchAndRewrite(omp::MasterOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
@@ -461,7 +454,7 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
 
   LogicalResult matchAndRewrite(omp::SingleOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     auto loc = op.getLoc();
     auto *ctx = rewriter.getContext();
@@ -490,7 +483,7 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
 
   LogicalResult matchAndRewrite(omp::WsloopOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     ARTS_INFO("Converting omp.wsloop to sde.su_iterate");
     auto loc = op.getLoc();
@@ -575,7 +568,7 @@ struct TaskToSdePattern : public OpRewritePattern<omp::TaskOp> {
 
   LogicalResult matchAndRewrite(omp::TaskOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     ARTS_INFO("Converting omp.task to sde.cu_task");
     auto loc = op.getLoc();
@@ -641,7 +634,7 @@ struct TaskloopToSdePattern : public OpRewritePattern<omp::TaskloopOp> {
 
   LogicalResult matchAndRewrite(omp::TaskloopOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     ARTS_INFO("Converting omp.taskloop to sde.su_iterate");
     auto loc = op.getLoc();
@@ -732,7 +725,7 @@ struct AtomicUpdateToSdePattern : public OpRewritePattern<omp::AtomicUpdateOp> {
 
   LogicalResult matchAndRewrite(omp::AtomicUpdateOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     ARTS_INFO("Converting omp.atomic.update to sde.cu_atomic");
     auto &region = op.getRegion();
@@ -791,7 +784,7 @@ struct TerminatorToSdePattern : public OpRewritePattern<omp::TerminatorOp> {
 
   LogicalResult matchAndRewrite(omp::TerminatorOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     sde::SdeYieldOp::create(rewriter, op.getLoc(), ValueRange{});
     rewriter.eraseOp(op);
@@ -805,7 +798,7 @@ struct BarrierToSdePattern : public OpRewritePattern<omp::BarrierOp> {
 
   LogicalResult matchAndRewrite(omp::BarrierOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     ARTS_INFO("Converting omp.barrier to sde.su_barrier");
     rewriter.replaceOpWithNewOp<sde::SdeSuBarrierOp>(op, ValueRange{},
@@ -820,7 +813,7 @@ struct TaskwaitToSdePattern : public OpRewritePattern<omp::TaskwaitOp> {
 
   LogicalResult matchAndRewrite(omp::TaskwaitOp op,
                                 PatternRewriter &rewriter) const override {
-    if (isInsideHostOpenMPIsland(op.getOperation()))
+    if (sde::isInsideHostOpenMPIsland(op.getOperation()))
       return failure();
     ARTS_INFO("Converting omp.taskwait to sde.su_barrier");
     rewriter.replaceOpWithNewOp<sde::SdeSuBarrierOp>(op, ValueRange{},

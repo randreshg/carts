@@ -6,7 +6,7 @@
 
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
-#include "carts/dialect/sde/Utils/SdeAttrNames.h"
+#include "carts/dialect/sde/Utils/PolygeistToSdeUtils.h"
 #define GEN_PASS_DEF_VERIFYARTSOBJECTSONLY
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
@@ -19,13 +19,6 @@ using namespace mlir::carts;
 using namespace mlir::carts::arts;
 
 namespace {
-
-static bool isInsideHostOpenMPIsland(Operation *op) {
-  for (Operation *cur = op; cur; cur = cur->getParentOp())
-    if (cur->hasAttr(sde::AttrNames::KeepHostOpenMP))
-      return true;
-  return false;
-}
 
 // The "no internode task depends on a coarse aggregate DB" invariant is
 // verified in VerifyArtsCdag: it must run AFTER
@@ -47,7 +40,7 @@ static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
     }
 
     if (op->getDialect() && op->getDialect()->getNamespace() == "omp") {
-      if (isInsideHostOpenMPIsland(op))
+      if (sde::isInsideHostOpenMPIsland(op))
         return;
       op->emitError() << "OpenMP operation '" << op->getName()
                       << "' remains after the SDE-to-ARTS boundary";
@@ -55,7 +48,7 @@ static LogicalResult verifyArtsObjectsOnly(ModuleOp module) {
     }
 
     if (isa<scf::ParallelOp>(op)) {
-      if (isInsideHostOpenMPIsland(op))
+      if (sde::isInsideHostOpenMPIsland(op))
         return;
       op->emitError()
           << "scf.parallel remains after the SDE-to-ARTS boundary; "

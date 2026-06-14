@@ -29,6 +29,10 @@ SmallVector<Value> clampDepIndices(Value source, ArrayRef<Value> indices,
 /// Return true when `op` is nested inside an OMP dialect region.
 bool isInsideOmpRegion(Operation *op);
 
+/// Return true when `op` is nested inside a region marked to preserve host
+/// OpenMP instead of converting it to SDE/ARTS.
+bool isInsideHostOpenMPIsland(Operation *op);
+
 /// Return true when `op` transitively contains any OMP dialect operation.
 bool containsOmpOp(Operation *op);
 

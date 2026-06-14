@@ -5,6 +5,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/sde/Utils/PolygeistToSdeUtils.h"
+#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "llvm/ADT/STLExtras.h"
@@ -137,6 +138,13 @@ bool isInsideOmpRegion(Operation *op) {
         ancestor->getDialect()->getNamespace() == "omp")
       return true;
   }
+  return false;
+}
+
+bool isInsideHostOpenMPIsland(Operation *op) {
+  for (Operation *cur = op; cur; cur = cur->getParentOp())
+    if (cur->hasAttr(AttrNames::KeepHostOpenMP))
+      return true;
   return false;
 }
 
