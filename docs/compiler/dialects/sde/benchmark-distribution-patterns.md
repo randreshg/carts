@@ -595,3 +595,32 @@ Either path is multi-week foundational work touching `LayoutAssignment`,
 together, gated on 2n checksum (a mis-attributed owner dim or accumulator
 miscompiles silently). It is correctly out of scope for an incremental change
 and must not be landed piecemeal on `v4`.
+
+### Addendum — the coherent fact-durability approach was also attempted, and also bottoms out
+
+A second, principled attempt implemented the "preserve facts through RankExpandMu"
+fix (approach A above) end to end: stamp `structuredClassification` durably,
+make `queryStructuredClassification` prefer the stamp, fix the replicated-array
+false-positive in `recognizeExpandedBlockGridMu`, and — the key missing piece —
+**stamp the owner-dim identity as a durable `ownerDims` attr on every SU that
+accesses an expanded MU** (collected pre-rewrite, because `rewriter.apply(mu)`
+invalidates `mu.getMemref().getUsers()` — iterating it afterward segfaults).
+
+This **cleared the coarse-boundary blocker** that had stuck the per-gate attempt:
+the pure block-parallel init writer finally realized as a windowed (not coarse)
+SU. gemm 2n then advanced to a *new* verifier error at the init writer
+(`gemm.c:19`): **`groupBlockCount whose rank does not match the committed owner
+rank`** — the init writer carries `groupBlockCount=[2,1]` (per-array-dim, rank 2)
+while the recovered owner identity is `[0]` (per-owner, rank 1). The distribution
+facts are stored in **mutually inconsistent formats** (per-array-dim vs
+per-owner), and stamping any one of them coherently surfaces the next mismatch.
+
+Conclusion across both attempts (~60 build cycles): Category-A 2n is not a finite
+bug list. Every layer cleared exposes another fact-reconciliation gap because the
+v4 pipeline lacks a single canonical, durable representation of the distribution
+facts (classification, owner dims, block extents, grid counts) that all of
+LayoutAssignment / RankExpandMu / MuAccessWindow / the SdeToArtsBoundary passes
+agree on. The real work is that canonical-fact redesign, validated end to end on
+2n **checksum** (compile success is necessary but not sufficient — a mis-stamped
+owner dim miscompiles silently). All experiments were reverted; baseline
+preserved (1n 21/21, SDE lit 29/29).
