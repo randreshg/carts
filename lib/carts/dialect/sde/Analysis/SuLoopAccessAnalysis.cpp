@@ -452,6 +452,12 @@ collectMemrefAccessesImpl(Operation *scope, Block &body, ArrayRef<Value> ivs,
     if (op.hasTrait<OpTrait::IsTerminator>())
       continue;
 
+    // arts.db_access_window is a short-lived SDE-to-ARTS boundary carrier (not a
+    // data access) with a MemWrite effect; skip it by name (no ARTS dep) so a
+    // shared witness SU stays classifiable after the boundary annotates its body.
+    if (op.getName().getStringRef() == "arts.db_access_window")
+      continue;
+
     if (isLocalScratchEffect(&op, scope))
       continue;
 

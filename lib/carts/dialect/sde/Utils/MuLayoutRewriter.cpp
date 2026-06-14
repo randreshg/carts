@@ -650,6 +650,7 @@ recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc) {
 
   std::optional<ExpandedBlockGridMu> result;
   std::optional<ComparableBlockGrid> committedLayout;
+  bool sawReplicatedReadFact = false;
   for (Operation *user : muAlloc.getMemref().getUsers()) {
     auto root = dyn_cast<SdeArrayLayoutRootOp>(user);
     if (!root || static_cast<int64_t>(root.getArrayId()) != *arrayId)
@@ -659,8 +660,19 @@ recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc) {
     SdeSuIterateOp source = root->getParentOfType<SdeSuIterateOp>();
     std::optional<LayoutGraphFact> fact =
         findBlockLayoutFact(source, *arrayId, LayoutGraphRole::read);
-    if (!fact)
+    if (!fact) {
+      // A committed replicated read fact (no owner dims) proves this MU is not an
+      // expanded block grid; record it so the type-shape fallback below does not
+      // misread a square logical array as a 1-D owner grid.
+      if (source)
+        for (const LayoutGraphFact &any :
+             parseArrayLayoutFacts(source.getArrayLayoutAttr()))
+          if (any.id == *arrayId && any.role == LayoutGraphRole::read &&
+              (any.layoutKind == ArrayLayoutKind::replicated ||
+               any.ownerDims.empty()))
+            sawReplicatedReadFact = true;
       continue;
+    }
     std::optional<ExpandedBlockGridMu> expanded =
         recognizeExpandedBlockGridMuFromShape(fact->ownerDims,
                                               committedBlockShape(*fact),
@@ -677,6 +689,11 @@ recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc) {
   }
   if (result)
     return result;
+  // Do not guess a block grid from the raw type when committed facts say the
+  // array is replicated: type-only recovery cannot tell a square logical array
+  // from a 1-D owner grid, and guessing strips the replicated read windows.
+  if (sawReplicatedReadFact)
+    return std::nullopt;
   if (std::optional<RecoveredMuPhysicalLayout> recovered =
           recoverMuPhysicalLayoutFromExpandedType(muType))
     return recognizeExpandedBlockGridMuFromShape(

@@ -72,6 +72,25 @@ struct SdeRankExpandMuPass
       if (!classification)
         continue;
 
+      // Commit the classification as a durable fact before the rewrite turns the
+      // body into div/rem block form that analyzeSuLoopAccesses cannot re-derive.
+      // 1n-inert: this loop only runs for committed block layouts.
+      if (!committed->writer.getStructuredClassificationAttr())
+        committed->writer.setStructuredClassificationAttr(
+            carts::sde::SdeStructuredClassificationAttr::get(
+                committed->writer.getContext(), *classification));
+
+      // Collect every SU accessing this MU BEFORE the rewrite invalidates
+      // mu.getMemref().getUsers().
+      llvm::SmallVector<carts::sde::SdeSuIterateOp, 4> accessorSus;
+      {
+        llvm::SmallPtrSet<Operation *, 4> seen;
+        for (Operation *user : mu.getMemref().getUsers())
+          if (auto su = user->getParentOfType<carts::sde::SdeSuIterateOp>())
+            if (seen.insert(su.getOperation()).second)
+              accessorSus.push_back(su);
+      }
+
       std::unique_ptr<carts::sde::MuAccessIndexer> indexer =
           carts::sde::makeMuAccessIndexer(*classification, committed->layout);
       carts::sde::MuLayoutRewriter rewriter(committed->layout, *indexer);
@@ -92,6 +111,14 @@ struct SdeRankExpandMuPass
         blockShape[dim] = committed->layout.blockExtents[slot];
       carts::sde::rewriteWriterArrayLayoutToPhysicalShape(
           committed->writer, ownerDims, blockShape);
+      (void)accessorSus;
+      // NOTE: owner-dim recovery for a separate init writer is handled
+      // per-dependency at the SDE-to-ARTS boundary (getArrayOwnerDimsForWindow's
+      // ownerDimCount fallback), NOT by stamping an ownerDims attr on accessor
+      // SUs here: that attr is read by SdeRedistribute and the boundary halo
+      // path, so stamping it on an SU that shares an array with a stencil diverts
+      // the stencil from its committed halo/movement window path. Keeping owner
+      // identity per-dependency leaves stencils untouched.
     }
 
     if (failed)

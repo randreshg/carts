@@ -1383,12 +1383,22 @@ convertSuIterate(sde::SdeSuIterateOp source,
   if (sde::SdeCuRegionOp computeCu = sde::findSuComputeCuRegion(source)) {
     if (auto groupCounts =
             readI64ArrayAttr(computeCu.getGroupBlockCountAttr())) {
-      if (groupCounts->size() != ownerDimCount)
+      // groupBlockCount may be committed per-owner-slot (size == ownerDimCount)
+      // or per-array-dim (a full-rank elementwise writer commits one count per
+      // logical dim, with count 1 on undistributed dims). Accept both: index
+      // per-array-dim counts by the resolved owner dims.
+      bool perOwner = groupCounts->size() == ownerDimCount;
+      bool perArrayDim =
+          !perOwner && llvm::all_of(ownerSlotDims, [&](int64_t d) {
+            return d >= 0 && static_cast<size_t>(d) < groupCounts->size();
+          });
+      if (!perOwner && !perArrayDim)
         return source.emitOpError()
                << "commits groupBlockCount whose rank does not match the "
                   "committed owner rank";
       for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-        int64_t count = (*groupCounts)[slot];
+        int64_t count = perOwner ? (*groupCounts)[slot]
+                                  : (*groupCounts)[ownerSlotDims[slot]];
         int64_t blockSize = ownerBlockSizes[slot];
         if (count <= 0)
           return source.emitOpError()
@@ -1631,6 +1641,14 @@ convertSuIterate(sde::SdeSuIterateOp source,
         Value remaining = arith::SubIOp::create(
             builder, loc, dep.alloc.getSizes()[slot], offset);
         Value count = arith::SubIOp::create(builder, loc, end, offset);
+        // Bound the dynamic span by the static per-dispatch group count so the
+        // distributed-launch consistency check can prove the acquire's span
+        // upper bound (and thus its owner-local routing) — otherwise the purely
+        // dynamic min(remaining, end-offset) has no statically known bound and
+        // an owner-local writer is conservatively rejected as multi-owner.
+        Value staticBound =
+            createConstantIndex(builder, loc, staticGroupCount);
+        count = arith::MinUIOp::create(builder, loc, count, staticBound);
         sizes.push_back(arith::MinUIOp::create(builder, loc, remaining, count));
         offsets.push_back(offset);
         depGroupBlockCounts[slot] = staticGroupCount;

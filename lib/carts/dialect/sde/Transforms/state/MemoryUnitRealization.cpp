@@ -188,7 +188,13 @@ static bool canRealizeCommittedOwnerSlices(sde::SdeSuIterateOp op) {
 
   auto classification = op.getStructuredClassification();
   if (!classification)
-    return getUnclassifiedOwnerSliceLayout(op).has_value();
+    // Admit an unclassified kernel with a consistent owner-dim output shape and
+    // no reduction accumulator (matmul-like reads inputs it does not write, so
+    // the in-place getUnclassifiedOwnerSliceLayout rejects it). 2n-only.
+    return getUnclassifiedOwnerSliceLayout(op).has_value() ||
+           (op.getReductionAccumulators().empty() &&
+            sde::findConsistentLoopIndexedOutputShapeWithOwnerDims(op)
+                .has_value());
 
   switch (*classification) {
   case sde::SdeStructuredClassification::matmul:

@@ -665,9 +665,37 @@ struct LayoutAssignmentPass
                                        layoutForSu.blockShape.end()),
                SmallVector<int64_t, 4>(profile.staticShape.begin(),
                                        profile.staticShape.end())});
-        } else {
-          updates[suId].entries.push_back(entry);
         }
+        // Original behavior: non-writerViaMu accessors (readers, replicated
+        // writers) author their arrayLayout entry. ADDITIONALLY (Class-A), a pure
+        // block-parallel writer-via-MU authors its write entry so its owner rank
+        // is pinned for the 2n boundary — but NOT a stencil-read array's writer:
+        // that array keeps its committed halo/movement realization, and authoring
+        // a plain write arrayLayout for it diverts SdeRedistribute (movement edge
+        // ends up unscoped). block-contraction (matmul k-reduction) writers also
+        // stay on the writerCommits-only path. 1n-inert.
+        // ADDITIONALLY (Class-A), a pure block-parallel ELEMENTWISE writer
+        // authors its write entry so its owner rank is pinned for the 2n boundary
+        // (e.g. a separate init writer whose committed witness is a different
+        // reader SU). Restrict to elementwise: a reduction output carries
+        // partial-reduction owner facts and authoring a plain write arrayLayout
+        // for it changes its committed owner grain; a stencil array keeps its
+        // halo/movement realization. Both are excluded.
+        bool blockParallelWriter =
+            writerViaMuType &&
+            layoutForSu.kind == sde::ArrayLayoutKind::blockParallel;
+        bool reductionWriter = false;
+        if (blockParallelWriter && suId < relations.schedulingUnits.size()) {
+          std::optional<sde::SdeStructuredClassification> wc =
+              sde::queryStructuredClassification(
+                  relations.schedulingUnits[suId]);
+          reductionWriter =
+              wc && *wc == sde::SdeStructuredClassification::reduction;
+        }
+        if (!writerViaMuType ||
+            (blockParallelWriter && !preserveFullWriterOwnerTile &&
+             !reductionWriter))
+          updates[suId].entries.push_back(entry);
         updates[suId].roots.push_back(
             {profile.root, arrayId,
              isWrite ? sde::SdeAccessMode::write : sde::SdeAccessMode::read});
