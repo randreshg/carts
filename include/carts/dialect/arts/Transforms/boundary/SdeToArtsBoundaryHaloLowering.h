@@ -7,6 +7,7 @@
 #define CARTS_DIALECT_ARTS_TRANSFORMS_BOUNDARY_SDETOARTSBOUNDARYHALOLOWERING_H
 
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/ArrayRef.h"
 
@@ -38,6 +39,18 @@ void emitCompactHaloCopy(OpBuilder &builder, Location loc,
                          ArrayRef<int64_t> sourceOffsets,
                          ArrayRef<Value> elementExtents, Value sourcePayload,
                          Value compactPayload);
+
+FailureOr<std::optional<HaloLoadRewrite>>
+classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
+                       const Halo2DTaskWork &work, Value rowIv, Value colIv);
+
+FailureOr<std::optional<HaloNdLoadRewrite>>
+classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
+                       const HaloNdTaskWork &work,
+                       ArrayRef<Value> ownerLoopIvs);
+
+FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
+                                      DirectDepSpec dep, Block *computeBlock);
 
 } // namespace carts::arts::boundary
 } // namespace mlir
