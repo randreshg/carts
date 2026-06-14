@@ -14,6 +14,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
+#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Operation.h"
@@ -601,6 +602,9 @@ bool muRootHasUnsupportedUse(Value root) {
     if (isa<memref::LoadOp, memref::StoreOp, memref::DeallocOp,
             SdeArrayLayoutRootOp, SdeSuHaloOp, SdeSuReduceScatterOp>(user))
       continue;
+    if (isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(
+            user))
+      continue;
     if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(user))
       if (isLayoutInvariantBasePointer(m2p))
         continue;
@@ -757,6 +761,8 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
   // no mutation.
   llvm::SmallVector<memref::LoadOp, 8> loads;
   llvm::SmallVector<memref::StoreOp, 8> stores;
+  llvm::SmallVector<affine::AffineReadOpInterface, 8> affineReads;
+  llvm::SmallVector<affine::AffineWriteOpInterface, 8> affineWrites;
   llvm::SmallVector<memref::DeallocOp, 2> deallocs;
   llvm::SmallVector<polygeist::Memref2PointerOp, 2> basePointers;
   llvm::SmallVector<SdeArrayLayoutRootOp, 4> provenance;
@@ -784,6 +790,20 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
           store.getIndices().size() != layout.logicalRank())
         return failure();
       stores.push_back(store);
+      continue;
+    }
+    if (auto read = dyn_cast<affine::AffineReadOpInterface>(user)) {
+      if (read.getMemRef() != oldMemref ||
+          read.getAffineMap().getNumResults() != layout.logicalRank())
+        return failure();
+      affineReads.push_back(read);
+      continue;
+    }
+    if (auto write = dyn_cast<affine::AffineWriteOpInterface>(user)) {
+      if (write.getMemRef() != oldMemref ||
+          write.getAffineMap().getNumResults() != layout.logicalRank())
+        return failure();
+      affineWrites.push_back(write);
       continue;
     }
     // Only layout-invariant base-pointer checks can follow the expanded memref.
@@ -819,6 +839,20 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
     load.erase();
   }
 
+  for (affine::AffineReadOpInterface read : affineReads) {
+    OpBuilder b(read.getOperation());
+    std::optional<SmallVector<Value, 8>> expanded = affine::expandAffineMap(
+        b, read->getLoc(), read.getAffineMap(), read.getMapOperands());
+    if (!expanded)
+      return failure();
+    llvm::SmallVector<Value, 6> idx =
+        indexer.localize(*expanded, b, read->getLoc());
+    auto newLoad =
+        memref::LoadOp::create(b, read->getLoc(), newMemref, ValueRange(idx));
+    read.getValue().replaceAllUsesWith(newLoad.getResult());
+    read->erase();
+  }
+
   // Rewrite writes.
   for (memref::StoreOp store : stores) {
     OpBuilder b(store);
@@ -827,6 +861,19 @@ LogicalResult MuLayoutRewriter::apply(SdeMuAllocOp muAlloc) {
     memref::StoreOp::create(b, store.getLoc(), store.getValueToStore(),
                             newMemref, ValueRange(idx));
     store.erase();
+  }
+
+  for (affine::AffineWriteOpInterface write : affineWrites) {
+    OpBuilder b(write.getOperation());
+    std::optional<SmallVector<Value, 8>> expanded = affine::expandAffineMap(
+        b, write->getLoc(), write.getAffineMap(), write.getMapOperands());
+    if (!expanded)
+      return failure();
+    llvm::SmallVector<Value, 6> idx =
+        indexer.localize(*expanded, b, write->getLoc());
+    memref::StoreOp::create(b, write->getLoc(), write.getValueToStore(),
+                            newMemref, ValueRange(idx));
+    write->erase();
   }
 
   // Preserve allocation identity checks after replacing the MU root.
