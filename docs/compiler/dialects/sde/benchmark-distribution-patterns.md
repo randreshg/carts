@@ -510,3 +510,88 @@ because a mis-attributed accumulator would miscompile silently.
 
 This is consistent with the standing classification of the matmul 2n scalers as
 architecture-scale (see §P6 and the megalarge scaling history).
+
+---
+
+## Appendix N — Category-A 2n distributed-WRITE realization: the full 9-layer trace
+
+Appendix M established that the Category-A kernels are unclassified at 2n. This
+appendix records the *complete* downstream chain, mapped function-by-function by
+instrumenting the live v4 passes at HEAD `aecc7cb1d` with the path-clearing
+experiments (Class-A write-layout authoring + the MemoryUnitRealization
+unclassified-admission relaxation) applied. Every experimental patch was
+**reverted**; baseline preserved (1n 21/21, SDE lit 29/29). This is the
+implementation roadmap for the foundational fix — it is *not* a single patch.
+
+### The unifying root cause
+
+The v4 SDE→ARTS distributed-write path assumes facts authored at `sde-planning`
+survive to the ARTS boundary. They do not: **RankExpandMu deliberately strips
+the committed `arrayLayout`/owner facts** (design intent — "owner dims are
+`recover(structure)`", `RankExpandMu.cpp` header), rewriting bodies into
+`div`/`rem` block-coordinate form. But the structure-recovery helpers that are
+supposed to replace those facts are incomplete, so the fact is lost at every
+layer that re-derives it. The same gap recurs for **classification, owner-dim
+identity, and block geometry**.
+
+### The chain (each layer reached only after clearing the one above)
+
+1. **`LayoutAssignment.cpp:656-668`** — a `writerViaMu` block-parallel writer
+   never authors its write-role `arrayLayout` (routed to `writerCommits` only).
+   Clearing it advances past the init-writer owner-rank error.
+2. **`MemoryUnitRealization.cpp:185-206`** — `canRealizeCommittedOwnerSlices`
+   fail-closes on the now-distributed matmul because it is unclassified and the
+   unclassified path requires in-place elementwise shapes. Relaxing it to admit
+   an owner-consistent, accumulator-free output advances past it.
+3. **Classification is never durable.** `queryStructuredClassification`
+   (`SuLoopAccessQuery.cpp:274`) re-derives from the body every call and
+   *prefers* re-derivation over the stamped attr (`stamped=-1` everywhere,
+   measured). Post-RankExpandMu the body is `div`/`rem` (still affine, so
+   re-derivation can succeed with a *wrong* answer) or carries
+   `arts.db_access_window` markers (`MemWrite` effect → `collectMemrefAccesses`
+   default-bail). Net: witnesses go unclassified/misclassified at the boundary.
+4. **`recognizeExpandedBlockGridMu` false-positives a replicated array.** For
+   replicated B (`memref<128x128xf32>`), the reader fact is replicated → no
+   block fact → it falls back to `recoverMuPhysicalLayoutFromExpandedType`, which
+   reads the *square logical* `128x128` as a 1-D owner grid (`ownerDims=[0]`,
+   `blockExtents=[128]`, `gridCounts=[128]`). `findOwnerIterationExtents` then
+   needs an extent of 16384 and fails → B starved of windows.
+5. **`hasUnsupportedCommittedWriter`** (`MuAccessWindow.cpp:150`) returns true
+   when the committed writer is unclassified (layer 3), so `queryAccessWindows`
+   *skips the write-window spec* for the init writer.
+6. Even with the write spec emitted (after clearing 3-5), **`readCommitted­Physical­Layout`** (`SdeToArtsBoundaryDepAnalysis.cpp:77`) returns nullopt: the
+   write-window dep has `ownerDimCount=1` and `validExtents` but **no owner-dim
+   identity** (`arrayOwnerDims` null, SU owner attr null, `recoverCommitted­Physical­Layout` fails — the writer's fact was stripped at layer's root).
+7. **`getArrayOwnerDimsForWindow`** (`:423`) returns empty because
+   `source.getArrayLayoutAttr()` no longer carries the writer fact. Adding a
+   structure-recovery fallback from the window's expanded MU type still did not
+   resolve the owner dims — the window's `mu` is cast back to the logical type
+   before the boundary reads it, so the expanded grid is no longer visible at
+   that point (layer 8, unresolved).
+
+After all of 1-7 were cleared, **gemm 2n still failed to compile** at the same
+`recordCoarseSuAccess` site — confirming at least one further unresolved layer.
+Compile success is also not the finish line: 2n **checksum** correctness is a
+separate gate untouched here.
+
+### What the fix actually is
+
+A coherent **fact-durability** design, not per-gate patches. Two viable shapes:
+- **(A) Preserve committed facts through RankExpandMu** — keep the
+  classification, owner dims, and block geometry as durable attrs the boundary
+  reads directly (stop re-deriving from a mutated body). Aligns with the charter
+  ("commit facts, consume them; do not re-derive"). The reverted experiments
+  proved each individual fact can be stamped 1n-inert, but they must be
+  preserved *coherently across all layers* to compose.
+- **(B) Make structure-recovery total and correct** — fix
+  `recoverMuPhysicalLayoutFromExpandedType` / `recognizeExpandedBlockGridMu` to
+  never confuse a replicated logical array with an owner grid, to fire for write
+  windows, and to read `div`/`rem` classification — and ensure the expanded type
+  is still visible at every boundary read (it is cast back to logical too early).
+
+Either path is multi-week foundational work touching `LayoutAssignment`,
+`MemoryUnitRealization`, `RankExpandMu`, `SuLoopAccess{Analysis,Query}`,
+`MuLayoutRewriter`, `MuAccessWindow`, and the `SdeToArtsBoundary*` passes
+together, gated on 2n checksum (a mis-attributed owner dim or accumulator
+miscompiles silently). It is correctly out of scope for an incremental change
+and must not be landed piecemeal on `v4`.
