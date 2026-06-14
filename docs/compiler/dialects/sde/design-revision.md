@@ -1893,9 +1893,23 @@ pattern channel is **gated-irreducible (boundary-translated, consume-and-erase)*
 - **fate-3 GATED — boundary-translated, consume-and-erase, NOT durable:**
   `depPattern` (translation of `sde::SdePattern`; read at the boundary, never
   re-stamped onto alloc/acquire/edt/epoch as a cache).
-- **delete-dead** (zero branching readers): `compact_halo_payload`,
-  `perBlockSummingSettle`, `perBlockHaloExchange`, `compactHaloPack`,
-  `ownerLocalWriterSplit`, `distribution_version`, `vectorizeWidth`, `unrollFactor`.
+- **delete-dead** (zero branching readers). **[code-verified 2026-06-14 — the
+  original list was partly wrong; corrected here]:**
+  - **DELETED** (truly dead, byte-identical, lit+1n-21/21 green): `vectorizeWidth`
+    + `unrollFactor` (copy-through only in `PartialReductionSplit`, NOT
+    zero-reader as first claimed — they had a non-branching get→set copy),
+    `perBlockSummingSettle` + `perBlockHaloExchange` (write-only: set in
+    BlockContraction/PartialReductionSplit/RealizeEdtDistribution, no getter/string
+    read anywhere, no test).
+  - **NOT dead — keep**: `distribution_version` (9 live refs).
+  - **deferred — write-only TODAY but tested boundary fixtures + scaffolding for
+    the in-progress distributed compact-halo / owner-local-writer-split
+    realization**: `compact_halo_payload`, `compactHaloPack`, `ownerLocalWriterSplit`.
+    Set by `SdeToArtsBoundaryAccessLowering`, checked by 3 conversion lit tests; do
+    NOT delete until the distributed realization that consumes them is either built
+    or formally dropped, else the S17-area work re-adds them.
+  - **lesson**: the "delete-dead" labels are not reliable without per-attr
+    `get*Attr`/`set*Attr`/raw-string/test verification — verify before deleting.
 - **de-attribute — pass-local scratch, must NOT be an op attr:** the
   `partialReductionSplit*` family (`partialReductionSplitRequired`/`...Dims`/
   `...Factor`/`...OwnerTaskCount`/`...TargetWorkerCount`) — produced, consumed, and

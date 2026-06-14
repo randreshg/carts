@@ -8,7 +8,9 @@ detailed file:line derivations).
 
 Structural SDE redesign is **live**. Remaining work is affine modernization (S4 main),
 attribute collapse (S13/S14), ARTS audit (Part 8), and scaling levers (S17–S21).
-**Gate:** 51/51 SDE + ARTS dialect lit tests pass.
+**Gate (code-verified 2026-06-14):** 60/60 dialect lit tests pass — SDE 29 / ARTS 21
+/ ARTS-RT 10 — **and** all 21 benchmark kernels compile + run `Correct=YES` at
+1n/small/local (the e2e gate, recovered from 0/21; see the E2E RECOVERY note above).
 
 **E2E RECOVERY (post-`b63e4304d`, commits `27844b9c6`..`d32acbbb5`)** — HEAD was
 lit-green but **e2e-RED: no benchmark compiled** (lit feeds pre-flattened IR). Root
