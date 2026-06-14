@@ -26,6 +26,10 @@ namespace carts::arts {
 /// layout facts needed to create a block DB immediately.
 bool hasPhysicalDbLayoutFacts(Operation *op);
 
+/// Build ceil(value / max(divisor, 1)) for index values.
+Value ceilDivPositiveIndex(OpBuilder &builder, Location loc, Value value,
+                           Value divisor);
+
 /// Resolve explicit owner-dimension and physical-block-shape attrs into a
 /// concrete DB layout for an allocation with the provided logical element
 /// extents.

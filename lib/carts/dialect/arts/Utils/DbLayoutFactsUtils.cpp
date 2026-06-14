@@ -20,15 +20,6 @@ using namespace mlir::carts::arts;
 
 namespace {
 
-static Value ceilDivPositiveIndex(OpBuilder &builder, Location loc, Value value,
-                                  Value divisor) {
-  Value one = createOneIndex(builder, loc);
-  divisor = arith::MaxUIOp::create(builder, loc, divisor, one);
-  Value adjusted = arith::AddIOp::create(
-      builder, loc, value, arith::SubIOp::create(builder, loc, divisor, one));
-  return arith::DivUIOp::create(builder, loc, adjusted, divisor);
-}
-
 static SmallVector<Value, 4>
 materializeIndexConstants(OpBuilder &builder, Location loc,
                           ArrayRef<int64_t> values) {
@@ -57,6 +48,15 @@ bool mlir::carts::arts::hasPhysicalDbLayoutFacts(Operation *op) {
     return false;
   auto partition = alloc.getPartitionMode();
   return partition && usesBlockLayout(*partition) && !alloc.getSizes().empty();
+}
+
+Value mlir::carts::arts::ceilDivPositiveIndex(OpBuilder &builder, Location loc,
+                                              Value value, Value divisor) {
+  Value one = createOneIndex(builder, loc);
+  divisor = arith::MaxUIOp::create(builder, loc, divisor, one);
+  Value adjusted = arith::AddIOp::create(
+      builder, loc, value, arith::SubIOp::create(builder, loc, divisor, one));
+  return arith::DivUIOp::create(builder, loc, adjusted, divisor);
 }
 
 FailureOr<DbPhysicalLayoutFacts>

@@ -11,6 +11,7 @@
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundarySuIterate.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
+#include "carts/dialect/arts/Utils/DbLayoutFactsUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
@@ -220,15 +221,6 @@ int64_t ceilDivPositiveI64(int64_t lhs, int64_t rhs) {
   if (lhs <= 0 || rhs <= 0)
     return 0;
   return (lhs + rhs - 1) / rhs;
-}
-
-Value ceilDivPositiveIndex(OpBuilder &builder, Location loc, Value value,
-                                  Value divisor) {
-  Value one = createOneIndex(builder, loc);
-  divisor = arith::MaxUIOp::create(builder, loc, divisor, one);
-  Value adjusted = arith::AddIOp::create(
-      builder, loc, value, arith::SubIOp::create(builder, loc, divisor, one));
-  return arith::DivUIOp::create(builder, loc, adjusted, divisor);
 }
 
 FailureOr<unsigned>
