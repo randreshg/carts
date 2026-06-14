@@ -624,3 +624,34 @@ agree on. The real work is that canonical-fact redesign, validated end to end on
 2n **checksum** (compile success is necessary but not sufficient — a mis-stamped
 owner dim miscompiles silently). All experiments were reverted; baseline
 preserved (1n 21/21, SDE lit 29/29).
+
+### Addendum 2 — furthest-progress WIP checkpoint (branch `wt/carts-v4-category-a-2n-wip`)
+
+A third pass drove the coherent fact-durability stack deeper, clearing ~14
+previously-blocking layers and advancing gemm 2n from "init owner-rank error" all
+the way into **ARTS EDT realization**. The full stack is preserved on
+`wt/carts-v4-category-a-2n-wip` (commit `7a77486d5`); it is NOT mergeable to v4
+(gemm 2n still fails; SDE lit 28/29 — the structural-pipeline CHECK needs updating
+for the authored write arrayLayout). Layers cleared, in order:
+
+1. author write-role arrayLayout for block-parallel writers (LayoutAssignment)
+2. admit owner-consistent unclassified output (MemoryUnitRealization)
+3. classification durability — skip `arts.db_access_window` in the classifier;
+   `queryStructuredClassification` prefers the stamped fact
+4. don't type-guess a block grid for a replicated array (recognizeExpandedBlockGridMu)
+5. stamp classification + owner-dims on **all accessor SUs**, collected
+   pre-rewrite (RankExpandMu) — the witness can be the matmul reader, but the
+   init writer is a separate SU that the boundary realizes on its own
+6. accept per-array-dim `groupBlockCount` by indexing with the owner dims
+   (the boundary owner-route verifier)
+7. let a fully-replicated init write earn replicated windows (MuAccessWindow)
+
+**Frontier (layer ~14, unresolved):** a replicated array (e.g. gemm's `B`) that is
+both written by a replicated init writer and read by a block-distributed consumer
+has no coherent realization path. Once `B` earns windows it is no longer coarse,
+so its replicated *writer* SU is rejected by the coarse path; but leaving `B`
+coarse makes the consumer EDT try to *capture* its pointer (EDTs must receive DB
+state as a dependency). The windowed SU path and the coarse SU path each handle
+only part of the replicated case; neither admits "replicated DB as an EDT
+dependency in both writer and reader." Resolving this — and every layer above it
+coherently — is the canonical-fact redesign, validated on 2n **checksum**.
