@@ -5,11 +5,16 @@
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
+#include "carts/dialect/sde/Analysis/AffineIndexUtils.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 
 #include "carts/utils/ValueAnalysis.h"
+#include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -290,27 +295,32 @@ static bool collectInner(Block &body, LoopNestInfo &info) {
       info.ivs.push_back(innerFor.getInductionVar());
       return collectInner(*innerFor.getBody(), info);
     }
+    if (auto innerFor = dyn_cast<affine::AffineForOp>(ops.front())) {
+      info.ivs.push_back(innerFor.getInductionVar());
+      return collectInner(*innerFor.getBody(), info);
+    }
   }
 
   if (ops.size() > 1) {
     SmallVector<scf::ForOp, 2> nestedFors;
+    SmallVector<affine::AffineForOp, 2> nestedAffineFors;
     SmallVector<Operation *> sideEffectsAroundInnerLoop;
     for (Operation *op : ops) {
       if (auto nestedFor = dyn_cast<scf::ForOp>(op)) {
         nestedFors.push_back(nestedFor);
         continue;
       }
+      if (auto nestedFor = dyn_cast<affine::AffineForOp>(op)) {
+        nestedAffineFors.push_back(nestedFor);
+        continue;
+      }
       if (!isEffectFreeBoundaryOp(op))
         sideEffectsAroundInnerLoop.push_back(op);
     }
 
-    SmallVector<Operation *, 2> nestedForOps;
-    nestedForOps.reserve(nestedFors.size());
-    for (scf::ForOp nestedFor : nestedFors)
-      nestedForOps.push_back(nestedFor.getOperation());
-
-    if (nestedFors.size() == 1) {
+    if (nestedFors.size() == 1 && nestedAffineFors.empty()) {
       scf::ForOp innerFor = nestedFors.front();
+      SmallVector<Operation *, 2> nestedForOps{innerFor.getOperation()};
       bool hasUnsupportedSideEffectsAroundInnerLoop =
           !boundarySideEffectsAreLocalScratch(sideEffectsAroundInnerLoop, body,
                                               nestedForOps);
@@ -322,7 +332,21 @@ static bool collectInner(Block &body, LoopNestInfo &info) {
       return collectInner(*innerFor.getBody(), info);
     }
 
+    if (nestedAffineFors.size() == 1 && nestedFors.empty()) {
+      affine::AffineForOp innerFor = nestedAffineFors.front();
+      SmallVector<Operation *, 2> nestedForOps{innerFor.getOperation()};
+      if (!boundarySideEffectsAreLocalScratch(sideEffectsAroundInnerLoop, body,
+                                              nestedForOps))
+        return false;
+      info.ivs.push_back(innerFor.getInductionVar());
+      return collectInner(*innerFor.getBody(), info);
+    }
+
     if (nestedFors.size() > 1) {
+      SmallVector<Operation *, 2> nestedForOps;
+      nestedForOps.reserve(nestedFors.size());
+      for (scf::ForOp nestedFor : nestedFors)
+        nestedForOps.push_back(nestedFor.getOperation());
       if (!boundarySideEffectsAreLocalScratch(sideEffectsAroundInnerLoop, body,
                                               nestedForOps))
         return false;
@@ -354,76 +378,44 @@ static bool collectPerfectNest(SdeSuIterateOp iterOp, LoopNestInfo &info) {
   return collectInner(*getSuIterateComputeBlock(iterOp), info);
 }
 
-static std::optional<AffineExpr>
-tryGetAffineExpr(Value value, ArrayRef<Value> ivs, MLIRContext *ctx) {
-  for (auto [idx, iv] : llvm::enumerate(ivs)) {
-    if (value == iv)
-      return getAffineDimExpr(idx, ctx);
-  }
-
-  auto *defOp = value.getDefiningOp();
-  if (!defOp)
+static std::optional<AffineMap> remapAccessMapToLoopIvs(
+    AffineMap map, OperandRange mapOperands, ArrayRef<Value> ivs,
+    MLIRContext *ctx) {
+  if (!map)
+    return std::nullopt;
+  SmallVector<Value, 8> operands(mapOperands.begin(), mapOperands.end());
+  affine::fullyComposeAffineMapAndOperands(&map, &operands);
+  map = simplifyAffineMap(map);
+  if (map.getNumSymbols() != 0 || map.getNumDims() != operands.size())
     return std::nullopt;
 
-  if (auto cst = dyn_cast<arith::ConstantOp>(defOp)) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
-      return getAffineConstantExpr(intAttr.getInt(), ctx);
-    return std::nullopt;
-  }
-
-  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
-    auto lhs = tryGetAffineExpr(addOp.getLhs(), ivs, ctx);
-    auto rhs = tryGetAffineExpr(addOp.getRhs(), ivs, ctx);
-    if (lhs && rhs)
-      return *lhs + *rhs;
-  }
-
-  if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
-    auto lhs = tryGetAffineExpr(subOp.getLhs(), ivs, ctx);
-    auto rhs = tryGetAffineExpr(subOp.getRhs(), ivs, ctx);
-    if (lhs && rhs)
-      return *lhs - *rhs;
-  }
-
-  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
-    auto lhs = tryGetAffineExpr(mulOp.getLhs(), ivs, ctx);
-    auto rhs = tryGetAffineExpr(mulOp.getRhs(), ivs, ctx);
-    if (lhs && rhs &&
-        (isa<AffineConstantExpr>(*lhs) || isa<AffineConstantExpr>(*rhs)))
-      return *lhs * *rhs;
-  }
-
-  if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp))
-    return tryGetAffineExpr(castOp.getIn(), ivs, ctx);
-
-  auto tryAffineBin = [&](Value lhsVal, Value rhsVal,
-                          AffineExprKind kind) -> std::optional<AffineExpr> {
-    auto lhs = tryGetAffineExpr(lhsVal, ivs, ctx);
-    if (!lhs)
+  SmallVector<AffineExpr, 8> dimReplacements(map.getNumDims());
+  for (auto [dim, operand] : llvm::enumerate(operands)) {
+    auto it = llvm::find(ivs, operand);
+    if (it == ivs.end())
       return std::nullopt;
-    int64_t rhsCst = 0;
-    if (!ValueAnalysis::getConstantIndex(rhsVal, rhsCst) || rhsCst <= 0)
-      return std::nullopt;
-    auto rhsExpr = getAffineConstantExpr(rhsCst, ctx);
-    switch (kind) {
-    case AffineExprKind::FloorDiv:
-      return (*lhs).floorDiv(rhsExpr);
-    case AffineExprKind::Mod:
-      return *lhs % rhsExpr;
-    default:
-      return std::nullopt;
-    }
-  };
+    dimReplacements[dim] = getAffineDimExpr(
+        static_cast<unsigned>(std::distance(ivs.begin(), it)), ctx);
+  }
 
-  if (auto divOp = dyn_cast<arith::DivSIOp>(defOp))
-    return tryAffineBin(divOp.getLhs(), divOp.getRhs(), AffineExprKind::FloorDiv);
-  if (auto remOp = dyn_cast<arith::RemSIOp>(defOp))
-    return tryAffineBin(remOp.getLhs(), remOp.getRhs(), AffineExprKind::Mod);
-  if (auto divOp = dyn_cast<arith::DivUIOp>(defOp))
-    return tryAffineBin(divOp.getLhs(), divOp.getRhs(), AffineExprKind::FloorDiv);
-  if (auto remOp = dyn_cast<arith::RemUIOp>(defOp))
-    return tryAffineBin(remOp.getLhs(), remOp.getRhs(), AffineExprKind::Mod);
+  SmallVector<AffineExpr, 4> remappedResults;
+  remappedResults.reserve(map.getNumResults());
+  for (AffineExpr result : map.getResults())
+    remappedResults.push_back(
+        result.replaceDimsAndSymbols(dimReplacements, {}));
+  return AffineMap::get(ivs.size(), /*symbolCount=*/0, remappedResults, ctx);
+}
 
+static std::optional<AffineMap> tryBuildIndexingMapFromAffineAccess(
+    Operation *memOp, ArrayRef<Value> ivs, MLIRContext *ctx) {
+  if (auto read = dyn_cast<affine::AffineReadOpInterface>(memOp)) {
+    return remapAccessMapToLoopIvs(read.getAffineMap(), read.getMapOperands(),
+                                   ivs, ctx);
+  }
+  if (auto write = dyn_cast<affine::AffineWriteOpInterface>(memOp)) {
+    return remapAccessMapToLoopIvs(write.getAffineMap(), write.getMapOperands(),
+                                   ivs, ctx);
+  }
   return std::nullopt;
 }
 
@@ -433,7 +425,7 @@ static std::optional<AffineMap> tryBuildIndexingMap(OperandRange indices,
   SmallVector<AffineExpr> exprs;
   exprs.reserve(indices.size());
   for (Value idx : indices) {
-    auto expr = tryGetAffineExpr(idx, ivs, ctx);
+    auto expr = sde::tryGetAffineExpr(idx, ivs, ctx);
     if (!expr)
       return std::nullopt;
     exprs.push_back(*expr);
@@ -465,6 +457,34 @@ collectMemrefAccessesImpl(Operation *scope, Block &body, ArrayRef<Value> ivs,
 
     if (isLocalLibcAllocatorScratchForBody(&op, body))
       continue;
+
+    if (auto read = dyn_cast<affine::AffineReadOpInterface>(&op)) {
+      auto memrefType = read.getMemRefType();
+      if (memrefType && memrefType.getRank() == 0)
+        continue;
+      auto map = tryBuildIndexingMapFromAffineAccess(&op, ivs, ctx);
+      if (!map)
+        return false;
+      reads.push_back(
+          {read.getMemRef(), *map, read.getOperation(), /*isRead=*/true});
+      sawAccess = true;
+      continue;
+    }
+
+    if (auto write = dyn_cast<affine::AffineWriteOpInterface>(&op)) {
+      if (isa<MemRefType>(write.getValueToStore().getType()))
+        continue;
+      auto memrefType = write.getMemRefType();
+      if (memrefType && memrefType.getRank() == 0)
+        continue;
+      auto map = tryBuildIndexingMapFromAffineAccess(&op, ivs, ctx);
+      if (!map)
+        return false;
+      writes.push_back({write.getMemRef(), *map, write.getOperation(),
+                        /*isRead=*/false});
+      sawAccess = true;
+      continue;
+    }
 
     if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
       // Skip pointer-to-memref wrapper loads (e.g., memref.load %wrapper[] :
@@ -529,6 +549,31 @@ collectMemrefAccessesImpl(Operation *scope, Block &body, ArrayRef<Value> ivs,
       continue;
     }
 
+    if (auto nestedFor = dyn_cast<affine::AffineForOp>(&op)) {
+      bool nestedSawAccess = false;
+      if (!collectMemrefAccessesImpl(scope, *nestedFor.getBody(), ivs, reads,
+                                     writes, ctx, nestedSawAccess))
+        return false;
+      sawAccess |= nestedSawAccess;
+      continue;
+    }
+
+    if (auto ifOp = dyn_cast<affine::AffineIfOp>(&op)) {
+      bool thenSawAccess = false;
+      if (!collectMemrefAccessesImpl(scope, *ifOp.getThenBlock(), ivs, reads,
+                                     writes, ctx, thenSawAccess))
+        return false;
+      sawAccess |= thenSawAccess;
+      if (Block *elseBlock = ifOp.getElseBlock()) {
+        bool elseSawAccess = false;
+        if (!collectMemrefAccessesImpl(scope, *elseBlock, ivs, reads, writes,
+                                       ctx, elseSawAccess))
+          return false;
+        sawAccess |= elseSawAccess;
+      }
+      continue;
+    }
+
     if (isKnownPureScalarLibmCall(&op))
       continue;
 
@@ -581,6 +626,11 @@ static void appendNestedForIvs(Block &body, SmallVectorImpl<Value> &ivs) {
     seen.insert(iv);
 
   body.walk([&](scf::ForOp loop) {
+    Value iv = loop.getInductionVar();
+    if (seen.insert(iv).second)
+      ivs.push_back(iv);
+  });
+  body.walk([&](affine::AffineForOp loop) {
     Value iv = loop.getInductionVar();
     if (seen.insert(iv).second)
       ivs.push_back(iv);

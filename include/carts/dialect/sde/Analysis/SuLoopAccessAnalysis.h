@@ -7,10 +7,11 @@
 /// classification can be shared by SDE-owned distribution and tiling planning
 /// without depending on target runtime IR.
 ///
-/// Consumes post-SDE-wrap IR inside `sde.su_iterate` CU bodies: `scf.for`,
-/// `memref.load`/`store`, and lowered `arith` index chains. A planning-head
-/// `LowerAffine` bridge remains until S4 swaps onto upstream `MemRefAccess`.
-/// Index maps are rebuilt from `arith` by `tryGetAffineExpr` in this file.
+/// Consumes post-SDE-wrap IR inside `sde.su_iterate` CU bodies. Index maps come
+/// from upstream `MemRefAccess` on `affine.load/store` when present, otherwise
+/// from lowered `memref` indices via `AffineIndexUtils::tryGetAffineExpr`. A
+/// localized `LowerAffine` bridge after the first `raise-to-sde` remains until
+/// Interchange/Tiling migrate to upstream affine.
 ///==========================================================================///
 
 #ifndef ARTS_DIALECT_SDE_ANALYSIS_SU_LOOP_ACCESS_ANALYSIS_H

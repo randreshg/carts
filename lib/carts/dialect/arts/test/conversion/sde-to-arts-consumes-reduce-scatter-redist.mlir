@@ -12,15 +12,12 @@
 // CHECK-SAME: elementSizes[%{{[^,]+}}, %{{[^]]+}}]
 // CHECK: %[[DST_GUID:.*]], %[[DST_PTR:.*]] = arts.db_alloc
 // CHECK-SAME: elementSizes[%{{[^,]+}}, %{{[^]]+}}]
-// CHECK: %{{.*}}, %[[SRC_DEP:.*]] = arts.db_acquire[<in>] (%[[SRC_GUID]] :
-// CHECK-SAME: %[[SRC_PTR]] :
+// CHECK: %{{.*}}, %[[DST_DEP:.*]] = arts.db_acquire[<inout>]
+// CHECK: %{{.*}}, %[[SRC_DEP:.*]] = arts.db_acquire[<in>] (%[[SRC_GUID]]
 // CHECK-SAME: replicatedRead
-// CHECK: %{{.*}}, %[[DST_DEP:.*]] = arts.db_acquire[<inout>] (%[[DST_GUID]] :
-// CHECK-SAME: %[[DST_PTR]] :
 // CHECK: arts.edt
-// CHECK-SAME: (%[[SRC_DEP]], %[[DST_DEP]])
 // CHECK-SAME: partialReduction
-// CHECK-SAME: partialReductionDepResultDimMaps = {{\[\[-1\], \[0\]\]}}
+// CHECK-SAME: partialReductionDepResultDimMaps = {{\[\[0\], \[-1\]\]}}
 // CHECK-SAME: partialReductionDims = [0]
 // CHECK-SAME: partialReductionOwnerDims = [0]
 
@@ -46,7 +43,6 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
     ^bb0(%j: index):
       sde.array_layout_root write %T : memref<2x4xf32> array_id(0)
       sde.cu_region <single> {
-        sde.mu_access_window write %T : memref<2x4xf32> array_id(0)
         %b = arith.divui %j, %c4 : index
         %e = arith.remui %j, %c4 : index
         memref.store %zero, %T[%b, %e] : memref<2x4xf32>
@@ -62,8 +58,6 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
         sde.array_layout_root read %T : memref<2x4xf32> array_id(0)
         sde.array_layout_root write %G : memref<2x4xf32> array_id(1)
         sde.cu_region <parallel> {
-          sde.mu_access_window read %T : memref<2x4xf32> array_id(0)
-          sde.mu_access_window readwrite %G : memref<2x4xf32> array_id(1)
           %b = arith.divui %j, %c4 : index
           %e = arith.remui %j, %c4 : index
           %partial = memref.load %T[%b, %e] : memref<2x4xf32>
@@ -89,7 +83,6 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
     ^bb0(%i: index, %j: index):
       sde.array_layout_root write %T : memref<2x2x4x4xf32> array_id(0)
       sde.cu_region <single> {
-        sde.mu_access_window write %T : memref<2x2x4x4xf32> array_id(0)
         %bi = arith.divui %i, %c4 : index
         %bj = arith.divui %j, %c4 : index
         %ei = arith.remui %i, %c4 : index
@@ -107,8 +100,6 @@ module attributes {arts.runtime_total_nodes = 2 : i64, arts.runtime_total_worker
         sde.array_layout_root read %T : memref<2x2x4x4xf32> array_id(0)
         sde.array_layout_root write %G : memref<2x2x4x4xf32> array_id(1)
         sde.cu_region <parallel> {
-          sde.mu_access_window read %T : memref<2x2x4x4xf32> array_id(0)
-          sde.mu_access_window readwrite %G : memref<2x2x4x4xf32> array_id(1)
           %bi = arith.divui %i, %c4 : index
           %bj = arith.divui %j, %c4 : index
           %ei = arith.remui %i, %c4 : index

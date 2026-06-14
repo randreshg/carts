@@ -26,36 +26,13 @@ def VerifySdeMuLayout : Pass<"verify-sde-mu-layout", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createVerifySdeMuLayoutPass()";
 }
 
-def VerifySdeMuAccessWindow
-    : Pass<"verify-sde-mu-access-window", "mlir::ModuleOp"> {
-  let summary = "Verify per-CU MU access-window coverage and consistency";
-  let description = [{
-    Checks the access-window invariants (the companion of
-    `verify-sde-mu-layout`, which proves the underlying access-arity soundness —
-    chain both for end-to-end coverage):
-
-      R1 — coverage: every in-scope MU (a converted single-owner block-grid
-           MU read or written by exactly one elementwise/stencil CU, not in
-           place) has EXACTLY ONE `sde.mu_access_window` in its enclosing
-           `sde.cu_region`. Zero means `raise-to-mu-access-window` did not run;
-           more than one means the raiser's idempotency guard is broken.
-
-      Block-grid bounds are type-derived and checked by the op's ODS verifier.
-
-    Conservative (out-of-scope) MUs are skipped, never rejected.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::carts::sde::createVerifySdeMuAccessWindowPass()";
-}
-
 def VerifySdeMuAccessWindowSync
     : Pass<"verify-sde-mu-access-window-sync", "mlir::ModuleOp"> {
   let summary = "Verify SU ordering is justified by MU access windows";
   let description = [{
     Checks that each surviving `sde.su_barrier` orders a real dependency between
-    its before/after CU phases, read off their raised `sde.mu_access_window`
-    facts. On every shared MU root (half-open block ranges per owner dim):
+    its before/after CU phases, read off query-derived MU access windows from
+    in-CU memory ops. On every shared MU root (half-open block ranges per owner dim):
 
       - JUSTIFIED: a write on one side overlaps an access on the other and any
         read stays within the written blocks (aligned RAW/WAW/WAR) — accept.
@@ -68,10 +45,10 @@ def VerifySdeMuAccessWindowSync
 
     Fail-closed when windows are present but the ordering cannot be proven
     (inconsistent owner-dim rank, or an adjacent access no window describes).
-    Out of scope (no windows on either side of a barrier) is skipped; window
-    coverage itself is `verify-sde-mu-access-window`'s job. Unlike effect-based
+    Out of scope (no query-derived windows on either side of a barrier) is skipped;
+    MU layout soundness is `verify-sde-mu-layout`'s job. Unlike effect-based
     barrier elimination, which removes barriers from structured memory effects,
-    this proves justification from raised block-grid windows. Reads current IR
+    this proves justification from query-derived block-grid windows. Reads current IR
     only and mutates nothing.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
@@ -129,7 +106,7 @@ def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
 
     It deliberately does NOT require CU `IsolatedFromAbove`, an `sde.mu_token`,
     a slice op, or any specific access-window carrier; isolation is a ARTS
-    concern and access windows are raised later by RaiseToMuAccessWindow. The
+    concern and access windows are derived on demand by queryAccessWindows. The
     pass reads only current IR and local op structure; it writes no metadata
     and branches on no downstream promise.
   }];

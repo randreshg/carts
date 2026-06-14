@@ -64,14 +64,6 @@ struct SdeRankExpandMuPass
       if (!committed ||
           !carts::sde::supportsRankExpandedAccessWindows(committed->writer))
         continue; // out of scope -> leave flat, add NO attrs
-      bool hasExplicitWindow = false;
-      for (Operation *user : mu.getMemref().getUsers())
-        if (isa<carts::sde::SdeMuAccessWindowOp>(user)) {
-          hasExplicitWindow = true;
-          break;
-        }
-      if (hasExplicitWindow)
-        continue; // pre-windowed MUs keep their explicit grain
 
       std::optional<carts::sde::SdeStructuredClassification> classification =
           carts::sde::queryStructuredClassification(committed->writer);

@@ -11,6 +11,8 @@
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
+#include "carts/utils/ValueAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -28,10 +30,6 @@ findArrayLayoutFact(SdeSuIterateOp si, int64_t arrayId, LayoutGraphRole role) {
     if (fact.id == arrayId && fact.role == role)
       return fact;
   return std::nullopt;
-}
-
-static SdeSuIterateOp findAccessWindowWitness(SdeMuAllocOp mu) {
-  return findCommittedBlockLayoutWitness(mu);
 }
 
 static SdeSuIterateOp findReaderAccessWindowWitness(SdeMuAllocOp mu) {
@@ -55,16 +53,103 @@ static SdeSuIterateOp findReaderAccessWindowWitness(SdeMuAllocOp mu) {
   return witness;
 }
 
+static bool suIterateAccessesMu(SdeSuIterateOp si, Value mu) {
+  Block *computeBlock = getSuIterateComputeBlock(si);
+  if (!computeBlock)
+    return false;
+  bool found = false;
+  computeBlock->walk([&](Operation *op) {
+    if (found)
+      return WalkResult::interrupt();
+    auto visit = [&](Value memref) {
+      if (ValueAnalysis::stripMemrefViewOps(memref) == mu)
+        found = true;
+    };
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      visit(load.getMemref());
+    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      visit(store.getMemref());
+    } else if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
+      visit(read.getMemRef());
+    } else if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+      visit(write.getMemRef());
+    }
+    return WalkResult::advance();
+  });
+  return found;
+}
+
+static SdeSuIterateOp findMovementConsumerWitness(SdeMuAllocOp mu) {
+  Value memref = mu.getMemref();
+  for (Operation *user : memref.getUsers()) {
+    if (!isa<SdeSuHaloOp, SdeSuAllToAllOp, SdeSuReduceScatterOp>(user))
+      continue;
+    auto distribute = user->getParentOfType<SdeSuDistributeOp>();
+    if (!distribute)
+      continue;
+    for (SdeSuIterateOp si : distribute.getBody().getOps<SdeSuIterateOp>()) {
+      if (!supportsRankExpandedAccessWindows(si))
+        continue;
+      if (suIterateAccessesMu(si, memref))
+        return si;
+    }
+  }
+  return SdeSuIterateOp();
+}
+
+static SdeSuIterateOp findStencilStoreWitness(SdeMuAllocOp mu) {
+  for (Operation *user : mu.getMemref().getUsers()) {
+    if (!isa<memref::StoreOp, affine::AffineWriteOpInterface>(user))
+      continue;
+    SdeSuIterateOp si = user->getParentOfType<SdeSuIterateOp>();
+    if (!si || !supportsRankExpandedAccessWindows(si))
+      continue;
+    return si;
+  }
+  return SdeSuIterateOp();
+}
+
 static SdeSuIterateOp resolveAccessWindowWitness(SdeMuAllocOp mu) {
-  SdeSuIterateOp witness = findAccessWindowWitness(mu);
+  SdeSuIterateOp witness = findCommittedBlockLayoutWitness(mu);
   if (witness && supportsRankExpandedAccessWindows(witness))
     return witness;
-  return findReaderAccessWindowWitness(mu);
+  witness = findReaderAccessWindowWitness(mu);
+  if (witness && supportsRankExpandedAccessWindows(witness))
+    return witness;
+  witness = findMovementConsumerWitness(mu);
+  if (witness && supportsRankExpandedAccessWindows(witness))
+    return witness;
+  return findStencilStoreWitness(mu);
+}
+
+static bool isDirectMuMemoryAccess(Operation *user) {
+  return isa<memref::LoadOp, memref::StoreOp>(user) ||
+         isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(
+             user);
+}
+
+static bool classifiesAsMuLoad(Operation *user) {
+  return isa<memref::LoadOp>(user) ||
+         isa<affine::AffineReadOpInterface>(user);
+}
+
+static bool classifiesAsMuStore(Operation *user) {
+  return isa<memref::StoreOp>(user) ||
+         isa<affine::AffineWriteOpInterface>(user);
+}
+
+static bool muHasOnlyDirectMemoryUses(SdeMuAllocOp mu) {
+  for (Operation *user : mu.getMemref().getUsers())
+    if (!isDirectMuMemoryAccess(user) &&
+        !isa<memref::DeallocOp, SdeArrayLayoutRootOp, SdeSuHaloOp,
+              SdeSuAllToAllOp, SdeSuReduceScatterOp>(user))
+      return false;
+  return true;
 }
 
 static bool hasUnsupportedCommittedWriter(SdeMuAllocOp mu) {
   for (Operation *user : mu.getMemref().getUsers()) {
-    if (!isa<memref::StoreOp>(user))
+    if (!classifiesAsMuStore(user))
       continue;
     SdeSuIterateOp writer = user->getParentOfType<SdeSuIterateOp>();
     while (writer && !recoverCommittedPhysicalLayout(writer))
@@ -73,14 +158,6 @@ static bool hasUnsupportedCommittedWriter(SdeMuAllocOp mu) {
       return true;
   }
   return false;
-}
-
-static bool muHasOnlyDirectMemoryUses(SdeMuAllocOp mu) {
-  for (Operation *user : mu.getMemref().getUsers())
-    if (!isa<memref::LoadOp, memref::StoreOp, memref::DeallocOp,
-             SdeArrayLayoutRootOp, SdeMuAccessWindowOp>(user))
-      return false;
-  return true;
 }
 
 static bool hasReplicatedReadFact(SdeCuRegionOp cu, int64_t arrayId, Value mu) {
@@ -138,10 +215,10 @@ queryReplicatedReadAccessWindows(SdeMuAllocOp mu, MemRefType muType) {
   };
 
   for (Operation *user : mu.getMemref().getUsers()) {
-    bool isLoad = isa<memref::LoadOp>(user);
-    bool isStore = isa<memref::StoreOp>(user);
-    if (!isLoad && !isStore)
+    if (!isDirectMuMemoryAccess(user))
       continue;
+    bool isLoad = classifiesAsMuLoad(user);
+    bool isStore = classifiesAsMuStore(user);
     SdeCuRegionOp cu = user->getParentOfType<SdeCuRegionOp>();
     if (!cu)
       return {};
@@ -284,16 +361,14 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
   // accesses stay readwrite unless the MU also has a committed halo read; that
   // case must be split into read-halo and write windows before ARTS.
   for (Operation *user : mu.getMemref().getUsers()) {
-    bool isLoad = isa<memref::LoadOp>(user);
-    bool isStore = isa<memref::StoreOp>(user);
-    if (!isLoad && !isStore)
+    if (!isDirectMuMemoryAccess(user))
       continue;
     auto userCu = user->getParentOfType<SdeCuRegionOp>();
     if (!userCu)
       return {}; // access outside any CU -> conservative for the whole MU
     CuAccess *access = getOrCreateAccess(userCu);
-    access->hasRead |= isLoad;
-    access->hasWrite |= isStore;
+    access->hasRead |= classifiesAsMuLoad(user);
+    access->hasWrite |= classifiesAsMuStore(user);
   }
 
   for (const CuAccess &access : accesses) {
@@ -340,8 +415,8 @@ std::optional<RaisedWindowSpec> queryAccessWindow(SdeMuAllocOp mu) {
 }
 
 std::optional<MuAccessWindowGeometry>
-deriveMuAccessWindowGeometry(SdeMuAccessWindowOp window) {
-  auto muType = dyn_cast<MemRefType>(window.getMu().getType());
+deriveMuAccessWindowGeometry(Value mu) {
+  auto muType = dyn_cast<MemRefType>(mu.getType());
   if (!muType || !muType.hasStaticShape())
     return std::nullopt;
 
@@ -356,7 +431,7 @@ deriveMuAccessWindowGeometry(SdeMuAccessWindowOp window) {
     return geom;
   };
 
-  if (auto muAlloc = window.getMu().getDefiningOp<SdeMuAllocOp>()) {
+  if (auto muAlloc = mu.getDefiningOp<SdeMuAllocOp>()) {
     if (std::optional<ExpandedBlockGridMu> exp =
             recognizeExpandedBlockGridMu(muAlloc)) {
       return fillFromExpanded(exp->ownerDims.size(),

@@ -642,10 +642,9 @@ struct BarrierEliminationPass
         return;
 
       if (!predEffects.hasWriteConflictWith(succEffects)) {
-        double syncCost = costModel ? costModel->getTaskSyncCost() : 0.0;
         redundantBarriers.push_back(barrier);
         eliminated++;
-        ARTS_DEBUG("Eliminated barrier (sync cost: " << syncCost << ")");
+        ARTS_DEBUG("Eliminated redundant barrier (no write conflict)");
         return;
       }
 

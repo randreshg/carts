@@ -1,22 +1,18 @@
 ///==========================================================================///
 /// File: AccessWindowSync.h
 ///
-/// Cross-barrier SU-ordering analysis from raised MU access windows.
+/// Cross-barrier SU-ordering analysis from query-derived MU access windows.
 ///
 /// A `sde.su_barrier` is the last-resort global ordering point between the CU
 /// phase immediately before it and the CU phase immediately after it. Once
-/// `raise-to-mu-access-window` has committed per-CU `sde.mu_access_window`
-/// facts, whether that barrier orders a real dependency is a structural fact,
-/// not a guess: it can be read off the block-grid windows (`[blockLo, blockHi)`
-/// per owner dim) the two phases touch.
+/// rank-expanded MUs and in-CU memory ops are in place, whether that barrier
+/// orders a real dependency is a structural fact read off `queryAccessWindows`
+/// block-grid coverage (`[blockLo, blockHi)` per owner dim).
 ///
 /// This analysis is the single source of truth shared by the
 /// `sde-mu-access-window-sync-opt` transform (which removes barriers it proves
 /// redundant) and `verify-sde-mu-access-window-sync` (which proves every
-/// surviving barrier is justified, or fails closed with evidence). Because both
-/// read the same classifier, the transform removes exactly what the verifier
-/// would otherwise reject as redundant. It reads current IR only and never
-/// introduces a token, slice, dependency-graph, or distribution structure.
+/// surviving barrier is justified, or fails closed with evidence).
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_SDE_ANALYSIS_ACCESSWINDOWSYNC_H
@@ -36,12 +32,9 @@ class Block;
 namespace mlir::carts::sde {
 
 /// The cross-barrier relationship between the CU phases an `sde.su_barrier`
-/// separates, classified from their raised MU access windows.
+/// separates, classified from query-derived MU access windows.
 enum class BarrierSyncVerdict {
-  /// No access-window surface surrounds the barrier (one phase is empty, or
-  /// neither phase carries a window). Conservative skip: ordinary pre-raise IR
-  /// is never reasoned about here; window coverage is
-  /// `verify-sde-mu-access-window`'s job.
+  /// No query-derived access-window surface surrounds the barrier.
   OutOfScope,
   /// A window's block arrays are malformed, so the ordering cannot be proven.
   Malformed,
@@ -60,16 +53,13 @@ enum class BarrierSyncVerdict {
   /// Windows on a shared MU disagree on owner-dim rank: the ordering cannot be
   /// proven.
   RankMismatch,
-  /// An ordered CU has a memory access no window describes: the ordering cannot
-  /// be proven.
+  /// An ordered CU has a memory access no query-derived window describes: the
+  /// ordering cannot be proven.
   Unprovable,
 };
 
-/// Classify the cross-barrier relationship between the CU phase immediately
-/// `before` an `sde.su_barrier` and the phase immediately `after` it, read off
-/// their raised `sde.mu_access_window` facts. The block-grain dependency is at
-/// `[blockLo, blockHi)`; the in-tile `validExtents` describes coverage within a
-/// block and is not part of the cross-CU block relationship.
+/// Classify the cross-barrier relationship between the CU phases immediately
+/// before and after an `sde.su_barrier` using query-derived access windows.
 BarrierSyncVerdict classifyBarrierSync(ArrayRef<SdeCuRegionOp> before,
                                        ArrayRef<SdeCuRegionOp> after);
 

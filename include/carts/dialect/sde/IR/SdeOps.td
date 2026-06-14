@@ -593,66 +593,6 @@ def SdeMuAllocOp : CartsSde_Op<"mu_alloc", [Pure]> {
   let hasVerifier = 1;
 }
 
-def SdeMuAccessWindowOp : CartsSde_Op<"mu_access_window", [
-      // NOT Pure: a zero-result structural fact must survive DCE until a
-      // verifier or lowering consumes it.
-      MemoryEffects<[MemWrite]>
-    ]> {
-  let summary = "Per-CU MU access-window fact in block-grid coordinates";
-  let description = [{
-    Raised by `raise-to-mu-access-window` after the final SDE shape rewrites.
-    Declares, for one rank-expanded MU root accessed by the enclosing CU, the
-    canonical access window in the SAME block-grid coordinate system that
-    `sde-rank-expand-mu` established on the `sde.mu_alloc` result type.
-
-    Placed near the top of the enclosing `sde.cu_region` body after any
-    same-block `sde.mu_alloc` it names, one per (MU root, access mode). The `mu`
-    operand is the rank-expanded `sde.mu_alloc` result (visible because
-    `sde.cu_region` is NOT `IsolatedFromAbove`). It names no collective, DB,
-    EDT, runtime ownership route, GUID, or runtime policy — it is a pure SDE
-    structural fact, consumed (not reinterpreted) by mechanical SDE-to-ARTS
-    lowering.
-
-    Attributes:
-      - `mode`          : SdeAccessMode, `read`, `write`, or `readwrite`.
-                          Same-CU in-place access is represented as one
-                          `readwrite` window and lowers to an inout dependency,
-                          except committed halo reads are split into separate
-                          read and write windows before ARTS.
-      - `arrayId`       : optional committed SDE array identity for `mu`,
-                          copied from the MU root. When the enclosing SU has
-                          `arrayLayout`, consumers must require a non-negative
-                          value instead of inferring by root order or size.
-
-    Block-grid coordinates (`ownerDimCount`, `blockLo`/`blockHi`,
-    `validExtents`) are derived from the rank-expanded `mu` memref type:
-    leading grid dims are `blockHi` with `blockLo == 0`, trailing tile dims are
-    `validExtents` (== committed blockExtent, never halo-inflated). A flat
-    whole-object MU uses `ownerDimCount == 0` with `validExtents == shape`.
-
-    For a ceil/partial last block the per-block valid extent is uniform
-    `blockExtent`; the partial last-block extent is derivable by a consumer from
-    the writer `sde.su_iterate` iteration domain (the committed source of truth),
-    not recomputed here. Stencil halo growth is outside this access-window fact;
-    SDE redistribution must represent halo movement before the boundary.
-
-    Production SDE shaping emits this carrier for in-scope block-grid MUs
-    before SDE-to-ARTS conversion consumes it.
-  }];
-
-  let arguments = (ins
-    AnyMemRef:$mu,
-    SdeAccessModeAttr:$mode,
-    OptionalAttr<I64Attr>:$arrayId
-  );
-
-  // No results: a structural fact op, not a value producer.
-  let results = (outs);
-
-  let hasCustomAssemblyFormat = 1;
-  let hasVerifier = 1;
-}
-
 def SdeSuHaloOp : CartsSde_Op<"su_halo", [
       // Mirror other SU movement ops: a zero-result structural fact, NOT Pure, MemWrite so
       // it survives DCE until SDE-to-ARTS lowering consumes it.

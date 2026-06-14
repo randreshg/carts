@@ -27,8 +27,6 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
       sde.su_iterate (%c1, %c1, %c1) to (%c13, %c14, %c11) step (%c7, %c5, %c3) classification(<stencil>) {
       ^bb0(%ib: index, %jb: index, %kb: index):
         sde.cu_region <parallel> {
-          sde.mu_access_window read %P : memref<2x3x4x7x5x3xf32> array_id(0)
-          sde.mu_access_window write %Q : memref<2x3x4x7x5x3xf32> array_id(1)
           %iend_raw = arith.addi %ib, %c7 : index
           %iend = arith.minui %iend_raw, %c13 : index
           scf.for %i = %ib to %iend step %c1 {

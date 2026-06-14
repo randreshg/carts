@@ -77,14 +77,11 @@ def MuAccessWindowSyncOpt
   let summary = "Remove SU barriers proven redundant by MU access windows";
   let description = [{
     The transform counterpart of `verify-sde-mu-access-window-sync`. After
-    `raise-to-mu-access-window` has committed per-CU `sde.mu_access_window` facts,
-    each surviving `sde.su_barrier` separates a before phase and an after phase
-    whose block-grid windows (`[blockLo, blockHi)` per owner dim) reveal whether
-    the barrier orders a real dependency. Reading the shared `classifyBarrierSync`
-    analysis, this pass erases every barrier proven REDUNDANT — the ordered CUs
-    touch disjoint blocks or only read shared blocks, and both phases are fully
-    described by windows, so removing the global ordering point lets SU
-    structure expose independent CU bodies for later ARTS dataflow.
+    rank-expanded MUs and in-CU memory ops are in place, each surviving
+    `sde.su_barrier` separates phases whose query-derived block-grid windows
+    (`[blockLo, blockHi)` per owner dim) reveal whether the barrier orders a
+    real dependency. Reading the shared `classifyBarrierSync` analysis, this
+    pass erases every barrier proven REDUNDANT.
 
     It is conservative and fails closed by construction: it removes a barrier
     only on a REDUNDANT verdict. JUSTIFIED barriers (a real aligned RAW/WAW/WAR

@@ -455,8 +455,6 @@ static int64_t nextInternalArrayId(Operation *anchor) {
   scope->walk([&](sde::SdeArrayLayoutRootOp root) {
     maxId = std::max<int64_t>(maxId, root.getArrayId());
   });
-  scope->walk(
-      [&](sde::SdeMuAccessWindowOp win) { record(win.getArrayIdAttr()); });
   scope->walk([&](sde::SdeSuHaloOp halo) { record(halo.getArrayIdAttr()); });
   scope->walk([&](sde::SdeSuReduceScatterOp reduce) {
     record(reduce.getArrayIdAttr());

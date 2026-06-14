@@ -4,13 +4,11 @@
 /// Recover the canonical per-CU MU access window from a rank-expanded
 /// block-grid MU.
 ///
-/// `queryAccessWindows` is the SINGLE shared scope+geometry gate used by both
-/// the `raise-to-mu-access-window` transform and the
-/// `verify-sde-mu-access-window` verifier, so the two never disagree on which
-/// MUs are in scope. It is a pure query: it reads the committed layout shape
-/// VERBATIM (it never recomputes owner dims or block shape) and returns an
-/// empty vector — conservative, not an error — for anything outside the
-/// supported elementwise/stencil, committed-owner-grid, fully-static path.
+/// `queryAccessWindows` is the single scope+geometry gate for SDE boundary
+/// lowering and barrier sync analysis. It reads the committed layout shape
+/// VERBATIM and returns an empty vector — conservative, not an error — for
+/// anything outside the supported elementwise/stencil, committed-owner-grid,
+/// fully-static path.
 ///==========================================================================///
 
 #ifndef CARTS_DIALECT_SDE_UTILS_MUACCESSWINDOW_H
@@ -36,8 +34,7 @@ struct MuAccessWindowGeometry {
 /// Derive access-window geometry from the committed rank-expanded MU type.
 /// Returns whole-object geometry (`ownerDimCount == 0`) when the MU is not a
 /// recognized block-grid expansion.
-std::optional<MuAccessWindowGeometry>
-deriveMuAccessWindowGeometry(SdeMuAccessWindowOp window);
+std::optional<MuAccessWindowGeometry> deriveMuAccessWindowGeometry(Value mu);
 
 /// The canonical per-CU access window for one rank-expanded MU.
 struct RaisedWindowSpec {
@@ -54,8 +51,7 @@ struct RaisedWindowSpec {
 /// conservative, no error): non-static/dynamic, no committed block-grid writer,
 /// classification not elementwise/stencil, a structure that does not recover
 /// the committed grain against the writer's iteration domain, SDE accumulator
-/// reductions, an unsupported (non-load/store/dealloc/window) use of the MU
-/// root, or an access outside any CU. Reduction-shaped output writers without
+/// reductions, an unsupported (non-load/store/dealloc) use of the MU root, or
 /// SDE reduction accumulators use the same direct block-window shape as
 /// elementwise writers.
 llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu);

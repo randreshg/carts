@@ -263,13 +263,14 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 2> kInitialCleanupPasses = {
     "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 25> kSdePlanningPasses = {
-    "LowerAffine(func)",
+static const std::array<llvm::StringLiteral, 24> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
     "LayoutAssignment",
     "LoopInterchange",
     "Tiling",
+    "RaiseSCFToAffine(func)",
+    "SimplifyAffineStructures(func)",
     "RaiseToSde",
     "ElementwiseFusion",
     "DistributionPlanning",
@@ -281,8 +282,6 @@ static const std::array<llvm::StringLiteral, 25> kSdePlanningPasses = {
     "SdeRankExpandMu",
     "SdeScalarBlockReduction",
     "VerifySdeMuLayout",
-    "RaiseToMuAccessWindow",
-    "VerifySdeMuAccessWindow",
     "MuAccessWindowSyncOpt",
     "VerifySdeMuAccessWindowSync",
     "SdeRedistribute",
@@ -1114,18 +1113,21 @@ void buildInitialCleanupPipeline(OpPassManager &optPM) {
 /// here; SDE facts feed the direct `sde-to-arts` boundary.
 void buildSdePlanningPipeline(PassManager &pm,
                               sde::SDECostModel *costModel = nullptr) {
-  // S3 bridge: SDE structural passes still consume scf until S4 swaps loop
-  // analysis/tiling/interchange onto upstream affine inside su_iterate bodies.
-  pm.addNestedPass<func::FuncOp>(createLowerAffinePass());
   pm.addPass(sde::createConvertOpenMPToSdePass());
-  // raise-to-sde CORE promotes proven-independent host nests and folds the
-  // initial cu-normalization.
+  // raise-to-sde CORE promotes proven-independent host nests (scf or affine) and
+  // folds the initial cu-normalization.
   pm.addPass(sde::createRaiseToSdePass());
   // Module-scoped per-array BLOCK layout assignment. Runs before
   // Tiling/Interchange split the parallel axes.
   pm.addPass(sde::createLayoutAssignmentPass(costModel));
+  // S4: Interchange handles affine stencil nests via permuteLoops; Tiling still
+  // emits scf owner tile loops. Keep affine through this window; S4d re-raises
+  // serial inner loops after Tiling. Final LowerAffine remains in ARTS-RT (:1277).
   pm.addPass(sde::createLoopInterchangePass());
   pm.addPass(sde::createTilingPass(costModel));
+  // S4d: re-raise serial inner loops to affine for MemRefAccess-based analysis.
+  pm.addNestedPass<func::FuncOp>(polygeist::createRaiseSCFToAffinePass());
+  pm.addNestedPass<func::FuncOp>(affine::createSimplifyAffineStructuresPass());
   // S6: re-run raise-to-sde after shape transforms expose new parallelism.
   pm.addPass(sde::createRaiseToSdePass());
   pm.addPass(sde::createElementwiseFusionPass());
@@ -1141,8 +1143,6 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createSdeRankExpandMuPass());
   pm.addPass(sde::createSdeScalarBlockReductionPass());
   pm.addPass(sde::createVerifySdeMuLayoutPass());
-  pm.addPass(sde::createRaiseToMuAccessWindowPass());
-  pm.addPass(sde::createVerifySdeMuAccessWindowPass());
   pm.addPass(sde::createMuAccessWindowSyncOptPass());
   pm.addPass(sde::createVerifySdeMuAccessWindowSyncPass());
   pm.addPass(sde::createSdeRedistributePass());

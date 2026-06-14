@@ -144,7 +144,6 @@ std::unique_ptr<Pass> createMemoryUnitRealizationPass();
 std::unique_ptr<Pass> createSdeRankExpandMuPass();
 std::unique_ptr<Pass> createSdeCuNormalizationPass();
 std::unique_ptr<Pass> createSdeScalarBlockReductionPass();
-std::unique_ptr<Pass> createRaiseToMuAccessWindowPass();
 std::unique_ptr<Pass> createSdeCoarseAvoidancePass();
 std::unique_ptr<Pass> createSdeRedistributePass();
 
@@ -174,7 +173,6 @@ std::unique_ptr<Pass> createConvertOpenMPToSdePass();
 // --- Verification ---
 std::unique_ptr<Pass> createVerifySdeLoweredPass();
 std::unique_ptr<Pass> createVerifySdeMuLayoutPass();
-std::unique_ptr<Pass> createVerifySdeMuAccessWindowPass();
 std::unique_ptr<Pass> createVerifySdeMuAccessWindowSyncPass();
 std::unique_ptr<Pass> createVerifySdeCoarseAvoidancePass();
 std::unique_ptr<Pass> createVerifySdePass();

@@ -15,7 +15,8 @@ func.func @ungrounded() {
     ^bb0(%i: index):
       sde.array_layout_root read %A : memref<128x64xf32> array_id(0)
       sde.cu_region <single> {
-        sde.mu_access_window read %A : memref<128x64xf32> array_id(0)
+        %v = memref.load %A[%i, %c0] : memref<128x64xf32>
+        %ignore = arith.addf %v, %v : f32
         sde.yield
       }
       sde.yield

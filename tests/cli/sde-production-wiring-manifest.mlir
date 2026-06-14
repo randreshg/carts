@@ -9,7 +9,6 @@ module {}
 // PIPE:      {"name": "sde-planning"
 // PIPE-SAME: "SdeCuNormalization"
 // PIPE-SAME: "SdeRankExpandMu"
-// PIPE-SAME: "RaiseToMuAccessWindow"
 // PIPE-SAME: "MuAccessWindowSyncOpt"
 // PIPE-SAME: "SdeRedistribute"
 // PIPE-SAME: "SdeCoarseAvoidance"

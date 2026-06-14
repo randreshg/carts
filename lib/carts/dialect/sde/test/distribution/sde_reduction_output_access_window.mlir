@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout,raise-to-mu-access-window,verify-sde-mu-access-window)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout)' 2>&1 | %FileCheck %s
 
 // A reduction-classified SU with no SDE reduction accumulator writes an
 // owner-indexed output block directly. SDE may realize it with the same
@@ -6,7 +6,8 @@
 
 // CHECK-LABEL: func.func @reduction_output_window
 // CHECK: %[[MU:.*]] = sde.mu_alloc : memref<4x256xf32>
-// CHECK: sde.mu_access_window write %[[MU]] : memref<4x256xf32> array_id(0)
+// CHECK-NOT: sde.mu_access_window
+// CHECK: memref.store %{{.*}}, %[[MU]][%{{.*}}] : memref<4x256xf32>
 
 func.func @reduction_output_window() {
   %c0 = arith.constant 0 : index

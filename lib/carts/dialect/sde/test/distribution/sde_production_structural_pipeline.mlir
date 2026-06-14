@@ -7,7 +7,7 @@
 // CHECK: sde.mu_alloc : memref<2x512xf32>
 // CHECK: sde.su_distribute <blocked>
 // CHECK: sde.cu_region <single>
-// CHECK: sde.mu_access_window write %{{.*}} : memref<2x512xf32> array_id(0)
+// CHECK-NOT: sde.mu_access_window
 // CHECK: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<2x512xf32>
 
 func.func @production_window_1d() {
@@ -31,7 +31,7 @@ func.func @production_window_1d() {
 // CHECK: %[[A:.*]] = sde.mu_alloc : memref<2x32768x8192xf32>
 // CHECK: sde.su_distribute <blocked>
 // CHECK: sde.su_iterate (%{{.*}}) to (%c65536) step (%{{.*}}) {{.*}}classification(<elementwise_pipeline>)
-// CHECK: sde.mu_access_window readwrite %[[A]] : memref<2x32768x8192xf32> array_id(1)
+// CHECK-NOT: sde.mu_access_window
 // CHECK: partialReductionOwnerDims = [0]
 
 func.func @owner_local_pipeline_budget_retiled() {
@@ -79,8 +79,7 @@ func.func @owner_local_pipeline_budget_retiled() {
 // CHECK: %[[B:.*]] = sde.mu_alloc : memref<2x256x256xf32>
 // CHECK: sde.su_iterate (%{{.*}}, %{{.*}}) to (%c512, %c256) step (%{{.*}}, %{{.*}}) {{.*}}classification(<reduction>)
 // CHECK: sde.array_layout_root read %[[A]] : memref<2x2x256x128x3136xf32> array_id(3)
-// CHECK: sde.mu_access_window read %[[A]] : memref<2x2x256x128x3136xf32> array_id(3)
-// CHECK: sde.mu_access_window write %[[B]] : memref<2x256x256xf32> array_id(2)
+// CHECK-NOT: sde.mu_access_window
 // CHECK: } {groupBlockCount = [2, 2]}
 // CHECK: } {arrayLayout = [{arrayId = 3 : i64
 
@@ -127,9 +126,8 @@ func.func @promoted_reduction_budget_retiled() {
 // CHECK-LABEL: func.func @replicated_writer_physical_shape_window
 // CHECK: %[[OUT:.*]] = sde.mu_alloc : memref<64x8x256x784xf32>
 // CHECK: sde.array_layout_root write %[[OUT]] : memref<64x8x256x784xf32> array_id({{[0-9]+}})
-// CHECK: sde.mu_access_window write %[[OUT]] : memref<64x8x256x784xf32> array_id(4)
+// CHECK-NOT: sde.mu_access_window
 // CHECK: sde.cu_region <single>
-// CHECK: sde.mu_access_window read %[[OUT]] : memref<64x8x256x784xf32> array_id(4)
 
 func.func @replicated_writer_physical_shape_window() {
   %c0 = arith.constant 0 : index
@@ -176,7 +174,7 @@ func.func @replicated_writer_physical_shape_window() {
 // CHECK-LABEL: func.func @block_contraction_writer_physical_shape_window
 // CHECK: %[[B:.*]] = sde.mu_alloc : memref<8x128x256xf32>
 // CHECK: sde.array_layout_root write %[[B]] : memref<8x128x256xf32> array_id(5)
-// CHECK: sde.mu_access_window write %[[B]] : memref<8x128x256xf32> array_id(5)
+// CHECK-NOT: sde.mu_access_window
 // CHECK: arrayId = 5 : i64, blockShape = [128, 256]
 // CHECK-SAME: kind = "block_parallel"
 // CHECK-SAME: ownerDims = [0]

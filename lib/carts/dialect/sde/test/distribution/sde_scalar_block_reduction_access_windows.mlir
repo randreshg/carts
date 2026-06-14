@@ -1,13 +1,13 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-scalar-block-reduction,raise-to-mu-access-window,verify-sde-mu-access-window,verify-sde-mu-layout,verify-sde)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-scalar-block-reduction,verify-sde-mu-layout,verify-sde)' 2>&1 | %FileCheck %s
 
 // CHECK-LABEL: func.func @rank_expanded_source_checksum_partials
 // CHECK: %[[PARTIAL:.*]] = sde.mu_alloc : memref<8x1x16x1xf64>
 // CHECK: sde.su_iterate (%{{.*}}) to (%c8) step (%{{.*}}) classification(<elementwise>)
 // CHECK: sde.array_layout_root write %[[PARTIAL]] : memref<8x1x16x1xf64> array_id(2)
-// CHECK: sde.mu_access_window write %[[PARTIAL]] : memref<8x1x16x1xf64> array_id(2)
+// CHECK-NOT: sde.mu_access_window
 // CHECK: memref.store %{{.*}}, %[[PARTIAL]][%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<8x1x16x1xf64>
 // CHECK-NOT: arrayLayout = [{arrayId = 2
-// CHECK: sde.mu_access_window read %[[PARTIAL]] : memref<8x1x16x1xf64> array_id(2)
+// CHECK-NOT: sde.mu_access_window
 // CHECK: memref.load %[[PARTIAL]][%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<8x1x16x1xf64>
 
 func.func @rank_expanded_source_checksum_partials() -> f64 {
@@ -48,7 +48,7 @@ func.func @rank_expanded_source_checksum_partials() -> f64 {
 // CHECK-LABEL: func.func @rank_expanded_nonleading_owner_checksum_partials
 // CHECK: %[[PARTIAL:.*]] = sde.mu_alloc : memref<4x8x2x16xf64>
 // CHECK: sde.su_iterate (%{{.*}}) to (%{{.*}}) step (%{{.*}}) classification(<elementwise>)
-// CHECK: sde.mu_access_window read %[[PARTIAL]] : memref<4x8x2x16xf64> array_id(1)
+// CHECK-NOT: sde.mu_access_window
 // CHECK: memref.load %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<4x8x2x16xf64>
 
 func.func @rank_expanded_nonleading_owner_checksum_partials() -> f64 {

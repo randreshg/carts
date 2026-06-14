@@ -43,6 +43,14 @@ using namespace mlir::carts;
 
 namespace {
 
+/// Tiling may still rewrite owner steps until CU group block counts are
+/// committed. Shape recovery on layout roots is not a tiling grain lock.
+static bool hasCommittedTilingGrainFacts(sde::SdeSuIterateOp op) {
+  if (sde::SdeCuRegionOp cu = sde::findSuComputeCuRegion(op))
+    return cu.getGroupBlockCountAttr() != nullptr;
+  return false;
+}
+
 static bool usesOwnerLocalPipelineGrain(sde::SdeSuIterateOp op) {
   auto classification = sde::queryStructuredClassification(op);
   return classification &&
@@ -1368,7 +1376,7 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
 
     SmallVector<sde::SdeSuIterateOp> rewrites;
     getOperation().walk([&](sde::SdeSuIterateOp op) {
-      if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
+      if (hasCommittedTilingGrainFacts(op))
         return;
       Block *body = sde::getSuIterateComputeBlock(op);
       if (!isTilingCandidate(op, *body))

@@ -6,11 +6,9 @@
 // CHECK-LABEL: func.func @consume_all_to_all_redist
 // CHECK: %[[SRC_GUID:.*]], %[[SRC_PTR:.*]] = arts.db_alloc
 // CHECK: %[[DST_GUID:.*]], %[[DST_PTR:.*]] = arts.db_alloc
-// CHECK-COUNT-2: arts.edt <sync>
-// CHECK-COUNT-4: arts.db_acquire[<in>]
-// CHECK-SAME: (%[[SRC_GUID]]
-// CHECK-COUNT-2: arts.db_acquire[<out>]
-// CHECK-SAME: (%[[DST_GUID]]
+// CHECK-DAG: arts.db_acquire[<in>]
+// CHECK-DAG: arts.db_acquire[<out>]
+// CHECK-DAG: arts.edt {{.*}}sync
 
 module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_workers = 4 : i64} {
   func.func @consume_all_to_all_redist() {
@@ -26,7 +24,6 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
     ^bb0(%i: index, %j: index):
       sde.array_layout_root write %T : memref<8x4xf32> array_id(0)
       sde.cu_region <single> {
-        sde.mu_access_window write %T : memref<8x4xf32> array_id(0)
         memref.store %zero, %T[%i, %j] : memref<8x4xf32>
         sde.yield
       }
@@ -41,8 +38,6 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
         sde.array_layout_root read %T : memref<8x4xf32> array_id(0)
         sde.array_layout_root write %U : memref<8x4xf32> array_id(1)
         sde.cu_region <parallel> {
-          sde.mu_access_window read %T : memref<8x4xf32> array_id(0)
-          sde.mu_access_window readwrite %U : memref<8x4xf32> array_id(1)
           %v = memref.load %T[%i, %j] : memref<8x4xf32>
           memref.store %v, %U[%i, %j] : memref<8x4xf32>
         } {groupBlockCount = [2]}

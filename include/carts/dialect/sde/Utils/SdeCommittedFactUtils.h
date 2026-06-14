@@ -292,6 +292,15 @@ inline std::optional<int64_t> getMuArrayIdFromLayoutRoot(SdeMuAllocOp mu) {
   for (Operation *user : mu.getMemref().getUsers()) {
     if (auto root = dyn_cast<SdeArrayLayoutRootOp>(user))
       return static_cast<int64_t>(root.getArrayId());
+    if (auto halo = dyn_cast<SdeSuHaloOp>(user))
+      if (std::optional<uint64_t> arrayId = halo.getArrayId())
+        return static_cast<int64_t>(*arrayId);
+    if (auto allToAll = dyn_cast<SdeSuAllToAllOp>(user))
+      if (std::optional<uint64_t> arrayId = allToAll.getArrayId())
+        return static_cast<int64_t>(*arrayId);
+    if (auto reduceScatter = dyn_cast<SdeSuReduceScatterOp>(user))
+      if (std::optional<uint64_t> arrayId = reduceScatter.getArrayId())
+        return static_cast<int64_t>(*arrayId);
   }
   return std::nullopt;
 }

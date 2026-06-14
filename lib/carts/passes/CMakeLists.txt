@@ -4,6 +4,7 @@
 ###===---------------------------------------------------------------===###
 
 set(_carts_common_mlir_link_libs
+  MLIRAffineAnalysis
   MLIRAffineDialect
   MLIRAffineUtils
   MLIRArithDialect

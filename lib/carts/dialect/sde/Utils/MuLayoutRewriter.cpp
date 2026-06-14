@@ -13,6 +13,7 @@
 #include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Operation.h"
@@ -150,13 +151,6 @@ findBlockLayoutFact(SdeSuIterateOp si, int64_t arrayId, LayoutGraphRole role) {
   return std::nullopt;
 }
 
-static bool hasExplicitAccessWindow(SdeMuAllocOp muAlloc) {
-  for (Operation *user : muAlloc.getMemref().getUsers())
-    if (isa<SdeMuAccessWindowOp>(user))
-      return true;
-  return false;
-}
-
 static std::optional<LayoutGraphFact>
 findSingleWriteBlockLayoutFact(SdeSuIterateOp si) {
   if (!si)
@@ -250,6 +244,11 @@ ownerDimsAsI64(ArrayRef<unsigned> ownerDims) {
   for (unsigned dim : ownerDims)
     out.push_back(static_cast<int64_t>(dim));
   return out;
+}
+
+static ArrayRef<int64_t> committedBlockShape(const LayoutGraphFact &fact) {
+  return fact.budgetBlockShape.empty() ? ArrayRef<int64_t>(fact.blockShape)
+                                       : ArrayRef<int64_t>(fact.budgetBlockShape);
 }
 
 static std::optional<ExpandedBlockGridMu>
@@ -530,8 +529,6 @@ findCommittedMuBlockLayout(SdeMuAllocOp muAlloc) {
     return staticResult;
   if (result)
     return result;
-  if (hasExplicitAccessWindow(muAlloc))
-    return std::nullopt;
 
   std::optional<CommittedMuBlockLayout> readResult;
   std::optional<CommittedMuBlockLayout> staticReadResult;
@@ -602,7 +599,7 @@ static bool isLayoutInvariantBasePointer(polygeist::Memref2PointerOp m2p) {
 bool muRootHasUnsupportedUse(Value root) {
   for (Operation *user : root.getUsers()) {
     if (isa<memref::LoadOp, memref::StoreOp, memref::DeallocOp,
-            SdeArrayLayoutRootOp, SdeMuAccessWindowOp, SdeSuHaloOp, SdeSuReduceScatterOp>(user))
+            SdeArrayLayoutRootOp, SdeSuHaloOp, SdeSuReduceScatterOp>(user))
       continue;
     if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(user))
       if (isLayoutInvariantBasePointer(m2p))
@@ -628,8 +625,21 @@ recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc) {
   if (!muType)
     return std::nullopt;
   std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc);
-  if (!arrayId)
+  if (!arrayId) {
+    for (Operation *user : muAlloc.getMemref().getUsers()) {
+      if (!isa<memref::StoreOp, affine::AffineWriteOpInterface>(user))
+        continue;
+      SdeSuIterateOp witness = user->getParentOfType<SdeSuIterateOp>();
+      if (!witness || !supportsRankExpandedAccessWindows(witness))
+        continue;
+      if (std::optional<RecoveredMuPhysicalLayout> recovered =
+              recoverMuPhysicalLayoutFromExpandedType(muType))
+        return recognizeExpandedBlockGridMuFromShape(
+            ownerDimsAsI64(recovered->ownerDims),
+            recovered->physicalBlockShape, muType);
+    }
     return std::nullopt;
+  }
 
   if (SdeSuIterateOp writer = findCommittedBlockLayoutWriter(muAlloc))
     return recognizeExpandedBlockGridMuForWriter(writer, muType);
@@ -648,7 +658,8 @@ recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc) {
     if (!fact)
       continue;
     std::optional<ExpandedBlockGridMu> expanded =
-        recognizeExpandedBlockGridMuFromShape(fact->ownerDims, fact->blockShape,
+        recognizeExpandedBlockGridMuFromShape(fact->ownerDims,
+                                              committedBlockShape(*fact),
                                               muType);
     if (!expanded)
       continue;

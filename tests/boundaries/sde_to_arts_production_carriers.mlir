@@ -1,14 +1,14 @@
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from=sde-planning --pipeline=sde-planning | %FileCheck %s --check-prefix=SDE
 // RUN: %carts-compile %s --O3 --arts-config %arts_config --start-from=sde-planning --pipeline=sde-to-arts | %FileCheck %s --check-prefix=ARTS --implicit-check-not=sde.mu_access_window
 
-// SDE production creates a committed MU access-window carrier, and the direct
-// SDE-to-ARTS boundary consumes it rather than letting it cross the dialect
-// frontier.
+// SDE production derives MU access windows from rank-expanded types and in-CU
+// memory ops; the direct SDE-to-ARTS boundary materializes ARTS DB windows
+// without a stamped SDE carrier.
 
 // SDE-LABEL: func.func @sde_to_arts_production_carrier
 // SDE: sde.su_iterate
 // SDE: sde.cu_region <parallel>
-// SDE: sde.mu_access_window write %{{.*}} : memref<4x256xf32>
+// SDE-NOT: sde.mu_access_window
 
 // ARTS-LABEL: func.func @sde_to_arts_production_carrier
 // ARTS: arts.db_alloc

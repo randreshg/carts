@@ -20,7 +20,8 @@ def LoopInterchange
     conversion.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::scf::SCFDialect"];
+                           "::mlir::scf::SCFDialect",
+                           "::mlir::affine::AffineDialect"];
   let constructor = "mlir::carts::sde::createLoopInterchangePass()";
 }
 

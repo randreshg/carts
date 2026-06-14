@@ -10,6 +10,7 @@
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
+#include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Block.h"
 #include "llvm/ADT/DenseSet.h"
@@ -21,7 +22,7 @@ namespace mlir::carts::sde {
 
 namespace {
 
-/// One raised window, decoded into block-grid coordinates.
+/// One access window, decoded into block-grid coordinates.
 struct WindowFact {
   Value mu;                   ///< the rank-expanded mu_alloc result
   SdeAccessMode mode;         ///< read, write, or readwrite
@@ -37,7 +38,6 @@ bool hasWriteEffect(SdeAccessMode mode) {
   return mode == SdeAccessMode::write || mode == SdeAccessMode::readwrite;
 }
 
-/// Half-open block rectangles overlap iff they overlap on every owner dim.
 bool rectanglesOverlap(const WindowFact &a, const WindowFact &b) {
   for (size_t k = 0; k < a.lo.size(); ++k)
     if (a.lo[k] >= b.hi[k] || b.lo[k] >= a.hi[k])
@@ -45,7 +45,6 @@ bool rectanglesOverlap(const WindowFact &a, const WindowFact &b) {
   return true;
 }
 
-/// True iff every block `inner` touches is also touched by `outer`.
 bool rectangleWithin(const WindowFact &inner, const WindowFact &outer) {
   for (size_t k = 0; k < inner.lo.size(); ++k)
     if (inner.lo[k] < outer.lo[k] || inner.hi[k] > outer.hi[k])
@@ -53,50 +52,102 @@ bool rectangleWithin(const WindowFact &inner, const WindowFact &outer) {
   return true;
 }
 
-/// Decode the windows directly in a CU body. Returns false (fail-closed) if a
-/// window's block arrays are malformed; the op's own verifier already bounds
-/// them, so this only guards against a non-array attribute.
-bool collectWindows(SdeCuRegionOp cu, SmallVectorImpl<WindowFact> &out) {
-  for (Operation &op : cu.getBody().front()) {
-    auto win = dyn_cast<SdeMuAccessWindowOp>(op);
-    if (!win)
-      continue;
-    std::optional<sde::MuAccessWindowGeometry> geom =
-        deriveMuAccessWindowGeometry(win);
-    if (!geom || geom->blockLo.size() != geom->blockHi.size())
-      return false;
-    out.push_back({win.getMu(), win.getMode(),
-                   SmallVector<int64_t, 2>(geom->blockLo.begin(),
-                                           geom->blockLo.end()),
-                   SmallVector<int64_t, 2>(geom->blockHi.begin(),
-                                           geom->blockHi.end())});
-  }
+static bool isDirectMuMemoryAccess(Operation *op) {
+  return isa<memref::LoadOp, memref::StoreOp>(op) ||
+         isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(op);
+}
+
+static SdeAccessMode accessModeForMemoryOp(Operation *op) {
+  if (isa<memref::LoadOp, affine::AffineReadOpInterface>(op))
+    return SdeAccessMode::read;
+  return SdeAccessMode::write;
+}
+
+static Value memrefForMemoryOp(Operation *op) {
+  if (auto load = dyn_cast<memref::LoadOp>(op))
+    return load.getMemRef();
+  if (auto store = dyn_cast<memref::StoreOp>(op))
+    return store.getMemRef();
+  if (auto read = dyn_cast<affine::AffineReadOpInterface>(op))
+    return read.getMemRef();
+  return cast<affine::AffineWriteOpInterface>(op).getMemRef();
+}
+
+static bool appendWindowFact(Value mu, SdeAccessMode mode,
+                             SmallVectorImpl<WindowFact> &out) {
+  std::optional<sde::MuAccessWindowGeometry> geom =
+      deriveMuAccessWindowGeometry(mu);
+  if (!geom || geom->blockLo.size() != geom->blockHi.size())
+    return false;
+  out.push_back({mu, mode,
+                 SmallVector<int64_t, 2>(geom->blockLo.begin(),
+                                         geom->blockLo.end()),
+                 SmallVector<int64_t, 2>(geom->blockHi.begin(),
+                                         geom->blockHi.end())});
   return true;
 }
 
-/// A phase is fully described by windows when every memref load/store in its
-/// CUs targets an MU root that carries a window in the same CU. Only then can
-/// the absence of a cross-barrier conflict prove the barrier redundant.
+bool collectWindows(SdeCuRegionOp cu, SmallVectorImpl<WindowFact> &out) {
+  llvm::DenseSet<std::pair<Value, SdeAccessMode>> seen;
+  bool ok = true;
+  cu.getBody().walk([&](Operation *op) {
+    if (!ok || !isDirectMuMemoryAccess(op))
+      return;
+    Value root = ValueAnalysis::stripMemrefViewOps(memrefForMemoryOp(op));
+    auto mu = root.getDefiningOp<SdeMuAllocOp>();
+    if (!mu)
+      return;
+    SdeAccessMode mode = accessModeForMemoryOp(op);
+    bool matchedQuery = false;
+    for (const RaisedWindowSpec &spec : queryAccessWindows(mu)) {
+      if (spec.cu != cu)
+        continue;
+      matchedQuery = true;
+      if (!seen.insert({spec.mu, spec.mode}).second)
+        continue;
+      if (!appendWindowFact(spec.mu, spec.mode, out))
+        ok = false;
+    }
+    if (!matchedQuery) {
+      if (!seen.insert({root, mode}).second)
+        return;
+      if (!appendWindowFact(root, mode, out))
+        ok = false;
+    }
+  });
+  return ok;
+}
+
+static bool accessCoveredByQuery(SdeCuRegionOp cu, SdeMuAllocOp mu,
+                                 SdeAccessMode mode) {
+  for (const RaisedWindowSpec &spec : queryAccessWindows(mu)) {
+    if (spec.cu != cu)
+      continue;
+    if (spec.mode == mode)
+      return true;
+    if (spec.mode == SdeAccessMode::readwrite &&
+        (mode == SdeAccessMode::read || mode == SdeAccessMode::write))
+      return true;
+  }
+  return false;
+}
+
 bool phaseFullyWindowed(ArrayRef<SdeCuRegionOp> phase) {
   for (SdeCuRegionOp cu : phase) {
-    llvm::DenseSet<Value> windowed;
-    for (Operation &op : cu.getBody().front())
-      if (auto win = dyn_cast<SdeMuAccessWindowOp>(op))
-        windowed.insert(ValueAnalysis::stripMemrefViewOps(win.getMu()));
     bool ok = true;
     cu.getBody().walk([&](Operation *op) {
-      Value memref;
-      if (auto load = dyn_cast<memref::LoadOp>(op))
-        memref = load.getMemRef();
-      else if (auto store = dyn_cast<memref::StoreOp>(op))
-        memref = store.getMemRef();
-      else
+      if (!isDirectMuMemoryAccess(op))
         return;
-      Value root = ValueAnalysis::stripMemrefViewOps(memref);
-      if (!root.getDefiningOp<SdeMuAllocOp>())
+      Value root = ValueAnalysis::stripMemrefViewOps(memrefForMemoryOp(op));
+      auto mu = root.getDefiningOp<SdeMuAllocOp>();
+      if (!mu)
         return;
-      if (!windowed.contains(root))
-        ok = false; // an access no window describes
+      SdeAccessMode mode = accessModeForMemoryOp(op);
+      if (accessCoveredByQuery(cu, mu, mode))
+        return;
+      if (deriveMuAccessWindowGeometry(root).has_value())
+        return;
+      ok = false;
     });
     if (!ok)
       return false;
@@ -109,7 +160,7 @@ bool phaseFullyWindowed(ArrayRef<SdeCuRegionOp> phase) {
 BarrierSyncVerdict classifyBarrierSync(ArrayRef<SdeCuRegionOp> before,
                                        ArrayRef<SdeCuRegionOp> after) {
   if (before.empty() || after.empty())
-    return BarrierSyncVerdict::OutOfScope; // orders nothing on one side
+    return BarrierSyncVerdict::OutOfScope;
 
   SmallVector<WindowFact, 4> wBefore, wAfter;
   bool wellFormed = true;
@@ -118,29 +169,22 @@ BarrierSyncVerdict classifyBarrierSync(ArrayRef<SdeCuRegionOp> before,
   for (SdeCuRegionOp cu : after)
     wellFormed &= collectWindows(cu, wAfter);
   if (wBefore.empty() && wAfter.empty())
-    return BarrierSyncVerdict::OutOfScope; // no access-window surface here
+    return BarrierSyncVerdict::OutOfScope;
   if (!wellFormed)
     return BarrierSyncVerdict::Malformed;
 
-  // Classify the cross-barrier relationship over shared MU roots. `b` is a
-  // before-phase window, `a` an after-phase window.
   bool justified = false, misaligned = false, rankMismatch = false;
   for (const WindowFact &b : wBefore)
     for (const WindowFact &a : wAfter) {
       if (a.mu != b.mu)
-        continue; // different MU -> no shared state
+        continue;
       if (a.lo.size() != b.lo.size()) {
         rankMismatch = true;
         continue;
       }
       bool bWrite = hasWriteEffect(b.mode);
-      bool aWrite = hasWriteEffect(a.mode);
-      if ((!bWrite && !aWrite) || !rectanglesOverlap(a, b))
-        continue; // both read, or disjoint blocks -> no dependency
-      // A flow dependency (producer before, consumer reads after) is misaligned
-      // when the consumer reaches blocks the producer never wrote. Anti- (WAR)
-      // and output (WAW) dependencies need only the overlap; the read there
-      // sources its data elsewhere.
+      if ((!bWrite && !hasWriteEffect(a.mode)) || !rectanglesOverlap(a, b))
+        continue;
       if (bWrite && hasReadEffect(a.mode) &&
           !rectangleWithin(/*inner=*/a, /*outer=*/b))
         misaligned = true;
@@ -148,8 +192,6 @@ BarrierSyncVerdict classifyBarrierSync(ArrayRef<SdeCuRegionOp> before,
         justified = true;
     }
 
-  // A concrete verdict (a movement need, or a real ordering) wins over the rare
-  // rank-mismatch ambiguity, so neither is masked.
   if (misaligned)
     return BarrierSyncVerdict::Misaligned;
   if (justified)

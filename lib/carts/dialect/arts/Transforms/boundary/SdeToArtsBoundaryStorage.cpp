@@ -53,33 +53,22 @@ readPhysicalLayoutFromExpandedType(MemRefType memrefType) {
 
 LogicalResult
 requireCompatibleWindows(sde::SdeMuAllocOp op,
-                         ArrayRef<sde::SdeMuAccessWindowOp> windows,
                          ArrayAttr &ownerDims, ArrayAttr &blockShape) {
-  if (windows.empty())
-    return success();
   auto memrefType = dyn_cast<MemRefType>(op.getMemref().getType());
   if (!memrefType)
     return op.emitOpError() << "requires a memref type for ARTS DB lowering";
 
-  sde::SdeMuAccessWindowOp firstWindow = windows.front();
   std::optional<sde::MuAccessWindowGeometry> firstGeom =
-      sde::deriveMuAccessWindowGeometry(firstWindow);
+      sde::deriveMuAccessWindowGeometry(op.getMemref());
   if (!firstGeom)
-    return firstWindow.emitOpError()
+    return op.emitOpError()
            << "could not derive access-window geometry from the rank-expanded "
               "MU type";
+
   unsigned ownerDimCount = static_cast<unsigned>(firstGeom->ownerDimCount);
   if (ownerDimCount == 0) {
     ownerDims = ownerDimsForExpandedWindow(op.getContext(), ownerDimCount);
     blockShape = ArrayAttr();
-    for (sde::SdeMuAccessWindowOp window : windows) {
-      std::optional<sde::MuAccessWindowGeometry> geom =
-          sde::deriveMuAccessWindowGeometry(window);
-      if (!geom || geom->ownerDimCount != 0)
-        return window.emitOpError()
-               << "mixes whole-object and block-grid access windows for the "
-                  "same MU";
-    }
     return success();
   }
 
@@ -94,7 +83,7 @@ requireCompatibleWindows(sde::SdeMuAllocOp op,
     if (expandedTypeLayout->ownerDims.size() != ownerDimCount ||
         expandedTypeLayout->blockShape.size() + ownerDimCount !=
             memrefType.getRank())
-      return firstWindow.emitOpError()
+      return op.emitOpError()
              << "has access-window owner rank incompatible with the "
                 "rank-expanded MU type";
     SmallVector<int64_t, 4> paddedBlockShape(ownerDimCount, 1);
@@ -105,42 +94,10 @@ requireCompatibleWindows(sde::SdeMuAllocOp op,
     FailureOr<ArrayAttr> maybeBlockShape = blockShapeForExpandedWindow(
         *firstGeom, memrefType, op.getContext());
     if (failed(maybeBlockShape))
-      return firstWindow.emitOpError()
-             << "has window shape incompatible with the rank-expanded MU";
+      return op.emitOpError()
+             << "has access-window shape incompatible with the rank-expanded "
+                "MU";
     blockShape = *maybeBlockShape;
-  }
-
-  for (sde::SdeMuAccessWindowOp window : windows) {
-    std::optional<sde::MuAccessWindowGeometry> geom =
-        sde::deriveMuAccessWindowGeometry(window);
-    if (!geom ||
-        static_cast<unsigned>(geom->ownerDimCount) != ownerDimCount)
-      return window.emitOpError()
-             << "conflicts with another access-window for the same MU";
-    if (expandedTypeLayout) {
-      if (expandedTypeLayout->blockShape.size() + ownerDimCount !=
-          memrefType.getRank())
-        return window.emitOpError()
-               << "commits a block shape incompatible with the rank-expanded "
-                  "MU type";
-      FailureOr<ArrayAttr> candidate = blockShapeForExpandedWindow(
-          *geom, memrefType, op.getContext());
-      if (failed(candidate))
-        return window.emitOpError()
-               << "commits a block shape incompatible with the rank-expanded "
-                  "MU type";
-      if (*candidate != blockShape)
-        return window.emitOpError()
-               << "commits a block shape that conflicts with the rank-expanded "
-                  "MU type";
-      continue;
-    }
-    FailureOr<ArrayAttr> candidate =
-        blockShapeForExpandedWindow(*geom, memrefType, op.getContext());
-    if (failed(candidate) || *candidate != blockShape)
-      return window.emitOpError()
-             << "commits a block shape that conflicts with another "
-                "access-window for the same MU";
   }
   return success();
 }
@@ -300,50 +257,106 @@ LogicalResult lowerMuData(sde::SdeMuDataOp op) {
   return success();
 }
 
-ArrayAttr getCommittedHaloShapeForWindow(sde::SdeMuAccessWindowOp window,
-                                                ArrayAttr committedHaloShape);
+static LogicalResult createDbBackedReplacement(
+    OpBuilder &builder, sde::SdeMuAllocOp op, MemRefType memrefType,
+    ArrayAttr ownerDims, ArrayAttr blockShape,
+    const sde::MuAccessWindowGeometry &geom, Value &replacement) {
+  if (geom.ownerDimCount == 0)
+    return arts::createCoarseDbBackedMemref(builder, op.getLoc(), memrefType,
+                                          op.getDynamicSizes(), replacement);
+  return arts::createBlockDbBackedMemref(builder, op.getLoc(), memrefType,
+                                         op.getDynamicSizes(), ownerDims,
+                                         blockShape, replacement);
+}
+
+static ArrayAttr getCommittedHaloShapeForCu(sde::SdeCuRegionOp cu, Value mu,
+                                            ArrayAttr committedHaloShape) {
+  if (!cu || !committedHaloShape)
+    return {};
+  auto parentSu = cu->getParentOfType<sde::SdeSuIterateOp>();
+  if (!parentSu)
+    return {};
+  for (Operation *op = parentSu->getPrevNode(); op; op = op->getPrevNode()) {
+    if (auto halo = dyn_cast<sde::SdeSuHaloOp>(op)) {
+      if (halo.getMu() == mu)
+        return halo.getHaloShape();
+    }
+  }
+  return {};
+}
+
+static LogicalResult emitDbAccessWindowFromSpec(
+    OpBuilder &builder, Location loc, Value replacement,
+    sde::RaisedWindowSpec spec, ArrayAttr committedHaloShape,
+    MLIRContext *ctx) {
+  std::optional<sde::MuAccessWindowGeometry> geom =
+      sde::deriveMuAccessWindowGeometry(spec.mu);
+  if (!geom)
+    return mlir::emitError(spec.cu.getLoc())
+           << "could not derive access-window geometry from the rank-expanded "
+              "MU type";
+
+  ArrayAttr haloShape =
+      getCommittedHaloShapeForCu(spec.cu, spec.mu, committedHaloShape);
+  if (spec.mode == sde::SdeAccessMode::write)
+    haloShape = {};
+  else if (spec.mode == sde::SdeAccessMode::readwrite && haloShape) {
+    return mlir::emitError(spec.cu.getLoc())
+           << "commits a writable halo dependency; SDE must split the read "
+              "halo and write access before ARTS realization";
+  }
+
+  FailureOr<ArtsMode> mode = convertAccessMode(spec.mode, spec.cu.getOperation());
+  if (failed(mode))
+    return failure();
+
+  IntegerAttr arrayIdAttr;
+  if (spec.arrayId)
+    arrayIdAttr = builder.getI64IntegerAttr(*spec.arrayId);
+
+  arts::DbAccessWindowOp::create(
+      builder, loc, replacement, ArtsModeAttr::get(ctx, *mode), arrayIdAttr,
+      builder.getI64IntegerAttr(geom->ownerDimCount),
+      builder.getI64ArrayAttr(geom->blockLo),
+      builder.getI64ArrayAttr(geom->blockHi),
+      builder.getI64ArrayAttr(geom->validExtents), haloShape);
+  return success();
+}
 
 LogicalResult
-lowerMuAlloc(sde::SdeMuAllocOp op,
-             ArrayRef<sde::SdeMuAccessWindowOp> committedWindows,
-             ArrayAttr committedHaloShape) {
+lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr committedHaloShape) {
   auto memrefType = dyn_cast<MemRefType>(op.getMemref().getType());
   if (!memrefType)
     return op.emitOpError()
            << "expects a memref result before SDE-to-ARTS conversion";
 
+  llvm::SmallVector<sde::RaisedWindowSpec, 4> derivedSpecs =
+      sde::queryAccessWindows(op);
+  const bool hasDerivedSpecs = !derivedSpecs.empty();
+
   ArrayAttr ownerDims;
   ArrayAttr blockShape;
-  if (failed(requireCompatibleWindows(op, committedWindows, ownerDims,
-                                      blockShape)))
-    return failure();
+  if (hasDerivedSpecs) {
+    if (failed(requireCompatibleWindows(op, ownerDims, blockShape)))
+      return failure();
+  }
 
   OpBuilder builder(op);
   Value replacement;
-  if (!committedWindows.empty()) {
-    sde::SdeMuAccessWindowOp firstWindow = committedWindows.front();
-    std::optional<sde::MuAccessWindowGeometry> firstGeom =
-        sde::deriveMuAccessWindowGeometry(firstWindow);
-    if (!firstGeom)
-      return firstWindow.emitOpError()
+  if (hasDerivedSpecs) {
+    std::optional<sde::MuAccessWindowGeometry> geom =
+        sde::deriveMuAccessWindowGeometry(op.getMemref());
+    if (!geom)
+      return op.emitOpError()
              << "could not derive access-window geometry from the rank-expanded "
                 "MU type";
-    if (firstGeom->ownerDimCount == 0) {
-      if (failed(arts::createCoarseDbBackedMemref(
-              builder, op.getLoc(), memrefType, op.getDynamicSizes(),
-              replacement)))
-        return op.emitOpError()
-               << "could not realize committed SDE whole-object layout as ARTS "
-                  "DB";
-    } else if (failed(arts::createBlockDbBackedMemref(
-                   builder, op.getLoc(), memrefType, op.getDynamicSizes(),
-                   ownerDims, blockShape, replacement))) {
+    if (failed(createDbBackedReplacement(builder, op, memrefType, ownerDims,
+                                         blockShape, *geom, replacement)))
       return op.emitOpError()
-             << "could not realize committed SDE block layout as ARTS DB";
-    }
+             << "could not realize query-derived SDE layout as ARTS DB";
   } else if (committedHaloShape) {
     return op.emitOpError()
-           << "commits halo movement but has no committed SDE access-window "
+           << "commits halo movement but has no query-derived SDE access-window "
               "layout for ARTS DB realization";
   } else if (failed(arts::createCoarseDbBackedMemref(
                  builder, op.getLoc(), memrefType, op.getDynamicSizes(),
@@ -356,58 +369,24 @@ lowerMuAlloc(sde::SdeMuAllocOp op,
     replacement =
         memref::CastOp::create(builder, op.getLoc(), memrefType, replacement);
 
-  for (sde::SdeMuAccessWindowOp window : committedWindows) {
-    OpBuilder windowBuilder(window);
-    ArrayAttr haloShape =
-        getCommittedHaloShapeForWindow(window, committedHaloShape);
-    if (window.getMode() == sde::SdeAccessMode::write)
-      haloShape = {};
-    else if (window.getMode() == sde::SdeAccessMode::readwrite && haloShape) {
-      return window.emitOpError()
-             << "commits a writable halo dependency; SDE must split the read "
-                "halo and write access before ARTS realization";
+  if (hasDerivedSpecs) {
+    for (const sde::RaisedWindowSpec &spec : derivedSpecs) {
+      sde::SdeCuRegionOp cu = spec.cu;
+      if (cu.getBody().empty())
+        return op.emitOpError()
+               << "query-derived access window targets an empty CU region";
+      OpBuilder cuBuilder(cu);
+      cuBuilder.setInsertionPointToStart(&cu.getBody().front());
+      if (failed(emitDbAccessWindowFromSpec(cuBuilder, cu.getLoc(), replacement,
+                                            spec, committedHaloShape,
+                                            op.getContext())))
+        return failure();
     }
-    FailureOr<ArtsMode> mode =
-        convertAccessMode(window.getMode(), window.getOperation());
-    if (failed(mode))
-      return failure();
-    std::optional<sde::MuAccessWindowGeometry> geom =
-        sde::deriveMuAccessWindowGeometry(window);
-    if (!geom)
-      return window.emitOpError()
-             << "could not derive access-window geometry from the rank-expanded "
-                "MU type";
-    arts::DbAccessWindowOp::create(
-        windowBuilder, window.getLoc(), replacement,
-        ArtsModeAttr::get(op.getContext(), *mode), window.getArrayIdAttr(),
-        windowBuilder.getI64IntegerAttr(geom->ownerDimCount),
-        windowBuilder.getI64ArrayAttr(geom->blockLo),
-        windowBuilder.getI64ArrayAttr(geom->blockHi),
-        windowBuilder.getI64ArrayAttr(geom->validExtents),
-        haloShape);
   }
-  for (sde::SdeMuAccessWindowOp window : committedWindows)
-    window.erase();
 
   eraseDeallocUsers(op.getMemref());
   op.getMemref().replaceAllUsesWith(replacement);
   op.erase();
   return success();
-}
-
-ArrayAttr getCommittedHaloShapeForWindow(sde::SdeMuAccessWindowOp window,
-                                                ArrayAttr committedHaloShape) {
-  if (!window || !committedHaloShape)
-    return {};
-  auto parentSu = window->getParentOfType<sde::SdeSuIterateOp>();
-  if (!parentSu)
-    return {};
-  for (Operation *op = parentSu->getPrevNode(); op; op = op->getPrevNode()) {
-    if (auto halo = dyn_cast<sde::SdeSuHaloOp>(op)) {
-      if (halo.getMu() == window.getMu())
-        return halo.getHaloShape();
-    }
-  }
-  return {};
 }
 } // namespace mlir::carts::arts::boundary

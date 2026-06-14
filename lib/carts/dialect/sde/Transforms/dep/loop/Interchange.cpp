@@ -8,8 +8,9 @@
 ///
 /// 2. Stencil halo ordering: for stencil classification, reads
 ///    accessMinOffsets/accessMaxOffsets to compute per-dim halo
-///    width. For 3D+ stencils with multiple inner scf.for loops, reorders so
-///    the smallest-halo-width dim is outermost (minimizes total halo volume).
+///    width. For 3D+ stencils with multiple inner loops (affine.for or scf.for),
+///    reorders so the smallest-halo-width dim is outermost (minimizes total halo
+///    volume). Affine nests use upstream `permuteLoops`.
 ///
 /// The interchange handles imperfect nests by distributing init ops into a
 /// separate loop when the j loop contains both init stores and a reduction
@@ -22,6 +23,8 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/LoopUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -39,6 +42,15 @@ using namespace mlir;
 using namespace mlir::carts;
 
 namespace {
+
+/// Interchange may still rewrite inner loops until CU group block counts are
+/// committed. `hasCommittedCuMuPartitionFacts` also fires on layout-root shape
+/// recovery and would skip interchange too early.
+static bool hasCommittedInterchangeGrainFacts(sde::SdeSuIterateOp op) {
+  if (sde::SdeCuRegionOp cu = sde::findSuComputeCuRegion(op))
+    return cu.getGroupBlockCountAttr() != nullptr;
+  return false;
+}
 
 static bool isTerminatorOp(Operation &op) {
   return op.hasTrait<OpTrait::IsTerminator>();
@@ -68,6 +80,54 @@ static bool collectInnerForChain(Block &body,
     current = found.getBody();
   }
   return !loops.empty();
+}
+
+/// Collect a linear chain of nested affine.for loops from the su_iterate body.
+static bool collectInnerAffineForChain(
+    Block &body, SmallVectorImpl<affine::AffineForOp> &loops) {
+  Block *current = &body;
+  while (true) {
+    affine::AffineForOp found;
+    for (Operation &op : *current) {
+      if (isTerminatorOp(op))
+        continue;
+      if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
+        if (found)
+          return false;
+        found = forOp;
+      }
+    }
+    if (!found)
+      break;
+    loops.push_back(found);
+    current = found.getBody();
+  }
+  return !loops.empty();
+}
+
+/// Swap the innermost affine.for pair via upstream permuteLoops (k-j order).
+static bool interchangeAffineLoopPair(affine::AffineForOp outerLoop,
+                                      affine::AffineForOp innerLoop) {
+  if (innerLoop->getParentOp() != outerLoop.getOperation())
+    return false;
+  if (outerLoop.getNumResults() != 0 || innerLoop.getNumResults() != 0)
+    return false;
+
+  for (Operation &op : *outerLoop.getBody()) {
+    if (isTerminatorOp(op))
+      continue;
+    if (&op == innerLoop.getOperation())
+      break;
+    return false;
+  }
+
+  SmallVector<affine::AffineForOp, 2> nest = {outerLoop, innerLoop};
+  if (!affine::isPerfectlyNested(nest))
+    return false;
+
+  (void)affine::permuteLoops(nest, {1, 0});
+  ARTS_INFO("SDE loop interchange applied: affine k-j order (was j-k)");
+  return true;
 }
 
 /// Find the two innermost scf.for loops inside the su_iterate body.
@@ -1009,14 +1069,12 @@ struct LoopInterchangePass
   /// Try stencil halo-based interchange for stencil classification.
   /// Reads accessMinOffsets/accessMaxOffsets, computes per-dim halo width,
   /// and reorders inner loops so smallest-halo-width dim is outermost.
-  /// Only applies to 3D+ stencils with 2+ inner scf.for loops.
+  /// Only applies to 3D+ stencils with 2+ inner affine.for or scf.for loops.
   bool tryStencilHaloInterchange(sde::SdeSuIterateOp op, Block &body) {
     ArrayAttr minArr = op.getAccessMinOffsetsAttr();
     ArrayAttr maxArr = op.getAccessMaxOffsetsAttr();
     if (!minArr || !maxArr || minArr.size() < 2)
       return false;
-
-    // Compute halo widths per dim
     SmallVector<int64_t> haloWidths;
     for (unsigned d = 0; d < minArr.size(); ++d) {
       int64_t lo = cast<IntegerAttr>(minArr[d]).getInt();
@@ -1024,34 +1082,24 @@ struct LoopInterchangePass
       haloWidths.push_back(hi - lo);
     }
 
-    // Collect inner scf.for loop chain
-    SmallVector<scf::ForOp> innerLoops;
-    if (!collectInnerForChain(body, innerLoops))
-      return false;
-
-    // Need at least 2 inner loops to consider interchange.
-    // dim 0 is the su_iterate IV, inner loops correspond to dims 1..N.
-    if (innerLoops.size() < 2)
-      return false;
-
-    // For the inner loop pair (first two inner loops = dims 1 and 2):
-    // Smallest halo should be outermost of the pair to minimize total
-    // halo volume when the outer dim is partitioned.
-    // innerLoops[0] = current outermost inner (dim 1)
-    // innerLoops[1] = next inner (dim 2)
-    // Swap if haloWidths[1] > haloWidths[2], i.e., dim 1 has wider halo.
-    // (dims are 0-indexed; dim 0 = su_iterate, dim 1 = innerLoops[0], etc.)
     unsigned dim1 = 1;
     unsigned dim2 = 2;
     if (dim2 >= haloWidths.size())
       return false;
-
     if (haloWidths[dim1] <= haloWidths[dim2])
       return false; // already optimal or equal
 
-    // Build the interchange: swap the two innermost scf.for loops.
-    // This is a simpler case: no init-loop distribution needed since
-    // stencil bodies are pure computation.
+    SmallVector<affine::AffineForOp, 4> affineInnerLoops;
+    if (collectInnerAffineForChain(body, affineInnerLoops) &&
+        affineInnerLoops.size() >= 2) {
+      if (interchangeAffineLoopPair(affineInnerLoops[0], affineInnerLoops[1]))
+        return true;
+    }
+
+    SmallVector<scf::ForOp, 4> innerLoops;
+    if (!collectInnerForChain(body, innerLoops) || innerLoops.size() < 2)
+      return false;
+
     scf::ForOp outerLoop = innerLoops[0];
     scf::ForOp innerLoop = innerLoops[1];
 
@@ -1086,7 +1134,7 @@ struct LoopInterchangePass
     for (sde::SdeSuIterateOp op : iterateOps) {
       if (!op || op->getParentRegion() == nullptr)
         continue;
-      if (sde::hasCommittedCuMuPartitionFacts(op.getOperation()))
+      if (hasCommittedInterchangeGrainFacts(op))
         continue;
 
       Block *body = sde::getSuIterateComputeBlock(op);

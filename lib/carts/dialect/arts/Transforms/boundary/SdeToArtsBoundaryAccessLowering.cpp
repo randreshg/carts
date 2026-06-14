@@ -17,6 +17,7 @@
 #include "carts/dialect/arts/Utils/MovementLoweringUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
+#include "carts/dialect/sde/Analysis/AffineIndexUtils.h"
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
@@ -26,10 +27,13 @@
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/AffineMap.h"
 #include <algorithm>
 #include <functional>
 #include <limits>
@@ -573,45 +577,20 @@ collectMappedLoopIvs(sde::SdeSuIterateOp source, Block *computeBlock) {
                       ValueAnalysis::tryFoldConstantIndex(loop.getStep())});
   });
 
+  computeBlock->walk<WalkOrder::PreOrder>([&](affine::AffineForOp loop) {
+    mapped.push_back({loop.getInductionVar(), std::nullopt,
+                      loop.hasConstantLowerBound()
+                          ? std::optional<int64_t>(loop.getConstantLowerBound())
+                          : std::nullopt,
+                      loop.hasConstantUpperBound()
+                          ? std::optional<int64_t>(loop.getConstantUpperBound())
+                          : std::nullopt,
+                      loop.hasConstantBounds()
+                          ? std::optional<int64_t>(loop.getStepAsInt())
+                          : std::nullopt});
+  });
+
   return mapped;
-}
-
-std::optional<int64_t> matchScaledIv(Value value, Value iv) {
-  value = ValueAnalysis::stripNumericCasts(value);
-  iv = ValueAnalysis::stripNumericCasts(iv);
-  if (ValueAnalysis::sameValue(value, iv))
-    return 1;
-  auto mul = value.getDefiningOp<arith::MulIOp>();
-  if (!mul)
-    return std::nullopt;
-  Value lhs = ValueAnalysis::stripNumericCasts(mul.getLhs());
-  Value rhs = ValueAnalysis::stripNumericCasts(mul.getRhs());
-  if (ValueAnalysis::sameValue(lhs, iv))
-    return ValueAnalysis::tryFoldConstantIndex(rhs);
-  if (ValueAnalysis::sameValue(rhs, iv))
-    return ValueAnalysis::tryFoldConstantIndex(lhs);
-  return std::nullopt;
-}
-
-
-std::optional<ScaledIvResidual> decomposeScaledIvResidual(Value value,
-                                                                 Value iv) {
-  value = ValueAnalysis::stripNumericCasts(value);
-  if (std::optional<int64_t> multiplier = matchScaledIv(value, iv))
-    return ScaledIvResidual{*multiplier, Value{}};
-
-  auto add = value.getDefiningOp<arith::AddIOp>();
-  if (!add)
-    return std::nullopt;
-  Value lhs = ValueAnalysis::stripNumericCasts(add.getLhs());
-  Value rhs = ValueAnalysis::stripNumericCasts(add.getRhs());
-  if (std::optional<int64_t> multiplier = matchScaledIv(lhs, iv);
-      multiplier && !ValueAnalysis::dependsOn(rhs, iv))
-    return ScaledIvResidual{*multiplier, rhs};
-  if (std::optional<int64_t> multiplier = matchScaledIv(rhs, iv);
-      multiplier && !ValueAnalysis::dependsOn(lhs, iv))
-    return ScaledIvResidual{*multiplier, lhs};
-  return std::nullopt;
 }
 
 std::optional<int64_t>
@@ -684,6 +663,112 @@ bool isUnsignedLessThan(Value value, int64_t limit,
   return upper && *upper <= limit;
 }
 
+static std::optional<unsigned>
+loopDimForIv(Value iv, ArrayRef<MappedLoopIv> mappedIvs) {
+  for (const MappedLoopIv &mapped : mappedIvs) {
+    if (mapped.loopDim && ValueAnalysis::sameValue(mapped.iv, iv))
+      return *mapped.loopDim;
+  }
+  return std::nullopt;
+}
+
+static std::optional<unsigned>
+uniqueReferencedLoopDim(AffineExpr expr, ArrayRef<Value> ivOrder,
+                        ArrayRef<MappedLoopIv> mappedIvs) {
+  std::optional<unsigned> selected;
+  bool conflict = false;
+  expr.walk([&](AffineExpr node) {
+    if (conflict)
+      return;
+    auto dim = dyn_cast<AffineDimExpr>(node);
+    if (!dim || dim.getPosition() >= ivOrder.size())
+      return;
+    if (std::optional<unsigned> loopDim =
+            loopDimForIv(ivOrder[dim.getPosition()], mappedIvs)) {
+      if (selected && *selected != *loopDim)
+        conflict = true;
+      else if (!selected)
+        selected = loopDim;
+    }
+  });
+  return conflict ? std::nullopt : selected;
+}
+
+static std::optional<DepOwnerAccessSlot> analyzeDepOwnerAccessSlotFromAffineExpr(
+    AffineExpr expr, ArrayRef<MappedLoopIv> mappedIvs,
+    ArrayRef<Value> ivOrder, bool allowUnitHaloOffset) {
+  expr = simplifyAffineExpr(expr, ivOrder.size(), 0);
+  int64_t blockSize = 1;
+  while (auto bin = dyn_cast<AffineBinaryOpExpr>(expr)) {
+    if (bin.getKind() != AffineExprKind::FloorDiv)
+      break;
+    auto rhs = dyn_cast<AffineConstantExpr>(bin.getRHS());
+    if (!rhs || rhs.getValue() <= 0)
+      return std::nullopt;
+    blockSize *= rhs.getValue();
+    expr = simplifyAffineExpr(bin.getLHS(), ivOrder.size(), 0);
+  }
+
+  if (auto cst = dyn_cast<AffineConstantExpr>(expr))
+    return DepOwnerAccessSlot{std::nullopt, blockSize, cst.getValue()};
+
+  std::optional<unsigned> loopDim =
+      uniqueReferencedLoopDim(expr, ivOrder, mappedIvs);
+  if (!loopDim)
+    return std::nullopt;
+
+  MLIRContext *ctx = expr.getContext();
+  unsigned dimPos = 0;
+  bool foundDim = false;
+  expr.walk([&](AffineExpr node) {
+    if (foundDim)
+      return;
+    if (auto dim = dyn_cast<AffineDimExpr>(node)) {
+      dimPos = dim.getPosition();
+      foundDim = true;
+    }
+  });
+  if (!foundDim || dimPos >= ivOrder.size())
+    return std::nullopt;
+  AffineExpr dimExpr = getAffineDimExpr(dimPos, ctx);
+
+  if (expr == dimExpr)
+    return DepOwnerAccessSlot{*loopDim, blockSize, std::nullopt};
+
+  if (allowUnitHaloOffset) {
+    if (auto add = dyn_cast<AffineBinaryOpExpr>(expr)) {
+      if (add.getKind() == AffineExprKind::Add) {
+        auto offset = dyn_cast<AffineConstantExpr>(add.getRHS());
+        if (offset && offset.getValue() >= -1 && offset.getValue() <= 1 &&
+            add.getLHS() == dimExpr)
+          return DepOwnerAccessSlot{*loopDim, blockSize, std::nullopt};
+        offset = dyn_cast<AffineConstantExpr>(add.getLHS());
+        if (offset && offset.getValue() >= -1 && offset.getValue() <= 1 &&
+            add.getRHS() == dimExpr)
+          return DepOwnerAccessSlot{*loopDim, blockSize, std::nullopt};
+      }
+    }
+  }
+
+  if (auto mul = dyn_cast<AffineBinaryOpExpr>(expr)) {
+    if (mul.getKind() == AffineExprKind::Mul) {
+      int64_t multiplier = 0;
+      AffineExpr dimPart;
+      if (auto lhs = dyn_cast<AffineConstantExpr>(mul.getLHS())) {
+        multiplier = lhs.getValue();
+        dimPart = mul.getRHS();
+      } else if (auto rhs = dyn_cast<AffineConstantExpr>(mul.getRHS())) {
+        multiplier = rhs.getValue();
+        dimPart = mul.getLHS();
+      }
+      if (multiplier > 0 && dimPart == dimExpr && blockSize % multiplier == 0)
+        return DepOwnerAccessSlot{*loopDim, blockSize / multiplier, std::nullopt};
+    }
+  }
+
+  return std::nullopt;
+}
+
 std::optional<DepOwnerAccessSlot>
 analyzeDepOwnerAccessIndex(Value rawIndex, ArrayRef<MappedLoopIv> mappedIvs,
                            bool allowUnitHaloOffset = false) {
@@ -691,54 +776,22 @@ analyzeDepOwnerAccessIndex(Value rawIndex, ArrayRef<MappedLoopIv> mappedIvs,
   if (std::optional<int64_t> fixed = ValueAnalysis::tryFoldConstantIndex(index))
     return DepOwnerAccessSlot{std::nullopt, 1, *fixed};
 
-  Value numerator = index;
-  int64_t blockSize = 1;
-  if (auto div = index.getDefiningOp<arith::DivUIOp>()) {
-    std::optional<int64_t> divisor = ValueAnalysis::tryFoldConstantIndex(
-        ValueAnalysis::stripNumericCasts(div.getRhs()));
-    if (!divisor || *divisor <= 0)
-      return std::nullopt;
-    numerator = ValueAnalysis::stripNumericCasts(div.getLhs());
-    blockSize = *divisor;
-  }
-
-  std::optional<unsigned> selectedDim;
+  SmallVector<Value, 8> ivOrder;
+  ivOrder.reserve(mappedIvs.size());
   for (const MappedLoopIv &mapped : mappedIvs) {
-    if (!mapped.loopDim)
-      continue;
-    if (!ValueAnalysis::sameValue(numerator, mapped.iv) &&
-        !ValueAnalysis::dependsOn(numerator, mapped.iv))
-      continue;
-    ValueAnalysis::IndexExpr expr =
-        ValueAnalysis::analyzeIndexExpr(numerator, mapped.iv);
-    bool isCanonicalIv = expr.dependsOnIV && expr.multiplier &&
-                         *expr.multiplier == 1 &&
-                         (!expr.offset || *expr.offset == 0);
-    bool isUnitHaloOffset = allowUnitHaloOffset && expr.dependsOnIV &&
-                            expr.multiplier && *expr.multiplier == 1 &&
-                            expr.offset && *expr.offset >= -1 &&
-                            *expr.offset <= 1;
-    if (!ValueAnalysis::sameValue(numerator, mapped.iv) && !isCanonicalIv &&
-        !isUnitHaloOffset) {
-      if (std::optional<ScaledIvResidual> scaled =
-              decomposeScaledIvResidual(numerator, mapped.iv)) {
-        if (scaled->multiplier <= 0 || blockSize % scaled->multiplier != 0 ||
-            !isUnsignedLessThan(scaled->residual, scaled->multiplier,
-                                mappedIvs))
-          return std::nullopt;
-        blockSize /= scaled->multiplier;
-      } else {
-        return std::nullopt;
-      }
-    }
-    if (selectedDim && *selectedDim != *mapped.loopDim)
-      return std::nullopt;
-    selectedDim = *mapped.loopDim;
+    if (mapped.loopDim)
+      ivOrder.push_back(mapped.iv);
   }
-
-  if (!selectedDim)
+  if (ivOrder.empty())
     return std::nullopt;
-  return DepOwnerAccessSlot{*selectedDim, blockSize, std::nullopt};
+
+  std::optional<AffineExpr> expr =
+      sde::tryGetAffineExpr(index, ivOrder, index.getContext());
+  if (!expr)
+    return std::nullopt;
+
+  return analyzeDepOwnerAccessSlotFromAffineExpr(*expr, mappedIvs, ivOrder,
+                                                 allowUnitHaloOffset);
 }
 
 bool accessModeMayUseLoad(ArtsMode mode) {
@@ -806,10 +859,74 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
   SmallVector<MappedLoopIv, 8> mappedIvs =
       collectMappedLoopIvs(source, computeBlock);
 
+  SmallVector<Value, 8> ivOrder;
+  ivOrder.reserve(mappedIvs.size());
+  for (const MappedLoopIv &mapped : mappedIvs) {
+    if (mapped.loopDim)
+      ivOrder.push_back(mapped.iv);
+  }
+
   SmallVector<DepOwnerAccessSlot, 4> selected;
   bool sawAccess = false;
-  auto record = [&](Operation *op, Value memref,
-                    ValueRange indices) -> LogicalResult {
+  auto analyzeMapResults =
+      [&](Operation *op, AffineMap map,
+          ValueRange mapOperands) -> FailureOr<SmallVector<DepOwnerAccessSlot, 4>> {
+    if (!map || map.getNumSymbols() != 0)
+      return op->emitError()
+             << "cannot analyze symbolic affine access map for SDE access-window "
+                "coordinates";
+    if (map.getNumResults() < ownerDimCount)
+      return op->emitError()
+             << "rank-expanded DB access has fewer block coordinates than its "
+                "SDE access window";
+    SmallVector<AffineExpr, 4> dimReplacements(map.getNumDims());
+    for (auto [dim, operand] : llvm::enumerate(mapOperands)) {
+      auto it = llvm::find(ivOrder, operand);
+      if (it == ivOrder.end())
+        return op->emitError()
+               << "cannot map affine access operand to a dispatch loop IV";
+      dimReplacements[dim] = getAffineDimExpr(
+          static_cast<unsigned>(std::distance(ivOrder.begin(), it)),
+          map.getContext());
+    }
+    SmallVector<DepOwnerAccessSlot, 4> candidate;
+    candidate.reserve(ownerDimCount);
+    for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+      AffineExpr expr = simplifyAffineExpr(
+          map.getResult(slot).replaceDimsAndSymbols(dimReplacements, {}),
+          ivOrder.size(), 0);
+      std::optional<DepOwnerAccessSlot> access =
+          analyzeDepOwnerAccessSlotFromAffineExpr(expr, mappedIvs, ivOrder,
+                                                allowUnitHaloOffsets);
+      if (!access) {
+        if (isCommittedFullWindowSlot(source, alloc, slot, blockLo, blockHi,
+                                      validExtents, arrayOwnerDims)) {
+          DepOwnerAccessSlot fullWindow;
+          fullWindow.fullWindow = true;
+          fullWindow.coordinateBlockSize = 1;
+          candidate.push_back(fullWindow);
+          continue;
+        }
+        if (mode == ArtsMode::in && slot < blockLo.size() &&
+            slot < blockHi.size() && blockLo[slot] == 0 &&
+            blockHi[slot] > blockLo[slot]) {
+          DepOwnerAccessSlot fullWindow;
+          fullWindow.fullWindow = true;
+          fullWindow.coordinateBlockSize = 1;
+          candidate.push_back(fullWindow);
+          continue;
+        }
+        return op->emitError()
+               << "cannot map SDE access-window block coordinate to a loop "
+                  "dimension";
+      }
+      candidate.push_back(*access);
+    }
+    return candidate;
+  };
+
+  auto recordIndices = [&](Operation *op, Value memref,
+                           ValueRange indices) -> LogicalResult {
     if (resolveBoundaryDbAlloc(memref) != alloc)
       return success();
     sawAccess = true;
@@ -862,15 +979,53 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
       if (!accessModeMayUseLoad(mode))
         return WalkResult::advance();
-      if (failed(record(op, load.getMemref(), load.getIndices())))
+      if (failed(recordIndices(op, load.getMemref(), load.getIndices())))
         return WalkResult::interrupt();
       return WalkResult::advance();
     }
     if (auto store = dyn_cast<memref::StoreOp>(op)) {
       if (!accessModeMayUseStore(mode))
         return WalkResult::advance();
-      if (failed(record(op, store.getMemref(), store.getIndices())))
+      if (failed(recordIndices(op, store.getMemref(), store.getIndices())))
         return WalkResult::interrupt();
+      return WalkResult::advance();
+    }
+    if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
+      if (!accessModeMayUseLoad(mode))
+        return WalkResult::advance();
+      if (resolveBoundaryDbAlloc(read.getMemRef()) != alloc)
+        return WalkResult::advance();
+      sawAccess = true;
+      FailureOr<SmallVector<DepOwnerAccessSlot, 4>> candidate =
+          analyzeMapResults(op, read.getAffineMap(), read.getMapOperands());
+      if (failed(candidate))
+        return WalkResult::interrupt();
+      if (selected.empty())
+        selected = *candidate;
+      else if (selected != *candidate)
+        return op->emitError()
+                   << "uses inconsistent block coordinates for one SDE "
+                      "access window",
+               WalkResult::interrupt();
+      return WalkResult::advance();
+    }
+    if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
+      if (!accessModeMayUseStore(mode))
+        return WalkResult::advance();
+      if (resolveBoundaryDbAlloc(write.getMemRef()) != alloc)
+        return WalkResult::advance();
+      sawAccess = true;
+      FailureOr<SmallVector<DepOwnerAccessSlot, 4>> candidate =
+          analyzeMapResults(op, write.getAffineMap(), write.getMapOperands());
+      if (failed(candidate))
+        return WalkResult::interrupt();
+      if (selected.empty())
+        selected = *candidate;
+      else if (selected != *candidate)
+        return op->emitError()
+                   << "uses inconsistent block coordinates for one SDE "
+                      "access window",
+               WalkResult::interrupt();
       return WalkResult::advance();
     }
     return WalkResult::advance();
@@ -2184,6 +2339,33 @@ Value getCommonDivRemSource(Value divValue, Value remValue,
   return div.getLhs();
 }
 
+static std::optional<int64_t> tryGetUnitNeighborhoodOffset(Value expr, Value iv) {
+  MLIRContext *ctx = expr.getContext();
+  std::optional<AffineExpr> affine =
+      sde::tryGetAffineExpr(expr, {iv}, ctx);
+  if (!affine)
+    return std::nullopt;
+  *affine = simplifyAffineExpr(*affine, 1, 0);
+  AffineExpr dim = getAffineDimExpr(0, ctx);
+  if (*affine == dim)
+    return 0;
+  if (auto add = dyn_cast<AffineBinaryOpExpr>(*affine)) {
+    if (add.getKind() != AffineExprKind::Add)
+      return std::nullopt;
+    if (add.getLHS() == dim) {
+      if (auto cst = dyn_cast<AffineConstantExpr>(add.getRHS()))
+        if (cst.getValue() >= -1 && cst.getValue() <= 1)
+          return cst.getValue();
+    }
+    if (add.getRHS() == dim) {
+      if (auto cst = dyn_cast<AffineConstantExpr>(add.getLHS()))
+        if (cst.getValue() >= -1 && cst.getValue() <= 1)
+          return -cst.getValue();
+    }
+  }
+  return std::nullopt;
+}
+
 FailureOr<std::optional<HaloLoadRewrite>>
 classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
                        const Halo2DTaskWork &work, Value rowIv, Value colIv) {
@@ -2204,42 +2386,33 @@ classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
     return failure();
   }
 
-  ValueAnalysis::IndexExpr row =
-      ValueAnalysis::analyzeIndexExpr(rowExpr, rowIv);
-  ValueAnalysis::IndexExpr col =
-      ValueAnalysis::analyzeIndexExpr(colExpr, colIv);
-  auto valid = [](const ValueAnalysis::IndexExpr &expr) {
-    return expr.dependsOnIV && expr.multiplier && *expr.multiplier == 1 &&
-           expr.offset;
-  };
-  if (!valid(row) || !valid(col)) {
+  std::optional<int64_t> rowOffset = tryGetUnitNeighborhoodOffset(rowExpr, rowIv);
+  std::optional<int64_t> colOffset = tryGetUnitNeighborhoodOffset(colExpr, colIv);
+  if (!rowOffset || !colOffset) {
     load.emitOpError()
         << "does not expose affine unit-neighborhood indices required for ARTS "
            "compact 2D unit-halo load rewriting";
     return failure();
   }
-
-  int64_t rowOffset = *row.offset;
-  int64_t colOffset = *col.offset;
-  if (rowOffset == 0 && colOffset == 0)
+  if (*rowOffset == 0 && *colOffset == 0)
     return std::optional<HaloLoadRewrite>{
         HaloLoadRewrite{haloWorkIndex, Halo2DFace::Center}};
-  if (rowOffset != 0 && colOffset != 0) {
+  if (*rowOffset != 0 && *colOffset != 0) {
     load.emitOpError()
         << "requires corner halo realization, which ARTS has not "
            "committed; refusing a full-block halo byte-window";
     return failure();
   }
-  if (rowOffset == -1 && colOffset == 0)
+  if (*rowOffset == -1 && *colOffset == 0)
     return std::optional<HaloLoadRewrite>{
         HaloLoadRewrite{haloWorkIndex, Halo2DFace::Top}};
-  if (rowOffset == 1 && colOffset == 0)
+  if (*rowOffset == 1 && *colOffset == 0)
     return std::optional<HaloLoadRewrite>{
         HaloLoadRewrite{haloWorkIndex, Halo2DFace::Bottom}};
-  if (rowOffset == 0 && colOffset == -1)
+  if (*rowOffset == 0 && *colOffset == -1)
     return std::optional<HaloLoadRewrite>{
         HaloLoadRewrite{haloWorkIndex, Halo2DFace::Left}};
-  if (rowOffset == 0 && colOffset == 1)
+  if (*rowOffset == 0 && *colOffset == 1)
     return std::optional<HaloLoadRewrite>{
         HaloLoadRewrite{haloWorkIndex, Halo2DFace::Right}};
 
@@ -2272,23 +2445,21 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
              "compact N-D unit-halo load rewriting";
       return failure();
     }
-    ValueAnalysis::IndexExpr analyzed =
-        ValueAnalysis::analyzeIndexExpr(expr, ownerLoopIvs[slot]);
-    if (!analyzed.dependsOnIV || !analyzed.multiplier ||
-        *analyzed.multiplier != 1 || !analyzed.offset) {
+    std::optional<int64_t> offset =
+        tryGetUnitNeighborhoodOffset(expr, ownerLoopIvs[slot]);
+    if (!offset) {
       load.emitOpError()
           << "does not expose affine unit-neighborhood indices required for "
              "ARTS compact N-D unit-halo load rewriting";
       return failure();
     }
-    int64_t offset = *analyzed.offset;
-    if (offset < -1 || offset > 1) {
+    if (*offset < -1 || *offset > 1) {
       load.emitOpError()
           << "requires non-unit halo realization, which ARTS has not "
              "committed; refusing a full-block halo byte-window";
       return failure();
     }
-    hasHaloOffset |= offset != 0;
+    hasHaloOffset |= *offset != 0;
   }
 
   if (!hasHaloOffset)
@@ -2344,19 +2515,10 @@ FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
       failedScan = true;
       return WalkResult::interrupt();
     }
-    ValueAnalysis::IndexExpr row =
-        ValueAnalysis::analyzeIndexExpr(rowExpr, rowIv);
-    ValueAnalysis::IndexExpr col =
-        ValueAnalysis::analyzeIndexExpr(colExpr, colIv);
-    auto getUnitOffset =
-        [&](const ValueAnalysis::IndexExpr &expr) -> std::optional<int64_t> {
-      if (!expr.dependsOnIV || !expr.multiplier || *expr.multiplier != 1 ||
-          !expr.offset || *expr.offset < -1 || *expr.offset > 1)
-        return std::nullopt;
-      return *expr.offset;
-    };
-    std::optional<int64_t> rowOffset = getUnitOffset(row);
-    std::optional<int64_t> colOffset = getUnitOffset(col);
+    std::optional<int64_t> rowOffset =
+        tryGetUnitNeighborhoodOffset(rowExpr, rowIv);
+    std::optional<int64_t> colOffset =
+        tryGetUnitNeighborhoodOffset(colExpr, colIv);
     if (!rowOffset || !colOffset) {
       load.emitOpError()
           << "does not expose affine unit-neighborhood indices required for "

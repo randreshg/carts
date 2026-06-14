@@ -1,17 +1,24 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,raise-to-mu-access-window,verify-sde-mu-access-window)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout,sde-storage-to-arts-db)' 2>&1 | %FileCheck %s
 
 // Stencil: a stencil-classified, single-owner block layout is in scope.
 // The committed layout carries a halo () but rank expansion does NOT
 // grow the tile (halo data lives in neighbouring blocks; halo redistribution is
-// a later transform). So the raised window's in-tile valid extent is the block
-// extent [16, 16] (NOT halo-grown to [20, ...]); growing it would exceed the
-// expanded tile and the op verifier would reject it. The expanded A root is
-// write-only.
+// a later transform). Query-derived boundary lowering stamps an out window with
+// in-tile valid extent [16, 16] (NOT halo-grown to [20, ...]); growing it would
+// exceed the expanded tile. The expanded A root is write-only.
 
 // CHECK-LABEL: func.func @raise_window_stencil
-// CHECK: sde.mu_alloc : memref<128x16xf32>
-// CHECK: sde.mu_alloc : memref<8x16x16xf32>
-// CHECK: sde.mu_access_window write %{{.*}} : memref<8x16x16xf32> array_id(0)
+// CHECK: arts.db_alloc
+// CHECK-SAME: <coarse>
+// CHECK: memref.cast {{.*}} to memref<128x16xf32>
+// CHECK: arts.db_alloc
+// CHECK-SAME: <block>
+// CHECK: memref.cast {{.*}} to memref<8x16x16xf32>
+// CHECK-NOT: sde.mu_access_window
+// CHECK: arts.db_access_window
+// CHECK-SAME: mode = #arts.mode<out>
+// CHECK-SAME: ownerDimCount = 1
+// CHECK-SAME: validExtents = [16, 16]
 
 func.func @raise_window_stencil() {
   %c0 = arith.constant 0 : index

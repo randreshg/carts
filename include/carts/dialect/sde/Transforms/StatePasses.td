@@ -169,39 +169,6 @@ def SdeScalarBlockReduction
   let constructor = "mlir::carts::sde::createSdeScalarBlockReductionPass()";
 }
 
-def SdeRaiseToMuAccessWindow
-    : Pass<"raise-to-mu-access-window", "mlir::ModuleOp"> {
-  let summary = "Raise canonical per-CU MU access windows over block-grid MUs";
-  let description = [{
-    Structural access-window carrier. After the final SDE shape rewrites, for
-    every `sde.mu_alloc` rank-expanded into a single-contiguous-owner block-grid
-    MU (elementwise/stencil, fully static), this pass raises one
-    `sde.mu_access_window` fact near the top of the enclosing `sde.cu_region`,
-    after any same-block `sde.mu_alloc` it names, per (MU root, read/write
-    mode), in the SAME block-grid coordinate system the carrier type already
-    encodes.
-
-    It is a pure ADDITIVE raiser: it reads the committed layout facts and the expanded
-    type VERBATIM (never recomputing owner dims or block shape), proves the
-    structure against the writer `sde.su_iterate` iteration domain, and emits
-    explicit window structure. It introduces no `sde.mu_token`, slice,
-    `sde.mu_dep`, or ARTS isolation concept, and writes no downstream promise.
-
-    Out-of-scope MUs are skipped conservatively (no window, no error): dynamic,
-    matmul/reduction, multi-owner, and unsupported uses. Same-CU in-place
-    load/store access is raised as one `readwrite` window, except committed
-    halo reads are split into separate read and write windows so ARTS never
-    receives a writable halo dependency. The pass never mutates existing ops; it
-    only inserts window facts.
-
-    Production SDE shaping runs this after MU layout has been realized and
-    rank-expanded, then verifies the raised windows before crossing into ARTS.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::carts::sde::createRaiseToMuAccessWindowPass()";
-}
-
 def SdeCoarseAvoidance
     : Pass<"sde-coarse-avoidance", "mlir::ModuleOp"> {
   let summary = "Avoid coarse MU allocation by realizing the committed grain";

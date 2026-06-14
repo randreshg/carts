@@ -135,11 +135,6 @@ struct MappedLoopIv {
   std::optional<int64_t> step;
 };
 
-struct ScaledIvResidual {
-  int64_t multiplier = 1;
-  Value residual;
-};
-
 struct TaskDepSpec {
   sde::SdeMuDepOp dep;
   arts::DbAllocOp alloc;

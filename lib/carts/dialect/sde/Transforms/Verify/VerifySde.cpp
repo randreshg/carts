@@ -25,7 +25,7 @@
 ///
 /// Deliberately NOT checked: CU `IsolatedFromAbove` (a ARTS concern), the
 /// presence of an `sde.mu_token` / slice op / any specific access-window
-/// carrier (windows are raised later by RaiseToMuAccessWindow).
+/// carrier (access windows are derived on demand by queryAccessWindows).
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"

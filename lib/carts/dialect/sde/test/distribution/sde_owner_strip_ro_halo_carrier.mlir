@@ -1,11 +1,11 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout,raise-to-mu-access-window,verify-sde-mu-access-window,sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout,sde-redistribute)' 2>&1 | %FileCheck %s
 
 // Rank-expanded owner-strip stencils need one read window per read-only
 // neighbor input and a halo_like redist projected onto the expanded grid dim.
 
 // CHECK-LABEL: func.func @owner_strip_three_ro_inputs
 // CHECK-COUNT-3: sde.su_halo %{{.*}} : memref<16x8x8x4xf32> array_id({{[0-9]+}}) owner [0] block [1, 8, 8, 4] halo [1, 0, 0, 0]
-// CHECK-COUNT-3: sde.mu_access_window read %{{.*}} : memref<16x8x8x4xf32> array_id({{[0-9]+}})
+// CHECK-NOT: sde.mu_access_window
 
 func.func @owner_strip_three_ro_inputs() {
   %c0 = arith.constant 0 : index
@@ -77,7 +77,9 @@ func.func @owner_strip_three_ro_inputs() {
 }
 
 // CHECK-LABEL: func.func @in_place_gauss_seidel_gets_readwrite_window
-// CHECK: sde.mu_access_window readwrite %{{.*}} : memref<16x8x8x4xf32> array_id(4)
+// CHECK-NOT: sde.mu_access_window
+// CHECK: memref.load %{{.*}}[
+// CHECK: memref.store %{{.*}}[
 
 func.func @in_place_gauss_seidel_gets_readwrite_window() {
   %c0 = arith.constant 0 : index

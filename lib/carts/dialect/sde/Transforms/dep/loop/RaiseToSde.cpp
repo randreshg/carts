@@ -2,8 +2,10 @@
 /// File: RaiseToSde.cpp
 ///
 /// SDE raise-to-sde CORE (partial Step 11): raises proven-independent
-/// sequential `scf.for` nests into bare `sde.su_iterate` + `sde.cu_region`
-/// skeletons via `buildSuIterate` / `buildCuRegion` with zero optional attrs.
+/// sequential `scf.for` or `affine.for` nests into bare `sde.su_iterate` +
+/// `sde.cu_region` skeletons via `buildSuIterate` / `buildCuRegion` with zero
+/// optional attrs. Affine nests use upstream `isLoopParallel`; scf nests keep
+/// the conservative IV-equality proof until Interchange/Tiling migrate.
 ///
 /// Per-axis split: a contiguous parallel outer prefix becomes an N-D
 /// `su_iterate` domain; dependence-carrying inner axes stay as `scf.for`
@@ -32,6 +34,10 @@ namespace mlir::carts::sde {
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 
+#include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -58,8 +64,12 @@ struct Counter {
   Type elemType;
 };
 
+enum class LoopNestKind { Scf, Affine };
+
 struct ParallelNest {
+  LoopNestKind kind = LoopNestKind::Scf;
   SmallVector<scf::ForOp, 4> loops;
+  SmallVector<affine::AffineForOp, 4> affineLoops;
   SmallVector<int64_t, 4> extents;
   SmallVector<memref::StoreOp, 4> arrayStores;
   SmallVector<Value, 4> roots;
@@ -260,11 +270,11 @@ static bool nestBodyIsSupported(scf::ForOp outer,
   return !rejected;
 }
 
-static std::optional<int64_t> findCounterInit(Value mem, scf::ForOp outer) {
-  Block *parent = outer->getBlock();
+static std::optional<int64_t> findCounterInit(Value mem, Operation *outerLoop) {
+  Block *parent = outerLoop->getBlock();
   Value lastStored;
   for (Operation &op : *parent) {
-    if (&op == outer.getOperation())
+    if (&op == outerLoop)
       break;
     if (auto st = dyn_cast<memref::StoreOp>(op))
       if (ValueAnalysis::stripMemrefViewOps(st.getMemref()) == mem)
@@ -275,12 +285,12 @@ static std::optional<int64_t> findCounterInit(Value mem, scf::ForOp outer) {
   return matchConstInt(lastStored);
 }
 
-static bool counterUsesAreLoopLocal(Value mem, scf::ForOp outer) {
-  Block *parent = outer->getBlock();
+static bool counterUsesAreLoopLocal(Value mem, Operation *outerLoop) {
+  Block *parent = outerLoop->getBlock();
   for (Operation *user : mem.getUsers()) {
-    if (outer->isAncestor(user))
+    if (outerLoop->isAncestor(user))
       continue;
-    if (user->getBlock() != parent || !user->isBeforeInBlock(outer))
+    if (user->getBlock() != parent || !user->isBeforeInBlock(outerLoop))
       return false;
     auto store = dyn_cast<memref::StoreOp>(user);
     if (!store || ValueAnalysis::stripMemrefViewOps(store.getMemref()) != mem)
@@ -300,6 +310,246 @@ static bool nestHasReentrantAncestor(scf::ForOp outer) {
          outer->getParentOfType<sde::SdeCuRegionOp>();
 }
 
+static bool nestHasReentrantAncestor(affine::AffineForOp outer) {
+  auto cu = outer->getParentOfType<sde::SdeCuRegionOp>();
+  if (cu && outer->getParentOp() == cu.getOperation() &&
+      cu.getKind() == sde::SdeCuKind::single && cu.getIterArgs().empty())
+    return false;
+  return outer->getParentOfType<sde::SdeSuIterateOp>() ||
+         outer->getParentOfType<sde::SdeCuRegionOp>();
+}
+
+static bool collectPerfectAffineForChain(
+    affine::AffineForOp outer, SmallVectorImpl<affine::AffineForOp> &loops) {
+  affine::AffineForOp cur = outer;
+  while (true) {
+    loops.push_back(cur);
+    Block &body = cur.getRegion().front();
+    affine::AffineForOp next;
+    for (Operation &op : body.without_terminator()) {
+      if (auto nested = dyn_cast<affine::AffineForOp>(op)) {
+        if (next)
+          return true;
+        next = nested;
+        continue;
+      }
+      if (!isPureScalarOp(&op) && !isa<affine::AffineIfOp>(op))
+        return true;
+    }
+    if (next) {
+      cur = next;
+      continue;
+    }
+    return true;
+  }
+}
+
+static std::optional<int64_t> constantTrip(affine::AffineForOp loop) {
+  if (!loop.hasConstantLowerBound() || !loop.hasConstantUpperBound())
+    return std::nullopt;
+  int64_t lb = loop.getConstantLowerBound();
+  int64_t ub = loop.getConstantUpperBound();
+  int64_t step = loop.getStepAsInt();
+  if (lb != 0 || step != 1 || ub <= 0)
+    return std::nullopt;
+  return ub;
+}
+
+static bool affineNestBodyIsSupported(affine::AffineForOp outer,
+                                      ArrayRef<affine::AffineForOp> loops) {
+  llvm::SmallDenseSet<Operation *> loopOps;
+  for (affine::AffineForOp loop : loops)
+    loopOps.insert(loop.getOperation());
+
+  bool rejected = false;
+  outer.walk([&](Operation *op) {
+    if (rejected)
+      return WalkResult::interrupt();
+    if (loopOps.contains(op))
+      return WalkResult::advance();
+    if (isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface,
+            memref::StoreOp, memref::LoadOp, affine::AffineYieldOp>(op))
+      return WalkResult::advance();
+    if (isa<affine::AffineIfOp>(op) || isPureScalarOp(op) ||
+        sde::isKnownPureScalarLibmCall(op) || isMemoryEffectFree(op))
+      return WalkResult::advance();
+    rejected = true;
+    return WalkResult::interrupt();
+  });
+  return !rejected;
+}
+
+static unsigned countAffineParallelPrefix(ArrayRef<affine::AffineForOp> loops) {
+  unsigned prefix = 0;
+  for (affine::AffineForOp loop : loops) {
+    SmallVector<affine::LoopReduction, 2> reductions;
+    if (!affine::isLoopParallel(loop, &reductions))
+      break;
+    if (loop.getNumIterOperands() > 0 &&
+        reductions.size() != loop.getNumIterOperands())
+      break;
+    ++prefix;
+  }
+  return prefix;
+}
+
+static std::optional<ParallelNest> matchAffineParallelNest(
+    affine::AffineForOp outer) {
+  if (nestHasReentrantAncestor(outer))
+    return std::nullopt;
+  if (isa<affine::AffineForOp>(outer->getParentOp()))
+    return std::nullopt;
+
+  ParallelNest nest;
+  nest.kind = LoopNestKind::Affine;
+  if (auto cu = outer->getParentOfType<sde::SdeCuRegionOp>()) {
+    if (outer->getParentOp() != cu.getOperation() ||
+        cu.getKind() != sde::SdeCuKind::single || !cu.getIterArgs().empty())
+      return std::nullopt;
+    nest.enclosingSingleCu = cu;
+  }
+
+  collectPerfectAffineForChain(outer, nest.affineLoops);
+  if (nest.affineLoops.empty())
+    return std::nullopt;
+  for (affine::AffineForOp loop : nest.affineLoops) {
+    std::optional<int64_t> trip = constantTrip(loop);
+    if (!trip)
+      return std::nullopt;
+    nest.extents.push_back(*trip);
+  }
+
+  if (!affineNestBodyIsSupported(outer, nest.affineLoops))
+    return std::nullopt;
+
+  nest.parallelPrefix = countAffineParallelPrefix(nest.affineLoops);
+  if (nest.parallelPrefix == 0)
+    return std::nullopt;
+  if (nest.parallelPrefix < nest.affineLoops.size())
+    return std::nullopt;
+
+  SmallVector<Operation *, 4> storeOps;
+  SmallVector<Operation *, 8> loadOps;
+  outer.walk([&](Operation *op) {
+    if (isa<affine::AffineWriteOpInterface, memref::StoreOp>(op)) {
+      storeOps.push_back(op);
+      return WalkResult::advance();
+    }
+    if (isa<affine::AffineReadOpInterface, memref::LoadOp>(op)) {
+      loadOps.push_back(op);
+      return WalkResult::advance();
+    }
+    return WalkResult::advance();
+  });
+
+  auto storeMemref = [](Operation *op) -> Value {
+    if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op))
+      return write.getMemRef();
+    return cast<memref::StoreOp>(op).getMemref();
+  };
+  auto loadMemref = [](Operation *op) -> Value {
+    if (auto read = dyn_cast<affine::AffineReadOpInterface>(op))
+      return read.getMemRef();
+    return cast<memref::LoadOp>(op).getMemref();
+  };
+
+  llvm::SmallDenseMap<Value, int64_t> counterStep;
+  SmallVector<Value, 4> writtenRoots;
+  for (Operation *storeOp : storeOps) {
+    Value rawMem = storeMemref(storeOp);
+    Value r = ValueAnalysis::stripMemrefViewOps(rawMem);
+    if (isScalarScratch(r)) {
+      Value storedValue;
+      if (auto st = dyn_cast<memref::StoreOp>(storeOp))
+        storedValue = st.getValue();
+      else
+        return std::nullopt;
+      auto add = storedValue.getDefiningOp<arith::AddIOp>();
+      if (!add)
+        return std::nullopt;
+      std::optional<int64_t> kc;
+      if (auto ld = add.getLhs().getDefiningOp<memref::LoadOp>();
+          ld && ValueAnalysis::stripMemrefViewOps(ld.getMemref()) == r) {
+        kc = matchConstInt(add.getRhs());
+      } else if (auto ld2 = add.getRhs().getDefiningOp<memref::LoadOp>();
+                 ld2 &&
+                 ValueAnalysis::stripMemrefViewOps(ld2.getMemref()) == r) {
+        kc = matchConstInt(add.getLhs());
+      }
+      if (!kc)
+        return std::nullopt;
+      if (counterStep.count(r))
+        return std::nullopt;
+      counterStep[r] = *kc;
+      continue;
+    }
+
+    if (!r || sde::isDefinedInside(outer.getOperation(), r))
+      return std::nullopt;
+
+    auto memRefType = dyn_cast<MemRefType>(r.getType());
+    if (!memRefType || memRefType.getRank() == 0)
+      return std::nullopt;
+    for (int64_t dim : memRefType.getShape()) {
+      if (dim == ShapedType::kDynamic)
+        return std::nullopt;
+    }
+
+    if (!rootIn(r, writtenRoots))
+      writtenRoots.push_back(r);
+  }
+
+  std::optional<SmallVector<int64_t, 4>> selectedShape;
+  for (Operation *storeOp : storeOps) {
+    Value r = ValueAnalysis::stripMemrefViewOps(storeMemref(storeOp));
+    if (isScalarScratch(r))
+      continue;
+
+    auto memRefType = cast<MemRefType>(r.getType());
+    SmallVector<int64_t, 4> shape;
+    shape.reserve(memRefType.getRank());
+    for (int64_t dim : memRefType.getShape())
+      shape.push_back(dim);
+
+    if (!selectedShape)
+      selectedShape = shape;
+    else if (*selectedShape != shape)
+      return std::nullopt;
+
+    if (!rootIn(r, nest.roots))
+      nest.roots.push_back(r);
+  }
+  if (nest.roots.empty())
+    return std::nullopt;
+
+  for (auto &kv : counterStep) {
+    std::optional<int64_t> init = findCounterInit(kv.first, outer.getOperation());
+    if (!init)
+      return std::nullopt;
+    if (!counterUsesAreLoopLocal(kv.first, outer.getOperation()))
+      return std::nullopt;
+    auto mt = dyn_cast<MemRefType>(kv.first.getType());
+    if (!mt)
+      return std::nullopt;
+    nest.counters.push_back({kv.first, *init, kv.second, mt.getElementType()});
+  }
+  auto isCounter = [&](Value root) {
+    for (const Counter &c : nest.counters)
+      if (c.mem == root)
+        return true;
+    return false;
+  };
+  for (Operation *loadOp : loadOps) {
+    Value r = ValueAnalysis::stripMemrefViewOps(loadMemref(loadOp));
+    if (!isCounter(r))
+      if (!r || isScalarScratch(r) || rootIn(r, nest.roots) ||
+          sde::isDefinedInside(outer.getOperation(), r))
+        return std::nullopt;
+  }
+
+  return nest;
+}
+
 static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
   if (nestHasReentrantAncestor(outer))
     return std::nullopt;
@@ -307,6 +557,7 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
     return std::nullopt;
 
   ParallelNest nest;
+  nest.kind = LoopNestKind::Scf;
   if (auto cu = outer->getParentOfType<sde::SdeCuRegionOp>()) {
     if (outer->getParentOp() != cu.getOperation() ||
         cu.getKind() != sde::SdeCuKind::single || !cu.getIterArgs().empty())
@@ -433,10 +684,10 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
     return std::nullopt;
 
   for (auto &kv : counterStep) {
-    std::optional<int64_t> init = findCounterInit(kv.first, outer);
+    std::optional<int64_t> init = findCounterInit(kv.first, outer.getOperation());
     if (!init)
       return std::nullopt;
-    if (!counterUsesAreLoopLocal(kv.first, outer))
+    if (!counterUsesAreLoopLocal(kv.first, outer.getOperation()))
       return std::nullopt;
     auto mt = dyn_cast<MemRefType>(kv.first.getType());
     if (!mt)
@@ -682,11 +933,45 @@ static void splitSingleCuAroundSchedulingOps(sde::SdeCuRegionOp cu) {
   cu.erase();
 }
 
+static void convertAffineMemoryOpsInRegion(Region &region) {
+  SmallVector<Operation *> toErase;
+  region.walk([&](Operation *op) {
+    if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
+      OpBuilder builder(store);
+      std::optional<SmallVector<Value, 8>> indices = affine::expandAffineMap(
+          builder, store.getLoc(), store.getAffineMap(), store.getMapOperands());
+      if (!indices)
+        return WalkResult::advance();
+      memref::StoreOp::create(builder, store.getLoc(), store.getValue(),
+                              store.getMemRef(), *indices);
+      toErase.push_back(store);
+      return WalkResult::advance();
+    }
+    if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
+      OpBuilder builder(load);
+      std::optional<SmallVector<Value, 8>> indices = affine::expandAffineMap(
+          builder, load.getLoc(), load.getAffineMap(), load.getMapOperands());
+      if (!indices)
+        return WalkResult::advance();
+      auto memLoad = memref::LoadOp::create(builder, load.getLoc(),
+                                            load.getMemRef(), *indices);
+      load.replaceAllUsesWith(memLoad.getResult());
+      toErase.push_back(load);
+      return WalkResult::advance();
+    }
+    return WalkResult::advance();
+  });
+  for (Operation *op : toErase)
+    op->erase();
+}
+
 static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
                                                   OpBuilder &builder,
                                                   Operation *insertBefore) {
-  scf::ForOp outer = nest.loops.front();
-  Location loc = outer.getLoc();
+  Location loc = insertBefore ? insertBefore->getLoc()
+                              : (nest.kind == LoopNestKind::Scf
+                                     ? nest.loops.front().getLoc()
+                                     : nest.affineLoops.front().getLoc());
   unsigned parallelPrefix = nest.parallelPrefix;
 
   if (insertBefore)
@@ -721,20 +1006,31 @@ static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
   Block &cuBody = sde::ensureBlock(cuRegion.getBody());
   builder.setInsertionPointToStart(&cuBody);
   IRMapping mapper;
-  for (unsigned d = 0; d < parallelPrefix; ++d)
-    mapper.map(nest.loops[d].getInductionVar(), dst.getArgument(d));
+  if (nest.kind == LoopNestKind::Scf) {
+    for (unsigned d = 0; d < parallelPrefix; ++d)
+      mapper.map(nest.loops[d].getInductionVar(), dst.getArgument(d));
 
-  // Clone executable work from every loop level, not only the innermost body.
-  // Jacobi-style init nests compute outer-loop values (e.g. index_cast of the
-  // outer IV) that the inner body still references; dropping those defs and
-  // erasing the scf nest leaves dangling uses.
-  for (scf::ForOp loop : nest.loops) {
-    Block &body = loop.getRegion().front();
-    for (Operation &op : body.without_terminator()) {
-      if (isa<scf::ForOp>(op))
-        continue;
-      builder.clone(op, mapper);
+    for (scf::ForOp loop : nest.loops) {
+      Block &body = loop.getRegion().front();
+      for (Operation &op : body.without_terminator()) {
+        if (isa<scf::ForOp>(op))
+          continue;
+        builder.clone(op, mapper);
+      }
     }
+  } else {
+    for (unsigned d = 0; d < parallelPrefix; ++d)
+      mapper.map(nest.affineLoops[d].getInductionVar(), dst.getArgument(d));
+
+    for (affine::AffineForOp loop : nest.affineLoops) {
+      Block &body = loop.getRegion().front();
+      for (Operation &op : body.without_terminator()) {
+        if (isa<affine::AffineForOp>(op))
+          continue;
+        builder.clone(op, mapper);
+      }
+    }
+    convertAffineMemoryOpsInRegion(cuRegion.getBody());
   }
   sde::SdeYieldOp::create(builder, loc, ValueRange{});
 
@@ -746,9 +1042,8 @@ static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
 
 static void substituteCounters(ParallelNest &nest, sde::SdeSuIterateOp suIter,
                                OpBuilder &builder) {
-  scf::ForOp outer = nest.loops.front();
-  Location loc = outer.getLoc();
-  unsigned n = nest.loops.size();
+  Location loc = suIter.getLoc();
+  unsigned n = nest.extents.size();
 
   SmallVector<Value, 4> dimIv;
   Block &suBody = suIter.getBody().front();
@@ -814,13 +1109,15 @@ static void substituteCounters(ParallelNest &nest, sde::SdeSuIterateOp suIter,
 }
 
 static void raiseNest(ParallelNest &nest, OpBuilder &builder) {
-  scf::ForOp outer = nest.loops.front();
+  Operation *outer = nest.kind == LoopNestKind::Scf
+                         ? nest.loops.front().getOperation()
+                         : nest.affineLoops.front().getOperation();
 
   if (nest.enclosingSingleCu) {
     sde::SdeSuIterateOp suIter =
-        createSuIterateForNest(nest, builder, outer.getOperation());
+        createSuIterateForNest(nest, builder, outer);
     substituteCounters(nest, suIter, builder);
-    outer.erase();
+    outer->erase();
     splitSingleCuAroundSchedulingOps(nest.enclosingSingleCu);
     return;
   }
@@ -828,7 +1125,7 @@ static void raiseNest(ParallelNest &nest, OpBuilder &builder) {
   builder.setInsertionPoint(outer);
   sde::SdeSuIterateOp suIter = createSuIterateForNest(nest, builder, nullptr);
   substituteCounters(nest, suIter, builder);
-  outer.erase();
+  outer->erase();
 }
 
 static bool moduleHasAsyncSuIterate(ModuleOp module) {
@@ -852,6 +1149,19 @@ static std::optional<ParallelNest> findNextParallelNest(ModuleOp module) {
     if (skipRawHostNests && !outer->getParentOfType<sde::SdeCuRegionOp>())
       return WalkResult::advance();
     if (std::optional<ParallelNest> nest = matchParallelNest(outer)) {
+      next = std::move(*nest);
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (next)
+    return next;
+  module.walk([&](affine::AffineForOp outer) -> WalkResult {
+    if (isa<affine::AffineForOp>(outer->getParentOp()))
+      return WalkResult::advance();
+    if (skipRawHostNests && !outer->getParentOfType<sde::SdeCuRegionOp>())
+      return WalkResult::advance();
+    if (std::optional<ParallelNest> nest = matchAffineParallelNest(outer)) {
       next = std::move(*nest);
       return WalkResult::interrupt();
     }

@@ -124,8 +124,8 @@ SdeSuIterateOp findCommittedBlockLayoutWitness(SdeMuAllocOp muAlloc);
 
 /// True if `root` has a use a block-grid layout cannot localize — any user
 /// other than a direct `memref.load`/`store`/`dealloc`,
-/// `sde.array_layout_root` provenance, an `sde.mu_access_window` fact, or an
-/// `sde.redist` fact. The single allow-list shared by the coarse-avoidance
+/// `sde.array_layout_root` provenance, or a committed SU movement op
+/// (`su.halo`, `su.all_to_all`, `su.reduce_scatter`). The single allow-list shared by the coarse-avoidance
 /// gate and redistribution realization so they never drift.
 bool muRootHasUnsupportedUse(mlir::Value root);
 

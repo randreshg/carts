@@ -120,10 +120,8 @@ FailureOr<Value> arts::findAllToAllTargetMemref(sde::SdeSuAllToAllOp allToAll,
     targetMu = mu;
   };
 
-  consumer.walk([&](sde::SdeMuAccessWindowOp window) {
-    if (window.getMode() == sde::SdeAccessMode::read)
-      return;
-    considerWrite(window.getMu());
+  consumer.walk([&](memref::StoreOp store) {
+    considerWrite(store.getMemRef());
   });
   consumer.walk([&](sde::SdeArrayLayoutRootOp root) {
     if (root.getMode() != sde::SdeAccessMode::write)
