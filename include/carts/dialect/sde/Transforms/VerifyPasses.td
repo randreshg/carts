@@ -12,20 +12,6 @@ def VerifySdeLowered : Pass<"verify-sde-lowered", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::sde::createVerifySdeLoweredPass()";
 }
 
-def VerifySdeMuLayout : Pass<"verify-sde-mu-layout", "mlir::ModuleOp"> {
-  let summary = "Verify the structural block-grid carrier on sde.mu_alloc";
-  let description = [{
-    Checks the structural block-grid carrier invariants:
-      * no stale logical-rank access (or rank-reducing view) against a converted
-        rank-expanded block-grid MU.
-
-    Conservative (flat) MUs and out-of-scope layouts are skipped.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::memref::MemRefDialect"];
-  let constructor = "mlir::carts::sde::createVerifySdeMuLayoutPass()";
-}
-
 def VerifySdeMuAccessWindowSync
     : Pass<"verify-sde-mu-access-window-sync", "mlir::ModuleOp"> {
   let summary = "Verify SU ordering is justified by MU access windows";
@@ -46,7 +32,7 @@ def VerifySdeMuAccessWindowSync
     Fail-closed when windows are present but the ordering cannot be proven
     (inconsistent owner-dim rank, or an adjacent access no window describes).
     Out of scope (no query-derived windows on either side of a barrier) is skipped;
-    MU layout soundness is `verify-sde-mu-layout`'s job. Unlike effect-based
+    MU layout soundness is the `sde.mu_alloc` op verifier's job. Unlike effect-based
     barrier elimination, which removes barriers from structured memory effects,
     this proves justification from query-derived block-grid windows. Reads current IR
     only and mutates nothing.

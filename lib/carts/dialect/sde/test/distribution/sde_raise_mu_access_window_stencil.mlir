@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout,sde-storage-to-arts-db)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,sde-storage-to-arts-db)' 2>&1 | %FileCheck %s
 
 // Stencil: a stencil-classified, single-owner block layout is in scope.
 // The committed layout carries a halo () but rank expansion does NOT

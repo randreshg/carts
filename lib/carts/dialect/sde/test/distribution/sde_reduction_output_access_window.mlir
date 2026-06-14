@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu)' 2>&1 | %FileCheck %s
 
 // A reduction-classified SU with no SDE reduction accumulator writes an
 // owner-indexed output block directly. SDE may realize it with the same

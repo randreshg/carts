@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout,sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,sde-redistribute)' 2>&1 | %FileCheck %s
 
 // Rank-expanded owner-strip stencils need one read window per read-only
 // neighbor input and a halo_like redist projected onto the expanded grid dim.

@@ -170,7 +170,6 @@ std::unique_ptr<Pass> createConvertOpenMPToSdePass();
 
 // --- Verification ---
 std::unique_ptr<Pass> createVerifySdeLoweredPass();
-std::unique_ptr<Pass> createVerifySdeMuLayoutPass();
 std::unique_ptr<Pass> createVerifySdeMuAccessWindowSyncPass();
 std::unique_ptr<Pass> createVerifySdeCoarseAvoidancePass();
 std::unique_ptr<Pass> createVerifySdePass();

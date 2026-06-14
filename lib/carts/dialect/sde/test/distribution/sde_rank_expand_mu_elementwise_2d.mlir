@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu,verify-sde-mu-layout)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu)' 2>&1 | %FileCheck %s
 
 // Structural carrier: committed single-contiguous-owner elementwise BLOCK facts
 // in arrayLayout rank-expand the written sde.mu_alloc result memref so the block

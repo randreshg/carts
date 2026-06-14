@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-scalar-block-reduction,verify-sde-mu-layout,verify-sde)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-cu-normalization,sde-scalar-block-reduction,verify-sde)' 2>&1 | %FileCheck %s
 
 // CHECK-LABEL: func.func @rank_expanded_source_checksum_partials
 // CHECK: %[[PARTIAL:.*]] = sde.mu_alloc : memref<8x1x16x1xf64>

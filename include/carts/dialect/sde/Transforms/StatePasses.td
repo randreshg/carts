@@ -95,7 +95,7 @@ def SdeRankExpandMu
         physical `[block, intra-block, ...]` coordinate system via div/mod
         localization.
 
-    Owner dims become `recover(structure)` (see `verify-sde-mu-layout`); no
+    Owner dims become `recover(structure)` (see the `sde.mu_alloc` op verifier); no
     owner-dim/block-shape attribute is added to the `mu_alloc`. Matmul,
     reduction, in-place, dynamic, and multi-owner layouts are left in
     conservative flat form (or fail closed) — never papered over with an

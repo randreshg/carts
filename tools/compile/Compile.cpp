@@ -263,7 +263,7 @@ static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 2> kInitialCleanupPasses = {
     "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 22> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
     "LayoutAssignment",
@@ -280,7 +280,6 @@ static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
     "SdeCuNormalization",
     "SdeRankExpandMu",
     "SdeScalarBlockReduction",
-    "VerifySdeMuLayout",
     "MuAccessWindowSyncOpt",
     "VerifySdeMuAccessWindowSync",
     "SdeRedistribute",
@@ -1145,7 +1144,6 @@ void buildSdePlanningPipeline(PassManager &pm,
   // fails closed at the SDE boundary instead of being repaired downstream.
   pm.addPass(sde::createSdeRankExpandMuPass());
   pm.addPass(sde::createSdeScalarBlockReductionPass());
-  pm.addPass(sde::createVerifySdeMuLayoutPass());
   pm.addPass(sde::createMuAccessWindowSyncOptPass());
   pm.addPass(sde::createVerifySdeMuAccessWindowSyncPass());
   pm.addPass(sde::createSdeRedistributePass());

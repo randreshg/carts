@@ -8,6 +8,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
+#include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/dialect/sde/Utils/SdeCuStructure.h"
 #include "carts/utils/ArrayAttrUtils.h"
@@ -830,6 +831,28 @@ LogicalResult SdeMuAllocOp::verify() {
     return emitOpError() << "expects " << numDynamic
                          << " dynamic size(s) for result type " << memrefTy
                          << "; got " << getDynamicSizes().size();
+
+  // Folded from the former verify-sde-mu-layout pass (R1c): once this MU is
+  // rank-expanded into a block grid, no user may take a rank-reducing view
+  // (subview/collapse/cast) that reintroduces a stale logical-rank handle onto
+  // the converted block-grid MU. The load/store arity arm of that pass is
+  // dropped as redundant with the core memref.load/store verifiers (their index
+  // arity must already equal the rank of the same MU memref). Conservative
+  // (flat) MUs are skipped: recognizeExpandedBlockGridMu returns nullopt.
+  if (recognizeExpandedBlockGridMu(*this)) {
+    const int64_t muRank = memrefTy.getRank();
+    for (Operation *user : getMemref().getUsers()) {
+      if (isa<memref::LoadOp, memref::StoreOp>(user))
+        continue;
+      for (Value res : user->getResults()) {
+        auto resType = dyn_cast<MemRefType>(res.getType());
+        if (resType && resType.getRank() < muRank)
+          return user->emitOpError()
+                 << "rank-reducing view of a rank-expanded block-grid MU "
+                    "reintroduces a stale logical-rank access";
+      }
+    }
+  }
   return success();
 }
 

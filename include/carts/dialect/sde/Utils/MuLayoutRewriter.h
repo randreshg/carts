@@ -131,7 +131,7 @@ bool muRootHasUnsupportedUse(mlir::Value root);
 
 /// A rank-expanded block-grid MU candidate (any number of owner dims),
 /// recognized purely from the committed writer `su_iterate` plus the expanded
-/// memref type. This is shape RECOGNITION only (the `verify-sde-mu-layout`
+/// memref type. This is shape RECOGNITION only (the `sde.mu_alloc` op verifier's
 /// shape gate); it does NOT prove tile/grain consistency — callers decide
 /// whether a mismatch is a skip (a raiser) or an error (a verifier).
 ///

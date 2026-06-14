@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-memory-unit-realization,sde-rank-expand-mu,verify-sde-mu-layout)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-memory-unit-realization,sde-rank-expand-mu)' 2>&1 | %FileCheck %s
 
 // A memref allocated inside a producer CU and yielded as a CU result is still
 // SDE-owned storage once later SUs commit block-layout facts for that result.

@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(loop-interchange,sde-rank-expand-mu,verify-sde-mu-layout)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(loop-interchange,sde-rank-expand-mu)' 2>&1 | %FileCheck %s
 
 // CHECK-LABEL: func.func @matmul_output_access_windows
 // CHECK: %[[OUT:.*]] = sde.mu_alloc : memref<4x4x32x32xf32>
