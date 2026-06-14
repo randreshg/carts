@@ -249,7 +249,7 @@ static cl::opt<std::string> CustomPassPipeline(
              "pipeline"),
     cl::value_desc("pipeline"), cl::init(""));
 
-static const std::array<llvm::StringLiteral, 12> kSdeInputNormalizationPasses =
+static const std::array<llvm::StringLiteral, 14> kSdeInputNormalizationPasses =
     {"PromoteTargetAttrs",
      "SimplifyAffineStructures(func)",
      "CSE",
@@ -257,6 +257,8 @@ static const std::array<llvm::StringLiteral, 12> kSdeInputNormalizationPasses =
      "SdeInputInliner",
      "PolygeistCanonicalize",
      "ScalarForwarding",
+     "PolygeistCanonicalize",
+     "LowerAffine(func)",
      "PolygeistCanonicalize",
      "SdeMemrefNormalization",
      "SdeHandleDeps",
@@ -1110,6 +1112,16 @@ void buildSdeInputNormalizationPipeline(PassManager &pm) {
   pm.addPass(sde::createSdeInputInlinerPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(sde::createScalarForwardingPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  // SdeMemrefNormalization's nested-pointer (`float**`) allocation detector is
+  // keyed on the memref dialect (scf loops + memref.load/store with direct
+  // `root[%iv]` indexing). S4 keeps the kernel in affine form, so lower it back
+  // to memref/scf for this one pass, then run PolygeistCanonicalize to fold the
+  // `polygeist.subindex` row plumbing into direct `root[%iv]` accesses (the form
+  // the detector matches; pre-S4 this fold happened on the memref-dialect store,
+  // but S4's affine store left the subindex behind). The planning pipeline
+  // re-raises affine immediately after (S4d, addAffineRecoveryBundle).
+  pm.addNestedPass<func::FuncOp>(createLowerAffinePass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(sde::createSdeMemrefNormalizationPass());
   pm.addPass(sde::createSdeHandleDepsPass());
