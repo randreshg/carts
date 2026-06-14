@@ -249,10 +249,11 @@ static cl::opt<std::string> CustomPassPipeline(
              "pipeline"),
     cl::value_desc("pipeline"), cl::init(""));
 
-static const std::array<llvm::StringLiteral, 11> kSdeInputNormalizationPasses =
+static const std::array<llvm::StringLiteral, 12> kSdeInputNormalizationPasses =
     {"PromoteTargetAttrs",
      "SimplifyAffineStructures(func)",
      "CSE",
+     "PolygeistCanonicalize",
      "SdeInputInliner",
      "PolygeistCanonicalize",
      "ScalarForwarding",
@@ -1097,6 +1098,14 @@ void buildSdeInputNormalizationPipeline(PassManager &pm) {
   // lowering so memref normalization can read affine.load/store maps natively.
   optPM.addPass(affine::createSimplifyAffineStructuresPass());
   pm.addPass(createCSEPass());
+  // Fold constant control flow (e.g. cgeist's `scf.if %true` / execute_region
+  // nests around a `min(NI,NJ)` loop bound) BEFORE inlining. Otherwise a helper
+  // whose `affine.for` bound is such a non-constant value is a valid affine
+  // symbol only at the callee's top level, and inlining it produces invalid
+  // affine IR ("operand cannot be used as a symbol"). Folding the bound to a
+  // constant keeps the helper inlinable (its accesses must land on the caller's
+  // DB-backed storage for SDE-to-ARTS realization).
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(sde::createSdeInputInlinerPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(sde::createScalarForwardingPass());
