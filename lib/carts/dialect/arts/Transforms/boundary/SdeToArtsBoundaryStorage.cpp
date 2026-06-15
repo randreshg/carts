@@ -78,10 +78,20 @@ LogicalResult requireCompatibleWindows(sde::SdeMuAllocOp op,
   std::optional<CommittedPhysicalLayout> expandedTypeLayout;
   if (preferExpandedTypeLayout)
     expandedTypeLayout = readPhysicalLayoutFromExpandedType(memrefType);
+  // recoverMuPhysicalLayoutFromExpandedType is a type-only structural guess and
+  // is ambiguous when a leading grid dim equals a small owner block extent
+  // (e.g. a [2,4,...] prefix can read as either grid=2/block=4 over one owner
+  // dim or as two owner grids). firstGeom is anchored on the committed SDE
+  // layout fact via deriveMuAccessWindowGeometry, so when the type-only owner
+  // rank disagrees with it, the type reader is the unreliable one: discard it
+  // and author the block shape from the fact-anchored geometry instead of
+  // failing closed.
+  if (expandedTypeLayout &&
+      expandedTypeLayout->ownerDims.size() != ownerDimCount)
+    expandedTypeLayout.reset();
   if (expandedTypeLayout) {
-    if (expandedTypeLayout->ownerDims.size() != ownerDimCount ||
-        expandedTypeLayout->blockShape.size() + ownerDimCount !=
-            memrefType.getRank())
+    if (expandedTypeLayout->blockShape.size() + ownerDimCount !=
+        memrefType.getRank())
       return op.emitOpError()
              << "has access-window owner rank incompatible with the "
                 "rank-expanded MU type";
@@ -235,28 +245,29 @@ static TaskDepLayoutLookup findCommittedBlockLayoutForRoot(
   if (!searchRoot)
     searchRoot = context;
 
-  WalkResult walkResult = searchRoot->walk([&](sde::SdeArrayLayoutRootOp layoutRoot) {
-    if (layoutRoot.getMode() != sde::SdeAccessMode::write ||
-        !ValueAnalysis::sameMemrefRoot(layoutRoot.getRoot(), root))
-      return WalkResult::advance();
-    auto iterate = layoutRoot->getParentOfType<sde::SdeSuIterateOp>();
-    FailureOr<sde::CommittedSuPhysicalLayout> layout =
-        readCommittedBlockLayoutForRootFact(layoutRoot, iterate);
-    if (failed(layout))
-      return WalkResult::interrupt();
-    if (!selected) {
-      selected = *layout;
-      return WalkResult::advance();
-    }
-    if (sameValues(selected->ownerDims, layout->ownerDims) &&
-        sameValues(selected->blockShape, layout->blockShape))
-      return WalkResult::advance();
-    InFlightDiagnostic diag =
-        context->emitError("conflicting committed block layouts for task "
-                           "dependency storage root");
-    diag.attachNote(iterate.getLoc()) << "conflicting layout source";
-    return WalkResult::interrupt();
-  });
+  WalkResult walkResult =
+      searchRoot->walk([&](sde::SdeArrayLayoutRootOp layoutRoot) {
+        if (layoutRoot.getMode() != sde::SdeAccessMode::write ||
+            !ValueAnalysis::sameMemrefRoot(layoutRoot.getRoot(), root))
+          return WalkResult::advance();
+        auto iterate = layoutRoot->getParentOfType<sde::SdeSuIterateOp>();
+        FailureOr<sde::CommittedSuPhysicalLayout> layout =
+            readCommittedBlockLayoutForRootFact(layoutRoot, iterate);
+        if (failed(layout))
+          return WalkResult::interrupt();
+        if (!selected) {
+          selected = *layout;
+          return WalkResult::advance();
+        }
+        if (sameValues(selected->ownerDims, layout->ownerDims) &&
+            sameValues(selected->blockShape, layout->blockShape))
+          return WalkResult::advance();
+        InFlightDiagnostic diag =
+            context->emitError("conflicting committed block layouts for task "
+                               "dependency storage root");
+        diag.attachNote(iterate.getLoc()) << "conflicting layout source";
+        return WalkResult::interrupt();
+      });
   if (walkResult.wasInterrupted())
     return {TaskDepLayoutLookupKind::Failure, {}};
 
@@ -273,7 +284,8 @@ static TaskDepLayoutLookup findCommittedBlockLayoutForRoot(
     return {TaskDepLayoutLookupKind::Failure, {}};
   }
   // Halo/query-window roots must stay on generic MU lowering so it can emit or
-  // reject the corresponding db_access_window/halo facts before storage rewrite.
+  // reject the corresponding db_access_window/halo facts before storage
+  // rewrite.
   if (taskDepRootRequiresGenericMuLowering(root, haloFactsByMu))
     return {TaskDepLayoutLookupKind::DeferToGenericMuLowering, {}};
   return {TaskDepLayoutLookupKind::Found, *selected};
@@ -325,7 +337,8 @@ LogicalResult exposeTaskDepMemrefRoots(ModuleOp module) {
 }
 
 LogicalResult realizeTaskDepMemrefStorage(
-    ModuleOp module, const llvm::DenseMap<Value, HaloRedistFacts> &haloFactsByMu) {
+    ModuleOp module,
+    const llvm::DenseMap<Value, HaloRedistFacts> &haloFactsByMu) {
   if (failed(exposeTaskDepMemrefRoots(module)))
     return failure();
 
@@ -382,17 +395,18 @@ LogicalResult realizeTaskDepMemrefStorage(
         findCommittedBlockLayoutForRoot(root, rootOp, haloFactsByMu);
     if (committedLayout.kind == TaskDepLayoutLookupKind::Failure)
       return failure();
-    if (committedLayout.kind == TaskDepLayoutLookupKind::DeferToGenericMuLowering)
+    if (committedLayout.kind ==
+        TaskDepLayoutLookupKind::DeferToGenericMuLowering)
       continue;
 
-    LogicalResult realized = committedLayout.kind == TaskDepLayoutLookupKind::Found
-                                 ? createCommittedLayoutDbBackedMemref(
-                                       builder, rootOp->getLoc(), memrefType,
-                                       *dynamicSizes, committedLayout.layout,
-                                       replacement)
-                                 : arts::createCoarseDbBackedMemref(
-                                       builder, rootOp->getLoc(), memrefType,
-                                       *dynamicSizes, replacement);
+    LogicalResult realized =
+        committedLayout.kind == TaskDepLayoutLookupKind::Found
+            ? createCommittedLayoutDbBackedMemref(
+                  builder, rootOp->getLoc(), memrefType, *dynamicSizes,
+                  committedLayout.layout, replacement)
+            : arts::createCoarseDbBackedMemref(builder, rootOp->getLoc(),
+                                               memrefType, *dynamicSizes,
+                                               replacement);
     if (failed(realized))
       return rootOp->emitError()
              << "could not realize task dependency memref as an ARTS DB";

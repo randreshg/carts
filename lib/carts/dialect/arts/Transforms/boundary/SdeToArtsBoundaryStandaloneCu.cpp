@@ -11,6 +11,7 @@
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
+#include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -216,11 +217,96 @@ appendCoarseDbReadDependencies(sde::SdeCuRegionOp source,
   return success();
 }
 
+// A residual `<single>` source CU that fuses a serial init loop (e.g. an
+// `idx++`-carried data init) keeps the access window for the array it writes,
+// so it is realized as an EDT rather than inlined. But CuNormalization also
+// captures every value escaping the span as a CU result -- including scratch
+// `memref.alloc`/`memref.alloca` buffers (output buffers that are now dead
+// after storage realization, and `memref<f64>` checksum accumulators shared
+// with a sibling checksum CU). These are storage allocations, not EDT
+// dataflow, so they cannot be expressed as scalar EDT yields. Hoist any
+// CU-result whose yielded value is an alloc/alloca defined directly in the CU
+// body out to before the CU and rebuild the CU without that result; the
+// hoisted SSA value then dominates both the in-CU uses (e.g. the init store of
+// an accumulator) and any sibling-CU use. Only static-shape allocs (no dynamic
+// operands) are hoisted; anything else is left in place and the later result
+// checks fail closed. Returns the rebuilt (or unchanged) CU.
+sde::SdeCuRegionOp hoistEscapingScratchResults(sde::SdeCuRegionOp source) {
+  if (source.getNumResults() == 0 || source.getBody().empty())
+    return source;
+  Block &body = source.getBody().front();
+  auto yield = dyn_cast_or_null<sde::SdeYieldOp>(body.getTerminator());
+  if (!yield || yield.getValues().size() != source.getNumResults())
+    return source;
+
+  // Decide which results are hoistable scratch allocations.
+  SmallVector<bool> hoist(source.getNumResults(), false);
+  bool any = false;
+  for (auto [idx, value] : llvm::enumerate(yield.getValues())) {
+    Operation *def = value.getDefiningOp();
+    if (!def || def->getBlock() != &body)
+      continue;
+    if (!isa<memref::AllocOp, memref::AllocaOp>(def))
+      continue;
+    if (def->getNumOperands() != 0) // dynamic-shape alloc: leave for fail-close
+      continue;
+    hoist[idx] = true;
+    any = true;
+  }
+  if (!any)
+    return source;
+
+  // Snapshot the yielded values before any mutation.
+  SmallVector<Value> yieldedValues(yield.getValues().begin(),
+                                   yield.getValues().end());
+
+  // Move the hoistable defs to just before the CU (static allocs have no
+  // operands, so dominance is trivially preserved for both in-CU and
+  // downstream uses).
+  for (auto [idx, value] : llvm::enumerate(yieldedValues))
+    if (hoist[idx])
+      value.getDefiningOp()->moveBefore(source);
+
+  // Build the reduced result/yield lists.
+  SmallVector<Type> keptTypes;
+  SmallVector<Value> keptYields;
+  for (auto [idx, value] : llvm::enumerate(yieldedValues))
+    if (!hoist[idx]) {
+      keptTypes.push_back(source.getResult(idx).getType());
+      keptYields.push_back(value);
+    }
+
+  OpBuilder builder(source);
+  auto rebuilt = sde::buildCuRegion(
+      builder, source.getLoc(), source.getKindAttr(),
+      source.getNowaitAttr() ? builder.getUnitAttr() : nullptr,
+      /*iterArgs=*/ValueRange{}, keptTypes, source.getSerialReasonAttr());
+  // Move the body block over and reset the yield to the kept values.
+  Block &newBody = sde::ensureBlock(rebuilt.getBody());
+  newBody.getOperations().splice(newBody.end(), body.getOperations());
+  yield->setOperands(keptYields);
+
+  // Remap result uses: hoisted -> hoisted SSA value, kept -> new CU result.
+  unsigned keptPos = 0;
+  for (auto [idx, oldResult] : llvm::enumerate(source.getResults())) {
+    if (hoist[idx])
+      oldResult.replaceAllUsesWith(yieldedValues[idx]);
+    else
+      oldResult.replaceAllUsesWith(rebuilt.getResult(keptPos++));
+  }
+  source.erase();
+  return rebuilt;
+}
+
 } // namespace
 
 LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   if (!source || source->getParentOfType<sde::SdeSuIterateOp>())
     return success();
+
+  // Hoist scratch alloc/alloca results out of the CU so only genuine scalar
+  // dataflow remains as CU results before EDT realization.
+  source = hoistEscapingScratchResults(source);
 
   SmallVector<DirectCuDepSpec, 4> deps;
   SmallVector<arts::DbAccessWindowOp, 4> windows;

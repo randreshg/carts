@@ -12,15 +12,15 @@
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
 #include "mlir/Dialect/Affine/Utils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Operation.h"
 #include "polygeist/Ops.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <memory>
@@ -202,7 +202,8 @@ resolveMuPhysicalLayoutForWriter(MemRefType logicalType,
                                  SdeSuIterateOp writer) {
   if (!writer)
     return std::nullopt;
-  if (std::optional<LayoutGraphFact> fact = findSingleWriteBlockLayoutFact(writer))
+  if (std::optional<LayoutGraphFact> fact =
+          findSingleWriteBlockLayoutFact(writer))
     return resolveMuPhysicalLayout(logicalType, fact->ownerDims,
                                    fact->blockShape);
   if (std::optional<CommittedSuPhysicalLayout> committed =
@@ -261,8 +262,7 @@ recognizeExpandedBlockGridMuFromShape(ArrayRef<int64_t> ownerVals,
   return out;
 }
 
-static SmallVector<int64_t, 4>
-ownerDimsAsI64(ArrayRef<unsigned> ownerDims) {
+static SmallVector<int64_t, 4> ownerDimsAsI64(ArrayRef<unsigned> ownerDims) {
   SmallVector<int64_t, 4> out;
   out.reserve(ownerDims.size());
   for (unsigned dim : ownerDims)
@@ -271,8 +271,9 @@ ownerDimsAsI64(ArrayRef<unsigned> ownerDims) {
 }
 
 static ArrayRef<int64_t> committedBlockShape(const LayoutGraphFact &fact) {
-  return fact.budgetBlockShape.empty() ? ArrayRef<int64_t>(fact.blockShape)
-                                       : ArrayRef<int64_t>(fact.budgetBlockShape);
+  return fact.budgetBlockShape.empty()
+             ? ArrayRef<int64_t>(fact.blockShape)
+             : ArrayRef<int64_t>(fact.budgetBlockShape);
 }
 
 static std::optional<ExpandedBlockGridMu>
@@ -280,17 +281,18 @@ recognizeExpandedBlockGridMuForWriter(SdeSuIterateOp writer,
                                       MemRefType muType) {
   if (!writer || !muType)
     return std::nullopt;
-  if (std::optional<LayoutGraphFact> fact = findSingleWriteBlockLayoutFact(writer)) {
+  if (std::optional<LayoutGraphFact> fact =
+          findSingleWriteBlockLayoutFact(writer)) {
     if (std::optional<ExpandedBlockGridMu> expanded =
-            recognizeExpandedBlockGridMuFromShape(fact->ownerDims, fact->blockShape,
-                                                  muType))
+            recognizeExpandedBlockGridMuFromShape(fact->ownerDims,
+                                                  fact->blockShape, muType))
       return expanded;
   }
   if (std::optional<CommittedSuPhysicalLayout> committed =
           recoverCommittedPhysicalLayout(writer))
     if (std::optional<ExpandedBlockGridMu> expanded =
-            recognizeExpandedBlockGridMuFromShape(committed->ownerDims,
-                                                  committed->blockShape, muType))
+            recognizeExpandedBlockGridMuFromShape(
+                committed->ownerDims, committed->blockShape, muType))
       return expanded;
   if (std::optional<RecoveredMuPhysicalLayout> recovered =
           recoverMuPhysicalLayoutFromExpandedType(muType))
@@ -457,18 +459,16 @@ static void coalesceGeneratedIndexSplitOps(ArrayRef<OpT> ops,
 }
 
 static void coalesceGeneratedIndexSplits(const GeneratedIndexSplits &splits) {
-  coalesceGeneratedIndexSplitOps(ArrayRef<arith::DivUIOp>(splits.divs),
-                                 [](arith::DivUIOp prior,
-                                    arith::DivUIOp current) {
-                                   return canReuseGeneratedIndexSplit(prior,
-                                                                      current);
-                                 });
-  coalesceGeneratedIndexSplitOps(ArrayRef<arith::RemUIOp>(splits.rems),
-                                 [](arith::RemUIOp prior,
-                                    arith::RemUIOp current) {
-                                   return canReuseGeneratedIndexSplit(prior,
-                                                                      current);
-                                 });
+  coalesceGeneratedIndexSplitOps(
+      ArrayRef<arith::DivUIOp>(splits.divs),
+      [](arith::DivUIOp prior, arith::DivUIOp current) {
+        return canReuseGeneratedIndexSplit(prior, current);
+      });
+  coalesceGeneratedIndexSplitOps(
+      ArrayRef<arith::RemUIOp>(splits.rems),
+      [](arith::RemUIOp prior, arith::RemUIOp current) {
+        return canReuseGeneratedIndexSplit(prior, current);
+      });
 }
 
 // A writer whose entire iteration domain folds to constants is the strongest
@@ -776,8 +776,8 @@ recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc) {
       if (std::optional<RecoveredMuPhysicalLayout> recovered =
               recoverMuPhysicalLayoutFromExpandedType(muType))
         return recognizeExpandedBlockGridMuFromShape(
-            ownerDimsAsI64(recovered->ownerDims),
-            recovered->physicalBlockShape, muType);
+            ownerDimsAsI64(recovered->ownerDims), recovered->physicalBlockShape,
+            muType);
     }
     return std::nullopt;
   }
@@ -798,9 +798,9 @@ recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc) {
     std::optional<LayoutGraphFact> fact =
         findBlockLayoutFact(source, *arrayId, LayoutGraphRole::read);
     if (!fact) {
-      // A committed replicated read fact (no owner dims) proves this MU is not an
-      // expanded block grid; record it so the type-shape fallback below does not
-      // misread a square logical array as a 1-D owner grid.
+      // A committed replicated read fact (no owner dims) proves this MU is not
+      // an expanded block grid; record it so the type-shape fallback below does
+      // not misread a square logical array as a 1-D owner grid.
       if (source)
         for (const LayoutGraphFact &any :
              parseArrayLayoutFacts(source.getArrayLayoutAttr()))
@@ -811,9 +811,20 @@ recognizeExpandedBlockGridMu(SdeMuAllocOp muAlloc) {
       continue;
     }
     std::optional<ExpandedBlockGridMu> expanded =
-        recognizeExpandedBlockGridMuFromShape(fact->ownerDims,
-                                              committedBlockShape(*fact),
-                                              muType);
+        recognizeExpandedBlockGridMuFromShape(
+            fact->ownerDims, committedBlockShape(*fact), muType);
+    // The materialized MU type carries the *physical* block extent, which can
+    // diverge from the budget grain (e.g. budgetBlockShape=[1,...] coarsened to
+    // a physical blockShape=[4,...] when the rank-expand fixes the owner block
+    // at the iteration grain). When the budget-grain recognition does not pair
+    // with the materialized type, retry against the committed physical
+    // blockShape: both shapes carry the same committed ownerDims, so this keeps
+    // the recovered owner-dim count tied to the SDE fact instead of falling
+    // through to the ambiguous type-only structural recovery.
+    if (!expanded && !fact->budgetBlockShape.empty() &&
+        fact->budgetBlockShape != fact->blockShape)
+      expanded = recognizeExpandedBlockGridMuFromShape(
+          fact->ownerDims, fact->blockShape, muType);
     if (!expanded)
       continue;
     ComparableBlockGrid comparable = comparableBlockGrid(*expanded);
