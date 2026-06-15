@@ -80,35 +80,68 @@ static bool mayAliasIndex(Value lhs, Value rhs) {
   return true;
 }
 
-static bool mayLoadStoredMemref(memref::StoreOp store, memref::LoadOp load) {
-  if (!isa<BaseMemRefType>(store.getValueToStore().getType()))
-    return false;
-  auto tableType = dyn_cast<MemRefType>(store.getMemRef().getType());
+/// A pointer-table store: a memref.store/affine.store whose stored value is a
+/// memref written into a memref-of-memref table. Normalizes both flavors so the
+/// indirection through `times_arr[j][k]`-style tables is followed regardless of
+/// whether cgeist emitted affine or non-affine stores. Affine ops fold constant
+/// indices into the map, so the operand list is unreliable; we key on the table
+/// SSA value and over-approximate aliasing (sound for access-mode inference).
+struct PointerTableStore {
+  Value stored;
+  Value table;
+};
+
+static std::optional<PointerTableStore> asPointerTableStore(Operation *op) {
+  Value stored, table;
+  if (auto store = dyn_cast<memref::StoreOp>(op)) {
+    stored = store.getValueToStore();
+    table = store.getMemRef();
+  } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
+    stored = store.getValueToStore();
+    table = store.getMemRef();
+  } else {
+    return std::nullopt;
+  }
+  if (!isa<BaseMemRefType>(stored.getType()))
+    return std::nullopt;
+  auto tableType = dyn_cast<MemRefType>(table.getType());
   if (!tableType || !isa<BaseMemRefType>(tableType.getElementType()))
-    return false;
-  if (ValueAnalysis::stripMemrefViewOps(store.getMemRef()) !=
-      ValueAnalysis::stripMemrefViewOps(load.getMemRef()))
-    return false;
-  if (store.getIndices().size() != load.getIndices().size())
-    return false;
-
-  for (auto [storedIdx, loadedIdx] :
-       llvm::zip(store.getIndices(), load.getIndices()))
-    if (!mayAliasIndex(storedIdx, loadedIdx))
-      return false;
-
-  return true;
+    return std::nullopt;
+  return PointerTableStore{stored, table};
 }
 
-static void enqueueMemrefPointerTableLoads(memref::StoreOp store, EdtOp edt,
+static Value getLoadedTable(Operation *op) {
+  if (auto load = dyn_cast<memref::LoadOp>(op))
+    return load.getMemRef();
+  if (auto load = dyn_cast<affine::AffineLoadOp>(op))
+    return load.getMemRef();
+  return Value();
+}
+
+/// Conservative: any load of the same table value may observe the stored row.
+/// Over-approximation only widens the read set, never hides a write, so it is
+/// safe for access-mode inference.
+static bool mayLoadStoredMemref(const PointerTableStore &store, Operation *load,
+                                Value loadResult) {
+  if (!isa<BaseMemRefType>(loadResult.getType()))
+    return false;
+  Value loadTable = getLoadedTable(load);
+  if (!loadTable)
+    return false;
+  return ValueAnalysis::stripMemrefViewOps(store.table) ==
+         ValueAnalysis::stripMemrefViewOps(loadTable);
+}
+
+static void enqueueMemrefPointerTableLoads(const PointerTableStore &store,
+                                           EdtOp edt,
                                            SmallVectorImpl<Value> &worklist) {
-  edt.walk([&](memref::LoadOp load) {
-    if (!isInsideEdtBody(load.getOperation(), edt))
+  edt.walk([&](Operation *op) {
+    if (!isa<memref::LoadOp, affine::AffineLoadOp>(op))
       return;
-    if (!isa<BaseMemRefType>(load.getResult().getType()))
+    if (!isInsideEdtBody(op, edt))
       return;
-    if (mayLoadStoredMemref(store, load))
-      worklist.push_back(load.getResult());
+    if (mayLoadStoredMemref(store, op, op->getResult(0)))
+      worklist.push_back(op->getResult(0));
   });
 }
 
@@ -328,9 +361,9 @@ ArtsMode DbUtils::inferEdtAccessMode(Operation *underlyingOp, EdtOp edt) {
           combined = combineAccessModes(combined, ArtsMode::out);
       }
 
-      if (auto store = dyn_cast<memref::StoreOp>(user))
-        if (store.getValueToStore() == current)
-          enqueueMemrefPointerTableLoads(store, edt, worklist);
+      if (std::optional<PointerTableStore> store = asPointerTableStore(user))
+        if (store->stored == current)
+          enqueueMemrefPointerTableLoads(*store, edt, worklist);
 
       if (!isMemrefForwardingForSource(user, current))
         continue;
@@ -1292,5 +1325,6 @@ DbAcquireOp mlir::carts::arts::createUnitBlockDbAcquireAtCoords(
       builder, loc, mode, alloc.getGuid(), alloc.getPtr(),
       std::optional<PartitionMode>(PartitionMode::block), SmallVector<Value>{},
       offsets, sizes, SmallVector<Value>{}, SmallVector<Value>{},
-      SmallVector<Value>{}, Value{}, SmallVector<Value>{}, SmallVector<Value>{});
+      SmallVector<Value>{}, Value{}, SmallVector<Value>{},
+      SmallVector<Value>{});
 }
