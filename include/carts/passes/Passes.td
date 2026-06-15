@@ -239,6 +239,22 @@ def SdeStorageToArtsDb : Pass<"sde-storage-to-arts-db", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::arts::createSdeStorageToArtsDbPass()";
 }
 
+def VerifyRawAccessCovered
+    : Pass<"verify-raw-access-covered", "mlir::ModuleOp"> {
+  let summary = "Verify raw SU accesses are covered by SDE access-window deps";
+  let description = [{
+    Fails closed when a raw `sde.su_iterate` body access touches a DB-backed
+    memref without a committed SDE access-window dependency, or strengthens a
+    committed dependency's mode. This is the standalone form of the coverage
+    gate that runs inline during sde-accesses-to-arts-deps; it authors no ARTS
+    structure and selects no policy.
+  }];
+  let dependentDialects =
+      ["::mlir::memref::MemRefDialect", "::mlir::carts::sde::CartsSdeDialect",
+       "::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts::createVerifyRawAccessCoveredPass()";
+}
+
 def SdeAccessesToArtsDeps
     : Pass<"sde-accesses-to-arts-deps", "mlir::ModuleOp"> {
   let summary = "Realize SDE scheduling/access facts as ARTS dependencies";

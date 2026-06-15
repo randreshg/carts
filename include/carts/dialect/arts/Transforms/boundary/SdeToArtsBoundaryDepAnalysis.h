@@ -9,6 +9,7 @@
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "mlir/Support/LogicalResult.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 
 namespace mlir {
@@ -56,6 +57,14 @@ collectSuDependencies(sde::SdeSuIterateOp source,
                       SmallVectorImpl<DirectDepSpec> &deps,
                       DenseSet<Operation *> &consumedCuLevelAccessWindows,
                       SmallVectorImpl<Operation *> &consumedRedists);
+
+// Raw-access coverage gate (owned by SdeToArtsBoundaryRawAccessVerify): fails
+// closed when a raw SU body access is not covered by a committed SDE
+// access-window dependency. Invoked inline by collectSuDependencies.
+LogicalResult verifyRawSuAccessesCoveredByDeps(
+    sde::SdeSuIterateOp source,
+    DenseMap<Operation *, SmallVector<unsigned, 2>> &depIndex,
+    SmallVectorImpl<DirectDepSpec> &deps);
 
 LogicalResult collectStandaloneCuDependencies(
     sde::SdeCuRegionOp source, SmallVectorImpl<DirectCuDepSpec> &deps,

@@ -23,6 +23,7 @@ namespace mlir {
 namespace carts::arts::boundary {
 
 LogicalResult runSdeStorageToArtsDb(ModuleOp module);
+LogicalResult runVerifyRawAccessCovered(ModuleOp module);
 LogicalResult runSdeAccessesToArtsDeps(ModuleOp module);
 LogicalResult runFinalizeSdeToArts(ModuleOp module);
 

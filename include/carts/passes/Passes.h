@@ -31,6 +31,7 @@ std::unique_ptr<Pass> createDCEPass();
 
 /// EDT and loop-structure transformation passes.
 std::unique_ptr<Pass> createSdeStorageToArtsDbPass();
+std::unique_ptr<Pass> createVerifyRawAccessCoveredPass();
 std::unique_ptr<Pass> createSdeAccessesToArtsDepsPass();
 std::unique_ptr<Pass> createFinalizeSdeToArtsPass();
 std::unique_ptr<Pass> createCreateDbsPass();

@@ -9,6 +9,7 @@
 
 namespace mlir::carts::arts {
 #define GEN_PASS_DEF_SDESTORAGETOARTSDB
+#define GEN_PASS_DEF_VERIFYRAWACCESSCOVERED
 #define GEN_PASS_DEF_SDEACCESSESTOARTSDEPS
 #define GEN_PASS_DEF_FINALIZESDETOARTS
 #include "carts/passes/Passes.h.inc"
@@ -17,6 +18,14 @@ struct SdeStorageToArtsDbPass
     : public impl::SdeStorageToArtsDbBase<SdeStorageToArtsDbPass> {
   void runOnOperation() override {
     if (failed(boundary::runSdeStorageToArtsDb(getOperation())))
+      signalPassFailure();
+  }
+};
+
+struct VerifyRawAccessCoveredPass
+    : public impl::VerifyRawAccessCoveredBase<VerifyRawAccessCoveredPass> {
+  void runOnOperation() override {
+    if (failed(boundary::runVerifyRawAccessCovered(getOperation())))
       signalPassFailure();
   }
 };
@@ -39,6 +48,10 @@ struct FinalizeSdeToArtsPass
 
 std::unique_ptr<Pass> createSdeStorageToArtsDbPass() {
   return std::make_unique<SdeStorageToArtsDbPass>();
+}
+
+std::unique_ptr<Pass> createVerifyRawAccessCoveredPass() {
+  return std::make_unique<VerifyRawAccessCoveredPass>();
 }
 
 std::unique_ptr<Pass> createSdeAccessesToArtsDepsPass() {
