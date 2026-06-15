@@ -136,6 +136,12 @@ static bool isDerivedFromRtPtrImpl(Value value, Value source,
     return trace(view.getSource());
   if (auto reinterpretCast = dyn_cast<memref::ReinterpretCastOp>(defOp))
     return trace(reinterpretCast.getSource());
+  /// A guarded dep pointer is `select(valid, fallback, depPtr)`
+  /// (DataPtrHoisting null-guard). Its provenance is either arm, so trace both
+  /// pointer operands rather than the boolean condition the generic operand(0)
+  /// fallback walks.
+  if (auto sel = dyn_cast<LLVM::SelectOp>(defOp))
+    return trace(sel.getTrueValue()) || trace(sel.getFalseValue());
 
   if (defOp->getNumOperands() > 0)
     return trace(defOp->getOperand(0));

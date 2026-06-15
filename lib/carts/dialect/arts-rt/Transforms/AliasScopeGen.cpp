@@ -153,6 +153,19 @@ static DepIndexInfo extractDepIndexInfo(LLVM::LoadOp loadOp) {
         info.constantIndex = static_cast<int64_t>(depIdxRaw);
         return info;
       }
+
+      /// Single-level form `gep %depv[entry, 1]` where the entry index folded
+      /// into the field GEP (no separate entry GEP, e.g. dep 0). The entry
+      /// index is then the penultimate index of the field GEP itself.
+      auto fieldIndices = ptrFieldGep.getRawConstantIndices();
+      if (fieldIndices.size() >= 2) {
+        int32_t entryRaw = fieldIndices[fieldIndices.size() - 2];
+        if (entryRaw != LLVM::GEPOp::kDynamicIndex) {
+          info.valid = true;
+          info.constantIndex = static_cast<int64_t>(entryRaw);
+          return info;
+        }
+      }
     }
   }
 
@@ -291,6 +304,19 @@ findCandidateDataPointers(Value addr,
         break;
       }
     }
+    /// A guarded/indirected access reaches its array through a second-level
+    /// row-pointer load whose value is not one of the collected dep-pointer
+    /// values. Anchor it on the dep-pointer-field GEP address instead: the
+    /// access's row pointer is loaded from an address derived from that field.
+    if (!derived) {
+      for (LLVM::LoadOp loadOp : info.loadOps) {
+        Value anchor = loadOp.getAddr();
+        if (anchor && RtDbUtils::isDerivedFromPtr(addr, anchor)) {
+          derived = true;
+          break;
+        }
+      }
+    }
     if (derived)
       result.push_back(&info);
   }
@@ -350,6 +376,10 @@ static int processMemoryAccesses(LLVM::LLVMFuncOp funcOp,
 
     if (auto loadOp = dyn_cast<LLVM::LoadOp>(op)) {
       if (dataPointerValues.contains(loadOp.getResult()))
+        return;
+      /// A pointer-result load reads a dep/row pointer from a table, not array
+      /// data; alias scopes belong on the data accesses derived from it.
+      if (isa<LLVM::LLVMPointerType>(loadOp.getResult().getType()))
         return;
       addr = loadOp.getAddr();
     } else if (auto storeOp = dyn_cast<LLVM::StoreOp>(op)) {
