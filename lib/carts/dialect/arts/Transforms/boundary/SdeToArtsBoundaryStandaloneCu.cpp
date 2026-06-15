@@ -121,101 +121,6 @@ collectCloneableReadOnlyGlobalMemrefs(sde::SdeCuRegionOp source,
   return failure(failed);
 }
 
-// A residual CU may use a heap `memref.alloc` scratch buffer (e.g. softmax
-// output) that is allocated outside but used and freed entirely within the CU.
-// Such a buffer is EDT-private: clone its alloc into the EDT body so it is not
-// captured as an outer pointer. Only buffers whose every use is inside the CU
-// qualify; anything escaping the CU must travel as a real DB dependency.
-LogicalResult collectCloneablePrivateScratchAllocs(sde::SdeCuRegionOp source,
-                                                   SetVector<Value> &scratch) {
-  SetVector<Value> candidates;
-  source.getBody().walk([&](Operation *op) {
-    if (isa<arts::DbAccessWindowOp, sde::SdeYieldOp>(op))
-      return;
-    for (Value operand : op->getOperands()) {
-      if (!isa<MemRefType>(operand.getType()) ||
-          isDefinedInside(operand, source.getOperation()))
-        continue;
-      if (operand.getDefiningOp<memref::AllocOp>())
-        candidates.insert(operand);
-    }
-  });
-  for (Value alloc : candidates) {
-    bool allInside = true;
-    for (Operation *user : alloc.getUsers())
-      if (!source.getOperation()->isAncestor(user)) {
-        allInside = false;
-        break;
-      }
-    if (allInside)
-      scratch.insert(alloc);
-  }
-  return success();
-}
-
-// A standalone residual CU may read a DB-backed array for which SDE authored no
-// access window (e.g. a diagonal checksum over a coarse whole-array output).
-// Author a whole-array coarse read dependency for each such DB so the access is
-// remapped to a DbRef over the complete array. A coarse DB holds the entire
-// array in one block, so a whole-array read is exact. A block-partitioned DB
-// has multiple blocks; a coarse DbRef would read only block 0 -> silent-wrong,
-// so fail closed and require an SDE-committed window for that case.
-LogicalResult
-appendCoarseDbReadDependencies(sde::SdeCuRegionOp source,
-                               SmallVectorImpl<DirectCuDepSpec> &deps) {
-  DenseSet<Operation *> covered;
-  for (DirectCuDepSpec &dep : deps)
-    covered.insert(dep.alloc.getOperation());
-
-  SmallVector<arts::DbAllocOp, 4> pendingAllocs;
-  DenseMap<Operation *, bool> pendingHasWrite;
-  bool failed = false;
-  source.getBody().walk([&](Operation *op) {
-    Value memref;
-    bool isWrite = false;
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      memref = load.getMemref();
-    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      memref = store.getMemref();
-      isWrite = true;
-    } else {
-      return;
-    }
-    arts::DbAllocOp alloc = resolveBoundaryDbAlloc(memref);
-    if (!alloc || covered.contains(alloc.getOperation()))
-      return;
-    std::optional<arts::PartitionMode> mode = alloc.getPartitionMode();
-    if (!mode || *mode != arts::PartitionMode::coarse) {
-      op->emitError()
-          << "accesses a block-partitioned DB-backed array in a standalone CU "
-             "without a committed SDE access window; a coarse access would "
-             "only "
-             "see one block (silent-wrong). SDE must author a multi-block "
-             "access window for this access";
-      failed = true;
-      return;
-    }
-    auto [it, inserted] =
-        pendingHasWrite.try_emplace(alloc.getOperation(), isWrite);
-    if (inserted)
-      pendingAllocs.push_back(alloc);
-    else
-      it->second |= isWrite;
-  });
-  if (failed)
-    return failure();
-
-  for (arts::DbAllocOp alloc : pendingAllocs) {
-    DirectCuDepSpec dep;
-    dep.alloc = alloc;
-    dep.mode =
-        pendingHasWrite[alloc.getOperation()] ? ArtsMode::inout : ArtsMode::in;
-    dep.ownerDimCount = 0;
-    deps.push_back(std::move(dep));
-  }
-  return success();
-}
-
 } // namespace
 
 LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
@@ -228,10 +133,6 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     return failure();
   if (windows.empty())
     return success();
-  // SDE may leave a coarse whole-array read of a residual checksum unwindowed;
-  // author a coarse read dep so it is remapped (fail closed for multi-block).
-  if (failed(appendCoarseDbReadDependencies(source, deps)))
-    return failure();
 
   if (source.getBody().empty())
     return source.emitOpError()
@@ -396,12 +297,6 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   }
   for (CuResultSpec &result : resultSpecs)
     allowedDbHandles.insert(result.writePtr);
-  SetVector<Value> cloneablePrivateScratchAllocs;
-  if (failed(collectCloneablePrivateScratchAllocs(
-          source, cloneablePrivateScratchAllocs)))
-    return failure();
-  for (Value scratch : cloneablePrivateScratchAllocs)
-    allowedDbHandles.insert(scratch);
   SetVector<Value> cloneableReadOnlyGlobalMemrefs;
   if (failed(collectCloneableReadOnlyGlobalMemrefs(
           source, allowedDbHandles, cloneableReadOnlyGlobalMemrefs)))
@@ -458,12 +353,6 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     bodyBuilder.insert(cloned);
     mapper.map(capture, cloned->getResult(0));
   }
-  for (Value scratch : cloneablePrivateScratchAllocs) {
-    Operation *def = scratch.getDefiningOp();
-    Operation *cloned = def->clone(mapper);
-    bodyBuilder.insert(cloned);
-    mapper.map(scratch, cloned->getResult(0));
-  }
   for (Operation &nested : body) {
     if (isa<arts::DbAccessWindowOp, sde::SdeYieldOp>(&nested))
       continue;
@@ -510,12 +399,6 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   }
 
   source.erase();
-  // The original scratch allocs are now dead (their only uses were the erased
-  // residual body); drop them so no orphan heap alloc remains.
-  for (Value scratch : cloneablePrivateScratchAllocs)
-    if (Operation *def = scratch.getDefiningOp())
-      if (def->use_empty())
-        def->erase();
   return success();
 }
 

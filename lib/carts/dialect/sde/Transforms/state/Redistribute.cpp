@@ -1,17 +1,15 @@
 /// Redistribute.cpp
-#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/RedistributionEdges.h"
+#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
-#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
-#include "llvm/ADT/DenseMap.h"
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_SDEREDISTRIBUTE
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
-} // namespace mlir::carts::sde
+}
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include <memory>
@@ -22,24 +20,17 @@ static bool alreadyRepresented(const carts::sde::RedistributionEdge &edge) {
   for (Operation *user : edge.root.getUsers()) {
     if (auto halo = dyn_cast<carts::sde::SdeSuHaloOp>(user)) {
       if (edge.kind == carts::sde::RedistributionEdgeKind::Halo &&
-          halo.getArrayIdAttr() &&
-          halo.getArrayIdAttr().getInt() == edge.arrayId &&
-          halo.getOwnerDims() ==
-              buildI64ArrayAttr(halo.getContext(), edge.sourceOwnerDims) &&
-          halo.getBlockShape() ==
-              buildI64ArrayAttr(halo.getContext(), edge.sourceBlockShape) &&
-          halo.getHaloShape() ==
-              buildI64ArrayAttr(halo.getContext(), edge.haloShape))
+          halo.getArrayIdAttr() && halo.getArrayIdAttr().getInt() == edge.arrayId &&
+          halo.getOwnerDims() == buildI64ArrayAttr(halo.getContext(), edge.sourceOwnerDims) &&
+          halo.getBlockShape() == buildI64ArrayAttr(halo.getContext(), edge.sourceBlockShape) &&
+          halo.getHaloShape() == buildI64ArrayAttr(halo.getContext(), edge.haloShape))
         return true;
     }
     if (auto reduce = dyn_cast<carts::sde::SdeSuReduceScatterOp>(user)) {
       if (edge.kind == carts::sde::RedistributionEdgeKind::ReduceScatter &&
-          reduce.getArrayIdAttr() &&
-          reduce.getArrayIdAttr().getInt() == edge.arrayId &&
-          reduce.getOwnerDims() ==
-              buildI64ArrayAttr(reduce.getContext(), edge.sourceOwnerDims) &&
-          reduce.getBlockShape() ==
-              buildI64ArrayAttr(reduce.getContext(), edge.sourceBlockShape))
+          reduce.getArrayIdAttr() && reduce.getArrayIdAttr().getInt() == edge.arrayId &&
+          reduce.getOwnerDims() == buildI64ArrayAttr(reduce.getContext(), edge.sourceOwnerDims) &&
+          reduce.getBlockShape() == buildI64ArrayAttr(reduce.getContext(), edge.sourceBlockShape))
         return true;
     }
     if (auto allToAll = dyn_cast<carts::sde::SdeSuAllToAllOp>(user)) {
@@ -62,8 +53,7 @@ static bool alreadyRepresented(const carts::sde::RedistributionEdge &edge) {
 static std::optional<carts::sde::SdeReductionKind>
 getFirstReductionKind(carts::sde::SdeSuIterateOp consumer) {
   ArrayAttr kinds = consumer.getReductionKindsAttr();
-  if (!kinds || kinds.empty())
-    return std::nullopt;
+  if (!kinds || kinds.empty()) return std::nullopt;
   if (auto attr = dyn_cast<carts::sde::SdeReductionKindAttr>(*kinds.begin()))
     return attr.getValue();
   return std::nullopt;
@@ -128,10 +118,9 @@ findReduceScatterWriteTarget(carts::sde::SdeSuIterateOp consumer) {
       candidate.root = root;
       candidate.arrayId = fact.id;
       candidate.ownerDims.assign(fact.ownerDims.begin(), fact.ownerDims.end());
-      ArrayRef<int64_t> blockShape =
-          fact.budgetBlockShape.empty()
-              ? ArrayRef<int64_t>(fact.blockShape)
-              : ArrayRef<int64_t>(fact.budgetBlockShape);
+      ArrayRef<int64_t> blockShape = fact.budgetBlockShape.empty()
+                                         ? ArrayRef<int64_t>(fact.blockShape)
+                                         : ArrayRef<int64_t>(fact.budgetBlockShape);
       candidate.blockShape.assign(blockShape.begin(), blockShape.end());
       if (!endpointShapeFitsRoot(candidate.root, candidate.ownerDims,
                                  candidate.blockShape)) {
@@ -163,9 +152,9 @@ static bool isElementwisePipeline(carts::sde::SdeSuIterateOp consumer) {
              carts::sde::SdeStructuredClassification::elementwise_pipeline;
 }
 
-static LogicalResult
-ensurePartialReductionFacts(carts::sde::SdeSuIterateOp consumer,
-                            const ReduceScatterWriteTarget &target) {
+static LogicalResult ensurePartialReductionFacts(
+    carts::sde::SdeSuIterateOp consumer,
+    const ReduceScatterWriteTarget &target) {
   MLIRContext *ctx = consumer.getContext();
   SmallVector<int64_t, 4> reductionDims;
   std::optional<carts::sde::SuLoopAccessSummary> summary =
@@ -185,185 +174,28 @@ ensurePartialReductionFacts(carts::sde::SdeSuIterateOp consumer,
   return success();
 }
 
-// Owner-subset reconciliation for stencil double-buffering. A 2-D-halo stencil
-// writes its output on the full owner tile (e.g. [0,1]); an elementwise
-// copy-back consumer of that same array commits a coarser single-owner
-// row-strip read fact (e.g. [0]) even though RankExpandMu realized the SAME
-// rank-expanded grid MU for both (the consumer loads/stores the array on the
-// writer's [0,1] grid coordinates). RedistributionEdges then sees DIFFERENT
-// owner dims and tries an sde.su_all_to_all whose block extent overflows the
-// expanded grid dim. The owner difference is a layout-assignment artifact, not
-// a data-location difference: the consumer already lives on the producer grid.
-// Re-commit such an owner-subset elementwise reader to the writer home's owner
-// layout so producer==consumer and no redistribution edge is emitted. Strictly
-// fail-closed: only fires when the reader's grounded root MU type equals the
-// writer's, the reader owners are a proper subset of the home owners, and the
-// reader carries no halo (a stencil/reduction consumer keeps its own fact).
-// Runs after SdeRankExpandMu, which is what materializes the writer's
-// multi-owner physical write fact and the shared expanded root type.
-static void reconcileSubsetOwnerExpandedGridReaders(Operation *moduleOp) {
-  struct WriterHome {
-    sde::SdeSuIterateOp writer;
-    SmallVector<int64_t, 4> ownerDims;
-    SmallVector<int64_t, 4> blockShape;
-    SmallVector<int64_t, 4> budgetShape;
-    int64_t muBlockCount = 1;
-    bool conflicting = false;
-  };
-  llvm::DenseMap<int64_t, WriterHome> homeById;
-
-  moduleOp->walk([&](sde::SdeSuIterateOp op) {
-    ArrayAttr layout = op.getArrayLayoutAttr();
-    if (!layout)
-      return;
-    for (const sde::LayoutGraphFact &f : sde::parseArrayLayoutFacts(layout)) {
-      if (f.id < 0 || f.role != sde::LayoutGraphRole::write ||
-          f.layoutKind != sde::ArrayLayoutKind::blockParallel ||
-          f.ownerDims.size() < 2)
-        continue;
-      WriterHome &home = homeById[f.id];
-      if (home.writer) {
-        home.conflicting = true;
-        continue;
-      }
-      home.writer = op;
-      home.ownerDims.assign(f.ownerDims.begin(), f.ownerDims.end());
-      home.blockShape.assign(f.blockShape.begin(), f.blockShape.end());
-      home.budgetShape.assign(f.budgetBlockShape.begin(),
-                              f.budgetBlockShape.end());
-      home.muBlockCount = f.muBlockCount;
-    }
-  });
-  if (homeById.empty())
-    return;
-
-  auto sameOwnerSet = [](ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
-    if (lhs.size() != rhs.size())
-      return false;
-    SmallVector<int64_t, 4> a(lhs.begin(), lhs.end());
-    SmallVector<int64_t, 4> b(rhs.begin(), rhs.end());
-    llvm::sort(a);
-    llvm::sort(b);
-    return a == b;
-  };
-  auto isProperOwnerSubset = [](ArrayRef<int64_t> sub, ArrayRef<int64_t> sup) {
-    if (sub.empty() || sub.size() >= sup.size())
-      return false;
-    for (int64_t d : sub)
-      if (!llvm::is_contained(sup, d))
-        return false;
-    return true;
-  };
-
-  MLIRContext *ctx = moduleOp->getContext();
-  Builder builder(ctx);
-  StringAttr ownerName =
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::OwnerDims);
-  StringAttr blockShapeName =
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::BlockShape);
-  StringAttr budgetName =
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::BudgetBlockShape);
-  StringAttr muCountName =
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::MuBlockCount);
-
-  moduleOp->walk([&](sde::SdeSuIterateOp reader) {
-    ArrayAttr layout = reader.getArrayLayoutAttr();
-    if (!layout)
-      return;
-    // Stencil/reduction consumers own their coarser fact; never coarsen the
-    // producer grid out from under a halo or contraction read.
-    if (auto cls = sde::queryStructuredClassification(reader);
-        cls && (*cls == sde::SdeStructuredClassification::stencil ||
-                *cls == sde::SdeStructuredClassification::matmul))
-      return;
-    if (sde::deriveCommittedHaloShape(reader))
-      return;
-
-    bool changed = false;
-    SmallVector<Attribute, 4> rewritten;
-    rewritten.reserve(layout.size());
-    for (Attribute attr : layout) {
-      auto dict = dyn_cast<DictionaryAttr>(attr);
-      std::optional<sde::LayoutGraphFact> f =
-          dict ? sde::parseArrayLayoutFact(dict) : std::nullopt;
-      if (!dict || !f || f->role != sde::LayoutGraphRole::read ||
-          f->layoutKind != sde::ArrayLayoutKind::blockParallel) {
-        rewritten.push_back(attr);
-        continue;
-      }
-      auto it = homeById.find(f->id);
-      if (it == homeById.end() || it->second.conflicting ||
-          it->second.writer == reader ||
-          !isProperOwnerSubset(f->ownerDims, it->second.ownerDims)) {
-        rewritten.push_back(attr);
-        continue;
-      }
-      const WriterHome &home = it->second;
-      // The reader must already physically live on the writer's rank-expanded
-      // grid: same grounded root MU type. Otherwise the owner difference is a
-      // real data-location difference and the all_to_all/fail-closed path owns
-      // it.
-      Value readerRoot =
-          sde::findArrayLayoutRoot(reader, f->id, sde::SdeAccessMode::read);
-      Value writerRoot = sde::findArrayLayoutRoot(home.writer, f->id,
-                                                  sde::SdeAccessMode::write);
-      if (!readerRoot || !writerRoot ||
-          readerRoot.getType() != writerRoot.getType()) {
-        rewritten.push_back(attr);
-        continue;
-      }
-      if (sameOwnerSet(f->ownerDims, home.ownerDims)) {
-        rewritten.push_back(attr);
-        continue;
-      }
-      SmallVector<NamedAttribute, 8> fields;
-      for (NamedAttribute named : dict)
-        if (named.getName() != ownerName && named.getName() != blockShapeName &&
-            named.getName() != budgetName && named.getName() != muCountName)
-          fields.push_back(named);
-      fields.push_back(builder.getNamedAttr(
-          ownerName, buildI64ArrayAttr(ctx, home.ownerDims)));
-      fields.push_back(builder.getNamedAttr(
-          blockShapeName, buildI64ArrayAttr(ctx, home.blockShape)));
-      if (!home.budgetShape.empty())
-        fields.push_back(builder.getNamedAttr(
-            budgetName, buildI64ArrayAttr(ctx, home.budgetShape)));
-      if (home.muBlockCount > 0)
-        fields.push_back(builder.getNamedAttr(
-            muCountName, builder.getI64IntegerAttr(home.muBlockCount)));
-      rewritten.push_back(builder.getDictionaryAttr(fields));
-      changed = true;
-    }
-    if (changed)
-      reader.setArrayLayoutAttr(ArrayAttr::get(ctx, rewritten));
-  });
-}
-
-struct SdeRedistributePass
-    : public carts::sde::impl::SdeRedistributeBase<SdeRedistributePass> {
+struct SdeRedistributePass : public carts::sde::impl::SdeRedistributeBase<SdeRedistributePass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     MLIRContext *ctx = &getContext();
-    reconcileSubsetOwnerExpandedGridReaders(module);
-    carts::sde::RedistributionEdges committed =
-        carts::sde::collectRedistributionEdges(module);
+    carts::sde::RedistributionEdges committed = carts::sde::collectRedistributionEdges(module);
     bool sawFailure = false;
     for (const auto &failure : committed.failures) {
       carts::sde::SdeSuIterateOp consumer = failure.consumer;
-      consumer.emitOpError()
-          << "sde-redistribute: " << failure.reason << " (array "
-          << failure.arrayId << "); refusing to invent redistribution";
+      consumer.emitOpError() << "sde-redistribute: " << failure.reason
+          << " (array " << failure.arrayId << "); refusing to invent redistribution";
       sawFailure = true;
     }
     for (const auto &edge : committed.edges) {
       carts::sde::RedistributionEdge emitEdge = edge;
       auto consumer = emitEdge.consumer;
       if (emitEdge.kind == carts::sde::RedistributionEdgeKind::ReduceScatter) {
-        bool sourceEndpointFits = endpointShapeFitsRoot(
-            emitEdge.root, emitEdge.sourceOwnerDims, emitEdge.sourceBlockShape);
-        bool shouldTargetWriteResult = consumer.getPartialReductionAttr() ||
-                                       !sourceEndpointFits ||
-                                       isElementwisePipeline(consumer);
+        bool sourceEndpointFits =
+            endpointShapeFitsRoot(emitEdge.root, emitEdge.sourceOwnerDims,
+                                  emitEdge.sourceBlockShape);
+        bool shouldTargetWriteResult =
+            consumer.getPartialReductionAttr() || !sourceEndpointFits ||
+            isElementwisePipeline(consumer);
         FailureOr<std::optional<ReduceScatterWriteTarget>> target =
             shouldTargetWriteResult ? findReduceScatterWriteTarget(consumer)
                                     : std::optional<ReduceScatterWriteTarget>();
@@ -398,34 +230,25 @@ struct SdeRedistributePass
                                            (*target)->blockShape.end());
         }
       }
-      if (alreadyRepresented(emitEdge))
-        continue;
-      if (!dyn_cast_or_null<carts::sde::SdeSuDistributeOp>(
-              consumer->getParentOp())) {
-        consumer.emitOpError()
-            << "sde-redistribute: movement edge for array " << emitEdge.arrayId
-            << " is not inside sde.su_distribute; refusing to emit an unscoped "
-               "movement op";
-        sawFailure = true;
-        continue;
+      if (alreadyRepresented(emitEdge)) continue;
+      if (!dyn_cast_or_null<carts::sde::SdeSuDistributeOp>(consumer->getParentOp())) {
+        consumer.emitOpError() << "sde-redistribute: movement edge for array " << emitEdge.arrayId
+            << " is not inside sde.su_distribute; refusing to emit an unscoped movement op";
+        sawFailure = true; continue;
       }
-      IntegerAttr arrayIdAttr =
-          IntegerAttr::get(IntegerType::get(ctx, 64), emitEdge.arrayId);
+      IntegerAttr arrayIdAttr = IntegerAttr::get(IntegerType::get(ctx, 64), emitEdge.arrayId);
       ArrayAttr ownerDims = buildI64ArrayAttr(ctx, emitEdge.sourceOwnerDims);
       ArrayAttr blockShape = buildI64ArrayAttr(ctx, emitEdge.sourceBlockShape);
       OpBuilder builder(consumer);
       if (emitEdge.kind == carts::sde::RedistributionEdgeKind::Halo) {
-        carts::sde::SdeSuHaloOp::create(
-            builder, consumer.getLoc(), emitEdge.root, arrayIdAttr, ownerDims,
-            blockShape, buildI64ArrayAttr(ctx, emitEdge.haloShape));
+        carts::sde::SdeSuHaloOp::create(builder, consumer.getLoc(), emitEdge.root, arrayIdAttr,
+            ownerDims, blockShape, buildI64ArrayAttr(ctx, emitEdge.haloShape));
         continue;
       }
       if (emitEdge.kind == carts::sde::RedistributionEdgeKind::ReduceScatter) {
-        auto kind = getFirstReductionKind(consumer).value_or(
-            carts::sde::SdeReductionKind::add);
-        carts::sde::SdeSuReduceScatterOp::create(
-            builder, consumer.getLoc(), emitEdge.root, arrayIdAttr, ownerDims,
-            blockShape, IntegerAttr::get(IntegerType::get(ctx, 64), 0),
+        auto kind = getFirstReductionKind(consumer).value_or(carts::sde::SdeReductionKind::add);
+        carts::sde::SdeSuReduceScatterOp::create(builder, consumer.getLoc(), emitEdge.root, arrayIdAttr,
+            ownerDims, blockShape, IntegerAttr::get(IntegerType::get(ctx, 64), 0),
             carts::sde::SdeReductionKindAttr::get(ctx, kind));
         continue;
       }
@@ -438,17 +261,15 @@ struct SdeRedistributePass
             buildI64ArrayAttr(ctx, emitEdge.targetBlockShape));
         continue;
       }
-      consumer.emitOpError()
-          << "sde-redistribute: unexpected redistribution edge kind";
+      consumer.emitOpError() << "sde-redistribute: unexpected redistribution edge kind";
       sawFailure = true;
     }
-    if (sawFailure)
-      signalPassFailure();
+    if (sawFailure) signalPassFailure();
   }
 };
-} // namespace
+}
 namespace mlir::carts::sde {
 std::unique_ptr<Pass> createSdeRedistributePass() {
   return std::make_unique<SdeRedistributePass>();
 }
-} // namespace mlir::carts::sde
+}

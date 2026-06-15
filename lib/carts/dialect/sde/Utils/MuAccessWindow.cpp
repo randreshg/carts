@@ -7,7 +7,9 @@
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
+#include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
@@ -120,35 +122,6 @@ static SdeSuIterateOp resolveAccessWindowWitness(SdeMuAllocOp mu) {
   return findStencilStoreWitness(mu);
 }
 
-/// A residual `<single>` init writer (or an unlabeled writer SU) that stores
-/// the whole rank-expanded MU proves the committed owner grid directly: every
-/// owner block index is a loop-variant block coordinate, so the access spans
-/// every block, not a fixed one. Returns true only if at least one store to
-/// `mu` addresses each owner dim with a non-constant index. Read-only and
-/// single-fixed-block accessors do not qualify, so this never authorizes a
-/// window for a partial / contraction reader.
-static bool hasFullGridResidualWriter(SdeMuAllocOp mu, unsigned ownerDimCount) {
-  if (ownerDimCount == 0)
-    return false;
-  for (Operation *user : mu.getMemref().getUsers()) {
-    auto store = dyn_cast<memref::StoreOp>(user);
-    if (!store ||
-        ValueAnalysis::stripMemrefViewOps(store.getMemRef()) != mu.getMemref())
-      continue;
-    if (store.getIndices().size() < ownerDimCount)
-      continue;
-    bool everyOwnerDimVariant = true;
-    for (unsigned i = 0; i < ownerDimCount; ++i)
-      if (ValueAnalysis::tryFoldConstantIndex(store.getIndices()[i])) {
-        everyOwnerDimVariant = false;
-        break;
-      }
-    if (everyOwnerDimVariant)
-      return true;
-  }
-  return false;
-}
-
 static bool isDirectMuMemoryAccess(Operation *user) {
   return isa<memref::LoadOp, memref::StoreOp>(user) ||
          isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(
@@ -156,7 +129,8 @@ static bool isDirectMuMemoryAccess(Operation *user) {
 }
 
 static bool classifiesAsMuLoad(Operation *user) {
-  return isa<memref::LoadOp>(user) || isa<affine::AffineReadOpInterface>(user);
+  return isa<memref::LoadOp>(user) ||
+         isa<affine::AffineReadOpInterface>(user);
 }
 
 static bool classifiesAsMuStore(Operation *user) {
@@ -168,7 +142,7 @@ static bool muHasOnlyDirectMemoryUses(SdeMuAllocOp mu) {
   for (Operation *user : mu.getMemref().getUsers())
     if (!isDirectMuMemoryAccess(user) &&
         !isa<memref::DeallocOp, SdeArrayLayoutRootOp, SdeSuHaloOp,
-             SdeSuAllToAllOp, SdeSuReduceScatterOp>(user))
+              SdeSuAllToAllOp, SdeSuReduceScatterOp>(user))
       return false;
   return true;
 }
@@ -252,8 +226,7 @@ queryReplicatedReadAccessWindows(SdeMuAllocOp mu, MemRefType muType) {
       return {};
     if (isStore) {
       // A fully-replicated write is legal (every node writes the whole array);
-      // bail only on a committed BLOCK write fact, which contradicts
-      // replication.
+      // bail only on a committed BLOCK write fact, which contradicts replication.
       if (SdeSuIterateOp writerSu = cu->getParentOfType<SdeSuIterateOp>()) {
         std::optional<LayoutGraphFact> wfact =
             findArrayLayoutFact(writerSu, *arrayId, LayoutGraphRole::write);
@@ -325,21 +298,8 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
   // committed iteration extent (with the existing halo-widening allowance).
   std::optional<SmallVector<int64_t, 4>> ownerExtents =
       findOwnerIterationExtents(si, exp->blockExtents, exp->gridCounts);
-  if (!ownerExtents || ownerExtents->size() != ownerDimCount) {
-    // The resolved witness (typically a contraction reader) does not iterate
-    // the array's full owner grid, so its loop bounds cannot prove the grid.
-    // When a residual init writer stores every block with loop-variant owner
-    // coordinates, the committed expanded grid IS the authoritative shape:
-    // owner extent = gridCount * blockExtent. This authors the missing window
-    // for the init-writer (and read windows for any residual readers) without
-    // ever firing for a partial / single-fixed-block accessor.
-    if (!hasFullGridResidualWriter(mu, ownerDimCount))
-      return specs;
-    SmallVector<int64_t, 4> gridExtents(ownerDimCount, 0);
-    for (unsigned i = 0; i < ownerDimCount; ++i)
-      gridExtents[i] = exp->gridCounts[i] * exp->blockExtents[i];
-    ownerExtents = std::move(gridExtents);
-  }
+  if (!ownerExtents || ownerExtents->size() != ownerDimCount)
+    return specs;
 
   // Reconstruct the logical shape from the proven owner extents and require it
   // to recover EXACTLY the committed (ascending) owner dims.
@@ -463,7 +423,8 @@ std::optional<RaisedWindowSpec> queryAccessWindow(SdeMuAllocOp mu) {
   return specs.front();
 }
 
-std::optional<MuAccessWindowGeometry> deriveMuAccessWindowGeometry(Value mu) {
+std::optional<MuAccessWindowGeometry>
+deriveMuAccessWindowGeometry(Value mu) {
   auto muType = dyn_cast<MemRefType>(mu.getType());
   if (!muType || !muType.hasStaticShape())
     return std::nullopt;
@@ -482,13 +443,11 @@ std::optional<MuAccessWindowGeometry> deriveMuAccessWindowGeometry(Value mu) {
   if (auto muAlloc = mu.getDefiningOp<SdeMuAllocOp>()) {
     if (std::optional<ExpandedBlockGridMu> exp =
             recognizeExpandedBlockGridMu(muAlloc)) {
-      return fillFromExpanded(
-          exp->ownerDims.size(),
-          muType.getShape().drop_front(exp->ownerDims.size()));
+      return fillFromExpanded(exp->ownerDims.size(),
+                              muType.getShape().drop_front(exp->ownerDims.size()));
     }
     // A committed replicated array is whole-array (ownerDimCount==0); avoid the
-    // type-shape fallback misreading a square logical shape as a 1-D owner
-    // grid.
+    // type-shape fallback misreading a square logical shape as a 1-D owner grid.
     if (std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc))
       if (hasReplicatedReadFact(muAlloc, *arrayId)) {
         MuAccessWindowGeometry geom;
@@ -499,15 +458,14 @@ std::optional<MuAccessWindowGeometry> deriveMuAccessWindowGeometry(Value mu) {
       }
   }
 
-  // Hand-written rank-expanded boundary IR may omit writer physical attrs;
-  // recover the grid prefix structurally when the committed MU type is
-  // rank-expanded.
+  // Hand-written rank-expanded boundary IR may omit writer physical attrs; recover
+  // the grid prefix structurally when the committed MU type is rank-expanded.
   if (muType.getRank() >= 2) {
     if (std::optional<RecoveredMuPhysicalLayout> recovered =
             recoverMuPhysicalLayoutFromExpandedType(muType))
-      return fillFromExpanded(
-          recovered->ownerDims.size(),
-          muType.getShape().drop_front(recovered->ownerDims.size()));
+      return fillFromExpanded(recovered->ownerDims.size(),
+                              muType.getShape().drop_front(
+                                  recovered->ownerDims.size()));
   }
 
   MuAccessWindowGeometry geom;

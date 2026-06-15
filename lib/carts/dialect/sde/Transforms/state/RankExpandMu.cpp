@@ -104,12 +104,19 @@ struct SdeRankExpandMuPass
         blockShape[dim] = committed->layout.blockExtents[slot];
       // Owner-dim recovery for a separate init writer is per-dependency at the
       // boundary (readPhysicalLayoutFromDepWindow), not a shared SU attr here.
-      // Restate only THIS MU's array: committed->writer can be a reader SU
-      // recovered for an input array, and its sibling write facts (e.g. a
-      // matmul's distinct output) carry their own committed grain that this
-      // array's block shape must not overwrite.
+      // Restate only THIS MU's array ONLY for matmul/contraction writers: there
+      // the witness SU writes a DISTINCT output array whose reconciled grain
+      // must not be clobbered by an input array's block shape. For other
+      // families (stencils etc.) the witness's own output IS the array being
+      // expanded, and the original unrestricted restatement is required -
+      // restricting there drops a needed write-fact restatement and breaks
+      // CreateDbs.
+      bool isContractionWriter =
+          classification &&
+          *classification == carts::sde::SdeStructuredClassification::matmul;
       carts::sde::rewriteWriterArrayLayoutToPhysicalShape(
-          committed->writer, ownerDims, blockShape, muArrayId);
+          committed->writer, ownerDims, blockShape,
+          isContractionWriter ? muArrayId : std::nullopt);
     }
 
     if (failed)
