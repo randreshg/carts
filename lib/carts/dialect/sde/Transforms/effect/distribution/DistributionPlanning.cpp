@@ -2167,6 +2167,24 @@ static void reconcileSameOwnerArrayGrain(Operation *moduleOp) {
     bool eligible = true;
     bool seen = false;
     bool differs = false;
+    // Per-dim GCD of the genuine node-agnostic *budget* grains. A writer that
+    // committed only an abstract coarse blockShape (no budgetBlockShape) must
+    // be reconciled DOWN to this budget rather than dragging the unified grain
+    // to a coprime GCD with it: gcd(abstractBlock, budget) can be 1, which is a
+    // grain NEITHER side realizes (one DB block per element -> millions of
+    // EDTs). The budget is the one grain both sides can realize.
+    SmallVector<int64_t, 4> budgetUnified;
+    bool budgetSeen = false;
+    bool budgetSizeMismatch = false;
+    // Set when some contributing grain is *incompatible* with the budget grain
+    // on a dim (neither divides the other), so the cross-fact GCD collapses to
+    // a grain the incompatible side cannot realize. A grain that merely divides
+    // the budget (a legitimate finer matmul/elementwise tile) is compatible and
+    // is preserved.
+    bool incompatibleWithBudget = false;
+    // Every per-dim grain that contributed to the cross-fact GCD, for the
+    // post-walk budget-compatibility check.
+    SmallVector<SmallVector<int64_t, 4>, 4> contributingGrains;
   };
   llvm::DenseMap<int64_t, GrainInfo> byId;
 
@@ -2188,6 +2206,8 @@ static void reconcileSameOwnerArrayGrain(Operation *moduleOp) {
         info.eligible = false;
         continue;
       }
+      info.contributingGrains.push_back(
+          SmallVector<int64_t, 4>(grain.begin(), grain.end()));
       if (!info.seen) {
         info.seen = true;
         info.ownerDims.assign(f.ownerDims.begin(), f.ownerDims.end());
@@ -2204,6 +2224,23 @@ static void reconcileSameOwnerArrayGrain(Operation *moduleOp) {
           info.unified[i] = g > 0 ? g : info.unified[i];
         }
       }
+      // Track the GCD of declared budget grains separately. Only facts that
+      // actually carry a budgetBlockShape contribute, so a coarse abstract
+      // writer blockShape never collapses this.
+      if (!f.budgetBlockShape.empty()) {
+        ArrayRef<int64_t> budget(f.budgetBlockShape);
+        if (!info.budgetSeen) {
+          info.budgetSeen = true;
+          info.budgetUnified.assign(budget.begin(), budget.end());
+        } else if (info.budgetUnified.size() != budget.size()) {
+          info.budgetSizeMismatch = true;
+        } else {
+          for (size_t i = 0; i < budget.size(); ++i) {
+            int64_t g = std::gcd(info.budgetUnified[i], budget[i]);
+            info.budgetUnified[i] = g > 0 ? g : info.budgetUnified[i];
+          }
+        }
+      }
       if (f.role == sde::LayoutGraphRole::write) {
         info.writerOps.push_back(op);
         if (info.rootShape.empty())
@@ -2212,6 +2249,42 @@ static void reconcileSameOwnerArrayGrain(Operation *moduleOp) {
       }
     }
   });
+
+  // When a declared budget grain exists, it is the authoritative node-agnostic
+  // grain both producers and consumers can realize. The raw cross-fact GCD is
+  // only safe when every contributing grain is *compatible* with the budget
+  // (one divides the other on every dim). If some contributing grain is
+  // incompatible with the budget (neither divides the other, e.g. a writer's
+  // coarse abstract blockShape that was never physically committed at budget),
+  // the GCD collapses to a grain that incompatible side cannot realize — for a
+  // 1-D elementwise array this is one DB block per element (millions of EDTs).
+  // In that case adopt the budget grain and re-commit the writers at it.
+  for (auto &kv : byId) {
+    GrainInfo &info = kv.second;
+    if (!info.eligible || !info.seen || !info.budgetSeen ||
+        info.budgetSizeMismatch)
+      continue;
+    if (info.unified.size() != info.budgetUnified.size())
+      continue;
+    for (const SmallVector<int64_t, 4> &grain : info.contributingGrains) {
+      if (grain.size() != info.budgetUnified.size())
+        continue;
+      for (size_t i = 0; i < grain.size(); ++i) {
+        int64_t g = grain[i], b = info.budgetUnified[i];
+        if (g <= 0 || b <= 0)
+          continue;
+        int64_t common = std::gcd(g, b);
+        if (common != std::min(g, b))
+          info.incompatibleWithBudget = true;
+      }
+    }
+    if (!info.incompatibleWithBudget)
+      continue;
+    // Adopt the budget grain as the unified target and force the differing
+    // writers to be re-committed at it.
+    info.unified.assign(info.budgetUnified.begin(), info.budgetUnified.end());
+    info.differs = true;
+  }
 
   llvm::DenseMap<int64_t, SmallVector<int64_t, 4>> targetById;
   for (auto &kv : byId) {
