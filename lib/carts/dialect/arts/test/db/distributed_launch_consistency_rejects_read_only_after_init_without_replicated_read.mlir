@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(distributed-launch-consistency)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(edt-split-for-mixed-deps,writer-owner-route)' 2>&1 | %FileCheck %s
 
 // read_only_after_init proves the coarse DB is immutable after initialization,
 // but it does not prove the DB is available on every node. Without an explicit

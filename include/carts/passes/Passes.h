@@ -45,7 +45,8 @@ std::unique_ptr<Pass> createDbShortenLifetimesPass();
 std::unique_ptr<Pass> createDbDeadRootEliminationPass();
 std::unique_ptr<Pass> createPartialReductionSplitPass();
 std::unique_ptr<Pass> createBlockContractionSplitPass();
-std::unique_ptr<Pass> createDistributedLaunchConsistencyPass();
+std::unique_ptr<Pass> createEdtSplitForMixedDepsPass();
+std::unique_ptr<Pass> createWriterOwnerRoutePass();
 /// Realize EDT distribution facts (family, version, block-halo capability)
 /// from the committed dep pattern and access-window facts.
 std::unique_ptr<Pass> createRealizeEdtDistributionPass();

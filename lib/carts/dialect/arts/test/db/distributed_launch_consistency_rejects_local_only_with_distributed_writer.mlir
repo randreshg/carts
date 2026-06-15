@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(distributed-launch-consistency)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(edt-split-for-mixed-deps,writer-owner-route)' 2>&1 | %FileCheck %s
 
 // Localizing an EDT that also writes a distributed DB violates committed
 // ownership. Without an explicit ordering dependency to preserve the original

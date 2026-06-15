@@ -1,10 +1,13 @@
 ///==========================================================================///
-/// File: DistributedLaunchConsistency.cpp
+/// File: WriterOwnerRoute.cpp
 ///
-/// Reconciles ARTS EDT placement with distributed DB ownership.
+/// Route distributed-writer EDTs to their DB owner. Carved from the former
+/// DistributedLaunchConsistency pass (T031): this half owns owner-route
+/// derivation and writer promotion; the mixed-dep rejection/localization half
+/// lives in EdtSplitForMixedDeps.
 ///==========================================================================///
 
-#define GEN_PASS_DEF_DISTRIBUTEDLAUNCHCONSISTENCY
+#define GEN_PASS_DEF_WRITEROWNERROUTE
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
@@ -25,7 +28,7 @@
 #include <optional>
 #include <utility>
 
-ARTS_DEBUG_SETUP(distributed_launch_consistency);
+ARTS_DEBUG_SETUP(writer_owner_route);
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -511,20 +514,6 @@ getWriterOwnerTarget(Value dep, std::optional<int64_t> totalNodes,
   return {WriterOwnerTargetStatus::Ready, std::move(target)};
 }
 
-static bool hasDistributedWriterDependency(EdtOp edt) {
-  for (Value dep : edt.getDependencies()) {
-    Operation *underlying = DbUtils::getUnderlyingDb(dep);
-    auto acquire = dyn_cast_or_null<DbAcquireOp>(underlying);
-    if (!acquire || !DbUtils::isWriterMode(acquire.getMode()))
-      continue;
-    auto alloc =
-        dyn_cast_or_null<DbAllocOp>(DbUtils::getUnderlyingDbAlloc(dep));
-    if (alloc && hasDistributedDbAllocation(alloc.getOperation()))
-      return true;
-  }
-  return false;
-}
-
 static std::optional<WriterOwnerTarget>
 getConsistentWriterOwnerTarget(EdtOp edt, bool &sawDistributedWriter,
                                bool &conflict, bool &multiOwnerRange,
@@ -564,43 +553,14 @@ getConsistentWriterOwnerTarget(EdtOp edt, bool &sawDistributedWriter,
   return expectedOwner;
 }
 
-struct DistributedLaunchConsistencyPass
-    : public impl::DistributedLaunchConsistencyBase<
-          DistributedLaunchConsistencyPass> {
+struct WriterOwnerRoutePass
+    : public impl::WriterOwnerRouteBase<WriterOwnerRoutePass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
-    bool requiresInterNodeRouting = requiresArtsInterNodeOwnerRouting(module);
-    unsigned localized = 0;
     unsigned promoted = 0;
     unsigned routed = 0;
     bool failed = false;
-
-    module.walk([&](EdtOp edt) {
-      if (failed)
-        return;
-      if (DbUtils::hasLocalOnlyDistributedLaunchDependency(edt) &&
-          hasDistributedWriterDependency(edt) && requiresInterNodeRouting) {
-        edt.emitError()
-            << "mixes a local-only distributed dependency with a distributed "
-               "writer; preserving the original EDT join would require an "
-               "explicit ordering dependency before ARTS can split the codelet";
-        failed = true;
-        return;
-      }
-      if (edt.getConcurrency() != EdtConcurrency::internode)
-        return;
-      if (!DbUtils::hasLocalOnlyDistributedLaunchDependency(edt))
-        return;
-
-      OpBuilder builder(edt);
-      Value localRoute = createCurrentNodeRoute(builder, edt.getLoc());
-      edt.setConcurrency(EdtConcurrency::intranode);
-      edt.getRouteMutable().set(localRoute);
-      ++localized;
-      ARTS_DEBUG(
-          "Localized internode EDT with rejected distributed DB dep: " << edt);
-    });
 
     module.walk([&](EdtOp edt) {
       if (failed)
@@ -662,15 +622,13 @@ struct DistributedLaunchConsistencyPass
       return;
     }
 
-    ARTS_INFO("Distributed launch consistency localized "
-              << localized << " EDTs, promoted " << promoted
-              << " EDTs, and routed " << routed << " EDTs");
+    ARTS_INFO("Writer owner route promoted " << promoted << " EDTs and routed "
+                                             << routed << " EDTs");
   }
 };
 
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::carts::arts::createDistributedLaunchConsistencyPass() {
-  return std::make_unique<DistributedLaunchConsistencyPass>();
+std::unique_ptr<Pass> mlir::carts::arts::createWriterOwnerRoutePass() {
+  return std::make_unique<WriterOwnerRoutePass>();
 }

@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(distributed-launch-consistency,verify-arts-cdag)' | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(edt-split-for-mixed-deps,writer-owner-route,verify-arts-cdag)' | %FileCheck %s
 
 // An explicit replicatedRead acquire is the ARTS-side availability proof for a
 // read-only coarse DB consumed by an internode distributed writer. The pass must

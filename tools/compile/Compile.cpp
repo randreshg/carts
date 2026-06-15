@@ -300,20 +300,14 @@ static const std::array<llvm::StringLiteral, 6> kCreateDbsPasses = {
     "Mem2Reg",   "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
     "DbModeTightening", "PolygeistCanonicalize", "CSE(arts.edt)", "Mem2Reg"};
-static const std::array<llvm::StringLiteral, 13> kPostDbRefinementPasses = {
-    "DbModeTightening",
-    "EdtDeadDepElimination",
-    "DbConsolidateStencilHalos",
-    "DbStorageBridgeCopyPlacement",
-    "DbShortenLifetimes",
-    "DbDeadRootElimination",
-    "PartialReductionSplit",
-    "BlockContractionSplit",
-    "DbScratchElimination",
-    "DbDistributedOwnershipRealization",
-    "PolygeistCanonicalize",
-    "CSE(arts.edt)",
-    "DistributedLaunchConsistency"};
+static const std::array<llvm::StringLiteral, 14> kPostDbRefinementPasses = {
+    "DbModeTightening",          "EdtDeadDepElimination",
+    "DbConsolidateStencilHalos", "DbStorageBridgeCopyPlacement",
+    "DbShortenLifetimes",        "DbDeadRootElimination",
+    "PartialReductionSplit",     "BlockContractionSplit",
+    "DbScratchElimination",      "DbDistributedOwnershipRealization",
+    "PolygeistCanonicalize",     "CSE(arts.edt)",
+    "EdtSplitForMixedDeps",      "WriterOwnerRoute"};
 static const std::array<llvm::StringLiteral, 6> kLateConcurrencyCleanupPasses =
     {"Hoisting",         "PolygeistCanonicalize",   "CSE(arts.edt)",
      "EdtAllocaSinking", "ArtsDeadCodeElimination", "Mem2Reg"};
@@ -655,7 +649,8 @@ void registerDialects(DialectRegistry &registry) {
   registerFinalizeSdeToArts();
   registerPartialReductionSplit();
   registerBlockContractionSplit();
-  registerDistributedLaunchConsistency();
+  registerEdtSplitForMixedDeps();
+  registerWriterOwnerRoute();
   registerRealizeEdtDistribution();
   registerDbDistributedRuntimeInit();
   registerEpochTailContinuation();
@@ -1227,7 +1222,8 @@ void buildPostDbRefinementPipeline(PassManager &pm) {
   pm.addPass(arts::createDbScratchEliminationPass());
   pm.addPass(arts::createDbDistributedOwnershipRealizationPass());
   addCanonicalizeAndEdtLocalCSE(pm);
-  pm.addPass(arts::createDistributedLaunchConsistencyPass());
+  pm.addPass(arts::createEdtSplitForMixedDepsPass());
+  pm.addPass(arts::createWriterOwnerRoutePass());
 }
 
 /// Apply late DB-aware loop cleanup and final stack/SSA simplification.
