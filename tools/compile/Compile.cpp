@@ -649,6 +649,7 @@ void registerDialects(DialectRegistry &registry) {
   /// are registered here, while staged compiler pipelines wire pass ordering.
   registerDeadCodeElimination();
   registerSdeStorageToArtsDb();
+  registerVerifyRawAccessCovered();
   registerSdeAccessesToArtsDeps();
   registerFinalizeSdeToArts();
   registerPartialReductionSplit();
