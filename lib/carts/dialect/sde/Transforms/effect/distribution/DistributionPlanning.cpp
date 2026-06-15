@@ -22,11 +22,9 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Transforms/effect/distribution/BlockGrainPlan.h"
 #include "carts/dialect/sde/Transforms/effect/distribution/DistributionFailClosed.h"
 #include "carts/dialect/sde/Transforms/effect/distribution/DistributionLayoutUtils.h"
+#include "carts/dialect/sde/Transforms/effect/distribution/MovementTagging.h"
 #include "carts/dialect/sde/Transforms/effect/distribution/OwnerDimSelect.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
-#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
-#include "carts/utils/LoopUtils.h"
-#include "carts/utils/Utils.h"
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
@@ -44,66 +42,6 @@ struct DistributionRewrite {
   sde::SdeSuIterateOp op;
   sde::SdeDistributionKind kind = sde::SdeDistributionKind::blocked;
 };
-
-static bool hasEnoughWorkForDistribution(sde::SdeSuIterateOp op,
-                                         sde::SDECostModel &costModel) {
-  std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
-  if (!tripCount)
-    return true;
-
-  int64_t threshold =
-      saturatingMultiplyPositive(costModel.getLogicalWorkerCapacity(),
-                                 costModel.getMinIterationsPerWorker());
-  return *tripCount >= threshold;
-}
-
-static std::optional<sde::SdeDistributionKind>
-chooseDistributionKind(sde::SdeSuIterateOp op, sde::SDECostModel &costModel) {
-  if (op->getParentOfType<sde::SdeSuDistributeOp>())
-    return std::nullopt;
-  if (costModel.getLogicalWorkerCapacity() <= 1)
-    return std::nullopt;
-
-  auto classificationAttr = sde::queryStructuredClassification(op);
-  if (!classificationAttr) {
-    std::optional<sde::LoopIndexedOutputShape> outputPlan =
-        sde::findLoopIndexedOutputShape(op);
-    if (!outputPlan)
-      return std::nullopt;
-    auto effects = sde::collectStructuredMemoryEffects(op.getBody());
-    if (effects.hasUnknownEffects || effects.reads.contains(outputPlan->root))
-      return std::nullopt;
-    if (hasEnoughWorkForDistribution(op, costModel))
-      return sde::SdeDistributionKind::blocked;
-    return std::nullopt;
-  }
-
-  if (op.getNumResults() > 0 &&
-      *classificationAttr != sde::SdeStructuredClassification::reduction)
-    return std::nullopt;
-
-  switch (*classificationAttr) {
-  case sde::SdeStructuredClassification::elementwise:
-  case sde::SdeStructuredClassification::elementwise_pipeline:
-    return sde::SdeDistributionKind::blocked;
-  case sde::SdeStructuredClassification::stencil:
-    if (sde::requiresNestedStencilOwnerPromotion(op) &&
-        !sde::hasRealizableOwnerStrip(op))
-      return std::nullopt;
-    if (isInPlaceSelfReadStencil(op) && !sde::queryInPlaceSafe(op))
-      return std::nullopt;
-    if (hasEnoughWorkForDistribution(op, costModel))
-      return sde::SdeDistributionKind::owner_compute;
-    return std::nullopt;
-  case sde::SdeStructuredClassification::matmul:
-    return sde::SdeDistributionKind::blocked;
-  case sde::SdeStructuredClassification::reduction:
-    if (!op.getReductionAccumulators().empty())
-      return sde::SdeDistributionKind::blocked;
-    return std::nullopt;
-  }
-  return std::nullopt;
-}
 
 struct DistributionPlanningPass
     : public sde::impl::DistributionPlanningBase<DistributionPlanningPass> {

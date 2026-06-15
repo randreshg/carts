@@ -171,6 +171,8 @@ createBlockGrainPlanPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createOwnerDimSelectPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
+createMovementTaggingPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
 createBarrierEliminationPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createMuAccessWindowSyncOptPass();
 

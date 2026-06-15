@@ -54,6 +54,24 @@ def DistributionPlanning
   let constructor = "mlir::carts::sde::createDistributionPlanningPass()";
 }
 
+def MovementTagging
+    : Pass<"sde-movement-tagging", "mlir::ModuleOp"> {
+  let summary = "Tag distributable SDE loops with sde.su_distribute";
+  let description = [{
+    Selects the SDE distribution kind (blocked vs owner_compute) for eligible
+    structured `sde.su_iterate` operations from SDE-owned classification and
+    generic logical-capacity heuristics, and wraps the chosen loops in
+    `sde.su_distribute`. Fail-closed gating for unimplemented in-place stencil
+    wavefronts is owned by sde-distribution-fail-closed, which runs earlier; this
+    pass only tags work that is legally distributable. It names no collectives,
+    DBs, EDTs, owner maps, routes, or runtime policy.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::scf::SCFDialect"];
+  let constructor = "mlir::carts::sde::createMovementTaggingPass()";
+}
+
 def OwnerDimSelect
     : Pass<"sde-owner-dim-select", "mlir::ModuleOp"> {
   let summary = "Select SDE owner dims and commit per-SU physical layout";
