@@ -167,6 +167,8 @@ createDistributionPlanningPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createDistributionFailClosedPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
+createBlockGrainPlanPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
 createBarrierEliminationPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createMuAccessWindowSyncOptPass();
 

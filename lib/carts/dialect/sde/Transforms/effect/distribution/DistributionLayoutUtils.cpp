@@ -14,6 +14,7 @@
 #include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
@@ -35,6 +36,67 @@ int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
 int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel) {
   return saturatingMultiplyPositive(costModel.getLogicalWorkerCapacity(),
                                     costModel.getInterLocalityTaskWaves());
+}
+
+int64_t readStencilHaloForOwnerDim(sde::SdeSuIterateOp op, unsigned ownerDim) {
+  std::optional<sde::SuNeighborhoodAccessInfo> neighborhood =
+      sde::queryNeighborhoodAccessInfo(op);
+  if (!neighborhood)
+    return 0;
+
+  for (auto [idx, rawDim] : llvm::enumerate(neighborhood->ownerDims)) {
+    if (rawDim < 0 || static_cast<unsigned>(rawDim) != ownerDim)
+      continue;
+    if (idx >= neighborhood->minOffsets.size() ||
+        idx >= neighborhood->maxOffsets.size())
+      return 0;
+    return std::max<int64_t>(0, std::max(-neighborhood->minOffsets[idx],
+                                         neighborhood->maxOffsets[idx]));
+  }
+  return 0;
+}
+
+std::optional<sde::LayoutGraphFact>
+layoutFactFromCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
+  std::optional<sde::CommittedSuPhysicalLayout> layout =
+      sde::recoverCommittedPhysicalLayout(op);
+  if (!layout || layout->ownerDims.empty() || layout->blockShape.empty())
+    return std::nullopt;
+  sde::LayoutGraphFact fact;
+  fact.role = sde::LayoutGraphRole::write;
+  fact.layoutKind = sde::ArrayLayoutKind::blockParallel;
+  fact.ownerDims = layout->ownerDims;
+  fact.blockShape = layout->blockShape;
+  return fact;
+}
+
+std::optional<sde::LayoutGraphFact>
+selectSingleWriteLayoutFact(sde::SdeSuIterateOp op) {
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return layoutFactFromCommittedPhysicalLayout(op);
+
+  std::optional<sde::LayoutGraphFact> selected;
+  llvm::SmallDenseSet<int64_t, 4> writtenIds;
+  for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
+    if (fact.role != sde::LayoutGraphRole::write || fact.ownerDims.empty() ||
+        fact.blockShape.empty())
+      continue;
+    if (fact.id < 0 || !writtenIds.insert(fact.id).second)
+      return std::nullopt;
+    if (!selected) {
+      selected = fact;
+      continue;
+    }
+    if (selected->layoutKind != fact.layoutKind ||
+        selected->ownerDims != fact.ownerDims ||
+        selected->blockShape != fact.blockShape ||
+        selected->budgetBlockShape != fact.budgetBlockShape)
+      return std::nullopt;
+  }
+  if (!selected)
+    return layoutFactFromCommittedPhysicalLayout(op);
+  return selected;
 }
 
 std::optional<unsigned> findDependentSuLoopSlot(Value index,

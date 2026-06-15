@@ -54,6 +54,25 @@ def DistributionPlanning
   let constructor = "mlir::carts::sde::createDistributionPlanningPass()";
 }
 
+def BlockGrainPlan
+    : Pass<"sde-block-grain-plan", "mlir::ModuleOp"> {
+  let summary = "Unify SDE block grain for budgeted same-owner layouts";
+  let description = [{
+    Owns the SDE block-grain decisions for data-parallel distributed arrays.
+    The budget-reconciled physical grain committer is consumed by the per-SU
+    owner-dim commit pass; this pass itself runs the A1 same-owner grain
+    unification, committing one node-agnostic block grain (the per-dim GCD /
+    budget grain) on every block_parallel fact of an array so producer and
+    consumer SUs share a home and no same-owner re-tile is left for
+    RedistributionEdges to reject. It does not choose owner dimensions, movement
+    families, distribution wrappers, DB grain, routes, or runtime policy.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::memref::MemRefDialect",
+                           "::mlir::scf::SCFDialect"];
+  let constructor = "mlir::carts::sde::createBlockGrainPlanPass()";
+}
+
 def DistributionFailClosed
     : Pass<"sde-distribution-fail-closed", "mlir::ModuleOp"> {
   let summary = "Fail closed for unimplemented in-place stencil wavefront cases";
