@@ -136,6 +136,56 @@ static SdeSuIterateOp resolveAccessWindowWitness(SdeMuAllocOp mu) {
 /// targets (bicg A-init <single>, atax combine, activations softmax) have a
 /// non-stencil (elementwise_pipeline) witness whose loop bounds cannot prove
 /// the grid, so they alone need this fallback.
+// A stencil SU is block-realizable at the SDE/ARTS boundary only if its
+// realized `su_iterate` loop exposes at least one loop dim per committed owner
+// dim of EVERY array it touches. When some touched array commits more owner
+// dims than the stencil has loop dims (e.g. a 2-D [0,1] owner grid under a 1-D
+// `su_iterate` whose column owner coordinate is `div(inner_scf_iv, block)`, or
+// a 3-D [0,1,2] grid under a 1-D loop as in sw4lite/vel4sg), the boundary
+// cannot map that array's owner window from the loop and falls it back to a
+// coarse DB.
+static bool stencilIsBlockRealizable(SdeSuIterateOp stencil) {
+  unsigned loopRank = stencil.getLowerBounds().size();
+  for (const LayoutGraphFact &fact :
+       parseArrayLayoutFacts(stencil.getArrayLayoutAttr()))
+    if (fact.ownerDims.size() > loopRank)
+      return false;
+  return true;
+}
+
+// True when `mu` is read or written by a stencil-classified SU that is not
+// block-realizable (see stencilIsBlockRealizable). Such a stencil leaves at
+// least one of its arrays coarse; mixing that coarse DB with any block DB in
+// the same SU is unsupported by the direct (block) SDE/ARTS boundary path — it
+// rejects the unmapped owner window with "cannot map SDE access-window block
+// coordinate to a loop dimension" or "touches a DB without a committed SDE
+// access-window dependency". So the WHOLE stencil neighborhood (every array the
+// stencil reads or writes, including non-rank-expanded / replicated outputs and
+// any sibling array a separate init/copy writer would otherwise block-author)
+// must be realized coarse-consistently until the stencil itself can map its
+// multi-D owner grid (inner-scf owner loop + RO halo realization,
+// architecture-scale). This keeps jacobi-for / poisson-for / sw4lite-vel4sg
+// correct at one node exactly as conv-2d/conv-3d already are, while leaving the
+// genuine non-stencil residual targets (bicg A-init, atax combine, activations
+// softmax) on the block path.
+static bool muUsedByUnmappableStencil(SdeMuAllocOp mu) {
+  for (Operation *user : mu.getMemref().getUsers()) {
+    if (!isa<memref::LoadOp, memref::StoreOp, affine::AffineReadOpInterface,
+             affine::AffineWriteOpInterface>(user))
+      continue;
+    SdeSuIterateOp accessor = user->getParentOfType<SdeSuIterateOp>();
+    if (!accessor)
+      continue;
+    auto classification = accessor.getStructuredClassification();
+    if (!classification ||
+        *classification != SdeStructuredClassification::stencil)
+      continue;
+    if (!stencilIsBlockRealizable(accessor))
+      return true;
+  }
+  return false;
+}
+
 static bool hasFullGridResidualWriter(SdeMuAllocOp mu, unsigned ownerDimCount,
                                       SdeSuIterateOp si) {
   if (ownerDimCount == 0)
@@ -260,6 +310,13 @@ queryReplicatedReadAccessWindows(SdeMuAllocOp mu, MemRefType muType) {
       !hasReplicatedReadFact(mu, *arrayId))
     return specs;
 
+  // A replicated array touched by a stencil whose owner grid the realized loop
+  // cannot map must stay coarse-consistent with that stencil's other (coarse)
+  // arrays; otherwise the stencil SU mixes a windowed and a coarse DB and the
+  // direct boundary path rejects it. See muUsedByUnmappableStencil.
+  if (muUsedByUnmappableStencil(mu))
+    return specs;
+
   struct CuAccess {
     SdeCuRegionOp cu;
     bool hasRead = false;
@@ -341,6 +398,19 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
   const unsigned ownerDimCount = exp->ownerDims.size();
   if (ownerDimCount == 0)
     return specs; // no owner grid -> conservative
+
+  // Keep an array coarse when it participates in a stencil whose realized
+  // su_iterate loop cannot map its committed owner grid (see
+  // muUsedByUnmappableStencil). Any block window authored here — whether proven
+  // from a 2-D init/copy witness below or from the residual-writer fallback —
+  // would make the stencil SU a mixed block/coarse writer that the direct
+  // SDE/ARTS boundary path cannot lower (it would reject the unmapped owner
+  // window with "cannot map SDE access-window block coordinate to a loop
+  // dimension"). Realizing such a stencil as block needs an inner-scf owner
+  // loop plus RO halo (architecture-scale); until then the whole stencil
+  // neighborhood is realized coarse-consistently, exactly as conv-2d/conv-3d.
+  if (muUsedByUnmappableStencil(mu))
+    return specs;
 
   // The L trailing tile dims (one per logical dim); the K leading dims are the
   // owner grid.
