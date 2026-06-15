@@ -31,6 +31,7 @@ namespace mlir::carts::arts_rt {
 #include "carts/utils/Debug.h"
 #include "carts/utils/LoopUtils.h"
 #include "carts/utils/ValueAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/PatternMatch.h"
@@ -73,6 +74,11 @@ static std::pair<Value, SmallVector<Value>> getLoadInfo(Operation *op) {
   /// Handle polygeist.load (DynLoadOp)
   if (auto dynLoad = dyn_cast<polygeist::DynLoadOp>(op))
     return {dynLoad.getMemref(), SmallVector<Value>(dynLoad.getIndices())};
+
+  /// Handle affine.load (scalar/0-d accumulators reach here as affine ops
+  /// because affine lowering runs after this pass).
+  if (auto affLoad = dyn_cast<affine::AffineLoadOp>(op))
+    return {affLoad.getMemRef(), SmallVector<Value>(affLoad.getIndices())};
   return {Value(), {}};
 }
 
@@ -84,6 +90,10 @@ static std::pair<Value, SmallVector<Value>> getStoreInfo(Operation *op) {
   /// Handle polygeist.store (DynStoreOp)
   if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(op))
     return {dynStore.getMemref(), SmallVector<Value>(dynStore.getIndices())};
+
+  /// Handle affine.store (see getLoadInfo).
+  if (auto affStore = dyn_cast<affine::AffineStoreOp>(op))
+    return {affStore.getMemRef(), SmallVector<Value>(affStore.getIndices())};
   return {Value(), {}};
 }
 
@@ -93,6 +103,8 @@ static Value getStoredValue(Operation *op) {
     return store.getValue();
   if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(op))
     return dynStore.getValue();
+  if (auto affStore = dyn_cast<affine::AffineStoreOp>(op))
+    return affStore.getValueToStore();
   return Value();
 }
 
@@ -120,9 +132,10 @@ detectReductionPattern(scf::ForOp forOp) {
   /// (not inside nested regions - those need to be transformed first)
   SmallVector<Operation *> loads, stores;
   for (Operation &op : body->without_terminator()) {
-    if (isa<memref::LoadOp, polygeist::DynLoadOp>(&op))
+    if (isa<memref::LoadOp, polygeist::DynLoadOp, affine::AffineLoadOp>(&op))
       loads.push_back(&op);
-    else if (isa<memref::StoreOp, polygeist::DynStoreOp>(&op))
+    else if (isa<memref::StoreOp, polygeist::DynStoreOp, affine::AffineStoreOp>(
+                 &op))
       stores.push_back(&op);
   }
 
@@ -130,7 +143,10 @@ detectReductionPattern(scf::ForOp forOp) {
   /// indices
   for (Operation *storeOp : stores) {
     auto [storeMemref, storeIndices] = getStoreInfo(storeOp);
-    if (!storeMemref || storeIndices.empty())
+    /// Empty indices are valid: a 0-d scalar accumulator (e.g. memref<f32>
+    /// `%acc[]`) is the canonical reduction and its (absent) indices are
+    /// trivially loop-invariant.
+    if (!storeMemref)
       continue;
 
     /// Check if indices are loop-invariant
@@ -169,9 +185,15 @@ detectReductionPattern(scf::ForOp forOp) {
       /// to avoid dangling references when erasing the old loop.
       /// Additionally, the memref must be defined OUTSIDE the loop so that
       /// we can create new loads/stores outside the loop that use it.
-      if (ValueAnalysis::sameDirectMemrefAccess(loadMemref, loadIndices,
-                                                storeMemref, storeIndices) &&
-          loadOp->hasOneUse() && isLoopInvariant(forOp, storeMemref)) {
+      /// A 0-d scalar accumulator has no indices: same location reduces to
+      /// same memref. Otherwise compare the full access.
+      bool sameLocation =
+          storeIndices.empty()
+              ? (loadMemref == storeMemref && loadIndices.empty())
+              : ValueAnalysis::sameDirectMemrefAccess(
+                    loadMemref, loadIndices, storeMemref, storeIndices);
+      if (sameLocation && loadOp->hasOneUse() &&
+          isLoopInvariant(forOp, storeMemref)) {
         pattern.loadOp = loadOp;
         pattern.storeOp = storeOp;
         pattern.valueToYield = storedValue;
@@ -323,6 +345,11 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
     initValue = polygeist::DynLoadOp::create(
         rewriter, loc, dynLoad.getResult().getType(), dynLoad.getMemref(),
         dynLoad.getIndices(), dynLoad.getSizes());
+  } else if (auto affLoad = dyn_cast<affine::AffineLoadOp>(pattern.loadOp)) {
+    /// For affine.load, recreate before the loop (identity map from indices;
+    /// empty for a 0-d scalar accumulator).
+    initValue = affine::AffineLoadOp::create(
+        rewriter, loc, affLoad.getMemRef(), affLoad.getIndices());
   }
   Operation *initOp = initValue ? initValue.getDefiningOp() : nullptr;
 
@@ -394,6 +421,10 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
     polygeist::DynStoreOp::create(rewriter, loc, finalValue,
                                   dynStore.getMemref(), dynStore.getIndices(),
                                   dynStore.getSizes());
+  } else if (auto affStore = dyn_cast<affine::AffineStoreOp>(pattern.storeOp)) {
+    /// For affine.store, store the final reduced value after the loop.
+    affine::AffineStoreOp::create(rewriter, loc, finalValue,
+                                  affStore.getMemRef(), affStore.getIndices());
   }
 
   /// Erase the old loop
