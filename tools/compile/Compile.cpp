@@ -264,9 +264,10 @@ static const std::array<llvm::StringLiteral, 12> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 2> kInitialCleanupPasses = {
     "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 25> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 26> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
+    "LayoutCandidateChoose",
     "WriterLayoutCommit",
     "LoopInterchange",
     "Tiling",
@@ -1133,8 +1134,11 @@ void buildSdePlanningPipeline(PassManager &pm,
   // raise-to-sde CORE promotes proven-independent host nests (scf or affine)
   // and folds the initial cu-normalization.
   pm.addPass(sde::createRaiseToSdePass());
-  // Module-scoped per-array BLOCK layout assignment. Runs before
-  // Tiling/Interchange split the parallel axes.
+  // Module-scoped per-array BLOCK layout assignment, run as the two-pass split:
+  // sde-layout-candidate-choose decides+commits the chosen logical layout fact,
+  // sde-writer-layout-commit consumes it and realizes the per-SU writer/reader/
+  // physical facts. Runs before Tiling/Interchange split the parallel axes.
+  pm.addPass(sde::createLayoutCandidateChoosePass(costModel));
   pm.addPass(sde::createWriterLayoutCommitPass(costModel));
   // S4: Interchange handles affine stencil nests via permuteLoops; Tiling still
   // emits scf owner tile loops. Keep affine through this window; S4d re-raises

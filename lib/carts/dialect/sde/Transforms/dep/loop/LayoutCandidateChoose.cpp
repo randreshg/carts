@@ -7,10 +7,11 @@
 /// structurally choose one owner layout, recording the readers whose geometry
 /// disagrees. Also owns the element-space block-sizing helpers.
 ///
-/// Hosts the `sde-layout-candidate-choose` pass: it runs the shared layout
-/// driver with reader commit disabled, committing only the chosen WRITER home
-/// layouts (owner-computes axes). The reader-side reconciliation is committed by
-/// `sde-writer-layout-commit`; the production pipeline runs the atomic full pass.
+/// Hosts the `sde-layout-candidate-choose` pass (pass 1 of the layout engine):
+/// it promotes owner loops, builds access relations, chooses each array's owner
+/// layout, and COMMITS that chosen logical layout as a real authoritative SDE
+/// choice fact. `sde-writer-layout-commit` (pass 2) consumes the committed fact
+/// and realizes the per-SU writer/reader/physical facts over it.
 ///
 /// This is strictly DATA-LAYOUT: pattern-agnostic (driven only by affine maps,
 /// iterator types, and static shapes), it NAMES NO COLLECTIVE.
@@ -255,11 +256,11 @@ struct LayoutCandidateChoosePass
       : costModel(costModel) {}
 
   void runOnOperation() override {
-    // PhaseA–PhaseD over WRITERS only: choose each array's owner layout and
-    // commit the writer home facts. Reader reconciliation is committed by
-    // sde-writer-layout-commit; the production pipeline runs the atomic pass.
-    sde::detail::runLayoutAssignment(getOperation(), costModel,
-                                     /*commitReaders=*/false);
+    // Pass 1 of the layout engine: owner-loop promotion + PhaseA +
+    // PhaseB/PhaseC choice, then COMMIT the chosen logical layout per array as
+    // a real authoritative SDE choice fact for sde-writer-layout-commit to
+    // consume.
+    sde::detail::chooseAndCommitChoiceFact(getOperation(), costModel);
   }
 
 private:

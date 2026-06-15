@@ -81,14 +81,16 @@ def SdeLoopPatternFacts
 
 def LayoutAssignment
     : Pass<"sde-layout-assignment", "mlir::ModuleOp"> {
-  let summary = "[DEPRECATED] Per-array BLOCK layout assignment (use "
-                "sde-writer-layout-commit)";
+  let summary = "[DEPRECATED] Atomic per-array BLOCK layout assignment (use the "
+                "sde-layout-candidate-choose -> sde-writer-layout-commit pair)";
   let description = [{
-    DEPRECATED alias of `sde-writer-layout-commit`, retained so existing
-    pipelines and lit RUN lines that name `sde-layout-assignment` keep
-    resolving. Identical full behavior: it runs PhaseA-PhaseD atomically. New
-    pipelines should use `sde-writer-layout-commit` (and, when only the chosen
-    owner layouts are wanted, `sde-layout-candidate-choose`).
+    DEPRECATED. The production layout engine is now the two-pass sequence
+    `sde-layout-candidate-choose` (decide+commit the chosen logical layout) ->
+    `sde-writer-layout-commit` (consume+realize it). This pass is the legacy
+    single-pass atomic driver, retained only so existing pipelines and lit RUN
+    lines that name `sde-layout-assignment` keep resolving. It runs PhaseA-PhaseD
+    atomically and produces IR byte-identical to the two-pass sequence. New
+    pipelines must run the pair.
 
     Assigns one element-space BLOCK layout to every external array root accessed
     by the module's `sde.su_iterate` scheduling units. This is the
@@ -123,22 +125,21 @@ def LayoutAssignment
 
 def LayoutCandidateChoose
     : Pass<"sde-layout-candidate-choose", "mlir::ModuleOp"> {
-  let summary = "Choose per-array owner layouts and commit writer home facts";
+  let summary = "Pass 1: choose per-array owner layouts and commit the choice "
+                "as an authoritative SDE fact";
   let description = [{
-    PhaseA-PhaseC of SDE per-array BLOCK layout assignment, plus the writer-side
-    commit of PhaseD. For every external array root it enumerates candidate
-    element-space layouts (block-parallel owner-dim, block-contraction,
-    replicated) from the affine access relations and structurally chooses one
-    owner layout (owner-computes; HPF DISTRIBUTE/ALIGN), then commits the chosen
-    WRITER home layout as `arrayLayout` write facts (with the realizable
-    owner-dim clamp) and writer physical MU-type layouts.
+    Pass 1 of the SDE per-array BLOCK layout engine (PhaseA-PhaseC). It promotes
+    owner loops, builds module access relations, and for every external array
+    root enumerates candidate element-space layouts (block-parallel owner-dim,
+    block-contraction, replicated) from the affine access relations and
+    structurally chooses one owner layout (owner-computes; HPF DISTRIBUTE/ALIGN).
 
-    It does NOT commit the reader-side transitional layouts; those are committed
-    by `sde-writer-layout-commit`. This pass is the granular front half of the
-    layout engine; the production pipeline runs the atomic
-    `sde-writer-layout-commit`, which performs choice and reader/writer commit
-    in a single run (no metadata-promise handoff). Pattern-free; names no
-    communication operation.
+    It then COMMITS the chosen logical layout per array — owner dims, block
+    shape, and the disagreeing readers it implies — as a real authoritative SDE
+    choice fact for `sde-writer-layout-commit` to consume. This is a committed
+    decision, not an uncommitted candidate: pass 2 realizes it, never repairs or
+    re-chooses it. It performs no per-SU writer/reader/physical realization.
+    Pattern-free; names no communication operation.
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createLayoutCandidateChoosePass()";
@@ -146,20 +147,22 @@ def LayoutCandidateChoose
 
 def WriterLayoutCommit
     : Pass<"sde-writer-layout-commit", "mlir::ModuleOp"> {
-  let summary = "Module-scoped affine-driven per-array BLOCK layout assignment";
+  let summary = "Pass 2: consume the committed layout choice and realize the "
+                "per-SU writer/reader/physical layout facts";
   let description = [{
-    The SDE DATA-LAYOUT engine (HPF DISTRIBUTE/ALIGN). It chooses one
-    element-space BLOCK layout per external array root and commits the layout
-    facts atomically: it asks the candidate chooser (PhaseA-PhaseC) for each
-    array's owner layout, reconciles per-SU writer/reader geometry
-    (witnessedWriterOwnerPositions, inferReaderRequiredLayout), and writes
-    PhaseD facts on BOTH the writer and every disagreeing reader scheduling unit
-    plus the writer physical MU-type layouts.
+    Pass 2 of the SDE per-array BLOCK layout engine (PhaseD). It CONSUMES the
+    authoritative chosen-layout fact committed by `sde-layout-candidate-choose`
+    and realizes it: it reconciles per-SU writer/reader geometry over the
+    committed choice (witnessedWriterOwnerPositions, inferReaderRequiredLayout)
+    and writes the PhaseD facts on BOTH the writer and every disagreeing reader
+    scheduling unit plus the writer physical MU-type layouts, then erases the
+    now-realized choice fact.
 
-    Choice and commit happen in one pass run: it does not stamp an
-    uncommitted-candidate promise for a later pass to repair. It supersedes the
-    deprecated `sde-layout-assignment` (identical behavior). It is pattern-free
-    (driven only by affine maps, iterator types, and static shapes), names no
+    It does not re-choose or re-derive a different layout — it consumes,
+    realizes, or rejects the committed fact. The net IR after the pair equals the
+    deprecated atomic `sde-layout-assignment` exactly. When invoked standalone
+    (no committed choice fact present, e.g. a textual single-pass run), it falls
+    back to the self-contained atomic driver. It is pattern-free, names no
     communication operation, and knows nothing about target objects or
     placement; later SDE passes consume the committed layout facts.
   }];

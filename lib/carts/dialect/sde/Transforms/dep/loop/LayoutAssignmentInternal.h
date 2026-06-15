@@ -3,16 +3,21 @@
 // Internal interface shared by the layout-assignment carve:
 //   * LayoutCandidateChoose.cpp owns candidate enumeration + assignment
 //     (PhaseB/PhaseC) and the element-space block-sizing helpers, plus the
-//     `sde-layout-candidate-choose` pass that commits the chosen writer home
-//     layouts.
-//   * WriterLayoutCommit.cpp owns the shared pass driver, per-SU writer/reader
-//     reconciliation (witnessedWriterOwnerPositions, inferReaderRequiredLayout),
-//     and PhaseD fact commit, plus the `sde-writer-layout-commit` pass and the
-//     deprecated `sde-layout-assignment` alias.
+//     `sde-layout-candidate-choose` pass that CHOOSES each array's owner layout
+//     and COMMITS it as a real authoritative choice fact for the next pass.
+//   * WriterLayoutCommit.cpp owns the shared PhaseD commit driver, per-SU
+//     writer/reader reconciliation (witnessedWriterOwnerPositions,
+//     inferReaderRequiredLayout), and the choice-fact (de)serialization, plus
+//     the `sde-writer-layout-commit` pass and the deprecated
+//     `sde-layout-assignment` alias.
 //
 // This header carries no policy; it is the thin call surface between the two
-// translation units. The driver (`runLayoutAssignment`) keeps choice and commit
-// atomic within a single pass — no metadata-promise handoff.
+// translation units. The layout engine is a two-pass split with a legal
+// committed-fact handoff: `sde-layout-candidate-choose` decides+commits the
+// chosen logical layout, and `sde-writer-layout-commit` consumes that committed
+// fact and realizes the per-SU writer/reader/physical facts (it does not
+// re-choose). The net IR after the two passes equals the atomic
+// `runLayoutAssignment` exactly — choice is committed, never a repair-promise.
 //
 //===----------------------------------------------------------------------===//
 
@@ -77,15 +82,29 @@ ChosenLayout assignLayout(const ArrayAccessProfile &profile,
                           std::optional<unsigned> contractionPosition,
                           bool preserveFullWriterOwnerTile);
 
-// Shared driver for the layout-assignment passes. Runs owner-loop promotion,
-// PhaseA access relations, the BlockContraction-input map, PhaseB/PhaseC
-// candidate choice, and PhaseD fact commit. `commitReaders` gates the
-// reader-side reconciliation/commit: the full `sde-writer-layout-commit` (and
-// the deprecated `sde-layout-assignment`) pass commit writers AND readers
-// atomically; `sde-layout-candidate-choose` commits only the chosen writer home
-// layouts. Choice and commit stay in one pass run — no metadata-promise handoff.
-void runLayoutAssignment(::mlir::Operation *moduleOp, SDECostModel *costModel,
-                         bool commitReaders);
+// Atomic driver (deprecated `sde-layout-assignment`, and the standalone
+// fallback when no committed choice fact is present). Runs owner-loop
+// promotion, PhaseA access relations, the BlockContraction-input map,
+// PhaseB/PhaseC candidate choice, and PhaseD writer+reader fact commit in a
+// single pass run.
+void runLayoutAssignment(::mlir::Operation *moduleOp, SDECostModel *costModel);
+
+// Pass 1 (`sde-layout-candidate-choose`): owner-loop promotion + PhaseA +
+// PhaseB/PhaseC choice, then COMMIT the chosen logical layout per array as a
+// real authoritative SDE choice fact (a module attribute) for pass 2 to
+// consume. It performs no per-SU writer/reader/physical realization. Fails
+// closed (no fact) only when there is nothing to distribute (no cost model /
+// single worker / no arrays).
+void chooseAndCommitChoiceFact(::mlir::Operation *moduleOp,
+                               SDECostModel *costModel);
+
+// Pass 2 (`sde-writer-layout-commit`): CONSUME the committed choice fact from
+// pass 1 and realize PhaseD writer+reader+physical facts over it, then erase
+// the now-realized choice fact. It does not re-choose or re-derive a different
+// layout. When no choice fact is present (standalone invocation), it falls back
+// to the self-contained atomic `runLayoutAssignment`.
+void consumeChoiceFactAndCommit(::mlir::Operation *moduleOp,
+                                SDECostModel *costModel);
 
 } // namespace mlir::carts::sde::detail
 
