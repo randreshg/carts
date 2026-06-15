@@ -26,7 +26,8 @@ namespace mlir::carts::sde {
 inline std::optional<LayoutGraphFact>
 findSingleCommittedWriterBlockLayout(SdeSuIterateOp op);
 
-/// Physical block layout recovered from arrayLayout facts or rank-expanded roots.
+/// Physical block layout recovered from arrayLayout facts or rank-expanded
+/// roots.
 struct CommittedSuPhysicalLayout {
   SmallVector<int64_t, 4> ownerDims;
   SmallVector<int64_t, 4> blockShape;
@@ -34,7 +35,6 @@ struct CommittedSuPhysicalLayout {
 
 inline std::optional<CommittedSuPhysicalLayout>
 recoverPhysicalLayoutFromCuGroupCounts(SdeSuIterateOp op);
-
 
 inline std::optional<CommittedSuPhysicalLayout>
 recoverCommittedPhysicalLayout(SdeSuIterateOp op) {
@@ -198,10 +198,10 @@ inline bool hasCommittedCuMuPartitionFacts(Operation *op) {
 
 /// Commit CU grouping as per-owner-dim block counts on the compute `cu_region`.
 /// Omits the attribute when every owner dim groups exactly one DB block.
-inline void commitCuGroupBlockCounts(SdeCuRegionOp cu,
-                                     ArrayRef<int64_t> ownerDims,
-                                     ArrayRef<int64_t> physicalBlockShape,
-                                     ArrayRef<int64_t> logicalWorkerSlice = {}) {
+inline void
+commitCuGroupBlockCounts(SdeCuRegionOp cu, ArrayRef<int64_t> ownerDims,
+                         ArrayRef<int64_t> physicalBlockShape,
+                         ArrayRef<int64_t> logicalWorkerSlice = {}) {
   if (!cu || ownerDims.empty() || physicalBlockShape.empty())
     return;
   ArrayRef<int64_t> slice =
@@ -228,10 +228,10 @@ inline void commitCuGroupBlockCounts(SdeCuRegionOp cu,
   cu.setGroupBlockCountAttr(buildI64ArrayAttr(cu.getContext(), counts));
 }
 
-inline void commitCuGroupBlockCounts(SdeSuIterateOp op,
-                                     ArrayRef<int64_t> ownerDims,
-                                     ArrayRef<int64_t> physicalBlockShape,
-                                     ArrayRef<int64_t> logicalWorkerSlice = {}) {
+inline void
+commitCuGroupBlockCounts(SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
+                         ArrayRef<int64_t> physicalBlockShape,
+                         ArrayRef<int64_t> logicalWorkerSlice = {}) {
   commitCuGroupBlockCounts(findSuComputeCuRegion(op), ownerDims,
                            physicalBlockShape, logicalWorkerSlice);
 }
@@ -343,10 +343,13 @@ collapseRankExpandedRootShape(ArrayRef<int64_t> rootShape,
 }
 
 /// Make write-role arrayLayout facts reflect the committed physical MU grain.
-inline bool
-rewriteWriterArrayLayoutToPhysicalShape(SdeSuIterateOp op,
-                                        ArrayRef<int64_t> ownerDims,
-                                        ArrayRef<int64_t> physicalBlockShape) {
+/// When `restrictToArrayId` is set, only that array's write fact is restated;
+/// sibling write facts of a multi-output SU (or a reader SU recovered as the
+/// committed writer) keep their own committed grain.
+inline bool rewriteWriterArrayLayoutToPhysicalShape(
+    SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
+    ArrayRef<int64_t> physicalBlockShape,
+    std::optional<int64_t> restrictToArrayId = std::nullopt) {
   if (!op || ownerDims.empty() || physicalBlockShape.empty())
     return false;
   ArrayAttr layout = op.getArrayLayoutAttr();
@@ -373,6 +376,7 @@ rewriteWriterArrayLayoutToPhysicalShape(SdeSuIterateOp op,
     std::optional<LayoutGraphFact> fact =
         dict ? parseArrayLayoutFact(dict) : std::nullopt;
     if (!dict || !fact || fact->role != LayoutGraphRole::write ||
+        (restrictToArrayId && fact->id != *restrictToArrayId) ||
         (fact->layoutKind != ArrayLayoutKind::blockParallel &&
          fact->layoutKind != ArrayLayoutKind::blockContraction &&
          fact->layoutKind != ArrayLayoutKind::replicated)) {
@@ -457,10 +461,11 @@ inline bool reconcilePartialReductionOwnersWithCommittedShape(
 
 /// Commit physical grain via CU group counts only; rank expansion stays in
 /// RankExpandMu / MemoryUnitRealization.
-inline bool commitWriterPhysicalLayoutViaMuType(
-    SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
-    ArrayRef<int64_t> physicalBlockShape,
-    ArrayRef<int64_t> logicalWorkerSlice = {}) {
+inline bool
+commitWriterPhysicalLayoutViaMuType(SdeSuIterateOp op,
+                                    ArrayRef<int64_t> ownerDims,
+                                    ArrayRef<int64_t> physicalBlockShape,
+                                    ArrayRef<int64_t> logicalWorkerSlice = {}) {
   if (!op || ownerDims.empty() || physicalBlockShape.empty())
     return false;
   commitCuGroupBlockCounts(op, ownerDims, physicalBlockShape,
@@ -468,14 +473,14 @@ inline bool commitWriterPhysicalLayoutViaMuType(
   bool changed =
       reconcilePartialReductionOwnersWithCommittedShape(op, ownerDims);
   changed |= rewriteWriterArrayLayoutToPhysicalShape(op, ownerDims,
-                                                       physicalBlockShape);
+                                                     physicalBlockShape);
   return changed;
 }
 
-inline bool commitWriterPhysicalLayoutFacts(
-    SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
-    ArrayRef<int64_t> physicalBlockShape,
-    ArrayRef<int64_t> logicalWorkerSlice = {}) {
+inline bool
+commitWriterPhysicalLayoutFacts(SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
+                                ArrayRef<int64_t> physicalBlockShape,
+                                ArrayRef<int64_t> logicalWorkerSlice = {}) {
   return commitWriterPhysicalLayoutViaMuType(op, ownerDims, physicalBlockShape,
                                              logicalWorkerSlice);
 }
@@ -485,8 +490,8 @@ inline bool reconcileArrayLayoutWithCommittedPhysicalShape(SdeSuIterateOp op) {
       findSingleCommittedWriterBlockLayout(op);
   if (!writeLayout)
     return false;
-  return rewriteWriterArrayLayoutToPhysicalShape(
-      op, writeLayout->ownerDims, writeLayout->blockShape);
+  return rewriteWriterArrayLayoutToPhysicalShape(op, writeLayout->ownerDims,
+                                                 writeLayout->blockShape);
 }
 
 } // namespace mlir::carts::sde

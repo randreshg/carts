@@ -65,6 +65,11 @@ struct SdeRankExpandMuPass
           !carts::sde::supportsRankExpandedAccessWindows(committed->writer))
         continue; // out of scope -> leave flat, add NO attrs
 
+      // Resolve the array id before rewriter.apply replaces the MU root (which
+      // invalidates the layout-root users the lookup walks).
+      std::optional<int64_t> muArrayId =
+          carts::sde::getMuArrayIdFromLayoutRoot(mu);
+
       std::optional<carts::sde::SdeStructuredClassification> classification =
           carts::sde::queryStructuredClassification(committed->writer);
       if (!classification)
@@ -72,7 +77,8 @@ struct SdeRankExpandMuPass
 
       // Commit classification durably before the rewrite makes the body div/rem
       // (un-re-derivable). 1n-inert: only runs for committed block layouts.
-      if (classification && !committed->writer.getStructuredClassificationAttr())
+      if (classification &&
+          !committed->writer.getStructuredClassificationAttr())
         committed->writer.setStructuredClassificationAttr(
             carts::sde::SdeStructuredClassificationAttr::get(
                 committed->writer.getContext(), *classification));
@@ -98,8 +104,12 @@ struct SdeRankExpandMuPass
         blockShape[dim] = committed->layout.blockExtents[slot];
       // Owner-dim recovery for a separate init writer is per-dependency at the
       // boundary (readPhysicalLayoutFromDepWindow), not a shared SU attr here.
+      // Restate only THIS MU's array: committed->writer can be a reader SU
+      // recovered for an input array, and its sibling write facts (e.g. a
+      // matmul's distinct output) carry their own committed grain that this
+      // array's block shape must not overwrite.
       carts::sde::rewriteWriterArrayLayoutToPhysicalShape(
-          committed->writer, ownerDims, blockShape);
+          committed->writer, ownerDims, blockShape, muArrayId);
     }
 
     if (failed)
