@@ -41,6 +41,10 @@ layoutFactFromCommittedPhysicalLayout(sde::SdeSuIterateOp op);
 std::optional<sde::LayoutGraphFact>
 selectSingleWriteLayoutFact(sde::SdeSuIterateOp op);
 
+// True for stencil-classified SUs whose body reads and writes the same root
+// (in-place self-read).
+bool isInPlaceSelfReadStencil(sde::SdeSuIterateOp op);
+
 int64_t getInterLocalityTargetWorkers(sde::SDECostModel &costModel);
 
 std::optional<unsigned> findDependentSuLoopSlot(Value index,

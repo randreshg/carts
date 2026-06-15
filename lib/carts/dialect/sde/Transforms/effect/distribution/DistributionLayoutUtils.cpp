@@ -187,6 +187,16 @@ bool hasCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
   return sde::hasCommittedWriterBlockLayout(op);
 }
 
+bool isInPlaceSelfReadStencil(sde::SdeSuIterateOp op) {
+  auto classification = sde::queryStructuredClassification(op);
+  if (!classification ||
+      *classification != sde::SdeStructuredClassification::stencil)
+    return false;
+
+  auto effects = sde::collectStructuredMemoryEffects(op.getBody());
+  return !effects.hasUnknownEffects && sde::hasInPlaceSelfRead(effects);
+}
+
 void applyPhysicalPlan(sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
                        ArrayRef<int64_t> physicalBlockShape,
                        ArrayRef<int64_t> haloShape,

@@ -54,6 +54,27 @@ def DistributionPlanning
   let constructor = "mlir::carts::sde::createDistributionPlanningPass()";
 }
 
+def OwnerDimSelect
+    : Pass<"sde-owner-dim-select", "mlir::ModuleOp"> {
+  let summary = "Select SDE owner dims and commit per-SU physical layout";
+  let description = [{
+    Per-SU owner-dimension selection and physical layout commit for the SDE
+    distribution chain. Realizes the in-place wavefront/skew transform where
+    legal, commits loop-step replicated layout, and runs the ordered per-pattern
+    physical committers (budget-reconciled grain, co-iterated writer inherit,
+    stencil owner_tile, matmul, uniform elementwise, reduction task shape, and
+    in-place serial slice). It commits only layouts the realized SDE loop steps
+    already satisfy; unsupported shapes stay unmodified for later SDE verifiers.
+    It selects no movement families, distribution wrappers, DB grain, routes, or
+    runtime policy.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::arith::ArithDialect",
+                           "::mlir::memref::MemRefDialect",
+                           "::mlir::scf::SCFDialect"];
+  let constructor = "mlir::carts::sde::createOwnerDimSelectPass()";
+}
+
 def BlockGrainPlan
     : Pass<"sde-block-grain-plan", "mlir::ModuleOp"> {
   let summary = "Unify SDE block grain for budgeted same-owner layouts";
