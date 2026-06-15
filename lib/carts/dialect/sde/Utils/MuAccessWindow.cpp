@@ -231,6 +231,27 @@ static bool hasReplicatedReadFact(SdeMuAllocOp mu, int64_t arrayId) {
   return false;
 }
 
+// A committed replicated WRITE fact (e.g. correlation's symmetric corr matrix,
+// which SDE cannot block-distribute as single-writer) is whole-array. Mirrors
+// hasReplicatedReadFact so the type-shape fallback in
+// deriveMuAccessWindowGeometry does not misread a square logical write MU as a
+// 1-D owner grid.
+static bool hasReplicatedWriteFact(SdeMuAllocOp mu, int64_t arrayId) {
+  for (Operation *user : mu.getMemref().getUsers()) {
+    auto root = dyn_cast<SdeArrayLayoutRootOp>(user);
+    if (!root || root.getMode() != SdeAccessMode::write ||
+        static_cast<int64_t>(root.getArrayId()) != arrayId)
+      continue;
+    SdeSuIterateOp si = root->getParentOfType<SdeSuIterateOp>();
+    std::optional<LayoutGraphFact> fact =
+        findArrayLayoutFact(si, arrayId, LayoutGraphRole::write);
+    if (fact && fact->layoutKind == ArrayLayoutKind::replicated &&
+        fact->ownerDims.empty())
+      return true;
+  }
+  return false;
+}
+
 static llvm::SmallVector<RaisedWindowSpec, 4>
 queryReplicatedReadAccessWindows(SdeMuAllocOp mu, MemRefType muType) {
   llvm::SmallVector<RaisedWindowSpec, 4> specs;
@@ -493,23 +514,26 @@ std::optional<MuAccessWindowGeometry> deriveMuAccessWindowGeometry(Value mu) {
   };
 
   if (auto muAlloc = mu.getDefiningOp<SdeMuAllocOp>()) {
-    if (std::optional<ExpandedBlockGridMu> exp =
-            recognizeExpandedBlockGridMu(muAlloc)) {
-      return fillFromExpanded(
-          exp->ownerDims.size(),
-          muType.getShape().drop_front(exp->ownerDims.size()));
-    }
-    // A committed replicated array is whole-array (ownerDimCount==0); avoid the
-    // type-shape fallback misreading a square logical shape as a 1-D owner
-    // grid.
+    // A committed replicated array (read OR write) is whole-array
+    // (ownerDimCount==0). The committed layout fact is authoritative: check it
+    // BEFORE the structural type guesses below, which would otherwise misread a
+    // square logical shape (e.g. correlation's replicated corr matrix) as a 1-D
+    // owner grid via recognizeExpandedBlockGridMu / the type-shape fallback.
     if (std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc))
-      if (hasReplicatedReadFact(muAlloc, *arrayId)) {
+      if (hasReplicatedReadFact(muAlloc, *arrayId) ||
+          hasReplicatedWriteFact(muAlloc, *arrayId)) {
         MuAccessWindowGeometry geom;
         geom.ownerDimCount = 0;
         geom.validExtents.assign(muType.getShape().begin(),
                                  muType.getShape().end());
         return geom;
       }
+    if (std::optional<ExpandedBlockGridMu> exp =
+            recognizeExpandedBlockGridMu(muAlloc)) {
+      return fillFromExpanded(
+          exp->ownerDims.size(),
+          muType.getShape().drop_front(exp->ownerDims.size()));
+    }
   }
 
   // Hand-written rank-expanded boundary IR may omit writer physical attrs;

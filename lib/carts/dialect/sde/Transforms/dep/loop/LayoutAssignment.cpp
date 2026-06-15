@@ -12,9 +12,10 @@
 /// It is strictly DATA-LAYOUT: pattern-agnostic (driven only by affine maps,
 /// iterator types, and static shapes), it NAMES NO COLLECTIVE, and it knows
 /// nothing about concrete storage, tasks, epochs, or runtime placement. It only
-/// adds transitional `arrayLayout` SDE attrs on disagreeing readers and writers. Redistribution edges are detected later by
-/// comparing committed producer/consumer layout facts (or rank-expanded
-/// `mu_alloc` types), not a `layoutsDisagree` marker.
+/// adds transitional `arrayLayout` SDE attrs on disagreeing readers and
+/// writers. Redistribution edges are detected later by comparing committed
+/// producer/consumer layout facts (or rank-expanded `mu_alloc` types), not a
+/// `layoutsDisagree` marker.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
@@ -22,11 +23,12 @@
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
-#include "carts/dialect/sde/Utils/SdeOwnerLoopPromotion.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
+#include "carts/dialect/sde/Utils/SdeOwnerLoopPromotion.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -365,7 +367,8 @@ static ChosenLayout assignLayout(const sde::ArrayAccessProfile &profile,
   if (chosen)
     result.layout = *chosen;
   if (chosen)
-    collectDisagreeingReaders(profile, result.layout, result.disagreeingReaders);
+    collectDisagreeingReaders(profile, result.layout,
+                              result.disagreeingReaders);
   return result;
 }
 
@@ -432,8 +435,9 @@ static bool schedulingUnitWritesRoot(const sde::ArrayAccessProfile &profile,
   return false;
 }
 
-static bool schedulingUnitWritesAnyRoot(
-    const sde::ModuleSuAccessRelations &relations, unsigned suId) {
+static bool
+schedulingUnitWritesAnyRoot(const sde::ModuleSuAccessRelations &relations,
+                            unsigned suId) {
   for (const auto &kv : relations.profiles) {
     if (schedulingUnitWritesRoot(kv.second, suId))
       return true;
@@ -470,9 +474,10 @@ static bool readerHasOwnerReduction(const sde::ArrayAccessProfile &profile,
   return false;
 }
 
-static bool readerParallelIndexesPosition(const sde::ArrayAccessProfile &profile,
-                                          unsigned suId, unsigned pos,
-                                          bool includeHalo = false) {
+static bool
+readerParallelIndexesPosition(const sde::ArrayAccessProfile &profile,
+                              unsigned suId, unsigned pos,
+                              bool includeHalo = false) {
   for (const sde::ArrayPositionUse &use : profile.positionUses[pos]) {
     if (use.suId != suId || use.isWrite)
       continue;
@@ -488,7 +493,8 @@ static bool isStencilReader(ArrayRef<sde::SdeSuIterateOp> schedulingUnits,
                             unsigned suId) {
   if (suId >= schedulingUnits.size())
     return false;
-  auto classification = sde::queryStructuredClassification(schedulingUnits[suId]);
+  auto classification =
+      sde::queryStructuredClassification(schedulingUnits[suId]);
   return classification &&
          *classification == sde::SdeStructuredClassification::stencil;
 }
@@ -498,8 +504,7 @@ static bool isStencilReader(ArrayRef<sde::SdeSuIterateOp> schedulingUnits,
 // owner-preserving halo reads keep the module home layout; repartition readers
 // commit the parallel axes they actually traverse.
 static sde::ArrayLayoutCandidate
-inferReaderRequiredLayout(const sde::ArrayAccessProfile &profile,
-                          unsigned suId,
+inferReaderRequiredLayout(const sde::ArrayAccessProfile &profile, unsigned suId,
                           ArrayRef<sde::SdeSuIterateOp> schedulingUnits,
                           const sde::ArrayLayoutCandidate &homeLayout) {
   if (readerHasOwnerReduction(profile, suId, homeLayout.ownerPositions)) {
@@ -535,6 +540,87 @@ static bool hasStencilReader(const sde::ArrayAccessProfile &profile,
     }
   }
   return false;
+}
+
+// A block-parallel WRITER may only own a physical dim it indexes with a single
+// SU loop IV consistently across EVERY store to the root, and distinct owner
+// dims must use distinct IVs. A symmetric/cross-row writer (correlation's
+// corr[i][j] AND corr[j][i] from a 1-D i-loop) indexes owner dim 0 with i in
+// one store and j in the other: owning that dim would route corr[j][i] to a DB
+// block the SU does not own. Returns the realizable subset of `ownerPositions`
+// (in input order). Positions not witnessed are dropped so the committed owner
+// rank never exceeds what the SU loop can actually realize.
+static SmallVector<int64_t, 4>
+witnessedWriterOwnerPositions(sde::SdeSuIterateOp writerOp, Value root,
+                              ArrayRef<int64_t> ownerPositions) {
+  SmallVector<int64_t, 4> result;
+  if (!writerOp || !root || ownerPositions.empty())
+    return result;
+  std::optional<SmallVector<Value>> ivs = writerOp.getLoopInductionVars();
+  if (!ivs || ivs->empty())
+    return result;
+
+  // Per owner position: the single loop-IV index used at that memref dim, or a
+  // sentinel state. -2 = unseen, -1 = disqualified, >=0 = loop-IV slot index.
+  llvm::SmallDenseMap<int64_t, int> posToIv;
+  for (int64_t pos : ownerPositions)
+    posToIv[pos] = -2;
+
+  auto ivSlot = [&](Value index) -> int {
+    Value base = ::mlir::carts::ValueAnalysis::stripNumericCasts(index);
+    int64_t off = 0;
+    base = ::mlir::carts::ValueAnalysis::stripConstantOffset(base, &off);
+    if (off != 0)
+      return -1;
+    base = ::mlir::carts::ValueAnalysis::stripNumericCasts(base);
+    for (auto [slot, iv] : llvm::enumerate(*ivs))
+      if (::mlir::carts::ValueAnalysis::sameValue(base, iv))
+        return static_cast<int>(slot);
+    return -1;
+  };
+
+  auto inspect = [&](Value memref, OperandRange indices) {
+    Value mbase = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(memref);
+    if (mbase != root)
+      return;
+    for (int64_t pos : ownerPositions) {
+      int &state = posToIv[pos];
+      if (state == -1)
+        continue;
+      if (pos < 0 || static_cast<size_t>(pos) >= indices.size()) {
+        state = -1;
+        continue;
+      }
+      int slot = ivSlot(indices[static_cast<size_t>(pos)]);
+      if (slot < 0)
+        state = -1;
+      else if (state == -2)
+        state = slot;
+      else if (state != slot)
+        state = -1; // inconsistent IV across stores
+    }
+  };
+
+  writerOp.getBody().walk([&](Operation *nested) {
+    if (auto st = dyn_cast<memref::StoreOp>(nested)) {
+      if (!isa<MemRefType>(st.getValueToStore().getType()))
+        inspect(st.getMemref(), st.getIndices());
+    } else if (auto ld = dyn_cast<memref::LoadOp>(nested)) {
+      // Reads of the root at an owner position must also be owner-local, else
+      // the owner-tile is not a single-writer/owner-local region.
+      if (!isa<MemRefType>(ld.getResult().getType()))
+        inspect(ld.getMemref(), ld.getIndices());
+    }
+  });
+
+  // Keep positions with a consistent loop-IV witness; enforce distinct IVs.
+  llvm::SmallDenseSet<int, 4> usedSlots;
+  for (int64_t pos : ownerPositions) {
+    int state = posToIv[pos];
+    if (state >= 0 && usedSlots.insert(state).second)
+      result.push_back(pos);
+  }
+  return result;
 }
 
 struct LayoutAssignmentPass
@@ -655,6 +741,35 @@ struct LayoutAssignmentPass
         if (!isWrite && readerDisagrees)
           layoutForSu = inferReaderRequiredLayout(
               profile, suId, relations.schedulingUnits, chosen.layout);
+        // Clamp a block-parallel writer's owner dims to the ones its SU can
+        // realize as owner-local single-writer regions (see
+        // witnessedWriterOwnerPositions). Drops the unrealizable owner dims of
+        // a symmetric/cross-row writer (correlation) instead of committing a
+        // silently-wrong owner-tile; an empty residual leaves the array
+        // un-owned so downstream distribution fails closed rather than
+        // miscompile.
+        if (isWrite &&
+            layoutForSu.kind == sde::ArrayLayoutKind::blockParallel &&
+            !layoutForSu.ownerPositions.empty() &&
+            suId < relations.schedulingUnits.size()) {
+          SmallVector<int64_t, 4> witnessed = witnessedWriterOwnerPositions(
+              relations.schedulingUnits[suId], profile.root,
+              layoutForSu.ownerPositions);
+          if (witnessed.size() != layoutForSu.ownerPositions.size()) {
+            for (int64_t pos : layoutForSu.ownerPositions) {
+              if (llvm::is_contained(witnessed, pos))
+                continue;
+              if (pos >= 0 &&
+                  static_cast<size_t>(pos) < layoutForSu.blockShape.size() &&
+                  static_cast<size_t>(pos) < profile.staticShape.size())
+                layoutForSu.blockShape[pos] = profile.staticShape[pos];
+            }
+            layoutForSu.ownerPositions.assign(witnessed.begin(),
+                                              witnessed.end());
+            if (layoutForSu.ownerPositions.empty())
+              layoutForSu.kind = sde::ArrayLayoutKind::replicated;
+          }
+        }
         DictionaryAttr entry = buildLayoutEntry(
             ctx, arrayId, profile.staticShape, layoutForSu,
             isWrite ? sde::AttrNames::LayoutGraphValues::RoleWrite
@@ -679,8 +794,9 @@ struct LayoutAssignmentPass
                SmallVector<int64_t, 4>(profile.staticShape.begin(),
                                        profile.staticShape.end())});
         }
-        // Block-parallel non-reduction, non-stencil writers also pin their owner
-        // rank for the 2n boundary; reductions/stencils keep their own grain.
+        // Block-parallel non-reduction, non-stencil writers also pin their
+        // owner rank for the 2n boundary; reductions/stencils keep their own
+        // grain.
         bool blockParallelWriter =
             writerViaMuType &&
             layoutForSu.kind == sde::ArrayLayoutKind::blockParallel;
