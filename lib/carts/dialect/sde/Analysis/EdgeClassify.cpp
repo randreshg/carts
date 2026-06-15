@@ -24,19 +24,6 @@ using namespace mlir;
 
 namespace mlir::carts::sde::redist {
 
-void recordHomeLayout(llvm::DenseMap<int64_t, HomeLayout> &homeByArrayId,
-                      llvm::DenseSet<int64_t> &conflictingHome, int64_t arrayId,
-                      HomeLayout home) {
-  auto it = homeByArrayId.find(arrayId);
-  if (it == homeByArrayId.end()) {
-    homeByArrayId[arrayId] = std::move(home);
-    return;
-  }
-  if (it->second.ownerDims != home.ownerDims ||
-      it->second.blockShape != home.blockShape)
-    conflictingHome.insert(arrayId);
-}
-
 std::optional<LayoutGraphFact> findLayoutFact(SdeSuIterateOp su,
                                               int64_t arrayId) {
   if (ArrayAttr layout = su.getArrayLayoutAttr())

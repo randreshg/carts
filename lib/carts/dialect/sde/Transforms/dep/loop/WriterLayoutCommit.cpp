@@ -563,8 +563,9 @@ static void commitLayoutFacts(
 // net IR equals the atomic driver exactly; it is a committed decision the next
 // pass realizes, not an uncommitted candidate it repairs.
 
-static constexpr StringLiteral kLayoutChoiceAttr = "sde.layout_choice";
-static constexpr StringLiteral kDisagreeingReadersField = "disagreeingReaders";
+static constexpr StringLiteral kLayoutChoiceAttr = sde::AttrNames::LayoutChoice;
+static constexpr StringLiteral kDisagreeingReadersField =
+    sde::AttrNames::DisagreeingReaders;
 
 static sde::ArrayLayoutKind layoutKindFromString(StringRef kind) {
   if (kind == sde::AttrNames::LayoutGraph::BlockParallel)

@@ -42,10 +42,6 @@ enum class EdgeClassify {
   AllToAll,
 };
 
-void recordHomeLayout(llvm::DenseMap<int64_t, HomeLayout> &homeByArrayId,
-                      llvm::DenseSet<int64_t> &conflictingHome, int64_t arrayId,
-                      HomeLayout home);
-
 std::optional<LayoutGraphFact> findLayoutFact(SdeSuIterateOp su,
                                               int64_t arrayId);
 

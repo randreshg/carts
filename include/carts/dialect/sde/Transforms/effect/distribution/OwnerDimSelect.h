@@ -4,9 +4,8 @@
 /// Per-SU owner-dim selection and physical layout commit for the SDE
 /// distribution chain (wavefront/skew realization, loop-step replicated layout,
 /// and the ordered per-pattern physical committers). Carved verbatim from the
-/// correctness-base @782988ad1 DistributionPlanning pass. The single entry
-/// point is shared by the transitional DistributionPlanning orchestrator and
-/// the standalone OwnerDimSelect pass.
+/// correctness-base @782988ad1 DistributionPlanning pass, now owned by the
+/// standalone OwnerDimSelect pass.
 ///==========================================================================///
 
 #ifndef ARTS_DIALECT_SDE_TRANSFORMS_EFFECT_DISTRIBUTION_OWNER_DIM_SELECT_H

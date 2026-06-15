@@ -736,7 +736,7 @@ bool DbUtils::isHostWholeToComputeBlockBridgeMovement(EdtOp edt) {
     // source is actually cross-node SERVABLE. A local_only coarse host (e.g. a
     // single_block-rejected A) with no replicatedRead cannot be delivered to a
     // remote node, so an <internode> bridge over it dereferences a NULL dep on
-    // the non-owning rank. Excluding it here lets DistributedLaunchConsistency
+    // the non-owning rank. Excluding it here lets EdtSplitForMixedDeps
     // localize the bridge to <intranode>+current-node, where each node creates
     // the block from its own local host copy.
     if (DbUtils::isCoarseUserDataDb(alloc) && partition &&

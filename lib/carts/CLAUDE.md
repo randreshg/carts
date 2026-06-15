@@ -16,7 +16,9 @@ dialect/                     MLIR dialects (one subdirectory per CARTS dialect)
       dep/loop/              LoopInterchange, Tiling, IterationSpaceDecomposition
       dep/fusion/            ElementwiseFusion
       effect/scheduling/     ReductionStrategy, AtomicReductionRealization
-      effect/distribution/   DistributionPlanning, BarrierElimination
+      effect/distribution/   BlockGrainPlan, OwnerDimSelect, MovementTagging,
+                             DistributionFailClosed, DistributionLayoutUtils,
+                             BarrierElimination
     Utils/                   SDE-specific utilities (SDECostModel)
     Verify/                  VerifySdeLowered
   arts/                     ARTS dialect — codelet isolation

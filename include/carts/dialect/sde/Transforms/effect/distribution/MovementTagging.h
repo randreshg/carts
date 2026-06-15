@@ -3,9 +3,8 @@
 ///
 /// Distribution-kind selection for the SDE distribution chain (blocked vs
 /// owner_compute) and the sde.su_distribute wrapping it drives. Carved verbatim
-/// from the correctness-base @782988ad1 DistributionPlanning pass. The
-/// distribution-kind chooser is shared by the transitional DistributionPlanning
-/// orchestrator and the standalone MovementTagging pass.
+/// from the correctness-base @782988ad1 DistributionPlanning pass, now owned by
+/// the standalone MovementTagging pass.
 ///==========================================================================///
 
 #ifndef ARTS_DIALECT_SDE_TRANSFORMS_EFFECT_DISTRIBUTION_MOVEMENT_TAGGING_H

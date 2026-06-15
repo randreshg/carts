@@ -85,11 +85,6 @@ bool requiresInPlaceSelfRawWavefrontFailClosed(sde::SdeSuIterateOp op,
   return true;
 }
 
-bool requiresUnimplementedStencilWavefront(sde::SdeSuIterateOp op,
-                                           sde::SDECostModel &costModel) {
-  return requiresInPlaceSelfRawWavefrontFailClosed(op, costModel);
-}
-
 void emitStencilWavefrontFailClosed(sde::SdeSuIterateOp op) {
   op.emitOpError()
       << "in-place self-read stencil (Gauss-Seidel family) has loop-carried "

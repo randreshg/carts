@@ -3,9 +3,8 @@
 ///
 /// Fail-closed predicates and diagnostic for the SDE distribution passes (A7
 /// in-place self-read wavefront/skew gate). Carved verbatim from the
-/// correctness-base @782988ad1 DistributionPlanning pass. Declared here so the
-/// transitional DistributionPlanning orchestrator and the standalone
-/// DistributionFailClosed pass share one owner.
+/// correctness-base @782988ad1 DistributionPlanning pass, now owned by the
+/// standalone DistributionFailClosed pass.
 ///==========================================================================///
 
 #ifndef ARTS_DIALECT_SDE_TRANSFORMS_EFFECT_DISTRIBUTION_FAIL_CLOSED_H
@@ -21,11 +20,6 @@ namespace mlir::carts::sde::distribution {
 // unimplemented SDE wavefront/skew transform.
 bool requiresInPlaceSelfRawWavefrontFailClosed(sde::SdeSuIterateOp op,
                                                sde::SDECostModel &costModel);
-
-// Multi-worker in-place neighborhood stencils need a wavefront/skew transform;
-// without one, SDE may only preserve the serial single-worker lowering.
-bool requiresUnimplementedStencilWavefront(sde::SdeSuIterateOp op,
-                                           sde::SDECostModel &costModel);
 
 // Cite committed SDE facts so downstream layers cannot reinterpret this case.
 void emitStencilWavefrontFailClosed(sde::SdeSuIterateOp op);

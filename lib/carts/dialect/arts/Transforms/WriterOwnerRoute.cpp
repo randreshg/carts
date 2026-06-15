@@ -11,7 +11,6 @@
 #include "carts/dialect/arts/IR/ArtsDialect.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
-#include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/OperationAttributes.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/passes/Passes.h"
