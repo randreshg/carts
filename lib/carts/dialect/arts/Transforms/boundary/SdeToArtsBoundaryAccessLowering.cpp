@@ -43,76 +43,6 @@ using namespace mlir::carts::arts;
 
 namespace mlir::carts::arts::boundary {
 
-LogicalResult collectExternalScalarCaptures(sde::SdeSuIterateOp source,
-                                            SetVector<Value> &captures) {
-  auto addIfExternalScalar = [&](Value value) {
-    if (!value || !isScalarParamType(value.getType()))
-      return;
-    if (!isDefinedInside(value, source.getOperation()))
-      captures.insert(value);
-  };
-
-  for (Value value : source.getLowerBounds())
-    addIfExternalScalar(value);
-  for (Value value : source.getUpperBounds())
-    addIfExternalScalar(value);
-  for (Value value : source.getSteps())
-    addIfExternalScalar(value);
-
-  Block *computeBlock = sde::getSuIterateComputeBlock(source);
-  if (!computeBlock)
-    return source.emitOpError() << "has no computable body";
-  computeBlock->walk([&](Operation *op) {
-    for (Value operand : op->getOperands())
-      addIfExternalScalar(operand);
-  });
-  return success();
-}
-
-LogicalResult collectExternalScalarCaptures(sde::SdeCuTaskOp source,
-                                            SetVector<Value> &captures) {
-  auto addIfExternalScalar = [&](Value value) {
-    if (!value || !isScalarParamType(value.getType()) ||
-        isConstantLikeValue(value))
-      return;
-    if (!isDefinedInside(value, source.getOperation()))
-      captures.insert(value);
-  };
-
-  source.getBody().walk([&](Operation *op) {
-    if (isa<sde::SdeMuDepOp>(op))
-      return;
-    for (Value operand : op->getOperands())
-      addIfExternalScalar(operand);
-  });
-  return success();
-}
-
-LogicalResult collectExternalScalarCaptures(sde::SdeCuRegionOp source,
-                                            SetVector<Value> &captures) {
-  auto addIfExternalScalar = [&](Value value) {
-    if (!value || !isScalarParamType(value.getType()) ||
-        isConstantLikeValue(value))
-      return;
-    if (!isDefinedInside(value, source.getOperation()))
-      captures.insert(value);
-  };
-
-  source.getBody().walk([&](Operation *op) {
-    if (isa<arts::DbAccessWindowOp, sde::SdeMuDepOp>(op))
-      return;
-    for (Value operand : op->getOperands())
-      addIfExternalScalar(operand);
-  });
-  return success();
-}
-
-Value remapOrSelf(IRMapping &mapper, Value value) {
-  if (Value mapped = mapper.lookupOrNull(value))
-    return mapped;
-  return value;
-}
-
 FailureOr<CompactHaloColumnSpec>
 realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
                               ArrayRef<int64_t> groupBlockCounts,
@@ -771,21 +701,6 @@ LogicalResult rewriteOwnerIndicesToLocal(
       if (op->use_empty())
         op->erase();
   return result.wasInterrupted() ? failure() : success();
-}
-
-LogicalResult translateSdeAtomicsToArts(Region &region) {
-  SmallVector<sde::SdeCuAtomicOp> atomics;
-  region.walk([&](sde::SdeCuAtomicOp op) { atomics.push_back(op); });
-  for (sde::SdeCuAtomicOp atomic : atomics) {
-    if (atomic.getReductionKind() != sde::SdeReductionKind::add)
-      return atomic.emitOpError()
-             << "cannot realize non-add SDE atomic at the ARTS boundary";
-    OpBuilder builder(atomic);
-    arts::AtomicAddOp::create(builder, atomic.getLoc(), atomic.getAddr(),
-                              atomic.getValue());
-    atomic.erase();
-  }
-  return success();
 }
 
 LogicalResult

@@ -167,6 +167,24 @@ static bool isReadOnlyEdtLocalGlobal(Value source, EdtOp edt) {
   return true;
 }
 
+/// A function-scope alloca of a memref-of-memref (pointer-table, e.g.
+/// `times_arr[NUM_KERNELS]`) whose every use is confined to the body of `edt`
+/// is EDT-private plumbing: it carries host-side memref handles, not shared
+/// state, and must not be promoted to a DB. The underlying rows it indexes are
+/// the real shared arrays and get their own DBs separately.
+static bool isEdtLocalPointerTableAlloca(Operation *allocOp, EdtOp edt) {
+  auto alloca = dyn_cast<memref::AllocaOp>(allocOp);
+  if (!alloca)
+    return false;
+  auto type = dyn_cast<MemRefType>(alloca.getResult().getType());
+  if (!type || !isa<MemRefType>(type.getElementType()))
+    return false;
+  for (Operation *user : alloca.getResult().getUsers())
+    if (!edt->isAncestor(user))
+      return false;
+  return true;
+}
+
 static Value adaptMemrefToType(Value value, Type targetType,
                                Operation *insertBefore, OpBuilder &builder) {
   if (!value || value.getType() == targetType)
@@ -658,6 +676,12 @@ void CreateDbsPass::collectMemrefs() {
         /// SDE storage lowering). Those handles are already first-class DBs;
         /// only the memref->DB conversion below needs to run on non-DB allocs.
         if (isa<DbAllocOp>(underlyingOp))
+          continue;
+
+        /// A pointer-table alloca whose every use is confined to this EDT is
+        /// EDT-private plumbing even if declared at function scope; the real
+        /// shared arrays are the rows it indexes, which get DBs of their own.
+        if (isEdtLocalPointerTableAlloca(underlyingOp, edt))
           continue;
 
         /// EDT-local scratch and read-only recreated globals are private

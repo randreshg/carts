@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(distributed-launch-consistency,verify-arts-cdag)' | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(edt-split-for-mixed-deps,writer-owner-route,verify-arts-cdag)' | %FileCheck %s
 
 // CHECK-LABEL: func.func @single_node_local_only_with_distributed_writer
 // CHECK: arts.edt <task> <intranode>

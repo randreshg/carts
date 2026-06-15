@@ -12,14 +12,19 @@ set(CARTS_SDE_TRANSFORMS_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/state/ScalarForwarding.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/state/DeadStateCleanup.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/RaiseToSde.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/LayoutAssignment.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/LayoutCandidateChoose.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/WriterLayoutCommit.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/Interchange.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/dep/loop/Tiling.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/scheduling/ReductionStrategy.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/scheduling/AtomicReductionRealization.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/BarrierElimination.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/MuAccessWindowSyncOpt.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/DistributionPlanning.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/DistributionLayoutUtils.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/DistributionFailClosed.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/BlockGrainPlan.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/OwnerDimSelect.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/MovementTagging.cpp"
 )
 set(CARTS_SDE_TRANSFORMS_SOURCE_FILES ${CARTS_SDE_TRANSFORMS_SOURCE_FILES} PARENT_SCOPE)
 set(CARTS_SDE_VERIFY_SOURCE_FILES ${CARTS_SDE_VERIFY_SOURCE_FILES} PARENT_SCOPE)

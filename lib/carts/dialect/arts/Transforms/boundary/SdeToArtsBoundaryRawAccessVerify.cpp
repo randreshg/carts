@@ -1,17 +1,28 @@
 ///==========================================================================///
 /// File: SdeToArtsBoundaryRawAccessVerify.cpp
 /// Verify raw SU accesses are covered by committed SDE access-window deps.
+///
+/// Carved verbatim from the correctness-base @782988ad1
+/// SdeToArtsBoundaryDepAnalysis.cpp. verifyRawSuAccessesCoveredByDeps stays the
+/// owner of the raw-access coverage gate and is still invoked inline by
+/// collectSuDependencies during accesses-to-arts-deps lowering (on the
+/// post-movement/post-distribute IR). runVerifyRawAccessCovered exposes the
+/// same gate as a standalone runner.
 ///==========================================================================///
 
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryDepAnalysis.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryHelpers.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryPasses.h"
+#include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/utils/ValueAnalysis.h"
+
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -97,11 +108,14 @@ LogicalResult verifyRawSuAccessesCoveredByDeps(
 }
 
 static LogicalResult verifyRawAccessCovered(sde::SdeSuIterateOp source) {
-  DenseMap<Operation *, SmallVector<unsigned, 2>> depIndex;
+  // collectSuDependencies runs verifyRawSuAccessesCoveredByDeps internally over
+  // the committed access-window deps it collects; reuse it so the standalone
+  // gate matches the inline coverage check used during lowering.
   SmallVector<DirectDepSpec, 4> deps;
-  if (failed(collectSuAccessWindowDependencySpecs(source, depIndex, deps)))
-    return failure();
-  return verifyRawSuAccessesCoveredByDeps(source, depIndex, deps);
+  DenseSet<Operation *> consumedCuLevelAccessWindows;
+  SmallVector<Operation *> consumedRedists;
+  return collectSuDependencies(source, deps, consumedCuLevelAccessWindows,
+                               consumedRedists);
 }
 
 LogicalResult runVerifyRawAccessCovered(ModuleOp module) {

@@ -951,30 +951,6 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
     return success();
   };
 
-  auto recordFullWindowAccess = [&](Operation *op,
-                                    Value memref) -> LogicalResult {
-    if (resolveBoundaryDbAlloc(memref) != alloc)
-      return success();
-    sawAccess = true;
-    SmallVector<DepOwnerAccessSlot, 4> candidate;
-    candidate.reserve(ownerDimCount);
-    for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-      (void)slot;
-      DepOwnerAccessSlot fullWindow;
-      fullWindow.fullWindow = true;
-      fullWindow.coordinateBlockSize = 1;
-      candidate.push_back(fullWindow);
-    }
-    if (selected.empty()) {
-      selected = std::move(candidate);
-      return success();
-    }
-    if (selected != candidate)
-      return op->emitError()
-             << "uses inconsistent block coordinates for one SDE access window";
-    return success();
-  };
-
   WalkResult walk = computeBlock->walk([&](Operation *op) {
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
       if (!accessModeMayUseLoad(mode))
@@ -988,15 +964,6 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
         return WalkResult::advance();
       if (failed(recordIndices(op, store.getMemref(), store.getIndices())))
         return WalkResult::interrupt();
-      return WalkResult::advance();
-    }
-    if (auto copy = dyn_cast<memref::CopyOp>(op)) {
-      if (accessModeMayUseLoad(mode))
-        if (failed(recordFullWindowAccess(op, copy.getSource())))
-          return WalkResult::interrupt();
-      if (accessModeMayUseStore(mode))
-        if (failed(recordFullWindowAccess(op, copy.getTarget())))
-          return WalkResult::interrupt();
       return WalkResult::advance();
     }
     if (auto read = dyn_cast<affine::AffineReadOpInterface>(op)) {
@@ -1201,55 +1168,6 @@ collectCoarseSuDependencies(sde::SdeSuIterateOp source,
 }
 
 void collectTouchedDbAllocs(sde::SdeSuIterateOp source,
-                            DenseSet<Operation *> &touched);
-
-LogicalResult recordAccessWindowDependency(
-    sde::SdeSuIterateOp source, arts::DbAccessWindowOp window,
-    DenseMap<Operation *, SmallVector<unsigned, 2>> &depIndex,
-    SmallVectorImpl<DirectDepSpec> &deps,
-    const DenseMap<Operation *, SmallVector<ReduceScatterRedistFacts, 2>>
-        &reduceScatterFactsByAlloc);
-
-LogicalResult collectSuAccessWindowDependencySpecs(
-    sde::SdeSuIterateOp source,
-    DenseMap<Operation *, SmallVector<unsigned, 2>> &depIndex,
-    SmallVectorImpl<DirectDepSpec> &deps,
-    DenseSet<Operation *> *consumedCuLevelAccessWindows,
-    SmallVectorImpl<Operation *> *consumedRedists) {
-  SmallVector<Operation *> localConsumedRedists;
-  SmallVectorImpl<Operation *> &redists =
-      consumedRedists ? *consumedRedists : localConsumedRedists;
-  DenseSet<Operation *> touchedAllocs;
-  collectTouchedDbAllocs(source, touchedAllocs);
-  DenseMap<Operation *, SmallVector<ReduceScatterRedistFacts, 2>>
-      reduceScatterFactsByAlloc;
-  if (failed(collectPrecedingReduceScatterRedists(
-          source, reduceScatterFactsByAlloc, redists)))
-    return failure();
-
-  auto consider = [&](arts::DbAccessWindowOp window) -> WalkResult {
-    if (auto ownerSu = window->getParentOfType<sde::SdeSuIterateOp>())
-      if (ownerSu != source)
-        return WalkResult::advance();
-    Operation *alloc = arts::DbUtils::getUnderlyingDbAlloc(window.getMu());
-    if (!alloc || !touchedAllocs.contains(alloc))
-      return WalkResult::advance();
-    if (failed(recordAccessWindowDependency(source, window, depIndex, deps,
-                                            reduceScatterFactsByAlloc)))
-      return WalkResult::interrupt();
-    if (consumedCuLevelAccessWindows &&
-        !window->getParentOfType<sde::SdeSuIterateOp>())
-      consumedCuLevelAccessWindows->insert(window.getOperation());
-    return WalkResult::advance();
-  };
-
-  sde::SdeCuRegionOp parentCu = source->getParentOfType<sde::SdeCuRegionOp>();
-  WalkResult result = parentCu ? parentCu.getBody().walk(consider)
-                               : source.getBody().walk(consider);
-  return result.wasInterrupted() ? failure() : success();
-}
-
-void collectTouchedDbAllocs(sde::SdeSuIterateOp source,
                             DenseSet<Operation *> &touched) {
   source.getBody().walk([&](Operation *op) {
     Value memref;
@@ -1257,13 +1175,6 @@ void collectTouchedDbAllocs(sde::SdeSuIterateOp source,
       memref = load.getMemref();
     else if (auto store = dyn_cast<memref::StoreOp>(op))
       memref = store.getMemref();
-    else if (auto copy = dyn_cast<memref::CopyOp>(op)) {
-      if (arts::DbAllocOp alloc = resolveBoundaryDbAlloc(copy.getSource()))
-        touched.insert(alloc.getOperation());
-      if (arts::DbAllocOp alloc = resolveBoundaryDbAlloc(copy.getTarget()))
-        touched.insert(alloc.getOperation());
-      return;
-    }
     else if (auto atomic = dyn_cast<sde::SdeCuAtomicOp>(op))
       memref = atomic.getAddr();
     else
@@ -1469,8 +1380,35 @@ collectSuDependencies(sde::SdeSuIterateOp source,
                       DenseSet<Operation *> &consumedCuLevelAccessWindows,
                       SmallVectorImpl<Operation *> &consumedRedists) {
   DenseMap<Operation *, SmallVector<unsigned, 2>> depIndex;
-  return collectSuAccessWindowDependencySpecs(
-      source, depIndex, deps, &consumedCuLevelAccessWindows, &consumedRedists);
+  DenseSet<Operation *> touchedAllocs;
+  collectTouchedDbAllocs(source, touchedAllocs);
+  DenseMap<Operation *, SmallVector<ReduceScatterRedistFacts, 2>>
+      reduceScatterFactsByAlloc;
+  if (failed(collectPrecedingReduceScatterRedists(
+          source, reduceScatterFactsByAlloc, consumedRedists)))
+    return failure();
+
+  auto consider = [&](arts::DbAccessWindowOp window) -> WalkResult {
+    if (auto ownerSu = window->getParentOfType<sde::SdeSuIterateOp>())
+      if (ownerSu != source)
+        return WalkResult::advance();
+    Operation *alloc = arts::DbUtils::getUnderlyingDbAlloc(window.getMu());
+    if (!alloc || !touchedAllocs.contains(alloc))
+      return WalkResult::advance();
+    if (failed(recordAccessWindowDependency(source, window, depIndex, deps,
+                                            reduceScatterFactsByAlloc)))
+      return WalkResult::interrupt();
+    if (!window->getParentOfType<sde::SdeSuIterateOp>())
+      consumedCuLevelAccessWindows.insert(window.getOperation());
+    return WalkResult::advance();
+  };
+
+  sde::SdeCuRegionOp parentCu = source->getParentOfType<sde::SdeCuRegionOp>();
+  WalkResult result = parentCu ? parentCu.getBody().walk(consider)
+                               : source.getBody().walk(consider);
+  if (result.wasInterrupted())
+    return failure();
+  return verifyRawSuAccessesCoveredByDeps(source, depIndex, deps);
 }
 
 LogicalResult collectStandaloneCuDependencies(

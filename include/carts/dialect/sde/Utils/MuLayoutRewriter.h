@@ -81,6 +81,14 @@ std::unique_ptr<MuAccessIndexer>
 makeMuAccessIndexer(SdeStructuredClassification cls,
                     const MuPhysicalLayout &layout);
 
+/// Build the safest indexer for a committed block layout. If the SU has a
+/// recoverable classification, use its mode-specific indexer; otherwise use the
+/// generic HPF BLOCK indexer so committed unclassified direct layouts still
+/// realize structurally instead of crashing downstream.
+std::unique_ptr<MuAccessIndexer>
+makeMuAccessIndexerForCommittedLayout(SdeSuIterateOp si,
+                                      const MuPhysicalLayout &layout);
+
 /// True when an SU classification can witness rank-expanded block-grid MU
 /// access windows. CUs with SDE reduction accumulators are excluded because
 /// their accumulator protocol is not a direct block write.

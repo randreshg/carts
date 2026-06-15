@@ -5,6 +5,7 @@
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/RedistributionEdges.h"
+#include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
@@ -943,13 +944,13 @@ static bool hasNonZero(ArrayAttr attr) {
   });
 }
 
-static bool consumerHasReadRoot(SdeSuIterateOp consumer, int64_t arrayId,
-                                Value movementRoot) {
+static bool consumerHasRoot(SdeSuIterateOp consumer, int64_t arrayId,
+                            Value movementRoot, SdeAccessMode mode) {
   Value root = carts::ValueAnalysis::stripMemrefViewOps(movementRoot);
   for (SdeArrayLayoutRootOp provenance :
        consumer.getBody().getOps<SdeArrayLayoutRootOp>()) {
     if (static_cast<int64_t>(provenance.getArrayId()) != arrayId ||
-        provenance.getMode() != SdeAccessMode::read)
+        provenance.getMode() != mode)
       continue;
     Value consumerRoot =
         carts::ValueAnalysis::stripMemrefViewOps(provenance.getRoot());
@@ -960,39 +961,127 @@ static bool consumerHasReadRoot(SdeSuIterateOp consumer, int64_t arrayId,
 }
 
 static std::optional<LayoutGraphFact>
-findConsumerReadFact(SdeSuIterateOp consumer, int64_t arrayId) {
+findConsumerLayoutFact(SdeSuIterateOp consumer, int64_t arrayId,
+                       LayoutGraphRole role) {
   if (ArrayAttr layout = consumer.getArrayLayoutAttr())
     for (const LayoutGraphFact &fact : parseArrayLayoutFacts(layout))
-      if (fact.id == arrayId && fact.role == LayoutGraphRole::read)
+      if (fact.id == arrayId && fact.role == role)
         return fact;
   return std::nullopt;
+}
+
+static bool consumerHasOwnerReductionAccess(SdeSuIterateOp consumer,
+                                            Value movementRoot,
+                                            ArrayRef<int64_t> ownerDims) {
+  Operation *scope = consumer->getParentOfType<ModuleOp>();
+  if (!scope || ownerDims.empty())
+    return false;
+
+  ModuleSuAccessRelations relations = buildModuleSuAccessRelations(scope);
+  std::optional<unsigned> consumerId;
+  for (auto [id, su] : llvm::enumerate(relations.schedulingUnits)) {
+    if (su == consumer) {
+      consumerId = id;
+      break;
+    }
+  }
+  if (!consumerId)
+    return false;
+
+  Value root = carts::ValueAnalysis::stripMemrefViewOps(movementRoot);
+  const ArrayAccessProfile *profile = nullptr;
+  auto direct = relations.profiles.find(root);
+  if (direct != relations.profiles.end()) {
+    profile = &direct->second;
+  } else {
+    for (const auto &entry : relations.profiles) {
+      if (carts::ValueAnalysis::sameMemrefRoot(entry.first, root)) {
+        profile = &entry.second;
+        break;
+      }
+    }
+  }
+  if (!profile)
+    return false;
+
+  for (int64_t ownerDim : ownerDims) {
+    if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= profile->rank)
+      continue;
+    for (const ArrayPositionUse &use : profile->positionUses[ownerDim]) {
+      if (use.suId == *consumerId && !use.isWrite &&
+          use.kind == ArrayDimKind::reductionIndexed)
+        return true;
+    }
+  }
+  return false;
 }
 
 static SdeSuIterateOp findAnchoredConsumer(Operation *movement) {
   for (Operation *next = movement->getNextNode(); next;
        next = next->getNextNode()) {
-    if (isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp>(next))
+    if (isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp,
+            SdeSuAllToAllOp>(next))
       continue;
     return dyn_cast<SdeSuIterateOp>(next);
   }
   return {};
 }
 
+static bool partialReductionFactsMatchMovement(SdeSuIterateOp consumer,
+                                               ArrayRef<int64_t> ownerDims) {
+  if (!consumer.getPartialReductionAttr())
+    return false;
+  std::optional<SmallVector<int64_t, 4>> partialDims =
+      readI64ArrayAttr(consumer.getPartialReductionDimsAttr());
+  std::optional<SmallVector<int64_t, 4>> partialOwnerDims =
+      readI64ArrayAttr(consumer.getPartialReductionOwnerDimsAttr());
+  if (!partialDims || partialDims->empty() || !partialOwnerDims ||
+      partialOwnerDims->empty())
+    return false;
+  if (ArrayRef<int64_t>(*partialOwnerDims) != ownerDims)
+    return false;
+
+  std::optional<SuLoopAccessSummary> summary = analyzeSuLoopAccesses(consumer);
+  if (!summary)
+    return false;
+  SmallVector<int64_t, 4> derivedReductionDims;
+  for (auto [dim, iteratorType] : llvm::enumerate(summary->iterTypes))
+    if (iteratorType == utils::IteratorType::reduction)
+      derivedReductionDims.push_back(static_cast<int64_t>(dim));
+  return !derivedReductionDims.empty() &&
+         ArrayRef<int64_t>(*partialDims) ==
+             ArrayRef<int64_t>(derivedReductionDims);
+}
+
 static LogicalResult verifyMovementAnchoredInConsumer(
     Operation *movement, int64_t arrayId, Value movementRoot,
+    ArrayRef<int64_t> movementOwnerDims,
     bool requireHaloBacking, bool requireReductionBacking) {
   SdeSuIterateOp consumer = findAnchoredConsumer(movement);
   if (!consumer)
     return movement->emitOpError()
            << "movement op is not anchored before a consumer sde.su_iterate";
-  if (!consumerHasReadRoot(consumer, arrayId, movementRoot))
+  bool hasReadRoot =
+      consumerHasRoot(consumer, arrayId, movementRoot, SdeAccessMode::read);
+  bool hasReductionWriteRoot =
+      requireReductionBacking &&
+      consumerHasRoot(consumer, arrayId, movementRoot, SdeAccessMode::write);
+  if (!hasReadRoot && !hasReductionWriteRoot)
     return movement->emitOpError()
-           << "anchored consumer has no matching read provenance for this "
-              "redistribution root";
-  std::optional<LayoutGraphFact> readFact = findConsumerReadFact(consumer, arrayId);
-  if (!readFact)
+           << "anchored consumer has no matching "
+           << (requireReductionBacking ? "read/write" : "read")
+           << " provenance for this redistribution root";
+  std::optional<LayoutGraphFact> readFact =
+      findConsumerLayoutFact(consumer, arrayId, LayoutGraphRole::read);
+  std::optional<LayoutGraphFact> writeFact =
+      requireReductionBacking
+          ? findConsumerLayoutFact(consumer, arrayId, LayoutGraphRole::write)
+          : std::nullopt;
+  if (!readFact && !writeFact)
     return movement->emitOpError()
-           << "anchored consumer has no committed read layout for this "
+           << "anchored consumer has no committed "
+           << (requireReductionBacking ? "read/write" : "read")
+           << " layout for this "
               "redistribution array";
   if (requireHaloBacking) {
     if (!deriveCommittedHaloShape(consumer) &&
@@ -1003,9 +1092,18 @@ static LogicalResult verifyMovementAnchoredInConsumer(
                 "facts";
   }
   if (requireReductionBacking) {
-    if (readFact->layoutKind == ArrayLayoutKind::blockContraction ||
-        consumer.getPartialReductionAttr())
+    const LayoutGraphFact &backingFact = readFact ? *readFact : *writeFact;
+    if (backingFact.layoutKind == ArrayLayoutKind::blockContraction ||
+        consumerHasOwnerReductionAccess(consumer, movementRoot,
+                                        backingFact.ownerDims))
       return success();
+    if (consumer.getPartialReductionAttr()) {
+      if (partialReductionFactsMatchMovement(consumer, movementOwnerDims))
+        return success();
+      return movement->emitOpError()
+             << "reduce-scatter movement is not backed by committed "
+                "partial-reduction dims/owner dims";
+    }
     return movement->emitOpError()
            << "reduce-scatter movement is not backed by a contraction/"
               "reduction consumer";
@@ -1040,8 +1138,8 @@ static LogicalResult verifyMovementGroundedAndAnchored(
     return movement->emitOpError()
            << "is not grounded in committed SDE layout: " << reason;
   return verifyMovementAnchoredInConsumer(movement, arrayId, movementRoot,
-                                        requireHaloBacking,
-                                        requireReductionBacking);
+                                          *ownerDims, requireHaloBacking,
+                                          requireReductionBacking);
 }
 
 // Shared endpoint check for SU-scope movement ops: owner dims in range + unique;

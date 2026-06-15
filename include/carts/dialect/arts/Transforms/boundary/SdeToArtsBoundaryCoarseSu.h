@@ -12,9 +12,8 @@
 namespace mlir {
 namespace carts::arts::boundary {
 
-LogicalResult
-convertCoarseSuIterate(sde::SdeSuIterateOp source,
-                       SmallVectorImpl<CoarseSuDependency> &deps);
+LogicalResult convertCoarseSuIterate(sde::SdeSuIterateOp source,
+                                     SmallVectorImpl<CoarseSuDependency> &deps);
 LogicalResult tryConvertCoarseSuIterate(sde::SdeSuIterateOp source);
 
 } // namespace carts::arts::boundary

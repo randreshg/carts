@@ -3,14 +3,12 @@
 ///
 /// SDE→ARTS boundary pass runners.
 ///
-/// Four mechanical passes (no SDE policy):
+/// Three mechanical passes (no SDE policy):
 ///   1. sde-storage-to-arts-db — MU storage → DbAlloc; validate movement facts;
 ///      stamp transitional db_access_window carriers.
-///   2. verify-raw-access-covered — fail closed if raw SU body accesses are not
-///      covered by committed SDE access-window dependencies.
-///   3. sde-accesses-to-arts-deps — realize movements; lower carriers by case:
+///   2. sde-accesses-to-arts-deps — realize movements; lower carriers by case:
 ///        movements → standalone CU → SU iterate → CU task.
-///   4. finalize-sde-to-arts — control/resource cleanup; reject residual SDE.
+///   3. finalize-sde-to-arts — control/resource cleanup; reject residual SDE.
 ///
 /// Implementation is split across boundary/* translation units.
 ///==========================================================================///

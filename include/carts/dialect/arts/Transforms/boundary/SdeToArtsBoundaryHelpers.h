@@ -21,7 +21,16 @@ bool isScalarParamType(Type type);
 bool isConstantLikeValue(Value value);
 bool isDefinedInside(Value value, Operation *scope);
 bool isStackScratchMemref(Value memref);
+
+LogicalResult collectExternalScalarCaptures(sde::SdeSuIterateOp source,
+                                            SetVector<Value> &captures);
+LogicalResult collectExternalScalarCaptures(sde::SdeCuTaskOp source,
+                                            SetVector<Value> &captures);
+LogicalResult collectExternalScalarCaptures(sde::SdeCuRegionOp source,
+                                            SetVector<Value> &captures);
+
 Value remapOrSelf(IRMapping &mapper, Value value);
+LogicalResult translateSdeAtomicsToArts(Region &region);
 
 FailureOr<ArtsMode> convertAccessMode(sde::SdeAccessMode mode,
                                       Operation *context);
@@ -35,13 +44,6 @@ LogicalResult attachCommittedSdeFacts(sde::SdeSuIterateOp source,
                                       arts::EdtOp edt);
 LogicalResult attachUnpartitionedSdeFacts(sde::SdeSuIterateOp source,
                                           arts::EdtOp edt);
-LogicalResult collectExternalScalarCaptures(sde::SdeSuIterateOp source,
-                                            SetVector<Value> &captures);
-LogicalResult collectExternalScalarCaptures(sde::SdeCuTaskOp source,
-                                            SetVector<Value> &captures);
-LogicalResult collectExternalScalarCaptures(sde::SdeCuRegionOp source,
-                                            SetVector<Value> &captures);
-LogicalResult translateSdeAtomicsToArts(Region &region);
 
 ArrayAttr ownerDimsForExpandedWindow(MLIRContext *ctx, unsigned ownerDimCount);
 FailureOr<ArrayAttr>

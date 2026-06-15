@@ -2,9 +2,20 @@
 /// File: SuLoopAccessAnalysis.cpp
 ///
 /// Reusable structural analysis for SDE scheduling-unit loops.
+///
+/// Umbrella translation unit: it owns the public query API
+/// (analyzeSuLoopAccesses, findContractionTilingCandidate,
+/// findCompatibleSuOutputLayoutFacts, hasRealizableOwnerStrip,
+/// extractNeighborhoodAccessInfo, isOwnerLocalPipelineReduction,
+/// hasDistinctExternalMatmulInputRoots, buildModuleSuAccessRelations) plus the
+/// shape / owner-slice / write-support helpers those wrappers share. The
+/// per-phase mechanics are carved into PerfectNestCollect.cpp,
+/// MemrefAccessCollect.cpp, StructuredClassify.cpp, and
+/// NeighborhoodAnalysis.cpp (declared in SuLoopAccessAnalysisDetail.h).
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
+#include "SuLoopAccessAnalysisDetail.h"
 #include "carts/dialect/sde/Analysis/AffineIndexUtils.h"
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
@@ -30,601 +41,6 @@ using namespace mlir::carts;
 namespace mlir::carts::sde {
 namespace {
 
-static SmallVector<Operation *> getBodyOps(Block &body) {
-  SmallVector<Operation *> ops;
-  for (auto &op : body) {
-    if (op.hasTrait<OpTrait::IsTerminator>())
-      continue;
-    if (isa<SdeYieldOp>(op))
-      continue;
-    ops.push_back(&op);
-  }
-  return ops;
-}
-
-static bool isLocalScratchMemref(Value value, Block &scope) {
-  Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(value);
-  if (!root)
-    return false;
-
-  Operation *def = root.getDefiningOp();
-  return def && def->getBlock() == &scope;
-}
-
-static bool isUsedInside(Operation *ancestor, Value value) {
-  if (!ancestor || !value)
-    return false;
-  for (OpOperand &use : value.getUses())
-    if (ancestor->isAncestor(use.getOwner()))
-      return true;
-  return false;
-}
-
-static bool isUsedInsideAny(ArrayRef<Operation *> ancestors, Value value) {
-  if (!value)
-    return false;
-  for (Operation *ancestor : ancestors)
-    if (isUsedInside(ancestor, value))
-      return true;
-  return false;
-}
-
-// Polygeist can preserve C local scratch allocation as libc calls instead of
-// memref.alloc.  The analyzer may ignore those effects only for exact
-// allocator/free pairs whose result cannot escape the analyzed body.
-static bool isLibcAllocatorCallee(StringRef callee) {
-  return callee == "malloc" || callee == "calloc" || callee == "aligned_alloc";
-}
-
-static bool isLibcFreeCallee(StringRef callee) { return callee == "free"; }
-
-static bool hasBaseMemrefType(Value value) {
-  return value && isa<BaseMemRefType>(value.getType());
-}
-
-static bool isLibcFreeCallUsing(func::CallOp call, Value root) {
-  return call && isLibcFreeCallee(call.getCallee()) &&
-         call->getNumOperands() == 1 && call.getNumResults() == 0 &&
-         ::mlir::carts::ValueAnalysis::sameMemrefRoot(call.getOperand(0), root);
-}
-
-static bool isLocalLibcAllocatorRoot(Value root, Block &scope) {
-  root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
-  if (!hasBaseMemrefType(root))
-    return false;
-
-  auto call = root.getDefiningOp<func::CallOp>();
-  return call && call->getBlock() == &scope &&
-         isLibcAllocatorCallee(call.getCallee());
-}
-
-static bool hasLocalLibcFreeUse(Value root) {
-  root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
-  for (OpOperand &use : root.getUses())
-    if (auto call = dyn_cast<func::CallOp>(use.getOwner()))
-      if (isLibcFreeCallUsing(call, root))
-        return true;
-  return false;
-}
-
-static bool opIsInsideAny(ArrayRef<Operation *> ancestors, Operation *op) {
-  if (!op)
-    return false;
-  for (Operation *ancestor : ancestors)
-    if (ancestor && ancestor->isAncestor(op))
-      return true;
-  return false;
-}
-
-static bool onlyUsedByRegionsOrLocalFree(Value value,
-                                         ArrayRef<Operation *> regions,
-                                         Block &scope, Value root,
-                                         llvm::SmallPtrSetImpl<Value> &seen) {
-  if (!value || !seen.insert(value).second)
-    return true;
-
-  for (OpOperand &use : value.getUses()) {
-    Operation *owner = use.getOwner();
-    if (!owner || owner->hasTrait<OpTrait::IsTerminator>())
-      return false;
-
-    if (auto storeOp = dyn_cast<memref::StoreOp>(owner))
-      if (::mlir::carts::ValueAnalysis::sameMemrefRoot(
-              storeOp.getValueToStore(), root))
-        return false;
-
-    if (auto call = dyn_cast<func::CallOp>(owner)) {
-      if (!isLibcFreeCallUsing(call, root))
-        return false;
-      if (call->getBlock() != &scope && !opIsInsideAny(regions, owner))
-        return false;
-      continue;
-    }
-
-    bool hasDerivedMemrefResult = false;
-    for (Value result : owner->getResults())
-      hasDerivedMemrefResult |= hasBaseMemrefType(result);
-    if (hasDerivedMemrefResult) {
-      if (!isMemoryEffectFree(owner))
-        return false;
-      for (Value result : owner->getResults()) {
-        if (!hasBaseMemrefType(result))
-          continue;
-        if (!onlyUsedByRegionsOrLocalFree(result, regions, scope, root, seen))
-          return false;
-      }
-      continue;
-    }
-
-    if (!opIsInsideAny(regions, owner))
-      return false;
-  }
-
-  return true;
-}
-
-static bool onlyUsedByRegionsOrLocalFree(Value root,
-                                         ArrayRef<Operation *> regions,
-                                         Block &scope) {
-  root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
-  llvm::SmallPtrSet<Value, 8> seen;
-  return onlyUsedByRegionsOrLocalFree(root, regions, scope, root, seen);
-}
-
-static bool isLocalLibcAllocatorScratch(Value root, Block &scope,
-                                        ArrayRef<Operation *> regions) {
-  root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
-  return isLocalLibcAllocatorRoot(root, scope) &&
-         isUsedInsideAny(regions, root) && hasLocalLibcFreeUse(root) &&
-         onlyUsedByRegionsOrLocalFree(root, regions, scope);
-}
-
-static bool isLocalLibcAllocatorScratchCall(Operation *op, Block &scope,
-                                            ArrayRef<Operation *> regions) {
-  auto call = dyn_cast_or_null<func::CallOp>(op);
-  if (!call || call->getBlock() != &scope ||
-      !isLibcAllocatorCallee(call.getCallee()) || call.getNumResults() == 0)
-    return false;
-
-  for (Value result : call.getResults())
-    if (!isLocalLibcAllocatorScratch(result, scope, regions))
-      return false;
-  return true;
-}
-
-static bool isLocalLibcFreeScratchCall(Operation *op, Block &scope,
-                                       ArrayRef<Operation *> regions) {
-  auto call = dyn_cast_or_null<func::CallOp>(op);
-  if (!isLibcFreeCallUsing(
-          call, call && call->getNumOperands() == 1
-                    ? ::mlir::carts::ValueAnalysis::stripMemrefViewOps(
-                          call.getOperand(0))
-                    : Value{}))
-    return false;
-  Value root =
-      ::mlir::carts::ValueAnalysis::stripMemrefViewOps(call.getOperand(0));
-  return isLocalLibcAllocatorScratch(root, scope, regions);
-}
-
-static bool isLocalScratchSideEffectUsedByLoop(Operation *op, Block &scope,
-                                               scf::ForOp loop) {
-  if (!op)
-    return false;
-
-  if (isa<memref::AllocOp, memref::AllocaOp>(op)) {
-    for (Value result : op->getResults()) {
-      if (!isLocalScratchMemref(result, scope))
-        return false;
-      if (!isUsedInside(loop.getOperation(), result))
-        return false;
-    }
-    return true;
-  }
-
-  auto isLoopScratchAccess = [&](Value memref) {
-    Value root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(memref);
-    return isLocalScratchMemref(root, scope) &&
-           isUsedInside(loop.getOperation(), root);
-  };
-
-  if (auto loadOp = dyn_cast<memref::LoadOp>(op))
-    return isLoopScratchAccess(loadOp.getMemref());
-
-  if (auto storeOp = dyn_cast<memref::StoreOp>(op))
-    return isLoopScratchAccess(storeOp.getMemref());
-
-  if (auto deallocOp = dyn_cast<memref::DeallocOp>(op))
-    return isLoopScratchAccess(deallocOp.getMemref());
-
-  return false;
-}
-
-static bool
-isLocalScratchSideEffectUsedByRegions(Operation *op, Block &scope,
-                                      ArrayRef<Operation *> regions) {
-  if (!op || regions.empty())
-    return false;
-
-  if (isLocalLibcAllocatorScratchCall(op, scope, regions) ||
-      isLocalLibcFreeScratchCall(op, scope, regions))
-    return true;
-
-  for (Operation *region : regions)
-    if (auto loop = dyn_cast_or_null<scf::ForOp>(region))
-      if (isLocalScratchSideEffectUsedByLoop(op, scope, loop))
-        return true;
-  return false;
-}
-
-static bool isRankZeroScalarMemrefAccess(Operation *op) {
-  Value memref;
-  if (auto loadOp = dyn_cast_or_null<memref::LoadOp>(op)) {
-    if (isa<MemRefType>(loadOp.getResult().getType()))
-      return false;
-    memref = loadOp.getMemref();
-  } else if (auto storeOp = dyn_cast_or_null<memref::StoreOp>(op)) {
-    if (isa<MemRefType>(storeOp.getValueToStore().getType()))
-      return false;
-    memref = storeOp.getMemref();
-  } else {
-    return false;
-  }
-
-  auto memrefType = dyn_cast<MemRefType>(memref.getType());
-  return memrefType && memrefType.getRank() == 0;
-}
-
-static bool isEffectFreeBoundaryOp(Operation *op) {
-  return isMemoryEffectFree(op) || isRankZeroScalarMemrefAccess(op);
-}
-
-static bool
-boundarySideEffectsAreLocalScratch(ArrayRef<Operation *> sideEffects,
-                                   Block &body, ArrayRef<Operation *> regions) {
-  for (Operation *op : sideEffects)
-    if (!isLocalScratchSideEffectUsedByRegions(op, body, regions))
-      return false;
-  return true;
-}
-
-static bool collectInner(Block &body, LoopNestInfo &info) {
-  SmallVector<Operation *> ops = getBodyOps(body);
-
-  if (ops.size() == 1) {
-    if (auto innerFor = dyn_cast<scf::ForOp>(ops.front())) {
-      info.ivs.push_back(innerFor.getInductionVar());
-      return collectInner(*innerFor.getBody(), info);
-    }
-    if (auto innerFor = dyn_cast<affine::AffineForOp>(ops.front())) {
-      info.ivs.push_back(innerFor.getInductionVar());
-      return collectInner(*innerFor.getBody(), info);
-    }
-  }
-
-  if (ops.size() > 1) {
-    SmallVector<scf::ForOp, 2> nestedFors;
-    SmallVector<affine::AffineForOp, 2> nestedAffineFors;
-    SmallVector<Operation *> sideEffectsAroundInnerLoop;
-    for (Operation *op : ops) {
-      if (auto nestedFor = dyn_cast<scf::ForOp>(op)) {
-        nestedFors.push_back(nestedFor);
-        continue;
-      }
-      if (auto nestedFor = dyn_cast<affine::AffineForOp>(op)) {
-        nestedAffineFors.push_back(nestedFor);
-        continue;
-      }
-      if (!isEffectFreeBoundaryOp(op))
-        sideEffectsAroundInnerLoop.push_back(op);
-    }
-
-    if (nestedFors.size() == 1 && nestedAffineFors.empty()) {
-      scf::ForOp innerFor = nestedFors.front();
-      SmallVector<Operation *, 2> nestedForOps{innerFor.getOperation()};
-      bool hasUnsupportedSideEffectsAroundInnerLoop =
-          !boundarySideEffectsAreLocalScratch(sideEffectsAroundInnerLoop, body,
-                                              nestedForOps);
-      info.ivs.push_back(innerFor.getInductionVar());
-      if (hasUnsupportedSideEffectsAroundInnerLoop) {
-        info.innermostBody = &body;
-        return true;
-      }
-      return collectInner(*innerFor.getBody(), info);
-    }
-
-    if (nestedAffineFors.size() == 1 && nestedFors.empty()) {
-      affine::AffineForOp innerFor = nestedAffineFors.front();
-      SmallVector<Operation *, 2> nestedForOps{innerFor.getOperation()};
-      if (!boundarySideEffectsAreLocalScratch(sideEffectsAroundInnerLoop, body,
-                                              nestedForOps))
-        return false;
-      info.ivs.push_back(innerFor.getInductionVar());
-      return collectInner(*innerFor.getBody(), info);
-    }
-
-    if (nestedFors.size() > 1) {
-      SmallVector<Operation *, 2> nestedForOps;
-      nestedForOps.reserve(nestedFors.size());
-      for (scf::ForOp nestedFor : nestedFors)
-        nestedForOps.push_back(nestedFor.getOperation());
-      if (!boundarySideEffectsAreLocalScratch(sideEffectsAroundInnerLoop, body,
-                                              nestedForOps))
-        return false;
-      info.innermostBody = &body;
-      return true;
-    }
-  }
-
-  info.innermostBody = &body;
-  return true;
-}
-
-static bool collectPerfectNest(SdeSuIterateOp iterOp, LoopNestInfo &info) {
-  info.rootIterOp = iterOp;
-
-  Region &region = iterOp.getBody();
-  if (region.empty() || region.front().getNumArguments() == 0)
-    return false;
-
-  // SdeSuIterateOp block arguments are laid out as induction variables
-  // followed by iter_args.  Only the loop-rank prefix participates in affine
-  // access maps; treating carried values as IVs fabricates reduction
-  // dimensions for result-bearing elementwise loops.
-  unsigned numIvs = iterOp.getLowerBounds().size();
-  if (region.front().getNumArguments() < numIvs)
-    return false;
-  for (BlockArgument arg : region.front().getArguments().take_front(numIvs))
-    info.ivs.push_back(arg);
-  return collectInner(*getSuIterateComputeBlock(iterOp), info);
-}
-
-static std::optional<AffineMap> remapAccessMapToLoopIvs(
-    AffineMap map, OperandRange mapOperands, ArrayRef<Value> ivs,
-    MLIRContext *ctx) {
-  if (!map)
-    return std::nullopt;
-  SmallVector<Value, 8> operands(mapOperands.begin(), mapOperands.end());
-  affine::fullyComposeAffineMapAndOperands(&map, &operands);
-  map = simplifyAffineMap(map);
-  if (map.getNumSymbols() != 0 || map.getNumDims() != operands.size())
-    return std::nullopt;
-
-  SmallVector<AffineExpr, 8> dimReplacements(map.getNumDims());
-  for (auto [dim, operand] : llvm::enumerate(operands)) {
-    auto it = llvm::find(ivs, operand);
-    if (it == ivs.end())
-      return std::nullopt;
-    dimReplacements[dim] = getAffineDimExpr(
-        static_cast<unsigned>(std::distance(ivs.begin(), it)), ctx);
-  }
-
-  SmallVector<AffineExpr, 4> remappedResults;
-  remappedResults.reserve(map.getNumResults());
-  for (AffineExpr result : map.getResults())
-    remappedResults.push_back(
-        result.replaceDimsAndSymbols(dimReplacements, {}));
-  return AffineMap::get(ivs.size(), /*symbolCount=*/0, remappedResults, ctx);
-}
-
-static std::optional<AffineMap> tryBuildIndexingMapFromAffineAccess(
-    Operation *memOp, ArrayRef<Value> ivs, MLIRContext *ctx) {
-  if (auto read = dyn_cast<affine::AffineReadOpInterface>(memOp)) {
-    return remapAccessMapToLoopIvs(read.getAffineMap(), read.getMapOperands(),
-                                   ivs, ctx);
-  }
-  if (auto write = dyn_cast<affine::AffineWriteOpInterface>(memOp)) {
-    return remapAccessMapToLoopIvs(write.getAffineMap(), write.getMapOperands(),
-                                   ivs, ctx);
-  }
-  return std::nullopt;
-}
-
-static std::optional<AffineMap> tryBuildIndexingMap(OperandRange indices,
-                                                    ArrayRef<Value> ivs,
-                                                    MLIRContext *ctx) {
-  SmallVector<AffineExpr> exprs;
-  exprs.reserve(indices.size());
-  for (Value idx : indices) {
-    auto expr = sde::tryGetAffineExpr(idx, ivs, ctx);
-    if (!expr)
-      return std::nullopt;
-    exprs.push_back(*expr);
-  }
-  return AffineMap::get(/*dimCount=*/ivs.size(), /*symbolCount=*/0, exprs, ctx);
-}
-
-static bool isLocalLibcAllocatorScratchForBody(Operation *op, Block &body) {
-  Operation *region = body.getParentOp();
-  if (!region)
-    return false;
-
-  SmallVector<Operation *, 1> regions{region};
-  return isLocalLibcAllocatorScratchCall(op, body, regions) ||
-         isLocalLibcFreeScratchCall(op, body, regions);
-}
-
-static bool
-collectMemrefAccessesImpl(Operation *scope, Block &body, ArrayRef<Value> ivs,
-                          SmallVectorImpl<MemrefAccessEntry> &reads,
-                          SmallVectorImpl<MemrefAccessEntry> &writes,
-                          MLIRContext *ctx, bool &sawAccess) {
-  for (auto &op : body) {
-    if (op.hasTrait<OpTrait::IsTerminator>())
-      continue;
-
-    // arts.db_access_window is a short-lived SDE-to-ARTS boundary carrier (not a
-    // data access) with a MemWrite effect; skip it by name (no ARTS dep) so a
-    // shared witness SU stays classifiable after the boundary annotates its body.
-    if (op.getName().getStringRef() == "arts.db_access_window")
-      continue;
-
-    if (isLocalScratchEffect(&op, scope))
-      continue;
-
-    if (isLocalLibcAllocatorScratchForBody(&op, body))
-      continue;
-
-    if (auto read = dyn_cast<affine::AffineReadOpInterface>(&op)) {
-      auto memrefType = read.getMemRefType();
-      if (memrefType && memrefType.getRank() == 0)
-        continue;
-      auto map = tryBuildIndexingMapFromAffineAccess(&op, ivs, ctx);
-      if (!map)
-        return false;
-      reads.push_back(
-          {read.getMemRef(), *map, read.getOperation(), /*isRead=*/true});
-      sawAccess = true;
-      continue;
-    }
-
-    if (auto write = dyn_cast<affine::AffineWriteOpInterface>(&op)) {
-      if (isa<MemRefType>(write.getValueToStore().getType()))
-        continue;
-      auto memrefType = write.getMemRefType();
-      if (memrefType && memrefType.getRank() == 0)
-        continue;
-      auto map = tryBuildIndexingMapFromAffineAccess(&op, ivs, ctx);
-      if (!map)
-        return false;
-      writes.push_back({write.getMemRef(), *map, write.getOperation(),
-                        /*isRead=*/false});
-      sawAccess = true;
-      continue;
-    }
-
-    if (auto loadOp = dyn_cast<memref::LoadOp>(&op)) {
-      // Skip pointer-to-memref wrapper loads (e.g., memref.load %wrapper[] :
-      // memref<memref<?xi32>>). These are pointer dereferences, not data
-      // accesses. Including them would create structured inputs with
-      // memref-of-memref types rather than element memrefs.
-      if (isa<MemRefType>(loadOp.getResult().getType()))
-        continue;
-      auto memrefType = dyn_cast<MemRefType>(loadOp.getMemref().getType());
-      if (memrefType && memrefType.getRank() == 0)
-        continue;
-
-      auto map = tryBuildIndexingMap(loadOp.getIndices(), ivs, ctx);
-      if (!map)
-        return false;
-      reads.push_back(
-          {loadOp.getMemref(), *map, loadOp.getOperation(), /*isRead=*/true});
-      sawAccess = true;
-      continue;
-    }
-
-    if (auto storeOp = dyn_cast<memref::StoreOp>(&op)) {
-      // Skip stores to pointer-to-memref wrappers.
-      if (isa<MemRefType>(storeOp.getValueToStore().getType()))
-        continue;
-      auto memrefType = dyn_cast<MemRefType>(storeOp.getMemref().getType());
-      if (memrefType && memrefType.getRank() == 0)
-        continue;
-
-      auto map = tryBuildIndexingMap(storeOp.getIndices(), ivs, ctx);
-      if (!map)
-        return false;
-      writes.push_back({storeOp.getMemref(), *map, storeOp.getOperation(),
-                        /*isRead=*/false});
-      sawAccess = true;
-      continue;
-    }
-
-    if (auto ifOp = dyn_cast<scf::IfOp>(&op)) {
-      bool thenSawAccess = false;
-      if (!collectMemrefAccessesImpl(scope, ifOp.getThenRegion().front(), ivs,
-                                     reads, writes, ctx, thenSawAccess))
-        return false;
-      sawAccess |= thenSawAccess;
-
-      if (!ifOp.getElseRegion().empty()) {
-        bool elseSawAccess = false;
-        if (!collectMemrefAccessesImpl(scope, ifOp.getElseRegion().front(), ivs,
-                                       reads, writes, ctx, elseSawAccess))
-          return false;
-        sawAccess |= elseSawAccess;
-      }
-      continue;
-    }
-
-    if (auto nestedFor = dyn_cast<scf::ForOp>(&op)) {
-      bool nestedSawAccess = false;
-      if (!collectMemrefAccessesImpl(scope, *nestedFor.getBody(), ivs, reads,
-                                     writes, ctx, nestedSawAccess))
-        return false;
-      sawAccess |= nestedSawAccess;
-      continue;
-    }
-
-    if (auto nestedFor = dyn_cast<affine::AffineForOp>(&op)) {
-      bool nestedSawAccess = false;
-      if (!collectMemrefAccessesImpl(scope, *nestedFor.getBody(), ivs, reads,
-                                     writes, ctx, nestedSawAccess))
-        return false;
-      sawAccess |= nestedSawAccess;
-      continue;
-    }
-
-    if (auto ifOp = dyn_cast<affine::AffineIfOp>(&op)) {
-      bool thenSawAccess = false;
-      if (!collectMemrefAccessesImpl(scope, *ifOp.getThenBlock(), ivs, reads,
-                                     writes, ctx, thenSawAccess))
-        return false;
-      sawAccess |= thenSawAccess;
-      if (Block *elseBlock = ifOp.getElseBlock()) {
-        bool elseSawAccess = false;
-        if (!collectMemrefAccessesImpl(scope, *elseBlock, ivs, reads, writes,
-                                       ctx, elseSawAccess))
-          return false;
-        sawAccess |= elseSawAccess;
-      }
-      continue;
-    }
-
-    if (isKnownPureScalarLibmCall(&op))
-      continue;
-
-    if (isMemoryEffectFree(&op))
-      continue;
-
-    return false;
-  }
-
-  return true;
-}
-
-static bool collectMemrefAccesses(Operation *scope, Block &body,
-                                  ArrayRef<Value> ivs,
-                                  SmallVectorImpl<MemrefAccessEntry> &reads,
-                                  SmallVectorImpl<MemrefAccessEntry> &writes,
-                                  MLIRContext *ctx) {
-  bool sawAccess = false;
-  if (!collectMemrefAccessesImpl(scope, body, ivs, reads, writes, ctx,
-                                 sawAccess))
-    return false;
-  return sawAccess;
-}
-
-static void
-computeIteratorTypes(unsigned numDims, ArrayRef<AffineMap> outputMaps,
-                     SmallVectorImpl<utils::IteratorType> &iterTypes) {
-  llvm::SmallBitVector dimsInOutputs(numDims, false);
-  for (AffineMap map : outputMaps) {
-    for (unsigned i = 0; i < map.getNumResults(); ++i) {
-      map.getResult(i).walk([&](AffineExpr expr) {
-        if (auto dimExpr = dyn_cast<AffineDimExpr>(expr))
-          dimsInOutputs.set(dimExpr.getPosition());
-      });
-    }
-  }
-
-  for (unsigned d = 0; d < numDims; ++d) {
-    iterTypes.push_back(dimsInOutputs.test(d) ? utils::IteratorType::parallel
-                                              : utils::IteratorType::reduction);
-  }
-}
-
-// AffineDimOffset and extractDimOffset live in AffineIndexUtils.
-
 static void appendNestedForIvs(Block &body, SmallVectorImpl<Value> &ivs) {
   llvm::SmallPtrSet<Value, 8> seen;
   for (Value iv : ivs)
@@ -640,165 +56,6 @@ static void appendNestedForIvs(Block &body, SmallVectorImpl<Value> &ivs) {
     if (seen.insert(iv).second)
       ivs.push_back(iv);
   });
-}
-
-static std::optional<SuNeighborhoodAccessInfo>
-extractNeighborhoodAccessInfo(ArrayRef<MemrefAccessEntry> reads,
-                              unsigned numLoops) {
-  if (numLoops == 0)
-    return std::nullopt;
-
-  SuNeighborhoodAccessInfo info;
-  info.minOffsets.assign(numLoops, 0);
-  info.maxOffsets.assign(numLoops, 0);
-  info.writeFootprint.assign(numLoops, 1);
-  for (unsigned dim = 0; dim < numLoops; ++dim) {
-    info.ownerDims.push_back(dim);
-    info.spatialDims.push_back(dim);
-  }
-
-  bool sawNeighborhoodOffset = false;
-  for (const MemrefAccessEntry &entry : reads) {
-    for (AffineExpr result : entry.indexingMap.getResults()) {
-      auto dimOffset = extractDimOffset(result);
-      if (!dimOffset || !dimOffset->dim)
-        continue;
-
-      unsigned dim = *dimOffset->dim;
-      if (dim >= numLoops)
-        continue;
-
-      info.minOffsets[dim] = std::min(info.minOffsets[dim], dimOffset->offset);
-      info.maxOffsets[dim] = std::max(info.maxOffsets[dim], dimOffset->offset);
-      sawNeighborhoodOffset |= dimOffset->offset != 0;
-    }
-  }
-
-  if (!sawNeighborhoodOffset)
-    return std::nullopt;
-  return info;
-}
-
-static llvm::SmallBitVector getUsedDims(AffineMap map, unsigned numDims) {
-  llvm::SmallBitVector used(numDims);
-  for (AffineExpr result : map.getResults())
-    for (unsigned dim = 0; dim < numDims; ++dim)
-      if (result.isFunctionOfDim(dim))
-        used.set(dim);
-  return used;
-}
-
-static bool hasExactDimUse(AffineMap map, const llvm::SmallBitVector &expected,
-                           unsigned numDims) {
-  return getUsedDims(map, numDims) == expected;
-}
-
-static bool hasCanonicalMatmulAccessShape(
-    ArrayRef<MemrefAccessEntry> reads, ArrayRef<AffineMap> outputMaps,
-    ArrayRef<utils::IteratorType> iterTypes, unsigned numDims) {
-  SmallVector<unsigned, 2> parallelDims;
-  SmallVector<unsigned, 1> reductionDims;
-  for (auto [dim, type] : llvm::enumerate(iterTypes)) {
-    if (type == utils::IteratorType::parallel)
-      parallelDims.push_back(dim);
-    else
-      reductionDims.push_back(dim);
-  }
-
-  if (parallelDims.size() != 2 || reductionDims.size() != 1 || numDims != 3)
-    return false;
-
-  llvm::SmallBitVector outputDims(numDims);
-  outputDims.set(parallelDims[0]);
-  outputDims.set(parallelDims[1]);
-  bool hasMatmulOutput = llvm::any_of(outputMaps, [&](AffineMap map) {
-    return hasExactDimUse(map, outputDims, numDims);
-  });
-  if (!hasMatmulOutput)
-    return false;
-
-  llvm::SmallBitVector lhsDims(numDims);
-  lhsDims.set(parallelDims[0]);
-  lhsDims.set(reductionDims[0]);
-  llvm::SmallBitVector rhsDims(numDims);
-  rhsDims.set(reductionDims[0]);
-  rhsDims.set(parallelDims[1]);
-
-  bool hasLhs = false;
-  bool hasRhs = false;
-  for (const MemrefAccessEntry &read : reads) {
-    hasLhs |= hasExactDimUse(read.indexingMap, lhsDims, numDims);
-    hasRhs |= hasExactDimUse(read.indexingMap, rhsDims, numDims);
-  }
-  return hasLhs && hasRhs;
-}
-
-static SdeStructuredClassification
-classifyPattern(ArrayRef<MemrefAccessEntry> reads,
-                ArrayRef<AffineMap> outputMaps,
-                ArrayRef<utils::IteratorType> iterTypes, unsigned numDims) {
-  unsigned numParallel = 0;
-  unsigned numReduction = 0;
-  for (utils::IteratorType t : iterTypes) {
-    if (t == utils::IteratorType::parallel)
-      ++numParallel;
-    else
-      ++numReduction;
-  }
-
-  if (numReduction == 0) {
-    for (const auto &entry : reads) {
-      if (hasConstantOffsets(entry.indexingMap))
-        return SdeStructuredClassification::stencil;
-    }
-    return SdeStructuredClassification::elementwise;
-  }
-
-  if (numParallel == 2 && numReduction == 1 && numDims == 3 &&
-      reads.size() >= 2 && !outputMaps.empty() &&
-      hasCanonicalMatmulAccessShape(reads, outputMaps, iterTypes, numDims))
-    return SdeStructuredClassification::matmul;
-
-  return SdeStructuredClassification::reduction;
-}
-
-static bool isConstantZeroIndexingMap(AffineMap indexingMap) {
-  if (indexingMap.getNumResults() != 1)
-    return false;
-
-  auto constant = dyn_cast<AffineConstantExpr>(indexingMap.getResult(0));
-  return constant && constant.getValue() == 0;
-}
-
-static bool supportsReductionCarrierSubset(SdeSuIterateOp iterOp,
-                                           const LoopNestInfo &nest,
-                                           ArrayRef<MemrefAccessEntry> reads,
-                                           ArrayRef<MemrefAccessEntry> writes) {
-  if (iterOp.getReductionAccumulators().size() != 1 || nest.ivs.size() != 1)
-    return false;
-  if (writes.size() != 1)
-    return false;
-
-  Value reductionAccumulator = iterOp.getReductionAccumulators().front();
-  auto reductionType = dyn_cast<MemRefType>(reductionAccumulator.getType());
-  if (!reductionType || reductionType.getRank() != 1)
-    return false;
-
-  const MemrefAccessEntry &write = writes.front();
-  if (write.memref != reductionAccumulator ||
-      !isConstantZeroIndexingMap(write.indexingMap))
-    return false;
-
-  unsigned matchingReductionReads = 0;
-  for (const MemrefAccessEntry &read : reads) {
-    if (read.memref != reductionAccumulator)
-      continue;
-    if (!isConstantZeroIndexingMap(read.indexingMap))
-      return false;
-    ++matchingReductionReads;
-  }
-
-  return matchingReductionReads == 1;
 }
 
 static Value normalizeOutputRoot(Value value) {
@@ -1061,7 +318,7 @@ bool hasDistinctExternalMatmulInputRoots(SdeSuIterateOp iterOp) {
         externalWriteRoots.contains(root))
       continue;
 
-    llvm::SmallBitVector used = getUsedDims(read.indexingMap, numDims);
+    llvm::SmallBitVector used = detail::getUsedDims(read.indexingMap, numDims);
     if (used == lhsDims) {
       if (!lhsRoot)
         lhsRoot = root;
@@ -1124,7 +381,7 @@ findContractionTilingCandidate(SdeSuIterateOp iterOp) {
         externalWriteRoots.contains(root))
       continue;
 
-    llvm::SmallBitVector used = getUsedDims(read.indexingMap, numDims);
+    llvm::SmallBitVector used = detail::getUsedDims(read.indexingMap, numDims);
     if (used == lhsDims) {
       if (!lhsRoot)
         lhsRoot = root;
@@ -1156,7 +413,7 @@ findContractionTilingCandidate(SdeSuIterateOp iterOp) {
     for (const MemrefAccessEntry &read : summary->reads) {
       if (normalizeOutputRoot(read.memref) != rhsRoot)
         continue;
-      if (getUsedDims(read.indexingMap, numDims) != rhsDims)
+      if (detail::getUsedDims(read.indexingMap, numDims) != rhsDims)
         continue;
       for (auto [pos, result] :
            llvm::enumerate(read.indexingMap.getResults())) {
@@ -1179,15 +436,15 @@ std::optional<SuLoopAccessSummary>
 analyzeSuLoopAccesses(SdeSuIterateOp iterOp) {
   MLIRContext *ctx = iterOp.getContext();
   SuLoopAccessSummary summary;
-  if (!collectPerfectNest(iterOp, summary.nest))
+  if (!detail::collectPerfectNest(iterOp, summary.nest))
     return std::nullopt;
   if (!summary.nest.innermostBody || summary.nest.ivs.empty())
     return std::nullopt;
   appendNestedForIvs(*summary.nest.innermostBody, summary.nest.ivs);
 
-  if (!collectMemrefAccesses(iterOp.getOperation(), *summary.nest.innermostBody,
-                             summary.nest.ivs, summary.reads, summary.writes,
-                             ctx))
+  if (!detail::collectMemrefAccesses(
+          iterOp.getOperation(), *summary.nest.innermostBody, summary.nest.ivs,
+          summary.reads, summary.writes, ctx))
     return std::nullopt;
 
   summary.outputMaps.reserve(summary.writes.size() +
@@ -1226,22 +483,23 @@ analyzeSuLoopAccesses(SdeSuIterateOp iterOp) {
   if (readsAllConstant && writesAllConstant)
     return std::nullopt;
 
-  computeIteratorTypes(summary.nest.ivs.size(), summary.outputMaps,
-                       summary.iterTypes);
+  detail::computeIteratorTypes(summary.nest.ivs.size(), summary.outputMaps,
+                               summary.iterTypes);
   summary.classification =
-      classifyPattern(summary.reads, summary.outputMaps, summary.iterTypes,
-                      summary.nest.ivs.size());
+      detail::classifyPattern(summary.reads, summary.outputMaps,
+                              summary.iterTypes, summary.nest.ivs.size());
   if (summary.classification == SdeStructuredClassification::reduction &&
       isOwnerLocalPipelineReduction(iterOp))
     summary.classification = SdeStructuredClassification::elementwise_pipeline;
-  summary.supportsReductionCarrier = supportsReductionCarrierSubset(
+  summary.supportsReductionCarrier = detail::supportsReductionCarrierSubset(
       iterOp, summary.nest, summary.reads, summary.writes);
   return summary;
 }
 
 std::optional<SuNeighborhoodAccessInfo>
 extractNeighborhoodAccessInfo(const SuLoopAccessSummary &summary) {
-  return extractNeighborhoodAccessInfo(summary.reads, summary.nest.ivs.size());
+  return detail::extractNeighborhoodAccessInfo(summary.reads,
+                                               summary.nest.ivs.size());
 }
 
 std::optional<SuOutputLayoutFacts>
@@ -1324,7 +582,8 @@ bool hasRealizableOwnerStrip(SdeSuIterateOp op) {
   // authoritative realizability signal at that point.
   if (std::optional<sde::CommittedSuPhysicalLayout> committed =
           sde::recoverCommittedPhysicalLayout(op)) {
-    if (!committed->ownerDims.empty() && committed->ownerDims.size() <= loopRank &&
+    if (!committed->ownerDims.empty() &&
+        committed->ownerDims.size() <= loopRank &&
         llvm::all_of(committed->ownerDims, [](int64_t d) { return d >= 0; }))
       return true;
   }

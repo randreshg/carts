@@ -155,6 +155,10 @@ std::unique_ptr<Pass> createRaiseToSdePass();
 std::unique_ptr<Pass> createSdeLoopPatternFactsPass();
 std::unique_ptr<Pass>
 createLayoutAssignmentPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createLayoutCandidateChoosePass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createWriterLayoutCommitPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createLoopInterchangePass();
 std::unique_ptr<Pass> createTilingPass(SDECostModel *costModel = nullptr);
 
@@ -163,9 +167,13 @@ std::unique_ptr<Pass>
 createReductionStrategyPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createSdeAtomicReductionRealizationPass();
 std::unique_ptr<Pass>
-createDistributionPlanningPass(SDECostModel *costModel = nullptr);
+createDistributionFailClosedPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createBlockGrainPlanPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createOwnerDimSelectPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createMovementTaggingPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createBarrierEliminationPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createMuAccessWindowSyncOptPass();

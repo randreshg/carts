@@ -4,7 +4,6 @@
 ///==========================================================================///
 
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryStandaloneCu.h"
-
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryDepAnalysis.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryHelpers.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
@@ -12,20 +11,24 @@
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/LaunchPolicyUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
+#include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/utils/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
 
 using namespace mlir;
 using namespace mlir::carts;
 using namespace mlir::carts::arts;
 
 namespace mlir::carts::arts::boundary {
+namespace {
 
-static bool enqueueForwardedMemrefResults(Operation *user, Value value,
-                                          SmallVectorImpl<Value> &worklist) {
+bool enqueueForwardedMemrefResults(Operation *user, Value value,
+                                   SmallVectorImpl<Value> &worklist) {
   if (auto cast = dyn_cast<memref::CastOp>(user)) {
     if (cast.getSource() != value)
       return false;
@@ -49,7 +52,7 @@ static bool enqueueForwardedMemrefResults(Operation *user, Value value,
   return false;
 }
 
-static bool isReadOnlyMemrefUseInside(Value source, Operation *scope) {
+bool isReadOnlyMemrefUseInside(Value source, Operation *scope) {
   SmallVector<Value, 8> worklist;
   DenseSet<Value> visited;
   worklist.push_back(source);
@@ -81,9 +84,10 @@ static bool isReadOnlyMemrefUseInside(Value source, Operation *scope) {
   return true;
 }
 
-static LogicalResult collectCloneableReadOnlyGlobalMemrefs(
-    sde::SdeCuRegionOp source, const DenseSet<Value> &allowedDbHandles,
-    SetVector<Value> &captures) {
+LogicalResult
+collectCloneableReadOnlyGlobalMemrefs(sde::SdeCuRegionOp source,
+                                      const DenseSet<Value> &allowedDbHandles,
+                                      SetVector<Value> &captures) {
   bool failed = false;
   source.getBody().walk([&](Operation *op) {
     if (isa<arts::DbAccessWindowOp, sde::SdeYieldOp>(op))
@@ -118,9 +122,191 @@ static LogicalResult collectCloneableReadOnlyGlobalMemrefs(
   return failure(failed);
 }
 
+// A residual CU may use a heap `memref.alloc` scratch buffer (e.g. softmax
+// output) that is allocated outside but used and freed entirely within the CU.
+// Such a buffer is EDT-private: clone its alloc into the EDT body so it is not
+// captured as an outer pointer. Only buffers whose every use is inside the CU
+// qualify; anything escaping the CU must travel as a real DB dependency.
+LogicalResult collectCloneablePrivateScratchAllocs(sde::SdeCuRegionOp source,
+                                                   SetVector<Value> &scratch) {
+  SetVector<Value> candidates;
+  source.getBody().walk([&](Operation *op) {
+    if (isa<arts::DbAccessWindowOp, sde::SdeYieldOp>(op))
+      return;
+    for (Value operand : op->getOperands()) {
+      if (!isa<MemRefType>(operand.getType()) ||
+          isDefinedInside(operand, source.getOperation()))
+        continue;
+      if (operand.getDefiningOp<memref::AllocOp>())
+        candidates.insert(operand);
+    }
+  });
+  for (Value alloc : candidates) {
+    bool allInside = true;
+    for (Operation *user : alloc.getUsers())
+      if (!source.getOperation()->isAncestor(user)) {
+        allInside = false;
+        break;
+      }
+    if (allInside)
+      scratch.insert(alloc);
+  }
+  return success();
+}
+
+// A standalone residual CU may read a DB-backed array for which SDE authored no
+// access window (e.g. a diagonal checksum over a coarse whole-array output).
+// Author a whole-array coarse read dependency for each such DB so the access is
+// remapped to a DbRef over the complete array. A coarse DB holds the entire
+// array in one block, so a whole-array read is exact. A block-partitioned DB
+// has multiple blocks; a coarse DbRef would read only block 0 -> silent-wrong,
+// so fail closed and require an SDE-committed window for that case.
+LogicalResult
+appendCoarseDbReadDependencies(sde::SdeCuRegionOp source,
+                               SmallVectorImpl<DirectCuDepSpec> &deps) {
+  DenseSet<Operation *> covered;
+  for (DirectCuDepSpec &dep : deps)
+    covered.insert(dep.alloc.getOperation());
+
+  SmallVector<arts::DbAllocOp, 4> pendingAllocs;
+  DenseMap<Operation *, bool> pendingHasWrite;
+  bool failed = false;
+  source.getBody().walk([&](Operation *op) {
+    Value memref;
+    bool isWrite = false;
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      memref = load.getMemref();
+    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      memref = store.getMemref();
+      isWrite = true;
+    } else {
+      return;
+    }
+    arts::DbAllocOp alloc = resolveBoundaryDbAlloc(memref);
+    if (!alloc || covered.contains(alloc.getOperation()))
+      return;
+    std::optional<arts::PartitionMode> mode = alloc.getPartitionMode();
+    if (!mode || *mode != arts::PartitionMode::coarse) {
+      op->emitError()
+          << "accesses a block-partitioned DB-backed array in a standalone CU "
+             "without a committed SDE access window; a coarse access would "
+             "only "
+             "see one block (silent-wrong). SDE must author a multi-block "
+             "access window for this access";
+      failed = true;
+      return;
+    }
+    auto [it, inserted] =
+        pendingHasWrite.try_emplace(alloc.getOperation(), isWrite);
+    if (inserted)
+      pendingAllocs.push_back(alloc);
+    else
+      it->second |= isWrite;
+  });
+  if (failed)
+    return failure();
+
+  for (arts::DbAllocOp alloc : pendingAllocs) {
+    DirectCuDepSpec dep;
+    dep.alloc = alloc;
+    dep.mode =
+        pendingHasWrite[alloc.getOperation()] ? ArtsMode::inout : ArtsMode::in;
+    dep.ownerDimCount = 0;
+    deps.push_back(std::move(dep));
+  }
+  return success();
+}
+
+// A residual `<single>` source CU that fuses a serial init loop (e.g. an
+// `idx++`-carried data init) keeps the access window for the array it writes,
+// so it is realized as an EDT rather than inlined. But CuNormalization also
+// captures every value escaping the span as a CU result -- including scratch
+// `memref.alloc`/`memref.alloca` buffers (output buffers that are now dead
+// after storage realization, and `memref<f64>` checksum accumulators shared
+// with a sibling checksum CU). These are storage allocations, not EDT
+// dataflow, so they cannot be expressed as scalar EDT yields. Hoist any
+// CU-result whose yielded value is an alloc/alloca defined directly in the CU
+// body out to before the CU and rebuild the CU without that result; the
+// hoisted SSA value then dominates both the in-CU uses (e.g. the init store of
+// an accumulator) and any sibling-CU use. Only static-shape allocs (no dynamic
+// operands) are hoisted; anything else is left in place and the later result
+// checks fail closed. Returns the rebuilt (or unchanged) CU.
+sde::SdeCuRegionOp hoistEscapingScratchResults(sde::SdeCuRegionOp source) {
+  if (source.getNumResults() == 0 || source.getBody().empty())
+    return source;
+  Block &body = source.getBody().front();
+  auto yield = dyn_cast_or_null<sde::SdeYieldOp>(body.getTerminator());
+  if (!yield || yield.getValues().size() != source.getNumResults())
+    return source;
+
+  // Decide which results are hoistable scratch allocations.
+  SmallVector<bool> hoist(source.getNumResults(), false);
+  bool any = false;
+  for (auto [idx, value] : llvm::enumerate(yield.getValues())) {
+    Operation *def = value.getDefiningOp();
+    if (!def || def->getBlock() != &body)
+      continue;
+    if (!isa<memref::AllocOp, memref::AllocaOp>(def))
+      continue;
+    if (def->getNumOperands() != 0) // dynamic-shape alloc: leave for fail-close
+      continue;
+    hoist[idx] = true;
+    any = true;
+  }
+  if (!any)
+    return source;
+
+  // Snapshot the yielded values before any mutation.
+  SmallVector<Value> yieldedValues(yield.getValues().begin(),
+                                   yield.getValues().end());
+
+  // Move the hoistable defs to just before the CU (static allocs have no
+  // operands, so dominance is trivially preserved for both in-CU and
+  // downstream uses).
+  for (auto [idx, value] : llvm::enumerate(yieldedValues))
+    if (hoist[idx])
+      value.getDefiningOp()->moveBefore(source);
+
+  // Build the reduced result/yield lists.
+  SmallVector<Type> keptTypes;
+  SmallVector<Value> keptYields;
+  for (auto [idx, value] : llvm::enumerate(yieldedValues))
+    if (!hoist[idx]) {
+      keptTypes.push_back(source.getResult(idx).getType());
+      keptYields.push_back(value);
+    }
+
+  OpBuilder builder(source);
+  auto rebuilt = sde::buildCuRegion(
+      builder, source.getLoc(), source.getKindAttr(),
+      source.getNowaitAttr() ? builder.getUnitAttr() : nullptr,
+      /*iterArgs=*/ValueRange{}, keptTypes, source.getSerialReasonAttr());
+  // Move the body block over and reset the yield to the kept values.
+  Block &newBody = sde::ensureBlock(rebuilt.getBody());
+  newBody.getOperations().splice(newBody.end(), body.getOperations());
+  yield->setOperands(keptYields);
+
+  // Remap result uses: hoisted -> hoisted SSA value, kept -> new CU result.
+  unsigned keptPos = 0;
+  for (auto [idx, oldResult] : llvm::enumerate(source.getResults())) {
+    if (hoist[idx])
+      oldResult.replaceAllUsesWith(yieldedValues[idx]);
+    else
+      oldResult.replaceAllUsesWith(rebuilt.getResult(keptPos++));
+  }
+  source.erase();
+  return rebuilt;
+}
+
+} // namespace
+
 LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   if (!source || source->getParentOfType<sde::SdeSuIterateOp>())
     return success();
+
+  // Hoist scratch alloc/alloca results out of the CU so only genuine scalar
+  // dataflow remains as CU results before EDT realization.
+  source = hoistEscapingScratchResults(source);
 
   SmallVector<DirectCuDepSpec, 4> deps;
   SmallVector<arts::DbAccessWindowOp, 4> windows;
@@ -128,6 +314,10 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     return failure();
   if (windows.empty())
     return success();
+  // SDE may leave a coarse whole-array read of a residual checksum unwindowed;
+  // author a coarse read dep so it is remapped (fail closed for multi-block).
+  if (failed(appendCoarseDbReadDependencies(source, deps)))
+    return failure();
 
   if (source.getBody().empty())
     return source.emitOpError()
@@ -292,6 +482,12 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   }
   for (CuResultSpec &result : resultSpecs)
     allowedDbHandles.insert(result.writePtr);
+  SetVector<Value> cloneablePrivateScratchAllocs;
+  if (failed(collectCloneablePrivateScratchAllocs(
+          source, cloneablePrivateScratchAllocs)))
+    return failure();
+  for (Value scratch : cloneablePrivateScratchAllocs)
+    allowedDbHandles.insert(scratch);
   SetVector<Value> cloneableReadOnlyGlobalMemrefs;
   if (failed(collectCloneableReadOnlyGlobalMemrefs(
           source, allowedDbHandles, cloneableReadOnlyGlobalMemrefs)))
@@ -348,6 +544,12 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
     bodyBuilder.insert(cloned);
     mapper.map(capture, cloned->getResult(0));
   }
+  for (Value scratch : cloneablePrivateScratchAllocs) {
+    Operation *def = scratch.getDefiningOp();
+    Operation *cloned = def->clone(mapper);
+    bodyBuilder.insert(cloned);
+    mapper.map(scratch, cloned->getResult(0));
+  }
   for (Operation &nested : body) {
     if (isa<arts::DbAccessWindowOp, sde::SdeYieldOp>(&nested))
       continue;
@@ -394,6 +596,12 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
   }
 
   source.erase();
+  // The original scratch allocs are now dead (their only uses were the erased
+  // residual body); drop them so no orphan heap alloc remains.
+  for (Value scratch : cloneablePrivateScratchAllocs)
+    if (Operation *def = scratch.getDefiningOp())
+      if (def->use_empty())
+        def->erase();
   return success();
 }
 

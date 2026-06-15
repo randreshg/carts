@@ -1,21 +1,32 @@
 ///==========================================================================///
 /// File: SdeToArtsBoundaryCoarseSu.cpp
 /// Coarse SDE SU iterate access realization.
+///
+/// Carved verbatim from the correctness-base @782988ad1
+/// SdeToArtsBoundaryAccessLowering.cpp. Lowers an `sde.su_iterate` whose
+/// DB-backed accesses carry no committed access-window dependencies into a
+/// conservative whole-DB coarse ARTS task; fails closed when committed physical
+/// or movement facts are present without access windows.
 ///==========================================================================///
 
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryCoarseSu.h"
 
+#include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryCommon.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryDepAnalysis.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryHelpers.h"
+#include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
+#include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ValueAnalysis.h"
+
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include <algorithm>
+#include "mlir/IR/IRMapping.h"
+#include "llvm/ADT/SetVector.h"
 
 using namespace mlir;
 using namespace mlir::carts;

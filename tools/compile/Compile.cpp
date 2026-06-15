@@ -264,18 +264,21 @@ static const std::array<llvm::StringLiteral, 12> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 2> kInitialCleanupPasses = {
     "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 26> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
-    "LayoutAssignment",
+    "LayoutCandidateChoose",
+    "WriterLayoutCommit",
     "LoopInterchange",
     "Tiling",
     "AffineCFG(func)",
     "RaiseSCFToAffine(func)",
     "SimplifyAffineStructures(func)",
     "RaiseToSde",
-    "DistributionPlanning",
+    "DistributionFailClosed",
+    "OwnerDimSelect",
     "BlockGrainPlan",
+    "MovementTagging",
     "BarrierElimination",
     "MemoryUnitRealization",
     "SdeAtomicReductionRealization",
@@ -288,9 +291,9 @@ static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
     "SdeCoarseAvoidance",
     "VerifySdeCoarseAvoidance",
     "VerifySde"};
-static const std::array<llvm::StringLiteral, 5> kSdeToArtsPasses = {
-    "SdeStorageToArtsDb", "VerifyRawAccessCovered", "SdeAccessesToArtsDeps",
-    "FinalizeSdeToArts", "VerifyArtsObjectsOnly"};
+static const std::array<llvm::StringLiteral, 4> kSdeToArtsPasses = {
+    "SdeStorageToArtsDb", "SdeAccessesToArtsDeps", "FinalizeSdeToArts",
+    "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 3> kEdtDepRealizationPasses = {
     "RealizeEdtDistribution", "VerifySdeLowered", "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 6> kEdtLocalCleanupPasses = {
@@ -301,20 +304,14 @@ static const std::array<llvm::StringLiteral, 6> kCreateDbsPasses = {
     "Mem2Reg",   "PolygeistCanonicalize"};
 static const std::array<llvm::StringLiteral, 4> kDbOptPasses = {
     "DbModeTightening", "PolygeistCanonicalize", "CSE(arts.edt)", "Mem2Reg"};
-static const std::array<llvm::StringLiteral, 13> kPostDbRefinementPasses = {
-    "DbModeTightening",
-    "EdtDeadDepElimination",
-    "DbConsolidateStencilHalos",
-    "DbStorageBridgeCopyPlacement",
-    "DbShortenLifetimes",
-    "DbDeadRootElimination",
-    "PartialReductionSplit",
-    "BlockContractionSplit",
-    "DbScratchElimination",
-    "DbDistributedOwnershipRealization",
-    "PolygeistCanonicalize",
-    "CSE(arts.edt)",
-    "DistributedLaunchConsistency"};
+static const std::array<llvm::StringLiteral, 14> kPostDbRefinementPasses = {
+    "DbModeTightening",          "EdtDeadDepElimination",
+    "DbConsolidateStencilHalos", "DbStorageBridgeCopyPlacement",
+    "DbShortenLifetimes",        "DbDeadRootElimination",
+    "PartialReductionSplit",     "BlockContractionSplit",
+    "DbScratchElimination",      "DbDistributedOwnershipRealization",
+    "PolygeistCanonicalize",     "CSE(arts.edt)",
+    "EdtSplitForMixedDeps",      "WriterOwnerRoute"};
 static const std::array<llvm::StringLiteral, 6> kLateConcurrencyCleanupPasses =
     {"Hoisting",         "PolygeistCanonicalize",   "CSE(arts.edt)",
      "EdtAllocaSinking", "ArtsDeadCodeElimination", "Mem2Reg"};
@@ -657,7 +654,8 @@ void registerDialects(DialectRegistry &registry) {
   registerFinalizeSdeToArts();
   registerPartialReductionSplit();
   registerBlockContractionSplit();
-  registerDistributedLaunchConsistency();
+  registerEdtSplitForMixedDeps();
+  registerWriterOwnerRoute();
   registerRealizeEdtDistribution();
   registerDbDistributedRuntimeInit();
   registerEpochTailContinuation();
@@ -1137,9 +1135,12 @@ void buildSdePlanningPipeline(PassManager &pm,
   // raise-to-sde CORE promotes proven-independent host nests (scf or affine)
   // and folds the initial cu-normalization.
   pm.addPass(sde::createRaiseToSdePass());
-  // Module-scoped per-array BLOCK layout assignment. Runs before
-  // Tiling/Interchange split the parallel axes.
-  pm.addPass(sde::createLayoutAssignmentPass(costModel));
+  // Module-scoped per-array BLOCK layout assignment, run as the two-pass split:
+  // sde-layout-candidate-choose decides+commits the chosen logical layout fact,
+  // sde-writer-layout-commit consumes it and realizes the per-SU writer/reader/
+  // physical facts. Runs before Tiling/Interchange split the parallel axes.
+  pm.addPass(sde::createLayoutCandidateChoosePass(costModel));
+  pm.addPass(sde::createWriterLayoutCommitPass(costModel));
   // S4: Interchange handles affine stencil nests via permuteLoops; Tiling still
   // emits scf owner tile loops. Keep affine through this window; S4d re-raises
   // serial inner loops after Tiling. Final LowerAffine remains in ARTS-RT
@@ -1150,8 +1151,17 @@ void buildSdePlanningPipeline(PassManager &pm,
   addAffineRecoveryBundle(pm.nest<func::FuncOp>());
   // S6: re-run raise-to-sde after shape transforms expose new parallelism.
   pm.addPass(sde::createRaiseToSdePass());
-  pm.addPass(sde::createDistributionPlanningPass(costModel));
+  // Distribution chain (Phase 11 pass-split of the former DistributionPlanning
+  // monolith). Fail-closed runs first so an unimplemented in-place stencil
+  // wavefront aborts before any layout commit. OwnerDimSelect commits the
+  // per-SU owner-dim/physical layout (budget-reconciled grain authored first
+  // via BlockGrainPlan's committer), BlockGrainPlan then runs the A1 same-owner
+  // grain unification over all committed facts, and MovementTagging tags
+  // distributable loops with sde.su_distribute.
+  pm.addPass(sde::createDistributionFailClosedPass(costModel));
+  pm.addPass(sde::createOwnerDimSelectPass(costModel));
   pm.addPass(sde::createBlockGrainPlanPass(costModel));
+  pm.addPass(sde::createMovementTaggingPass(costModel));
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createMemoryUnitRealizationPass());
   pm.addPass(sde::createSdeAtomicReductionRealizationPass());
@@ -1173,7 +1183,6 @@ void buildSdePlanningPipeline(PassManager &pm,
 /// acquire, EDT, and control objects directly from those committed facts.
 void buildSdeToArtsPipeline(PassManager &pm) {
   pm.addPass(arts::createSdeStorageToArtsDbPass());
-  pm.addPass(arts::createVerifyRawAccessCoveredPass());
   pm.addPass(arts::createSdeAccessesToArtsDepsPass());
   pm.addPass(arts::createFinalizeSdeToArtsPass());
   pm.addPass(arts::createVerifyArtsObjectsOnlyPass());
@@ -1231,7 +1240,8 @@ void buildPostDbRefinementPipeline(PassManager &pm) {
   pm.addPass(arts::createDbScratchEliminationPass());
   pm.addPass(arts::createDbDistributedOwnershipRealizationPass());
   addCanonicalizeAndEdtLocalCSE(pm);
-  pm.addPass(arts::createDistributedLaunchConsistencyPass());
+  pm.addPass(arts::createEdtSplitForMixedDepsPass());
+  pm.addPass(arts::createWriterOwnerRoutePass());
 }
 
 /// Apply late DB-aware loop cleanup and final stack/SSA simplification.

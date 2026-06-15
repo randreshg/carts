@@ -3,6 +3,7 @@
 /// SDE→ARTS boundary lowering unit.
 ///==========================================================================///
 
+#include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryHelpers.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
@@ -53,6 +54,91 @@ bool isDefinedInside(Value value, Operation *scope) {
     if (parent == scope)
       return true;
   return false;
+}
+
+LogicalResult collectExternalScalarCaptures(sde::SdeSuIterateOp source,
+                                            SetVector<Value> &captures) {
+  auto addIfExternalScalar = [&](Value value) {
+    if (!value || !isScalarParamType(value.getType()))
+      return;
+    if (!isDefinedInside(value, source.getOperation()))
+      captures.insert(value);
+  };
+
+  for (Value value : source.getLowerBounds())
+    addIfExternalScalar(value);
+  for (Value value : source.getUpperBounds())
+    addIfExternalScalar(value);
+  for (Value value : source.getSteps())
+    addIfExternalScalar(value);
+
+  Block *computeBlock = sde::getSuIterateComputeBlock(source);
+  if (!computeBlock)
+    return source.emitOpError() << "has no computable body";
+  computeBlock->walk([&](Operation *op) {
+    for (Value operand : op->getOperands())
+      addIfExternalScalar(operand);
+  });
+  return success();
+}
+
+LogicalResult collectExternalScalarCaptures(sde::SdeCuTaskOp source,
+                                            SetVector<Value> &captures) {
+  auto addIfExternalScalar = [&](Value value) {
+    if (!value || !isScalarParamType(value.getType()) ||
+        isConstantLikeValue(value))
+      return;
+    if (!isDefinedInside(value, source.getOperation()))
+      captures.insert(value);
+  };
+
+  source.getBody().walk([&](Operation *op) {
+    if (isa<sde::SdeMuDepOp>(op))
+      return;
+    for (Value operand : op->getOperands())
+      addIfExternalScalar(operand);
+  });
+  return success();
+}
+
+LogicalResult collectExternalScalarCaptures(sde::SdeCuRegionOp source,
+                                            SetVector<Value> &captures) {
+  auto addIfExternalScalar = [&](Value value) {
+    if (!value || !isScalarParamType(value.getType()) ||
+        isConstantLikeValue(value))
+      return;
+    if (!isDefinedInside(value, source.getOperation()))
+      captures.insert(value);
+  };
+
+  source.getBody().walk([&](Operation *op) {
+    if (isa<arts::DbAccessWindowOp, sde::SdeMuDepOp>(op))
+      return;
+    for (Value operand : op->getOperands())
+      addIfExternalScalar(operand);
+  });
+  return success();
+}
+
+Value remapOrSelf(IRMapping &mapper, Value value) {
+  if (Value mapped = mapper.lookupOrNull(value))
+    return mapped;
+  return value;
+}
+
+LogicalResult translateSdeAtomicsToArts(Region &region) {
+  SmallVector<sde::SdeCuAtomicOp> atomics;
+  region.walk([&](sde::SdeCuAtomicOp op) { atomics.push_back(op); });
+  for (sde::SdeCuAtomicOp atomic : atomics) {
+    if (atomic.getReductionKind() != sde::SdeReductionKind::add)
+      return atomic.emitOpError()
+             << "cannot realize non-add SDE atomic at the ARTS boundary";
+    OpBuilder builder(atomic);
+    arts::AtomicAddOp::create(builder, atomic.getLoc(), atomic.getAddr(),
+                              atomic.getValue());
+    atomic.erase();
+  }
+  return success();
 }
 
 bool isStackScratchMemref(Value memref) {

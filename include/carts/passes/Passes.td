@@ -190,20 +190,36 @@ def BlockContractionSplit
       "mlir::carts::arts::createBlockContractionSplitPass()";
 }
 
-def DistributedLaunchConsistency
-    : Pass<"distributed-launch-consistency", "mlir::ModuleOp"> {
-  let summary = "Keep distributed EDT placement consistent with DB ownership";
+def EdtSplitForMixedDeps
+    : Pass<"edt-split-for-mixed-deps", "mlir::ModuleOp"> {
+  let summary = "Reject/localize EDTs mixing local-only and distributed-writer deps";
   let description = [{
-    Reconciles ARTS EDT placement with distributed DB ownership decisions.
-    Internode EDTs that depend on DBs rejected for distributed ownership are
-    localized to intranode execution, except for small read-only coarse DBs
-    that are intentionally allowed to travel as cheap dependencies.
+    Reconciles ARTS EDT placement with distributed DB ownership for the
+    mixed-dependency case. An EDT that mixes a local-only distributed
+    dependency with a distributed writer is rejected (it would require an
+    explicit ordering dependency before the codelet can be split); internode
+    EDTs that only carry rejected local-only distributed deps are localized to
+    intranode execution.
   }];
   let dependentDialects =
       ["::mlir::func::FuncDialect", "::mlir::arith::ArithDialect",
        "::mlir::memref::MemRefDialect", "::mlir::carts::arts::ArtsDialect"];
-  let constructor =
-      "mlir::carts::arts::createDistributedLaunchConsistencyPass()";
+  let constructor = "mlir::carts::arts::createEdtSplitForMixedDepsPass()";
+}
+
+def WriterOwnerRoute : Pass<"writer-owner-route", "mlir::ModuleOp"> {
+  let summary = "Route distributed-writer EDTs to their DB owner";
+  let description = [{
+    Derives the consistent owner route for an EDT that writes distributed DBs
+    from the committed DB block grid and promotes/routes the codelet to that
+    owner. EDTs whose owner route cannot be derived, that span multiple owners,
+    or that disagree across writers are rejected (SDE-to-ARTS must split or
+    sequence them before distributed launch).
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::arith::ArithDialect",
+       "::mlir::memref::MemRefDialect", "::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts::createWriterOwnerRoutePass()";
 }
 
 def SdeStorageToArtsDb : Pass<"sde-storage-to-arts-db", "mlir::ModuleOp"> {
@@ -225,18 +241,16 @@ def SdeStorageToArtsDb : Pass<"sde-storage-to-arts-db", "mlir::ModuleOp"> {
 
 def VerifyRawAccessCovered
     : Pass<"verify-raw-access-covered", "mlir::ModuleOp"> {
-  let summary = "Verify raw SU accesses are covered by SDE access windows";
+  let summary = "Verify raw SU accesses are covered by SDE access-window deps";
   let description = [{
-    Fail-closed verification at the direct SDE-to-ARTS boundary. The pass reads
-    committed SDE access-window dependency evidence and rejects raw SU body
-    loads/stores/copies/atomics that touch ARTS DB-backed storage without a
-    covering dependency or with a stronger access mode than SDE committed. It
-    does not author dependency facts or repair missing SDE structure.
+    Fails closed when a raw `sde.su_iterate` body access touches a DB-backed
+    memref without a committed SDE access-window dependency, or strengthens a
+    committed dependency's mode. This is the standalone form of the coverage
+    gate that runs inline during sde-accesses-to-arts-deps; it authors no ARTS
+    structure and selects no policy.
   }];
   let dependentDialects =
-      ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
-       "::mlir::arith::ArithDialect", "::mlir::memref::MemRefDialect",
-       "::mlir::carts::sde::CartsSdeDialect",
+      ["::mlir::memref::MemRefDialect", "::mlir::carts::sde::CartsSdeDialect",
        "::mlir::carts::arts::ArtsDialect"];
   let constructor = "mlir::carts::arts::createVerifyRawAccessCoveredPass()";
 }

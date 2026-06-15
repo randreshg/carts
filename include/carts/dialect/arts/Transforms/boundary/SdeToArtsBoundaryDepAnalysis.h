@@ -52,23 +52,19 @@ LogicalResult
 collectCoarseSuDependencies(sde::SdeSuIterateOp source,
                             SmallVectorImpl<CoarseSuDependency> &deps);
 
-LogicalResult collectSuAccessWindowDependencySpecs(
-    sde::SdeSuIterateOp source,
-    DenseMap<Operation *, SmallVector<unsigned, 2>> &depIndex,
-    SmallVectorImpl<DirectDepSpec> &deps,
-    DenseSet<Operation *> *consumedCuLevelAccessWindows = nullptr,
-    SmallVectorImpl<Operation *> *consumedRedists = nullptr);
-
-LogicalResult verifyRawSuAccessesCoveredByDeps(
-    sde::SdeSuIterateOp source,
-    DenseMap<Operation *, SmallVector<unsigned, 2>> &depIndex,
-    SmallVectorImpl<DirectDepSpec> &deps);
-
 LogicalResult
 collectSuDependencies(sde::SdeSuIterateOp source,
                       SmallVectorImpl<DirectDepSpec> &deps,
                       DenseSet<Operation *> &consumedCuLevelAccessWindows,
                       SmallVectorImpl<Operation *> &consumedRedists);
+
+// Raw-access coverage gate (owned by SdeToArtsBoundaryRawAccessVerify): fails
+// closed when a raw SU body access is not covered by a committed SDE
+// access-window dependency. Invoked inline by collectSuDependencies.
+LogicalResult verifyRawSuAccessesCoveredByDeps(
+    sde::SdeSuIterateOp source,
+    DenseMap<Operation *, SmallVector<unsigned, 2>> &depIndex,
+    SmallVectorImpl<DirectDepSpec> &deps);
 
 LogicalResult collectStandaloneCuDependencies(
     sde::SdeCuRegionOp source, SmallVectorImpl<DirectCuDepSpec> &deps,
