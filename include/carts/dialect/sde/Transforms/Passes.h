@@ -155,6 +155,10 @@ std::unique_ptr<Pass> createRaiseToSdePass();
 std::unique_ptr<Pass> createSdeLoopPatternFactsPass();
 std::unique_ptr<Pass>
 createLayoutAssignmentPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createLayoutCandidateChoosePass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createWriterLayoutCommitPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createLoopInterchangePass();
 std::unique_ptr<Pass> createTilingPass(SDECostModel *costModel = nullptr);
 

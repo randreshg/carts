@@ -267,7 +267,7 @@ static const std::array<llvm::StringLiteral, 2> kInitialCleanupPasses = {
 static const std::array<llvm::StringLiteral, 25> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
-    "LayoutAssignment",
+    "WriterLayoutCommit",
     "LoopInterchange",
     "Tiling",
     "AffineCFG(func)",
@@ -1135,7 +1135,7 @@ void buildSdePlanningPipeline(PassManager &pm,
   pm.addPass(sde::createRaiseToSdePass());
   // Module-scoped per-array BLOCK layout assignment. Runs before
   // Tiling/Interchange split the parallel axes.
-  pm.addPass(sde::createLayoutAssignmentPass(costModel));
+  pm.addPass(sde::createWriterLayoutCommitPass(costModel));
   // S4: Interchange handles affine stencil nests via permuteLoops; Tiling still
   // emits scf owner tile loops. Keep affine through this window; S4d re-raises
   // serial inner loops after Tiling. Final LowerAffine remains in ARTS-RT
