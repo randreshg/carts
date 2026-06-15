@@ -19,6 +19,7 @@ set(CARTS_SDE_TRANSFORMS_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/scheduling/AtomicReductionRealization.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/BarrierElimination.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/MuAccessWindowSyncOpt.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/DistributionLayoutUtils.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/DistributionPlanning.cpp"
 )
 set(CARTS_SDE_TRANSFORMS_SOURCE_FILES ${CARTS_SDE_TRANSFORMS_SOURCE_FILES} PARENT_SCOPE)
