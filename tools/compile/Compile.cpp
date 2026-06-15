@@ -264,7 +264,7 @@ static const std::array<llvm::StringLiteral, 12> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 2> kInitialCleanupPasses = {
     "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 22> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 25> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
     "LayoutAssignment",
@@ -274,7 +274,10 @@ static const std::array<llvm::StringLiteral, 22> kSdePlanningPasses = {
     "RaiseSCFToAffine(func)",
     "SimplifyAffineStructures(func)",
     "RaiseToSde",
-    "DistributionPlanning",
+    "DistributionFailClosed",
+    "OwnerDimSelect",
+    "BlockGrainPlan",
+    "MovementTagging",
     "BarrierElimination",
     "MemoryUnitRealization",
     "SdeAtomicReductionRealization",
@@ -1143,7 +1146,17 @@ void buildSdePlanningPipeline(PassManager &pm,
   addAffineRecoveryBundle(pm.nest<func::FuncOp>());
   // S6: re-run raise-to-sde after shape transforms expose new parallelism.
   pm.addPass(sde::createRaiseToSdePass());
-  pm.addPass(sde::createDistributionPlanningPass(costModel));
+  // Distribution chain (Phase 11 pass-split of the former DistributionPlanning
+  // monolith). Fail-closed runs first so an unimplemented in-place stencil
+  // wavefront aborts before any layout commit. OwnerDimSelect commits the
+  // per-SU owner-dim/physical layout (budget-reconciled grain authored first
+  // via BlockGrainPlan's committer), BlockGrainPlan then runs the A1 same-owner
+  // grain unification over all committed facts, and MovementTagging tags
+  // distributable loops with sde.su_distribute.
+  pm.addPass(sde::createDistributionFailClosedPass(costModel));
+  pm.addPass(sde::createOwnerDimSelectPass(costModel));
+  pm.addPass(sde::createBlockGrainPlanPass(costModel));
+  pm.addPass(sde::createMovementTaggingPass(costModel));
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createMemoryUnitRealizationPass());
   pm.addPass(sde::createSdeAtomicReductionRealizationPass());

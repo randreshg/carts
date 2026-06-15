@@ -163,8 +163,6 @@ std::unique_ptr<Pass>
 createReductionStrategyPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createSdeAtomicReductionRealizationPass();
 std::unique_ptr<Pass>
-createDistributionPlanningPass(SDECostModel *costModel = nullptr);
-std::unique_ptr<Pass>
 createDistributionFailClosedPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createBlockGrainPlanPass(SDECostModel *costModel = nullptr);

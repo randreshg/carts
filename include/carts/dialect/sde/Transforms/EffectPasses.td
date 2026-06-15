@@ -38,22 +38,6 @@ def SdeAtomicReductionRealization
       "mlir::carts::sde::createSdeAtomicReductionRealizationPass()";
 }
 
-def DistributionPlanning
-    : Pass<"distribution-planning", "mlir::ModuleOp"> {
-  let summary = "Commit SDE distribution facts on structured SDE loops";
-  let description = [{
-    Uses SDE-owned structured classification and generic logical-capacity
-    heuristics to wrap eligible `sde.su_iterate` operations in
-    `sde.su_distribute`, commits physical owner/block facts that are already
-    realized by SDE loop shape, and fails closed for unimplemented wavefront
-    stencil cases.
-  }];
-  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
-                           "::mlir::arith::ArithDialect",
-                           "::mlir::scf::SCFDialect"];
-  let constructor = "mlir::carts::sde::createDistributionPlanningPass()";
-}
-
 def MovementTagging
     : Pass<"sde-movement-tagging", "mlir::ModuleOp"> {
   let summary = "Tag distributable SDE loops with sde.su_distribute";
