@@ -9,6 +9,7 @@
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryTypes.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "mlir/Support/LogicalResult.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 
 namespace mlir {
@@ -50,6 +51,18 @@ LogicalResult ensureDistributedWriterOwnerLocalGroups(
 LogicalResult
 collectCoarseSuDependencies(sde::SdeSuIterateOp source,
                             SmallVectorImpl<CoarseSuDependency> &deps);
+
+LogicalResult collectSuAccessWindowDependencySpecs(
+    sde::SdeSuIterateOp source,
+    DenseMap<Operation *, SmallVector<unsigned, 2>> &depIndex,
+    SmallVectorImpl<DirectDepSpec> &deps,
+    DenseSet<Operation *> *consumedCuLevelAccessWindows = nullptr,
+    SmallVectorImpl<Operation *> *consumedRedists = nullptr);
+
+LogicalResult verifyRawSuAccessesCoveredByDeps(
+    sde::SdeSuIterateOp source,
+    DenseMap<Operation *, SmallVector<unsigned, 2>> &depIndex,
+    SmallVectorImpl<DirectDepSpec> &deps);
 
 LogicalResult
 collectSuDependencies(sde::SdeSuIterateOp source,

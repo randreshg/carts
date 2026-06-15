@@ -57,19 +57,22 @@ inline NamedAttrList getRewrittenAttrs(SdeSuIterateOp op) {
 /// at every construction site. Byte-identical to a direct create with the same
 /// values. (Mirrors `buildSuIterate` for the SU op.)
 inline SdeCuRegionOp buildCuRegion(OpBuilder &builder, Location loc,
-                                   SdeCuKindAttr kind, UnitAttr nowait = nullptr,
+                                   SdeCuKindAttr kind,
+                                   UnitAttr nowait = nullptr,
                                    ValueRange iterArgs = {},
                                    TypeRange resultTypes = {},
                                    SdeSerialReasonAttr serialReason = nullptr) {
-  return SdeCuRegionOp::create(builder, loc, resultTypes, kind, nowait, iterArgs,
-                               serialReason, /*groupBlockCount=*/nullptr);
+  return SdeCuRegionOp::create(builder, loc, resultTypes, kind, nowait,
+                               iterArgs, serialReason,
+                               /*groupBlockCount=*/nullptr);
 }
 
 /// The full optional attribute set of an `sde.su_iterate`, each defaulting to
 /// null. Callers set only what they need; the rest stay absent. This is the
 /// single carrier the positionally-threaded `SdeSuIterateOp::create` arguments
 /// used to be, so that adding/removing an su_iterate attribute is one edit here
-/// instead of one at every construction site (design-revision.md Part 4 Step 1).
+/// instead of one at every construction site (design-revision.md Part 4 Step
+/// 1).
 struct SuIterateAttrs {
   UnitAttr nowait = nullptr;
   ArrayAttr reductionKinds = nullptr;
@@ -115,20 +118,20 @@ struct SuIterateAttrs {
 /// SdeSuIterateOp::create with the positional attribute soup hidden behind the
 /// named SuIterateAttrs carrier. Byte-identical to a direct create call with
 /// the same values.
-inline SdeSuIterateOp
-buildSuIterate(OpBuilder &builder, Location loc, ValueRange lowerBounds,
-               ValueRange upperBounds, ValueRange steps,
-               const SuIterateAttrs &attrs = {},
-               ValueRange reductionAccumulators = {},
-               TypeRange resultTypes = {}) {
+inline SdeSuIterateOp buildSuIterate(OpBuilder &builder, Location loc,
+                                     ValueRange lowerBounds,
+                                     ValueRange upperBounds, ValueRange steps,
+                                     const SuIterateAttrs &attrs = {},
+                                     ValueRange reductionAccumulators = {},
+                                     TypeRange resultTypes = {}) {
   return SdeSuIterateOp::create(
-      builder, loc, resultTypes, lowerBounds, upperBounds, steps,
-      attrs.nowait, reductionAccumulators,
-      attrs.reductionKinds, attrs.partialReduction,
+      builder, loc, resultTypes, lowerBounds, upperBounds, steps, attrs.nowait,
+      reductionAccumulators, attrs.reductionKinds, attrs.partialReduction,
       attrs.partialReductionDims, attrs.partialReductionOwnerDims,
       attrs.structuredClassification, attrs.pattern, attrs.accessMinOffsets,
       attrs.accessMaxOffsets, attrs.ownerDims, attrs.spatialDims,
-      attrs.writeFootprint,       attrs.inPlaceSafe, attrs.inPlaceSharedState, attrs.arrayLayout);
+      attrs.writeFootprint, attrs.inPlaceSafe, attrs.inPlaceSharedState,
+      attrs.arrayLayout);
 }
 
 class SDECostModel;
@@ -161,6 +164,8 @@ createReductionStrategyPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createSdeAtomicReductionRealizationPass();
 std::unique_ptr<Pass>
 createDistributionPlanningPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass>
+createBlockGrainPlanPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createBarrierEliminationPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass> createMuAccessWindowSyncOptPass();

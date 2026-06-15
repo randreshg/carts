@@ -7,6 +7,8 @@
 module {}
 
 // PIPE:      {"name": "sde-planning"
+// PIPE-SAME: "DistributionPlanning"
+// PIPE-SAME: "BlockGrainPlan"
 // PIPE-SAME: "SdeCuNormalization"
 // PIPE-SAME: "SdeRankExpandMu"
 // PIPE-SAME: "MuAccessWindowSyncOpt"
@@ -16,6 +18,7 @@ module {}
 // PIPE-SAME: "dependsOn": ["initial-cleanup"]
 // PIPE:      {"name": "sde-to-arts"
 // PIPE-SAME: "SdeStorageToArtsDb"
+// PIPE-SAME: "VerifyRawAccessCovered"
 // PIPE-SAME: "SdeAccessesToArtsDeps"
 // PIPE-SAME: "FinalizeSdeToArts"
 // PIPE-SAME: "dependsOn": ["sde-planning"]

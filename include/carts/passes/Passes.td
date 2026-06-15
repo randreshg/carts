@@ -223,6 +223,24 @@ def SdeStorageToArtsDb : Pass<"sde-storage-to-arts-db", "mlir::ModuleOp"> {
   let constructor = "mlir::carts::arts::createSdeStorageToArtsDbPass()";
 }
 
+def VerifyRawAccessCovered
+    : Pass<"verify-raw-access-covered", "mlir::ModuleOp"> {
+  let summary = "Verify raw SU accesses are covered by SDE access windows";
+  let description = [{
+    Fail-closed verification at the direct SDE-to-ARTS boundary. The pass reads
+    committed SDE access-window dependency evidence and rejects raw SU body
+    loads/stores/copies/atomics that touch ARTS DB-backed storage without a
+    covering dependency or with a stronger access mode than SDE committed. It
+    does not author dependency facts or repair missing SDE structure.
+  }];
+  let dependentDialects =
+      ["::mlir::func::FuncDialect", "::mlir::scf::SCFDialect",
+       "::mlir::arith::ArithDialect", "::mlir::memref::MemRefDialect",
+       "::mlir::carts::sde::CartsSdeDialect",
+       "::mlir::carts::arts::ArtsDialect"];
+  let constructor = "mlir::carts::arts::createVerifyRawAccessCoveredPass()";
+}
+
 def SdeAccessesToArtsDeps
     : Pass<"sde-accesses-to-arts-deps", "mlir::ModuleOp"> {
   let summary = "Realize SDE scheduling/access facts as ARTS dependencies";

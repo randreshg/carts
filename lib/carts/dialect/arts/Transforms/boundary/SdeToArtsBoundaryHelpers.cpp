@@ -28,7 +28,6 @@
 #include <functional>
 #include <limits>
 
-
 using namespace mlir;
 using namespace mlir::carts;
 using namespace mlir::carts::arts;
@@ -62,7 +61,7 @@ bool isStackScratchMemref(Value memref) {
 }
 
 FailureOr<ArtsMode> convertAccessMode(sde::SdeAccessMode mode,
-                                             Operation *context) {
+                                      Operation *context) {
   switch (mode) {
   case sde::SdeAccessMode::read:
     return ArtsMode::in;
@@ -77,7 +76,7 @@ FailureOr<ArtsMode> convertAccessMode(sde::SdeAccessMode mode,
 }
 
 FailureOr<ArtsDepPattern> convertPattern(sde::SdePattern pattern,
-                                                Operation *context) {
+                                         Operation *context) {
   switch (pattern) {
   case sde::SdePattern::uniform:
     return ArtsDepPattern::uniform;
@@ -122,7 +121,7 @@ bool hasCommittedPartialReductionFacts(sde::SdeSuIterateOp source) {
 }
 
 LogicalResult attachCommittedSdeFacts(sde::SdeSuIterateOp source,
-                                             arts::EdtOp task) {
+                                      arts::EdtOp task) {
   MLIRContext *ctx = source.getContext();
   Operation *taskOp = task.getOperation();
   if (auto pattern = source.getPatternAttr()) {
@@ -163,7 +162,7 @@ LogicalResult attachCommittedSdeFacts(sde::SdeSuIterateOp source,
 }
 
 LogicalResult attachUnpartitionedSdeFacts(sde::SdeSuIterateOp source,
-                                                 arts::EdtOp task) {
+                                          arts::EdtOp task) {
   MLIRContext *ctx = source.getContext();
   Operation *taskOp = task.getOperation();
   if (auto pattern = source.getPatternAttr()) {
@@ -180,8 +179,7 @@ LogicalResult attachUnpartitionedSdeFacts(sde::SdeSuIterateOp source,
   return success();
 }
 
-ArrayAttr ownerDimsForExpandedWindow(MLIRContext *ctx,
-                                            unsigned ownerDimCount) {
+ArrayAttr ownerDimsForExpandedWindow(MLIRContext *ctx, unsigned ownerDimCount) {
   SmallVector<int64_t, 4> ownerDims;
   ownerDims.reserve(ownerDimCount);
   for (unsigned idx = 0; idx < ownerDimCount; ++idx)
@@ -202,8 +200,7 @@ blockShapeForExpandedWindow(const sde::MuAccessWindowGeometry &geom,
   return Builder(ctx).getI64ArrayAttr(blockShape);
 }
 
-std::optional<SmallVector<int64_t, 4>>
-readCommittedPhysicalOwnerDims(
+std::optional<SmallVector<int64_t, 4>> readCommittedPhysicalOwnerDims(
     sde::SdeSuIterateOp source,
     const std::optional<SmallVector<int64_t, 4>> &arrayOwnerDims) {
   if (arrayOwnerDims && !arrayOwnerDims->empty())

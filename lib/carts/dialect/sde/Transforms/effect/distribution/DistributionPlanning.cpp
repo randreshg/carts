@@ -10,6 +10,7 @@
 
 #include "carts/dialect/sde/Transforms/Passes.h"
 namespace mlir::carts::sde {
+#define GEN_PASS_DEF_BLOCKGRAINPLAN
 #define GEN_PASS_DEF_DISTRIBUTIONPLANNING
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
@@ -22,6 +23,7 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ExecutionResourceAttrs.h"
 #include "carts/utils/LoopUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -52,6 +54,37 @@ struct DistributionRewrite {
   sde::SdeSuIterateOp op;
   sde::SdeDistributionKind kind = sde::SdeDistributionKind::blocked;
 };
+
+class ModuleExecutionResourceCostModel final : public sde::SDECostModel {
+public:
+  ModuleExecutionResourceCostModel(int64_t logicalWorkers,
+                                   int64_t logicalLocalities)
+      : logicalWorkers(std::max<int64_t>(1, logicalWorkers)),
+        logicalLocalities(std::max<int64_t>(1, logicalLocalities)) {}
+
+  int getLogicalWorkerCapacity() const override {
+    return static_cast<int>(std::min<int64_t>(
+        logicalWorkers, std::numeric_limits<int>::max()));
+  }
+
+  int getWorkerLocalityGroupCount() const override {
+    return static_cast<int>(std::min<int64_t>(
+        logicalLocalities, std::numeric_limits<int>::max()));
+  }
+
+private:
+  int64_t logicalWorkers;
+  int64_t logicalLocalities;
+};
+
+static std::optional<ModuleExecutionResourceCostModel>
+buildModuleExecutionResourceCostModel(ModuleOp module) {
+  std::optional<int64_t> workers = getLogicalTotalWorkers(module);
+  if (!workers || *workers <= 0)
+    return std::nullopt;
+  int64_t localities = getLogicalTotalLocalities(module).value_or(1);
+  return ModuleExecutionResourceCostModel(*workers, localities);
+}
 
 static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs);
 static void
@@ -170,9 +203,8 @@ static int64_t readStencilHaloForOwnerDim(sde::SdeSuIterateOp op,
     if (idx >= neighborhood->minOffsets.size() ||
         idx >= neighborhood->maxOffsets.size())
       return 0;
-    return std::max<int64_t>(
-        0, std::max(-neighborhood->minOffsets[idx],
-                    neighborhood->maxOffsets[idx]));
+    return std::max<int64_t>(0, std::max(-neighborhood->minOffsets[idx],
+                                         neighborhood->maxOffsets[idx]));
   }
   return 0;
 }
@@ -300,8 +332,8 @@ collectRectangularWavefrontLoopNest(sde::SdeSuIterateOp op,
       op.getLowerBounds().size() != op.getUpperBounds().size() ||
       op.getLowerBounds().size() != op.getSteps().size())
     return false;
-  if (op.getNumResults() != 0 ||
-      !op.getReductionAccumulators().empty() || op.getReductionKindsAttr())
+  if (op.getNumResults() != 0 || !op.getReductionAccumulators().empty() ||
+      op.getReductionKindsAttr())
     return false;
 
   Block *computeBlock = sde::getSuIterateComputeBlock(op);
@@ -585,18 +617,20 @@ static sde::SdeSuIterateOp realizeWavefrontSkew(sde::SdeSuIterateOp op,
   sde::SuIterateAttrs suAttrs = sde::SuIterateAttrs::fromOp(op);
   suAttrs.pattern =
       sde::SdePatternAttr::get(ctx, sde::SdePattern::stencil_tiling_nd);
-  suAttrs.accessMinOffsets = buildI64ArrayAttr(ctx, plan.neighborhood.minOffsets);
-  suAttrs.accessMaxOffsets = buildI64ArrayAttr(ctx, plan.neighborhood.maxOffsets);
+  suAttrs.accessMinOffsets =
+      buildI64ArrayAttr(ctx, plan.neighborhood.minOffsets);
+  suAttrs.accessMaxOffsets =
+      buildI64ArrayAttr(ctx, plan.neighborhood.maxOffsets);
   suAttrs.ownerDims = ownerDimsAttr;
   suAttrs.spatialDims = spatialDimsAttr;
   suAttrs.writeFootprint = writeFootprintAttr;
   // Distribution/in-place predicates are intentionally re-derived downstream.
   suAttrs.inPlaceSafe = nullptr;
   suAttrs.inPlaceSharedState = nullptr;
-  auto newOp = sde::buildSuIterate(
-      builder, loc, ValueRange(leadingLowerBounds),
-      ValueRange(leadingUpperBounds), ValueRange(leadingSteps), suAttrs,
-      op.getReductionAccumulators());
+  auto newOp = sde::buildSuIterate(builder, loc, ValueRange(leadingLowerBounds),
+                                   ValueRange(leadingUpperBounds),
+                                   ValueRange(leadingSteps), suAttrs,
+                                   op.getReductionAccumulators());
 
   Block &newBody = sde::ensureBlock(newOp.getBody());
   while (newBody.getNumArguments() < leadingLowerBounds.size())
@@ -1025,6 +1059,12 @@ static bool hasCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
   return sde::hasCommittedWriterBlockLayout(op);
 }
 
+static bool hasCommittedCuGroupGrain(sde::SdeSuIterateOp op) {
+  if (sde::SdeCuRegionOp cu = sde::findSuComputeCuRegion(op))
+    return cu.getGroupBlockCountAttr() != nullptr;
+  return false;
+}
+
 static std::optional<sde::LayoutGraphFact>
 layoutFactFromCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
   std::optional<sde::CommittedSuPhysicalLayout> layout =
@@ -1307,7 +1347,7 @@ commitPhysicalLayoutFromAssignedLayout(sde::SdeSuIterateOp op,
 // realizes the block shape selected here.
 static bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
                                          sde::SDECostModel &costModel) {
-  if (!op || hasCommittedPhysicalLayout(op))
+  if (!op || hasCommittedCuGroupGrain(op))
     return false;
   // Matmul/contraction keeps its dedicated contraction-tiling plan: its CU-task
   // grain is the reduction-aware worker grain, not the data-parallel block
@@ -1324,7 +1364,8 @@ static bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
        *cls == sde::SdeStructuredClassification::elementwise_pipeline) &&
       sde::queryInPlaceSafe(op))
     return false;
-  if (auto pat = sde::querySuPattern(op); pat && *pat == sde::SdePattern::matmul)
+  if (auto pat = sde::querySuPattern(op);
+      pat && *pat == sde::SdePattern::matmul)
     return false;
   std::optional<sde::LayoutGraphFact> writeLayout =
       selectSingleWriteLayoutFact(op);
@@ -1883,10 +1924,9 @@ commitInPlaceSharedStencilSerialSlice(sde::SdeSuIterateOp op,
   if (slice <= 1)
     return;
 
-  sde::commitWriterPhysicalLayoutFacts(
-      op, SmallVector<int64_t, 1>{0},
-      SmallVector<int64_t, 1>{slice},
-      SmallVector<int64_t, 1>{slice});
+  sde::commitWriterPhysicalLayoutFacts(op, SmallVector<int64_t, 1>{0},
+                                       SmallVector<int64_t, 1>{slice},
+                                       SmallVector<int64_t, 1>{slice});
 }
 
 static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
@@ -1896,6 +1936,36 @@ static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
     return std::numeric_limits<int64_t>::max();
   return lhs * rhs;
 }
+
+struct BlockGrainPlanPass
+    : public sde::impl::BlockGrainPlanBase<BlockGrainPlanPass> {
+  explicit BlockGrainPlanPass(sde::SDECostModel *costModel = nullptr)
+      : costModel(costModel) {}
+
+  void runOnOperation() override {
+    sde::SDECostModel *activeCostModel = costModel;
+    std::optional<ModuleExecutionResourceCostModel> moduleCostModel;
+    if (!activeCostModel) {
+      moduleCostModel = buildModuleExecutionResourceCostModel(
+          dyn_cast<ModuleOp>(getOperation()));
+      if (!moduleCostModel)
+        return;
+      activeCostModel = &*moduleCostModel;
+    }
+
+    if (activeCostModel->getLogicalWorkerCapacity() <= 1)
+      return;
+
+    SmallVector<sde::SdeSuIterateOp, 16> iterates;
+    getOperation().walk(
+        [&](sde::SdeSuIterateOp op) { iterates.push_back(op); });
+    for (sde::SdeSuIterateOp op : iterates)
+      commitBudgetReconciledLayout(op, *activeCostModel);
+  }
+
+private:
+  sde::SDECostModel *costModel = nullptr;
+};
 
 static bool hasEnoughWorkForDistribution(sde::SdeSuIterateOp op,
                                          sde::SDECostModel &costModel) {
@@ -2039,12 +2109,6 @@ struct DistributionPlanningPass
         continue;
       }
 
-      // Budget-reconciled layout is authored first so the per-pattern
-      // committers below see an already-committed multi-owner data-parallel SU
-      // and skip it; they still run for the families budget declines
-      // (single-owner, matmul, reduction, in-place). The committed budget
-      // layout is the authority.
-      commitBudgetReconciledLayout(op, *costModel);
       commitStencilPhysicalLayout(op, *costModel);
       commitDirectRowMatmulPhysicalLayout(op, *costModel);
       commitMatmulPhysicalLayout(op, *costModel);
@@ -2086,6 +2150,10 @@ namespace mlir::carts::sde {
 std::unique_ptr<Pass>
 createDistributionPlanningPass(sde::SDECostModel *costModel) {
   return std::make_unique<DistributionPlanningPass>(costModel);
+}
+
+std::unique_ptr<Pass> createBlockGrainPlanPass(sde::SDECostModel *costModel) {
+  return std::make_unique<BlockGrainPlanPass>(costModel);
 }
 
 } // namespace mlir::carts::sde

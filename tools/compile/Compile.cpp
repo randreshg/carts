@@ -264,7 +264,7 @@ static const std::array<llvm::StringLiteral, 12> kSdeInputNormalizationPasses =
      "CSE"};
 static const std::array<llvm::StringLiteral, 2> kInitialCleanupPasses = {
     "CSE(func)", "PolygeistCanonicalizeFor(func)"};
-static const std::array<llvm::StringLiteral, 22> kSdePlanningPasses = {
+static const std::array<llvm::StringLiteral, 23> kSdePlanningPasses = {
     "ConvertOpenMPToSde",
     "RaiseToSde",
     "LayoutAssignment",
@@ -275,6 +275,7 @@ static const std::array<llvm::StringLiteral, 22> kSdePlanningPasses = {
     "SimplifyAffineStructures(func)",
     "RaiseToSde",
     "DistributionPlanning",
+    "BlockGrainPlan",
     "BarrierElimination",
     "MemoryUnitRealization",
     "SdeAtomicReductionRealization",
@@ -287,9 +288,9 @@ static const std::array<llvm::StringLiteral, 22> kSdePlanningPasses = {
     "SdeCoarseAvoidance",
     "VerifySdeCoarseAvoidance",
     "VerifySde"};
-static const std::array<llvm::StringLiteral, 4> kSdeToArtsPasses = {
-    "SdeStorageToArtsDb", "SdeAccessesToArtsDeps", "FinalizeSdeToArts",
-    "VerifyArtsObjectsOnly"};
+static const std::array<llvm::StringLiteral, 5> kSdeToArtsPasses = {
+    "SdeStorageToArtsDb", "VerifyRawAccessCovered", "SdeAccessesToArtsDeps",
+    "FinalizeSdeToArts", "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 3> kEdtDepRealizationPasses = {
     "RealizeEdtDistribution", "VerifySdeLowered", "VerifyArtsObjectsOnly"};
 static const std::array<llvm::StringLiteral, 6> kEdtLocalCleanupPasses = {
@@ -651,6 +652,7 @@ void registerDialects(DialectRegistry &registry) {
   /// are registered here, while staged compiler pipelines wire pass ordering.
   registerDeadCodeElimination();
   registerSdeStorageToArtsDb();
+  registerVerifyRawAccessCovered();
   registerSdeAccessesToArtsDeps();
   registerFinalizeSdeToArts();
   registerPartialReductionSplit();
@@ -1149,6 +1151,7 @@ void buildSdePlanningPipeline(PassManager &pm,
   // S6: re-run raise-to-sde after shape transforms expose new parallelism.
   pm.addPass(sde::createRaiseToSdePass());
   pm.addPass(sde::createDistributionPlanningPass(costModel));
+  pm.addPass(sde::createBlockGrainPlanPass(costModel));
   pm.addPass(sde::createBarrierEliminationPass(costModel));
   pm.addPass(sde::createMemoryUnitRealizationPass());
   pm.addPass(sde::createSdeAtomicReductionRealizationPass());
@@ -1170,6 +1173,7 @@ void buildSdePlanningPipeline(PassManager &pm,
 /// acquire, EDT, and control objects directly from those committed facts.
 void buildSdeToArtsPipeline(PassManager &pm) {
   pm.addPass(arts::createSdeStorageToArtsDbPass());
+  pm.addPass(arts::createVerifyRawAccessCoveredPass());
   pm.addPass(arts::createSdeAccessesToArtsDepsPass());
   pm.addPass(arts::createFinalizeSdeToArtsPass());
   pm.addPass(arts::createVerifyArtsObjectsOnlyPass());

@@ -54,6 +54,23 @@ def DistributionPlanning
   let constructor = "mlir::carts::sde::createDistributionPlanningPass()";
 }
 
+def BlockGrainPlan
+    : Pass<"sde-block-grain-plan", "mlir::ModuleOp"> {
+  let summary = "Commit SDE physical block grain for budgeted layouts";
+  let description = [{
+    Consumes SDE-owned budget block layout facts on data-parallel
+    `sde.su_iterate` writers and commits the corresponding physical writer
+    grain once the loop steps already realize that block shape. It does not
+    choose owner dimensions, movement families, distribution wrappers, DB grain,
+    routes, or runtime policy; unsupported shapes stay unmodified for later SDE
+    verifiers to reject.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::memref::MemRefDialect",
+                           "::mlir::scf::SCFDialect"];
+  let constructor = "mlir::carts::sde::createBlockGrainPlanPass()";
+}
+
 def BarrierElimination
     : Pass<"barrier-elimination", "mlir::ModuleOp"> {
   let summary = "Remove redundant SDE barriers and commit timestep stages";
