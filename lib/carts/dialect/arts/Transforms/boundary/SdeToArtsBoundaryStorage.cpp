@@ -18,6 +18,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
+#include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
@@ -303,10 +304,36 @@ static LogicalResult createCommittedLayoutDbBackedMemref(
                                          ownerDims, blockShape, replacement);
 }
 
-static bool memrefRequiresBlockDbRealization(MemRefType memrefType) {
+static bool memrefTypeLooksRankExpandedBlockGrid(MemRefType memrefType) {
   if (std::optional<CommittedPhysicalLayout> layout =
           readPhysicalLayoutFromExpandedType(memrefType))
     return !layout->ownerDims.empty();
+  return false;
+}
+
+static bool memrefRequiresBlockDbRealization(MemRefType memrefType) {
+  return memrefTypeLooksRankExpandedBlockGrid(memrefType);
+}
+
+static bool hasCommittedReplicatedLayoutFact(sde::SdeMuAllocOp op) {
+  std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(op);
+  if (!arrayId)
+    return false;
+  for (Operation *user : op.getMemref().getUsers()) {
+    auto root = dyn_cast<sde::SdeArrayLayoutRootOp>(user);
+    if (!root || static_cast<int64_t>(root.getArrayId()) != *arrayId)
+      continue;
+    if (auto source = root->getParentOfType<sde::SdeSuIterateOp>()) {
+      for (const sde::LayoutGraphFact &fact :
+           sde::parseArrayLayoutFacts(source.getArrayLayoutAttr())) {
+        if (fact.id != *arrayId)
+          continue;
+        if (fact.layoutKind == sde::ArrayLayoutKind::replicated ||
+            fact.ownerDims.empty())
+          return true;
+      }
+    }
+  }
   return false;
 }
 
@@ -468,7 +495,8 @@ static LogicalResult createDbBackedReplacement(
     ArrayAttr ownerDims, ArrayAttr blockShape,
     const sde::MuAccessWindowGeometry &geom, Value &replacement) {
   if (geom.ownerDimCount == 0) {
-    if (memrefRequiresBlockDbRealization(memrefType))
+    if (!hasCommittedReplicatedLayoutFact(op) &&
+        sde::recognizeExpandedBlockGridMu(op))
       return op.emitOpError()
              << "query-derived access windows claim zero owner rank on a "
                 "rank-expanded block-grid MU; SDE must commit owner layout "
