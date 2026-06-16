@@ -179,6 +179,28 @@ void mlir::carts::arts::EdtOp::setDependencies(ValueRange newDeps) {
                                       static_cast<int32_t>(params.size())}));
 }
 
+static bool isReadOnlyHeapScratchUseInEdtBody(Value alloc, Region &edtBody) {
+  if (!alloc.getDefiningOp<memref::AllocOp>())
+    return false;
+  auto isMutatingWrite = [](Operation *user, Value memref) -> bool {
+    if (auto store = dyn_cast<memref::StoreOp>(user))
+      return store.getMemref() == memref;
+    if (auto copy = dyn_cast<memref::CopyOp>(user))
+      return copy.getTarget() == memref;
+    return false;
+  };
+  bool sawUseInBody = false;
+  for (Operation *user : alloc.getUsers()) {
+    Region *userRegion = user->getParentRegion();
+    if (!userRegion || !edtBody.isAncestor(userRegion))
+      continue;
+    sawUseInBody = true;
+    if (isMutatingWrite(user, alloc))
+      return false;
+  }
+  return sawUseInBody;
+}
+
 void mlir::carts::arts::EdtOp::appendDependency(Value dep) {
   SmallVector<Value> deps(getDependencies().begin(), getDependencies().end());
   deps.push_back(dep);
@@ -329,8 +351,16 @@ LogicalResult EdtOp::verify() {
       if (operand.getDefiningOp<memref::AllocaOp>())
         continue;
 
-      if (operand.getDefiningOp<memref::AllocOp>() ||
-          operand.getDefiningOp<DbAllocOp>())
+      if (auto heapAlloc = operand.getDefiningOp<memref::AllocOp>()) {
+        (void)heapAlloc;
+        if (getTypeAttr().getValue() == EdtType::sync &&
+            getConcurrency() == EdtConcurrency::intranode &&
+            isReadOnlyHeapScratchUseInEdtBody(operand, getBody()))
+          continue;
+        return rejectPointerCapture();
+      }
+
+      if (operand.getDefiningOp<DbAllocOp>())
         return rejectPointerCapture();
 
       if (Value handle = EdtUtils::traceCapturedDbHandle(operand))
