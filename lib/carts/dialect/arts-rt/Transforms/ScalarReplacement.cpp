@@ -194,6 +194,36 @@ detectReductionPattern(scf::ForOp forOp) {
                     loadMemref, loadIndices, storeMemref, storeIndices);
       if (sameLocation && loadOp->hasOneUse() &&
           isLoopInvariant(forOp, storeMemref)) {
+        /// The promotion replaces ONLY the matched load/store pair with an
+        /// iter_arg and drops the in-loop store. That is sound only when the
+        /// matched pair is the loop body's sole access to this accumulator.
+        /// If any other direct-child load or store touches the same memref
+        /// (e.g. a counter that is read once to compute a value and again to
+        /// increment it, as in an `idx`/`count`-style accumulator), those
+        /// stale accesses would read the now-unstored memref and silently
+        /// miscompile. Bail out of this candidate in that case.
+        bool hasOtherAccess = false;
+        for (Operation *otherLoad : loads) {
+          if (otherLoad == loadOp)
+            continue;
+          if (getLoadInfo(otherLoad).first == storeMemref) {
+            hasOtherAccess = true;
+            break;
+          }
+        }
+        if (!hasOtherAccess) {
+          for (Operation *otherStore : stores) {
+            if (otherStore == storeOp)
+              continue;
+            if (getStoreInfo(otherStore).first == storeMemref) {
+              hasOtherAccess = true;
+              break;
+            }
+          }
+        }
+        if (hasOtherAccess)
+          continue;
+
         pattern.loadOp = loadOp;
         pattern.storeOp = storeOp;
         pattern.valueToYield = storedValue;
