@@ -303,6 +303,13 @@ static LogicalResult createCommittedLayoutDbBackedMemref(
                                          ownerDims, blockShape, replacement);
 }
 
+static bool memrefRequiresBlockDbRealization(MemRefType memrefType) {
+  if (std::optional<CommittedPhysicalLayout> layout =
+          readPhysicalLayoutFromExpandedType(memrefType))
+    return !layout->ownerDims.empty();
+  return false;
+}
+
 LogicalResult exposeTaskDepMemrefRoots(ModuleOp module) {
   SetVector<Operation *> regions;
   bool foundError = false;
@@ -399,17 +406,27 @@ LogicalResult realizeTaskDepMemrefStorage(
         TaskDepLayoutLookupKind::DeferToGenericMuLowering)
       continue;
 
-    LogicalResult realized =
-        committedLayout.kind == TaskDepLayoutLookupKind::Found
-            ? createCommittedLayoutDbBackedMemref(
-                  builder, rootOp->getLoc(), memrefType, *dynamicSizes,
-                  committedLayout.layout, replacement)
-            : arts::createCoarseDbBackedMemref(builder, rootOp->getLoc(),
-                                               memrefType, *dynamicSizes,
-                                               replacement);
-    if (failed(realized))
-      return rootOp->emitError()
-             << "could not realize task dependency memref as an ARTS DB";
+    LogicalResult realized = success();
+    if (committedLayout.kind == TaskDepLayoutLookupKind::Found) {
+      realized = createCommittedLayoutDbBackedMemref(
+          builder, rootOp->getLoc(), memrefType, *dynamicSizes,
+          committedLayout.layout, replacement);
+    } else if (memrefRequiresBlockDbRealization(memrefType)) {
+      rootOp->emitError()
+          << "rank-expanded block-grid storage reached ARTS boundary "
+             "without a committed SDE block layout; SDE must author "
+             "arrayLayout facts before SDE-to-ARTS storage lowering";
+      return failure();
+    } else {
+      realized = arts::createCoarseDbBackedMemref(builder, rootOp->getLoc(),
+                                                  memrefType, *dynamicSizes,
+                                                  replacement);
+    }
+    if (failed(realized)) {
+      rootOp->emitError()
+          << "could not realize task dependency memref as an ARTS DB";
+      return failure();
+    }
     if (replacement.getType() != memrefType)
       replacement = memref::CastOp::create(builder, rootOp->getLoc(),
                                            memrefType, replacement);
@@ -450,9 +467,15 @@ static LogicalResult createDbBackedReplacement(
     OpBuilder &builder, sde::SdeMuAllocOp op, MemRefType memrefType,
     ArrayAttr ownerDims, ArrayAttr blockShape,
     const sde::MuAccessWindowGeometry &geom, Value &replacement) {
-  if (geom.ownerDimCount == 0)
+  if (geom.ownerDimCount == 0) {
+    if (memrefRequiresBlockDbRealization(memrefType))
+      return op.emitOpError()
+             << "query-derived access windows claim zero owner rank on a "
+                "rank-expanded block-grid MU; SDE must commit owner layout "
+                "facts before SDE-to-ARTS storage lowering";
     return arts::createCoarseDbBackedMemref(builder, op.getLoc(), memrefType,
                                             op.getDynamicSizes(), replacement);
+  }
   return arts::createBlockDbBackedMemref(builder, op.getLoc(), memrefType,
                                          op.getDynamicSizes(), ownerDims,
                                          blockShape, replacement);
