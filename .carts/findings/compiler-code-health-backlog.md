@@ -103,7 +103,7 @@ All **DONE** (@4fcf3ec57 decisions + phases B–K).
 |--------|------|----------|
 | `8095225d7` | ARTS WriterOwnerRoute | Defer unroutable/multi-owner EDTs on single-node; lit `writer_owner_route_skips_single_node.mlir` |
 | `2c229e6cc` | ARTS boundary storage | Replicated-layout coarse DB path for zero owner-rank query geometry |
-| `1b8b4e809` | SDE boundary scaffolding | `boundaries/01_omp_to_sde`, `04_arts_to_rt` README placeholders |
+| `1b8b4e809` | SDE boundary scaffolding | `boundaries/{01,02,04}_*/README.md` placeholders (0 conversion dumps) |
 
 ---
 
