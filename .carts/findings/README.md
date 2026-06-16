@@ -2,13 +2,15 @@
 
 > Single entry point. Updated 2026-06-16 after 1n medium SC-001 validation.
 
-## Canonical state — `v4` @ `4fcf3ec57` + E2E session 2026-06-16
+## Canonical state — `v4` @ `f91d741a2` + E2E session 2026-06-16
 
-Line contains: correctness base (18/21 medium + 3 fail-closed) + Phase 11 split
+Line contains: correctness base + Phase 11 split
 (T027–T031) + US8 scalar-replacement guard (`56c516207`). Latest E2E validation:
 `.carts/findings/e2e-validation-20260616.md`.
 
-Build clean; lit **103/109** (6 jacobi/poisson boundary fails).
+Build clean; pipeline manifest available; lit **103/109** (6 pre-existing
+jacobi/poisson boundary fail-closed tests); all 21 registered medium,
+64-thread, 1-node local benchmark rows are **Correct=YES**.
 
 ## What is still open
 
@@ -19,9 +21,9 @@ Build clean; lit **103/109** (6 jacobi/poisson boundary fails).
 
 ## What is done
 
-- **1n MEDIUM correctness:** 18/21 Correct=YES + 3 precise fail-closed
-  (atax/batchnorm cross-owner reduction, seidel-2d in-place wavefront). lit 79/79
-  (dialect scope). On the correctness base, carried into recarve.
+- **1n MEDIUM correctness:** 21/21 registered benchmarks Correct=YES on
+  2026-06-16 after tracked-WIP cleanup. No 2n, cluster, large, extralarge, or
+  megalarge rows were run in this scoped pass.
 - **Phase 11 pass-split (US9, T027–T031):** DONE + VALIDATED on recarve.
   DistributionPlanning deleted and split into DistributionFailClosed /
   BlockGrainPlan / OwnerDimSelect / MovementTagging + DistributionLayoutUtils;
@@ -67,7 +69,8 @@ the noalias fix (already folded).
 
 ## Next steps
 
-1. After the running medium sweep: rebuild recarve, re-lit, commit the review
-   cleanups (carts-commit), land the 2 test-gaps.
+1. Keep the 6 jacobi/poisson boundary lit failures as a separate fail-closed
+   boundary task unless they become the current gate.
 2. Fold `wt/large-perf` into recarve; validate gemm large vectorizes.
-3. Merge recarve → `v4`.
+3. Run 2-node validation only when explicitly in scope and cluster access is
+   available.

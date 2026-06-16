@@ -1,16 +1,16 @@
-# Distribution spec E2E validation — 2026-06-16 (1n session)
+# Distribution spec E2E validation - 2026-06-16 (1n session)
 
-> Branch `v4` @ SDE alternating-buffer grain reconcile + ARTS verifier fix.
-> Scope: 1-node medium only. Runner: `dekk carts benchmarks run --launcher local --nodes 1 --threads 64 -s medium`.
+> Branch `v4` @ `f91d741a2` after cleanup of unrelated tracked WIP.
+> Scope: 1-node medium only. Runner: `dekk carts benchmarks run <bench> --size medium --threads 64 --nodes 1 --launcher local --no-rdma --timeout 180 --trace`.
 
 ## SC status
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| **SC-001** (1n medium correctness) | **CLOSED** | poisson-for Correct=YES (`20260616_060613`); jacobi-for (`20260616_060639`); volume-integral (`20260616_060703`) @ 64t |
+| **SC-001** (1n medium correctness) | **CLOSED** | All 21 registered benchmarks passed at medium / 64 threads / 1 node / local launcher (`20260616_061857` through `20260616_062352`) |
 | **SC-002** (2n Correct or fail-closed) | **DEFERRED / OUT OF SCOPE** | User-scoped this pass to 1-node only; no 2n or cluster validation run |
 | **SC-003** (<50s large) | **OUT OF SCOPE** | Large validation intentionally skipped for this pass |
-| **SC-005** (lit green) | **103/109** | 6 jacobi/poisson stencil-halo boundary tests (optional scope deferred); cross_owner_reductions PASS |
+| **SC-005** (lit green) | **103/109** | 6 jacobi/poisson stencil-halo boundary tests still fail closed with missing committed SDE access-window deps; documented as pre-existing on v4/base |
 | **SC-006** (US9 split) | **DONE** | Unchanged |
 
 ## Blocker fixes this session
@@ -45,22 +45,49 @@
 
 ## 1n medium validation matrix
 
-| Kernel | medium 1n / 64t | Notes |
-|--------|-----------------|-------|
-| kastors-jacobi/poisson-for | Correct=YES | SC-001 blocker closed |
-| kastors-jacobi/jacobi-for | Correct=YES | Regression |
-| seissol/volume-integral | Correct=YES | Regression |
-| ml-kernels/activations | Correct=YES | Regression (prior session) |
+| Kernel | medium 1n / 64t | Result id | Notes |
+|--------|-----------------|-----------|-------|
+| stream | Correct=YES | `20260616_061857_964177` | Fresh full sweep |
+| kastors-jacobi/jacobi-for | Correct=YES | `20260616_061912_039860` | Fresh full sweep |
+| kastors-jacobi/poisson-for | Correct=YES | `20260616_061925_332057` | SC-001 blocker remains closed |
+| ml-kernels/activations | Correct=YES | `20260616_061938_711155` | Fresh full sweep |
+| ml-kernels/batchnorm | Correct=YES | `20260616_061952_554892` | Fresh full sweep |
+| ml-kernels/layernorm | Correct=YES | `20260616_062006_092970` | Fresh full sweep |
+| ml-kernels/pooling | Correct=YES | `20260616_062019_443844` | Fresh full sweep |
+| polybench/2mm | Correct=YES | `20260616_062033_392830` | Fresh full sweep |
+| polybench/3mm | Correct=YES | `20260616_062055_713556` | Fresh full sweep |
+| polybench/atax | Correct=YES | `20260616_062117_693628` | Fresh full sweep |
+| polybench/bicg | Correct=YES | `20260616_062131_610472` | Fresh full sweep |
+| polybench/convolution-2d | Correct=YES | `20260616_062145_109664` | Fresh full sweep |
+| polybench/convolution-3d | Correct=YES | `20260616_062159_197056` | Fresh full sweep |
+| polybench/correlation | Correct=YES | `20260616_062212_726466` | Fresh full sweep |
+| polybench/gemm | Correct=YES | `20260616_062227_223430` | Fresh full sweep |
+| polybench/jacobi2d | Correct=YES | `20260616_062245_106847` | Fresh full sweep |
+| polybench/seidel-2d | Correct=YES | `20260616_062258_968887` | Fresh full sweep |
+| seissol/volume-integral | Correct=YES | `20260616_062312_584388` | Fresh full sweep |
+| specfem3d/stress | Correct=YES | `20260616_062325_832202` | Fresh full sweep |
+| specfem3d/velocity | Correct=YES | `20260616_062339_269016` | Fresh full sweep |
+| sw4lite/vel4sg-base | Correct=YES | `20260616_062352_626890` | Fresh full sweep |
 
-The broader touched spot matrix was started but interrupted by the user; no 2n
-or large validation was run in this scoped pass.
+No 2n, cluster, large, extralarge, or megalarge validation was run in this
+scoped pass.
 
 ## Lit
 
-`dekk carts lit`: **103/109** pass; 6 jacobi/poisson stencil-halo boundary tests still fail (pre-existing optional scope).
+`dekk carts lit`: **103/109** pass; the 6 remaining jacobi/poisson
+stencil-halo boundary tests fail closed while compiling with `touches a DB
+without a committed SDE access-window dependency`. These failures are
+pre-existing per `.carts/findings/plan.md` and do not contradict the fresh
+single-node medium benchmark sweep.
 
 New: `sde_redistribute_reconciles_alternating_buffer_grain.mlir`, `sde_redistribute_reconciles_alternating_buffer_root_grain.mlir`, `sde_redistribute_cross_owner_reductions.mlir` **PASS**.
 
-## Commits this session
+## Verification
 
-See git log — activations verify; poisson stencil dep alignment; SDE alternating-buffer grain reconcile.
+Commands run after preserving/stashing tracked WIP:
+
+- `dekk carts build` - PASS.
+- `dekk carts pipeline --json` - PASS.
+- `dekk carts benchmarks list` - PASS, 21 registered benchmarks.
+- `dekk carts lit` - 103/109, known pre-existing boundary failures above.
+- 21 explicit `dekk carts benchmarks run <bench> --size medium --threads 64 --nodes 1 --launcher local --no-rdma --timeout 180 --trace` invocations - all PASS / Correct=YES.
