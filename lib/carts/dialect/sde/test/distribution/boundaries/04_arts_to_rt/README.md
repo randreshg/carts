@@ -1,0 +1,9 @@
+# Dialect boundary: `arts → to → rt`
+
+Conversion pass(es): DbLowering, EdtLowering, EpochLowering
+
+- `before.mlir` — module state entering this boundary
+- `<PassClass>.mlir` — module state after that specific pass ran
+- `after.mlir` — module state leaving this boundary
+
+_(file count this run: 0 conversion pass dump(s))_
