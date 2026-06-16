@@ -32,14 +32,116 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 
+#include <numeric>
+
 using namespace mlir;
 
 namespace mlir::carts::sde {
 
 using namespace mlir::carts::sde::redist;
 
+static bool movementEndpointFitsRoot(MemRefType muType,
+                                     ArrayRef<int64_t> ownerDims,
+                                     ArrayRef<int64_t> blockShape) {
+  if (!muType || !muType.hasStaticShape() || ownerDims.empty() ||
+      blockShape.empty())
+    return false;
+  int64_t rank = muType.getRank();
+  ArrayRef<int64_t> shape = muType.getShape();
+  if (static_cast<int64_t>(blockShape.size()) == rank) {
+    SmallVector<bool, 4> isOwner(rank, false);
+    for (int64_t d : ownerDims) {
+      if (d < 0 || d >= rank || isOwner[d])
+        return false;
+      isOwner[d] = true;
+    }
+    for (int64_t d = 0; d < rank; ++d) {
+      if (blockShape[d] <= 0 || blockShape[d] > shape[d])
+        return false;
+      if (!isOwner[d] && blockShape[d] != shape[d])
+        return false;
+    }
+    return true;
+  }
+  if (static_cast<int64_t>(blockShape.size()) !=
+      static_cast<int64_t>(ownerDims.size()))
+    return false;
+  for (auto [i, d] : llvm::enumerate(ownerDims)) {
+    if (blockShape[i] <= 0 || blockShape[i] > shape[d])
+      return false;
+  }
+  return true;
+}
+
 static bool isAllZero(ArrayRef<int64_t> values) {
   return llvm::all_of(values, [](int64_t value) { return value == 0; });
+}
+
+static ArrayRef<int64_t> committedLayoutGrain(const LayoutGraphFact &fact) {
+  return fact.budgetBlockShape.empty() ? ArrayRef<int64_t>(fact.blockShape)
+                                       : ArrayRef<int64_t>(fact.budgetBlockShape);
+}
+
+static void unifyHomeBlockShapeFromCommittedFacts(
+    Operation *moduleOp, llvm::DenseMap<int64_t, HomeLayout> &homeByArrayId) {
+  struct GrainState {
+    SmallVector<int64_t, 4> ownerDims;
+    SmallVector<int64_t, 4> unified;
+    bool seen = false;
+    bool eligible = true;
+  };
+  llvm::DenseMap<int64_t, GrainState> byId;
+  moduleOp->walk([&](SdeSuIterateOp su) {
+    ArrayAttr layout = su.getArrayLayoutAttr();
+    if (!layout)
+      return;
+    for (const LayoutGraphFact &fact : parseArrayLayoutFacts(layout)) {
+      if (fact.id < 0 ||
+          fact.layoutKind != ArrayLayoutKind::blockParallel ||
+          fact.ownerDims.empty())
+        continue;
+      ArrayRef<int64_t> grain = committedLayoutGrain(fact);
+      if (grain.empty()) {
+        byId[fact.id].eligible = false;
+        continue;
+      }
+      GrainState &state = byId[fact.id];
+      if (!state.seen) {
+        state.seen = true;
+        state.ownerDims.assign(fact.ownerDims.begin(), fact.ownerDims.end());
+        state.unified.assign(grain.begin(), grain.end());
+        continue;
+      }
+      if (ArrayRef<int64_t>(state.ownerDims) !=
+              ArrayRef<int64_t>(fact.ownerDims) ||
+          state.unified.size() != grain.size()) {
+        state.eligible = false;
+        continue;
+      }
+      for (size_t i = 0; i < grain.size(); ++i) {
+        int64_t lhs = state.unified[i];
+        int64_t rhs = grain[i];
+        if (lhs <= 0)
+          state.unified[i] = rhs;
+        else if (rhs <= 0)
+          continue;
+        else if (lhs == rhs)
+          continue;
+        else {
+          int64_t lo = std::min(lhs, rhs);
+          int64_t hi = std::max(lhs, rhs);
+          state.unified[i] = (hi % lo == 0) ? hi : std::gcd(lhs, rhs);
+        }
+      }
+    }
+  });
+  for (auto &entry : homeByArrayId) {
+    auto it = byId.find(entry.first);
+    if (it == byId.end() || !it->second.eligible || !it->second.seen)
+      continue;
+    entry.second.blockShape.assign(it->second.unified.begin(),
+                                   it->second.unified.end());
+  }
 }
 
 static SdeSuIterateOp findStoreProducer(Operation *moduleOp, Value root) {
@@ -145,6 +247,7 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         conflictingHome.insert(f.id);
     }
   });
+  unifyHomeBlockShapeFromCommittedFacts(moduleOp, homeByArrayId);
 
   moduleOp->walk([&](SdeSuIterateOp reader) {
     llvm::SmallVector<int64_t, 4> candidateArrayIds;
@@ -335,6 +438,16 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         else {
           fail("all_to_all redistribution edge has no committed consumer "
                "required-read layout");
+          continue;
+        }
+        auto muType = dyn_cast<MemRefType>(root.getType());
+        if (!muType ||
+            !movementEndpointFitsRoot(muType, edge.sourceOwnerDims,
+                                      edge.sourceBlockShape) ||
+            !movementEndpointFitsRoot(muType, edge.targetOwnerDims,
+                                      edge.targetBlockShape)) {
+          fail("all_to_all redistribution geometry is not representable on "
+               "the grounded root");
           continue;
         }
       }

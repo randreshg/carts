@@ -1,15 +1,16 @@
-// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-redistribute)' 2>&1 | %FileCheck %s
 
-// Same-owner re-tiling is a BlockGrainPlan responsibility, not an all_to_all
-// movement. If stale same-owner reader grain reaches redistribution, SDE must
-// fail closed instead of leaving a mismatched read fact for downstream repair.
+// Compatible same-owner block-grain mismatches are reconciled during
+// redistribution (after rank expansion) so a degenerate all_to_all is never
+// emitted for a within-owner re-tile.
 
+// CHECK-LABEL: func.func @same_owner_retile_reconciled
+// CHECK-NOT: same-owner block-grain mismatch must be reconciled before redistribution
 // CHECK-NOT: sde.su_all_to_all
-// CHECK: same-owner block-grain mismatch must be reconciled before redistribution
-// CHECK-NOT: sde.su_all_to_all
+// CHECK-NOT: refusing to invent redistribution
 
-func.func @same_owner_retile_rejected(%T: memref<256x256xf32>,
-                                      %U: memref<256x256xf32>) {
+func.func @same_owner_retile_reconciled(%T: memref<256x256xf32>,
+                                        %U: memref<256x256xf32>) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %c256 = arith.constant 256 : index

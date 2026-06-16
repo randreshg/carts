@@ -18,6 +18,15 @@
 
 namespace mlir::carts::sde::distribution {
 
+enum class SameOwnerGrainUnifyKind {
+  /// Pre-rank-expand planning: adopt the finest budget grain both sides can
+  /// realize (per-dim GCD of committed grains).
+  GcdBudget,
+  /// Post-rank-expand redistribution: lift finer reader budgets to the writer's
+  /// already-realized coarse block grain when one divides the other.
+  CoarseCompatiblePostExpand,
+};
+
 // Commit the one node-agnostic budget grain for a multi-owner data-parallel
 // writer SU when the current SU step already realizes the selected block grain.
 bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
@@ -27,7 +36,9 @@ bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
 // every block_parallel fact of an array so producer/consumer home==reader and
 // no same-owner re-tile is left for RedistributionEdges to reject. Runs after
 // all per-SU layout commits.
-void reconcileSameOwnerArrayGrain(Operation *moduleOp);
+void reconcileSameOwnerArrayGrain(
+    Operation *moduleOp,
+    SameOwnerGrainUnifyKind unifyKind = SameOwnerGrainUnifyKind::GcdBudget);
 
 } // namespace mlir::carts::sde::distribution
 

@@ -366,19 +366,19 @@ bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
     std::optional<int64_t> radius = getOwnerHaloRadius(
         ownerHaloShape, expanded->logicalRank, rawSourceOwner,
         /*ownerSlot=*/i, /*logicalOwnerDim=*/expanded->ownerDims[i]);
-    if (radius && *radius == 0) {
-      std::optional<int64_t> recovered = recoverExpandedOwnerHaloFromLoads(
-          edge.root, accessReader, /*gridSlot=*/i,
-          /*logicalOwnerDim=*/expanded->ownerDims[i],
-          expanded->blockExtents[i]);
-      if (!recovered) {
+    if (!radius || *radius == 0) {
+      if (std::optional<int64_t> recovered = recoverExpandedOwnerHaloFromLoads(
+              edge.root, accessReader, /*gridSlot=*/i,
+              /*logicalOwnerDim=*/expanded->ownerDims[i],
+              expanded->blockExtents[i])) {
+        radius = *recovered;
+      } else if (!radius) {
         failReason = "rank-expanded halo redistribution has no recoverable "
                      "ghost width for a committed owner grid dim";
         return false;
       }
-      radius = *recovered;
     }
-    if (!radius || *radius < 0) {
+    if (*radius < 0) {
       failReason = "rank-expanded halo redistribution has no recoverable ghost "
                    "width for a committed owner grid dim";
       return false;

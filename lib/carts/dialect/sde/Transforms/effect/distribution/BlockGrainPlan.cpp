@@ -48,6 +48,39 @@ struct BlockGrainPlan {
   SmallVector<int64_t, 4> haloShape;
 };
 
+static int64_t unifyBlockDim(int64_t lhs, int64_t rhs,
+                             SameOwnerGrainUnifyKind unifyKind) {
+  if (lhs <= 0)
+    return rhs;
+  if (rhs <= 0)
+    return lhs;
+  if (lhs == rhs)
+    return lhs;
+  if (unifyKind == SameOwnerGrainUnifyKind::CoarseCompatiblePostExpand) {
+    int64_t lo = std::min(lhs, rhs);
+    int64_t hi = std::max(lhs, rhs);
+    if (hi % lo == 0)
+      return hi;
+  }
+  int64_t g = std::gcd(lhs, rhs);
+  return g > 0 ? g : std::min(lhs, rhs);
+}
+
+static void unifyBlockShape(ArrayRef<int64_t> grain,
+                            SmallVector<int64_t, 4> &unified,
+                            SameOwnerGrainUnifyKind unifyKind) {
+  if (grain.empty())
+    return;
+  if (unified.empty()) {
+    unified.assign(grain.begin(), grain.end());
+    return;
+  }
+  if (unified.size() != grain.size())
+    return;
+  for (size_t i = 0; i < grain.size(); ++i)
+    unified[i] = unifyBlockDim(unified[i], grain[i], unifyKind);
+}
+
 // Choose the one committed node-agnostic budget grain for every SU that writes
 // a multi-owner-distributed data-parallel array. The caller only commits it
 // when the current SU step already realizes the selected block grain.
@@ -149,7 +182,8 @@ bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
 // on every block_parallel fact of the array so home==reader and no
 // redistribution edge exists. Node-agnostic; runs after per-SU commit so
 // RankExpandMu/RedistributionEdges consume unified facts.
-void reconcileSameOwnerArrayGrain(Operation *moduleOp) {
+void reconcileSameOwnerArrayGrain(Operation *moduleOp,
+                                  SameOwnerGrainUnifyKind unifyKind) {
   auto committedGrain = [](const sde::LayoutGraphFact &f) -> ArrayRef<int64_t> {
     return f.budgetBlockShape.empty() ? ArrayRef<int64_t>(f.blockShape)
                                       : ArrayRef<int64_t>(f.budgetBlockShape);
@@ -215,9 +249,8 @@ void reconcileSameOwnerArrayGrain(Operation *moduleOp) {
         for (size_t i = 0; i < grain.size(); ++i) {
           if (grain[i] != info.unified[i])
             info.differs = true;
-          int64_t g = std::gcd(info.unified[i], grain[i]);
-          info.unified[i] = g > 0 ? g : info.unified[i];
         }
+        unifyBlockShape(grain, info.unified, unifyKind);
       }
       // Track the GCD of declared budget grains separately. Only facts that
       // actually carry a budgetBlockShape contribute, so a coarse abstract
@@ -290,16 +323,22 @@ void reconcileSameOwnerArrayGrain(Operation *moduleOp) {
   if (targetById.empty())
     return;
 
-  // Re-commit each writer's physical layout at the unified grain. The physical
-  // CU-group block counts (not the arrayLayout fact) are what RankExpandMu
-  // reads to shape the MU and re-author the write fact, so unifying only the
-  // fact is not enough — the producer must realize the finer grain.
   for (auto &kv : targetById) {
     GrainInfo &info = byId[kv.first];
     for (sde::SdeSuIterateOp writer : info.writerOps)
       if (writer)
+        (void)sde::rewriteWriterArrayLayoutToPhysicalShape(
+            writer, info.ownerDims, kv.second, kv.first);
+  }
+
+  for (auto &kv : byId) {
+    GrainInfo &info = kv.second;
+    if (!info.incompatibleWithBudget || !info.eligible || !info.seen)
+      continue;
+    for (sde::SdeSuIterateOp writer : info.writerOps)
+      if (writer)
         (void)sde::commitWriterPhysicalLayoutFacts(writer, info.ownerDims,
-                                                   kv.second);
+                                                   targetById[kv.first]);
   }
 
   MLIRContext *ctx = moduleOp->getContext();
@@ -328,7 +367,7 @@ void reconcileSameOwnerArrayGrain(Operation *moduleOp) {
       }
       auto it = targetById.find(f->id);
       const GrainInfo &info = byId[f->id];
-      if (it == targetById.end() || f->role != sde::LayoutGraphRole::read ||
+      if (it == targetById.end() ||
           f->layoutKind != sde::ArrayLayoutKind::blockParallel ||
           ArrayRef<int64_t>(f->ownerDims) !=
               ArrayRef<int64_t>(info.ownerDims) ||

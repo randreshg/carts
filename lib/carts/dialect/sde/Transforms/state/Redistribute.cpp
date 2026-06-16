@@ -4,7 +4,9 @@
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Transforms/effect/distribution/BlockGrainPlan.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
+#include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
@@ -259,27 +261,38 @@ static void reconcileLayoutFactsToExpandedRoots(Operation *moduleOp) {
               : carts::sde::SdeAccessMode::read;
       Value root = carts::sde::findArrayLayoutRoot(op, fact->id, mode);
       auto type = root ? dyn_cast<MemRefType>(root.getType()) : MemRefType();
-      std::optional<carts::sde::RecoveredMuPhysicalLayout> recovered =
-          type ? carts::sde::recoverMuPhysicalLayoutFromExpandedType(type)
-               : std::nullopt;
-      if (!recovered || recovered->ownerDims.empty()) {
+      // Rank-expanded storage has K grid dims + L tile dims, so rank exceeds
+      // the logical blockShape rank. Plain function-arg memrefs are flat and
+      // must not be "reconciled" via type-shape guessing.
+      if (!type || type.getRank() <= fact->blockShape.size()) {
+        rewritten.push_back(attr);
+        continue;
+      }
+      std::optional<carts::sde::ExpandedBlockGridMu> expanded =
+          carts::sde::recognizeExpandedBlockGridMu(op, type);
+      if (!expanded || expanded->ownerDims.empty()) {
         rewritten.push_back(attr);
         continue;
       }
 
       SmallVector<int64_t, 4> recoveredOwners =
-          ownerDimsAsI64(recovered->ownerDims);
+          ownerDimsAsI64(expanded->ownerDims);
       if (!ownerDimsContainAll(fact->ownerDims, recoveredOwners)) {
         rewritten.push_back(attr);
         continue;
       }
 
+      SmallVector<int64_t, 4> physicalBlockShape(expanded->logicalRank);
+      ArrayRef<int64_t> tiles =
+          type.getShape().drop_front(expanded->ownerDims.size());
+      for (unsigned dim = 0; dim < expanded->logicalRank; ++dim)
+        physicalBlockShape[dim] = tiles[dim];
+
       Attribute updated = attr;
-      int64_t recoveredBlocks =
-          productOrOne(type.getShape().take_front(recovered->ownerDims.size()));
+      int64_t recoveredBlocks = productOrOne(expanded->gridCounts);
       if (rewriteFactToExpandedRoot(builder, dict, *fact, recoveredOwners,
-                                    recovered->physicalBlockShape,
-                                    recoveredBlocks, updated)) {
+                                    physicalBlockShape, recoveredBlocks,
+                                    updated)) {
         rewritten.push_back(updated);
         changed = true;
         continue;
@@ -711,6 +724,11 @@ struct SdeRedistributePass
     authorInitWriterAccessWindows(module);
     reconcileSubsetOwnerExpandedGridReaders(module);
     reconcileLayoutFactsToExpandedRoots(module);
+    // RankExpandMu may expose new budget/physical grains after BlockGrainPlan;
+    // re-unify same-owner block grain so home==reader before edge collection.
+    carts::sde::distribution::reconcileSameOwnerArrayGrain(
+        module, carts::sde::distribution::SameOwnerGrainUnifyKind::
+                      CoarseCompatiblePostExpand);
     carts::sde::RedistributionEdges committed =
         carts::sde::collectRedistributionEdges(module);
     bool sawFailure = false;
