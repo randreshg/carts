@@ -1411,7 +1411,43 @@ collectSuDependencies(sde::SdeSuIterateOp source,
                                : source.getBody().walk(consider);
   if (result.wasInterrupted())
     return failure();
-  return verifyRawSuAccessesCoveredByDeps(source, depIndex, deps);
+  if (failed(verifyRawSuAccessesCoveredByDeps(source, depIndex, deps)))
+    return failure();
+
+  // A transposed or differently laid-out read (e.g. poisson `f` vs `u`) can
+  // fall back to fullWindow on every owner slot when block coordinates do not
+  // map cleanly to dispatch IVs. That acquires the whole DB grid while sibling
+  // halo reads use the SU tile window, leaving compact-halo guid holders unset
+  // at runtime. Reuse the tile-mapped access slots from a sibling in-mode dep
+  // at the same owner rank when every slot on this dep is fullWindow.
+  for (unsigned ownerRank = 1; ownerRank <= 4; ++ownerRank) {
+    const DirectDepSpec *templateDep = nullptr;
+    for (const DirectDepSpec &dep : deps) {
+      if (dep.mode != ArtsMode::in || dep.reduceScatter ||
+          dep.ownerDimCount != ownerRank || dep.accessSlots.size() != ownerRank)
+        continue;
+      if (llvm::any_of(dep.accessSlots, [](const DepOwnerAccessSlot &slot) {
+            return slot.fullWindow;
+          }))
+        continue;
+      templateDep = &dep;
+      break;
+    }
+    if (!templateDep)
+      continue;
+    for (DirectDepSpec &dep : deps) {
+      if (&dep == templateDep || dep.mode != ArtsMode::in ||
+          dep.reduceScatter || dep.ownerDimCount != ownerRank ||
+          dep.accessSlots.size() != ownerRank)
+        continue;
+      if (!llvm::all_of(dep.accessSlots, [](const DepOwnerAccessSlot &slot) {
+            return slot.fullWindow;
+          }))
+        continue;
+      dep.accessSlots = templateDep->accessSlots;
+    }
+  }
+  return success();
 }
 
 LogicalResult collectStandaloneCuDependencies(

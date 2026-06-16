@@ -515,6 +515,459 @@ static void reconcileSubsetOwnerExpandedGridReaders(Operation *moduleOp) {
   });
 }
 
+static bool sameOwnerDimPositions(ArrayRef<int64_t> lhs,
+                                  ArrayRef<int64_t> rhs) {
+  return lhs.size() == rhs.size() &&
+         std::equal(lhs.begin(), lhs.end(), rhs.begin());
+}
+
+static ArrayRef<int64_t> committedBlockGrain(const sde::LayoutGraphFact &fact) {
+  return fact.budgetBlockShape.empty()
+             ? ArrayRef<int64_t>(fact.blockShape)
+             : ArrayRef<int64_t>(fact.budgetBlockShape);
+}
+
+static int64_t blockGrainVolume(ArrayRef<int64_t> shape) {
+  int64_t volume = 1;
+  for (int64_t dim : shape)
+    if (dim > 0)
+      volume *= dim;
+  return volume;
+}
+
+static bool isFinerBlockGrain(const sde::LayoutGraphFact &candidate,
+                              const sde::LayoutGraphFact &baseline) {
+  ArrayRef<int64_t> candidateGrain = committedBlockGrain(candidate);
+  ArrayRef<int64_t> baselineGrain = committedBlockGrain(baseline);
+  if (candidateGrain.empty() || baselineGrain.empty() ||
+      candidateGrain.size() != baselineGrain.size())
+    return candidate.muBlockCount > baseline.muBlockCount;
+  int64_t candidateVolume = blockGrainVolume(candidateGrain);
+  int64_t baselineVolume = blockGrainVolume(baselineGrain);
+  if (candidateVolume != baselineVolume)
+    return candidateVolume < baselineVolume;
+  return candidate.muBlockCount > baseline.muBlockCount;
+}
+
+static void restateArrayLayoutFactGrain(Builder &builder, DictionaryAttr dict,
+                                        ArrayRef<int64_t> ownerDims,
+                                        ArrayRef<int64_t> blockShape,
+                                        ArrayRef<int64_t> budgetBlockShape,
+                                        int64_t muBlockCount, Attribute &out) {
+  MLIRContext *ctx = builder.getContext();
+  StringAttr blockShapeName =
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::BlockShape);
+  StringAttr budgetName =
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::BudgetBlockShape);
+  StringAttr muCountName =
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::MuBlockCount);
+  StringAttr ownerName =
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::OwnerDims);
+
+  SmallVector<NamedAttribute, 8> fields;
+  for (NamedAttribute named : dict)
+    if (named.getName() != ownerName && named.getName() != blockShapeName &&
+        named.getName() != budgetName && named.getName() != muCountName)
+      fields.push_back(named);
+  fields.push_back(
+      builder.getNamedAttr(ownerName, buildI64ArrayAttr(ctx, ownerDims)));
+  fields.push_back(
+      builder.getNamedAttr(blockShapeName, buildI64ArrayAttr(ctx, blockShape)));
+  if (!budgetBlockShape.empty())
+    fields.push_back(builder.getNamedAttr(
+        budgetName, buildI64ArrayAttr(ctx, budgetBlockShape)));
+  if (muBlockCount > 0)
+    fields.push_back(builder.getNamedAttr(
+        muCountName, builder.getI64IntegerAttr(muBlockCount)));
+  out = builder.getDictionaryAttr(fields);
+}
+
+static bool sameI64Array(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
+  return lhs.size() == rhs.size() &&
+         std::equal(lhs.begin(), lhs.end(), rhs.begin());
+}
+
+static void propagateArrayBlockGrainOnSu(sde::SdeSuIterateOp op,
+                                         int64_t arrayId,
+                                         ArrayRef<int64_t> ownerDims,
+                                         ArrayRef<int64_t> blockShape,
+                                         ArrayRef<int64_t> budgetBlockShape,
+                                         int64_t muBlockCount) {
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return;
+  MLIRContext *ctx = op.getContext();
+  Builder builder(ctx);
+  bool changed = false;
+  SmallVector<Attribute, 4> rewritten;
+  rewritten.reserve(layout.size());
+  for (Attribute attr : layout) {
+    auto dict = dyn_cast<DictionaryAttr>(attr);
+    std::optional<sde::LayoutGraphFact> fact =
+        dict ? sde::parseArrayLayoutFact(dict) : std::nullopt;
+    if (!dict || !fact || fact->id != arrayId ||
+        fact->layoutKind != sde::ArrayLayoutKind::blockParallel ||
+        !sameOwnerDimPositions(fact->ownerDims, ownerDims) ||
+        (sameI64Array(fact->blockShape, blockShape) &&
+         sameI64Array(fact->budgetBlockShape, budgetBlockShape) &&
+         (!muBlockCount || fact->muBlockCount == muBlockCount))) {
+      rewritten.push_back(attr);
+      continue;
+    }
+    Attribute updated = attr;
+    restateArrayLayoutFactGrain(builder, dict, ownerDims, blockShape,
+                                budgetBlockShape, muBlockCount, updated);
+    rewritten.push_back(updated);
+    changed = true;
+  }
+  if (changed)
+    op.setArrayLayoutAttr(ArrayAttr::get(ctx, rewritten));
+}
+
+static std::optional<sde::LayoutGraphFact>
+findFinestCommittedFactForArray(Operation *moduleOp, int64_t arrayId) {
+  std::optional<sde::LayoutGraphFact> finest;
+  moduleOp->walk([&](sde::SdeSuIterateOp op) {
+    ArrayAttr layout = op.getArrayLayoutAttr();
+    if (!layout)
+      return;
+    for (const sde::LayoutGraphFact &fact :
+         sde::parseArrayLayoutFacts(layout)) {
+      if (fact.id != arrayId || fact.ownerDims.empty() ||
+          fact.layoutKind != sde::ArrayLayoutKind::blockParallel)
+        continue;
+      if (!finest || isFinerBlockGrain(fact, *finest))
+        finest = fact;
+    }
+  });
+  return finest;
+}
+
+static std::optional<sde::LayoutGraphFact>
+lookupSuLayoutFact(sde::SdeSuIterateOp op, int64_t arrayId,
+                   std::optional<sde::LayoutGraphRole> role = std::nullopt) {
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return std::nullopt;
+  std::optional<sde::LayoutGraphFact> match;
+  for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
+    if (fact.id != arrayId || fact.ownerDims.empty() ||
+        fact.layoutKind != sde::ArrayLayoutKind::blockParallel)
+      continue;
+    if (role && fact.role != *role)
+      continue;
+    if (!match || isFinerBlockGrain(fact, *match))
+      match = fact;
+  }
+  return match;
+}
+
+static DictionaryAttr findFinestFactDictForArray(Operation *moduleOp,
+                                                 int64_t arrayId) {
+  std::optional<sde::LayoutGraphFact> finest;
+  DictionaryAttr finestDict;
+  moduleOp->walk([&](sde::SdeSuIterateOp op) {
+    ArrayAttr layout = op.getArrayLayoutAttr();
+    if (!layout)
+      return;
+    for (Attribute attr : layout) {
+      auto dict = dyn_cast<DictionaryAttr>(attr);
+      std::optional<sde::LayoutGraphFact> fact =
+          dict ? sde::parseArrayLayoutFact(dict) : std::nullopt;
+      if (!dict || !fact || fact->id != arrayId || fact->ownerDims.empty() ||
+          fact->layoutKind != sde::ArrayLayoutKind::blockParallel)
+        continue;
+      if (!finest || isFinerBlockGrain(*fact, *finest)) {
+        finest = *fact;
+        finestDict = dict;
+      }
+    }
+  });
+  return finestDict;
+}
+
+static void ensureWriteFactForArrayRoot(sde::SdeSuIterateOp op, int64_t arrayId,
+                                        DictionaryAttr homeDict) {
+  if (!homeDict || lookupSuLayoutFact(op, arrayId, sde::LayoutGraphRole::write))
+    return;
+  MLIRContext *ctx = op.getContext();
+  Builder builder(ctx);
+  StringAttr roleName =
+      builder.getStringAttr(sde::AttrNames::LayoutGraph::Role);
+  StringAttr writeRole =
+      builder.getStringAttr(sde::AttrNames::LayoutGraphValues::RoleWrite);
+
+  SmallVector<Attribute, 4> facts;
+  if (ArrayAttr layout = op.getArrayLayoutAttr())
+    facts.assign(layout.begin(), layout.end());
+
+  SmallVector<NamedAttribute, 8> fields;
+  for (NamedAttribute named : homeDict)
+    if (named.getName() != roleName)
+      fields.push_back(named);
+  fields.push_back(builder.getNamedAttr(roleName, writeRole));
+  facts.push_back(builder.getDictionaryAttr(fields));
+  op.setArrayLayoutAttr(ArrayAttr::get(ctx, facts));
+}
+
+static LogicalResult
+rematerializeExpandedMuForArray(Operation *moduleOp, int64_t arrayId,
+                                ArrayRef<int64_t> ownerDims,
+                                ArrayRef<int64_t> blockShape) {
+  sde::SdeMuAllocOp targetMu;
+  moduleOp->walk([&](sde::SdeMuAllocOp mu) {
+    if (targetMu)
+      return;
+    std::optional<int64_t> muArrayId = sde::getMuArrayIdFromLayoutRoot(mu);
+    if (muArrayId && *muArrayId == arrayId)
+      targetMu = mu;
+  });
+  if (!targetMu)
+    return success();
+
+  auto expandedType = dyn_cast<MemRefType>(targetMu.getMemref().getType());
+  if (!expandedType || !expandedType.hasStaticShape())
+    return success();
+  std::optional<sde::RecoveredMuPhysicalLayout> recovered =
+      sde::recoverMuPhysicalLayoutFromExpandedType(expandedType);
+  if (!recovered || recovered->ownerDims.empty())
+    return success();
+
+  const unsigned numGrid = recovered->ownerDims.size();
+  SmallVector<int64_t, 4> newShape(expandedType.getShape().begin(),
+                                   expandedType.getShape().end());
+  llvm::SmallDenseMap<int64_t, int64_t, 4> oldToNewBlockExtent;
+  for (auto [slot, od] : llvm::enumerate(recovered->ownerDims)) {
+    if (slot >= ownerDims.size() || ownerDims[slot] != static_cast<int64_t>(od))
+      return success();
+    int64_t oldBlock = recovered->physicalBlockShape[od];
+    int64_t newBlock =
+        blockShape.size() == recovered->logicalShape.size()
+            ? blockShape[od]
+            : (slot < blockShape.size() ? blockShape[slot] : oldBlock);
+    if (newBlock <= 0 || newBlock >= oldBlock)
+      continue;
+    if (oldBlock % newBlock != 0)
+      return failure();
+    int64_t scale = oldBlock / newBlock;
+    newShape[slot] *= scale;
+    newShape[numGrid + od] = newBlock;
+    oldToNewBlockExtent[oldBlock] = newBlock;
+  }
+  if (oldToNewBlockExtent.empty())
+    return success();
+
+  MemRefType retiledType =
+      MemRefType::get(newShape, expandedType.getElementType());
+  if (retiledType == expandedType)
+    return success();
+
+  Value muValue = targetMu.getMemref();
+  MLIRContext *ctx = moduleOp->getContext();
+  OpBuilder builder(ctx);
+  auto usesBlockConstant = [&](Value index, int64_t oldBlock) -> bool {
+    Operation *def = index.getDefiningOp();
+    if (!def)
+      return false;
+    Value rhs;
+    if (auto div = dyn_cast<arith::DivUIOp>(def))
+      rhs = div.getRhs();
+    else if (auto rem = dyn_cast<arith::RemUIOp>(def))
+      rhs = rem.getRhs();
+    else
+      return false;
+    auto cst = rhs.getDefiningOp<arith::ConstantOp>();
+    if (!cst)
+      return false;
+    auto intAttr = dyn_cast<IntegerAttr>(cst.getValue());
+    return intAttr && intAttr.getValue().isNonNegative() &&
+           intAttr.getValue().getZExtValue() == static_cast<uint64_t>(oldBlock);
+  };
+
+  auto rewriteIndexing = [&](Operation *op) {
+    auto retileIndex = [&](Location loc, Value index) -> Value {
+      for (const auto &kv : oldToNewBlockExtent) {
+        if (!usesBlockConstant(index, kv.first))
+          continue;
+        Operation *def = index.getDefiningOp();
+        if (!def)
+          continue;
+        Value lhs = isa<arith::DivUIOp>(def)
+                        ? cast<arith::DivUIOp>(def).getLhs()
+                        : cast<arith::RemUIOp>(def).getLhs();
+        auto newCst = arith::ConstantIndexOp::create(builder, loc, kv.second);
+        if (isa<arith::DivUIOp>(def))
+          return arith::DivUIOp::create(builder, loc, lhs, newCst).getResult();
+        return arith::RemUIOp::create(builder, loc, lhs, newCst).getResult();
+      }
+      return index;
+    };
+    if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (store.getMemref() != muValue)
+        return;
+      SmallVector<Value, 4> newIndices;
+      bool changed = false;
+      for (Value index : store.getIndices()) {
+        Value retiled = retileIndex(store.getLoc(), index);
+        newIndices.push_back(retiled);
+        changed |= (retiled != index);
+      }
+      if (changed)
+        store.getIndicesMutable().assign(newIndices);
+      return;
+    }
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (load.getMemref() != muValue)
+        return;
+      SmallVector<Value, 4> newIndices;
+      bool changed = false;
+      for (Value index : load.getIndices()) {
+        Value retiled = retileIndex(load.getLoc(), index);
+        newIndices.push_back(retiled);
+        changed |= (retiled != index);
+      }
+      if (changed)
+        load.getIndicesMutable().assign(newIndices);
+    }
+  };
+
+  moduleOp->walk(rewriteIndexing);
+  targetMu.getMemref().setType(retiledType);
+  return success();
+}
+
+static bool isAlternatingBufferShapePair(ArrayRef<int64_t> read,
+                                         ArrayRef<int64_t> write) {
+  if (read.size() != write.size() || read.size() < 2)
+    return false;
+  for (size_t i = 1; i < read.size(); ++i)
+    if (read[i] != write[i])
+      return false;
+  return read[0] > 0 && write[0] > 0 && read[0] != write[0] &&
+         (write[0] % read[0] == 0 || read[0] % write[0] == 0);
+}
+
+static void unifyAlternatingBufferPair(Operation *moduleOp,
+                                       sde::SdeSuIterateOp op,
+                                       const sde::LayoutGraphFact &readFact,
+                                       const sde::LayoutGraphFact &writeFact) {
+  if (readFact.id == writeFact.id ||
+      !sameOwnerDimPositions(readFact.ownerDims, writeFact.ownerDims) ||
+      !isAlternatingBufferShapePair(readFact.blockShape, writeFact.blockShape))
+    return;
+  if (sameI64Array(readFact.blockShape, writeFact.blockShape))
+    return;
+
+  if (DictionaryAttr homeDict =
+          findFinestFactDictForArray(moduleOp, writeFact.id))
+    ensureWriteFactForArrayRoot(op, writeFact.id, homeDict);
+
+  propagateArrayBlockGrainOnSu(op, writeFact.id, writeFact.ownerDims,
+                               readFact.blockShape, readFact.budgetBlockShape,
+                               readFact.muBlockCount);
+  (void)sde::rewriteWriterArrayLayoutToPhysicalShape(
+      op, writeFact.ownerDims, readFact.blockShape, writeFact.id);
+  // Physical MU retile is applied in a follow-up walk after all pairs are
+  // unified so halo/movement lowering sees one block table.
+}
+
+// Jacobi/poisson double-buffer copies read `unew` and write `u` on the same
+// owner dim but can commit different block grains (e.g. 4x256 vs 2x512 rows).
+// ARTS compact-halo packing and the copy-back EDT assume matching block tables;
+// unify the write buffer to the read source grain before edge collection.
+static void reconcileAlternatingBufferGrain(Operation *moduleOp) {
+  moduleOp->walk([&](sde::SdeSuIterateOp op) {
+    ArrayAttr layout = op.getArrayLayoutAttr();
+    if (!layout)
+      return;
+    std::optional<sde::LayoutGraphFact> readFact;
+    std::optional<sde::LayoutGraphFact> writeFact;
+    for (const sde::LayoutGraphFact &fact :
+         sde::parseArrayLayoutFacts(layout)) {
+      if (fact.id < 0 || fact.ownerDims.empty() ||
+          fact.layoutKind != sde::ArrayLayoutKind::blockParallel)
+        continue;
+      if (fact.role == sde::LayoutGraphRole::read) {
+        if (!readFact || isFinerBlockGrain(fact, *readFact))
+          readFact = fact;
+      } else if (fact.role == sde::LayoutGraphRole::write) {
+        if (!writeFact || isFinerBlockGrain(*writeFact, fact))
+          writeFact = fact;
+      }
+    }
+    if (!readFact || !writeFact)
+      return;
+    unifyAlternatingBufferPair(moduleOp, op, *readFact, *writeFact);
+  });
+
+  moduleOp->walk([&](sde::SdeSuIterateOp op) {
+    if (op.getBody().empty())
+      return;
+    std::optional<int64_t> readArrayId;
+    std::optional<int64_t> writeArrayId;
+    for (sde::SdeArrayLayoutRootOp root :
+         op.getBody().front().getOps<sde::SdeArrayLayoutRootOp>()) {
+      if (!root.getArrayIdAttr())
+        continue;
+      int64_t id = root.getArrayIdAttr().getInt();
+      if (root.getMode() == sde::SdeAccessMode::read)
+        readArrayId = id;
+      else if (root.getMode() == sde::SdeAccessMode::write)
+        writeArrayId = id;
+    }
+    if (!readArrayId || !writeArrayId || *readArrayId == *writeArrayId)
+      return;
+
+    std::optional<sde::LayoutGraphFact> readFact =
+        lookupSuLayoutFact(op, *readArrayId, sde::LayoutGraphRole::read);
+    if (!readFact)
+      readFact = findFinestCommittedFactForArray(moduleOp, *readArrayId);
+    std::optional<sde::LayoutGraphFact> writeFact =
+        lookupSuLayoutFact(op, *writeArrayId, sde::LayoutGraphRole::write);
+    if (!writeFact)
+      writeFact = findFinestCommittedFactForArray(moduleOp, *writeArrayId);
+    if (!readFact || !writeFact)
+      return;
+    unifyAlternatingBufferPair(moduleOp, op, *readFact, *writeFact);
+  });
+
+  llvm::SmallDenseSet<int64_t, 4> retiledArrays;
+  moduleOp->walk([&](sde::SdeSuIterateOp op) {
+    if (op.getBody().empty())
+      return;
+    std::optional<int64_t> readArrayId;
+    std::optional<int64_t> writeArrayId;
+    for (sde::SdeArrayLayoutRootOp root :
+         op.getBody().front().getOps<sde::SdeArrayLayoutRootOp>()) {
+      if (!root.getArrayIdAttr())
+        continue;
+      int64_t id = root.getArrayIdAttr().getInt();
+      if (root.getMode() == sde::SdeAccessMode::read)
+        readArrayId = id;
+      else if (root.getMode() == sde::SdeAccessMode::write)
+        writeArrayId = id;
+    }
+    if (!readArrayId || !writeArrayId || *readArrayId == *writeArrayId)
+      return;
+    std::optional<sde::LayoutGraphFact> readFact =
+        lookupSuLayoutFact(op, *readArrayId, sde::LayoutGraphRole::read);
+    if (!readFact)
+      readFact = findFinestCommittedFactForArray(moduleOp, *readArrayId);
+    std::optional<sde::LayoutGraphFact> writeFact =
+        lookupSuLayoutFact(op, *writeArrayId, sde::LayoutGraphRole::write);
+    if (!writeFact)
+      writeFact = findFinestCommittedFactForArray(moduleOp, *writeArrayId);
+    if (!readFact || !writeFact || readFact->id == writeFact->id ||
+        !isAlternatingBufferShapePair(readFact->blockShape,
+                                      writeFact->blockShape) ||
+        sameI64Array(readFact->blockShape, writeFact->blockShape))
+      return;
+    if (retiledArrays.insert(writeFact->id).second)
+      (void)rematerializeExpandedMuForArray(
+          moduleOp, writeFact->id, writeFact->ownerDims, readFact->blockShape);
+  });
+}
+
 // Author the committed write access-window dependency for an elementwise INIT
 // writer of block-distributed arrays. A data-parallel init loop (e.g.
 // `u[i][j] = 0; unew[i][j] = 0; f[i][j] = ...`) writes several arrays in one
@@ -680,18 +1133,58 @@ static void authorInitWriterAccessWindows(Operation *moduleOp) {
       continue;
 
     // Author one write fact (copied from the array's committed home, role
-    // flipped to write) plus its array_layout_root, per distinct DB.
+    // flipped to write) plus its array_layout_root, per distinct DB. When
+    // several outputs share the same owner dim (jacobi/poisson `u` + `unew`),
+    // commit the finest shared block grain so the multi-writer init and later
+    // copy-back/halo lowering see one block table.
+    llvm::SmallVector<std::pair<SmallVector<int64_t, 4>, sde::LayoutGraphFact>,
+                      4>
+        canonicalByOwnerDims;
+    for (const auto &kv : writes) {
+      std::optional<sde::LayoutGraphFact> fact =
+          sde::parseArrayLayoutFact(kv.second.fact);
+      if (!fact || fact->ownerDims.empty() || fact->blockShape.empty())
+        continue;
+      auto it = llvm::find_if(canonicalByOwnerDims, [&](const auto &entry) {
+        return sameOwnerDimPositions(entry.first, fact->ownerDims);
+      });
+      if (it == canonicalByOwnerDims.end()) {
+        canonicalByOwnerDims.push_back({fact->ownerDims, *fact});
+        continue;
+      }
+      if (isFinerBlockGrain(*fact, it->second))
+        it->second = *fact;
+    }
+
     SmallVector<Attribute, 4> facts;
     SmallVector<std::pair<Value, DbHome>, 4> roots;
     for (const auto &kv : writes) {
       auto alloc = cast<sde::SdeMuAllocOp>(kv.first);
       const DbHome &home = kv.second;
+      std::optional<sde::LayoutGraphFact> sourceFact =
+          sde::parseArrayLayoutFact(home.fact);
+      if (!sourceFact)
+        continue;
+      const sde::LayoutGraphFact *canonical = &*sourceFact;
+      if (auto it = llvm::find_if(canonicalByOwnerDims,
+                                  [&](const auto &entry) {
+                                    return sameOwnerDimPositions(
+                                        entry.first, sourceFact->ownerDims);
+                                  });
+          it != canonicalByOwnerDims.end())
+        canonical = &it->second;
+
       SmallVector<NamedAttribute, 8> fields;
       for (NamedAttribute named : home.fact)
         if (named.getName() != roleName)
           fields.push_back(named);
       fields.push_back(builder.getNamedAttr(roleName, writeRole));
-      facts.push_back(builder.getDictionaryAttr(fields));
+      Attribute authored = builder.getDictionaryAttr(fields);
+      restateArrayLayoutFactGrain(builder, cast<DictionaryAttr>(authored),
+                                  canonical->ownerDims, canonical->blockShape,
+                                  canonical->budgetBlockShape,
+                                  canonical->muBlockCount, authored);
+      facts.push_back(authored);
       roots.push_back({alloc.getMemref(), home});
     }
 
@@ -703,13 +1196,34 @@ static void authorInitWriterAccessWindows(Operation *moduleOp) {
           sde::SdeAccessModeAttr::get(ctx, sde::SdeAccessMode::write),
           IntegerAttr::get(IntegerType::get(ctx, 64), rk.second.arrayId));
     }
+    for (const auto &kv : writes) {
+      std::optional<sde::LayoutGraphFact> sourceFact =
+          sde::parseArrayLayoutFact(kv.second.fact);
+      if (!sourceFact)
+        continue;
+      auto it = llvm::find_if(canonicalByOwnerDims, [&](const auto &entry) {
+        return sameOwnerDimPositions(entry.first, sourceFact->ownerDims);
+      });
+      if (it == canonicalByOwnerDims.end() ||
+          committedBlockGrain(*sourceFact) == committedBlockGrain(it->second))
+        continue;
+      (void)sde::rewriteWriterArrayLayoutToPhysicalShape(
+          op, it->second.ownerDims, it->second.blockShape, sourceFact->id);
+    }
     // Commit CU group block counts so the compute CU groups the same DB blocks
     // the home consumer does (parsed from the copied home fact).
     for (const auto &kv : writes) {
       std::optional<sde::LayoutGraphFact> f =
           sde::parseArrayLayoutFact(kv.second.fact);
       if (f && !f->ownerDims.empty() && !f->blockShape.empty()) {
-        sde::commitCuGroupBlockCounts(op, f->ownerDims, f->blockShape);
+        auto it = llvm::find_if(canonicalByOwnerDims, [&](const auto &entry) {
+          return sameOwnerDimPositions(entry.first, f->ownerDims);
+        });
+        if (it != canonicalByOwnerDims.end())
+          sde::commitCuGroupBlockCounts(op, it->second.ownerDims,
+                                        it->second.blockShape);
+        else
+          sde::commitCuGroupBlockCounts(op, f->ownerDims, f->blockShape);
         break;
       }
     }
@@ -726,9 +1240,11 @@ struct SdeRedistributePass
     reconcileLayoutFactsToExpandedRoots(module);
     // RankExpandMu may expose new budget/physical grains after BlockGrainPlan;
     // re-unify same-owner block grain so home==reader before edge collection.
+    reconcileAlternatingBufferGrain(module);
     carts::sde::distribution::reconcileSameOwnerArrayGrain(
         module, carts::sde::distribution::SameOwnerGrainUnifyKind::
-                      CoarseCompatiblePostExpand);
+                    CoarseCompatiblePostExpand);
+    reconcileAlternatingBufferGrain(module);
     carts::sde::RedistributionEdges committed =
         carts::sde::collectRedistributionEdges(module);
     bool sawFailure = false;
