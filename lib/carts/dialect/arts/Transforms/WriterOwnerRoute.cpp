@@ -557,8 +557,10 @@ struct WriterOwnerRoutePass
   void runOnOperation() override {
     ModuleOp module = getOperation();
     std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
+    const bool singleNodeRuntime = totalNodes && *totalNodes <= 1;
     unsigned promoted = 0;
     unsigned routed = 0;
+    unsigned deferredSingleNode = 0;
     bool failed = false;
 
     module.walk([&](EdtOp edt) {
@@ -577,6 +579,10 @@ struct WriterOwnerRoutePass
                                          totalNodes);
 
       if (multiOwnerRange) {
+        if (singleNodeRuntime) {
+          ++deferredSingleNode;
+          return;
+        }
         edt.emitError()
             << "writes a distributed DB range that may span multiple owners; "
                "SDE-to-ARTS must split writer codelets into owner-local "
@@ -587,6 +593,10 @@ struct WriterOwnerRoutePass
       if (!sawDistributedWriter)
         return;
       if (unroutable || conflict || !expectedOwner) {
+        if (singleNodeRuntime) {
+          ++deferredSingleNode;
+          return;
+        }
         edt.emitError()
             << "writes distributed DBs whose owner route cannot be derived "
                "from the DB block grid; ARTS must split or "
@@ -601,6 +611,10 @@ struct WriterOwnerRoutePass
           createOwnerRoute(builder, edt.getLoc(), expectedOwner->alloc,
                            expectedOwner->acquire, expectedOwner->facts);
       if (!expectedRoute) {
+        if (singleNodeRuntime) {
+          ++deferredSingleNode;
+          return;
+        }
         edt.emitError()
             << "writes a distributed DB but ARTS could not derive an owner "
                "route from the DB block grid";
@@ -621,8 +635,14 @@ struct WriterOwnerRoutePass
       return;
     }
 
-    ARTS_INFO("Writer owner route promoted " << promoted << " EDTs and routed "
-                                             << routed << " EDTs");
+    if (deferredSingleNode)
+      ARTS_INFO("Writer owner route promoted " << promoted << " EDTs, routed "
+                                               << routed << " EDTs, deferred "
+                                               << deferredSingleNode
+                                               << " single-node EDTs");
+    else
+      ARTS_INFO("Writer owner route promoted " << promoted << " EDTs and routed "
+                                               << routed << " EDTs");
   }
 };
 
