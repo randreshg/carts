@@ -1071,8 +1071,7 @@ findMatchingReduceScatterFacts(
   if (!match)
     return std::optional<ReduceScatterRedistFacts>{};
   if (window.getMode() != ArtsMode::in)
-    return window.emitOpError()
-           << "matches reduce_scatter_like movement but is not read-only";
+    return std::optional<ReduceScatterRedistFacts>{};
 
   std::optional<SmallVector<int64_t, 4>> blockShape =
       readI64ArrayAttr(match->sourceBlockShape);
@@ -1276,6 +1275,10 @@ LogicalResult recordAccessWindowDependency(
       continue;
     DirectDepSpec &dep = deps[depIdx];
     if (!canMergeAccessWindowIntoDep(dep, window.getMode(), haloShape))
+      continue;
+    if (dep.reduceScatter && window.getMode() != ArtsMode::in)
+      continue;
+    if (reduceScatter->has_value() && dep.mode != ArtsMode::in)
       continue;
 
     if (dep.ownerDimCount != ownerDimCount || dep.blockLo != facts->blockLo ||

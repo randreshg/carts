@@ -42,7 +42,9 @@ expandHaloShapeToRootRank(ArrayRef<int64_t> haloShape,
                           ArrayRef<int64_t> ownerDims, unsigned rootRank);
 
 bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
-                                 SdeSuIterateOp reader, MemRefType rootType,
+                                 SdeSuIterateOp projectionSu,
+                                 SdeSuIterateOp accessReader,
+                                 MemRefType rootType,
                                  ArrayRef<int64_t> committedHaloShape,
                                  std::string &failReason);
 

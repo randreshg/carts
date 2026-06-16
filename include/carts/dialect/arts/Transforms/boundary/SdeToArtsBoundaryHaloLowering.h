@@ -34,9 +34,11 @@ void enumerateUnitHaloSourceOffsets(
 
 SmallVector<Value, 4>
 buildRankExpandedElementIndices(OpBuilder &builder, Location loc,
+                                unsigned ownerDimCount,
                                 ArrayRef<Value> elementIndices);
 
 void emitCompactHaloCopy(OpBuilder &builder, Location loc,
+                         unsigned ownerDimCount,
                          ArrayRef<int64_t> sourceOffsets,
                          ArrayRef<Value> elementExtents, Value sourcePayload,
                          Value compactPayload);

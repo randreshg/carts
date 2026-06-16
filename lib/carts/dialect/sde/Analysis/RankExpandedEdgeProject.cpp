@@ -18,16 +18,207 @@
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 
+#include <cstdlib>
+
 using namespace mlir;
 
 namespace mlir::carts::sde::redist {
+
+static bool allZero(ArrayRef<int64_t> values) {
+  return llvm::all_of(values, [](int64_t value) { return value == 0; });
+}
+
+static SmallVector<Value, 8> collectIndexInductionValues(SdeSuIterateOp op) {
+  SmallVector<Value, 8> ivs;
+  if (!op)
+    return ivs;
+  for (Value arg : op.getBody().getArguments())
+    if (arg.getType().isIndex())
+      ivs.push_back(arg);
+  op.getBody().walk(
+      [&](scf::ForOp loop) { ivs.push_back(loop.getInductionVar()); });
+  op.getBody().walk(
+      [&](affine::AffineForOp loop) { ivs.push_back(loop.getInductionVar()); });
+  return ivs;
+}
+
+static std::optional<int64_t>
+recoverConstantOffsetFromAnyIv(Value value, ArrayRef<Value> ivs) {
+  for (Value iv : ivs) {
+    ::mlir::carts::ValueAnalysis::IndexExpr expr =
+        ::mlir::carts::ValueAnalysis::analyzeIndexExpr(value, iv);
+    if (expr.dependsOnIV && expr.offset)
+      return std::llabs(*expr.offset);
+
+    int64_t constantOffset = 0;
+    Value base = ::mlir::carts::ValueAnalysis::stripConstantOffset(
+        ::mlir::carts::ValueAnalysis::stripNumericCasts(value),
+        &constantOffset);
+    if (::mlir::carts::ValueAnalysis::sameValue(
+            ::mlir::carts::ValueAnalysis::stripNumericCasts(base),
+            ::mlir::carts::ValueAnalysis::stripNumericCasts(iv)))
+      return std::llabs(constantOffset);
+  }
+  return std::nullopt;
+}
+
+static std::optional<SmallVector<int64_t, 4>>
+recoverRankExpandedOwnerHaloFromLoads(Value root, SdeSuIterateOp reader,
+                                      ArrayRef<int64_t> ownerDims,
+                                      MemRefType rootType) {
+  if (!root || !reader || ownerDims.empty() || !rootType ||
+      !rootType.hasStaticShape())
+    return std::nullopt;
+
+  const unsigned ownerCount = ownerDims.size();
+  const unsigned rootRank = rootType.getRank();
+  if (ownerCount >= rootRank)
+    return std::nullopt;
+  const unsigned logicalRank = rootRank - ownerCount;
+
+  SmallVector<int64_t, 4> sortedOwners(ownerDims.begin(), ownerDims.end());
+  llvm::sort(sortedOwners);
+  for (int64_t ownerDim : sortedOwners)
+    if (ownerDim < 0 || static_cast<unsigned>(ownerDim) >= logicalRank)
+      return std::nullopt;
+
+  SmallVector<Value, 8> ivs = collectIndexInductionValues(reader);
+  if (ivs.empty())
+    return std::nullopt;
+
+  SmallVector<int64_t, 4> radii(ownerCount, 0);
+  bool sawLoad = false;
+  bool sawUnknown = false;
+  ArrayRef<int64_t> shape = rootType.getShape();
+  reader.getBody().walk([&](memref::LoadOp load) {
+    if (sawUnknown)
+      return;
+    if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(load.getMemref()) !=
+        root)
+      return;
+    sawLoad = true;
+    if (load.getIndices().size() != rootRank) {
+      sawUnknown = true;
+      return;
+    }
+
+    for (auto [slot, ownerDim] : llvm::enumerate(sortedOwners)) {
+      unsigned tileSlot = ownerCount + static_cast<unsigned>(ownerDim);
+      if (slot >= load.getIndices().size() ||
+          tileSlot >= load.getIndices().size()) {
+        sawUnknown = true;
+        return;
+      }
+
+      int64_t blockExtent = shape[tileSlot];
+      if (blockExtent <= 0) {
+        sawUnknown = true;
+        return;
+      }
+
+      auto div = load.getIndices()[slot].getDefiningOp<arith::DivUIOp>();
+      auto rem = load.getIndices()[tileSlot].getDefiningOp<arith::RemUIOp>();
+      if (!div || !rem) {
+        sawUnknown = true;
+        return;
+      }
+      std::optional<int64_t> divExtent =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(div.getRhs());
+      std::optional<int64_t> remExtent =
+          ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(rem.getRhs());
+      if (!divExtent || !remExtent || *divExtent != blockExtent ||
+          *remExtent != blockExtent) {
+        sawUnknown = true;
+        return;
+      }
+
+      Value divBase =
+          ::mlir::carts::ValueAnalysis::stripNumericCasts(div.getLhs());
+      Value remBase =
+          ::mlir::carts::ValueAnalysis::stripNumericCasts(rem.getLhs());
+      if (!::mlir::carts::ValueAnalysis::sameValue(divBase, remBase)) {
+        sawUnknown = true;
+        return;
+      }
+      std::optional<int64_t> offset =
+          recoverConstantOffsetFromAnyIv(div.getLhs(), ivs);
+      if (!offset) {
+        sawUnknown = true;
+        return;
+      }
+      radii[slot] = std::max<int64_t>(radii[slot], *offset);
+    }
+  });
+
+  if (!sawLoad || sawUnknown)
+    return std::nullopt;
+  return radii;
+}
+
+static std::optional<int64_t>
+recoverExpandedOwnerHaloFromLoads(Value root, SdeSuIterateOp reader,
+                                  unsigned gridSlot, unsigned logicalOwnerDim,
+                                  int64_t blockExtent) {
+  if (!root || !reader || blockExtent <= 0)
+    return std::nullopt;
+  SmallVector<Value, 4> ownerIvs = collectOwnerIndexValues(reader);
+  if (logicalOwnerDim >= ownerIvs.size())
+    return std::nullopt;
+  Value ownerIv = ownerIvs[logicalOwnerDim];
+
+  bool sawProjectedLoad = false;
+  bool sawUnknownProjectedLoad = false;
+  int64_t radius = 0;
+  reader.getBody().walk([&](memref::LoadOp load) {
+    if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(load.getMemref()) !=
+            root ||
+        gridSlot >= load.getIndices().size())
+      return;
+    auto div = load.getIndices()[gridSlot].getDefiningOp<arith::DivUIOp>();
+    if (!div) {
+      sawUnknownProjectedLoad = true;
+      return;
+    }
+    std::optional<int64_t> divisor =
+        ::mlir::carts::ValueAnalysis::tryFoldConstantIndex(div.getRhs());
+    if (!divisor || *divisor != blockExtent) {
+      sawUnknownProjectedLoad = true;
+      return;
+    }
+    ::mlir::carts::ValueAnalysis::IndexExpr expr =
+        ::mlir::carts::ValueAnalysis::analyzeIndexExpr(div.getLhs(), ownerIv);
+    if ((!expr.dependsOnIV || !expr.offset)) {
+      int64_t constantOffset = 0;
+      Value base = ::mlir::carts::ValueAnalysis::stripConstantOffset(
+          ::mlir::carts::ValueAnalysis::stripNumericCasts(div.getLhs()),
+          &constantOffset);
+      if (::mlir::carts::ValueAnalysis::sameValue(
+              ::mlir::carts::ValueAnalysis::stripNumericCasts(base),
+              ::mlir::carts::ValueAnalysis::stripNumericCasts(ownerIv))) {
+        sawProjectedLoad = true;
+        radius = std::max<int64_t>(radius, std::llabs(constantOffset));
+        return;
+      }
+      sawUnknownProjectedLoad = true;
+      return;
+    }
+    sawProjectedLoad = true;
+    radius = std::max<int64_t>(radius, std::llabs(*expr.offset));
+  });
+  if (!sawProjectedLoad || sawUnknownProjectedLoad)
+    return std::nullopt;
+  return radius;
+}
 
 std::optional<HomeLayout> homeLayoutFromCommittedPhysical(SdeSuIterateOp su) {
   std::optional<CommittedSuPhysicalLayout> committed =
@@ -99,11 +290,13 @@ expandHaloShapeToRootRank(ArrayRef<int64_t> haloShape,
 }
 
 bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
-                                 SdeSuIterateOp reader, MemRefType rootType,
+                                 SdeSuIterateOp projectionSu,
+                                 SdeSuIterateOp accessReader,
+                                 MemRefType rootType,
                                  ArrayRef<int64_t> committedHaloShape,
                                  std::string &failReason) {
   std::optional<ExpandedBlockGridMu> expanded =
-      recognizeExpandedBlockGridMu(reader, rootType);
+      recognizeExpandedBlockGridMu(projectionSu, rootType);
   if (!expanded) {
     failReason = "rank-expanded halo redistribution is not a recognized "
                  "block-grid MU shape";
@@ -122,6 +315,14 @@ bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
   SmallVector<int64_t, 4> rawSourceOwner(edge.sourceOwnerDims.begin(),
                                          edge.sourceOwnerDims.end());
   if (!sameOwnerDimSet(edge.sourceOwnerDims, committedOwner)) {
+    if (std::optional<SmallVector<int64_t, 4>> recovered =
+            recoverRankExpandedOwnerHaloFromLoads(edge.root, accessReader,
+                                                  rawSourceOwner, rootType)) {
+      if (allZero(*recovered)) {
+        edge.haloShape.assign(rootType.getRank(), 0);
+        return true;
+      }
+    }
     failReason = "rank-expanded halo edge owner dims do not match the "
                  "committed expanded owner grid";
     return false;
@@ -132,13 +333,18 @@ bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
   if (committedHaloShape.size() == rootType.getRank()) {
     projectedOwnerHalo.reserve(rawSourceOwner.size());
     for (int64_t ownerDim : rawSourceOwner) {
-      if (ownerDim < 0 ||
-          ownerDim >= static_cast<int64_t>(committedHaloShape.size())) {
+      if (ownerDim < 0 || ownerDim >= expanded->logicalRank) {
         failReason = "rank-expanded halo redistribution has no recoverable "
                      "ghost width for a committed owner grid dim";
         return false;
       }
-      projectedOwnerHalo.push_back(committedHaloShape[ownerDim]);
+      unsigned expandedTileDim = numGrid + static_cast<unsigned>(ownerDim);
+      if (expandedTileDim >= committedHaloShape.size()) {
+        failReason = "rank-expanded halo redistribution has no recoverable "
+                     "ghost width for a committed owner grid dim";
+        return false;
+      }
+      projectedOwnerHalo.push_back(committedHaloShape[expandedTileDim]);
     }
     ownerHaloShape = projectedOwnerHalo;
   }
@@ -160,6 +366,18 @@ bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
     std::optional<int64_t> radius = getOwnerHaloRadius(
         ownerHaloShape, expanded->logicalRank, rawSourceOwner,
         /*ownerSlot=*/i, /*logicalOwnerDim=*/expanded->ownerDims[i]);
+    if (radius && *radius == 0) {
+      std::optional<int64_t> recovered = recoverExpandedOwnerHaloFromLoads(
+          edge.root, accessReader, /*gridSlot=*/i,
+          /*logicalOwnerDim=*/expanded->ownerDims[i],
+          expanded->blockExtents[i]);
+      if (!recovered) {
+        failReason = "rank-expanded halo redistribution has no recoverable "
+                     "ghost width for a committed owner grid dim";
+        return false;
+      }
+      radius = *recovered;
+    }
     if (!radius || *radius < 0) {
       failReason = "rank-expanded halo redistribution has no recoverable ghost "
                    "width for a committed owner grid dim";

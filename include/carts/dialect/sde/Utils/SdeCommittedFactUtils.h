@@ -40,6 +40,13 @@ inline std::optional<CommittedSuPhysicalLayout>
 recoverCommittedPhysicalLayout(SdeSuIterateOp op) {
   if (!op)
     return std::nullopt;
+  if (std::optional<LayoutGraphFact> writeLayout =
+          findSingleCommittedWriterBlockLayout(op))
+    return CommittedSuPhysicalLayout{writeLayout->ownerDims,
+                                     writeLayout->blockShape};
+  if (std::optional<CommittedSuPhysicalLayout> fromCu =
+          recoverPhysicalLayoutFromCuGroupCounts(op))
+    return fromCu;
   if (!op.getBody().empty()) {
     for (SdeArrayLayoutRootOp root :
          op.getBody().front().getOps<SdeArrayLayoutRootOp>()) {
@@ -60,13 +67,6 @@ recoverCommittedPhysicalLayout(SdeSuIterateOp op) {
       }
     }
   }
-  if (std::optional<CommittedSuPhysicalLayout> fromCu =
-          recoverPhysicalLayoutFromCuGroupCounts(op))
-    return fromCu;
-  if (std::optional<LayoutGraphFact> writeLayout =
-          findSingleCommittedWriterBlockLayout(op))
-    return CommittedSuPhysicalLayout{writeLayout->ownerDims,
-                                     writeLayout->blockShape};
   return std::nullopt;
 }
 

@@ -474,24 +474,6 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
     return &accesses.back();
   };
 
-  auto hasPositiveI64ArrayEntry = [](ArrayAttr attr) {
-    if (!attr)
-      return false;
-    return llvm::any_of(attr, [](Attribute value) {
-      auto integer = dyn_cast<IntegerAttr>(value);
-      return integer && integer.getInt() > 0;
-    });
-  };
-
-  auto i64ArrayContains = [](ArrayAttr attr, int64_t needle) {
-    if (!attr)
-      return false;
-    return llvm::any_of(attr, [&](Attribute value) {
-      auto integer = dyn_cast<IntegerAttr>(value);
-      return integer && integer.getInt() == needle;
-    });
-  };
-
   auto cuNeedsSplitHaloRead = [&](SdeCuRegionOp cu) {
     std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(mu);
     if (!arrayId)
@@ -527,6 +509,10 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
   for (const CuAccess &access : accesses) {
     if (!access.hasRead && !access.hasWrite)
       continue;
+    if (access.hasRead && access.hasWrite)
+      if (auto classification = si.getStructuredClassification())
+        if (*classification == SdeStructuredClassification::reduction)
+          return {};
     auto appendSpec = [&](SdeAccessMode mode) {
       RaisedWindowSpec spec;
       spec.cu = access.cu;

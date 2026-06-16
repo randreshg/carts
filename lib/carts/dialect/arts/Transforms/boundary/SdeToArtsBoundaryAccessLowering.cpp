@@ -329,9 +329,9 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
                           ArrayRef<int64_t> groupBlockCounts,
                           OpBuilder &builder, Location loc) {
   unsigned ownerDimCount = dep.ownerDimCount;
-  if (ownerDimCount < 2) {
+  if (ownerDimCount == 0) {
     return source.emitOpError()
-           << "requires owner rank of at least 2 for compact N-D halo "
+           << "requires positive owner rank for compact N-D halo "
               "realization, got "
            << ownerDimCount;
   }
@@ -360,16 +360,23 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
   }
 
   if (dep.alloc.getSizes().size() != ownerDimCount ||
-      dep.alloc.getElementSizes().size() != ownerDimCount * 2) {
+      dep.alloc.getElementSizes().size() <= ownerDimCount) {
     return source.emitOpError()
            << "commits a rank shape that ARTS compact N-D unit-halo "
               "realization cannot represent; refusing a full-block halo "
               "byte-window";
   }
+  unsigned payloadRank =
+      static_cast<unsigned>(dep.alloc.getElementSizes().size()) - ownerDimCount;
+  if (ownerDimCount > payloadRank) {
+    return source.emitOpError()
+           << "commits more owner dimensions than payload dimensions for "
+              "ARTS compact N-D unit-halo realization";
+  }
 
   SmallVector<Value, 4> elementExtents;
-  elementExtents.reserve(ownerDimCount);
-  for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+  elementExtents.reserve(payloadRank);
+  for (unsigned slot = 0; slot < payloadRank; ++slot) {
     FailureOr<int64_t> extent = requireStaticPositiveIndex(
         dep.alloc.getElementSizes()[ownerDimCount + slot],
         source.getOperation(), "halo element extent");
@@ -397,17 +404,19 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
   Value route = arts::createCurrentNodeRoute(builder, loc);
 
   CompactHaloNdSpec spec;
+  spec.ownerDimCount = ownerDimCount;
   spec.elementExtents.assign(elementExtents.begin(), elementExtents.end());
   spec.sides.reserve(sideOffsets.size());
 
   for (ArrayRef<int64_t> sideOffset : sideOffsets) {
     SmallVector<Value> compactElementSizes;
-    compactElementSizes.reserve(ownerDimCount * 2);
+    compactElementSizes.reserve(ownerDimCount + payloadRank);
     for (unsigned slot = 0; slot < ownerDimCount; ++slot)
       compactElementSizes.push_back(one);
-    for (unsigned slot = 0; slot < ownerDimCount; ++slot)
-      compactElementSizes.push_back(sideOffset[slot] == 0 ? elementExtents[slot]
-                                                          : one);
+    for (unsigned slot = 0; slot < payloadRank; ++slot)
+      compactElementSizes.push_back(
+          slot < ownerDimCount && sideOffset[slot] != 0 ? one
+                                                        : elementExtents[slot]);
 
     SmallVector<int64_t, 4> compactPhysicalBlockShape(physicalBlockShape);
     for (unsigned slot = 0; slot < ownerDimCount; ++slot)
@@ -492,10 +501,10 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
     Value compactPayload =
         arts::realizeDbInnerPayload(bodyBuilder, loc, packBlock.getArgument(1));
     SmallVector<Value, 4> bodyElementExtents;
-    bodyElementExtents.reserve(ownerDimCount);
-    for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+    bodyElementExtents.reserve(elementExtents.size());
+    for (unsigned slot = 0; slot < elementExtents.size(); ++slot)
       bodyElementExtents.push_back(packBlock.getArgument(paramOffset + slot));
-    emitCompactHaloCopy(bodyBuilder, loc, side.sourceOffsets,
+    emitCompactHaloCopy(bodyBuilder, loc, ownerDimCount, side.sourceOffsets,
                         bodyElementExtents, sourcePayload, compactPayload);
     bodyBuilder.setInsertionPointToEnd(&packBlock);
     arts::YieldOp::create(bodyBuilder, loc);
@@ -855,7 +864,9 @@ convertSuIterate(sde::SdeSuIterateOp source,
     arts::BarrierOp::create(builder, loc, reason);
   }
 
+  SmallVector<Value, 4> dispatchIvs;
   SmallVector<Value, 4> dispatchBases;
+  SmallVector<Value, 4> dispatchEnds;
   SmallVector<Value, 4> dispatchBlockOffsets;
   scf::ForOp dispatchRoot;
   for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
@@ -866,18 +877,30 @@ convertSuIterate(sde::SdeSuIterateOp source,
                            source.getUpperBounds()[physicalDim], step);
     if (!dispatchRoot)
       dispatchRoot = loop;
-    dispatchBases.push_back(loop.getInductionVar());
+    dispatchIvs.push_back(loop.getInductionVar());
     builder.setInsertionPointToStart(loop.getBody());
   }
 
   for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
     unsigned physicalDim = ownerRouteping->loopDims[slot];
-    Value base = dispatchBases[slot];
+    Value base = dispatchIvs[slot];
     Value lower = source.getLowerBounds()[physicalDim];
-    Value delta = arith::SubIOp::create(builder, loc, base, lower);
+    Value upper = source.getUpperBounds()[physicalDim];
     Value blockSize = createConstantIndex(builder, loc, ownerBlockSizes[slot]);
-    dispatchBlockOffsets.push_back(
-        arith::DivUIOp::create(builder, loc, delta, blockSize));
+    Value blockOffset = arith::DivUIOp::create(builder, loc, base, blockSize);
+    Value blockStart =
+        arith::MulIOp::create(builder, loc, blockOffset, blockSize);
+    Value groupBlockCount =
+        createConstantIndex(builder, loc, groupBlockCounts[slot]);
+    Value blockEndOffset =
+        arith::AddIOp::create(builder, loc, blockOffset, groupBlockCount);
+    Value blockEnd =
+        arith::MulIOp::create(builder, loc, blockEndOffset, blockSize);
+    dispatchBlockOffsets.push_back(blockOffset);
+    dispatchBases.push_back(
+        arith::MaxUIOp::create(builder, loc, blockStart, lower));
+    dispatchEnds.push_back(
+        arith::MinUIOp::create(builder, loc, blockEnd, upper));
   }
   DenseMap<unsigned, unsigned> dispatchSlotByLoopDim;
   for (auto [slot, loopDim] : llvm::enumerate(ownerRouteping->loopDims))
@@ -995,17 +1018,23 @@ convertSuIterate(sde::SdeSuIterateOp source,
         if (dispatchIt != dispatchSlotByLoopDim.end()) {
           unsigned dispatchSlot = dispatchIt->second;
           base = dispatchBases[dispatchSlot];
-          Value groupSpan =
-              createConstantIndex(builder, loc, workerSpans[dispatchSlot]);
-          groupEnd = arith::MinUIOp::create(
-              builder, loc,
-              arith::AddIOp::create(builder, loc, base, groupSpan), upper);
           staticGroupCount =
               std::max<int64_t>(1, ceilDivPositiveI64(workerSpans[dispatchSlot],
                                                       coordinateBlockSize));
         }
         Value rawOffset = arith::DivUIOp::create(builder, loc, base,
                                                  coordinateBlockSizeValue);
+        if (dispatchIt != dispatchSlotByLoopDim.end()) {
+          Value groupCount =
+              createConstantIndex(builder, loc, staticGroupCount);
+          Value rawGroupEnd =
+              arith::AddIOp::create(builder, loc, rawOffset, groupCount);
+          groupEnd = arith::MinUIOp::create(
+              builder, loc,
+              arith::MulIOp::create(builder, loc, rawGroupEnd,
+                                    coordinateBlockSizeValue),
+              upper);
+        }
         Value rawEnd = ceilDivPositiveIndex(builder, loc, groupEnd,
                                             coordinateBlockSizeValue);
         Value offset = rawOffset;
@@ -1111,6 +1140,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
                   "dependency";
       const CompactHaloNdSpec &compactSpec = compactHaloNdSpecs[specIt->second];
       HaloNdTaskWork haloTaskWork;
+      haloTaskWork.ownerDimCount = compactSpec.ownerDimCount;
       haloTaskWork.centerTaskDepIndex = centerTaskDep;
       haloTaskWork.elementExtents.assign(compactSpec.elementExtents.begin(),
                                          compactSpec.elementExtents.end());
@@ -1154,6 +1184,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
   SmallVector<Value, 8> taskParams;
   taskParams.append(dispatchBases.begin(), dispatchBases.end());
   taskParams.append(dispatchBlockOffsets.begin(), dispatchBlockOffsets.end());
+  taskParams.append(dispatchEnds.begin(), dispatchEnds.end());
 
   auto appendParamIfMissing = [&](Value value) -> unsigned {
     auto it = llvm::find(taskParams, value);
@@ -1229,6 +1260,9 @@ convertSuIterate(sde::SdeSuIterateOp source,
   for (auto [idx, offset] : llvm::enumerate(dispatchBlockOffsets))
     mapper.map(offset,
                taskBlock.getArgument(paramOffset + ownerDimCount + idx));
+  for (auto [idx, end] : llvm::enumerate(dispatchEnds))
+    mapper.map(end,
+               taskBlock.getArgument(paramOffset + ownerDimCount * 2 + idx));
   SmallVector<SmallVector<Value, 4>> taskDepBlockOffsetArgs;
   taskDepBlockOffsetArgs.reserve(depBlockOffsets.size());
   for (unsigned depIdx = 0; depIdx < depBlockOffsets.size(); ++depIdx) {
@@ -1330,23 +1364,33 @@ convertSuIterate(sde::SdeSuIterateOp source,
             return WalkResult::advance();
 
           const HaloNdTaskWork &work = haloNdTaskWorks[haloIt->second];
-          unsigned rank = work.elementExtents.size();
+          unsigned ownerRank = work.ownerDimCount;
           SmallVector<Value, 4> loopIvs;
           for (Operation *parent = load->getParentOp(); parent;
                parent = parent->getParentOp())
             if (auto loop = dyn_cast<scf::ForOp>(parent))
               loopIvs.push_back(loop.getInductionVar());
-          if (loopIvs.size() < rank) {
+          SmallVector<Value, 4> ownerLoopIvs;
+          ownerLoopIvs.reserve(ownerRank);
+          if (ownerRank < work.elementExtents.size()) {
+            auto sourceIvs = source.getLoopInductionVars();
+            if (!sourceIvs || sourceIvs->size() < ownerRank) {
+              load.emitOpError()
+                  << "is not nested in the N-D compute loops required for "
+                     "ARTS compact unit-halo load rewriting";
+              return WalkResult::interrupt();
+            }
+            for (unsigned slot = 0; slot < ownerRank; ++slot)
+              ownerLoopIvs.push_back((*sourceIvs)[slot]);
+          } else if (loopIvs.size() >= ownerRank) {
+            for (unsigned slot = 0; slot < ownerRank; ++slot)
+              ownerLoopIvs.push_back(loopIvs[ownerRank - 1 - slot]);
+          } else {
             load.emitOpError()
                 << "is not nested in the N-D compute loops required for ARTS "
                    "compact unit-halo load rewriting";
             return WalkResult::interrupt();
           }
-
-          SmallVector<Value, 4> ownerLoopIvs;
-          ownerLoopIvs.reserve(rank);
-          for (unsigned slot = 0; slot < rank; ++slot)
-            ownerLoopIvs.push_back(loopIvs[rank - 1 - slot]);
           FailureOr<std::optional<HaloNdLoadRewrite>> rewrite =
               classifyNdUnitHaloLoad(load, haloIt->second, work, ownerLoopIvs);
           if (failed(rewrite))
@@ -1368,10 +1412,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
       unsigned slot = static_cast<unsigned>(
           std::distance(ownerRouteping->loopDims.begin(), ownerIt));
       lower = mapper.lookup(dispatchBases[slot]);
-      Value localEnd = arith::AddIOp::create(
-          bodyBuilder, loc, lower,
-          createConstantIndex(bodyBuilder, loc, workerSpans[slot]));
-      upper = arith::MinUIOp::create(bodyBuilder, loc, localEnd, upper);
+      upper = mapper.lookup(dispatchEnds[slot]);
     } else {
       lower = remapOrSelf(mapper, source.getLowerBounds()[dim]);
     }

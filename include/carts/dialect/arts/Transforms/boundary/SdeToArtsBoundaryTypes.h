@@ -64,6 +64,7 @@ struct CompactHaloNdSideSpec {
 };
 
 struct CompactHaloNdSpec {
+  unsigned ownerDimCount = 0;
   SmallVector<Value, 4> elementExtents;
   SmallVector<CompactHaloNdSideSpec, 8> sides;
 };
@@ -79,6 +80,7 @@ struct Halo2DTaskWork {
 };
 
 struct HaloNdTaskWork {
+  unsigned ownerDimCount = 0;
   unsigned centerTaskDepIndex = 0;
   SmallVector<Value, 4> elementExtents;
   SmallVector<SmallVector<int64_t, 4>, 8> sideSourceOffsets;

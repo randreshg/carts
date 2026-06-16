@@ -38,6 +38,27 @@ namespace mlir::carts::sde {
 
 using namespace mlir::carts::sde::redist;
 
+static bool isAllZero(ArrayRef<int64_t> values) {
+  return llvm::all_of(values, [](int64_t value) { return value == 0; });
+}
+
+static SdeSuIterateOp findStoreProducer(Operation *moduleOp, Value root) {
+  root = ::mlir::carts::ValueAnalysis::stripMemrefViewOps(root);
+  if (!moduleOp || !root)
+    return SdeSuIterateOp();
+  SdeSuIterateOp producer;
+  moduleOp->walk([&](memref::StoreOp store) {
+    if (producer)
+      return WalkResult::interrupt();
+    if (::mlir::carts::ValueAnalysis::stripMemrefViewOps(store.getMemref()) !=
+        root)
+      return WalkResult::advance();
+    producer = store->getParentOfType<SdeSuIterateOp>();
+    return producer ? WalkResult::interrupt() : WalkResult::advance();
+  });
+  return producer;
+}
+
 RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
   RedistributionEdges result;
 
@@ -81,6 +102,37 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       // thus the redist) at the budget grain so reads/redist match the writer's
       // owner_block grain; use blockShape only when budget is absent
       // (non-budget kernels).
+      ArrayRef<int64_t> homeBlock = f.budgetBlockShape.empty()
+                                        ? ArrayRef<int64_t>(f.blockShape)
+                                        : ArrayRef<int64_t>(f.budgetBlockShape);
+      home.blockShape.assign(homeBlock.begin(), homeBlock.end());
+      auto it = homeByArrayId.find(f.id);
+      if (it == homeByArrayId.end())
+        homeByArrayId[f.id] = std::move(home);
+      else if (it->second.ownerDims != home.ownerDims ||
+               it->second.blockShape != home.blockShape)
+        conflictingHome.insert(f.id);
+    }
+  });
+  moduleOp->walk([&](SdeSuIterateOp su) {
+    ArrayAttr layout = su.getArrayLayoutAttr();
+    if (!layout)
+      return;
+    for (const LayoutGraphFact &f : parseArrayLayoutFacts(layout)) {
+      if (f.role != LayoutGraphRole::read ||
+          f.layoutKind != ArrayLayoutKind::blockParallel ||
+          f.ownerDims.empty() || f.blockShape.empty() || f.id < 0)
+        continue;
+      if (homeByArrayId.contains(f.id) || conflictingHome.contains(f.id))
+        continue;
+      Value root = findArrayLayoutRoot(su, f.id, SdeAccessMode::read);
+      SdeSuIterateOp producer = findStoreProducer(moduleOp, root);
+      if (!producer)
+        continue;
+      HomeLayout home;
+      home.writer = producer;
+      home.layoutKind = f.layoutKind;
+      home.ownerDims.assign(f.ownerDims.begin(), f.ownerDims.end());
       ArrayRef<int64_t> homeBlock = f.budgetBlockShape.empty()
                                         ? ArrayRef<int64_t>(f.blockShape)
                                         : ArrayRef<int64_t>(f.budgetBlockShape);
@@ -245,15 +297,15 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
       if (edge.kind == RedistributionEdgeKind::Halo) {
         if (recognizeExpandedBlockGridMu(home.writer, muType)) {
           std::string haloFail;
-          if (!projectRankExpandedHaloEdge(edge, home.writer, muType,
+          if (!projectRankExpandedHaloEdge(edge, home.writer, reader, muType,
                                            *haloShape, haloFail)) {
             fail(haloFail);
             continue;
           }
         } else if (recognizeExpandedBlockGridMu(reader, muType)) {
           std::string haloFail;
-          if (!projectRankExpandedHaloEdge(edge, reader, muType, *haloShape,
-                                           haloFail)) {
+          if (!projectRankExpandedHaloEdge(edge, reader, reader, muType,
+                                           *haloShape, haloFail)) {
             fail(haloFail);
             continue;
           }
@@ -269,6 +321,8 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
           }
           edge.haloShape = std::move(*expandedHalo);
         }
+        if (isAllZero(edge.haloShape))
+          continue;
       }
 
       if (edge.kind == RedistributionEdgeKind::Halo ||

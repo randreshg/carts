@@ -110,30 +110,32 @@ void enumerateUnitHaloSourceOffsets(
 
 SmallVector<Value, 4>
 buildRankExpandedElementIndices(OpBuilder &builder, Location loc,
+                                unsigned ownerDimCount,
                                 ArrayRef<Value> elementIndices) {
   SmallVector<Value, 4> indices;
-  indices.reserve(elementIndices.size() * 2);
-  for (unsigned idx = 0; idx < elementIndices.size(); ++idx)
+  indices.reserve(ownerDimCount + elementIndices.size());
+  for (unsigned idx = 0; idx < ownerDimCount; ++idx)
     indices.push_back(createZeroIndex(builder, loc));
   indices.append(elementIndices.begin(), elementIndices.end());
   return indices;
 }
 
 void emitCompactHaloCopy(OpBuilder &builder, Location loc,
+                         unsigned ownerDimCount,
                          ArrayRef<int64_t> sourceOffsets,
                          ArrayRef<Value> elementExtents, Value sourcePayload,
                          Value compactPayload) {
-  unsigned rank = sourceOffsets.size();
-  SmallVector<Value, 4> loopIvs(rank);
+  unsigned payloadRank = elementExtents.size();
+  SmallVector<Value, 4> loopIvs(payloadRank);
 
   std::function<void(unsigned)> emitAtDim = [&](unsigned dim) {
-    if (dim == rank) {
+    if (dim == payloadRank) {
       SmallVector<Value, 4> sourceElementIndices;
       SmallVector<Value, 4> compactElementIndices;
-      sourceElementIndices.reserve(rank);
-      compactElementIndices.reserve(rank);
-      for (unsigned slot = 0; slot < rank; ++slot) {
-        if (sourceOffsets[slot] == 0) {
+      sourceElementIndices.reserve(payloadRank);
+      compactElementIndices.reserve(payloadRank);
+      for (unsigned slot = 0; slot < payloadRank; ++slot) {
+        if (slot >= ownerDimCount || sourceOffsets[slot] == 0) {
           sourceElementIndices.push_back(loopIvs[slot]);
           compactElementIndices.push_back(loopIvs[slot]);
           continue;
@@ -150,14 +152,16 @@ void emitCompactHaloCopy(OpBuilder &builder, Location loc,
       }
       Value value = memref::LoadOp::create(
           builder, loc, sourcePayload,
-          buildRankExpandedElementIndices(builder, loc, sourceElementIndices));
+          buildRankExpandedElementIndices(builder, loc, ownerDimCount,
+                                          sourceElementIndices));
       memref::StoreOp::create(
           builder, loc, value, compactPayload,
-          buildRankExpandedElementIndices(builder, loc, compactElementIndices));
+          buildRankExpandedElementIndices(builder, loc, ownerDimCount,
+                                          compactElementIndices));
       return;
     }
 
-    if (sourceOffsets[dim] != 0) {
+    if (dim < ownerDimCount && sourceOffsets[dim] != 0) {
       emitAtDim(dim + 1);
       return;
     }
@@ -254,9 +258,11 @@ FailureOr<std::optional<HaloNdLoadRewrite>>
 classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
                        const HaloNdTaskWork &work,
                        ArrayRef<Value> ownerLoopIvs) {
-  unsigned rank = ownerLoopIvs.size();
+  unsigned ownerDimCount = ownerLoopIvs.size();
+  unsigned payloadRank = work.elementExtents.size();
   OperandRange indices = load.getIndices();
-  if (indices.size() != rank * 2 || work.elementExtents.size() != rank) {
+  if (ownerDimCount == 0 || ownerDimCount > payloadRank ||
+      indices.size() != ownerDimCount + payloadRank) {
     load.emitOpError()
         << "uses a rank shape unsupported by ARTS compact N-D unit-halo "
            "realization";
@@ -264,9 +270,10 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
   }
 
   bool hasHaloOffset = false;
-  for (unsigned slot = 0; slot < rank; ++slot) {
-    Value expr = getCommonDivRemSource(indices[slot], indices[rank + slot],
-                                       work.elementExtents[slot]);
+  for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+    Value expr =
+        getCommonDivRemSource(indices[slot], indices[ownerDimCount + slot],
+                              work.elementExtents[slot]);
     if (!expr) {
       load.emitOpError()
           << "does not expose div/rem rank-expanded indices required for ARTS "
@@ -493,15 +500,17 @@ LogicalResult rewriteClonedNdUnitHaloLoads(
     if (rewrite.haloWorkIndex >= haloWorks.size())
       return task.emitOpError() << "has stale compact halo load rewrite state";
     const HaloNdTaskWork &work = haloWorks[rewrite.haloWorkIndex];
-    unsigned rank = work.elementExtents.size();
+    unsigned ownerDimCount = work.ownerDimCount;
+    unsigned payloadRank = work.elementExtents.size();
     OperandRange indices = load.getIndices();
-    if (indices.size() != rank * 2)
+    if (ownerDimCount == 0 || ownerDimCount > payloadRank ||
+        indices.size() != ownerDimCount + payloadRank)
       return load.emitOpError() << "has unsupported compact halo rank after "
                                    "cloning";
 
     auto requirePayload = [&](unsigned index) -> FailureOr<Value> {
       if (index >= payloads.size() || index >= depBlockOffsetArgs.size() ||
-          depBlockOffsetArgs[index].size() != rank) {
+          depBlockOffsetArgs[index].size() != ownerDimCount) {
         task.emitOpError() << "has inconsistent compact halo dependency state";
         return failure();
       }
@@ -515,12 +524,13 @@ LogicalResult rewriteClonedNdUnitHaloLoads(
     Location loc = load.getLoc();
     builder.setInsertionPoint(load);
     SmallVector<Value, 4> centerElementIndices;
-    centerElementIndices.reserve(rank);
-    for (unsigned slot = 0; slot < rank; ++slot)
-      centerElementIndices.push_back(indices[rank + slot]);
+    centerElementIndices.reserve(payloadRank);
+    for (unsigned slot = 0; slot < payloadRank; ++slot)
+      centerElementIndices.push_back(indices[ownerDimCount + slot]);
     Value replacement = memref::LoadOp::create(
         builder, loc, *centerPayload,
-        buildRankExpandedElementIndices(builder, loc, centerElementIndices));
+        buildRankExpandedElementIndices(builder, loc, ownerDimCount,
+                                        centerElementIndices));
 
     if (work.sideSourceOffsets.size() != work.sideTaskDepIndices.size())
       return task.emitOpError() << "has inconsistent compact halo side state";
@@ -535,7 +545,7 @@ LogicalResult rewriteClonedNdUnitHaloLoads(
       ArrayRef<Value> sideBlockOffsets = depBlockOffsetArgs[sideDepIndex];
 
       Value condition;
-      for (unsigned slot = 0; slot < rank; ++slot) {
+      for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
         Value centerBlock = centerBlockOffsets[slot];
         if (sideOffsets[slot] == 0) {
           Value sameBlock =
@@ -555,18 +565,20 @@ LogicalResult rewriteClonedNdUnitHaloLoads(
       }
 
       SmallVector<Value, 4> sideElementIndices;
-      sideElementIndices.reserve(rank);
-      for (unsigned slot = 0; slot < rank; ++slot)
-        sideElementIndices.push_back(sideOffsets[slot] == 0
-                                         ? indices[rank + slot]
-                                         : createZeroIndex(builder, loc));
+      sideElementIndices.reserve(payloadRank);
+      for (unsigned slot = 0; slot < payloadRank; ++slot)
+        sideElementIndices.push_back(slot < ownerDimCount &&
+                                             sideOffsets[slot] != 0
+                                         ? createZeroIndex(builder, loc)
+                                         : indices[ownerDimCount + slot]);
 
       auto ifOp = scf::IfOp::create(builder, loc, load.getType(), condition,
                                     /*withElseRegion=*/true);
       builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
       Value sideValue = memref::LoadOp::create(
           builder, loc, *sidePayload,
-          buildRankExpandedElementIndices(builder, loc, sideElementIndices));
+          buildRankExpandedElementIndices(builder, loc, ownerDimCount,
+                                          sideElementIndices));
       scf::YieldOp::create(builder, loc, ValueRange{sideValue});
 
       builder.setInsertionPointToStart(&ifOp.getElseRegion().front());

@@ -4,6 +4,7 @@
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
+#include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
@@ -13,6 +14,7 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include <memory>
 using namespace mlir;
@@ -161,6 +163,154 @@ static bool isElementwisePipeline(carts::sde::SdeSuIterateOp consumer) {
   return classification &&
          *classification ==
              carts::sde::SdeStructuredClassification::elementwise_pipeline;
+}
+
+static SmallVector<int64_t, 4> ownerDimsAsI64(ArrayRef<unsigned> ownerDims) {
+  SmallVector<int64_t, 4> result;
+  result.reserve(ownerDims.size());
+  for (unsigned dim : ownerDims)
+    result.push_back(static_cast<int64_t>(dim));
+  return result;
+}
+
+static bool ownerDimsContainAll(ArrayRef<int64_t> superset,
+                                ArrayRef<int64_t> subset) {
+  for (int64_t dim : subset)
+    if (!llvm::is_contained(superset, dim))
+      return false;
+  return true;
+}
+
+static int64_t productOrOne(ArrayRef<int64_t> values) {
+  int64_t product = 1;
+  for (int64_t value : values) {
+    if (value <= 0)
+      return 1;
+    product *= value;
+  }
+  return product;
+}
+
+static bool rewriteFactToExpandedRoot(Builder &builder, DictionaryAttr dict,
+                                      const carts::sde::LayoutGraphFact &fact,
+                                      ArrayRef<int64_t> ownerDims,
+                                      ArrayRef<int64_t> blockShape,
+                                      int64_t muBlockCount,
+                                      Attribute &rewritten) {
+  StringAttr ownerName =
+      builder.getStringAttr(carts::sde::AttrNames::LayoutGraph::OwnerDims);
+  StringAttr blockShapeName =
+      builder.getStringAttr(carts::sde::AttrNames::LayoutGraph::BlockShape);
+  StringAttr muCountName =
+      builder.getStringAttr(carts::sde::AttrNames::LayoutGraph::MuBlockCount);
+
+  if (fact.ownerDims == ownerDims && fact.blockShape == blockShape &&
+      fact.muBlockCount == muBlockCount)
+    return false;
+
+  SmallVector<NamedAttribute, 8> fields;
+  for (NamedAttribute named : dict)
+    if (named.getName() != ownerName && named.getName() != blockShapeName &&
+        named.getName() != muCountName)
+      fields.push_back(named);
+  MLIRContext *ctx = builder.getContext();
+  fields.push_back(
+      builder.getNamedAttr(ownerName, buildI64ArrayAttr(ctx, ownerDims)));
+  fields.push_back(
+      builder.getNamedAttr(blockShapeName, buildI64ArrayAttr(ctx, blockShape)));
+  if (muBlockCount > 0)
+    fields.push_back(builder.getNamedAttr(
+        muCountName, builder.getI64IntegerAttr(muBlockCount)));
+  rewritten = builder.getDictionaryAttr(fields);
+  return true;
+}
+
+// Rank expansion is the real SDE storage transformation. Some nested-stencil
+// Jacobi shapes reach redistribution with older layout facts that still name a
+// multi-owner logical grid even though the materialized MU is an owner strip.
+// Reconcile only facts whose owner set is a strict superset of the recovered
+// expanded-root owners (or whose physical block/count is stale) so movement is
+// authored over the storage SDE actually built.
+static void reconcileLayoutFactsToExpandedRoots(Operation *moduleOp) {
+  MLIRContext *ctx = moduleOp->getContext();
+  Builder builder(ctx);
+  moduleOp->walk([&](carts::sde::SdeSuIterateOp op) {
+    ArrayAttr layout = op.getArrayLayoutAttr();
+    if (!layout)
+      return;
+
+    bool changed = false;
+    SmallVector<Attribute, 4> rewritten;
+    rewritten.reserve(layout.size());
+    for (Attribute attr : layout) {
+      auto dict = dyn_cast<DictionaryAttr>(attr);
+      std::optional<carts::sde::LayoutGraphFact> fact =
+          dict ? carts::sde::parseArrayLayoutFact(dict) : std::nullopt;
+      if (!dict || !fact ||
+          fact->layoutKind != carts::sde::ArrayLayoutKind::blockParallel ||
+          fact->ownerDims.empty() || fact->blockShape.empty()) {
+        rewritten.push_back(attr);
+        continue;
+      }
+
+      carts::sde::SdeAccessMode mode =
+          fact->role == carts::sde::LayoutGraphRole::write
+              ? carts::sde::SdeAccessMode::write
+              : carts::sde::SdeAccessMode::read;
+      Value root = carts::sde::findArrayLayoutRoot(op, fact->id, mode);
+      auto type = root ? dyn_cast<MemRefType>(root.getType()) : MemRefType();
+      std::optional<carts::sde::RecoveredMuPhysicalLayout> recovered =
+          type ? carts::sde::recoverMuPhysicalLayoutFromExpandedType(type)
+               : std::nullopt;
+      if (!recovered || recovered->ownerDims.empty()) {
+        rewritten.push_back(attr);
+        continue;
+      }
+
+      SmallVector<int64_t, 4> recoveredOwners =
+          ownerDimsAsI64(recovered->ownerDims);
+      if (!ownerDimsContainAll(fact->ownerDims, recoveredOwners)) {
+        rewritten.push_back(attr);
+        continue;
+      }
+
+      Attribute updated = attr;
+      int64_t recoveredBlocks =
+          productOrOne(type.getShape().take_front(recovered->ownerDims.size()));
+      if (rewriteFactToExpandedRoot(builder, dict, *fact, recoveredOwners,
+                                    recovered->physicalBlockShape,
+                                    recoveredBlocks, updated)) {
+        rewritten.push_back(updated);
+        changed = true;
+        continue;
+      }
+      rewritten.push_back(attr);
+    }
+
+    if (changed)
+      op.setArrayLayoutAttr(ArrayAttr::get(ctx, rewritten));
+  });
+}
+
+static bool ensureMovementScope(carts::sde::SdeSuIterateOp consumer,
+                                carts::sde::RedistributionEdgeKind edgeKind) {
+  if (consumer->getParentOfType<carts::sde::SdeSuDistributeOp>())
+    return true;
+  if (consumer.getNumResults() != 0)
+    return false;
+
+  carts::sde::SdeDistributionKind kind =
+      edgeKind == carts::sde::RedistributionEdgeKind::Halo
+          ? carts::sde::SdeDistributionKind::owner_compute
+          : carts::sde::SdeDistributionKind::blocked;
+  IRRewriter rewriter(consumer.getContext());
+  rewriter.setInsertionPoint(consumer);
+  auto distribute = carts::sde::SdeSuDistributeOp::create(
+      rewriter, consumer.getLoc(),
+      carts::sde::SdeDistributionKindAttr::get(consumer.getContext(), kind));
+  Block &body = carts::sde::ensureBlock(distribute.getBody());
+  consumer->moveBefore(&body, body.end());
+  return true;
 }
 
 static LogicalResult
@@ -492,13 +642,13 @@ static void authorInitWriterAccessWindows(Operation *moduleOp) {
     if (writes.size() < 2)
       continue;
 
-    // And the written DBs must carry MIXED owner-dim ranks (e.g. jacobi/poisson
-    // `f` on [0] plus `u`/`unew` on [0,1]). A uniform multi-output init whose
-    // DBs all share one owner rank (e.g. a conv input+output pair both on
-    // [0,1,2]) auto-derives its boundary window from the store indices at base
-    // and must not be disturbed. The mixed-rank init is the case the direct
-    // boundary cannot auto-window: its per-array owner counts differ, so SDE
-    // must commit the windows explicitly.
+    // And the written DBs must either carry MIXED owner-dim ranks (e.g.
+    // jacobi/poisson `f` on [0] plus `u`/`unew` on [0,1]) or share a uniform
+    // single-owner rank. The uniform single-owner case covers alternating
+    // buffer Jacobi where both initialized DB homes must be committed before
+    // redistribution can author the stencil read halos. Uniform multi-owner
+    // inits (e.g. conv input+output pairs on [0,1,2]) still auto-derive their
+    // boundary windows from store indices at base and must not be disturbed.
     bool anyMultiOwner = false;
     llvm::SmallDenseSet<size_t, 4> ownerRanks;
     for (const auto &kv : writes) {
@@ -510,7 +660,10 @@ static void authorInitWriterAccessWindows(Operation *moduleOp) {
       if (f->ownerDims.size() >= 2)
         anyMultiOwner = true;
     }
-    if (!anyMultiOwner || ownerRanks.size() < 2)
+    bool uniformSingleOwner =
+        ownerRanks.size() == 1 && !anyMultiOwner && ownerRanks.contains(1);
+    bool mixedOwnerRanks = anyMultiOwner && ownerRanks.size() >= 2;
+    if (!uniformSingleOwner && !mixedOwnerRanks)
       continue;
 
     // Author one write fact (copied from the array's committed home, role
@@ -557,6 +710,7 @@ struct SdeRedistributePass
     MLIRContext *ctx = &getContext();
     authorInitWriterAccessWindows(module);
     reconcileSubsetOwnerExpandedGridReaders(module);
+    reconcileLayoutFactsToExpandedRoots(module);
     carts::sde::RedistributionEdges committed =
         carts::sde::collectRedistributionEdges(module);
     bool sawFailure = false;
@@ -612,6 +766,7 @@ struct SdeRedistributePass
       }
       if (alreadyRepresented(emitEdge))
         continue;
+      (void)ensureMovementScope(consumer, emitEdge.kind);
       if (!dyn_cast_or_null<carts::sde::SdeSuDistributeOp>(
               consumer->getParentOp())) {
         consumer.emitOpError()
@@ -627,6 +782,8 @@ struct SdeRedistributePass
       ArrayAttr blockShape = buildI64ArrayAttr(ctx, emitEdge.sourceBlockShape);
       OpBuilder builder(consumer);
       if (emitEdge.kind == carts::sde::RedistributionEdgeKind::Halo) {
+        if (auto cu = carts::sde::findSuComputeCuRegion(consumer))
+          cu.removeGroupBlockCountAttr();
         carts::sde::SdeSuHaloOp::create(
             builder, consumer.getLoc(), emitEdge.root, arrayIdAttr, ownerDims,
             blockShape, buildI64ArrayAttr(ctx, emitEdge.haloShape));
