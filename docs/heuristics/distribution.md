@@ -2,14 +2,16 @@
 
 ## Purpose
 
-This document is the technical reference for CARTS H2 distribution:
+This document is the technical reference for CARTS distribution:
 - runtime capability constraints from ARTS
 - algorithm compatibility and tradeoffs
 - pattern classification ownership (analysis API)
 - selected lowering architecture and pipeline integration
 
-H2 decides *work distribution* and task loop structure.
-H1 partitioning still decides DB layout/rewrite details.
+SDE decides work distribution, block layout, movement families, and task loop
+structure. ARTS consumes that committed shape, realizes DB/EDT/owner-route
+objects, and groups compute/bridge/communication CUs without changing DB/MU
+grain.
 
 Related guide:
 - `docs/heuristics/partitioning.md`
@@ -104,7 +106,7 @@ annotation level.
 | Cannon-style shifts | Feasible but complex | Not implemented (future) |
 | SUMMA-style broadcast panels | Feasible via events/active messages | Not implemented (future) |
 | 2.5D replication | Possible but high complexity | Runtime can create/read cached duplicates through DB frontiers; compiler-directed eager replication is not implemented |
-| Stencil halo | Strong | SDE authors halo/window facts; the SDE-to-ARTS boundary must preserve token-local block/window views. The raw `create-dbs` bridge is coarse-only and rejects blocked/tiled physical layout attrs |
+| Stencil halo | Strong | SDE authors halo/window facts; the SDE-to-ARTS boundary preserves token-local block/window views. ARTS realizes per-block single-writer DBs and compact halo payloads over those facts. |
 
 ### 2.2 Why CARTS currently prefers 2D tiling over Cannon/SUMMA
 
@@ -115,11 +117,14 @@ For current compiler/runtime integration:
 
 Cannon and SUMMA remain viable future paths once collective-like orchestration is first-class in lowering/runtime APIs.
 
-## 3. Strategy Selection Policy (H2)
+## 3. Strategy Selection Policy
 
-Current selection policy is implemented in SDE by
-`DistributionPlanning` (`lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`).
-ARTS consumes and realizes the selected distribution intent; it should not
+Current selection policy is implemented in SDE by the split distribution
+planning passes:
+`DistributionFailClosed`, `OwnerDimSelect`, `BlockGrainPlan`, and
+`MovementTagging`, with shared helpers under
+`include/carts/dialect/sde/Transforms/effect/distribution/DistributionLayoutUtils.h`.
+ARTS consumes and realizes the selected distribution intent; it must not
 recover source-level distribution policy after the SDE-to-ARTS boundary.
 
 Selection order matters:
@@ -151,8 +156,8 @@ query utilities or pass-local walks instead of graph nodes.
 
 - SDE `SdeLoopPatternFacts` classifies work families, access windows, reductions,
   and distribution intent while source semantics are still visible.
-- `DistributionPlanning` consumes those SDE facts and authors the concrete
-  SDE facts that the boundary conversion uses.
+- The split SDE planning passes consume those facts and author the concrete SDE
+  facts that the boundary conversion uses.
 - ARTS boundary verification validates concrete DB/EDT/epoch shape and should
   not recover semantic loop families from implementation loops.
 
@@ -192,7 +197,10 @@ memref work that SDE did not make real.
 
 Key files:
 - `tools/compile/Compile.cpp`
-- `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionPlanning.cpp`
+- `lib/carts/dialect/sde/Transforms/effect/distribution/DistributionFailClosed.cpp`
+- `lib/carts/dialect/sde/Transforms/effect/distribution/OwnerDimSelect.cpp`
+- `lib/carts/dialect/sde/Transforms/effect/distribution/BlockGrainPlan.cpp`
+- `lib/carts/dialect/sde/Transforms/effect/distribution/MovementTagging.cpp`
 - `lib/carts/dialect/arts/Transforms/SdeToArtsBoundary.cpp`
 - `lib/carts/dialect/arts/Transforms/db/DbConsolidateStencilHalos.cpp`
 - `lib/carts/dialect/arts/Transforms/db/DbShortenLifetimes.cpp`
@@ -305,7 +313,8 @@ Reason:
 Pass-level summary (current behavior):
 - Loop normalization (triangular-to-rectangular forms): compatible
 - Loop reordering/interchange: compatible for current outer-loop distribution
-- Matmul inner tiling/reduction reshaping: compatible with current H2 selection
+- Matmul inner tiling/reduction reshaping: compatible with current SDE owner
+  selection
 - Loop fusion with matched bounds: compatible if resulting top-level loop semantics remain equivalent
 
 Future caveat:
@@ -331,19 +340,21 @@ explicit SDE/ARTS facts rather than a late ARTS semantic loop carrier.
 - Reduction realization consumes SDE reduction accumulators, kinds, and
   strategy; ARTS does not rediscover missing reduction semantics.
 
-### 9.3 Partitioning integration for 2D owner hints
+### 9.3 Partitioning integration for 2D owner facts
 
-ARTS DB refinement consumes tiling-2D owner hints on writable (`inout`) task acquires to force N-D block ownership where valid.
+ARTS DB refinement consumes committed SDE 2D owner facts on writable (`inout`)
+task acquires to realize N-D block ownership where valid.
 
 This coupling is what keeps data ownership and routed work aligned for
-`matmul` loops when H2 selects `tiling_2d`.
+`matmul` loops when SDE selects a 2D owner plan.
 
 ## 10. Heuristics Placement
 
 Distribution selection now lives in SDE:
-- `DistributionPlanning` reads SDE pattern/effect facts and the SDE cost model.
-- It authors `sde.su_distribute` or distribution attributes on eligible
-  `sde.su_iterate` operations.
+- The split distribution passes read SDE pattern/effect facts and the SDE cost
+  model.
+- They author `sde.su_distribute`, `sde.redist`, access-window, layout, and
+  movement facts on eligible SDE objects.
 - ARTS carries the explicit codelet facts.
 - ARTS DB/EDT/epoch passes consume concrete distribution attrs and ownership
   metadata; they should validate and refine the object graph, not reselect

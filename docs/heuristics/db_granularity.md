@@ -1,8 +1,8 @@
 # Single-rank heuristics: DB granularity
 
-This note is scoped to **single-rank / single-node** runs (i.e.,
-`artsGlobalRankCount == 1`). It explains runtime mechanics that drive EDT
-concurrency and turns them into practical guidance for DB granularity.
+This note explains runtime mechanics that drive EDT concurrency and turns them
+into practical guidance for DB/MU granularity. The rules apply to single-node
+and distributed runs unless a section says otherwise.
 
 Primary audiences:
 - CARTS/ARTS compiler-pass authors (MLIR passes)
@@ -57,7 +57,7 @@ Key distinction:
 So the core goal of DB partitioning is to turn a single large write target into
 multiple disjoint write targets that map to **distinct DBs**.
 
-## Practical heuristics (single rank)
+## Practical heuristics
 
 1. **Prefer block partitioning when loops carry a clear partition offset.**
    This keeps DB count moderate while still allowing concurrent writes.
@@ -66,14 +66,22 @@ multiple disjoint write targets that map to **distinct DBs**.
    Full-range acquires negate the benefit of partitioning by forcing every EDT
    to touch all DBs.
 
-3. **Keep DB count proportional to parallelism.**
-   If the DB count is far larger than the number of workers, overhead dominates.
+3. **Do not cap DB/MU grain to the worker count.**
+   SDE must expose every legal independent MU/CU block. ARTS cannot recover
+   parallel writer waves from one coarse DB, and worker-count caps leave legal
+   work unused on larger machines. If overhead is high, group compute/bridge/
+   communication CUs over preserved per-block DBs instead of coarsening the DBs.
 
 4. **Coarse can be correct but often serializes writes.**
    Use coarse only when partitioning is unsafe or when EDTs are read-only.
 
 5. **Stencils benefit from block or stencil partitioning.**
    Use halo-view handling to preserve locality without full-range accesses.
+
+6. **Keep DB grain separate from CU/bridge grain.**
+   Per-block single-writer DBs are the concurrency substrate. CU, bridge, and
+   communication grouping is an ARTS graph optimization over those DBs, not a
+   reason to merge independent DBs or hide committed SDE block structure.
 
 For partitioning mechanics and mode definitions, see
 `docs/heuristics/partitioning.md`.

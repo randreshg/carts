@@ -1,22 +1,30 @@
-# CARTS distribution effort — unified status & doc index
+# CARTS distribution effort - unified status and doc index
 
-> Single entry point. Updated 2026-06-16 after 1n medium SC-001 validation.
+> Single entry point. Updated 2026-06-17 after the v4 worker-grain and compact
+> halo fixes.
 
-## Canonical state — `v4` @ `f91d741a2` + E2E session 2026-06-16
+## Canonical state - `v4` @ `460bdc49f`
 
-Line contains: correctness base + Phase 11 split
-(T027–T031) + US8 scalar-replacement guard (`56c516207`). Latest E2E validation:
+Line contains the correctness base, Phase 11 split, US8 scalar-replacement
+guard, worker-grain layout realization (`f21f10f2e`), clean SDE halo payload
+consumption (`49ca80c55`), compact halo graph pressure reduction (`03ed9eda5`),
+and used-side compact halo packing (`460bdc49f`). Latest medium E2E validation:
 `.carts/findings/e2e-validation-20260616.md`.
 
-Build clean; pipeline manifest available; lit **103/109** (6 pre-existing
-jacobi/poisson boundary fail-closed tests); all 21 registered medium,
-64-thread, 1-node local benchmark rows are **Correct=YES**.
+Build and full-suite status should be refreshed before publication. The focused
+guard for promoted owner dimensions in ARTS DB payloads passes:
+`dekk carts lit lib/carts/dialect/arts/test/conversion/sde-to-arts-drops-promoted-owner-payload-dims.mlir -v`.
+Fresh large GEMM `sde-to-arts` output on this compiler emits C as DB grid
+`sizes[11,8]` with payload `elementSizes[437,600]`, not
+`elementSizes[1,1,437,600]`.
 
 ## What is still open
 
 - **poisson-for medium 1n runtime:** **FIXED** (SDE alternating-buffer grain reconcile per-SU).
 - **activations medium 1n regression:** **PASS** (sync intranode read-only heap scratch verify carve-out).
-- **End-to-end US8 large perf:** T024–T026 deferred; compiler evidence only.
+- **End-to-end large perf:** still open. The promoted-owner DB payload shape is
+  fixed, but large benchmark timing and cross-benchmark ARTS overhead remain to
+  be remeasured on the current binary.
 - **2 nodes (SC-002 / US2 T013):** deferred/out of scope for this 1n-only pass.
 
 ## What is done
@@ -24,12 +32,15 @@ jacobi/poisson boundary fail-closed tests); all 21 registered medium,
 - **1n MEDIUM correctness:** 21/21 registered benchmarks Correct=YES on
   2026-06-16 after tracked-WIP cleanup. No 2n, cluster, large, extralarge, or
   megalarge rows were run in this scoped pass.
-- **Phase 11 pass-split (US9, T027–T031):** DONE + VALIDATED on recarve.
+- **Phase 11 pass-split (US9, T027-T031):** DONE + VALIDATED on recarve.
   DistributionPlanning deleted and split into DistributionFailClosed /
   BlockGrainPlan / OwnerDimSelect / MovementTagging + DistributionLayoutUtils;
   RedistributionEdges → EdgeClassify + RankExpandedEdgeProject; boundary →
-  CoarseSu + RawAccessVerify; LayoutAssignment two-pass; SuLoopAccessAnalysis
-  4-way; DistributedLaunchConsistency → EdtSplitForMixedDeps + WriterOwnerRoute.
+  implementation units such as CoarseSu and RawAccessVerify while the production
+  `sde-to-arts` pipeline stays three passes:
+  `SdeStorageToArtsDb`, `SdeAccessesToArtsDeps`, `FinalizeSdeToArts`.
+  LayoutAssignment two-pass; SuLoopAccessAnalysis 4-way;
+  DistributedLaunchConsistency → EdtSplitForMixedDeps + WriterOwnerRoute.
 - **Pre-commit review (carts-simplify + carts-review + constitution):** ran as a
   40-agent ultracode audit; 0 high / 4 med / rest low, all behavior-preserving.
   Cleanups APPLIED: dead code (recordHomeLayout, requiresUnimplementedStencilWavefront
@@ -46,7 +57,7 @@ jacobi/poisson boundary fail-closed tests); all 21 registered medium,
   noalias-through-pointer-table cherry-picked onto recarve (`5e5ccca78`). Builds
   clean; lit 93/99 (== base + 4 new pass).
 
-## US8 — RESOLVED at the compiler level (commit 07a3c27e8)
+## US8 - resolved at the compiler level
 
 The gated IR observation was done (via carts-compile directly, bypassing the
 flaky runner): the dead-scope premise was WRONG (canonicalization already folds
@@ -55,13 +66,14 @@ load-store with non-empty indices, so the canonical 0-d scalar accumulator
 (`affine.load/store %acc[]`) was never promoted. Fix extends it to affine ops +
 0-d accumulators. RESULT: gemm MAC loop now promotes to scf.for iter_args and
 clang vectorizes it (width 4, interleave 4; 105 AVX ops vs 0). Necessary partner:
-the noalias fix (already folded).
+the noalias fix (already folded). The later guard keeps multi-read accumulators
+from being promoted incorrectly.
 
 ## Doc index
 
 | File | Purpose |
 |---|---|
-| `goal-large-perf.md` | Remaining-work goal prompt (US8 perf + large boundary bugs) |
+| `goal-large-perf.md` | Historical remaining-work prompt; verify against current `v4` before reuse |
 | `phase11-review-report.md` | Pre-commit review findings (most applied; 2 test-gaps open) |
 | `phase11-recarve-plan.md` | The executed split carve plan (historical reference) |
 | `distribution-audit-2n.md` | Per-benchmark 2n root causes (spec reference) |
@@ -69,8 +81,12 @@ the noalias fix (already folded).
 
 ## Next steps
 
-1. Keep the 6 jacobi/poisson boundary lit failures as a separate fail-closed
-   boundary task unless they become the current gate.
-2. Fold `wt/large-perf` into recarve; validate gemm large vectorizes.
+1. Re-run large representative benchmarks on the current binary and inspect
+   `sde-planning`, `sde-to-arts`, `post-db-refinement`, and `pre-lowering`
+   shape before changing runtime knobs.
+2. Keep the SDE-to-ARTS production pipeline mechanical. Split implementation
+   files only by responsibility; do not add boundary repair passes that
+   rediscover SDE-owned partitioning, movement families, DB grain, or owner
+   shape.
 3. Run 2-node validation only when explicitly in scope and cluster access is
    available.

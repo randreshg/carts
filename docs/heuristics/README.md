@@ -5,9 +5,9 @@ runtime-design notes.
 
 Primary guides:
 
-- Partitioning (H1): `docs/heuristics/partitioning.md`
-- Distribution (H2): `docs/heuristics/distribution.md`
+- Partitioning: `docs/heuristics/partitioning.md`
+- Distribution: `docs/heuristics/distribution.md`
 
 Related notes:
 
-- Single-rank DB granularity: `docs/heuristics/db_granularity.md`
+- DB/MU granularity and concurrency: `docs/heuristics/db_granularity.md`
