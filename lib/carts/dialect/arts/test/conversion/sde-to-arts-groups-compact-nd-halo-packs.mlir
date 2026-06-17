@@ -4,7 +4,7 @@
 // group while preserving one compact payload DB block per SDE MU/DB block.
 
 // CHECK-LABEL: func.func @groups_compact_nd_halo_packs
-// CHECK-COUNT-8: compact_halo_payload
+// CHECK-COUNT-1: compact_halo_payload
 // CHECK: scf.for %[[OUTER_IV:arg0]] = {{.*}} to {{.*}} step %c1{{(_[0-9]+)?}}
 // CHECK: scf.for %[[INNER_IV:arg1]] = {{.*}} to {{.*}} step %c2{{(_[0-9]+)?}}
 // CHECK: arts.db_acquire[<in>]{{.*}}offsets[%[[OUTER_IV]], %[[INNER_IV]]]

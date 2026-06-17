@@ -457,6 +457,46 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
       HaloNdLoadRewrite{haloWorkIndex, sourceOffsets}};
 }
 
+FailureOr<SmallVector<SmallVector<int64_t, 4>, 8>>
+collectRequiredNdUnitHaloSourceOffsets(sde::SdeSuIterateOp source,
+                                       DirectDepSpec dep, Block *computeBlock,
+                                       ArrayRef<unsigned> ownerLoopDims,
+                                       ArrayRef<unsigned> ownerPayloadDims,
+                                       ArrayRef<Value> elementExtents) {
+  HaloNdTaskWork work;
+  work.ownerDimCount = dep.ownerDimCount;
+  work.ownerPayloadDims.assign(ownerPayloadDims.begin(),
+                               ownerPayloadDims.end());
+  work.elementExtents.assign(elementExtents.begin(), elementExtents.end());
+
+  SmallVector<SmallVector<int64_t, 4>, 8> requiredOffsets;
+  bool failedScan = false;
+  WalkResult result = computeBlock->walk([&](memref::LoadOp load) {
+    if (resolveBoundaryDbAlloc(load.getMemref()) != dep.alloc)
+      return WalkResult::advance();
+    FailureOr<SmallVector<Value, 4>> ownerLoopIvs =
+        getCompactHaloOwnerLoopIvs(source, load, ownerLoopDims, "N-D");
+    if (failed(ownerLoopIvs)) {
+      failedScan = true;
+      return WalkResult::interrupt();
+    }
+    FailureOr<std::optional<HaloNdLoadRewrite>> rewrite =
+        classifyNdUnitHaloLoad(load, /*haloWorkIndex=*/0, work, *ownerLoopIvs);
+    if (failed(rewrite)) {
+      failedScan = true;
+      return WalkResult::interrupt();
+    }
+    if (!rewrite->has_value())
+      return WalkResult::advance();
+    if (!llvm::is_contained(requiredOffsets, (**rewrite).sourceOffsets))
+      requiredOffsets.push_back((**rewrite).sourceOffsets);
+    return WalkResult::advance();
+  });
+  if (result.wasInterrupted() || failedScan)
+    return failure();
+  return requiredOffsets;
+}
+
 FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
                                       DirectDepSpec dep, Block *computeBlock,
                                       ArrayRef<unsigned> ownerLoopDims) {

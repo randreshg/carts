@@ -1,15 +1,15 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-storage-to-arts-db,sde-accesses-to-arts-deps,finalize-sde-to-arts,verify-arts-objects-only)' 2>&1 | %FileCheck %s --implicit-check-not=sde.redist --implicit-check-not=sde.su_halo --implicit-check-not=sde.su_iterate --implicit-check-not=arts.db_access_window --implicit-check-not='full-block halo byte-window' --implicit-check-not=local_only
 
-// ARTS consumes a committed 3D unit halo movement as exact compact side,
-// edge, and corner payload DBs. The physical owner dims are intentionally
-// permuted with asymmetric block sizes; ARTS must read full-rank
-// physicalBlockShape by physical dim, not by owner-slot order.
+// ARTS consumes a committed 3D unit halo movement as exact compact payload DBs
+// only for the SDE loads that cross a unit side, edge, or corner. The physical
+// owner dims are intentionally permuted with asymmetric block sizes; ARTS must
+// read full-rank physicalBlockShape by physical dim, not by owner-slot order.
 
 // CHECK-LABEL: func.func @consumes_3d_unit_halo_redist
 // CHECK: arts.db_alloc
 // CHECK-SAME: sizes[%{{[^,]+}}, %{{[^,]+}}, %{{[^]]+}}]
 // CHECK-SAME: elementSizes[%c7{{(_[0-9]+)?}}, %c5{{(_[0-9]+)?}}, %c3{{(_[0-9]+)?}}]
-// CHECK-COUNT-26: compact_halo_payload
+// CHECK-COUNT-1: compact_halo_payload
 // CHECK: compactHaloPack
 // CHECK: scf.if
 

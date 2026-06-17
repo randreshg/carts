@@ -675,6 +675,7 @@ arts::DbAcquireOp create2DUnitCompactColumnAcquire(
 FailureOr<CompactHaloNdSpec>
 realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
                           ArrayRef<int64_t> groupBlockCounts,
+                          Block *computeBlock, ArrayRef<unsigned> ownerLoopDims,
                           OpBuilder &builder, Location loc) {
   unsigned ownerDimCount = dep.ownerDimCount;
   if (ownerDimCount == 0) {
@@ -755,9 +756,6 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
     physicalBlockShape.push_back(*constant);
   }
 
-  SmallVector<SmallVector<int64_t, 4>, 8> sideOffsets;
-  enumerateUnitHaloSourceOffsets(ownerDimCount, sideOffsets);
-
   MLIRContext *ctx = source.getContext();
   Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
@@ -769,9 +767,16 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
                                ownerPayloadDims.end());
   spec.elementExtents.assign(elementExtents.begin(), elementExtents.end());
   bool cleanPayloadShape = hasCleanPayloadElementShape(dep);
-  spec.sides.reserve(sideOffsets.size());
 
-  for (ArrayRef<int64_t> sideOffset : sideOffsets) {
+  FailureOr<SmallVector<SmallVector<int64_t, 4>, 8>> sideOffsets =
+      collectRequiredNdUnitHaloSourceOffsets(source, dep, computeBlock,
+                                             ownerLoopDims, ownerPayloadDims,
+                                             elementExtents);
+  if (failed(sideOffsets))
+    return failure();
+  spec.sides.reserve(sideOffsets->size());
+
+  for (ArrayRef<int64_t> sideOffset : *sideOffsets) {
     SmallVector<Value> compactElementSizes;
     compactElementSizes.reserve(dep.alloc.getElementSizes().size());
     if (!cleanPayloadShape)
@@ -813,6 +818,9 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
         {SmallVector<int64_t, 4>(sideOffset.begin(), sideOffset.end()),
          payloadDb});
   }
+
+  if (spec.sides.empty())
+    return spec;
 
   SmallVector<Value> blockOffsets;
   SmallVector<Value> blockSizes;
@@ -1529,14 +1537,19 @@ convertSuIterate(sde::SdeSuIterateOp source,
       continue;
     }
     FailureOr<CompactHaloNdSpec> compactSpec = realizeCompactHaloNdPacks(
-        source, dep, *depGroupBlockCounts, builder, loc);
+        source, dep, *depGroupBlockCounts, computeBlock,
+        ownerRouteping->loopDims, builder, loc);
     if (failed(compactSpec))
       return failure();
     compactNdSpecByDepIndex[depIndex] =
         static_cast<unsigned>(compactHaloNdSpecs.size());
     compactHaloNdSpecs.push_back(*compactSpec);
   }
-  if (!compactHaloColumnSpecs.empty() || !compactHaloNdSpecs.empty()) {
+  bool hasCompactNdPackWork =
+      llvm::any_of(compactHaloNdSpecs, [](const CompactHaloNdSpec &spec) {
+        return !spec.sides.empty();
+      });
+  if (!compactHaloColumnSpecs.empty() || hasCompactNdPackWork) {
     auto reason = arts::ArtsBarrierReasonAttr::get(
         source.getContext(), arts::ArtsBarrierReason::required_memory);
     arts::BarrierOp::create(builder, loc, reason);

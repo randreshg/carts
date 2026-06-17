@@ -64,6 +64,13 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
                        const HaloNdTaskWork &work,
                        ArrayRef<Value> ownerLoopIvs);
 
+FailureOr<SmallVector<SmallVector<int64_t, 4>, 8>>
+collectRequiredNdUnitHaloSourceOffsets(sde::SdeSuIterateOp source,
+                                       DirectDepSpec dep, Block *computeBlock,
+                                       ArrayRef<unsigned> ownerLoopDims,
+                                       ArrayRef<unsigned> ownerPayloadDims,
+                                       ArrayRef<Value> elementExtents);
+
 FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
                                       DirectDepSpec dep, Block *computeBlock,
                                       ArrayRef<unsigned> ownerLoopDims);
