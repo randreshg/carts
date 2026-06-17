@@ -6,6 +6,9 @@
 // physicalBlockShape by physical dim, not by owner-slot order.
 
 // CHECK-LABEL: func.func @consumes_3d_unit_halo_redist
+// CHECK: arts.db_alloc
+// CHECK-SAME: sizes[%{{[^,]+}}, %{{[^,]+}}, %{{[^]]+}}]
+// CHECK-SAME: elementSizes[%c7{{(_[0-9]+)?}}, %c5{{(_[0-9]+)?}}, %c3{{(_[0-9]+)?}}]
 // CHECK-COUNT-26: compact_halo_payload
 // CHECK: compactHaloPack
 // CHECK: scf.if

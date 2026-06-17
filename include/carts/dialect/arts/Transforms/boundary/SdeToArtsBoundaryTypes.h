@@ -60,6 +60,7 @@ struct CompactHaloColumnSpec {
   arts::DbAllocOp rightColumnDb;
   Value rowExtent;
   Value colExtent;
+  bool cleanPayloadShape = false;
 };
 
 struct CompactHaloNdSideSpec {

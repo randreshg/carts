@@ -92,6 +92,78 @@ validatePositiveGroupBlockCounts(sde::SdeSuIterateOp source,
   return success();
 }
 
+static bool hasCleanPayloadElementShape(DirectDepSpec &dep) {
+  return dep.alloc.getElementSizes().size() == dep.validExtents.size();
+}
+
+static bool hasRankExpandedPayloadElementShape(DirectDepSpec &dep) {
+  return dep.alloc.getElementSizes().size() ==
+         dep.ownerDimCount + dep.validExtents.size();
+}
+
+static FailureOr<unsigned> getCommittedPayloadRank(sde::SdeSuIterateOp source,
+                                                   DirectDepSpec &dep,
+                                                   StringRef diagnosticName) {
+  if (dep.validExtents.empty()) {
+    return source.emitOpError()
+           << "commits an empty access-window payload shape for ARTS "
+           << diagnosticName << " realization";
+  }
+  if (dep.alloc.getSizes().size() != dep.ownerDimCount ||
+      (!hasCleanPayloadElementShape(dep) &&
+       !hasRankExpandedPayloadElementShape(dep))) {
+    return source.emitOpError()
+           << "commits a rank shape that ARTS " << diagnosticName
+           << " realization cannot represent; refusing a full-block halo "
+              "byte-window";
+  }
+  return static_cast<unsigned>(dep.validExtents.size());
+}
+
+static unsigned getDbPayloadElementBase(DirectDepSpec &dep) {
+  return hasCleanPayloadElementShape(dep) ? 0 : dep.ownerDimCount;
+}
+
+static FailureOr<Value> getPayloadElementExtent(sde::SdeSuIterateOp source,
+                                                DirectDepSpec &dep,
+                                                unsigned payloadDim,
+                                                StringRef name) {
+  if (payloadDim >= dep.validExtents.size())
+    return source.emitOpError()
+           << "access-window valid extent rank does not cover " << name;
+  unsigned elementDim = getDbPayloadElementBase(dep) + payloadDim;
+  if (elementDim >= dep.alloc.getElementSizes().size())
+    return source.emitOpError()
+           << "DB payload shape does not cover access-window " << name;
+  FailureOr<int64_t> extent = requireStaticPositiveIndex(
+      dep.alloc.getElementSizes()[elementDim], source.getOperation(), name);
+  if (failed(extent))
+    return failure();
+  if (*extent != dep.validExtents[payloadDim])
+    return source.emitOpError()
+           << "DB payload extent disagrees with SDE access-window " << name;
+  return dep.alloc.getElementSizes()[elementDim];
+}
+
+static void appendElementWindowForPayloadShape(OpBuilder &builder, Location loc,
+                                               bool cleanPayloadShape,
+                                               unsigned ownerDimCount,
+                                               ArrayRef<Value> payloadOffsets,
+                                               ArrayRef<Value> payloadSizes,
+                                               SmallVectorImpl<Value> &offsets,
+                                               SmallVectorImpl<Value> &sizes) {
+  offsets.clear();
+  sizes.clear();
+  if (!cleanPayloadShape) {
+    for (unsigned idx = 0; idx < ownerDimCount; ++idx) {
+      offsets.push_back(createZeroIndex(builder, loc));
+      sizes.push_back(createOneIndex(builder, loc));
+    }
+  }
+  offsets.append(payloadOffsets.begin(), payloadOffsets.end());
+  sizes.append(payloadSizes.begin(), payloadSizes.end());
+}
+
 class BoundaryTaskDependencyBuilder {
 public:
   BoundaryTaskDependencyBuilder(MLIRContext *context,
@@ -303,20 +375,20 @@ realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
               "widening to a full-block byte window";
   }
 
-  if (dep.alloc.getSizes().size() != 2 ||
-      dep.alloc.getElementSizes().size() != 4) {
+  FailureOr<unsigned> payloadRank =
+      getCommittedPayloadRank(source, dep, "compact 2D unit-halo face");
+  if (failed(payloadRank))
+    return failure();
+  if (*payloadRank != 2)
     return source.emitOpError()
-           << "commits a rank shape that ARTS compact 2D unit-halo face "
-              "realization cannot represent; refusing a full-block halo "
-              "byte-window";
-  }
+           << "commits a payload rank that ARTS compact 2D unit-halo face "
+              "realization cannot represent";
 
-  FailureOr<int64_t> rowExtentStatic = requireStaticPositiveIndex(
-      dep.alloc.getElementSizes()[2], source.getOperation(), "halo row extent");
-  FailureOr<int64_t> colExtentStatic =
-      requireStaticPositiveIndex(dep.alloc.getElementSizes()[3],
-                                 source.getOperation(), "halo column extent");
-  if (failed(rowExtentStatic) || failed(colExtentStatic))
+  FailureOr<Value> rowExtentValue =
+      getPayloadElementExtent(source, dep, 0, "halo row extent");
+  FailureOr<Value> colExtentValue =
+      getPayloadElementExtent(source, dep, 1, "halo column extent");
+  if (failed(rowExtentValue) || failed(colExtentValue))
     return failure();
 
   SmallVector<int64_t, 4> physicalBlockShape;
@@ -333,12 +405,18 @@ realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
   Value zero = createZeroIndex(builder, loc);
   Value one = createOneIndex(builder, loc);
   Value route = arts::createCurrentNodeRoute(builder, loc);
-  Value rowExtent = dep.alloc.getElementSizes()[2];
-  Value colExtent = dep.alloc.getElementSizes()[3];
-  SmallVector<Value, 4> compactElementSizes{one, one, rowExtent,
-                                            createOneIndex(builder, loc)};
+  Value rowExtent = *rowExtentValue;
+  Value colExtent = *colExtentValue;
+  bool cleanPayloadShape = hasCleanPayloadElementShape(dep);
+  SmallVector<Value, 4> compactElementSizes;
+  if (!cleanPayloadShape) {
+    compactElementSizes.push_back(one);
+    compactElementSizes.push_back(one);
+  }
+  compactElementSizes.push_back(rowExtent);
+  compactElementSizes.push_back(one);
   SmallVector<int64_t, 4> compactPhysicalBlockShape(physicalBlockShape);
-  compactPhysicalBlockShape[3] = 1;
+  compactPhysicalBlockShape[getDbPayloadElementBase(dep) + 1] = 1;
 
   auto createCompactDb = [&]() -> FailureOr<arts::DbAllocOp> {
     auto db = arts::DbAllocOp::create(
@@ -370,6 +448,7 @@ realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
   spec.rightColumnDb = *rightColumnDb;
   spec.rowExtent = rowExtent;
   spec.colExtent = colExtent;
+  spec.cleanPayloadShape = cleanPayloadShape;
 
   Value rowGroupCount = createConstantIndex(builder, loc, groupBlockCounts[0]);
   Value colGroupCount = createConstantIndex(builder, loc, groupBlockCounts[1]);
@@ -465,23 +544,31 @@ realizeCompactHaloColumnPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
                          rowLimit, createOneIndex(bodyBuilder, loc));
   bodyBuilder.setInsertionPointToStart(rowLoop.getBody());
   Value row = rowLoop.getInductionVar();
-  SmallVector<Value, 4> sourceLeftIdx{createZeroIndex(bodyBuilder, loc),
-                                      createZeroIndex(bodyBuilder, loc), row,
-                                      createZeroIndex(bodyBuilder, loc)};
+  Value bodyZero = createZeroIndex(bodyBuilder, loc);
+  FailureOr<SmallVector<Value, 4>> sourceLeftIdx = buildPayloadElementIndices(
+      bodyBuilder, loc, sourceBlockPayload, dep.ownerDimCount,
+      ArrayRef<Value>{row, bodyZero});
+  FailureOr<SmallVector<Value, 4>> compactLeftIdx = buildPayloadElementIndices(
+      bodyBuilder, loc, leftBlockPayload, dep.ownerDimCount,
+      ArrayRef<Value>{row, bodyZero});
+  if (failed(sourceLeftIdx) || failed(compactLeftIdx))
+    return failure();
   Value leftValue = memref::LoadOp::create(bodyBuilder, loc, sourceBlockPayload,
-                                           sourceLeftIdx);
+                                           *sourceLeftIdx);
   memref::StoreOp::create(bodyBuilder, loc, leftValue, leftBlockPayload,
-                          sourceLeftIdx);
-  SmallVector<Value, 4> sourceRightIdx{createZeroIndex(bodyBuilder, loc),
-                                       createZeroIndex(bodyBuilder, loc), row,
-                                       lastCol};
-  SmallVector<Value, 4> compactRightIdx{createZeroIndex(bodyBuilder, loc),
-                                        createZeroIndex(bodyBuilder, loc), row,
-                                        createZeroIndex(bodyBuilder, loc)};
-  Value rightValue = memref::LoadOp::create(bodyBuilder, loc,
-                                            sourceBlockPayload, sourceRightIdx);
+                          *compactLeftIdx);
+  FailureOr<SmallVector<Value, 4>> sourceRightIdx = buildPayloadElementIndices(
+      bodyBuilder, loc, sourceBlockPayload, dep.ownerDimCount,
+      ArrayRef<Value>{row, lastCol});
+  FailureOr<SmallVector<Value, 4>> compactRightIdx = buildPayloadElementIndices(
+      bodyBuilder, loc, rightBlockPayload, dep.ownerDimCount,
+      ArrayRef<Value>{row, bodyZero});
+  if (failed(sourceRightIdx) || failed(compactRightIdx))
+    return failure();
+  Value rightValue = memref::LoadOp::create(
+      bodyBuilder, loc, sourceBlockPayload, *sourceRightIdx);
   memref::StoreOp::create(bodyBuilder, loc, rightValue, rightBlockPayload,
-                          compactRightIdx);
+                          *compactRightIdx);
   bodyBuilder.setInsertionPointToEnd(&packBlock);
   arts::YieldOp::create(bodyBuilder, loc);
 
@@ -522,12 +609,13 @@ arts::DbAcquireOp create2DUnitRowHaloAcquire(
   SmallVector<Value> offsets{sourceI, blockJ};
   SmallVector<Value> sizes{one, colSpan};
   dbOffsets.assign(offsets.begin(), offsets.end());
-  SmallVector<Value> elementOffsets{
-      createZeroIndex(builder, loc), createZeroIndex(builder, loc),
-      elementRowOffset, createZeroIndex(builder, loc)};
-  SmallVector<Value> elementSizes{createOneIndex(builder, loc),
-                                  createOneIndex(builder, loc),
-                                  createOneIndex(builder, loc), spec.colExtent};
+  SmallVector<Value, 4> payloadElementOffsets{elementRowOffset, zero};
+  SmallVector<Value, 4> payloadElementSizes{one, spec.colExtent};
+  SmallVector<Value> elementOffsets;
+  SmallVector<Value> elementSizes;
+  appendElementWindowForPayloadShape(
+      builder, loc, spec.cleanPayloadShape, dep.ownerDimCount,
+      payloadElementOffsets, payloadElementSizes, elementOffsets, elementSizes);
   auto acquire = arts::DbAcquireOp::create(
       builder, loc, ArtsMode::in, dep.alloc.getGuid(), dep.alloc.getPtr(),
       std::optional<arts::PartitionMode>(arts::PartitionMode::block),
@@ -616,15 +704,11 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
               "widening to a full-block byte window";
   }
 
-  if (dep.alloc.getSizes().size() != ownerDimCount ||
-      dep.alloc.getElementSizes().size() <= ownerDimCount) {
-    return source.emitOpError()
-           << "commits a rank shape that ARTS compact N-D unit-halo "
-              "realization cannot represent; refusing a full-block halo "
-              "byte-window";
-  }
-  unsigned payloadRank =
-      static_cast<unsigned>(dep.alloc.getElementSizes().size()) - ownerDimCount;
+  FailureOr<unsigned> payloadRankOr =
+      getCommittedPayloadRank(source, dep, "compact N-D unit-halo");
+  if (failed(payloadRankOr))
+    return failure();
+  unsigned payloadRank = *payloadRankOr;
   if (ownerDimCount > payloadRank) {
     return source.emitOpError()
            << "commits more owner dimensions than payload dimensions for "
@@ -654,12 +738,11 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
   SmallVector<Value, 4> elementExtents;
   elementExtents.reserve(payloadRank);
   for (unsigned slot = 0; slot < payloadRank; ++slot) {
-    FailureOr<int64_t> extent = requireStaticPositiveIndex(
-        dep.alloc.getElementSizes()[ownerDimCount + slot],
-        source.getOperation(), "halo element extent");
+    FailureOr<Value> extent =
+        getPayloadElementExtent(source, dep, slot, "halo element extent");
     if (failed(extent))
       return failure();
-    elementExtents.push_back(dep.alloc.getElementSizes()[ownerDimCount + slot]);
+    elementExtents.push_back(*extent);
   }
 
   SmallVector<int64_t, 4> physicalBlockShape;
@@ -685,13 +768,15 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
   spec.ownerPayloadDims.assign(ownerPayloadDims.begin(),
                                ownerPayloadDims.end());
   spec.elementExtents.assign(elementExtents.begin(), elementExtents.end());
+  bool cleanPayloadShape = hasCleanPayloadElementShape(dep);
   spec.sides.reserve(sideOffsets.size());
 
   for (ArrayRef<int64_t> sideOffset : sideOffsets) {
     SmallVector<Value> compactElementSizes;
-    compactElementSizes.reserve(ownerDimCount + payloadRank);
-    for (unsigned slot = 0; slot < ownerDimCount; ++slot)
-      compactElementSizes.push_back(one);
+    compactElementSizes.reserve(dep.alloc.getElementSizes().size());
+    if (!cleanPayloadShape)
+      for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+        compactElementSizes.push_back(one);
     for (unsigned slot = 0; slot < payloadRank; ++slot) {
       auto ownerIt = llvm::find(ownerPayloadDims, slot);
       bool sideOwnsPayload = ownerIt != ownerPayloadDims.end() &&
@@ -705,7 +790,8 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
     for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
       unsigned payloadDim = ownerPayloadDims[slot];
       if (sideOffset[slot] != 0)
-        compactPhysicalBlockShape[ownerDimCount + payloadDim] = 1;
+        compactPhysicalBlockShape[getDbPayloadElementBase(dep) + payloadDim] =
+            1;
     }
 
     auto payloadDb = arts::DbAllocOp::create(
@@ -801,25 +887,28 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
       bodyElementExtents.push_back(
           packBlock.getArgument(paramOffset + ownerDimCount + slot));
     SmallVector<Value, 4> localBlockIndices(ownerDimCount);
-    std::function<void(unsigned)> emitBlockLoop = [&](unsigned dim) {
+    std::function<LogicalResult(unsigned)> emitBlockLoop = [&](unsigned dim) {
       if (dim == ownerDimCount) {
         Value sourceBlockPayload = arts::DbRefOp::create(
             bodyBuilder, loc, sourceBlocks, localBlockIndices);
         Value compactBlockPayload = arts::DbRefOp::create(
             bodyBuilder, loc, compactBlocks, localBlockIndices);
-        emitCompactHaloCopy(bodyBuilder, loc, ownerDimCount, ownerPayloadDims,
-                            side.sourceOffsets, bodyElementExtents,
-                            sourceBlockPayload, compactBlockPayload);
-        return;
+        return emitCompactHaloCopy(bodyBuilder, loc, ownerDimCount,
+                                   ownerPayloadDims, side.sourceOffsets,
+                                   bodyElementExtents, sourceBlockPayload,
+                                   compactBlockPayload);
       }
       auto loop = scf::ForOp::create(
           bodyBuilder, loc, createZeroIndex(bodyBuilder, loc),
           bodyBlockSizes[dim], createOneIndex(bodyBuilder, loc));
       bodyBuilder.setInsertionPointToStart(loop.getBody());
       localBlockIndices[dim] = loop.getInductionVar();
-      emitBlockLoop(dim + 1);
+      if (failed(emitBlockLoop(dim + 1)))
+        return failure();
+      return success();
     };
-    emitBlockLoop(/*dim=*/0);
+    if (failed(emitBlockLoop(/*dim=*/0)))
+      return failure();
     bodyBuilder.setInsertionPointToEnd(&packBlock);
     arts::YieldOp::create(bodyBuilder, loc);
 

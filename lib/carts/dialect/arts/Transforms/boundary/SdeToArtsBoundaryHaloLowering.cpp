@@ -120,16 +120,34 @@ buildRankExpandedElementIndices(OpBuilder &builder, Location loc,
   return indices;
 }
 
-void emitCompactHaloCopy(OpBuilder &builder, Location loc,
-                         unsigned ownerDimCount,
-                         ArrayRef<unsigned> ownerPayloadDims,
-                         ArrayRef<int64_t> sourceOffsets,
-                         ArrayRef<Value> elementExtents, Value sourcePayload,
-                         Value compactPayload) {
+FailureOr<SmallVector<Value, 4>>
+buildPayloadElementIndices(OpBuilder &builder, Location loc, Value payload,
+                           unsigned ownerDimCount,
+                           ArrayRef<Value> elementIndices) {
+  auto payloadType = dyn_cast<MemRefType>(payload.getType());
+  if (!payloadType)
+    return emitError(loc) << "compact halo payload is not a memref";
+  if (payloadType.getRank() == static_cast<int64_t>(elementIndices.size()))
+    return SmallVector<Value, 4>(elementIndices.begin(), elementIndices.end());
+  if (payloadType.getRank() ==
+      static_cast<int64_t>(ownerDimCount + elementIndices.size()))
+    return buildRankExpandedElementIndices(builder, loc, ownerDimCount,
+                                           elementIndices);
+  return emitError(loc)
+         << "compact halo payload rank disagrees with committed SDE "
+            "access-window shape";
+}
+
+LogicalResult emitCompactHaloCopy(OpBuilder &builder, Location loc,
+                                  unsigned ownerDimCount,
+                                  ArrayRef<unsigned> ownerPayloadDims,
+                                  ArrayRef<int64_t> sourceOffsets,
+                                  ArrayRef<Value> elementExtents,
+                                  Value sourcePayload, Value compactPayload) {
   unsigned payloadRank = elementExtents.size();
   SmallVector<Value, 4> loopIvs(payloadRank);
 
-  std::function<void(unsigned)> emitAtDim = [&](unsigned dim) {
+  std::function<LogicalResult(unsigned)> emitAtDim = [&](unsigned dim) {
     if (dim == payloadRank) {
       SmallVector<Value, 4> sourceElementIndices;
       SmallVector<Value, 4> compactElementIndices;
@@ -159,15 +177,21 @@ void emitCompactHaloCopy(OpBuilder &builder, Location loc,
                                            createOneIndex(builder, loc));
         sourceElementIndices.push_back(last);
       }
-      Value value = memref::LoadOp::create(
-          builder, loc, sourcePayload,
-          buildRankExpandedElementIndices(builder, loc, ownerDimCount,
-                                          sourceElementIndices));
-      memref::StoreOp::create(
-          builder, loc, value, compactPayload,
-          buildRankExpandedElementIndices(builder, loc, ownerDimCount,
-                                          compactElementIndices));
-      return;
+      FailureOr<SmallVector<Value, 4>> sourceIndices =
+          buildPayloadElementIndices(builder, loc, sourcePayload, ownerDimCount,
+                                     sourceElementIndices);
+      if (failed(sourceIndices))
+        return failure();
+      FailureOr<SmallVector<Value, 4>> compactIndices =
+          buildPayloadElementIndices(builder, loc, compactPayload,
+                                     ownerDimCount, compactElementIndices);
+      if (failed(compactIndices))
+        return failure();
+      Value value =
+          memref::LoadOp::create(builder, loc, sourcePayload, *sourceIndices);
+      memref::StoreOp::create(builder, loc, value, compactPayload,
+                              *compactIndices);
+      return success();
     }
 
     auto ownerIt = llvm::find(ownerPayloadDims, dim);
@@ -175,8 +199,7 @@ void emitCompactHaloCopy(OpBuilder &builder, Location loc,
       unsigned ownerSlot = static_cast<unsigned>(
           std::distance(ownerPayloadDims.begin(), ownerIt));
       if (sourceOffsets[ownerSlot] != 0) {
-        emitAtDim(dim + 1);
-        return;
+        return emitAtDim(dim + 1);
       }
     }
 
@@ -186,11 +209,13 @@ void emitCompactHaloCopy(OpBuilder &builder, Location loc,
                              elementExtents[dim], createOneIndex(builder, loc));
       builder.setInsertionPointToStart(loop.getBody());
       loopIvs[dim] = loop.getInductionVar();
-      emitAtDim(dim + 1);
+      if (failed(emitAtDim(dim + 1)))
+        return failure();
     }
+    return success();
   };
 
-  emitAtDim(/*dim=*/0);
+  return emitAtDim(/*dim=*/0);
 }
 
 static Value getCommonDivRemSource(Value divValue, Value remValue,
@@ -437,11 +462,17 @@ FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
     return source.emitOpError()
            << "commits a halo dependency whose owner rank is not supported by "
               "ARTS compact 2D unit-halo load rewriting";
-  if (dep.alloc.getElementSizes().size() != 4) {
+  bool cleanPayloadShape =
+      dep.alloc.getElementSizes().size() == dep.validExtents.size();
+  bool expandedPayloadShape = dep.alloc.getElementSizes().size() ==
+                              dep.ownerDimCount + dep.validExtents.size();
+  if (!cleanPayloadShape && !expandedPayloadShape) {
     source.emitOpError() << "commits a rank shape that ARTS compact 2D "
                             "unit-halo realization cannot represent";
     return failure();
   }
+  unsigned rowExtentDim = cleanPayloadShape ? 0 : dep.ownerDimCount;
+  unsigned colExtentDim = cleanPayloadShape ? 1 : dep.ownerDimCount + 1;
   bool sawCorner = false;
   bool failedScan = false;
   WalkResult result = computeBlock->walk([&](memref::LoadOp load) {
@@ -463,10 +494,10 @@ FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
     }
     Value rowIv = (*ownerLoopIvs)[0];
     Value colIv = (*ownerLoopIvs)[1];
-    Value rowExpr = getCommonDivRemSource(indices[0], indices[2],
-                                          dep.alloc.getElementSizes()[2]);
-    Value colExpr = getCommonDivRemSource(indices[1], indices[3],
-                                          dep.alloc.getElementSizes()[3]);
+    Value rowExpr = getCommonDivRemSource(
+        indices[0], indices[2], dep.alloc.getElementSizes()[rowExtentDim]);
+    Value colExpr = getCommonDivRemSource(
+        indices[1], indices[3], dep.alloc.getElementSizes()[colExtentDim]);
     if (!rowExpr || !colExpr) {
       load.emitOpError()
           << "does not expose div/rem rank-expanded indices required for ARTS "

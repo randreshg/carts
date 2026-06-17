@@ -38,12 +38,17 @@ buildRankExpandedElementIndices(OpBuilder &builder, Location loc,
                                 unsigned ownerDimCount,
                                 ArrayRef<Value> elementIndices);
 
-void emitCompactHaloCopy(OpBuilder &builder, Location loc,
-                         unsigned ownerDimCount,
-                         ArrayRef<unsigned> ownerPayloadDims,
-                         ArrayRef<int64_t> sourceOffsets,
-                         ArrayRef<Value> elementExtents, Value sourcePayload,
-                         Value compactPayload);
+FailureOr<SmallVector<Value, 4>>
+buildPayloadElementIndices(OpBuilder &builder, Location loc, Value payload,
+                           unsigned ownerDimCount,
+                           ArrayRef<Value> elementIndices);
+
+LogicalResult emitCompactHaloCopy(OpBuilder &builder, Location loc,
+                                  unsigned ownerDimCount,
+                                  ArrayRef<unsigned> ownerPayloadDims,
+                                  ArrayRef<int64_t> sourceOffsets,
+                                  ArrayRef<Value> elementExtents,
+                                  Value sourcePayload, Value compactPayload);
 
 FailureOr<SmallVector<Value, 4>>
 getCompactHaloOwnerLoopIvs(sde::SdeSuIterateOp source, memref::LoadOp load,

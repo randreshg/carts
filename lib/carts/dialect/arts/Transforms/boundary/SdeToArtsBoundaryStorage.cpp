@@ -698,9 +698,9 @@ LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr committedHaloShape) {
       return op.emitOpError() << "could not derive access-window geometry from "
                                  "the rank-expanded "
                                  "MU type";
-    if (failed(createDbBackedReplacement(
-            builder, op, memrefType, ownerDims, blockShape, *geom, replacement,
-            /*dropPromotedOwnerDims=*/!static_cast<bool>(committedHaloShape))))
+    if (failed(createDbBackedReplacement(builder, op, memrefType, ownerDims,
+                                         blockShape, *geom, replacement,
+                                         /*dropPromotedOwnerDims=*/true)))
       return op.emitOpError()
              << "could not realize query-derived SDE layout as ARTS DB";
   } else if (committedHaloShape) {
