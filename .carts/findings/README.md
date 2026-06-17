@@ -3,12 +3,12 @@
 > Single entry point. Updated 2026-06-17 after the v4 worker-grain and compact
 > halo fixes.
 
-## Canonical state - `v4` @ `460bdc49f`
+## Canonical state - current `v4`
 
 Line contains the correctness base, Phase 11 split, US8 scalar-replacement
-guard, worker-grain layout realization (`f21f10f2e`), clean SDE halo payload
-consumption (`49ca80c55`), compact halo graph pressure reduction (`03ed9eda5`),
-and used-side compact halo packing (`460bdc49f`). Latest medium E2E validation:
+guard, worker-grain layout realization, clean SDE halo payload consumption,
+compact halo graph pressure reduction, used-side compact halo packing, and the
+2026-06-17 distribution-grain guidance cleanup. Latest medium E2E validation:
 `.carts/findings/e2e-validation-20260616.md`.
 
 Build and full-suite status should be refreshed before publication. The focused
@@ -45,7 +45,8 @@ Fresh large GEMM `sde-to-arts` output on this compiler emits C as DB grid
   40-agent ultracode audit; 0 high / 4 med / rest low, all behavior-preserving.
   Cleanups APPLIED: dead code (recordHomeLayout, requiresUnimplementedStencilWavefront
   wrapper, LaunchPolicyUtils include), stale DistributionPlanning refs, attr
-  centralization (sde.layout_choice → SdeAttrNames.h). See `phase11-review-report.md`.
+  centralization (sde.layout_choice → SdeAttrNames.h). The standalone
+  pre-commit review report was superseded by the applied fixes and this index.
 
 ## Done (2026-06-15, committed on recarve)
 
@@ -73,11 +74,10 @@ from being promoted incorrectly.
 
 | File | Purpose |
 |---|---|
-| `goal-large-perf.md` | Historical remaining-work prompt; verify against current `v4` before reuse |
-| `phase11-review-report.md` | Pre-commit review findings (most applied; 2 test-gaps open) |
 | `phase11-recarve-plan.md` | The executed split carve plan (historical reference) |
-| `distribution-audit-2n.md` | Per-benchmark 2n root causes (spec reference) |
-| `.carts/spec/specs/0001-distribution-1n-2n/` | Structured spec: spec/plan/tasks/research |
+| `phase11-split-keep-decisions.md` | Final split/keep decisions after the recarve |
+| `compiler-code-health-backlog.md` | Source-verified backlog; historical rows must be rechecked against current `v4` before reuse |
+| `e2e-validation-20260616.md` | Latest committed 1-node medium validation evidence |
 
 ## Next steps
 

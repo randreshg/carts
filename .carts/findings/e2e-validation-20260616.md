@@ -77,8 +77,8 @@ scoped pass.
 `dekk carts lit`: **103/109** pass; the 6 remaining jacobi/poisson
 stencil-halo boundary tests fail closed while compiling with `touches a DB
 without a committed SDE access-window dependency`. These failures are
-pre-existing per `.carts/findings/plan.md` and do not contradict the fresh
-single-node medium benchmark sweep.
+pre-existing per the findings index and do not contradict the fresh single-node
+medium benchmark sweep.
 
 New: `sde_redistribute_reconciles_alternating_buffer_grain.mlir`, `sde_redistribute_reconciles_alternating_buffer_root_grain.mlir`, `sde_redistribute_cross_owner_reductions.mlir` **PASS**.
 

@@ -85,7 +85,7 @@ Status key: **DONE** (verified in checkout), **OPEN** (work remains), **BLOCKED*
 
 | ID | Task | Constitution | C-hazard | Layer | Disposition | Validation | Status |
 |----|------|--------------|----------|-------|-------------|------------|--------|
-| U8-1 | T024 hoist div/rem indexing | P3 structural | codegen | Strength-reduce rank-expanded subscripts | wall-time conv/jacobi | **DEFERRED** — no owning `lib/carts/codegen` module; work belongs in ARTS-RT lowering / `goal-large-perf.md` |
+| U8-1 | T024 hoist div/rem indexing | P3 structural | codegen | Strength-reduce rank-expanded subscripts | wall-time conv/jacobi | **DEFERRED** — no owning `lib/carts/codegen` module; work belongs in ARTS-RT lowering and must be re-triaged from current `v4` evidence |
 | U8-2 | T025 vectorize accumulators | C1 | codegen | Vectorize promoted reductions | gemm AVX evidence | **PARTIAL** (compiler evidence @07a3c27e8; wall-time not captured) |
 | U8-3 | T026 fuse layernorm passes | — | codegen | Fuse mean/var/normalize | layernorm wall-time | **DEFERRED** |
 
