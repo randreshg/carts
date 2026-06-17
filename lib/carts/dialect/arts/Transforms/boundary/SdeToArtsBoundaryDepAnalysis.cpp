@@ -253,6 +253,22 @@ bool areWriterGroupsRouteLocal(ArrayRef<WriterGroupingSpec> writerSpecs,
   });
 }
 
+std::optional<unsigned>
+mapOwnerSlotToAccessWindowPayloadDim(unsigned ownerSlot, int64_t physicalDim,
+                                     unsigned ownerDimCount,
+                                     ArrayRef<int64_t> validExtents) {
+  if (physicalDim < 0)
+    return std::nullopt;
+  if (validExtents.size() == ownerDimCount) {
+    if (ownerSlot >= validExtents.size())
+      return std::nullopt;
+    return ownerSlot;
+  }
+  if (static_cast<size_t>(physicalDim) >= validExtents.size())
+    return std::nullopt;
+  return static_cast<unsigned>(physicalDim);
+}
+
 FailureOr<unsigned> getAccessWindowPayloadDim(sde::SdeSuIterateOp source,
                                               const DirectDepSpec &dep,
                                               unsigned ownerSlot,
@@ -262,12 +278,13 @@ FailureOr<unsigned> getAccessWindowPayloadDim(sde::SdeSuIterateOp source,
       return source.emitOpError()
              << "dependency array owner-dim facts do not cover owner slot";
     int64_t physicalDim = (*dep.arrayOwnerDims)[ownerSlot];
-    if (physicalDim < 0 ||
-        static_cast<size_t>(physicalDim) >= dep.validExtents.size())
+    std::optional<unsigned> payloadDim = mapOwnerSlotToAccessWindowPayloadDim(
+        ownerSlot, physicalDim, dep.ownerDimCount, dep.validExtents);
+    if (!payloadDim)
       return source.emitOpError()
              << "dependency array owner dimension is outside the "
                 "access-window payload rank";
-    return static_cast<unsigned>(physicalDim);
+    return *payloadDim;
   }
 
   if (dep.validExtents.size() == dep.ownerDimCount) {
@@ -580,9 +597,11 @@ getArrayOwnerDimsForWindow(sde::SdeSuIterateOp source,
     return window.emitOpError()
            << "owner-dim count disagrees with committed SDE arrayLayout facts";
 
-  for (int64_t ownerDim : match->ownerDims) {
-    if (ownerDim < 0 ||
-        static_cast<size_t>(ownerDim) >= facts.validExtents.size())
+  unsigned ownerDimCount = static_cast<unsigned>(window.getOwnerDimCount());
+  for (auto [slot, ownerDim] : llvm::enumerate(match->ownerDims)) {
+    if (!mapOwnerSlotToAccessWindowPayloadDim(static_cast<unsigned>(slot),
+                                              ownerDim, ownerDimCount,
+                                              facts.validExtents))
       return window.emitOpError()
              << "arrayLayout owner dimension is outside the access-window "
                 "payload rank";
@@ -618,9 +637,11 @@ getReduceScatterOwnerDimsForWindow(arts::DbAccessWindowOp window,
     return window.emitOpError()
            << "owner-dim count disagrees with committed reduce_scatter_like "
               "movement";
-  for (int64_t ownerDim : *ownerDims) {
-    if (ownerDim < 0 ||
-        static_cast<size_t>(ownerDim) >= facts.validExtents.size())
+  unsigned ownerDimCount = static_cast<unsigned>(window.getOwnerDimCount());
+  for (auto [slot, ownerDim] : llvm::enumerate(*ownerDims)) {
+    if (!mapOwnerSlotToAccessWindowPayloadDim(static_cast<unsigned>(slot),
+                                              ownerDim, ownerDimCount,
+                                              facts.validExtents))
       return window.emitOpError()
              << "reduce_scatter_like owner dimension is outside the "
                 "access-window payload rank";
@@ -1009,7 +1030,12 @@ bool isCommittedFullWindowSlot(
   if (arrayOwnerDims) {
     if (slot >= arrayOwnerDims->size())
       return false;
-    payloadDim = (*arrayOwnerDims)[slot];
+    std::optional<unsigned> mapped = mapOwnerSlotToAccessWindowPayloadDim(
+        slot, (*arrayOwnerDims)[slot], static_cast<unsigned>(blockLo.size()),
+        validExtents);
+    if (!mapped)
+      return false;
+    payloadDim = *mapped;
   }
   if (payloadDim < 0 || static_cast<size_t>(payloadDim) >= validExtents.size())
     return false;
