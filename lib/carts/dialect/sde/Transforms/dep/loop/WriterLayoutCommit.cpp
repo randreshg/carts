@@ -484,20 +484,22 @@ static void commitLayoutFacts(
           (layoutForSu.kind == sde::ArrayLayoutKind::blockParallel ||
            layoutForSu.kind == sde::ArrayLayoutKind::blockContraction);
       bool stencilWriter = false;
+      bool matmulWriter = false;
       bool reductionWriter = false;
       if (writerViaMuType && suId < relations.schedulingUnits.size()) {
         std::optional<sde::SdeStructuredClassification> wc =
             sde::queryStructuredClassification(relations.schedulingUnits[suId]);
         stencilWriter = wc && *wc == sde::SdeStructuredClassification::stencil;
+        matmulWriter = wc && *wc == sde::SdeStructuredClassification::matmul;
         reductionWriter =
             wc && *wc == sde::SdeStructuredClassification::reduction;
       }
-      // Stencil physical grain is not the abstract layout-choice grain.
-      // Writer roots preserved for a later stencil reader follow the same
-      // rule: the logical owner choice is real SDE evidence, but physical
-      // MU/CU grain is committed after tiling/neighborhood facts are available.
+      // Stencil and matmul physical grain is not the abstract layout-choice
+      // grain. The logical owner choice is real SDE evidence, but physical
+      // MU/CU grain is committed after the owning tiling path has rewritten the
+      // loop shape that makes it true.
       if (writerViaMuType) {
-        if (!stencilWriter && !preserveFullWriter)
+        if (!stencilWriter && !matmulWriter && !preserveFullWriter)
           writerCommits[suId].push_back(
               {SmallVector<int64_t, 4>(layoutForSu.ownerPositions.begin(),
                                        layoutForSu.ownerPositions.end()),

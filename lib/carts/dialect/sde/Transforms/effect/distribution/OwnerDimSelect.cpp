@@ -1875,6 +1875,9 @@ static void commitMatmulPhysicalLayout(sde::SdeSuIterateOp op,
   SmallVector<int64_t, 4> logicalWorkerSlice =
       buildLogicalWorkerSliceOrPhysical(op, outputPlan->shape, ownerDims,
                                         physicalBlockShape, workers);
+  if (!physicalLayoutMatchesRealizedLoopSteps(op, ownerDims, physicalBlockShape,
+                                              logicalWorkerSlice))
+    return;
 
   sde::commitWriterPhysicalLayoutFacts(op, ownerDims, physicalBlockShape,
                                        logicalWorkerSlice);

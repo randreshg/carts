@@ -566,19 +566,14 @@ static LogicalResult
 ensurePartialReductionFacts(carts::sde::SdeSuIterateOp consumer,
                             const ReduceScatterWriteTarget &target) {
   MLIRContext *ctx = consumer.getContext();
-  SmallVector<int64_t, 4> reductionDims;
-  std::optional<carts::sde::SuLoopAccessSummary> summary =
-      carts::sde::analyzeSuLoopAccesses(consumer);
-  if (!summary)
-    return failure();
-  for (auto [dim, iteratorType] : llvm::enumerate(summary->iterTypes))
-    if (iteratorType == utils::IteratorType::reduction)
-      reductionDims.push_back(static_cast<int64_t>(dim));
-  if (reductionDims.empty() || target.ownerDims.empty())
+  std::optional<carts::sde::SuPartialReductionFacts> facts =
+      carts::sde::queryPartialReductionFacts(consumer);
+  if (!facts || facts->reductionDims.empty() || target.ownerDims.empty())
     return failure();
 
   consumer.setPartialReductionAttr(UnitAttr::get(ctx));
-  consumer.setPartialReductionDimsAttr(buildI64ArrayAttr(ctx, reductionDims));
+  consumer.setPartialReductionDimsAttr(
+      buildI64ArrayAttr(ctx, facts->reductionDims));
   consumer.setPartialReductionOwnerDimsAttr(
       buildI64ArrayAttr(ctx, target.ownerDims));
   return success();

@@ -7,6 +7,7 @@
 
 #include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
+#include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -157,6 +158,21 @@ static bool isSiblingDistributedIntermediate(SdeSuIterateOp consumer,
   return found;
 }
 
+static SmallVector<int64_t, 4>
+deriveReductionOnlyDims(SdeSuIterateOp op,
+                        ArrayRef<utils::IteratorType> iterTypes) {
+  SmallVector<int64_t, 4> dims;
+  unsigned scheduleRank = op.getLowerBounds().size();
+  for (auto [dim, iteratorType] : llvm::enumerate(iterTypes)) {
+    if (iteratorType != utils::IteratorType::reduction)
+      continue;
+    if (dim < scheduleRank)
+      continue;
+    dims.push_back(static_cast<int64_t>(dim));
+  }
+  return dims;
+}
+
 static std::optional<SuPartialReductionFacts>
 computePartialReductionFacts(SdeSuIterateOp op,
                              const SuLoopAccessSummary &summary,
@@ -165,10 +181,7 @@ computePartialReductionFacts(SdeSuIterateOp op,
 
   if (classification == SdeStructuredClassification::elementwise_pipeline &&
       isOwnerLocalPipelineReduction(op)) {
-    for (auto [dim, iteratorType] : llvm::enumerate(summary.iterTypes)) {
-      if (iteratorType == utils::IteratorType::reduction)
-        facts.reductionDims.push_back(static_cast<int64_t>(dim));
-    }
+    facts.reductionDims = deriveReductionOnlyDims(op, summary.iterTypes);
     if (facts.reductionDims.empty())
       return facts;
 
@@ -184,6 +197,24 @@ computePartialReductionFacts(SdeSuIterateOp op,
         continue;
       if (summary.iterTypes[loopDim] == utils::IteratorType::parallel)
         facts.ownerDims.push_back(static_cast<int64_t>(physicalDim));
+    }
+    if (!facts.ownerDims.empty())
+      facts.hasPartialReduction = true;
+    return facts;
+  }
+
+  if (classification == SdeStructuredClassification::reduction) {
+    facts.reductionDims = deriveReductionOnlyDims(op, summary.iterTypes);
+    if (facts.reductionDims.empty())
+      return facts;
+
+    if (std::optional<SmallVector<int64_t, 4>> ownerDims =
+            readI64ArrayAttr(op.getPartialReductionOwnerDimsAttr())) {
+      facts.ownerDims.assign(ownerDims->begin(), ownerDims->end());
+    } else if (std::optional<CommittedSuPhysicalLayout> committed =
+                   recoverCommittedPhysicalLayout(op)) {
+      facts.ownerDims.assign(committed->ownerDims.begin(),
+                             committed->ownerDims.end());
     }
     if (!facts.ownerDims.empty())
       facts.hasPartialReduction = true;

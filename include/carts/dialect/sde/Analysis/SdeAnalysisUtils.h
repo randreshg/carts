@@ -10,6 +10,7 @@
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Utils/SdeCuStructure.h"
 #include "carts/utils/ValueAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -184,7 +185,8 @@ inline bool hasUnmodeledMemoryEffect(Operation *op) {
       isa<SdeYieldOp, SdeArrayLayoutRootOp>(op))
     return false;
 
-  if (isa<memref::LoadOp, memref::StoreOp>(op))
+  if (isa<memref::LoadOp, memref::StoreOp, affine::AffineLoadOp,
+          affine::AffineStoreOp>(op))
     return false;
 
   if (isKnownPureScalarLibmCall(op))
@@ -218,7 +220,19 @@ collectStructuredMemoryEffects(Region &region,
       return;
     }
 
+    if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
+      summary.reads.insert(
+          ::mlir::carts::ValueAnalysis::stripMemrefViewOps(loadOp.getMemref()));
+      return;
+    }
+
     if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+      summary.writes.insert(::mlir::carts::ValueAnalysis::stripMemrefViewOps(
+          storeOp.getMemref()));
+      return;
+    }
+
+    if (auto storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
       summary.writes.insert(::mlir::carts::ValueAnalysis::stripMemrefViewOps(
           storeOp.getMemref()));
       return;

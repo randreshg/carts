@@ -18,6 +18,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
 
@@ -1239,16 +1240,25 @@ static bool partialReductionFactsMatchMovement(SdeSuIterateOp consumer,
   if (ArrayRef<int64_t>(*partialOwnerDims) != ownerDims)
     return false;
 
-  std::optional<SuLoopAccessSummary> summary = analyzeSuLoopAccesses(consumer);
-  if (!summary)
-    return false;
-  SmallVector<int64_t, 4> derivedReductionDims;
-  for (auto [dim, iteratorType] : llvm::enumerate(summary->iterTypes))
-    if (iteratorType == utils::IteratorType::reduction)
-      derivedReductionDims.push_back(static_cast<int64_t>(dim));
-  return !derivedReductionDims.empty() &&
-         ArrayRef<int64_t>(*partialDims) ==
-             ArrayRef<int64_t>(derivedReductionDims);
+  unsigned scheduleRank = consumer.getLowerBounds().size();
+  auto nestedForDepth = [](auto &self, Block *block) -> unsigned {
+    if (!block)
+      return 0;
+    unsigned depth = 0;
+    for (Operation &op : block->without_terminator())
+      if (auto forOp = dyn_cast<scf::ForOp>(op))
+        depth = std::max(depth, 1 + self(self, forOp.getBody()));
+    return depth;
+  };
+  SdeCuRegionOp cu = findSuComputeCuRegion(consumer);
+  unsigned loopRank =
+      scheduleRank + nestedForDepth(nestedForDepth, cu && !cu.getBody().empty()
+                                                        ? &cu.getBody().front()
+                                                        : nullptr);
+  return llvm::all_of(*partialDims, [&](int64_t dim) {
+    return dim >= static_cast<int64_t>(scheduleRank) &&
+           dim < static_cast<int64_t>(loopRank);
+  });
 }
 
 static LogicalResult verifyMovementAnchoredInConsumer(

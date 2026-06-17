@@ -549,6 +549,8 @@ buildPromotedMatmulPhysicalTileShape(sde::SdeSuIterateOp op,
   if (!outputPlan || outputPlan->shape.size() < 2 ||
       outputPlan->loopDimToPhysicalDim.size() < op.getLowerBounds().size())
     return std::nullopt;
+  if (!sde::hasDistinctExternalMatmulInputRoots(op))
+    return std::nullopt;
 
   PhysicalTileShape plan;
   unsigned scheduleRank = op.getLowerBounds().size();
@@ -613,11 +615,8 @@ buildPromotedMatmulPhysicalTileShape(sde::SdeSuIterateOp op,
     plan.tileIterations[loopDim] = tile;
   }
 
-  if (!sde::buildBlockAlignedLogicalWorkerSlice(
-          outputPlan->shape, plan.ownerPhysicalDims, plan.blockShape,
-          getTargetTileTasks(op, costModel), plan.logicalWorkerSlice))
-    plan.logicalWorkerSlice.assign(plan.blockShape.begin(),
-                                   plan.blockShape.end());
+  plan.logicalWorkerSlice.assign(plan.blockShape.begin(),
+                                 plan.blockShape.end());
   plan.topology = plan.ownerPhysicalDims.size() == 2
                       ? sde::SdeIterationTopology::owner_tile_2d
                       : sde::SdeIterationTopology::owner_tile;
@@ -1602,10 +1601,8 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       if (!directMatmul) {
         physicalTileShape = buildCoiteratedReadWriterTilePlan(op);
         if (!physicalTileShape) {
-          if (auto cls = sde::queryStructuredClassification(op);
-              cls && *cls == sde::SdeStructuredClassification::matmul)
-            physicalTileShape =
-                buildPromotedMatmulPhysicalTileShape(op, *costModel);
+          physicalTileShape =
+              buildPromotedMatmulPhysicalTileShape(op, *costModel);
         }
         if (!physicalTileShape)
           physicalTileShape =
@@ -1751,10 +1748,6 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           ValueRange{tiledSteps}, sde::SuIterateAttrs::fromOp(op),
           op.getReductionAccumulators());
       newOp->setAttrs(sde::getRewrittenAttrs(op));
-      if (!physicalTileShape && !directMatmul)
-        alignExistingStaticPhysicalPlanToSteps(newOp, tiledSteps, parallelMask);
-      if (physicalTileShape)
-        commitPhysicalTileShape(newOp, *physicalTileShape);
 
       Block &newBody = sde::ensureBlock(newOp.getBody());
       for (unsigned d = newBody.getNumArguments(); d < numDims; ++d)
@@ -1779,6 +1772,11 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           oldCuRegion ? oldCuRegion.getSerialReasonAttr() : nullptr);
       Block &newCuBody = sde::ensureBlock(newCuRegion.getBody());
       rewriter.setInsertionPointToStart(&newCuBody);
+
+      if (!physicalTileShape && !directMatmul)
+        alignExistingStaticPhysicalPlanToSteps(newOp, tiledSteps, parallelMask);
+      if (physicalTileShape)
+        commitPhysicalTileShape(newOp, *physicalTileShape);
 
       SmallVector<scf::ForOp, 4> tileLoops;
       for (unsigned d = 0; d < numDims; ++d) {
