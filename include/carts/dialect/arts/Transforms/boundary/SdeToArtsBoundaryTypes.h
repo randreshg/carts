@@ -104,6 +104,7 @@ struct HaloLoadRewrite {
 
 struct HaloNdLoadRewrite {
   unsigned haloWorkIndex = 0;
+  SmallVector<int64_t, 4> sourceOffsets;
 };
 
 struct WriterGroupingSpec {

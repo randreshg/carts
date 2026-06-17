@@ -7,16 +7,14 @@
 // CHECK-LABEL: func.func @caps_compact_halo_payload_writer_groups
 // CHECK-COUNT-2: compact_halo_payload
 // CHECK: %[[C195:[A-Za-z0-9_]+]] = arith.constant 195 : index
-// CHECK: scf.for %{{.*}} = {{.*}} to {{.*}} step %[[C195]]
+// CHECK: scf.for
+// CHECK-SAME: step %[[C195]]
+// CHECK: arts.db_acquire[<in>]
 // CHECK: arts.db_acquire[<out>]
 // CHECK-SAME: sizes[
-// CHECK: arts.edt
-// CHECK-SAME: compactHaloPack
-// CHECK: scf.for %{{.*}} = {{.*}} to {{.*}} step %[[C195]]
 // CHECK: arts.db_acquire[<out>]
 // CHECK-SAME: sizes[
-// CHECK: arts.edt
-// CHECK-SAME: compactHaloPack
+// CHECK-COUNT-1: compactHaloPack
 
 module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_workers = 64 : i64} {
   func.func @caps_compact_halo_payload_writer_groups() {

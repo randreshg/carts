@@ -144,6 +144,7 @@ LogicalResult emitCompactHaloCopy(OpBuilder &builder, Location loc,
                                   ArrayRef<int64_t> sourceOffsets,
                                   ArrayRef<Value> elementExtents,
                                   Value sourcePayload, Value compactPayload) {
+  OpBuilder::InsertionGuard guard(builder);
   unsigned payloadRank = elementExtents.size();
   SmallVector<Value, 4> loopIvs(payloadRank);
 
@@ -414,6 +415,7 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
   }
 
   bool hasHaloOffset = false;
+  SmallVector<int64_t, 4> sourceOffsets(ownerDimCount, 0);
   for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
     if (slot >= work.ownerPayloadDims.size() ||
         work.ownerPayloadDims[slot] >= payloadRank) {
@@ -445,12 +447,14 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
              "committed; refusing a full-block halo byte-window";
       return failure();
     }
+    sourceOffsets[slot] = *offset;
     hasHaloOffset |= *offset != 0;
   }
 
   if (!hasHaloOffset)
     return std::optional<HaloNdLoadRewrite>{};
-  return std::optional<HaloNdLoadRewrite>{HaloNdLoadRewrite{haloWorkIndex}};
+  return std::optional<HaloNdLoadRewrite>{
+      HaloNdLoadRewrite{haloWorkIndex, sourceOffsets}};
 }
 
 FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
@@ -733,70 +737,77 @@ LogicalResult rewriteClonedNdUnitHaloLoads(
 
     if (work.sideSourceOffsets.size() != work.sideTaskDepIndices.size())
       return task.emitOpError() << "has inconsistent compact halo side state";
+    if (rewrite.sourceOffsets.size() != ownerDimCount)
+      return task.emitOpError() << "has stale compact halo rewrite offsets";
+    auto sideIt = llvm::find(work.sideSourceOffsets, rewrite.sourceOffsets);
+    if (sideIt == work.sideSourceOffsets.end())
+      return task.emitOpError()
+             << "has no compact halo side payload for classified load";
+    unsigned sideIndex = static_cast<unsigned>(
+        std::distance(work.sideSourceOffsets.begin(), sideIt));
+    unsigned sideDepIndex = work.sideTaskDepIndices[sideIndex];
+    FailureOr<Value> sidePayload = requirePayload(sideDepIndex);
+    if (failed(sidePayload))
+      return failure();
 
+    ArrayRef<int64_t> sideOffsets = work.sideSourceOffsets[sideIndex];
     ArrayRef<Value> centerBlockOffsets =
         depBlockOffsetArgs[work.centerTaskDepIndex];
-    for (auto [sideOffsets, sideDepIndex] :
-         llvm::zip_equal(work.sideSourceOffsets, work.sideTaskDepIndices)) {
-      FailureOr<Value> sidePayload = requirePayload(sideDepIndex);
-      if (failed(sidePayload))
-        return failure();
-      ArrayRef<Value> sideBlockOffsets = depBlockOffsetArgs[sideDepIndex];
+    ArrayRef<Value> sideBlockOffsets = depBlockOffsetArgs[sideDepIndex];
 
-      Value condition;
-      for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-        Value centerBlock = centerBlockOffsets[slot];
-        Value groupEnd = createGroupEnd(builder, loc, centerBlock,
-                                        work.centerGroupBlockCounts[slot]);
-        if (sideOffsets[slot] == 0) {
-          Value atOrAfterStart =
-              arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge,
-                                    indices[slot], centerBlock);
-          Value beforeEnd = arith::CmpIOp::create(
-              builder, loc, arith::CmpIPredicate::ult, indices[slot], groupEnd);
-          condition = andValues(loc, condition, atOrAfterStart);
-          condition = andValues(loc, condition, beforeEnd);
-          continue;
-        }
-
-        Value crossesBlock =
-            sideOffsets[slot] < 0
-                ? isBeforeGroup(builder, loc, indices[slot], centerBlock)
-                : isAfterOrAtGroupEnd(builder, loc, indices[slot], groupEnd);
-        Value matchesSide =
-            arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
-                                  indices[slot], sideBlockOffsets[slot]);
-        condition = andValues(loc, condition, crossesBlock);
-        condition = andValues(loc, condition, matchesSide);
+    Value condition;
+    for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+      Value centerBlock = centerBlockOffsets[slot];
+      Value groupEnd = createGroupEnd(builder, loc, centerBlock,
+                                      work.centerGroupBlockCounts[slot]);
+      if (sideOffsets[slot] == 0) {
+        Value atOrAfterStart =
+            arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge,
+                                  indices[slot], centerBlock);
+        Value beforeEnd = arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::ult, indices[slot], groupEnd);
+        condition = andValues(loc, condition, atOrAfterStart);
+        condition = andValues(loc, condition, beforeEnd);
+        continue;
       }
 
-      SmallVector<Value, 4> sideElementIndices;
-      sideElementIndices.reserve(payloadRank);
-      for (unsigned slot = 0; slot < payloadRank; ++slot)
-        if (auto ownerIt = llvm::find(work.ownerPayloadDims, slot);
-            ownerIt != work.ownerPayloadDims.end()) {
-          unsigned ownerSlot = static_cast<unsigned>(
-              std::distance(work.ownerPayloadDims.begin(), ownerIt));
-          sideElementIndices.push_back(sideOffsets[ownerSlot] != 0
-                                           ? createZeroIndex(builder, loc)
-                                           : indices[ownerDimCount + slot]);
-        } else {
-          sideElementIndices.push_back(indices[ownerDimCount + slot]);
-        }
-
-      auto ifOp = scf::IfOp::create(builder, loc, load.getType(), condition,
-                                    /*withElseRegion=*/true);
-      builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
-      Value sideValue = memref::LoadOp::create(
-          builder, loc, *sidePayload,
-          buildRankExpandedIndices(ownerIndices, sideElementIndices));
-      scf::YieldOp::create(builder, loc, ValueRange{sideValue});
-
-      builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
-      scf::YieldOp::create(builder, loc, ValueRange{replacement});
-      replacement = ifOp.getResult(0);
-      builder.setInsertionPointAfter(ifOp);
+      Value crossesBlock =
+          sideOffsets[slot] < 0
+              ? isBeforeGroup(builder, loc, indices[slot], centerBlock)
+              : isAfterOrAtGroupEnd(builder, loc, indices[slot], groupEnd);
+      Value matchesSide =
+          arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
+                                indices[slot], sideBlockOffsets[slot]);
+      condition = andValues(loc, condition, crossesBlock);
+      condition = andValues(loc, condition, matchesSide);
     }
+
+    SmallVector<Value, 4> sideElementIndices;
+    sideElementIndices.reserve(payloadRank);
+    for (unsigned slot = 0; slot < payloadRank; ++slot)
+      if (auto ownerIt = llvm::find(work.ownerPayloadDims, slot);
+          ownerIt != work.ownerPayloadDims.end()) {
+        unsigned ownerSlot = static_cast<unsigned>(
+            std::distance(work.ownerPayloadDims.begin(), ownerIt));
+        sideElementIndices.push_back(sideOffsets[ownerSlot] != 0
+                                         ? createZeroIndex(builder, loc)
+                                         : indices[ownerDimCount + slot]);
+      } else {
+        sideElementIndices.push_back(indices[ownerDimCount + slot]);
+      }
+
+    auto ifOp = scf::IfOp::create(builder, loc, load.getType(), condition,
+                                  /*withElseRegion=*/true);
+    builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+    Value sideValue = memref::LoadOp::create(
+        builder, loc, *sidePayload,
+        buildRankExpandedIndices(ownerIndices, sideElementIndices));
+    scf::YieldOp::create(builder, loc, ValueRange{sideValue});
+
+    builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
+    scf::YieldOp::create(builder, loc, ValueRange{replacement});
+    replacement = ifOp.getResult(0);
+    builder.setInsertionPointAfter(ifOp);
 
     load.replaceAllUsesWith(replacement);
     load.erase();

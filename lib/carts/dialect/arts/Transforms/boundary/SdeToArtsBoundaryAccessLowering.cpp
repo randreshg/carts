@@ -814,38 +814,40 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
          payloadDb});
   }
 
-  for (CompactHaloNdSideSpec &side : spec.sides) {
-    SmallVector<Value> blockOffsets;
-    SmallVector<Value> blockSizes;
-    blockOffsets.reserve(ownerDimCount);
-    blockSizes.reserve(ownerDimCount);
-    scf::ForOp outerLoop;
-    for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-      Value groupCount =
-          createConstantIndex(builder, loc, groupBlockCounts[slot]);
-      auto loop = scf::ForOp::create(builder, loc, zero,
-                                     dep.alloc.getSizes()[slot], groupCount);
-      if (!outerLoop)
-        outerLoop = loop;
-      builder.setInsertionPointToStart(loop.getBody());
-      Value blockOffset = loop.getInductionVar();
-      blockOffsets.push_back(blockOffset);
-      blockSizes.push_back(arith::MinUIOp::create(
-          builder, loc,
-          arith::SubIOp::create(builder, loc, dep.alloc.getSizes()[slot],
-                                blockOffset),
-          groupCount));
-    }
+  SmallVector<Value> blockOffsets;
+  SmallVector<Value> blockSizes;
+  blockOffsets.reserve(ownerDimCount);
+  blockSizes.reserve(ownerDimCount);
+  scf::ForOp outerLoop;
+  for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+    Value groupCount =
+        createConstantIndex(builder, loc, groupBlockCounts[slot]);
+    auto loop = scf::ForOp::create(builder, loc, zero,
+                                   dep.alloc.getSizes()[slot], groupCount);
+    if (!outerLoop)
+      outerLoop = loop;
+    builder.setInsertionPointToStart(loop.getBody());
+    Value blockOffset = loop.getInductionVar();
+    blockOffsets.push_back(blockOffset);
+    blockSizes.push_back(arith::MinUIOp::create(
+        builder, loc,
+        arith::SubIOp::create(builder, loc, dep.alloc.getSizes()[slot],
+                              blockOffset),
+        groupCount));
+  }
 
-    auto sourceAcquire = arts::DbAcquireOp::create(
-        builder, loc, ArtsMode::in, dep.alloc.getGuid(), dep.alloc.getPtr(),
-        std::optional<arts::PartitionMode>(arts::PartitionMode::block),
-        SmallVector<Value>{},
-        SmallVector<Value>(blockOffsets.begin(), blockOffsets.end()),
-        blockSizes, SmallVector<Value>{}, SmallVector<Value>{},
-        SmallVector<Value>{}, Value{}, SmallVector<Value>{},
-        SmallVector<Value>{});
-    sourceAcquire.setPreserveAccessMode();
+  auto sourceAcquire = arts::DbAcquireOp::create(
+      builder, loc, ArtsMode::in, dep.alloc.getGuid(), dep.alloc.getPtr(),
+      std::optional<arts::PartitionMode>(arts::PartitionMode::block),
+      SmallVector<Value>{},
+      SmallVector<Value>(blockOffsets.begin(), blockOffsets.end()), blockSizes,
+      SmallVector<Value>{}, SmallVector<Value>{}, SmallVector<Value>{}, Value{},
+      SmallVector<Value>{}, SmallVector<Value>{});
+  sourceAcquire.setPreserveAccessMode();
+
+  SmallVector<Value, 8> packDeps{sourceAcquire.getPtr()};
+  packDeps.reserve(1 + spec.sides.size());
+  for (CompactHaloNdSideSpec &side : spec.sides) {
     auto payloadAcquire = arts::DbAcquireOp::create(
         builder, loc, ArtsMode::out, side.payloadDb.getGuid(),
         side.payloadDb.getPtr(),
@@ -856,65 +858,71 @@ realizeCompactHaloNdPacks(sde::SdeSuIterateOp source, DirectDepSpec dep,
         SmallVector<Value>{}, Value{}, SmallVector<Value>{},
         SmallVector<Value>{});
     payloadAcquire.setPreserveAccessMode();
-
-    SmallVector<Value, 4> packDeps{sourceAcquire.getPtr(),
-                                   payloadAcquire.getPtr()};
-    SmallVector<Value, 4> packParams(blockSizes.begin(), blockSizes.end());
-    packParams.append(elementExtents.begin(), elementExtents.end());
-    auto packEdt = arts::EdtOp::create(
-        builder, loc, arts::EdtType::task, arts::EdtConcurrency::intranode,
-        arts::createCurrentNodeRoute(builder, loc), packDeps, packParams);
-    packEdt.setCompactHaloPackAttr(UnitAttr::get(ctx));
-
-    Block &packBlock = packEdt.getBody().front();
-    for (Value depValue : packDeps)
-      packBlock.addArgument(depValue.getType(), loc);
-    unsigned paramOffset = packBlock.getNumArguments();
-    for (Value param : packParams)
-      packBlock.addArgument(param.getType(), loc);
-
-    OpBuilder bodyBuilder(packEdt.getContext());
-    bodyBuilder.setInsertionPointToStart(&packBlock);
-    Value sourceBlocks = packBlock.getArgument(0);
-    Value compactBlocks = packBlock.getArgument(1);
-    SmallVector<Value, 4> bodyBlockSizes;
-    bodyBlockSizes.reserve(ownerDimCount);
-    for (unsigned slot = 0; slot < ownerDimCount; ++slot)
-      bodyBlockSizes.push_back(packBlock.getArgument(paramOffset + slot));
-    SmallVector<Value, 4> bodyElementExtents;
-    bodyElementExtents.reserve(elementExtents.size());
-    for (unsigned slot = 0; slot < elementExtents.size(); ++slot)
-      bodyElementExtents.push_back(
-          packBlock.getArgument(paramOffset + ownerDimCount + slot));
-    SmallVector<Value, 4> localBlockIndices(ownerDimCount);
-    std::function<LogicalResult(unsigned)> emitBlockLoop = [&](unsigned dim) {
-      if (dim == ownerDimCount) {
-        Value sourceBlockPayload = arts::DbRefOp::create(
-            bodyBuilder, loc, sourceBlocks, localBlockIndices);
-        Value compactBlockPayload = arts::DbRefOp::create(
-            bodyBuilder, loc, compactBlocks, localBlockIndices);
-        return emitCompactHaloCopy(bodyBuilder, loc, ownerDimCount,
-                                   ownerPayloadDims, side.sourceOffsets,
-                                   bodyElementExtents, sourceBlockPayload,
-                                   compactBlockPayload);
-      }
-      auto loop = scf::ForOp::create(
-          bodyBuilder, loc, createZeroIndex(bodyBuilder, loc),
-          bodyBlockSizes[dim], createOneIndex(bodyBuilder, loc));
-      bodyBuilder.setInsertionPointToStart(loop.getBody());
-      localBlockIndices[dim] = loop.getInductionVar();
-      if (failed(emitBlockLoop(dim + 1)))
-        return failure();
-      return success();
-    };
-    if (failed(emitBlockLoop(/*dim=*/0)))
-      return failure();
-    bodyBuilder.setInsertionPointToEnd(&packBlock);
-    arts::YieldOp::create(bodyBuilder, loc);
-
-    builder.setInsertionPointAfter(outerLoop);
+    packDeps.push_back(payloadAcquire.getPtr());
   }
 
+  SmallVector<Value, 4> packParams(blockSizes.begin(), blockSizes.end());
+  packParams.append(elementExtents.begin(), elementExtents.end());
+  auto packEdt = arts::EdtOp::create(
+      builder, loc, arts::EdtType::task, arts::EdtConcurrency::intranode,
+      arts::createCurrentNodeRoute(builder, loc), packDeps, packParams);
+  packEdt.setCompactHaloPackAttr(UnitAttr::get(ctx));
+
+  Block &packBlock = packEdt.getBody().front();
+  for (Value depValue : packDeps)
+    packBlock.addArgument(depValue.getType(), loc);
+  unsigned paramOffset = packBlock.getNumArguments();
+  for (Value param : packParams)
+    packBlock.addArgument(param.getType(), loc);
+
+  OpBuilder bodyBuilder(packEdt.getContext());
+  bodyBuilder.setInsertionPointToStart(&packBlock);
+  Value sourceBlocks = packBlock.getArgument(0);
+  SmallVector<Value, 8> compactBlocks;
+  compactBlocks.reserve(spec.sides.size());
+  for (unsigned sideIdx = 0; sideIdx < spec.sides.size(); ++sideIdx)
+    compactBlocks.push_back(packBlock.getArgument(1 + sideIdx));
+  SmallVector<Value, 4> bodyBlockSizes;
+  bodyBlockSizes.reserve(ownerDimCount);
+  for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+    bodyBlockSizes.push_back(packBlock.getArgument(paramOffset + slot));
+  SmallVector<Value, 4> bodyElementExtents;
+  bodyElementExtents.reserve(elementExtents.size());
+  for (unsigned slot = 0; slot < elementExtents.size(); ++slot)
+    bodyElementExtents.push_back(
+        packBlock.getArgument(paramOffset + ownerDimCount + slot));
+  SmallVector<Value, 4> localBlockIndices(ownerDimCount);
+  std::function<LogicalResult(unsigned)> emitBlockLoop = [&](unsigned dim) {
+    if (dim == ownerDimCount) {
+      Value sourceBlockPayload = arts::DbRefOp::create(
+          bodyBuilder, loc, sourceBlocks, localBlockIndices);
+      for (auto [side, compactBlocksArg] :
+           llvm::zip_equal(spec.sides, compactBlocks)) {
+        Value compactBlockPayload = arts::DbRefOp::create(
+            bodyBuilder, loc, compactBlocksArg, localBlockIndices);
+        if (failed(emitCompactHaloCopy(bodyBuilder, loc, ownerDimCount,
+                                       ownerPayloadDims, side.sourceOffsets,
+                                       bodyElementExtents, sourceBlockPayload,
+                                       compactBlockPayload)))
+          return failure();
+      }
+      return success();
+    }
+    auto loop = scf::ForOp::create(
+        bodyBuilder, loc, createZeroIndex(bodyBuilder, loc),
+        bodyBlockSizes[dim], createOneIndex(bodyBuilder, loc));
+    bodyBuilder.setInsertionPointToStart(loop.getBody());
+    localBlockIndices[dim] = loop.getInductionVar();
+    if (failed(emitBlockLoop(dim + 1)))
+      return failure();
+    return success();
+  };
+  if (failed(emitBlockLoop(/*dim=*/0)))
+    return failure();
+  bodyBuilder.setInsertionPointToEnd(&packBlock);
+  arts::YieldOp::create(bodyBuilder, loc);
+
+  builder.setInsertionPointAfter(outerLoop);
   return spec;
 }
 
