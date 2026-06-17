@@ -277,6 +277,8 @@ FailureOr<ArrayAttr>
 blockShapeForExpandedWindow(const sde::MuAccessWindowGeometry &geom,
                             MemRefType memrefType, MLIRContext *ctx) {
   unsigned ownerDimCount = static_cast<unsigned>(geom.ownerDimCount);
+  if (memrefType.getRank() == static_cast<int64_t>(geom.validExtents.size()))
+    return Builder(ctx).getI64ArrayAttr(geom.validExtents);
   if (memrefType.getRank() !=
       static_cast<int64_t>(ownerDimCount + geom.validExtents.size()))
     return failure();

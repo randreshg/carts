@@ -228,16 +228,58 @@ struct DirectMatmulTileShape {
 
 struct PhysicalTileShape {
   SmallVector<int64_t, 4> ownerPhysicalDims;
+  SmallVector<int64_t, 4> logicalShape;
   SmallVector<int64_t, 4> blockShape;
   SmallVector<int64_t, 4> logicalWorkerSlice;
   SmallVector<int64_t, 4> haloShape;
   SmallVector<int64_t, 4> tileIterations;
   sde::SdeIterationTopology topology = sde::SdeIterationTopology::owner_strip;
+  bool alignSameOwnerReadLayouts = false;
 };
 
 static std::optional<sde::LayoutGraphFact>
 selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
                                   bool allowSingleOwnerDim);
+static bool
+allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
+                                ArrayRef<int64_t> ownerDims,
+                                ArrayRef<int64_t> physicalDimToLoopDim = {});
+
+static std::optional<SmallVector<int64_t, 4>>
+findBudgetWriteLogicalShape(sde::SdeSuIterateOp op,
+                            const sde::LayoutGraphFact &writeLayout) {
+  if (writeLayout.id < 0 || writeLayout.budgetBlockShape.empty())
+    return std::nullopt;
+  std::optional<SmallVector<int64_t, 4>> rootShape =
+      sde::findWriteArrayRootShape(op, writeLayout.id);
+  if (!rootShape)
+    return std::nullopt;
+  return sde::collapseRankExpandedRootShape(*rootShape, writeLayout.ownerDims,
+                                            writeLayout.budgetBlockShape);
+}
+
+static bool hasBudgetReconciledLayoutCandidate(sde::SdeSuIterateOp op) {
+  if (!op || sde::hasCommittedWriterBlockLayout(op) ||
+      op.getReductionAccumulators().size() != 0)
+    return false;
+
+  if (auto classification = sde::queryStructuredClassification(op)) {
+    if (*classification != sde::SdeStructuredClassification::elementwise &&
+        *classification !=
+            sde::SdeStructuredClassification::elementwise_pipeline)
+      return false;
+  }
+
+  std::optional<sde::LayoutGraphFact> writeLayout =
+      selectSingleBudgetWriteLayoutFact(op, /*allowSingleOwnerDim=*/true);
+  if (!writeLayout || writeLayout->ownerDims.empty() ||
+      op.getLowerBounds().size() < writeLayout->ownerDims.size() ||
+      op.getSteps().size() != op.getLowerBounds().size())
+    return false;
+  if (!findBudgetWriteLogicalShape(op, *writeLayout))
+    return false;
+  return allExternalStoresCoverOwnerDims(op, writeLayout->ownerDims);
+}
 
 static std::optional<DirectMatmulTileShape>
 buildDirectMatmulTileShape(OpBuilder &builder, Location loc,
@@ -553,6 +595,7 @@ buildPromotedMatmulPhysicalTileShape(sde::SdeSuIterateOp op,
     return std::nullopt;
 
   PhysicalTileShape plan;
+  plan.logicalShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
   unsigned scheduleRank = op.getLowerBounds().size();
   for (unsigned loopDim = 0; loopDim < scheduleRank; ++loopDim) {
     int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
@@ -803,6 +846,7 @@ buildStencilPhysicalTileShape(sde::SdeSuIterateOp op,
     return std::nullopt;
 
   PhysicalTileShape plan;
+  plan.logicalShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
   plan.ownerPhysicalDims.assign(outputPlan->ownerPhysicalDims.begin(),
                                 outputPlan->ownerPhysicalDims.end());
   plan.blockShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
@@ -857,6 +901,7 @@ buildNdStencilPhysicalTileShape(sde::SdeSuIterateOp op,
     return std::nullopt;
 
   PhysicalTileShape plan;
+  plan.logicalShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
   plan.blockShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
   plan.tileIterations.assign(outputPlan->shape.begin(),
                              outputPlan->shape.end());
@@ -933,6 +978,14 @@ static void commitPhysicalTileShape(sde::SdeSuIterateOp op,
           : ArrayRef<int64_t>(plan.logicalWorkerSlice);
   sde::commitWriterPhysicalLayoutFacts(op, plan.ownerPhysicalDims,
                                        plan.blockShape, logicalSlice);
+  auto classification = sde::queryStructuredClassification(op);
+  if (classification &&
+      *classification == sde::SdeStructuredClassification::stencil)
+    (void)sde::rewriteSameOwnerReadLayoutsToPhysicalShape(
+        op, plan.ownerPhysicalDims, plan.blockShape, plan.logicalShape);
+  else if (plan.alignSameOwnerReadLayouts)
+    (void)sde::rewriteSameOwnerReadLayoutsToPhysicalShape(
+        op, plan.ownerPhysicalDims, plan.blockShape, plan.logicalShape);
 }
 
 static std::optional<unsigned> mapLoopDimToPhysicalDim(sde::SdeSuIterateOp op,
@@ -971,10 +1024,9 @@ static bool isBudgetReconciledTileCandidate(sde::SdeSuIterateOp op) {
   if (*classification == sde::SdeStructuredClassification::stencil) {
     if (sde::queryInPlaceSharedState(op))
       return false;
-    // Out-of-place stencils may consume the committed budget block as a cap on
-    // real DB/MU grain. They must not inflate a finer worker-balanced stencil
-    // tile to that budget: grouped halo compute needs lane-specific acquires
-    // in ARTS before SDE can coarsen stencil execution lanes.
+    // Stencil DB/MU grain is owned by the halo-aware stencil tiler. A
+    // budgetBlockShape on an assigned layout is only a candidate, not a
+    // committed physical block size.
     return true;
   }
 
@@ -1026,7 +1078,7 @@ selectSingleBudgetWriteLayoutFact(sde::SdeSuIterateOp op,
 static bool
 allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
                                 ArrayRef<int64_t> ownerDims,
-                                ArrayRef<int64_t> physicalDimToLoopDim = {}) {
+                                ArrayRef<int64_t> physicalDimToLoopDim) {
   if (!op || ownerDims.empty() || op.getBody().empty())
     return true;
 
@@ -1167,6 +1219,7 @@ buildCoiteratedReadWriterTilePlan(sde::SdeSuIterateOp op) {
     return std::nullopt;
 
   PhysicalTileShape plan;
+  plan.logicalShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
   plan.ownerPhysicalDims.assign(selectedRead->ownerDims.begin(),
                                 selectedRead->ownerDims.end());
   plan.blockShape.assign(writeBlock.begin(), writeBlock.end());
@@ -1200,7 +1253,8 @@ buildCoiteratedReadWriterTilePlan(sde::SdeSuIterateOp op) {
 static std::optional<PhysicalTileShape>
 buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
                                          sde::SDECostModel &costModel) {
-  if (!isBudgetReconciledTileCandidate(op))
+  if (!isBudgetReconciledTileCandidate(op) &&
+      !hasBudgetReconciledLayoutCandidate(op))
     return std::nullopt;
 
   auto classification = sde::queryStructuredClassification(op);
@@ -1215,23 +1269,44 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
       op.getSteps().size() != numDims)
     return std::nullopt;
 
+  SmallVector<int64_t, 4> logicalShape;
+  SmallVector<int64_t, 4> loopDimToPhysicalDim(numDims, -1);
+  SmallVector<int64_t, 4> physicalDimToLoopDim;
   std::optional<sde::SuOutputLayoutFacts> outputPlan =
       sde::findCompatibleSuOutputLayoutFacts(op);
-  if (!outputPlan || outputPlan->shape.empty() ||
-      outputPlan->shape.size() != writeLayout->budgetBlockShape.size() ||
-      outputPlan->physicalDimToLoopDim.size() != outputPlan->shape.size())
+  if (outputPlan) {
+    logicalShape.assign(outputPlan->shape.begin(), outputPlan->shape.end());
+    loopDimToPhysicalDim.assign(outputPlan->loopDimToPhysicalDim.begin(),
+                                outputPlan->loopDimToPhysicalDim.end());
+    physicalDimToLoopDim.assign(outputPlan->physicalDimToLoopDim.begin(),
+                                outputPlan->physicalDimToLoopDim.end());
+  } else if (std::optional<SmallVector<int64_t, 4>> shape =
+                 findBudgetWriteLogicalShape(op, *writeLayout)) {
+    logicalShape.assign(shape->begin(), shape->end());
+    physicalDimToLoopDim.assign(logicalShape.size(), -1);
+    for (auto [loopDim, physicalDim] :
+         llvm::enumerate(writeLayout->ownerDims)) {
+      if (physicalDim < 0 ||
+          static_cast<size_t>(physicalDim) >= physicalDimToLoopDim.size())
+        return std::nullopt;
+      loopDimToPhysicalDim[loopDim] = physicalDim;
+      physicalDimToLoopDim[physicalDim] = loopDim;
+    }
+  }
+  if (logicalShape.empty() ||
+      logicalShape.size() != writeLayout->budgetBlockShape.size() ||
+      physicalDimToLoopDim.size() != logicalShape.size())
     return std::nullopt;
 
   SmallVector<int64_t, 4> orderedOwnerPhysicalDims;
   orderedOwnerPhysicalDims.reserve(writeLayout->ownerDims.size());
   for (unsigned loopDim = 0; loopDim < numDims; ++loopDim) {
-    if (loopDim >= outputPlan->loopDimToPhysicalDim.size())
+    if (loopDim >= loopDimToPhysicalDim.size())
       return std::nullopt;
-    int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
+    int64_t physicalDim = loopDimToPhysicalDim[loopDim];
     if (physicalDim < 0)
       continue;
-    if (static_cast<size_t>(physicalDim) >=
-        outputPlan->physicalDimToLoopDim.size())
+    if (static_cast<size_t>(physicalDim) >= physicalDimToLoopDim.size())
       return std::nullopt;
     if (llvm::is_contained(writeLayout->ownerDims, physicalDim))
       orderedOwnerPhysicalDims.push_back(physicalDim);
@@ -1239,14 +1314,16 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
   if (orderedOwnerPhysicalDims.size() != writeLayout->ownerDims.size())
     return std::nullopt;
   if (!allExternalStoresCoverOwnerDims(op, orderedOwnerPhysicalDims,
-                                       outputPlan->physicalDimToLoopDim))
+                                       physicalDimToLoopDim))
     return std::nullopt;
 
   PhysicalTileShape plan;
+  plan.logicalShape.assign(logicalShape.begin(), logicalShape.end());
   plan.ownerPhysicalDims.assign(orderedOwnerPhysicalDims.begin(),
                                 orderedOwnerPhysicalDims.end());
   plan.blockShape.assign(writeLayout->budgetBlockShape.begin(),
                          writeLayout->budgetBlockShape.end());
+  plan.alignSameOwnerReadLayouts = true;
   bool isStencil = classification &&
                    *classification == sde::SdeStructuredClassification::stencil;
   if (isStencil) {
@@ -1256,9 +1333,9 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
     ownerExtents.reserve(plan.ownerPhysicalDims.size());
     for (int64_t physicalDim : plan.ownerPhysicalDims) {
       if (physicalDim < 0 ||
-          static_cast<size_t>(physicalDim) >= outputPlan->shape.size())
+          static_cast<size_t>(physicalDim) >= logicalShape.size())
         return std::nullopt;
-      ownerExtents.push_back(outputPlan->shape[physicalDim]);
+      ownerExtents.push_back(logicalShape[physicalDim]);
     }
     SmallVector<int64_t, 4> workerGrid = sde::factorStencilWorkersAcrossDims(
         std::max<int64_t>(1, getTargetTileTasks(op, costModel)), ownerExtents,
@@ -1266,25 +1343,24 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
     if (workerGrid.size() != plan.ownerPhysicalDims.size())
       return std::nullopt;
     for (auto [slot, physicalDim] : llvm::enumerate(plan.ownerPhysicalDims)) {
-      int64_t balancedBlock = sde::ceilDivPositive(
-          outputPlan->shape[physicalDim], workerGrid[slot]);
-      plan.blockShape[physicalDim] =
-          std::min<int64_t>(plan.blockShape[physicalDim], balancedBlock);
+      int64_t balancedBlock =
+          sde::ceilDivPositive(logicalShape[physicalDim], workerGrid[slot]);
+      plan.blockShape[physicalDim] = balancedBlock;
     }
     if (llvm::any_of(plan.blockShape,
                      [](int64_t extent) { return extent <= 0; }))
       return std::nullopt;
   } else if (!sde::enforceOwnerBlockConcurrencyFloor(
-                 outputPlan->shape, plan.ownerPhysicalDims,
+                 logicalShape, plan.ownerPhysicalDims,
                  getTargetTileTasks(op, costModel), plan.blockShape)) {
     return std::nullopt;
   }
   plan.tileIterations.assign(numDims, 1);
 
   for (unsigned loopDim = 0; loopDim < numDims; ++loopDim) {
-    if (loopDim >= outputPlan->loopDimToPhysicalDim.size())
+    if (loopDim >= loopDimToPhysicalDim.size())
       return std::nullopt;
-    int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
+    int64_t physicalDim = loopDimToPhysicalDim[loopDim];
     if (physicalDim < 0)
       continue;
     if (static_cast<size_t>(physicalDim) >= plan.blockShape.size())
@@ -1306,7 +1382,7 @@ buildBudgetReconciledElementwiseTilePlan(sde::SdeSuIterateOp op,
     plan.logicalWorkerSlice.assign(plan.blockShape.begin(),
                                    plan.blockShape.end());
   } else if (!sde::buildBlockAlignedLogicalWorkerSlice(
-                 outputPlan->shape, plan.ownerPhysicalDims, plan.blockShape,
+                 logicalShape, plan.ownerPhysicalDims, plan.blockShape,
                  costModel.getLogicalWorkerCapacity(),
                  plan.logicalWorkerSlice)) {
     plan.logicalWorkerSlice.assign(plan.blockShape.begin(),
@@ -1355,6 +1431,41 @@ static void
 alignExistingStaticPhysicalPlanToSteps(sde::SdeSuIterateOp op,
                                        ArrayRef<Value> tiledSteps,
                                        ArrayRef<bool> parallelMask) {
+  if (std::optional<sde::LayoutGraphFact> budgetLayout =
+          selectSingleBudgetWriteLayoutFact(op, /*allowSingleOwnerDim=*/true)) {
+    SmallVector<int64_t, 4> blockShape(budgetLayout->blockShape.begin(),
+                                       budgetLayout->blockShape.end());
+    bool changed = false;
+    for (unsigned dim = 0,
+                  e = std::min(tiledSteps.size(),
+                               static_cast<size_t>(parallelMask.size()));
+         dim < e; ++dim) {
+      if (!parallelMask[dim])
+        continue;
+      if (dim >= budgetLayout->ownerDims.size())
+        continue;
+      int64_t physicalDim = budgetLayout->ownerDims[dim];
+      if (physicalDim < 0 ||
+          static_cast<size_t>(physicalDim) >= blockShape.size())
+        return;
+      std::optional<int64_t> step =
+          ValueAnalysis::getPositiveConstantIndex(tiledSteps[dim]);
+      if (!step || *step <= 1)
+        continue;
+      blockShape[physicalDim] = *step;
+      changed = true;
+    }
+    if (changed) {
+      sde::commitWriterPhysicalLayoutFacts(op, budgetLayout->ownerDims,
+                                           blockShape, blockShape);
+      if (std::optional<SmallVector<int64_t, 4>> logicalShape =
+              findBudgetWriteLogicalShape(op, *budgetLayout))
+        (void)sde::rewriteSameOwnerReadLayoutsToPhysicalShape(
+            op, budgetLayout->ownerDims, blockShape, *logicalShape);
+      return;
+    }
+  }
+
   std::optional<sde::LayoutGraphFact> writeLayout =
       sde::findSingleCommittedWriterBlockLayout(op);
   if (!writeLayout)
@@ -1482,6 +1593,439 @@ static bool stripMineAffineLoop(affine::AffineForOp loop, int64_t tileSize) {
   return true;
 }
 
+static bool isKnownFloatZero(Value value) {
+  if (!value || !isa<FloatType>(value.getType()))
+    return false;
+  if (ValueAnalysis::isZeroConstant(value))
+    return true;
+  if (auto mul = value.getDefiningOp<arith::MulFOp>())
+    return isKnownFloatZero(mul.getLhs()) || isKnownFloatZero(mul.getRhs());
+  return false;
+}
+
+static bool matchAccumulatorContribution(scf::ForOp reductionLoop,
+                                         Value &contribution,
+                                         Operation *&accumulateOp) {
+  if (!reductionLoop || reductionLoop.getNumResults() != 1 ||
+      reductionLoop.getInitArgs().size() != 1)
+    return false;
+
+  auto yield = dyn_cast<scf::YieldOp>(reductionLoop.getBody()->back());
+  if (!yield || yield.getResults().size() != 1)
+    return false;
+
+  auto add = yield.getResults()[0].getDefiningOp<arith::AddFOp>();
+  if (!add)
+    return false;
+
+  Value accumulator = reductionLoop.getRegionIterArgs()[0];
+  if (add.getLhs() == accumulator)
+    contribution = add.getRhs();
+  else if (add.getRhs() == accumulator)
+    contribution = add.getLhs();
+  else
+    return false;
+
+  accumulateOp = add.getOperation();
+  return true;
+}
+
+static bool splitSumTerm(Value value, Value sum, Value &scale) {
+  if (value == sum)
+    return true;
+
+  auto mul = value.getDefiningOp<arith::MulFOp>();
+  if (!mul)
+    return false;
+
+  if (mul.getLhs() == sum) {
+    scale = mul.getRhs();
+    return true;
+  }
+  if (mul.getRhs() == sum) {
+    scale = mul.getLhs();
+    return true;
+  }
+  return false;
+}
+
+static bool splitFinalStoreTerm(Value stored, Value sum, Value &initValue,
+                                Value &sumScale) {
+  if (splitSumTerm(stored, sum, sumScale))
+    return true;
+
+  auto add = stored.getDefiningOp<arith::AddFOp>();
+  if (!add)
+    return false;
+
+  Value scale;
+  if (splitSumTerm(add.getLhs(), sum, scale)) {
+    initValue = add.getRhs();
+    sumScale = scale;
+    return true;
+  }
+  if (splitSumTerm(add.getRhs(), sum, scale)) {
+    initValue = add.getLhs();
+    sumScale = scale;
+    return true;
+  }
+  return false;
+}
+
+static Value cloneInitValue(OpBuilder &builder, Value value, IRMapping &mapping,
+                            Value forbidden, Operation *cloneScope) {
+  if (!value)
+    return {};
+  if (Value mapped = mapping.lookupOrNull(value))
+    return mapped;
+  if (value == forbidden || ValueAnalysis::dependsOn(value, forbidden))
+    return {};
+
+  Operation *def = value.getDefiningOp();
+  if (!def)
+    return mapping.lookupOrDefault(value);
+  if (!cloneScope || !cloneScope->isAncestor(def))
+    return mapping.lookupOrDefault(value);
+  if (def->getNumRegions() != 0 || isa<memref::StoreOp>(def))
+    return {};
+  if (!isa<memref::LoadOp>(def) && !isMemoryEffectFree(def))
+    return {};
+
+  SmallVector<Value, 4> operands;
+  operands.reserve(def->getNumOperands());
+  for (Value operand : def->getOperands()) {
+    Value mappedOperand =
+        cloneInitValue(builder, operand, mapping, forbidden, cloneScope);
+    if (!mappedOperand)
+      return {};
+    operands.push_back(mappedOperand);
+  }
+
+  OperationState state(def->getLoc(), def->getName().getStringRef());
+  state.addOperands(operands);
+  state.addTypes(def->getResultTypes());
+  state.addAttributes(def->getAttrs());
+  Operation *cloned = builder.create(state);
+  for (auto [oldResult, newResult] :
+       llvm::zip(def->getResults(), cloned->getResults()))
+    mapping.map(oldResult, newResult);
+  return mapping.lookupOrNull(value);
+}
+
+static bool matchFinalStoreWithReductionContribution(
+    scf::ForOp reductionLoop, ArrayRef<Operation *> postOps,
+    memref::StoreOp &store, Value &initValue, Value &sumScale) {
+  if (!isKnownFloatZero(reductionLoop.getInitArgs()[0]) || postOps.empty())
+    return false;
+
+  store = dyn_cast<memref::StoreOp>(postOps.back());
+  if (!store)
+    return false;
+
+  auto type = dyn_cast<MemRefType>(store.getMemRefType());
+  if (!type || type.getRank() < 2 || store.getIndices().size() < 2)
+    return false;
+
+  Value sum = reductionLoop.getResult(0);
+  Value stored = store.getValueToStore();
+  if (!splitFinalStoreTerm(stored, sum, initValue, sumScale))
+    return false;
+  return !initValue || !ValueAnalysis::dependsOn(initValue, sum);
+}
+
+static bool loopBodyReadsMemref(scf::ForOp loop, Value memref) {
+  bool readsMemref = false;
+  loop.walk([&](memref::LoadOp load) {
+    if (load.getMemref() == memref)
+      readsMemref = true;
+  });
+  return readsMemref;
+}
+
+static bool hasUnsupportedStoreInLoop(scf::ForOp loop) {
+  bool unsupported = false;
+  loop.walk([&](memref::StoreOp) { unsupported = true; });
+  return unsupported;
+}
+
+static bool outputStoresAreColumnLocal(scf::ForOp reductionLoop,
+                                       Value outputRoot, Value reductionIv) {
+  if (!reductionLoop || !outputRoot || !reductionIv)
+    return false;
+
+  bool sawStore = false;
+  bool rejected = false;
+  reductionLoop.walk([&](memref::StoreOp store) {
+    if (rejected)
+      return;
+    Value root =
+        ::mlir::carts::ValueAnalysis::stripMemrefViewOps(store.getMemref());
+    if (root != outputRoot) {
+      rejected = true;
+      return;
+    }
+    for (Value index : store.getIndices()) {
+      if (::mlir::carts::ValueAnalysis::dependsOn(index, reductionIv)) {
+        rejected = true;
+        return;
+      }
+    }
+    sawStore = true;
+  });
+  return sawStore && !rejected;
+}
+
+static bool
+collectPromotedMatmulColumnBody(scf::ForOp columnLoop,
+                                scf::ForOp &reductionLoop,
+                                SmallVectorImpl<Operation *> &postOps) {
+  if (!columnLoop || columnLoop.getNumResults() != 0 ||
+      !columnLoop.getInitArgs().empty())
+    return false;
+
+  bool sawReductionLoop = false;
+  for (Operation &op : columnLoop.getBody()->without_terminator()) {
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      if (sawReductionLoop)
+        return false;
+      reductionLoop = forOp;
+      sawReductionLoop = true;
+      continue;
+    }
+
+    if (!sawReductionLoop) {
+      if (isa<memref::AllocaOp>(op))
+        continue;
+      if (auto store = dyn_cast<memref::StoreOp>(op)) {
+        auto type = dyn_cast<MemRefType>(store.getMemRefType());
+        if (type && type.getRank() == 0)
+          continue;
+      }
+      return false;
+    }
+
+    postOps.push_back(&op);
+  }
+
+  return reductionLoop && reductionLoop.getNumResults() == 1 &&
+         reductionLoop.getInitArgs().size() == 1;
+}
+
+static bool collectPromotedMatmulInPlaceColumnBody(
+    scf::ForOp columnLoop, SmallVectorImpl<Operation *> &initOps,
+    memref::StoreOp &initStore, scf::ForOp &reductionLoop) {
+  if (!columnLoop || columnLoop.getNumResults() != 0 ||
+      !columnLoop.getInitArgs().empty())
+    return false;
+
+  bool sawReduction = false;
+  unsigned initStoreCount = 0;
+  for (Operation &op : columnLoop.getBody()->without_terminator()) {
+    if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (sawReduction)
+        return false;
+      initStore = store;
+      ++initStoreCount;
+      initOps.push_back(&op);
+      continue;
+    }
+
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      if (!initStore || sawReduction || forOp.getNumResults() != 0 ||
+          !forOp.getInitArgs().empty())
+        return false;
+      reductionLoop = forOp;
+      sawReduction = true;
+      continue;
+    }
+
+    if (sawReduction || op.getNumRegions() != 0)
+      return false;
+    if (!isa<memref::LoadOp>(op) && !isMemoryEffectFree(&op))
+      return false;
+    initOps.push_back(&op);
+  }
+
+  if (!initStore || initStoreCount != 1 || !reductionLoop || initOps.empty() ||
+      initOps.back() != initStore.getOperation())
+    return false;
+  Value outputRoot =
+      ::mlir::carts::ValueAnalysis::stripMemrefViewOps(initStore.getMemref());
+  return outputStoresAreColumnLocal(reductionLoop, outputRoot,
+                                    reductionLoop.getInductionVar());
+}
+
+/// Rewrite a promoted 2-D matmul tile from row/column/scalar-k dots to
+/// row/k/column update order. This preserves the committed owner tile but makes
+/// the B and C row accesses stride-1 before ARTS consumes the SDE facts.
+static bool rewritePromotedMatmulTileUpdate(scf::ForOp rowLoop,
+                                            scf::ForOp columnLoop) {
+  if (!rowLoop || !columnLoop ||
+      columnLoop->getParentOp() != rowLoop.getOperation() ||
+      rowLoop.getNumResults() != 0 || !rowLoop.getInitArgs().empty())
+    return false;
+
+  scf::ForOp reductionLoop;
+  SmallVector<Operation *> postOps;
+  if (!collectPromotedMatmulColumnBody(columnLoop, reductionLoop, postOps))
+    return false;
+
+  Value contribution;
+  Operation *accumulateOp = nullptr;
+  if (!matchAccumulatorContribution(reductionLoop, contribution, accumulateOp))
+    return false;
+
+  memref::StoreOp finalStore;
+  Value initValue;
+  Value sumScale;
+  if (!matchFinalStoreWithReductionContribution(
+          reductionLoop, postOps, finalStore, initValue, sumScale))
+    return false;
+
+  if (loopBodyReadsMemref(reductionLoop, finalStore.getMemref()) ||
+      hasUnsupportedStoreInLoop(reductionLoop))
+    return false;
+
+  Value oldJ = columnLoop.getInductionVar();
+  Value oldK = reductionLoop.getInductionVar();
+  Value zero = reductionLoop.getInitArgs()[0];
+  Location loc = columnLoop.getLoc();
+  OpBuilder builder(columnLoop);
+
+  scf::ForOp initLoop =
+      scf::ForOp::create(builder, loc, columnLoop.getLowerBound(),
+                         columnLoop.getUpperBound(), columnLoop.getStep());
+  {
+    OpBuilder::InsertionGuard initGuard(builder);
+    builder.setInsertionPointToStart(initLoop.getBody());
+    IRMapping mapping;
+    mapping.map(oldJ, initLoop.getInductionVar());
+    Value initial = zero;
+    if (initValue) {
+      initial =
+          cloneInitValue(builder, initValue, mapping,
+                         reductionLoop.getResult(0), columnLoop.getOperation());
+      if (!initial) {
+        initLoop.erase();
+        return false;
+      }
+    }
+    SmallVector<Value> indices;
+    for (Value index : finalStore.getIndices())
+      indices.push_back(mapping.lookupOrDefault(index));
+    memref::StoreOp::create(builder, loc, initial, finalStore.getMemref(),
+                            indices);
+  }
+
+  scf::ForOp::create(
+      builder, loc, reductionLoop.getLowerBound(),
+      reductionLoop.getUpperBound(), reductionLoop.getStep(), ValueRange{},
+      [&](OpBuilder &kBuilder, Location kLoc, Value newK, ValueRange) {
+        scf::ForOp::create(
+            kBuilder, kLoc, columnLoop.getLowerBound(),
+            columnLoop.getUpperBound(), columnLoop.getStep(), ValueRange{},
+            [&](OpBuilder &jBuilder, Location jLoc, Value newJ, ValueRange) {
+              IRMapping mapping;
+              mapping.map(oldK, newK);
+              mapping.map(oldJ, newJ);
+
+              for (Operation &op :
+                   reductionLoop.getBody()->without_terminator()) {
+                if (&op == accumulateOp)
+                  continue;
+                Operation *cloned = jBuilder.clone(op, mapping);
+                for (auto [oldResult, newResult] :
+                     llvm::zip(op.getResults(), cloned->getResults()))
+                  mapping.map(oldResult, newResult);
+              }
+
+              SmallVector<Value> indices;
+              for (Value index : finalStore.getIndices())
+                indices.push_back(mapping.lookupOrDefault(index));
+
+              Value oldValue = memref::LoadOp::create(
+                  jBuilder, jLoc, finalStore.getMemref(), indices);
+              Value mappedContribution = mapping.lookupOrDefault(contribution);
+              if (sumScale) {
+                Value mappedScale = mapping.lookupOrDefault(sumScale);
+                mappedContribution = arith::MulFOp::create(
+                    jBuilder, jLoc, mappedContribution, mappedScale);
+              }
+              Value updated = arith::AddFOp::create(jBuilder, jLoc, oldValue,
+                                                    mappedContribution);
+              memref::StoreOp::create(jBuilder, jLoc, updated,
+                                      finalStore.getMemref(), indices);
+              scf::YieldOp::create(jBuilder, jLoc);
+            });
+        scf::YieldOp::create(kBuilder, kLoc);
+      });
+
+  columnLoop.erase();
+  return true;
+}
+
+static bool rewritePromotedMatmulInPlaceTileUpdate(scf::ForOp rowLoop,
+                                                   scf::ForOp columnLoop) {
+  if (!rowLoop || !columnLoop ||
+      columnLoop->getParentOp() != rowLoop.getOperation() ||
+      rowLoop.getNumResults() != 0 || !rowLoop.getInitArgs().empty())
+    return false;
+
+  memref::StoreOp initStore;
+  scf::ForOp reductionLoop;
+  SmallVector<Operation *> initOps;
+  if (!collectPromotedMatmulInPlaceColumnBody(columnLoop, initOps, initStore,
+                                              reductionLoop))
+    return false;
+
+  Value oldJ = columnLoop.getInductionVar();
+  Value oldK = reductionLoop.getInductionVar();
+  Location loc = columnLoop.getLoc();
+  OpBuilder builder(columnLoop);
+
+  scf::ForOp initLoop =
+      scf::ForOp::create(builder, loc, columnLoop.getLowerBound(),
+                         columnLoop.getUpperBound(), columnLoop.getStep());
+  {
+    OpBuilder::InsertionGuard initGuard(builder);
+    builder.setInsertionPointToStart(initLoop.getBody());
+    IRMapping mapping;
+    mapping.map(oldJ, initLoop.getInductionVar());
+    for (Operation *op : initOps) {
+      Operation *cloned = builder.clone(*op, mapping);
+      for (auto [oldResult, newResult] :
+           llvm::zip(op->getResults(), cloned->getResults()))
+        mapping.map(oldResult, newResult);
+    }
+  }
+
+  scf::ForOp::create(
+      builder, loc, reductionLoop.getLowerBound(),
+      reductionLoop.getUpperBound(), reductionLoop.getStep(), ValueRange{},
+      [&](OpBuilder &kBuilder, Location kLoc, Value newK, ValueRange) {
+        scf::ForOp::create(
+            kBuilder, kLoc, columnLoop.getLowerBound(),
+            columnLoop.getUpperBound(), columnLoop.getStep(), ValueRange{},
+            [&](OpBuilder &jBuilder, Location jLoc, Value newJ, ValueRange) {
+              IRMapping mapping;
+              mapping.map(oldK, newK);
+              mapping.map(oldJ, newJ);
+              for (Operation &op :
+                   reductionLoop.getBody()->without_terminator()) {
+                Operation *cloned = jBuilder.clone(op, mapping);
+                for (auto [oldResult, newResult] :
+                     llvm::zip(op.getResults(), cloned->getResults()))
+                  mapping.map(oldResult, newResult);
+              }
+              scf::YieldOp::create(jBuilder, jLoc);
+            });
+        scf::YieldOp::create(kBuilder, kLoc);
+      });
+
+  columnLoop.erase();
+  return true;
+}
+
 static Value buildAlignedTileLowerBound(OpBuilder &builder, Location loc,
                                         Value lowerBound, Value tileStep) {
   if (!lowerBound || !tileStep)
@@ -1567,7 +2111,9 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       if (hasCommittedTilingGrainFacts(op))
         return;
       Block *body = sde::getSuIterateComputeBlock(op);
-      if (!isTilingCandidate(op, *body))
+      bool structuralBudgetCandidate = hasBudgetReconciledLayoutCandidate(op);
+      if ((!body || !isTilingCandidate(op, *body)) &&
+          !structuralBudgetCandidate)
         return;
 
       std::optional<int64_t> tripCount = getStaticTripCount(op.getOperation());
@@ -1582,6 +2128,7 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
       Location loc = op.getLoc();
       unsigned numDims = op.getLowerBounds().size();
       bool directMatmul = false;
+      bool promotedMatmul = false;
       std::optional<DirectMatmulTileShape> directMatmulShape;
       if (auto cls = sde::queryStructuredClassification(op);
           cls && *cls == sde::SdeStructuredClassification::matmul) {
@@ -1591,6 +2138,8 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           directMatmul = true;
         } else if (!hasPromotedParallelOutputSchedule(op)) {
           continue;
+        } else {
+          promotedMatmul = true;
         }
       }
 
@@ -1815,6 +2364,20 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
           continue;
         }
         commitDirectMatmulTileShape(newOp, *directMatmulShape);
+      }
+
+      if (promotedMatmul && tileLoops.size() == 2) {
+        if (!rewritePromotedMatmulTileUpdate(tileLoops[0], tileLoops[1]))
+          (void)rewritePromotedMatmulInPlaceTileUpdate(tileLoops[0],
+                                                       tileLoops[1]);
+      }
+      if (promotedMatmul && physicalTileShape) {
+        newOp.setPartialReductionAttr(UnitAttr::get(newOp.getContext()));
+        newOp.setPartialReductionDimsAttr(buildI64ArrayAttr(
+            newOp.getContext(),
+            SmallVector<int64_t, 1>{static_cast<int64_t>(numDims + 2)}));
+        newOp.setPartialReductionOwnerDimsAttr(buildI64ArrayAttr(
+            newOp.getContext(), physicalTileShape->ownerPhysicalDims));
       }
 
       rewriter.setInsertionPointToEnd(&newCuBody);

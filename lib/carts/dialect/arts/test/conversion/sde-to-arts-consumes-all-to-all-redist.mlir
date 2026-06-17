@@ -5,7 +5,9 @@
 
 // CHECK-LABEL: func.func @consume_all_to_all_redist
 // CHECK: %[[SRC_GUID:.*]], %[[SRC_PTR:.*]] = arts.db_alloc
+// CHECK-SAME: elementSizes[%c2{{(_[0-9]+)?}}, %c4{{(_[0-9]+)?}}]
 // CHECK: %[[DST_GUID:.*]], %[[DST_PTR:.*]] = arts.db_alloc
+// CHECK-SAME: elementSizes[%c4{{(_[0-9]+)?}}, %c4{{(_[0-9]+)?}}]
 // CHECK-DAG: arts.db_acquire[<in>]
 // CHECK-DAG: arts.db_acquire[<out>]
 // CHECK-DAG: arts.edt {{.*}}sync

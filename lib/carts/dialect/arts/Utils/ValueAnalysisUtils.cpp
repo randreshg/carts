@@ -184,6 +184,10 @@ static Value getUnderlyingValueImpl(Value value,
     return trace(subview.getSource());
   if (auto castOp = dyn_cast<memref::CastOp>(op))
     return trace(castOp.getSource());
+  if (auto expand = dyn_cast<memref::ExpandShapeOp>(op))
+    return trace(expand.getSrc());
+  if (auto collapse = dyn_cast<memref::CollapseShapeOp>(op))
+    return trace(collapse.getSrc());
   if (auto unrealized = dyn_cast<UnrealizedConversionCastOp>(op)) {
     ValueRange inputs = unrealized.getInputs();
     return inputs.empty() ? nullptr : trace(inputs.front());

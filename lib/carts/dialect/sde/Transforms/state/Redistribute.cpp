@@ -12,6 +12,7 @@
 #include "carts/dialect/sde/Utils/SdeOwnerLoopPromotion.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 namespace mlir::carts::sde {
@@ -140,19 +141,17 @@ findReduceScatterWriteTarget(carts::sde::SdeSuIterateOp consumer) {
               ? ArrayRef<int64_t>(fact.blockShape)
               : ArrayRef<int64_t>(fact.budgetBlockShape);
       candidate.blockShape.assign(blockShape.begin(), blockShape.end());
-      if (!endpointShapeFitsRoot(candidate.root, candidate.ownerDims,
-                                 candidate.blockShape)) {
-        auto type = dyn_cast<MemRefType>(candidate.root.getType());
-        if (type && type.hasStaticShape()) {
-          SmallVector<int64_t, 4> projected(type.getShape().begin(),
-                                            type.getShape().end());
-          for (int64_t ownerDim : candidate.ownerDims)
-            if (ownerDim >= 0 && ownerDim < type.getRank())
-              projected[ownerDim] = 1;
-          if (endpointShapeFitsRoot(candidate.root, candidate.ownerDims,
-                                    projected))
-            candidate.blockShape = std::move(projected);
-        }
+      auto type = dyn_cast<MemRefType>(candidate.root.getType());
+      if (type && type.hasStaticShape() &&
+          static_cast<int64_t>(candidate.blockShape.size()) != type.getRank()) {
+        SmallVector<int64_t, 4> projected(type.getShape().begin(),
+                                          type.getShape().end());
+        for (int64_t ownerDim : candidate.ownerDims)
+          if (ownerDim >= 0 && ownerDim < type.getRank())
+            projected[ownerDim] = 1;
+        if (endpointShapeFitsRoot(candidate.root, candidate.ownerDims,
+                                  projected))
+          candidate.blockShape = std::move(projected);
       }
       if (target)
         return failure();
@@ -562,12 +561,74 @@ static bool ensureMovementScope(carts::sde::SdeSuIterateOp consumer,
   return true;
 }
 
+static unsigned nestedForDepth(Block *block) {
+  if (!block)
+    return 0;
+  unsigned depth = 0;
+  for (Operation &op : block->without_terminator())
+    if (auto forOp = dyn_cast<scf::ForOp>(op))
+      depth = std::max(depth, 1 + nestedForDepth(forOp.getBody()));
+  return depth;
+}
+
+static bool isInsideScfFor(Operation *op) {
+  return op && op->getParentOfType<scf::ForOp>();
+}
+
+static bool hasNestedReadWriteAccumulator(carts::sde::SdeSuIterateOp consumer,
+                                          Value root) {
+  if (!consumer || !root)
+    return false;
+
+  bool nestedRead = false;
+  bool nestedWrite = false;
+  consumer.getBody().walk([&](Operation *op) {
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (isInsideScfFor(op) &&
+          carts::ValueAnalysis::stripMemrefViewOps(load.getMemref()) == root)
+        nestedRead = true;
+      return;
+    }
+    if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (isInsideScfFor(op) &&
+          carts::ValueAnalysis::stripMemrefViewOps(store.getMemref()) == root)
+        nestedWrite = true;
+    }
+  });
+  return nestedRead && nestedWrite;
+}
+
+static std::optional<carts::sde::SuPartialReductionFacts>
+deriveRankExpandedPartialReductionFacts(
+    carts::sde::SdeSuIterateOp consumer,
+    const ReduceScatterWriteTarget &target) {
+  if (!isElementwisePipeline(consumer) || target.ownerDims.empty() ||
+      !hasNestedReadWriteAccumulator(consumer, target.root))
+    return std::nullopt;
+
+  carts::sde::SdeCuRegionOp cu = carts::sde::findSuComputeCuRegion(consumer);
+  unsigned depth = nestedForDepth(
+      cu && !cu.getBody().empty() ? &cu.getBody().front() : nullptr);
+  if (depth == 0)
+    return std::nullopt;
+
+  carts::sde::SuPartialReductionFacts facts;
+  facts.hasPartialReduction = true;
+  unsigned scheduleRank = consumer.getLowerBounds().size();
+  for (unsigned dim = 0; dim < depth; ++dim)
+    facts.reductionDims.push_back(static_cast<int64_t>(scheduleRank + dim));
+  facts.ownerDims.assign(target.ownerDims.begin(), target.ownerDims.end());
+  return facts;
+}
+
 static LogicalResult
 ensurePartialReductionFacts(carts::sde::SdeSuIterateOp consumer,
                             const ReduceScatterWriteTarget &target) {
   MLIRContext *ctx = consumer.getContext();
   std::optional<carts::sde::SuPartialReductionFacts> facts =
       carts::sde::queryPartialReductionFacts(consumer);
+  if (!facts || facts->reductionDims.empty())
+    facts = deriveRankExpandedPartialReductionFacts(consumer, target);
   if (!facts || facts->reductionDims.empty() || target.ownerDims.empty())
     return failure();
 

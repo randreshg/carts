@@ -6,11 +6,13 @@
 
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
+#include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineMemoryOpInterfaces.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -220,6 +222,85 @@ static bool classifiesAsMuStore(Operation *user) {
          isa<affine::AffineWriteOpInterface>(user);
 }
 
+static bool gridIndexUsesOwnerIv(Value index, Value ownerIv,
+                                 int64_t blockExtent) {
+  if (blockExtent <= 0)
+    return false;
+  auto div =
+      ValueAnalysis::stripNumericCasts(index).getDefiningOp<arith::DivUIOp>();
+  if (!div)
+    return false;
+  std::optional<int64_t> divisor =
+      ValueAnalysis::tryFoldConstantIndex(div.getRhs());
+  if (!divisor || *divisor != blockExtent)
+    return false;
+  return ValueAnalysis::sameValue(
+      ValueAnalysis::stripNumericCasts(div.getLhs()),
+      ValueAnalysis::stripNumericCasts(ownerIv));
+}
+
+static bool cuAccessesUseSuOwnerGrid(SdeCuRegionOp cu, Value mu,
+                                     unsigned ownerDimCount,
+                                     ArrayRef<int64_t> blockExtents) {
+  if (!cu || !mu || ownerDimCount == 0 || blockExtents.size() < ownerDimCount)
+    return false;
+  SdeSuIterateOp owner = cu->getParentOfType<SdeSuIterateOp>();
+  SmallVector<Value, 4> ownerIvs = collectOwnerIndexValues(owner);
+  if (ownerIvs.size() < ownerDimCount)
+    return false;
+
+  bool sawAccess = false;
+  bool failed = false;
+  cu.getBody().walk([&](Operation *op) {
+    if (failed)
+      return;
+    Value memref;
+    ValueRange indices;
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      memref = load.getMemref();
+      indices = load.getIndices();
+    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      memref = store.getMemref();
+      indices = store.getIndices();
+    } else {
+      return;
+    }
+    if (ValueAnalysis::stripMemrefViewOps(memref) != mu)
+      return;
+    sawAccess = true;
+    if (indices.size() < ownerDimCount) {
+      failed = true;
+      return;
+    }
+    for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
+      if (!gridIndexUsesOwnerIv(indices[slot], ownerIvs[slot],
+                                blockExtents[slot])) {
+        failed = true;
+        return;
+      }
+    }
+  });
+  return sawAccess && !failed;
+}
+
+static bool mayAuthorReadWriteWindowForCu(SdeCuRegionOp cu, Value mu,
+                                          unsigned ownerDimCount,
+                                          ArrayRef<int64_t> blockExtents) {
+  SdeSuIterateOp owner = cu ? cu->getParentOfType<SdeSuIterateOp>() : nullptr;
+  if (!owner)
+    return true;
+  std::optional<SdeStructuredClassification> classification =
+      owner.getStructuredClassification();
+  if (!classification ||
+      *classification != SdeStructuredClassification::reduction)
+    return true;
+  if (!owner.getReductionAccumulators().empty())
+    return false;
+  if (owner.getPartialReductionAttr())
+    return true;
+  return cuAccessesUseSuOwnerGrid(cu, mu, ownerDimCount, blockExtents);
+}
+
 static bool muHasOnlyDirectMemoryUses(SdeMuAllocOp mu) {
   for (Operation *user : mu.getMemref().getUsers())
     if (!isDirectMuMemoryAccess(user) &&
@@ -227,6 +308,48 @@ static bool muHasOnlyDirectMemoryUses(SdeMuAllocOp mu) {
              SdeSuAllToAllOp, SdeSuReduceScatterOp>(user))
       return false;
   return true;
+}
+
+static std::optional<MuAccessWindowGeometry>
+deriveCommittedPhysicalGeometry(SdeMuAllocOp muAlloc, MemRefType muType) {
+  std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc);
+  if (!arrayId)
+    return std::nullopt;
+  SdeSuIterateOp writer = findCommittedBlockLayoutWriter(muAlloc);
+  if (!writer)
+    return std::nullopt;
+  std::optional<LayoutGraphFact> fact =
+      findArrayLayoutFact(writer, *arrayId, LayoutGraphRole::write);
+  if (!fact || fact->ownerDims.empty() || fact->blockShape.empty() ||
+      fact->blockShape.size() != static_cast<size_t>(muType.getRank()))
+    return std::nullopt;
+  if (fact->layoutKind != ArrayLayoutKind::blockParallel &&
+      fact->layoutKind != ArrayLayoutKind::blockContraction)
+    return std::nullopt;
+
+  MuAccessWindowGeometry geom;
+  geom.ownerDimCount = static_cast<int64_t>(fact->ownerDims.size());
+  geom.blockLo.assign(fact->ownerDims.size(), 0);
+  geom.validExtents.assign(fact->blockShape.begin(), fact->blockShape.end());
+  geom.blockHi.reserve(fact->ownerDims.size());
+  ArrayRef<int64_t> shape = muType.getShape();
+  bool hasNonUnitOwnerBlock = false;
+  for (int64_t ownerDim : fact->ownerDims) {
+    if (ownerDim < 0 ||
+        static_cast<size_t>(ownerDim) >= fact->blockShape.size())
+      return std::nullopt;
+    int64_t blockExtent = fact->blockShape[static_cast<size_t>(ownerDim)];
+    if (blockExtent <= 0)
+      return std::nullopt;
+    hasNonUnitOwnerBlock |= blockExtent != 1;
+    int64_t extent = shape[static_cast<size_t>(ownerDim)];
+    if (extent < 0)
+      return std::nullopt;
+    geom.blockHi.push_back((extent + blockExtent - 1) / blockExtent);
+  }
+  if (!hasNonUnitOwnerBlock)
+    return std::nullopt;
+  return geom;
 }
 
 static bool hasUnsupportedCommittedWriter(SdeMuAllocOp mu) {
@@ -501,10 +624,10 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
   for (const CuAccess &access : accesses) {
     if (!access.hasRead && !access.hasWrite)
       continue;
-    if (access.hasRead && access.hasWrite)
-      if (auto classification = si.getStructuredClassification())
-        if (*classification == SdeStructuredClassification::reduction)
-          return {};
+    if (access.hasRead && access.hasWrite &&
+        !mayAuthorReadWriteWindowForCu(access.cu, mu.getMemref(), ownerDimCount,
+                                       exp->blockExtents))
+      return {};
     auto appendSpec = [&](SdeAccessMode mode) {
       RaisedWindowSpec spec;
       spec.cu = access.cu;
@@ -576,6 +699,9 @@ std::optional<MuAccessWindowGeometry> deriveMuAccessWindowGeometry(Value mu) {
                                  muType.getShape().end());
         return geom;
       }
+    if (std::optional<MuAccessWindowGeometry> geom =
+            deriveCommittedPhysicalGeometry(muAlloc, muType))
+      return geom;
     if (std::optional<ExpandedBlockGridMu> exp =
             recognizeExpandedBlockGridMu(muAlloc)) {
       return fillFromExpanded(

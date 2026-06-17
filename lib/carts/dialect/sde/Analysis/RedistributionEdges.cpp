@@ -403,8 +403,12 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
                   : edgeClass == EdgeClassify::Halo
                       ? RedistributionEdgeKind::Halo
                       : RedistributionEdgeKind::ReduceScatter;
+      bool needsExpandedEndpoint =
+          expandedEndpoint &&
+          (!geometryFitsRoot ||
+           home.blockShape.size() != static_cast<size_t>(muType.getRank()));
       if ((hasOwnerReduction || committedContractionLayout) &&
-          expandedEndpoint && !geometryFitsRoot) {
+          needsExpandedEndpoint) {
         edge.sourceOwnerDims.assign(expandedEndpoint->ownerDims.begin(),
                                     expandedEndpoint->ownerDims.end());
         edge.sourceBlockShape.assign(expandedEndpoint->blockShape.begin(),

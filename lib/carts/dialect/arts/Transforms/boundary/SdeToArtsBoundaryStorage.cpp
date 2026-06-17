@@ -295,13 +295,111 @@ static TaskDepLayoutLookup findCommittedBlockLayoutForRoot(
 static LogicalResult createCommittedLayoutDbBackedMemref(
     OpBuilder &builder, Location loc, MemRefType memrefType,
     ValueRange dynamicSizes, const sde::CommittedSuPhysicalLayout &layout,
-    Value &replacement) {
+    Value &replacement, bool dropPromotedOwnerDims) {
   ArrayAttr ownerDims =
       buildI64ArrayAttr(builder.getContext(), layout.ownerDims);
   ArrayAttr blockShape =
       buildI64ArrayAttr(builder.getContext(), layout.blockShape);
   return arts::createBlockDbBackedMemref(builder, loc, memrefType, dynamicSizes,
-                                         ownerDims, blockShape, replacement);
+                                         ownerDims, blockShape, replacement,
+                                         dropPromotedOwnerDims);
+}
+
+static FailureOr<Value>
+materializeRankExpandedCompatibilityView(OpBuilder &builder, Location loc,
+                                         Value payload, MemRefType targetType,
+                                         unsigned ownerDimCount) {
+  auto payloadType = dyn_cast<MemRefType>(payload.getType());
+  if (!payloadType)
+    return failure();
+  if (payloadType.getRank() == targetType.getRank())
+    return payload;
+  if (ownerDimCount == 0 ||
+      payloadType.getRank() + static_cast<int64_t>(ownerDimCount) !=
+          targetType.getRank())
+    return failure();
+
+  Value expandSource = payload;
+  if (llvm::all_of(llvm::seq<int64_t>(0, payloadType.getRank()),
+                   [&](int64_t dim) {
+                     return !targetType.isDynamicDim(ownerDimCount + dim);
+                   })) {
+    SmallVector<int64_t> staticPayloadShape;
+    staticPayloadShape.reserve(payloadType.getRank());
+    for (int64_t dim = 0; dim < payloadType.getRank(); ++dim)
+      staticPayloadShape.push_back(targetType.getDimSize(ownerDimCount + dim));
+    MemRefType staticPayloadType =
+        MemRefType::get(staticPayloadShape, payloadType.getElementType());
+    if (payloadType != staticPayloadType) {
+      expandSource =
+          memref::CastOp::create(builder, loc, staticPayloadType, payload);
+      payloadType = staticPayloadType;
+    }
+  }
+
+  SmallVector<ReassociationIndices> reassociation;
+  reassociation.reserve(payloadType.getRank());
+  ReassociationIndices firstGroup;
+  firstGroup.reserve(ownerDimCount + 1);
+  for (unsigned dim = 0; dim <= ownerDimCount; ++dim)
+    firstGroup.push_back(dim);
+  reassociation.push_back(std::move(firstGroup));
+  for (int64_t dim = 1; dim < payloadType.getRank(); ++dim)
+    reassociation.push_back(
+        ReassociationIndices{static_cast<int64_t>(ownerDimCount) + dim});
+
+  SmallVector<OpFoldResult> outputShape;
+  outputShape.reserve(targetType.getRank());
+  for (unsigned dim = 0; dim < ownerDimCount; ++dim)
+    outputShape.push_back(builder.getIndexAttr(1));
+  for (int64_t dim = 0; dim < payloadType.getRank(); ++dim) {
+    if (!payloadType.isDynamicDim(dim)) {
+      outputShape.push_back(builder.getIndexAttr(payloadType.getDimSize(dim)));
+      continue;
+    }
+    outputShape.push_back(
+        memref::DimOp::create(builder, loc, expandSource, dim).getResult());
+  }
+
+  SmallVector<int64_t> expandedShape;
+  expandedShape.reserve(targetType.getRank());
+  for (unsigned dim = 0; dim < ownerDimCount; ++dim)
+    expandedShape.push_back(1);
+  for (int64_t dim = 0; dim < payloadType.getRank(); ++dim)
+    expandedShape.push_back(payloadType.getDimSize(dim));
+  auto expandedType =
+      MemRefType::get(expandedShape, targetType.getElementType());
+  return memref::ExpandShapeOp::create(builder, loc, expandedType, expandSource,
+                                       reassociation, outputShape)
+      .getResult();
+}
+
+static LogicalResult materializeReplacementForExistingUses(
+    OpBuilder &builder, Location loc, unsigned ownerDimCount,
+    MemRefType memrefType, Value &replacement) {
+  if (replacement.getType() == memrefType)
+    return success();
+  auto replacementType = dyn_cast<MemRefType>(replacement.getType());
+  if (replacementType && replacementType.getRank() != memrefType.getRank()) {
+    FailureOr<Value> expanded = materializeRankExpandedCompatibilityView(
+        builder, loc, replacement, memrefType, ownerDimCount);
+    if (failed(expanded))
+      return failure();
+    replacement = *expanded;
+    return success();
+  }
+  if (replacement.getType() != memrefType)
+    replacement = memref::CastOp::create(builder, loc, memrefType, replacement);
+  return success();
+}
+
+static void replaceAllUsesAllowingMemrefTypeChange(Value root,
+                                                   Value replacement) {
+  SmallVector<OpOperand *> uses;
+  for (OpOperand &use : root.getUses())
+    uses.push_back(&use);
+  for (OpOperand *use : uses)
+    use->set(replacement);
 }
 
 static bool memrefTypeLooksRankExpandedBlockGrid(MemRefType memrefType) {
@@ -434,10 +532,14 @@ LogicalResult realizeTaskDepMemrefStorage(
       continue;
 
     LogicalResult realized = success();
+    unsigned ownerDimCount = 0;
     if (committedLayout.kind == TaskDepLayoutLookupKind::Found) {
+      ownerDimCount =
+          static_cast<unsigned>(committedLayout.layout.ownerDims.size());
       realized = createCommittedLayoutDbBackedMemref(
           builder, rootOp->getLoc(), memrefType, *dynamicSizes,
-          committedLayout.layout, replacement);
+          committedLayout.layout, replacement,
+          /*dropPromotedOwnerDims=*/true);
     } else if (memrefRequiresBlockDbRealization(memrefType)) {
       rootOp->emitError()
           << "rank-expanded block-grid storage reached ARTS boundary "
@@ -453,12 +555,16 @@ LogicalResult realizeTaskDepMemrefStorage(
           << "could not realize task dependency memref as an ARTS DB";
       return failure();
     }
-    if (replacement.getType() != memrefType)
-      replacement = memref::CastOp::create(builder, rootOp->getLoc(),
-                                           memrefType, replacement);
+    if (failed(materializeReplacementForExistingUses(builder, rootOp->getLoc(),
+                                                     ownerDimCount, memrefType,
+                                                     replacement))) {
+      rootOp->emitError()
+          << "could not materialize a rank-expanded view of ARTS DB storage";
+      return failure();
+    }
 
     eraseDeallocUsers(root);
-    root.replaceAllUsesWith(replacement);
+    replaceAllUsesAllowingMemrefTypeChange(root, replacement);
     if (rootOp->use_empty())
       rootOp->erase();
   }
@@ -489,10 +595,12 @@ LogicalResult lowerMuData(sde::SdeMuDataOp op) {
   return success();
 }
 
-static LogicalResult createDbBackedReplacement(
-    OpBuilder &builder, sde::SdeMuAllocOp op, MemRefType memrefType,
-    ArrayAttr ownerDims, ArrayAttr blockShape,
-    const sde::MuAccessWindowGeometry &geom, Value &replacement) {
+static LogicalResult
+createDbBackedReplacement(OpBuilder &builder, sde::SdeMuAllocOp op,
+                          MemRefType memrefType, ArrayAttr ownerDims,
+                          ArrayAttr blockShape,
+                          const sde::MuAccessWindowGeometry &geom,
+                          Value &replacement, bool dropPromotedOwnerDims) {
   if (geom.ownerDimCount == 0) {
     if (!hasCommittedReplicatedLayoutFact(op) &&
         sde::recognizeExpandedBlockGridMu(op))
@@ -503,9 +611,9 @@ static LogicalResult createDbBackedReplacement(
     return arts::createCoarseDbBackedMemref(builder, op.getLoc(), memrefType,
                                             op.getDynamicSizes(), replacement);
   }
-  return arts::createBlockDbBackedMemref(builder, op.getLoc(), memrefType,
-                                         op.getDynamicSizes(), ownerDims,
-                                         blockShape, replacement);
+  return arts::createBlockDbBackedMemref(
+      builder, op.getLoc(), memrefType, op.getDynamicSizes(), ownerDims,
+      blockShape, replacement, dropPromotedOwnerDims);
 }
 
 static ArrayAttr getCommittedHaloShapeForCu(sde::SdeCuRegionOp cu, Value mu,
@@ -590,8 +698,9 @@ LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr committedHaloShape) {
       return op.emitOpError() << "could not derive access-window geometry from "
                                  "the rank-expanded "
                                  "MU type";
-    if (failed(createDbBackedReplacement(builder, op, memrefType, ownerDims,
-                                         blockShape, *geom, replacement)))
+    if (failed(createDbBackedReplacement(
+            builder, op, memrefType, ownerDims, blockShape, *geom, replacement,
+            /*dropPromotedOwnerDims=*/!static_cast<bool>(committedHaloShape))))
       return op.emitOpError()
              << "could not realize query-derived SDE layout as ARTS DB";
   } else if (committedHaloShape) {
@@ -605,9 +714,15 @@ LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr committedHaloShape) {
            << "could not realize unpartitioned SDE MU as ARTS DB";
   }
 
-  if (replacement.getType() != memrefType)
-    replacement =
-        memref::CastOp::create(builder, op.getLoc(), memrefType, replacement);
+  unsigned ownerDimCount =
+      hasDerivedSpecs ? static_cast<unsigned>(
+                            sde::deriveMuAccessWindowGeometry(op.getMemref())
+                                ->ownerDimCount)
+                      : 0;
+  if (failed(materializeReplacementForExistingUses(
+          builder, op.getLoc(), ownerDimCount, memrefType, replacement)))
+    return op.emitOpError()
+           << "could not materialize a rank-expanded view of ARTS DB storage";
 
   if (hasDerivedSpecs) {
     for (const sde::RaisedWindowSpec &spec : derivedSpecs) {
@@ -625,7 +740,7 @@ LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr committedHaloShape) {
   }
 
   eraseDeallocUsers(op.getMemref());
-  op.getMemref().replaceAllUsesWith(replacement);
+  replaceAllUsesAllowingMemrefTypeChange(op.getMemref(), replacement);
   op.erase();
   return success();
 }

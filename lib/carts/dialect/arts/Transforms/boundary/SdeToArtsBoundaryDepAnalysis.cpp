@@ -317,6 +317,8 @@ FailureOr<int64_t> getAccessWindowPayloadExtent(sde::SdeSuIterateOp source,
               "dispatch";
 
   unsigned payloadDim = dep.ownerDimCount + depPayloadDim;
+  if (alloc.getElementSizes().size() == dep.validExtents.size())
+    payloadDim = depPayloadDim;
   if (payloadDim >= alloc.getElementSizes().size())
     return source.emitOpError()
            << "rank-expanded DB payload shape does not cover access-window "

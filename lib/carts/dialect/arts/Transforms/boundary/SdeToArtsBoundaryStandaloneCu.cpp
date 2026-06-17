@@ -474,6 +474,21 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
       dbRefIndices.assign(localBlockIndices.begin(), localBlockIndices.end());
     Value payload = arts::DbRefOp::create(builder, op->getLoc(),
                                           dep.acquiredPtr, dbRefIndices);
+    auto payloadType = dyn_cast<MemRefType>(payload.getType());
+    if (!payloadType) {
+      op->emitError() << "DB payload access does not use a memref payload";
+      return WalkResult::interrupt();
+    }
+    bool usesCollapsedPayload =
+        payloadType.getRank() + static_cast<int64_t>(dep.ownerDimCount) ==
+        static_cast<int64_t>(indices.size());
+    bool usesRankExpandedPayload =
+        payloadType.getRank() == static_cast<int64_t>(indices.size());
+    if (!usesCollapsedPayload && !usesRankExpandedPayload) {
+      op->emitError()
+          << "DB payload rank is inconsistent with committed owner dimensions";
+      return WalkResult::interrupt();
+    }
     if (auto load = dyn_cast<memref::LoadOp>(op))
       load->setOperand(0, payload);
     else if (auto store = dyn_cast<memref::StoreOp>(op))
@@ -482,8 +497,16 @@ LogicalResult realizeStandaloneCuAccesses(sde::SdeCuRegionOp source) {
       op->emitError() << "unsupported direct DB payload access";
       return WalkResult::interrupt();
     }
-    for (unsigned idx = 0; idx < dep.ownerDimCount; ++idx)
-      indices[idx].set(createZeroIndex(builder, op->getLoc()));
+    if (usesCollapsedPayload) {
+      SmallVector<Value, 4> payloadIndices;
+      payloadIndices.reserve(indices.size() - dep.ownerDimCount);
+      for (unsigned idx = dep.ownerDimCount; idx < indices.size(); ++idx)
+        payloadIndices.push_back(indices[idx].get());
+      indices.assign(payloadIndices);
+    } else {
+      for (unsigned idx = 0; idx < dep.ownerDimCount; ++idx)
+        indices[idx].set(createZeroIndex(builder, op->getLoc()));
+    }
     return WalkResult::advance();
   };
 

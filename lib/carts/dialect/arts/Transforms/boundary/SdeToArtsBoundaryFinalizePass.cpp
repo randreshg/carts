@@ -7,6 +7,7 @@
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryCommon.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryPasses.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LogicalResult.h"
 
@@ -18,6 +19,25 @@ namespace mlir::carts::arts::boundary {
 
 LogicalResult lowerSdeResourceQuery(sde::SdeResourceQueryOp op);
 LogicalResult lowerSdeControlBarrier(sde::SdeSuBarrierOp op);
+
+static void eraseDeadBoundaryViews(ModuleOp module) {
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    SmallVector<Operation *> deadViews;
+    module.walk([&](Operation *op) {
+      if (!op->use_empty())
+        return;
+      if (isa<memref::CastOp, memref::ExpandShapeOp, memref::CollapseShapeOp>(
+              op))
+        deadViews.push_back(op);
+    });
+    for (Operation *op : llvm::reverse(deadViews)) {
+      op->erase();
+      changed = true;
+    }
+  }
+}
 
 LogicalResult runFinalizeSdeToArts(ModuleOp module) {
   SmallVector<sde::SdeResourceQueryOp> resourceQueries;
@@ -63,6 +83,7 @@ LogicalResult runFinalizeSdeToArts(ModuleOp module) {
       return failure();
 
   eraseDbBackedMemrefDeallocs(module);
+  eraseDeadBoundaryViews(module);
 
   bool foundAccessWindow = false;
   module.walk([&](arts::DbAccessWindowOp op) {

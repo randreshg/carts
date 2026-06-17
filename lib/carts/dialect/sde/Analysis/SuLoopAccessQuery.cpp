@@ -174,9 +174,38 @@ deriveReductionOnlyDims(SdeSuIterateOp op,
 }
 
 static std::optional<SuPartialReductionFacts>
+readCommittedPartialReductionFacts(SdeSuIterateOp op) {
+  if (!op.getPartialReductionAttr())
+    return std::nullopt;
+
+  std::optional<SmallVector<int64_t, 4>> dims =
+      readI64ArrayAttr(op.getPartialReductionDimsAttr());
+  std::optional<SmallVector<int64_t, 4>> ownerDims =
+      readI64ArrayAttr(op.getPartialReductionOwnerDimsAttr());
+  if (!dims || dims->empty() || !ownerDims || ownerDims->empty())
+    return std::nullopt;
+
+  unsigned scheduleRank = op.getLowerBounds().size();
+  if (llvm::any_of(*dims, [&](int64_t dim) {
+        return dim < static_cast<int64_t>(scheduleRank);
+      }))
+    return std::nullopt;
+
+  SuPartialReductionFacts facts;
+  facts.hasPartialReduction = true;
+  facts.reductionDims.assign(dims->begin(), dims->end());
+  facts.ownerDims.assign(ownerDims->begin(), ownerDims->end());
+  return facts;
+}
+
+static std::optional<SuPartialReductionFacts>
 computePartialReductionFacts(SdeSuIterateOp op,
                              const SuLoopAccessSummary &summary,
                              SdeStructuredClassification classification) {
+  if (std::optional<SuPartialReductionFacts> committed =
+          readCommittedPartialReductionFacts(op))
+    return committed;
+
   SuPartialReductionFacts facts;
 
   if (classification == SdeStructuredClassification::elementwise_pipeline &&

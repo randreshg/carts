@@ -37,6 +37,7 @@ namespace mlir::carts::sde {
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <memory>
@@ -129,9 +130,16 @@ static void reconcileReadArrayLayoutWithExpandedMu(
     auto dict = dyn_cast<DictionaryAttr>(attr);
     std::optional<carts::sde::LayoutGraphFact> fact =
         dict ? carts::sde::parseArrayLayoutFact(dict) : std::nullopt;
+    bool ownerDimsMatch = fact && fact->ownerDims == ownerDims;
+    bool contractionReaderSubset =
+        fact &&
+        fact->layoutKind == carts::sde::ArrayLayoutKind::blockContraction &&
+        llvm::all_of(fact->ownerDims, [&](int64_t dim) {
+          return llvm::is_contained(ownerDims, dim);
+        });
     if (!dict || !fact || fact->id != arrayId ||
         fact->role != carts::sde::LayoutGraphRole::read ||
-        fact->ownerDims != ownerDims ||
+        (!ownerDimsMatch && !contractionReaderSubset) ||
         (fact->layoutKind != carts::sde::ArrayLayoutKind::blockParallel &&
          fact->layoutKind != carts::sde::ArrayLayoutKind::blockContraction)) {
       rewritten.push_back(attr);

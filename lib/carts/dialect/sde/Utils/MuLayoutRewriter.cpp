@@ -17,6 +17,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Operation.h"
 #include "polygeist/Ops.h"
 #include "llvm/ADT/STLExtras.h"
@@ -335,6 +336,141 @@ static bool samePhysicalLayout(const ComparableBlockGrid &lhs,
          lhs.gridCounts == rhs.gridCounts;
 }
 
+static SdeSuIterateOp findEnclosingSuIterate(OpBuilder &builder) {
+  Block *block = builder.getInsertionBlock();
+  Operation *parent = block ? block->getParentOp() : nullptr;
+  while (parent) {
+    if (auto su = dyn_cast<SdeSuIterateOp>(parent))
+      return su;
+    parent = parent->getParentOp();
+  }
+  return {};
+}
+
+static std::optional<int64_t> constantIndex(Value value) {
+  return ValueAnalysis::tryFoldConstantIndex(value);
+}
+
+static bool sameIndexValue(Value lhs, Value rhs) {
+  return ValueAnalysis::sameValue(lhs, rhs);
+}
+
+static std::optional<Value> getScheduleIvForDim(SdeSuIterateOp su,
+                                                unsigned dim) {
+  if (!su || dim >= su.getLowerBounds().size() || su.getBody().empty())
+    return std::nullopt;
+  Block &body = su.getBody().front();
+  if (dim >= body.getNumArguments())
+    return std::nullopt;
+  return body.getArgument(dim);
+}
+
+static bool isBasePlusConstantOffsetInRange(Value value, Value base,
+                                            int64_t minOffset,
+                                            int64_t maxOffset) {
+  int64_t offset = 0;
+  Value stripped = ValueAnalysis::stripConstantOffset(
+      ValueAnalysis::stripNumericCasts(value), &offset);
+  stripped = ValueAnalysis::stripNumericCasts(stripped);
+  return sameIndexValue(stripped, base) && offset >= minOffset &&
+         offset <= maxOffset;
+}
+
+static bool isConstantIndexInRange(Value value, int64_t minValue,
+                                   int64_t maxValue) {
+  std::optional<int64_t> constant = constantIndex(value);
+  return constant && *constant >= minValue && *constant <= maxValue;
+}
+
+static bool isOwnerLocalLoopLowerBound(Value value, Value base,
+                                       int64_t blockExtent) {
+  if (blockExtent <= 0)
+    return false;
+  if (isBasePlusConstantOffsetInRange(value, base, /*minOffset=*/0,
+                                      /*maxOffset=*/blockExtent - 1))
+    return true;
+  auto acceptsMax = [&](Value lhs, Value rhs) {
+    return isOwnerLocalLoopLowerBound(lhs, base, blockExtent) &&
+           isConstantIndexInRange(rhs, /*minValue=*/0,
+                                  /*maxValue=*/blockExtent - 1);
+  };
+  Value stripped = ValueAnalysis::stripNumericCasts(value);
+  if (auto max = stripped.getDefiningOp<arith::MaxUIOp>())
+    return acceptsMax(max.getLhs(), max.getRhs()) ||
+           acceptsMax(max.getRhs(), max.getLhs());
+  if (auto max = stripped.getDefiningOp<arith::MaxSIOp>())
+    return acceptsMax(max.getLhs(), max.getRhs()) ||
+           acceptsMax(max.getRhs(), max.getLhs());
+  return false;
+}
+
+static bool isOwnerLocalLoopUpperBound(Value value, Value base,
+                                       int64_t blockExtent) {
+  if (blockExtent <= 0)
+    return false;
+  if (isBasePlusConstantOffsetInRange(value, base, /*minOffset=*/1,
+                                      /*maxOffset=*/blockExtent))
+    return true;
+  auto acceptsMin = [&](Value lhs, Value rhs) {
+    return isOwnerLocalLoopUpperBound(lhs, base, blockExtent) &&
+           constantIndex(rhs).has_value();
+  };
+  Value stripped = ValueAnalysis::stripNumericCasts(value);
+  if (auto min = stripped.getDefiningOp<arith::MinUIOp>())
+    return acceptsMin(min.getLhs(), min.getRhs()) ||
+           acceptsMin(min.getRhs(), min.getLhs());
+  if (auto min = stripped.getDefiningOp<arith::MinSIOp>())
+    return acceptsMin(min.getLhs(), min.getRhs()) ||
+           acceptsMin(min.getRhs(), min.getLhs());
+  return false;
+}
+
+static bool isForIvOwnerLocalToBase(Value value, Value base,
+                                    int64_t blockExtent) {
+  auto arg = dyn_cast<BlockArgument>(value);
+  if (!arg)
+    return false;
+  auto forOp = dyn_cast_or_null<scf::ForOp>(arg.getOwner()->getParentOp());
+  if (!forOp || forOp.getInductionVar() != value)
+    return false;
+  std::optional<int64_t> step = constantIndex(forOp.getStep());
+  if (!step || *step <= 0 || *step > blockExtent)
+    return false;
+  return isOwnerLocalLoopLowerBound(forOp.getLowerBound(), base, blockExtent) &&
+         isOwnerLocalLoopUpperBound(forOp.getUpperBound(), base, blockExtent);
+}
+
+struct OwnerLocalIndex {
+  Value blockBase;
+  Value localOffset;
+};
+
+static std::optional<OwnerLocalIndex>
+deriveOwnerLocalIndex(Value logicalIndex, unsigned dim, int64_t blockExtent,
+                      SdeSuIterateOp su, OpBuilder &builder, Location loc) {
+  std::optional<Value> maybeBase = getScheduleIvForDim(su, dim);
+  if (!maybeBase)
+    return std::nullopt;
+  Value base = *maybeBase;
+
+  if (dim >= su.getSteps().size())
+    return std::nullopt;
+  std::optional<int64_t> scheduleStep = constantIndex(su.getSteps()[dim]);
+  if (!scheduleStep || *scheduleStep <= 0 || *scheduleStep > blockExtent ||
+      blockExtent % *scheduleStep != 0)
+    return std::nullopt;
+
+  if (logicalIndex == base) {
+    Value zero = arith::ConstantIndexOp::create(builder, loc, 0);
+    return OwnerLocalIndex{base, zero};
+  }
+
+  if (!isForIvOwnerLocalToBase(logicalIndex, base, blockExtent))
+    return std::nullopt;
+  Value offset = arith::SubIOp::create(builder, loc, logicalIndex, base);
+  return OwnerLocalIndex{base, offset};
+}
+
 llvm::SmallVector<Value, 6> MuBlockIndexer::localize(ValueRange logicalIndices,
                                                      OpBuilder &builder,
                                                      Location loc) const {
@@ -350,20 +486,40 @@ llvm::SmallVector<Value, 6> MuBlockIndexer::localize(ValueRange logicalIndices,
 
   llvm::SmallVector<Value, 6> result;
   result.reserve(layout.expandedRank());
+  SdeSuIterateOp enclosingSu = findEnclosingSuIterate(builder);
+  llvm::SmallVector<std::optional<OwnerLocalIndex>, 4> ownerLocal(
+      layout.logicalRank());
+
+  for (auto [slot, dim] : llvm::enumerate(layout.ownerDims)) {
+    if (dim >= logicalIndices.size())
+      continue;
+    ownerLocal[dim] = deriveOwnerLocalIndex(logicalIndices[dim], dim,
+                                            layout.blockExtents[slot],
+                                            enclosingSu, builder, loc);
+  }
 
   // Prefix grid coordinates: gridCoord = idx / B, in committed owner order.
   for (auto [slot, dim] : llvm::enumerate(layout.ownerDims)) {
-    Value g = logicalIndices[dim];
     Value b = blockConst(layout.blockExtents[slot]);
-    result.push_back(arith::DivUIOp::create(builder, loc, g, b));
+    Value ownerIndex =
+        ownerLocal[dim] ? ownerLocal[dim]->blockBase : logicalIndices[dim];
+    result.push_back(arith::DivUIOp::create(builder, loc, ownerIndex, b));
   }
 
   // Tile coordinates: owner dim -> idx % B, non-owner dim -> passthrough.
   for (unsigned d = 0; d < layout.logicalRank(); ++d) {
     if (ownerBlockForDim[d]) {
-      Value g = logicalIndices[d];
       Value b = blockConst(*ownerBlockForDim[d]);
-      result.push_back(arith::RemUIOp::create(builder, loc, g, b));
+      if (ownerLocal[d]) {
+        Value baseOffset =
+            arith::RemUIOp::create(builder, loc, ownerLocal[d]->blockBase, b);
+        Value local = arith::AddIOp::create(builder, loc, baseOffset,
+                                            ownerLocal[d]->localOffset);
+        result.push_back(local);
+      } else {
+        Value g = logicalIndices[d];
+        result.push_back(arith::RemUIOp::create(builder, loc, g, b));
+      }
     } else {
       result.push_back(logicalIndices[d]);
     }

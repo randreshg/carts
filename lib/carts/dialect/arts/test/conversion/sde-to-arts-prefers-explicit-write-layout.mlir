@@ -8,7 +8,7 @@
 // CHECK-LABEL: func.func @prefers_explicit_write_layout
 // CHECK: arts.db_alloc
 // CHECK-SAME: <block>
-// CHECK-SAME: elementSizes[%c1{{(_[0-9]+)?}}, %c2{{(_[0-9]+)?}}, %c64{{(_[0-9]+)?}}, %c1024{{(_[0-9]+)?}}]
+// CHECK-SAME: elementSizes[%c2{{(_[0-9]+)?}}, %c64{{(_[0-9]+)?}}, %c1024{{(_[0-9]+)?}}]
 // CHECK: arts.edt
 
 module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_workers = 64 : i64} {

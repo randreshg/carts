@@ -1077,6 +1077,21 @@ LogicalResult rewriteOwnerIndicesToLocal(
                          "than committed owner dimensions";
       return WalkResult::interrupt();
     }
+    auto rootType = dyn_cast<MemRefType>(root.getType());
+    if (!rootType) {
+      op->emitError() << "DB payload access does not use a memref payload";
+      return WalkResult::interrupt();
+    }
+    bool usesCollapsedPayload =
+        rootType.getRank() + static_cast<int64_t>(ownerDimCount) ==
+        static_cast<int64_t>(indices.size());
+    bool usesRankExpandedPayload =
+        rootType.getRank() == static_cast<int64_t>(indices.size());
+    if (!usesCollapsedPayload && !usesRankExpandedPayload) {
+      op->emitError()
+          << "DB payload rank is inconsistent with committed owner dimensions";
+      return WalkResult::interrupt();
+    }
     builder.setInsertionPoint(op);
     if (depHasGroupedBlocks(depIdx) || depRequiresDbRef[depIdx]) {
       if (root != memref) {
@@ -1109,8 +1124,16 @@ LogicalResult rewriteOwnerIndicesToLocal(
         return WalkResult::interrupt();
       }
     }
-    for (unsigned idx = 0; idx < ownerDimCount; ++idx)
-      indices[idx].set(createZeroIndex(builder, op->getLoc()));
+    if (usesCollapsedPayload) {
+      SmallVector<Value, 4> payloadIndices;
+      payloadIndices.reserve(indices.size() - ownerDimCount);
+      for (unsigned idx = ownerDimCount; idx < indices.size(); ++idx)
+        payloadIndices.push_back(indices[idx].get());
+      indices.assign(payloadIndices);
+    } else {
+      for (unsigned idx = 0; idx < ownerDimCount; ++idx)
+        indices[idx].set(createZeroIndex(builder, op->getLoc()));
+    }
     return WalkResult::advance();
   };
 

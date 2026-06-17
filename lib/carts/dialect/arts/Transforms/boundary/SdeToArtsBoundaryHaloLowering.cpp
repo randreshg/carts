@@ -197,19 +197,49 @@ static Value getCommonDivRemSource(Value divValue, Value remValue,
                                    Value expectedDivisor) {
   auto div = ValueAnalysis::stripNumericCasts(divValue)
                  .getDefiningOp<arith::DivUIOp>();
-  auto rem = ValueAnalysis::stripNumericCasts(remValue)
-                 .getDefiningOp<arith::RemUIOp>();
-  if (!div || !rem)
+  if (!div)
     return {};
-  if (!ValueAnalysis::sameValue(div.getLhs(), rem.getLhs()) &&
-      !ValueAnalysis::areValuesEquivalent(div.getLhs(), rem.getLhs()))
+
+  auto same = [](Value lhs, Value rhs) {
+    return ValueAnalysis::sameValue(lhs, rhs) ||
+           ValueAnalysis::areValuesEquivalent(lhs, rhs);
+  };
+  if (!same(div.getRhs(), expectedDivisor))
     return {};
-  if ((!ValueAnalysis::sameValue(div.getRhs(), rem.getRhs()) &&
-       !ValueAnalysis::areValuesEquivalent(div.getRhs(), rem.getRhs())) ||
-      (!ValueAnalysis::sameValue(div.getRhs(), expectedDivisor) &&
-       !ValueAnalysis::areValuesEquivalent(div.getRhs(), expectedDivisor)))
+
+  auto sourceFromRem = [&](Value value) -> Value {
+    auto rem =
+        ValueAnalysis::stripNumericCasts(value).getDefiningOp<arith::RemUIOp>();
+    if (!rem || !same(div.getLhs(), rem.getLhs()) ||
+        !same(div.getRhs(), rem.getRhs()))
+      return {};
+    return div.getLhs();
+  };
+
+  if (Value source = sourceFromRem(remValue))
+    return source;
+
+  auto sourceFromOffset = [&](Value offset) -> Value {
+    if (std::optional<int64_t> constant = ValueAnalysis::tryFoldConstantIndex(
+            ValueAnalysis::stripNumericCasts(offset)))
+      if (*constant == 0)
+        return div.getLhs();
+    auto sub =
+        ValueAnalysis::stripNumericCasts(offset).getDefiningOp<arith::SubIOp>();
+    if (!sub || !same(sub.getRhs(), div.getLhs()))
+      return {};
+    return sub.getLhs();
+  };
+
+  auto add =
+      ValueAnalysis::stripNumericCasts(remValue).getDefiningOp<arith::AddIOp>();
+  if (!add)
     return {};
-  return div.getLhs();
+  if (sourceFromRem(add.getLhs()))
+    return sourceFromOffset(add.getRhs());
+  if (sourceFromRem(add.getRhs()))
+    return sourceFromOffset(add.getLhs());
+  return {};
 }
 
 FailureOr<SmallVector<Value, 4>>

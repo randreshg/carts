@@ -9,9 +9,9 @@
 
 // CHECK-LABEL: func.func @consume_reduce_scatter_redist
 // CHECK: %[[SRC_GUID:.*]], %[[SRC_PTR:.*]] = arts.db_alloc
-// CHECK-SAME: elementSizes[%{{[^,]+}}, %{{[^]]+}}]
+// CHECK-SAME: elementSizes[%{{[^]]+}}]
 // CHECK: %[[DST_GUID:.*]], %[[DST_PTR:.*]] = arts.db_alloc
-// CHECK-SAME: elementSizes[%{{[^,]+}}, %{{[^]]+}}]
+// CHECK-SAME: elementSizes[%{{[^]]+}}]
 // CHECK: %{{.*}}, %[[DST_DEP:.*]] = arts.db_acquire[<inout>]
 // CHECK: %{{.*}}, %[[SRC_DEP:.*]] = arts.db_acquire[<in>] (%[[SRC_GUID]]
 // CHECK-SAME: replicatedRead

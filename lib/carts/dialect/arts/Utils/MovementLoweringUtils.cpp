@@ -192,16 +192,16 @@ LogicalResult arts::emitAllToAllBlockCopy(
       loc, srcBlockIdx,
       createConstantIndex(loopBuilder, loc, coveringSourceBlockBase));
 
-  auto loadFromPayload = [&](Value payload) -> Value {
+  auto loadFromPayload = [&](OpBuilder &bodyBuilder, Value payload) -> Value {
     SmallVector<Value, 4> sourceIndices;
     sourceIndices.push_back(srcLocalRow);
     sourceIndices.push_back(targetLocalCoords[1]);
-    return memref::LoadOp::create(loopBuilder, loc, payload, sourceIndices);
+    return memref::LoadOp::create(bodyBuilder, loc, payload, sourceIndices);
   };
 
   Value loaded;
   if (sourcePayloads.size() == 1) {
-    loaded = loadFromPayload(sourcePayloads.front());
+    loaded = loadFromPayload(loopBuilder, sourcePayloads.front());
   } else if (sourcePayloads.size() == 2) {
     auto ifOp = scf::IfOp::create(
         loopBuilder, loc, elementType,
@@ -212,13 +212,13 @@ LogicalResult arts::emitAllToAllBlockCopy(
       OpBuilder thenBuilder =
           OpBuilder::atBlockBegin(&ifOp.getThenRegion().front());
       scf::YieldOp::create(thenBuilder, loc,
-                           loadFromPayload(sourcePayloads[0]));
+                           loadFromPayload(thenBuilder, sourcePayloads[0]));
     }
     {
       OpBuilder elseBuilder =
           OpBuilder::atBlockBegin(&ifOp.getElseRegion().front());
       scf::YieldOp::create(elseBuilder, loc,
-                           loadFromPayload(sourcePayloads[1]));
+                           loadFromPayload(elseBuilder, sourcePayloads[1]));
     }
     loaded = ifOp.getResult(0);
   } else {

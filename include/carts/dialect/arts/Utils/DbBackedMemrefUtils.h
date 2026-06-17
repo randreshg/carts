@@ -31,7 +31,8 @@ LogicalResult createBlockDbBackedMemref(OpBuilder &builder, Location loc,
                                         MemRefType memrefType,
                                         ValueRange dynamicSizes,
                                         ArrayAttr ownerDims,
-                                        ArrayAttr blockShape, Value &memref);
+                                        ArrayAttr blockShape, Value &memref,
+                                        bool dropPromotedOwnerDims = false);
 
 /// Resolve the ARTS DbAlloc backing a boundary memref, including CU-yielded
 /// aliases produced during SDE storage realization.

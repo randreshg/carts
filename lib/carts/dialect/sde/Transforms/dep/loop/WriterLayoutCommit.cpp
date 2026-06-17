@@ -41,6 +41,7 @@
 #include "carts/utils/ValueAnalysis.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/ADT/DenseMap.h"
@@ -109,6 +110,10 @@ static DictionaryAttr buildLayoutEntry(MLIRContext *ctx, int64_t arrayId,
     budgetShape = sde::detail::blockShapeFromBudget(
         staticShape, elemBytes, layout.ownerPositions,
         sde::detail::kTargetBlockBytes);
+  if (budgetShape.size() == layout.blockShape.size())
+    for (auto [idx, budget] : llvm::enumerate(budgetShape))
+      if (budget > 0 && layout.blockShape[idx] > 0)
+        budgetShape[idx] = std::min<int64_t>(budget, layout.blockShape[idx]);
   fields.push_back(b.getNamedAttr(sde::AttrNames::LayoutGraph::BudgetBlockShape,
                                   buildI64ArrayAttr(ctx, budgetShape)));
   return b.getDictionaryAttr(fields);
@@ -231,6 +236,61 @@ static bool hasStencilReader(const sde::ArrayAccessProfile &profile,
   return false;
 }
 
+static bool sameIndexValue(Value lhs, Value rhs) {
+  return ::mlir::carts::ValueAnalysis::sameValue(
+      ::mlir::carts::ValueAnalysis::stripNumericCasts(lhs),
+      ::mlir::carts::ValueAnalysis::stripNumericCasts(rhs));
+}
+
+static bool isIndexPair(ValueRange indices, Value first, Value second) {
+  return indices.size() == 2 && sameIndexValue(indices[0], first) &&
+         sameIndexValue(indices[1], second);
+}
+
+static bool isSplitEligibleSymmetricSelfGramWriter(sde::SdeSuIterateOp writerOp,
+                                                   Value root) {
+  if (!writerOp || !root || writerOp.getLowerBounds().size() != 1 ||
+      writerOp.getBody().empty() ||
+      writerOp.getBody().front().getNumArguments() < 1)
+    return false;
+  Block *compute = sde::getSuIterateComputeBlock(writerOp);
+  if (!compute)
+    return false;
+
+  Value rowIv = writerOp.getBody().front().getArgument(0);
+  memref::StoreOp diagonalStore;
+  scf::ForOp pairLoop;
+  for (Operation &nested : compute->without_terminator()) {
+    if (auto store = dyn_cast<memref::StoreOp>(nested)) {
+      if (ValueAnalysis::sameMemrefRoot(store.getMemref(), root) &&
+          isIndexPair(store.getIndices(), rowIv, rowIv))
+        diagonalStore = store;
+      continue;
+    }
+    if (auto loop = dyn_cast<scf::ForOp>(nested)) {
+      if (pairLoop)
+        return false;
+      pairLoop = loop;
+    }
+  }
+  if (!diagonalStore || !pairLoop)
+    return false;
+
+  Value colIv = pairLoop.getInductionVar();
+  bool sawUpper = false;
+  bool sawLower = false;
+  for (Operation &nested : pairLoop.getBody()->without_terminator()) {
+    if (isa<scf::ForOp>(nested))
+      continue;
+    auto store = dyn_cast<memref::StoreOp>(nested);
+    if (!store || !ValueAnalysis::sameMemrefRoot(store.getMemref(), root))
+      continue;
+    sawUpper |= isIndexPair(store.getIndices(), rowIv, colIv);
+    sawLower |= isIndexPair(store.getIndices(), colIv, rowIv);
+  }
+  return sawUpper && sawLower;
+}
+
 // A block-parallel WRITER may only own a physical dim it indexes with a single
 // SU loop IV consistently across EVERY store to the root, and distinct owner
 // dims must use distinct IVs. A symmetric/cross-row writer that stores both
@@ -248,6 +308,14 @@ witnessedWriterOwnerPositions(sde::SdeSuIterateOp writerOp, Value root,
   std::optional<SmallVector<Value>> ivs = writerOp.getLoopInductionVars();
   if (!ivs || ivs->empty())
     return result;
+  if (isSplitEligibleSymmetricSelfGramWriter(writerOp, root)) {
+    for (int64_t pos : ownerPositions) {
+      if (pos == 0) {
+        result.push_back(pos);
+        return result;
+      }
+    }
+  }
 
   // Per owner position: the single loop-IV index used at that memref dim, or a
   // sentinel state. -2 = unseen, -1 = disqualified, >=0 = loop-IV slot index.
@@ -388,7 +456,8 @@ chooseLayoutsForModule(const sde::ModuleSuAccessRelations &relations) {
 static void commitLayoutFacts(
     MLIRContext *ctx, sde::ModuleSuAccessRelations &relations,
     const llvm::MapVector<Value, int64_t> &arrayIds,
-    const llvm::DenseMap<Value, sde::detail::ChosenLayout> &chosenByRoot) {
+    const llvm::DenseMap<Value, sde::detail::ChosenLayout> &chosenByRoot,
+    sde::SDECostModel *costModel) {
   // Accumulate per-SU layout updates before applying so each su_iterate gets
   // one combined `arrayLayout` array of all its accessed roots.
   struct RootProvenance {
@@ -439,6 +508,7 @@ static void commitLayoutFacts(
       bool isWrite = schedulingUnitWritesRoot(profile, suId);
       bool readerDisagrees = chosen.disagreeingReaders.contains(suId);
       sde::ArrayLayoutCandidate layoutForSu = chosen.layout;
+      bool splitEligibleSymmetricSelfGram = false;
       if (!isWrite && readerDisagrees)
         layoutForSu = inferReaderRequiredLayout(
             profile, suId, relations.schedulingUnits, chosen.layout);
@@ -451,6 +521,8 @@ static void commitLayoutFacts(
       if (isWrite && layoutForSu.kind == sde::ArrayLayoutKind::blockParallel &&
           !layoutForSu.ownerPositions.empty() &&
           suId < relations.schedulingUnits.size()) {
+        splitEligibleSymmetricSelfGram = isSplitEligibleSymmetricSelfGramWriter(
+            relations.schedulingUnits[suId], profile.root);
         SmallVector<int64_t, 4> witnessed = witnessedWriterOwnerPositions(
             relations.schedulingUnits[suId], profile.root,
             layoutForSu.ownerPositions);
@@ -467,6 +539,11 @@ static void commitLayoutFacts(
           if (layoutForSu.ownerPositions.empty())
             layoutForSu.kind = sde::ArrayLayoutKind::replicated;
         }
+        if (splitEligibleSymmetricSelfGram &&
+            !layoutForSu.ownerPositions.empty() && costModel)
+          (void)sde::enforceOwnerBlockConcurrencyFloor(
+              profile.staticShape, layoutForSu.ownerPositions,
+              costModel->getLogicalWorkerCapacity(), layoutForSu.blockShape);
       }
       DictionaryAttr entry = buildLayoutEntry(
           ctx, arrayId, profile.staticShape, layoutForSu,
@@ -498,8 +575,15 @@ static void commitLayoutFacts(
       // grain. The logical owner choice is real SDE evidence, but physical
       // MU/CU grain is committed after the owning tiling path has rewritten the
       // loop shape that makes it true.
+      bool blockParallelWriter =
+          writerViaMuType &&
+          layoutForSu.kind == sde::ArrayLayoutKind::blockParallel;
+      bool workerAwarePhysicalCommit =
+          costModel && costModel->getLogicalWorkerCapacity() > 1 &&
+          blockParallelWriter && !reductionWriter;
       if (writerViaMuType) {
-        if (!stencilWriter && !matmulWriter && !preserveFullWriter)
+        if (!stencilWriter && !matmulWriter && !preserveFullWriter &&
+            !workerAwarePhysicalCommit)
           writerCommits[suId].push_back(
               {SmallVector<int64_t, 4>(layoutForSu.ownerPositions.begin(),
                                        layoutForSu.ownerPositions.end()),
@@ -511,9 +595,6 @@ static void commitLayoutFacts(
       // Block-parallel non-reduction, non-stencil writers also pin their
       // owner rank for the 2n boundary; reductions/stencils keep their own
       // grain.
-      bool blockParallelWriter =
-          writerViaMuType &&
-          layoutForSu.kind == sde::ArrayLayoutKind::blockParallel;
       if (!writerViaMuType || (blockParallelWriter && !reductionWriter))
         updates[suId].entries.push_back(entry);
       updates[suId].roots.push_back(
@@ -695,7 +776,7 @@ void runLayoutAssignment(::mlir::Operation *moduleOp,
   // PhaseB + PhaseC choice, then PhaseD realization — one atomic pass run.
   llvm::DenseMap<Value, sde::detail::ChosenLayout> chosenByRoot =
       chooseLayoutsForModule(relations);
-  commitLayoutFacts(ctx, relations, arrayIds, chosenByRoot);
+  commitLayoutFacts(ctx, relations, arrayIds, chosenByRoot, costModel);
 }
 
 void chooseAndCommitChoiceFact(::mlir::Operation *moduleOp,
@@ -750,7 +831,7 @@ void consumeChoiceFactAndCommit(::mlir::Operation *moduleOp,
       sde::assignStableArrayIds(relations);
   llvm::DenseMap<Value, sde::detail::ChosenLayout> chosenByRoot =
       deserializeChoiceFact(moduleOp, arrayIds);
-  commitLayoutFacts(ctx, relations, arrayIds, chosenByRoot);
+  commitLayoutFacts(ctx, relations, arrayIds, chosenByRoot, costModel);
   eraseChoiceFact(moduleOp);
 }
 

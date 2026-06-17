@@ -78,3 +78,53 @@ func.func @unstamped_owner_reduction_targets_write_result(%Tmp: memref<256xf32>,
   }
   return
 }
+
+// CHECK-LABEL: func.func @rank_expanded_owner_reduction_targets_write_result
+// CHECK: sde.su_reduce_scatter %{{.*}} : memref<2x4xf32> array_id(2) owner [0] block [1, 4] reduce 0 kind <add>
+// CHECK: partialReduction
+// CHECK-SAME: partialReductionDims = [1]
+// CHECK-SAME: partialReductionOwnerDims = [0]
+func.func @rank_expanded_owner_reduction_targets_write_result(
+    %A: memref<2x2x4x4xf32>, %Y: memref<2x4xf32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c4 = arith.constant 4 : index
+  %c8 = arith.constant 8 : index
+  %zero = arith.constant 0.0 : f32
+  sde.su_iterate (%c0, %c0) to (%c8, %c8) step (%c1, %c1) {
+  ^bb0(%i: index, %j: index):
+    sde.array_layout_root write %A : memref<2x2x4x4xf32> array_id(1)
+    sde.cu_region <single> {
+      %bi = arith.divui %i, %c4 : index
+      %bj = arith.divui %j, %c4 : index
+      %ti = arith.remui %i, %c4 : index
+      %tj = arith.remui %j, %c4 : index
+      memref.store %zero, %A[%bi, %bj, %ti, %tj] : memref<2x2x4x4xf32>
+      sde.yield
+    }
+  } {arrayLayout = [{arrayId = 1 : i64, kind = "block_contraction", ownerDims = [0, 1], blockShape = [4, 4], muBlockCount = 4 : i64, role = "write"}]}
+  sde.su_distribute <owner_compute> {
+  sde.su_iterate (%c0) to (%c8) step (%c1) classification(<elementwise_pipeline>) {
+  ^bb0(%j: index):
+    sde.array_layout_root read %A : memref<2x2x4x4xf32> array_id(1)
+    sde.array_layout_root write %Y : memref<2x4xf32> array_id(2)
+    sde.cu_region <single> {
+      %yb = arith.divui %j, %c4 : index
+      %yt = arith.remui %j, %c4 : index
+      memref.store %zero, %Y[%yb, %yt] : memref<2x4xf32>
+      scf.for %i = %c0 to %c8 step %c1 {
+        %ai = arith.divui %i, %c4 : index
+        %aj = arith.divui %j, %c4 : index
+        %ati = arith.remui %i, %c4 : index
+        %atj = arith.remui %j, %c4 : index
+        %a = memref.load %A[%ai, %aj, %ati, %atj] : memref<2x2x4x4xf32>
+        %old = memref.load %Y[%yb, %yt] : memref<2x4xf32>
+        %next = arith.addf %old, %a : f32
+        memref.store %next, %Y[%yb, %yt] : memref<2x4xf32>
+      }
+      sde.yield
+    }
+  } {arrayLayout = [{arrayId = 1 : i64, kind = "block_contraction", ownerDims = [0, 1], blockShape = [4, 4], muBlockCount = 4 : i64, role = "read"}, {arrayId = 2 : i64, kind = "block_parallel", ownerDims = [0], blockShape = [4], muBlockCount = 2 : i64, role = "write"}]}
+  }
+  return
+}

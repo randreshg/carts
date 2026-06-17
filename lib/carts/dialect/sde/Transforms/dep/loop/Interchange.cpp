@@ -1139,13 +1139,19 @@ findCommittedWriteLayoutFact(sde::SdeSuIterateOp op, Value root) {
   return std::nullopt;
 }
 
-static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
-                                                     Value output,
-                                                     Value diagonalValue) {
+static sde::SdeSuIterateOp
+createSymmetricMirrorLoop(sde::SdeSuIterateOp source, Value output,
+                          Value diagonalValue, Value sourceRowIv,
+                          Value sourceColIv, scf::ForOp reductionLoop) {
   OpBuilder builder(source);
   builder.setInsertionPointAfter(source);
   Location loc = source.getLoc();
   MLIRContext *ctx = source.getContext();
+  auto barrier = sde::SdeSuBarrierOp::create(
+      builder, loc, ValueRange{},
+      sde::SdeBarrierReasonAttr::get(ctx,
+                                     sde::SdeBarrierReason::required_memory));
+  builder.setInsertionPointAfter(barrier);
   Value lowerBound = source.getLowerBounds().front();
   Value upperBound = source.getUpperBounds().front();
   Value step = source.getSteps().front();
@@ -1175,9 +1181,13 @@ static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
   scf::ForOp::create(
       builder, loc, lowerBound, row, step, ValueRange{},
       [&](OpBuilder &colBuilder, Location colLoc, Value col, ValueRange) {
-        Value mirrored = memref::LoadOp::create(colBuilder, colLoc, output,
-                                                ValueRange{col, row});
-        memref::StoreOp::create(colBuilder, colLoc, mirrored, output,
+        IRMapping mapping;
+        mapping.map(sourceRowIv, col);
+        mapping.map(sourceColIv, row);
+        auto clonedReduction = cast<scf::ForOp>(
+            colBuilder.clone(*reductionLoop.getOperation(), mapping));
+        memref::StoreOp::create(colBuilder, colLoc,
+                                clonedReduction.getResult(0), output,
                                 ValueRange{row, col});
         scf::YieldOp::create(colBuilder, colLoc);
       });
@@ -1188,13 +1198,39 @@ static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
   return mirror;
 }
 
-static void attachMirrorWriteFacts(sde::SdeSuIterateOp mirror, Value output,
-                                   const CommittedWriteFact &writeFact) {
+static bool isReadLayoutFact(Attribute attr) {
+  auto dict = dyn_cast<DictionaryAttr>(attr);
+  if (!dict)
+    return false;
+  std::optional<sde::LayoutGraphFact> fact = sde::parseArrayLayoutFact(dict);
+  return fact && fact->role == sde::LayoutGraphRole::read;
+}
+
+static void attachMirrorFacts(sde::SdeSuIterateOp source,
+                              sde::SdeSuIterateOp mirror, Value output,
+                              const CommittedWriteFact &writeFact) {
   MLIRContext *ctx = mirror.getContext();
-  mirror.setArrayLayoutAttr(ArrayAttr::get(ctx, {writeFact.attr}));
+  SmallVector<Attribute, 4> layoutFacts;
+  if (ArrayAttr sourceLayout = source.getArrayLayoutAttr())
+    for (Attribute attr : sourceLayout)
+      if (isReadLayoutFact(attr))
+        layoutFacts.push_back(attr);
+  layoutFacts.push_back(writeFact.attr);
+  mirror.setArrayLayoutAttr(ArrayAttr::get(ctx, layoutFacts));
 
   Block &body = mirror.getBody().front();
   OpBuilder builder(&body, body.begin());
+  if (!source.getBody().empty()) {
+    for (sde::SdeArrayLayoutRootOp root :
+         source.getBody().front().getOps<sde::SdeArrayLayoutRootOp>()) {
+      if (root.getMode() != sde::SdeAccessMode::read)
+        continue;
+      sde::SdeArrayLayoutRootOp::create(
+          builder, mirror.getLoc(), root.getRoot(),
+          sde::SdeAccessModeAttr::get(ctx, sde::SdeAccessMode::read),
+          IntegerAttr::get(IntegerType::get(ctx, 64), root.getArrayId()));
+    }
+  }
   sde::SdeArrayLayoutRootOp::create(
       builder, mirror.getLoc(), output,
       sde::SdeAccessModeAttr::get(ctx, sde::SdeAccessMode::write),
@@ -1205,10 +1241,7 @@ static void attachMirrorWriteFacts(sde::SdeSuIterateOp mirror, Value output,
 }
 
 static bool splitSymmetricSelfGramStores(sde::SdeSuIterateOp op, Block &body) {
-  auto classAttr = op.getStructuredClassificationAttr();
-  if (!classAttr ||
-      classAttr.getValue() != sde::SdeStructuredClassification::matmul ||
-      op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
+  if (op.getLowerBounds().size() != 1 || op.getUpperBounds().size() != 1 ||
       op.getSteps().size() != 1 || op.getBody().front().getNumArguments() < 1)
     return false;
 
@@ -1275,9 +1308,9 @@ static bool splitSymmetricSelfGramStores(sde::SdeSuIterateOp op, Block &body) {
 
   lowerStore.erase();
   diagonalStore.erase();
-  sde::SdeSuIterateOp mirror =
-      createSymmetricMirrorLoop(op, output, diagonalValue);
-  attachMirrorWriteFacts(mirror, output, *writeFact);
+  sde::SdeSuIterateOp mirror = createSymmetricMirrorLoop(
+      op, output, diagonalValue, ownerIv, pairIv, reductionLoop);
+  attachMirrorFacts(op, mirror, output, *writeFact);
   ARTS_INFO("LoopInterchange: split symmetric self-Gram lower-triangle store");
   return true;
 }

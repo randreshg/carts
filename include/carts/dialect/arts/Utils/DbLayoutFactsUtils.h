@@ -36,7 +36,7 @@ Value ceilDivPositiveIndex(OpBuilder &builder, Location loc, Value value,
 FailureOr<DbPhysicalLayoutFacts>
 resolvePhysicalDbLayoutFacts(ArrayAttr ownerDimsAttr, ArrayAttr blockShapeAttr,
                              ValueRange elementSizes, OpBuilder &builder,
-                             Location loc);
+                             Location loc, bool dropPromotedOwnerDims = false);
 
 } // namespace carts::arts
 } // namespace mlir

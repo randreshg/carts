@@ -87,14 +87,15 @@ LogicalResult mlir::carts::arts::createCoarseDbBackedMemref(
 LogicalResult mlir::carts::arts::createBlockDbBackedMemref(
     OpBuilder &builder, Location loc, MemRefType memrefType,
     ValueRange dynamicSizes, ArrayAttr ownerDims, ArrayAttr blockShape,
-    Value &memref) {
+    Value &memref, bool dropPromotedOwnerDims) {
   FailureOr<SmallVector<Value>> elementSizes =
       buildDbBackedMemrefElementSizes(builder, loc, memrefType, dynamicSizes);
   if (failed(elementSizes))
     return failure();
 
-  FailureOr<DbPhysicalLayoutFacts> physicalFacts = resolvePhysicalDbLayoutFacts(
-      ownerDims, blockShape, *elementSizes, builder, loc);
+  FailureOr<DbPhysicalLayoutFacts> physicalFacts =
+      resolvePhysicalDbLayoutFacts(ownerDims, blockShape, *elementSizes,
+                                   builder, loc, dropPromotedOwnerDims);
   if (failed(physicalFacts))
     return failure();
 

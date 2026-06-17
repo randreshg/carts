@@ -16,7 +16,8 @@
 // CHECK: memref.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<128x64xf32>
 // CHECK: %[[BIDA:.*]] = arith.divui %{{.*}}, %c16
 // CHECK: %[[OFFA:.*]] = arith.remui %{{.*}}, %c16
-// CHECK: memref.store %{{.*}}, %{{.*}}[%[[BIDA]], %[[OFFA]], %{{.*}}] : memref<8x16x64xf32>
+// CHECK: %[[LOCALA:.*]] = arith.addi %[[OFFA]], %{{.*}} : index
+// CHECK: memref.store %{{.*}}, %{{.*}}[%[[BIDA]], %[[LOCALA]], %{{.*}}] : memref<8x16x64xf32>
 
 func.func @rank_expand_elementwise_2d() {
   %c0 = arith.constant 0 : index
@@ -139,6 +140,56 @@ func.func @rank_expand_reconciles_reader_home() {
       {arrayId = 11 : i64, blockShape = [64, 128],
        kind = "block_parallel",
        muBlockCount = 2 : i64, ownerDims = [0], role = "write"}]}
+  return
+}
+
+// CHECK-LABEL: func.func @rank_expand_reconciles_contraction_reader_home
+// CHECK: %[[T:.*]] = sde.mu_alloc : memref<4x4x32x32xf32>
+// CHECK: sde.array_layout_root read %[[T]] : memref<4x4x32x32xf32> array_id(30)
+// CHECK: arrayId = 30 : i64, blockShape = [32, 32]
+// CHECK-SAME: kind = "block_contraction"
+// CHECK-SAME: muBlockCount = 16 : i64
+// CHECK-SAME: ownerDims = [0, 1], role = "read"
+// CHECK-NOT: budgetBlockShape = [64, 128]
+
+func.func @rank_expand_reconciles_contraction_reader_home() {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c128 = arith.constant 128 : index
+  %zero = arith.constant 0.0 : f32
+  %T = sde.mu_alloc : memref<128x128xf32>
+  %G = sde.mu_alloc : memref<128x128xf32>
+  sde.su_iterate (%c0, %c0) to (%c128, %c128) step (%c1, %c1)
+      classification(<elementwise>) {
+  ^bb0(%i: index, %j: index):
+    sde.array_layout_root write %T : memref<128x128xf32> array_id(30)
+    sde.cu_region <single> {
+      memref.store %zero, %T[%i, %j] : memref<128x128xf32>
+      sde.yield
+    }
+    sde.yield
+  } {arrayLayout = [{arrayId = 30 : i64, blockShape = [32, 32],
+       kind = "block_parallel",
+       muBlockCount = 16 : i64, ownerDims = [0, 1], role = "write"}]}
+  sde.su_iterate (%c0, %c0) to (%c128, %c128) step (%c1, %c1)
+      classification(<matmul>) {
+  ^bb0(%i: index, %j: index):
+    sde.array_layout_root read %T : memref<128x128xf32> array_id(30)
+    sde.array_layout_root write %G : memref<128x128xf32> array_id(31)
+    sde.cu_region <single> {
+      scf.for %k = %c0 to %c128 step %c1 {
+        %v = memref.load %T[%k, %j] : memref<128x128xf32>
+        memref.store %v, %G[%i, %j] : memref<128x128xf32>
+      }
+      sde.yield
+    }
+    sde.yield
+  } {arrayLayout = [{arrayId = 30 : i64, blockShape = [64, 128],
+       budgetBlockShape = [64, 128], kind = "block_contraction",
+       muBlockCount = 2 : i64, ownerDims = [0], role = "read"},
+      {arrayId = 31 : i64, blockShape = [32, 32],
+       kind = "block_parallel",
+       muBlockCount = 16 : i64, ownerDims = [0, 1], role = "write"}]}
   return
 }
 

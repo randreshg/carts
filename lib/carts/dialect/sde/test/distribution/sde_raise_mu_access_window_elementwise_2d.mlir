@@ -12,7 +12,8 @@
 // CHECK: memref.cast {{.*}} to memref<128x64xf32>
 // CHECK: arts.db_alloc
 // CHECK-SAME: <block>
-// CHECK: memref.cast {{.*}} to memref<8x16x64xf32>
+// CHECK: memref.cast {{.*}} to memref<16x64xf32>
+// CHECK: memref.expand_shape {{.*}} into memref<1x16x64xf32>
 // CHECK-NOT: sde.mu_access_window
 // CHECK: arts.db_access_window
 // CHECK-SAME: mode = #arts.mode<out>

@@ -157,7 +157,9 @@ inline bool hasCommittedWriterBlockLayout(SdeSuIterateOp op) {
   for (const LayoutGraphFact &fact :
        parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
     if (fact.role == LayoutGraphRole::write && !fact.ownerDims.empty() &&
-        !fact.blockShape.empty())
+        !fact.blockShape.empty() &&
+        (fact.budgetBlockShape.empty() ||
+         fact.budgetBlockShape == fact.blockShape))
       return true;
   }
   return false;
@@ -172,6 +174,9 @@ findSingleCommittedWriterBlockLayout(SdeSuIterateOp op) {
        parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
     if (fact.role != LayoutGraphRole::write || fact.ownerDims.empty() ||
         fact.blockShape.empty())
+      continue;
+    if (!fact.budgetBlockShape.empty() &&
+        fact.budgetBlockShape != fact.blockShape)
       continue;
     if (!selected) {
       selected = fact;
@@ -429,6 +434,155 @@ inline bool rewriteWriterArrayLayoutToPhysicalShape(
   return changed;
 }
 
+/// Make same-owner read-role arrayLayout facts reflect a newly committed
+/// physical MU grain. This keeps reader facts fresh when a loop/layout
+/// transform commits the writer grain before same-owner grain reconciliation.
+inline bool rewriteSameOwnerReadLayoutsToPhysicalShape(
+    SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
+    ArrayRef<int64_t> physicalBlockShape, ArrayRef<int64_t> logicalShape) {
+  if (!op || ownerDims.empty() || physicalBlockShape.empty() ||
+      logicalShape.empty())
+    return false;
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return false;
+
+  MLIRContext *ctx = op.getContext();
+  Builder builder(ctx);
+  StringAttr kindName = builder.getStringAttr(AttrNames::LayoutGraph::Kind);
+  StringAttr ownerDimsName =
+      builder.getStringAttr(AttrNames::LayoutGraph::OwnerDims);
+  StringAttr blockShapeName =
+      builder.getStringAttr(AttrNames::LayoutGraph::BlockShape);
+  StringAttr muBlockCountName =
+      builder.getStringAttr(AttrNames::LayoutGraph::MuBlockCount);
+  StringAttr budgetBlockShapeName =
+      builder.getStringAttr(AttrNames::LayoutGraph::BudgetBlockShape);
+
+  int64_t muBlockCount =
+      inferCuCountFromMuPartition(logicalShape, ownerDims, physicalBlockShape);
+  bool changed = false;
+  SmallVector<Attribute, 4> rewritten;
+  rewritten.reserve(layout.size());
+  for (Attribute attr : layout) {
+    auto dict = dyn_cast<DictionaryAttr>(attr);
+    std::optional<LayoutGraphFact> fact =
+        dict ? parseArrayLayoutFact(dict) : std::nullopt;
+    if (!dict || !fact || fact->role != LayoutGraphRole::read ||
+        fact->layoutKind != ArrayLayoutKind::blockParallel ||
+        ArrayRef<int64_t>(fact->ownerDims) != ownerDims ||
+        fact->blockShape.size() != physicalBlockShape.size()) {
+      rewritten.push_back(attr);
+      continue;
+    }
+
+    SmallVector<NamedAttribute, 8> fields;
+    fields.reserve(dict.size());
+    for (NamedAttribute named : dict) {
+      StringAttr name = named.getName();
+      if (name == kindName || name == ownerDimsName || name == blockShapeName ||
+          name == muBlockCountName || name == budgetBlockShapeName)
+        continue;
+      fields.push_back(named);
+    }
+    fields.push_back(builder.getNamedAttr(
+        kindName,
+        builder.getStringAttr(AttrNames::LayoutGraph::BlockParallel)));
+    fields.push_back(
+        builder.getNamedAttr(ownerDimsName, buildI64ArrayAttr(ctx, ownerDims)));
+    fields.push_back(builder.getNamedAttr(
+        blockShapeName, buildI64ArrayAttr(ctx, physicalBlockShape)));
+    if (muBlockCount > 0)
+      fields.push_back(builder.getNamedAttr(
+          muBlockCountName, builder.getI64IntegerAttr(muBlockCount)));
+    rewritten.push_back(builder.getDictionaryAttr(fields));
+    changed = true;
+  }
+
+  if (changed)
+    op.setArrayLayoutAttr(ArrayAttr::get(ctx, rewritten));
+  return changed;
+}
+
+inline std::optional<int64_t> findSingleWriteRootArrayId(SdeSuIterateOp op) {
+  if (!op || op.getBody().empty())
+    return std::nullopt;
+  std::optional<int64_t> arrayId;
+  for (SdeArrayLayoutRootOp root :
+       op.getBody().front().getOps<SdeArrayLayoutRootOp>()) {
+    if (root.getMode() != SdeAccessMode::write)
+      continue;
+    int64_t candidate = static_cast<int64_t>(root.getArrayId());
+    if (arrayId && *arrayId != candidate)
+      return std::nullopt;
+    arrayId = candidate;
+  }
+  return arrayId;
+}
+
+inline bool hasCommittedWriteArrayLayoutFact(SdeSuIterateOp op,
+                                             int64_t arrayId) {
+  if (!op)
+    return false;
+  for (const LayoutGraphFact &fact :
+       parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+    if (fact.id == arrayId && fact.role == LayoutGraphRole::write)
+      return true;
+  }
+  return false;
+}
+
+inline bool
+authorSingleMissingWriterArrayLayoutFact(SdeSuIterateOp op,
+                                         ArrayRef<int64_t> ownerDims,
+                                         ArrayRef<int64_t> physicalBlockShape) {
+  if (!op || ownerDims.empty() || physicalBlockShape.empty())
+    return false;
+
+  std::optional<int64_t> arrayId = findSingleWriteRootArrayId(op);
+  if (!arrayId || hasCommittedWriteArrayLayoutFact(op, *arrayId))
+    return false;
+
+  std::optional<SmallVector<int64_t, 4>> rootShape =
+      findWriteArrayRootShape(op, *arrayId);
+  if (!rootShape)
+    return false;
+  std::optional<SmallVector<int64_t, 4>> logicalRootShape =
+      collapseRankExpandedRootShape(*rootShape, ownerDims, physicalBlockShape);
+  if (!logicalRootShape)
+    return false;
+
+  MLIRContext *ctx = op.getContext();
+  Builder builder(ctx);
+  SmallVector<NamedAttribute, 6> fields;
+  fields.push_back(builder.getNamedAttr(AttrNames::LayoutGraph::ArrayId,
+                                        builder.getI64IntegerAttr(*arrayId)));
+  fields.push_back(builder.getNamedAttr(
+      AttrNames::LayoutGraph::Role,
+      builder.getStringAttr(AttrNames::LayoutGraphValues::RoleWrite)));
+  fields.push_back(builder.getNamedAttr(
+      AttrNames::LayoutGraph::Kind,
+      builder.getStringAttr(AttrNames::LayoutGraph::BlockParallel)));
+  fields.push_back(builder.getNamedAttr(AttrNames::LayoutGraph::OwnerDims,
+                                        buildI64ArrayAttr(ctx, ownerDims)));
+  fields.push_back(
+      builder.getNamedAttr(AttrNames::LayoutGraph::BlockShape,
+                           buildI64ArrayAttr(ctx, physicalBlockShape)));
+  int64_t blockCount = inferCuCountFromMuPartition(*logicalRootShape, ownerDims,
+                                                   physicalBlockShape);
+  if (blockCount > 0)
+    fields.push_back(
+        builder.getNamedAttr(AttrNames::LayoutGraph::MuBlockCount,
+                             builder.getI64IntegerAttr(blockCount)));
+
+  SmallVector<Attribute, 4> entries;
+  if (ArrayAttr layout = op.getArrayLayoutAttr())
+    entries.assign(layout.begin(), layout.end());
+  entries.push_back(builder.getDictionaryAttr(fields));
+  op.setArrayLayoutAttr(ArrayAttr::get(ctx, entries));
+  return true;
+}
+
 inline bool reconcilePartialReductionOwnersWithCommittedShape(
     SdeSuIterateOp op, ArrayRef<int64_t> committedOwnerDims) {
   if (!op || committedOwnerDims.empty())
@@ -472,6 +626,8 @@ commitWriterPhysicalLayoutViaMuType(SdeSuIterateOp op,
                            logicalWorkerSlice);
   bool changed =
       reconcilePartialReductionOwnersWithCommittedShape(op, ownerDims);
+  changed |= authorSingleMissingWriterArrayLayoutFact(op, ownerDims,
+                                                      physicalBlockShape);
   changed |= rewriteWriterArrayLayoutToPhysicalShape(op, ownerDims,
                                                      physicalBlockShape);
   return changed;

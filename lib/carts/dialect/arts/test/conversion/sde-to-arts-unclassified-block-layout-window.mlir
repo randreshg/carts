@@ -18,7 +18,7 @@
 // ARTS: arts.db_acquire
 // ARTS-SAME: partitioning(<block>)
 // ARTS: arts.edt
-// ARTS: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] : memref<?x?x?xf32>
+// ARTS: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<?x?xf32>
 
 module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_workers = 4 : i64} {
   func.func @unclassified_committed_block_layout_window() {

@@ -763,72 +763,6 @@ static bool tryAdoptCompatibleStencilBudgetGrain(
   return true;
 }
 
-static bool rewriteSameOwnerStencilReadLayouts(
-    sde::SdeSuIterateOp op, ArrayRef<int64_t> ownerDims,
-    ArrayRef<int64_t> physicalBlockShape, ArrayRef<int64_t> logicalShape) {
-  ArrayAttr layout = op.getArrayLayoutAttr();
-  if (!op || !layout || ownerDims.empty() || physicalBlockShape.empty() ||
-      logicalShape.empty())
-    return false;
-
-  MLIRContext *ctx = op.getContext();
-  Builder builder(ctx);
-  StringAttr kindName =
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::Kind);
-  StringAttr ownerDimsName =
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::OwnerDims);
-  StringAttr blockShapeName =
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::BlockShape);
-  StringAttr muBlockCountName =
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::MuBlockCount);
-  StringAttr budgetBlockShapeName =
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::BudgetBlockShape);
-
-  int64_t muBlockCount = sde::inferCuCountFromMuPartition(
-      logicalShape, ownerDims, physicalBlockShape);
-  bool changed = false;
-  SmallVector<Attribute, 4> rewritten;
-  rewritten.reserve(layout.size());
-  for (Attribute attr : layout) {
-    auto dict = dyn_cast<DictionaryAttr>(attr);
-    std::optional<sde::LayoutGraphFact> fact =
-        dict ? sde::parseArrayLayoutFact(dict) : std::nullopt;
-    if (!dict || !fact || fact->role != sde::LayoutGraphRole::read ||
-        fact->layoutKind != sde::ArrayLayoutKind::blockParallel ||
-        ArrayRef<int64_t>(fact->ownerDims) != ownerDims ||
-        fact->blockShape.size() != physicalBlockShape.size()) {
-      rewritten.push_back(attr);
-      continue;
-    }
-
-    SmallVector<NamedAttribute, 8> fields;
-    fields.reserve(dict.size());
-    for (NamedAttribute named : dict) {
-      StringAttr name = named.getName();
-      if (name == kindName || name == ownerDimsName || name == blockShapeName ||
-          name == muBlockCountName || name == budgetBlockShapeName)
-        continue;
-      fields.push_back(named);
-    }
-    fields.push_back(builder.getNamedAttr(
-        kindName,
-        builder.getStringAttr(sde::AttrNames::LayoutGraph::BlockParallel)));
-    fields.push_back(
-        builder.getNamedAttr(ownerDimsName, buildI64ArrayAttr(ctx, ownerDims)));
-    fields.push_back(builder.getNamedAttr(
-        blockShapeName, buildI64ArrayAttr(ctx, physicalBlockShape)));
-    if (muBlockCount > 0)
-      fields.push_back(builder.getNamedAttr(
-          muBlockCountName, builder.getI64IntegerAttr(muBlockCount)));
-    rewritten.push_back(builder.getDictionaryAttr(fields));
-    changed = true;
-  }
-
-  if (changed)
-    op.setArrayLayoutAttr(ArrayAttr::get(ctx, rewritten));
-  return changed;
-}
-
 static SmallVector<Value, 4>
 collectAllSuLoopIndexValues(sde::SdeSuIterateOp op) {
   SmallVector<Value, 4> ownerIndexValues;
@@ -1563,7 +1497,7 @@ static void commitStencilPhysicalLayout(sde::SdeSuIterateOp op,
                 applyPhysicalLayoutOrRetileStencil(
                     op, ownerDims, physicalBlockShape, haloShape,
                     logicalWorkerSlice)) {
-          (void)rewriteSameOwnerStencilReadLayouts(
+          (void)sde::rewriteSameOwnerReadLayoutsToPhysicalShape(
               *realized, ownerDims, physicalBlockShape, tiledOutputPlan->shape);
           return;
         }
@@ -1644,7 +1578,7 @@ static void commitStencilPhysicalLayout(sde::SdeSuIterateOp op,
               applyPhysicalLayoutOrRetileStencil(op, ownerDims,
                                                  physicalBlockShape, haloShape,
                                                  logicalWorkerSlice)) {
-        (void)rewriteSameOwnerStencilReadLayouts(
+        (void)sde::rewriteSameOwnerReadLayoutsToPhysicalShape(
             *realized, ownerDims, physicalBlockShape, outputPlan->shape);
         return;
       }

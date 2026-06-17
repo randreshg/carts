@@ -6,7 +6,7 @@
 // STORAGE-LABEL: func.func @consume_window_1d
 // STORAGE: arts.db_alloc
 // STORAGE-SAME: <block>
-// STORAGE-SAME: elementSizes[%{{[^,]+}}, %c256]
+// STORAGE-SAME: elementSizes[%c256]
 // STORAGE: arts.db_access_window
 // STORAGE-SAME: mode = #arts.mode<out>
 // STORAGE-SAME: ownerDimCount = 1
@@ -15,24 +15,24 @@
 // ARTS-LABEL: func.func @consume_window_1d
 // ARTS: arts.db_alloc
 // ARTS-SAME: <block>
-// ARTS-SAME: elementSizes[%{{[^,]+}}, %c256]
+// ARTS-SAME: elementSizes[%c256]
 // ARTS: arts.db_acquire
 // ARTS-SAME: partitioning(<block>)
 // ARTS-SAME: offsets[%{{[^]]+}}]
 // ARTS-SAME: sizes[%{{[^]]+}}]
 // ARTS: arts.edt
-// ARTS: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<?x?xf32>
+// ARTS: memref.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<?xf32>
 
 // ARTS-LABEL: func.func @consume_full_rank_partial_window
 // ARTS: arts.db_alloc
 // ARTS-SAME: <block>
-// ARTS-SAME: elementSizes[%{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %{{[^]]+}}]
+// ARTS-SAME: elementSizes[%{{[^,]+}}, %{{[^,]+}}, %{{[^]]+}}]
 // ARTS: %[[GROUP:.*]] = arith.constant 4 : index
 // ARTS: scf.for %{{.*}} = %{{.*}} to %{{.*}} step %[[GROUP]]
 // ARTS: arts.db_acquire
 // ARTS-SAME: partitioning(<block>)
 // ARTS: arts.edt
-// ARTS: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<?x?x?x?xf64>
+// ARTS: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}] : memref<?x?x?xf64>
 
 // ARTS-LABEL: func.func @consume_rank_expanded_read_window_offsets
 // ARTS: scf.for %[[B:.*]] = %{{.*}} to %{{.*}} step %{{.*}} {

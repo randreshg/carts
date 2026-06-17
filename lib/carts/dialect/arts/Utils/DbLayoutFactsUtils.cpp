@@ -38,6 +38,23 @@ static Value blockSizeForPhysicalDim(const DbPhysicalLayoutFacts &facts,
   return Value();
 }
 
+static bool hasIdentityPromotedOwnerPrefix(ArrayRef<unsigned> partitionedDims,
+                                           ArrayRef<Value> blockSizes,
+                                           unsigned memrefRank) {
+  if (partitionedDims.empty() || partitionedDims.size() >= memrefRank ||
+      partitionedDims.size() != blockSizes.size())
+    return false;
+  for (auto [slot, dim] : llvm::enumerate(partitionedDims)) {
+    if (dim != slot)
+      return false;
+    std::optional<int64_t> blockSize =
+        ValueAnalysis::tryFoldConstantIndex(blockSizes[slot]);
+    if (!blockSize || *blockSize != 1)
+      return false;
+  }
+  return true;
+}
+
 } // namespace
 
 bool mlir::carts::arts::hasPhysicalDbLayoutFacts(Operation *op) {
@@ -60,11 +77,9 @@ Value mlir::carts::arts::ceilDivPositiveIndex(OpBuilder &builder, Location loc,
 }
 
 FailureOr<DbPhysicalLayoutFacts>
-mlir::carts::arts::resolvePhysicalDbLayoutFacts(ArrayAttr ownerDimsAttr,
-                                                ArrayAttr blockShapeAttr,
-                                                ValueRange elementSizes,
-                                                OpBuilder &builder,
-                                                Location loc) {
+mlir::carts::arts::resolvePhysicalDbLayoutFacts(
+    ArrayAttr ownerDimsAttr, ArrayAttr blockShapeAttr, ValueRange elementSizes,
+    OpBuilder &builder, Location loc, bool dropPromotedOwnerDims) {
   if (!ownerDimsAttr || !blockShapeAttr || elementSizes.empty())
     return failure();
 
@@ -118,8 +133,14 @@ mlir::carts::arts::resolvePhysicalDbLayoutFacts(ArrayAttr ownerDimsAttr,
         ceilDivPositiveIndex(builder, loc, extent, blockSize));
   }
 
-  facts.innerSizes.reserve(memrefRank);
-  for (unsigned dim = 0; dim < memrefRank; ++dim) {
+  unsigned firstInnerDim = 0;
+  if (dropPromotedOwnerDims &&
+      hasIdentityPromotedOwnerPrefix(facts.partitionedDims, facts.blockSizes,
+                                     memrefRank))
+    firstInnerDim = facts.partitionedDims.size();
+
+  facts.innerSizes.reserve(memrefRank - firstInnerDim);
+  for (unsigned dim = firstInnerDim; dim < memrefRank; ++dim) {
     if (Value blockSize = blockSizeForPhysicalDim(facts, dim)) {
       facts.innerSizes.push_back(blockSize);
       continue;
