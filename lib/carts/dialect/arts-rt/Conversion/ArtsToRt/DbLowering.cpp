@@ -259,7 +259,7 @@ void DbLoweringPass::convertDbAllocOps() {
         *partitionMode);
     ARTS_DEBUG("  - New DbAllocOp: " << newOp);
     copyArtsMetadataAttrs(oldOp.getOperation(), newOp.getOperation());
-    copyDistributionAttrs(oldOp.getOperation(), newOp.getOperation());
+    copyDbAllocDistributionFactAttrs(oldOp, newOp);
     if (auto bridge = oldOp.getStorageBridgeAttr())
       newOp.setStorageBridgeAttr(bridge);
     if (hasDistributedDbAllocation(oldOp.getOperation()) &&
@@ -469,7 +469,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   /// dep lowering rely on these attrs (or the mirrored value facts) to
   /// distinguish owned-write entries from read-only halo entries without
   /// teaching generic lowering code about specific dep families.
-  copySemanticFactAttrs(acquireOp.getOperation(), newAcquireOp.getOperation());
+  copyDbAcquireSemanticFactAttrs(acquireOp, newAcquireOp);
   newAcquireOp.copyPartitionSegmentsFrom(acquireOp);
   normalizeBlockHaloAcquireSlice(AC, newAcquireOp, sourcePtr);
   ++numAcquiresRewritten;

@@ -78,8 +78,9 @@ static bool isAllZero(ArrayRef<int64_t> values) {
 }
 
 static ArrayRef<int64_t> committedLayoutGrain(const LayoutGraphFact &fact) {
-  return fact.budgetBlockShape.empty() ? ArrayRef<int64_t>(fact.blockShape)
-                                       : ArrayRef<int64_t>(fact.budgetBlockShape);
+  return fact.budgetBlockShape.empty()
+             ? ArrayRef<int64_t>(fact.blockShape)
+             : ArrayRef<int64_t>(fact.budgetBlockShape);
 }
 
 static void unifyHomeBlockShapeFromCommittedFacts(
@@ -96,8 +97,7 @@ static void unifyHomeBlockShapeFromCommittedFacts(
     if (!layout)
       return;
     for (const LayoutGraphFact &fact : parseArrayLayoutFacts(layout)) {
-      if (fact.id < 0 ||
-          fact.layoutKind != ArrayLayoutKind::blockParallel ||
+      if (fact.id < 0 || fact.layoutKind != ArrayLayoutKind::blockParallel ||
           fact.ownerDims.empty())
         continue;
       ArrayRef<int64_t> grain = committedLayoutGrain(fact);
@@ -265,10 +265,6 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         result.failures.push_back({reader, arrayId, reason.str()});
       };
 
-      if (conflictingHome.contains(arrayId)) {
-        fail("conflicting committed writer layouts; home is non-reconcilable");
-        continue;
-      }
       auto homeIt = homeByArrayId.find(arrayId);
       if (homeIt == homeByArrayId.end())
         continue;
@@ -288,10 +284,36 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
         continue;
       }
       Value root = rootIt->second;
-      if (!readerNeedsRedistributionMovement(reader, arrayId, home, relations,
-                                             readerSuId, root))
-        continue;
       auto muType = dyn_cast<MemRefType>(root.getType());
+      std::optional<LayoutGraphFact> readerFact =
+          findLayoutFact(reader, arrayId);
+      bool readerMatchesSelectedHome = false;
+      if (readerFact) {
+        ArrayRef<int64_t> readerGrain = committedLayoutGrain(*readerFact);
+        readerMatchesSelectedHome =
+            readerFact->ownerDims == home.ownerDims &&
+            readerGrain == ArrayRef<int64_t>(home.blockShape);
+      }
+      std::optional<SmallVector<int64_t, 4>> haloShape =
+          getCommittedHaloShape(reader);
+      if (!haloShape && readerFact &&
+          sameOwnerDimSet(home.ownerDims, readerFact->ownerDims) && muType &&
+          muType.hasStaticShape()) {
+        haloShape = recoverRankExpandedOwnerHaloFromLoads(
+            root, reader, home.ownerDims, muType);
+        if (haloShape && isAllZero(*haloShape))
+          haloShape.reset();
+      }
+      bool needsMovement = readerNeedsRedistributionMovement(
+          reader, arrayId, home, relations, readerSuId, root);
+      if (conflictingHome.contains(arrayId) && !readerMatchesSelectedHome) {
+        fail("conflicting committed writer layouts; home is non-reconcilable");
+        continue;
+      }
+      if (!needsMovement &&
+          !(haloShape && readerFact &&
+            sameOwnerDimSet(home.ownerDims, readerFact->ownerDims)))
+        continue;
       if (!muType || !muType.hasStaticShape()) {
         fail("dynamic array shape has no static redistribution layout");
         continue;
@@ -316,10 +338,6 @@ RedistributionEdges collectRedistributionEdges(Operation *moduleOp) {
                   llvm::is_contained(home.ownerDims, static_cast<int64_t>(pos)))
                 hasOwnerReduction = true;
       }
-      std::optional<LayoutGraphFact> readerFact =
-          findLayoutFact(reader, arrayId);
-      std::optional<SmallVector<int64_t, 4>> haloShape =
-          getCommittedHaloShape(reader);
       std::optional<RedistEndpoint> expandedEndpoint =
           getRankExpandedReductionEndpoint(home, muType);
       bool geometryFitsRoot = logicalEndpointFitsRoot(home, muType);

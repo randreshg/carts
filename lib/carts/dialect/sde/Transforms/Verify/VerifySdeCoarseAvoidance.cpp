@@ -33,8 +33,8 @@ using namespace mlir::carts;
 namespace {
 
 /// True if the MU's redistribution is explicitly represented by a first-class
-/// SU movement op — its movement is owned by sde-redistribute, not a coarse last
-/// resort.
+/// SU movement op — its movement is owned by sde-redistribute, not a coarse
+/// last resort.
 static bool muHasExplicitMovement(carts::sde::SdeMuAllocOp mu) {
   for (Operation *user : mu.getMemref().getUsers())
     if (isa<carts::sde::SdeSuHaloOp, carts::sde::SdeSuReduceScatterOp>(user))

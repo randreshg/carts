@@ -15,9 +15,10 @@
 ///
 /// Subsumes the parallel-promotion slice of `sde-parallelize` and will
 /// eventually fold the initial `sde-cu-normalization` pipeline stage (the
-/// post-realization re-normalization remains a separate pass). Re-entrancy guard: skip loop nests
-/// already under `sde.su_iterate`; allow direct children of residual
-/// `cu_region<single>` wrappers or raw host `scf.for` at function scope.
+/// post-realization re-normalization remains a separate pass). Re-entrancy
+/// guard: skip loop nests already under `sde.su_iterate`; allow direct children
+/// of residual `cu_region<single>` wrappers or raw host `scf.for` at function
+/// scope.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -169,10 +170,10 @@ static bool storeUsesLoopIv(memref::StoreOp store, scf::ForOp loop,
   return indexUsesLoopIv(store.getIndices(), loop, physicalDim);
 }
 
-static bool storeMatchesParallelPrefix(memref::StoreOp store,
-                                       ArrayRef<scf::ForOp> loops,
-                                       unsigned parallelPrefix,
-                                       SmallVectorImpl<int64_t> &ownerPhysicalDims) {
+static bool
+storeMatchesParallelPrefix(memref::StoreOp store, ArrayRef<scf::ForOp> loops,
+                           unsigned parallelPrefix,
+                           SmallVectorImpl<int64_t> &ownerPhysicalDims) {
   llvm::SmallBitVector usedPhysicalDims(store.getIndices().size(), false);
   ownerPhysicalDims.clear();
   ownerPhysicalDims.reserve(parallelPrefix);
@@ -232,23 +233,23 @@ firstLoopCarriedReadAxis(ArrayRef<scf::ForOp> loops,
   return firstAxis;
 }
 
-static std::optional<unsigned>
-firstSerialAxis(ArrayRef<scf::ForOp> loops, ArrayRef<Value> writtenRoots) {
+static std::optional<unsigned> firstSerialAxis(ArrayRef<scf::ForOp> loops,
+                                               ArrayRef<Value> writtenRoots) {
   std::optional<unsigned> firstAxis;
   for (unsigned d = 0; d < loops.size(); ++d) {
     scf::ForOp loop = loops[d];
     if (!loop.getInitArgs().empty())
       firstAxis = firstAxis ? std::min(*firstAxis, d) : d;
   }
-  if (std::optional<unsigned> readAxis = firstLoopCarriedReadAxis(loops, writtenRoots)) {
+  if (std::optional<unsigned> readAxis =
+          firstLoopCarriedReadAxis(loops, writtenRoots)) {
     if (!firstAxis || *readAxis < *firstAxis)
       firstAxis = *readAxis;
   }
   return firstAxis;
 }
 
-static bool nestBodyIsSupported(scf::ForOp outer,
-                                ArrayRef<scf::ForOp> loops) {
+static bool nestBodyIsSupported(scf::ForOp outer, ArrayRef<scf::ForOp> loops) {
   llvm::SmallDenseSet<Operation *> loopOps;
   for (scf::ForOp loop : loops)
     loopOps.insert(loop.getOperation());
@@ -319,8 +320,9 @@ static bool nestHasReentrantAncestor(affine::AffineForOp outer) {
          outer->getParentOfType<sde::SdeCuRegionOp>();
 }
 
-static bool collectPerfectAffineForChain(
-    affine::AffineForOp outer, SmallVectorImpl<affine::AffineForOp> &loops) {
+static bool
+collectPerfectAffineForChain(affine::AffineForOp outer,
+                             SmallVectorImpl<affine::AffineForOp> &loops) {
   affine::AffineForOp cur = outer;
   while (true) {
     loops.push_back(cur);
@@ -393,8 +395,8 @@ static unsigned countAffineParallelPrefix(ArrayRef<affine::AffineForOp> loops) {
   return prefix;
 }
 
-static std::optional<ParallelNest> matchAffineParallelNest(
-    affine::AffineForOp outer) {
+static std::optional<ParallelNest>
+matchAffineParallelNest(affine::AffineForOp outer) {
   if (nestHasReentrantAncestor(outer))
     return std::nullopt;
   if (isa<affine::AffineForOp>(outer->getParentOp()))
@@ -523,7 +525,8 @@ static std::optional<ParallelNest> matchAffineParallelNest(
     return std::nullopt;
 
   for (auto &kv : counterStep) {
-    std::optional<int64_t> init = findCounterInit(kv.first, outer.getOperation());
+    std::optional<int64_t> init =
+        findCounterInit(kv.first, outer.getOperation());
     if (!init)
       return std::nullopt;
     if (!counterUsesAreLoopLocal(kv.first, outer.getOperation()))
@@ -645,8 +648,8 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
       firstSerial ? *firstSerial : static_cast<unsigned>(nest.loops.size());
   if (nest.parallelPrefix == 0)
     return std::nullopt;
-  // Fail closed on partial prefix until move-raise of serial suffixes (especially
-  // result-bearing scf.for loops) is stable end-to-end.
+  // Fail closed on partial prefix until move-raise of serial suffixes
+  // (especially result-bearing scf.for loops) is stable end-to-end.
   if (nest.parallelPrefix < nest.loops.size())
     return std::nullopt;
 
@@ -684,7 +687,8 @@ static std::optional<ParallelNest> matchParallelNest(scf::ForOp outer) {
     return std::nullopt;
 
   for (auto &kv : counterStep) {
-    std::optional<int64_t> init = findCounterInit(kv.first, outer.getOperation());
+    std::optional<int64_t> init =
+        findCounterInit(kv.first, outer.getOperation());
     if (!init)
       return std::nullopt;
     if (!counterUsesAreLoopLocal(kv.first, outer.getOperation()))
@@ -938,8 +942,9 @@ static void convertAffineMemoryOpsInRegion(Region &region) {
   region.walk([&](Operation *op) {
     if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
       OpBuilder builder(store);
-      std::optional<SmallVector<Value, 8>> indices = affine::expandAffineMap(
-          builder, store.getLoc(), store.getAffineMap(), store.getMapOperands());
+      std::optional<SmallVector<Value, 8>> indices =
+          affine::expandAffineMap(builder, store.getLoc(), store.getAffineMap(),
+                                  store.getMapOperands());
       if (!indices)
         return WalkResult::advance();
       memref::StoreOp::create(builder, store.getLoc(), store.getValue(),
@@ -989,7 +994,8 @@ static sde::SdeSuIterateOp createSuIterateForNest(ParallelNest &nest,
     steps.push_back(createConstantIndex(builder, loc, 1));
   }
 
-  auto suIter = sde::buildSuIterate(builder, loc, lowerBounds, upperBounds, steps);
+  auto suIter =
+      sde::buildSuIterate(builder, loc, lowerBounds, upperBounds, steps);
 
   Region &dstRegion = suIter.getBody();
   if (dstRegion.empty())
@@ -1114,8 +1120,7 @@ static void raiseNest(ParallelNest &nest, OpBuilder &builder) {
                          : nest.affineLoops.front().getOperation();
 
   if (nest.enclosingSingleCu) {
-    sde::SdeSuIterateOp suIter =
-        createSuIterateForNest(nest, builder, outer);
+    sde::SdeSuIterateOp suIter = createSuIterateForNest(nest, builder, outer);
     substituteCounters(nest, suIter, builder);
     outer->erase();
     splitSingleCuAroundSchedulingOps(nest.enclosingSingleCu);

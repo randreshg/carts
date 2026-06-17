@@ -42,7 +42,8 @@ inline Block *getSuIterateComputeBlock(SdeSuIterateOp op) {
   return &body;
 }
 
-/// The single executable leaf `sde.cu_region` directly under an `sde.su_iterate`.
+/// The single executable leaf `sde.cu_region` directly under an
+/// `sde.su_iterate`.
 inline SdeCuRegionOp findSuComputeCuRegion(SdeSuIterateOp op) {
   if (!op || op.getBody().empty())
     return SdeCuRegionOp{};

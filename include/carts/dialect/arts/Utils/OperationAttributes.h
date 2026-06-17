@@ -468,6 +468,77 @@ inline void inheritDistributionAttrs(Operation *source, Operation *dest) {
       setDistributionVersionAttr(dest, version);
 }
 
+namespace detail {
+template <typename SourceOpT, typename DestOpT>
+inline void copyGeneratedDistributionAttrs(SourceOpT source, DestOpT dest) {
+  if (!source || !dest)
+    return;
+
+  if (auto attr = source.getDistributionKindAttr())
+    dest.setDistributionKindAttr(attr);
+  else
+    dest.removeDistributionKindAttr();
+
+  if (auto attr = source.getDistributionPatternAttr())
+    dest.setDistributionPatternAttr(attr);
+  else
+    dest.removeDistributionPatternAttr();
+
+  if (auto attr = source.getDistributionVersionAttr())
+    dest.setDistributionVersionAttr(attr);
+  else
+    dest.removeDistributionVersionAttr();
+}
+
+template <typename SourceOpT, typename DestOpT>
+inline void inheritGeneratedDistributionAttrs(SourceOpT source, DestOpT dest) {
+  if (!source || !dest)
+    return;
+
+  if (!dest.getDistributionKindAttr())
+    if (auto attr = source.getDistributionKindAttr())
+      dest.setDistributionKindAttr(attr);
+
+  if (!dest.getDistributionPatternAttr())
+    if (auto attr = source.getDistributionPatternAttr())
+      dest.setDistributionPatternAttr(attr);
+
+  if (!dest.getDistributionVersionAttr())
+    if (auto attr = source.getDistributionVersionAttr())
+      dest.setDistributionVersionAttr(attr);
+}
+} // namespace detail
+
+/// Preserve generated distribution fact attrs when cloning or replacing a DB
+/// alloc.
+/// This typed wrapper keeps callers on ODS-generated accessors instead of the
+/// broader Operation* propagation bridge.
+inline void copyDbAllocDistributionFactAttrs(DbAllocOp source, DbAllocOp dest) {
+  detail::copyGeneratedDistributionAttrs(source, dest);
+}
+
+inline void copyDbAcquireDistributionFactAttrs(DbAcquireOp source,
+                                               DbAcquireOp dest) {
+  detail::copyGeneratedDistributionAttrs(source, dest);
+}
+
+/// Inherit EDT distribution fact attrs without overwriting attrs already
+/// authored on the destination EDT.
+inline void inheritEdtDistributionFactAttrs(EdtOp source, EdtOp dest) {
+  detail::inheritGeneratedDistributionAttrs(source, dest);
+}
+
+/// Inherit distribution fact attrs from a DB source onto a derived acquire.
+inline void inheritDbAcquireDistributionFactAttrs(DbAllocOp source,
+                                                  DbAcquireOp dest) {
+  detail::inheritGeneratedDistributionAttrs(source, dest);
+}
+
+inline void inheritDbAcquireDistributionFactAttrs(DbAcquireOp source,
+                                                  DbAcquireOp dest) {
+  detail::inheritGeneratedDistributionAttrs(source, dest);
+}
+
 /// Copy semantic pattern attributes between operations.
 /// This is the canonical helper for structural rewrites that replace a loop,
 /// EDT, or epoch with an equivalent operation and want downstream passes to
@@ -509,6 +580,20 @@ inline void copySemanticFactAttrs(Operation *source, Operation *dest) {
   if (source->hasAttr(AttrNames::Semantic::NarrowableDep))
     dest->setAttr(AttrNames::Semantic::NarrowableDep,
                   UnitAttr::get(dest->getContext()));
+  else
+    dest->removeAttr(AttrNames::Semantic::NarrowableDep);
+}
+
+inline void copyDbAcquireSemanticFactAttrs(DbAcquireOp source,
+                                           DbAcquireOp dest) {
+  if (!source || !dest)
+    return;
+  copyDbAcquireDistributionFactAttrs(source, dest);
+  copyDepPatternAttrs(source.getOperation(), dest.getOperation());
+  copyStencilFactAttrs(source.getOperation(), dest.getOperation());
+  if (source->hasAttr(AttrNames::Semantic::NarrowableDep))
+    dest->setAttr(AttrNames::Semantic::NarrowableDep,
+                  UnitAttr::get(dest.getContext()));
   else
     dest->removeAttr(AttrNames::Semantic::NarrowableDep);
 }

@@ -54,9 +54,8 @@ static bool hasExternalWriteRoot(SdeSuIterateOp op) {
 }
 
 static bool isAllowedSuDistributeChild(Operation *op) {
-  return sde::isSuOp(op) ||
-         isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp, SdeSuAllToAllOp>(
-             op);
+  return sde::isSuOp(op) || isa<SdeSuBarrierOp, SdeSuHaloOp,
+                                SdeSuReduceScatterOp, SdeSuAllToAllOp>(op);
 }
 
 static LogicalResult verifyCuContainsNoScheduling(Operation *cu) {
@@ -86,6 +85,195 @@ static std::optional<SdeAccessMode> modeForLayoutRole(LayoutGraphRole role) {
     return std::nullopt;
   }
   return std::nullopt;
+}
+
+static bool isKnownLayoutKind(StringRef value) {
+  return value == AttrNames::LayoutGraph::BlockParallel ||
+         value == AttrNames::LayoutGraph::BlockContraction ||
+         value == AttrNames::LayoutGraph::Replicated;
+}
+
+static LogicalResult
+parseRequiredI64ArrayLayoutField(SdeSuIterateOp op, DictionaryAttr dict,
+                                 unsigned entryIndex, StringRef fieldName,
+                                 SmallVectorImpl<int64_t> &values) {
+  auto attr = dyn_cast_or_null<ArrayAttr>(dict.get(fieldName));
+  if (!attr) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex << " field '"
+                     << fieldName << "' must be an i64 array";
+    return failure();
+  }
+  std::optional<SmallVector<int64_t, 4>> parsed = readI64ArrayAttr(attr);
+  if (!parsed) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex << " field '"
+                     << fieldName << "' must contain only integer attributes";
+    return failure();
+  }
+  values.assign(parsed->begin(), parsed->end());
+  return success();
+}
+
+static LogicalResult
+parseOptionalI64ArrayLayoutField(SdeSuIterateOp op, DictionaryAttr dict,
+                                 unsigned entryIndex, StringRef fieldName,
+                                 SmallVectorImpl<int64_t> &values) {
+  Attribute raw = dict.get(fieldName);
+  if (!raw)
+    return success();
+  auto attr = dyn_cast<ArrayAttr>(raw);
+  if (!attr) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex << " field '"
+                     << fieldName << "' must be an i64 array";
+    return failure();
+  }
+  std::optional<SmallVector<int64_t, 4>> parsed = readI64ArrayAttr(attr);
+  if (!parsed) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex << " field '"
+                     << fieldName << "' must contain only integer attributes";
+    return failure();
+  }
+  values.assign(parsed->begin(), parsed->end());
+  return success();
+}
+
+static LogicalResult verifyPositiveLayoutShape(SdeSuIterateOp op,
+                                               unsigned entryIndex,
+                                               StringRef fieldName,
+                                               ArrayRef<int64_t> values) {
+  if (values.empty()) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex << " field '"
+                     << fieldName << "' must not be empty";
+    return failure();
+  }
+  for (int64_t value : values) {
+    if (value <= 0) {
+      op.emitOpError() << "arrayLayout entry #" << entryIndex << " field '"
+                       << fieldName << "' must contain positive extents";
+      return failure();
+    }
+  }
+  return success();
+}
+
+static LogicalResult verifyArrayLayoutEntry(SdeSuIterateOp op, Attribute entry,
+                                            unsigned entryIndex,
+                                            LayoutGraphFact &fact) {
+  auto dict = dyn_cast<DictionaryAttr>(entry);
+  if (!dict) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex
+                     << " must be a dictionary attribute";
+    return failure();
+  }
+
+  auto idAttr =
+      dyn_cast_or_null<IntegerAttr>(dict.get(AttrNames::LayoutGraph::ArrayId));
+  if (!idAttr || idAttr.getInt() < 0) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex
+                     << " must include non-negative integer arrayId";
+    return failure();
+  }
+
+  auto roleAttr =
+      dyn_cast_or_null<StringAttr>(dict.get(AttrNames::LayoutGraph::Role));
+  if (!roleAttr ||
+      !modeForLayoutRole(parseLayoutGraphRole(roleAttr.getValue()))) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex
+                     << " must include role \"read\" or \"write\"";
+    return failure();
+  }
+
+  auto kindAttr =
+      dyn_cast_or_null<StringAttr>(dict.get(AttrNames::LayoutGraph::Kind));
+  if (!kindAttr || !isKnownLayoutKind(kindAttr.getValue())) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex
+                     << " must include a known layout kind";
+    return failure();
+  }
+
+  SmallVector<int64_t, 4> ownerDims;
+  SmallVector<int64_t, 4> blockShape;
+  SmallVector<int64_t, 4> budgetBlockShape;
+  if (failed(parseRequiredI64ArrayLayoutField(op, dict, entryIndex,
+                                              AttrNames::LayoutGraph::OwnerDims,
+                                              ownerDims)) ||
+      failed(parseRequiredI64ArrayLayoutField(
+          op, dict, entryIndex, AttrNames::LayoutGraph::BlockShape,
+          blockShape)) ||
+      failed(parseOptionalI64ArrayLayoutField(
+          op, dict, entryIndex, AttrNames::LayoutGraph::BudgetBlockShape,
+          budgetBlockShape)))
+    return failure();
+
+  SmallVector<int64_t, 4> seenOwnerDims;
+  for (int64_t dim : ownerDims) {
+    if (dim < 0) {
+      op.emitOpError() << "arrayLayout entry #" << entryIndex
+                       << " owner dimensions must be non-negative";
+      return failure();
+    }
+    if (llvm::is_contained(seenOwnerDims, dim)) {
+      op.emitOpError() << "arrayLayout entry #" << entryIndex
+                       << " owner dimensions must be unique";
+      return failure();
+    }
+    seenOwnerDims.push_back(dim);
+  }
+
+  ArrayLayoutKind kind = parseLayoutKind(kindAttr.getValue());
+  if (kind == ArrayLayoutKind::replicated && !ownerDims.empty()) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex
+                     << " replicated layout must not carry owner dimensions";
+    return failure();
+  }
+  if (kind == ArrayLayoutKind::blockParallel && ownerDims.empty()) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex
+                     << " block_parallel layout must carry owner dimensions";
+    return failure();
+  }
+
+  if (failed(verifyPositiveLayoutShape(
+          op, entryIndex, AttrNames::LayoutGraph::BlockShape, blockShape)))
+    return failure();
+  if (!budgetBlockShape.empty() &&
+      failed(verifyPositiveLayoutShape(op, entryIndex,
+                                       AttrNames::LayoutGraph::BudgetBlockShape,
+                                       budgetBlockShape)))
+    return failure();
+
+  if (Attribute rawMuBlockCount =
+          dict.get(AttrNames::LayoutGraph::MuBlockCount)) {
+    auto muBlockCount = dyn_cast<IntegerAttr>(rawMuBlockCount);
+    if (!muBlockCount || muBlockCount.getInt() <= 0) {
+      op.emitOpError() << "arrayLayout entry #" << entryIndex
+                       << " muBlockCount must be a positive integer";
+      return failure();
+    }
+  }
+
+  std::optional<LayoutGraphFact> parsed = parseArrayLayoutFact(dict);
+  if (!parsed) {
+    op.emitOpError() << "arrayLayout entry #" << entryIndex
+                     << " is not a parseable SDE layout fact";
+    return failure();
+  }
+  fact = std::move(*parsed);
+  return success();
+}
+
+static LogicalResult
+verifyArrayLayoutAttr(SdeSuIterateOp op, ArrayAttr layout,
+                      SmallVectorImpl<LayoutGraphFact> &facts) {
+  facts.clear();
+  if (!layout)
+    return success();
+  facts.reserve(layout.size());
+  for (auto [index, entry] : llvm::enumerate(layout)) {
+    LayoutGraphFact fact;
+    if (failed(verifyArrayLayoutEntry(op, entry, index, fact)))
+      return failure();
+    facts.push_back(std::move(fact));
+  }
+  return success();
 }
 
 } // namespace
@@ -377,10 +565,7 @@ void SdeSuIterateOp::print(OpAsmPrinter &p) {
 
   // attr-dict — elide attributes with dedicated syntax
   SmallVector<StringRef> elidedAttrs = {
-      "schedule",
-      "nowait",
-      "reductionKinds",
-      "structuredClassification",
+      "schedule", "nowait", "reductionKinds", "structuredClassification",
       getOperandSegmentSizesAttrName().getValue()};
   p.printOptionalAttrDict((*this)->getAttrs(), elidedAttrs);
 }
@@ -435,13 +620,14 @@ ParseResult SdeSuIterateOp::parse(OpAsmParser &parser, OperationState &result) {
       return failure();
   }
 
-  // reduction_strategy(<strategy>) — retired Step 9; discard on parse for round-trip.
+  // reduction_strategy(<strategy>) — retired Step 9; discard on parse for
+  // round-trip.
   if (succeeded(parser.parseOptionalKeyword("reduction_strategy"))) {
     SdeReductionStrategyAttr stratAttr;
     NamedAttrList ignoredAttrs;
     if (parser.parseLParen() ||
-        parser.parseCustomAttributeWithFallback(stratAttr, Type{}, "reductionStrategy",
-                                                ignoredAttrs) ||
+        parser.parseCustomAttributeWithFallback(
+            stratAttr, Type{}, "reductionStrategy", ignoredAttrs) ||
         parser.parseRParen())
       return failure();
   }
@@ -546,9 +732,9 @@ ParseResult SdeSuIterateOp::parse(OpAsmParser &parser, OperationState &result) {
 
   // Retired su_iterate attrs (Steps 8–9): drop on ingest so old IR round-trips.
   static constexpr StringRef kRetiredSuIterateAttrs[] = {
-      "physicalOwnerDims",  "physicalBlockShape", "physicalHaloShape",
-      "iterationTopology",  "distributionKind",   "reductionStrategy",
-      "layoutsDisagree",    "logicalWorkerSlice",
+      "physicalOwnerDims", "physicalBlockShape", "physicalHaloShape",
+      "iterationTopology", "distributionKind",   "reductionStrategy",
+      "layoutsDisagree",   "logicalWorkerSlice",
   };
   for (StringRef name : kRetiredSuIterateAttrs)
     result.attributes.erase(name);
@@ -633,16 +819,16 @@ LogicalResult SdeSuIterateOp::verify() {
     failed = true;
   }
 
-  ArrayAttr layout = getArrayLayoutAttr();
-  SmallVector<LayoutGraphFact, 4> facts;
-  if (layout)
-    facts = parseArrayLayoutFacts(layout);
-
   bool hasCommittedPhysicalLayout = hasCommittedCuMuPartitionFacts(*this);
 
   SmallVector<SdeArrayLayoutRootOp, 4> roots;
   for (SdeArrayLayoutRootOp root : entry.getOps<SdeArrayLayoutRootOp>())
     roots.push_back(root);
+
+  ArrayAttr layout = getArrayLayoutAttr();
+  SmallVector<LayoutGraphFact, 4> facts;
+  if (::mlir::failed(verifyArrayLayoutAttr(*this, layout, facts)))
+    failed = true;
 
   auto layoutRootSupportedWithoutDict = [&]() {
     if (hasCommittedPhysicalLayout)
@@ -874,6 +1060,18 @@ static Operation *movementVerificationScope(Operation *op) {
   return op;
 }
 
+static LogicalResult
+verifyMovementArrayIdIfCommittedLayout(Operation *movement,
+                                       IntegerAttr arrayIdAttr) {
+  if (arrayIdAttr)
+    return success();
+  if (!moduleUsesCommittedLayoutFacts(movementVerificationScope(movement)))
+    return success();
+  return movement->emitOpError()
+         << "movement op in committed-layout scope must carry array_id for "
+            "SDE array provenance";
+}
+
 static bool hasNegative(ArrayRef<int64_t> values) {
   return llvm::any_of(values, [](int64_t value) { return value < 0; });
 }
@@ -1019,8 +1217,8 @@ static bool consumerHasOwnerReductionAccess(SdeSuIterateOp consumer,
 static SdeSuIterateOp findAnchoredConsumer(Operation *movement) {
   for (Operation *next = movement->getNextNode(); next;
        next = next->getNextNode()) {
-    if (isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp,
-            SdeSuAllToAllOp>(next))
+    if (isa<SdeSuBarrierOp, SdeSuHaloOp, SdeSuReduceScatterOp, SdeSuAllToAllOp>(
+            next))
       continue;
     return dyn_cast<SdeSuIterateOp>(next);
   }
@@ -1055,8 +1253,8 @@ static bool partialReductionFactsMatchMovement(SdeSuIterateOp consumer,
 
 static LogicalResult verifyMovementAnchoredInConsumer(
     Operation *movement, int64_t arrayId, Value movementRoot,
-    ArrayRef<int64_t> movementOwnerDims,
-    bool requireHaloBacking, bool requireReductionBacking) {
+    ArrayRef<int64_t> movementOwnerDims, bool requireHaloBacking,
+    bool requireReductionBacking) {
   SdeSuIterateOp consumer = findAnchoredConsumer(movement);
   if (!consumer)
     return movement->emitOpError()
@@ -1122,8 +1320,9 @@ static LogicalResult verifyMovementGroundedAndAnchored(
   auto muType = dyn_cast<MemRefType>(movementRoot.getType());
   if (!muType || !muType.hasStaticShape())
     return success();
-  if (failed(verifyMovementEndpointGeometry(movement, movementRoot, ownerDimsAttr,
-                                            blockShapeAttr, haloShapeAttr)))
+  if (failed(verifyMovementEndpointGeometry(movement, movementRoot,
+                                            ownerDimsAttr, blockShapeAttr,
+                                            haloShapeAttr)))
     return failure();
   std::optional<SmallVector<int64_t, 4>> ownerDims =
       readI64ArrayAttr(ownerDimsAttr);
@@ -1132,9 +1331,9 @@ static LogicalResult verifyMovementGroundedAndAnchored(
   if (!ownerDims || !blockShape)
     return failure();
   std::string reason;
-  if (!movementEndpointGroundedInCommittedLayout(
-          scope, movementRoot, arrayId, *ownerDims, *blockShape,
-          allowExpandedFull, reason))
+  if (!movementEndpointGroundedInCommittedLayout(scope, movementRoot, arrayId,
+                                                 *ownerDims, *blockShape,
+                                                 allowExpandedFull, reason))
     return movement->emitOpError()
            << "is not grounded in committed SDE layout: " << reason;
   return verifyMovementAnchoredInConsumer(movement, arrayId, movementRoot,
@@ -1142,9 +1341,9 @@ static LogicalResult verifyMovementGroundedAndAnchored(
                                           requireReductionBacking);
 }
 
-// Shared endpoint check for SU-scope movement ops: owner dims in range + unique;
-// blockShape rank-length (full extent on non-owner dims) or owner-dim-length.
-// Movement endpoints must be partitioned (non-empty owner).
+// Shared endpoint check for SU-scope movement ops: owner dims in range +
+// unique; blockShape rank-length (full extent on non-owner dims) or
+// owner-dim-length. Movement endpoints must be partitioned (non-empty owner).
 static LogicalResult verifySuMovementEndpoint(Operation *op, StringRef name,
                                               MemRefType muType,
                                               ArrayAttr ownerAttr,
@@ -1162,7 +1361,8 @@ static LogicalResult verifySuMovementEndpoint(Operation *op, StringRef name,
   SmallVector<bool, 4> isOwner(rank, false);
   for (int64_t d : *owner) {
     if (d < 0 || d >= rank)
-      return op->emitOpError() << name << ": owner dim " << d << " out of range";
+      return op->emitOpError()
+             << name << ": owner dim " << d << " out of range";
     if (isOwner[d])
       return op->emitOpError() << name << ": owner dim " << d << " duplicated";
     isOwner[d] = true;
@@ -1171,25 +1371,26 @@ static LogicalResult verifySuMovementEndpoint(Operation *op, StringRef name,
       static_cast<int64_t>(block->size()) !=
           static_cast<int64_t>(owner->size()))
     return op->emitOpError()
-           << name << ": blockShape length must equal MU rank or owner-dim count";
+           << name
+           << ": blockShape length must equal MU rank or owner-dim count";
   if (static_cast<int64_t>(block->size()) == rank) {
     for (int64_t d = 0; d < rank; ++d) {
       int64_t b = (*block)[d];
       if (b <= 0 || b > shape[d])
-        return op->emitOpError()
-               << name << ": block extent " << b << " out of range on dim " << d;
+        return op->emitOpError() << name << ": block extent " << b
+                                 << " out of range on dim " << d;
       if (!isOwner[d] && b != shape[d])
         return op->emitOpError()
                << name
-               << ": non-owner block extent must equal full extent on dim " << d;
+               << ": non-owner block extent must equal full extent on dim "
+               << d;
     }
   } else {
     for (auto [i, d] : llvm::enumerate(*owner)) {
       int64_t b = (*block)[i];
       if (b <= 0 || b > shape[d])
-        return op->emitOpError()
-               << name << ": block extent " << b << " out of range on owner dim "
-               << d;
+        return op->emitOpError() << name << ": block extent " << b
+                                 << " out of range on owner dim " << d;
     }
   }
   return success();
@@ -1204,14 +1405,19 @@ LogicalResult SdeSuHaloOp::verify() {
     return emitOpError("sde.su_halo: mu operand must be a memref");
   if (!muType.hasStaticShape())
     return emitOpError("sde.su_halo: mu must be a static-shape memref");
+  if (failed(verifyMovementArrayIdIfCommittedLayout(getOperation(),
+                                                    getArrayIdAttr())))
+    return failure();
   if (IntegerAttr arrayId = getArrayIdAttr())
     if (arrayId.getInt() < 0)
-      return emitOpError("sde.su_halo: arrayId must be non-negative when present");
+      return emitOpError(
+          "sde.su_halo: arrayId must be non-negative when present");
   if (failed(verifySuMovementEndpoint(*this, "sde.su_halo", muType,
                                       getOwnerDims(), getBlockShape())))
     return failure();
   int64_t rank = muType.getRank();
-  std::optional<SmallVector<int64_t, 4>> halo = readI64ArrayAttr(getHaloShape());
+  std::optional<SmallVector<int64_t, 4>> halo =
+      readI64ArrayAttr(getHaloShape());
   if (!halo || static_cast<int64_t>(halo->size()) != rank)
     return emitOpError("sde.su_halo: haloShape length must equal MU rank");
   auto owner = readI64ArrayAttr(getOwnerDims());
@@ -1249,7 +1455,11 @@ LogicalResult SdeSuReduceScatterOp::verify() {
   if (!muType)
     return emitOpError("sde.su_reduce_scatter: mu operand must be a memref");
   if (!muType.hasStaticShape())
-    return emitOpError("sde.su_reduce_scatter: mu must be a static-shape memref");
+    return emitOpError(
+        "sde.su_reduce_scatter: mu must be a static-shape memref");
+  if (failed(verifyMovementArrayIdIfCommittedLayout(getOperation(),
+                                                    getArrayIdAttr())))
+    return failure();
   if (IntegerAttr arrayId = getArrayIdAttr())
     if (arrayId.getInt() < 0)
       return emitOpError(
@@ -1260,9 +1470,9 @@ LogicalResult SdeSuReduceScatterOp::verify() {
   auto owner = readI64ArrayAttr(getOwnerDims());
   int64_t reduceDim = getReduceDim();
   if (reduceDim < 0 || reduceDim >= static_cast<int64_t>(owner->size()))
-    return emitOpError()
-           << "sde.su_reduce_scatter: reduceDim " << reduceDim
-           << " is outside the owner-dim range [0, " << owner->size() << ")";
+    return emitOpError() << "sde.su_reduce_scatter: reduceDim " << reduceDim
+                         << " is outside the owner-dim range [0, "
+                         << owner->size() << ")";
   if (IntegerAttr arrayId = getArrayIdAttr()) {
     if (failed(verifyMovementGroundedAndAnchored(
             getOperation(), arrayId.getInt(), getMu(), getOwnerDims(),
@@ -1284,6 +1494,9 @@ LogicalResult SdeSuAllToAllOp::verify() {
     return emitOpError("sde.su_all_to_all: mu operand must be a memref");
   if (!muType.hasStaticShape())
     return emitOpError("sde.su_all_to_all: mu must be a static-shape memref");
+  if (failed(verifyMovementArrayIdIfCommittedLayout(getOperation(),
+                                                    getArrayIdAttr())))
+    return failure();
   if (IntegerAttr arrayId = getArrayIdAttr())
     if (arrayId.getInt() < 0)
       return emitOpError(

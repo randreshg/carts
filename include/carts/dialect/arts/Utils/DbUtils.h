@@ -301,8 +301,7 @@ public:
 
 /// Build a whole-DB acquire window: zero offsets and full alloc sizes.
 void buildWholeDbAcquireWindow(OpBuilder &builder, Location loc,
-                               DbAllocOp alloc,
-                               SmallVectorImpl<Value> &offsets,
+                               DbAllocOp alloc, SmallVectorImpl<Value> &offsets,
                                SmallVectorImpl<Value> &sizes);
 
 /// Create a block-mode acquire for one DB block at the given fold-constant

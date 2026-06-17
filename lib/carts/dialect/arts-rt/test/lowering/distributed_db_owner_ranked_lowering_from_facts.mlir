@@ -1,5 +1,7 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(db-lowering,db-distributed-runtime-init)' \
-// RUN:   | %FileCheck %s
+// RUN:   | %FileCheck %s --check-prefix=RT
+// RUN: %carts-compile %s --arts-config %inputs_dir/arts_multinode.cfg --start-from=pre-lowering --pipeline=arts-rt-to-llvm \
+// RUN:   | %FileCheck %s --check-prefix=LLVM
 
 // Distributed DB init is realized before LLVM lowering as explicit ARTS-RT
 // runtime ops. The LLVM conversion only lowers those ops to ABI calls.
@@ -18,12 +20,21 @@ module attributes {
   }
 }
 
-// CHECK-LABEL: func.func private @__carts_dist_alloc_{{[0-9]+}}_worker_init(
-// CHECK: scf.if
-// CHECK: arts_rt.db_create_with_guid_local
-// CHECK-NOT: func.call @arts_db_create_with_guid
-// CHECK-LABEL: func.func private @__carts_dist_alloc_{{[0-9]+}}_reserve_init
-// CHECK: arts_rt.db_guid_reserve
-// CHECK: return
-// CHECK-NOT: func.call @arts_guid_reserve
-// CHECK-NOT: func.call @arts_db_create_with_guid
+// RT-LABEL: func.func private @__carts_dist_alloc_{{[0-9]+}}_worker_init(
+// RT: scf.if
+// RT: arts_rt.db_create_with_guid_local
+// RT-NOT: func.call @arts_db_create_with_guid(
+// RT-LABEL: func.func private @__carts_dist_alloc_{{[0-9]+}}_reserve_init
+// RT: arts_rt.db_guid_reserve
+// RT: return
+// RT-NOT: func.call @arts_guid_reserve(
+// RT-NOT: func.call @arts_db_create_with_guid(
+
+// LLVM-NOT: func.func private @arts_db_create_with_guid(
+// LLVM-LABEL: func.func private @__carts_dist_alloc_{{[0-9]+}}_worker_init(
+// LLVM: func.call @arts_db_create_with_guid_local(
+// LLVM-NOT: func.call @arts_db_create_with_guid(
+// LLVM-NOT: func.func private @arts_db_create_with_guid(
+// LLVM-LABEL: func.func private @__carts_dist_alloc_{{[0-9]+}}_reserve_init
+// LLVM: func.call @arts_guid_reserve(
+// LLVM-NOT: func.call @arts_db_create_with_guid(

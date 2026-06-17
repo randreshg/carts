@@ -8,10 +8,12 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+
 #include "carts/dialect/sde/IR/SdeOpsDialect.h.inc"
+
 #define GET_TYPEDEF_CLASSES
-#include "carts/dialect/sde/IR/SdeOpsTypes.h.inc"
 #include "carts/dialect/sde/IR/SdeOpsEnums.h.inc"
+#include "carts/dialect/sde/IR/SdeOpsTypes.h.inc"
 #define GET_ATTRDEF_CLASSES
 #include "carts/dialect/sde/IR/SdeOpsAttributes.h.inc"
 #define GET_OP_CLASSES

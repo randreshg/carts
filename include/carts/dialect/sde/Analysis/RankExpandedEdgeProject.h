@@ -41,6 +41,11 @@ std::optional<SmallVector<int64_t, 4>>
 expandHaloShapeToRootRank(ArrayRef<int64_t> haloShape,
                           ArrayRef<int64_t> ownerDims, unsigned rootRank);
 
+std::optional<SmallVector<int64_t, 4>>
+recoverRankExpandedOwnerHaloFromLoads(Value root, SdeSuIterateOp reader,
+                                      ArrayRef<int64_t> ownerDims,
+                                      MemRefType rootType);
+
 bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
                                  SdeSuIterateOp projectionSu,
                                  SdeSuIterateOp accessReader,

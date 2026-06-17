@@ -22,7 +22,8 @@ namespace mlir::carts::arts::boundary {
 LogicalResult lowerMuData(sde::SdeMuDataOp op);
 LogicalResult lowerMuAlloc(sde::SdeMuAllocOp op, ArrayAttr haloShape);
 LogicalResult realizeTaskDepMemrefStorage(
-    ModuleOp module, const llvm::DenseMap<Value, HaloRedistFacts> &haloFactsByMu);
+    ModuleOp module,
+    const llvm::DenseMap<Value, HaloRedistFacts> &haloFactsByMu);
 
 LogicalResult runSdeStorageToArtsDb(ModuleOp module) {
   llvm::DenseMap<Value, HaloRedistFacts> haloFactsByMu;

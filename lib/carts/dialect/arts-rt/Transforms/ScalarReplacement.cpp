@@ -378,8 +378,8 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
   } else if (auto affLoad = dyn_cast<affine::AffineLoadOp>(pattern.loadOp)) {
     /// For affine.load, recreate before the loop (identity map from indices;
     /// empty for a 0-d scalar accumulator).
-    initValue = affine::AffineLoadOp::create(
-        rewriter, loc, affLoad.getMemRef(), affLoad.getIndices());
+    initValue = affine::AffineLoadOp::create(rewriter, loc, affLoad.getMemRef(),
+                                             affLoad.getIndices());
   }
   Operation *initOp = initValue ? initValue.getDefiningOp() : nullptr;
 

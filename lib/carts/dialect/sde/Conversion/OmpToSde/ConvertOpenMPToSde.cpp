@@ -91,18 +91,6 @@ static SmallVector<Value> ensureIndexRange(OpBuilder &b, Location loc,
   return result;
 }
 
-static bool hasWorkAfterInParentBlock(Operation *op) {
-  if (!op || !op->getBlock())
-    return false;
-
-  for (Operation *next = op->getNextNode(); next; next = next->getNextNode()) {
-    if (next->hasTrait<OpTrait::IsTerminator>())
-      continue;
-    return true;
-  }
-  return false;
-}
-
 static sde::SdeCuRegionOp cloneBodyIntoCuRegion(PatternRewriter &rewriter,
                                                 Location loc,
                                                 sde::SdeCuKind kind, Block &src,
@@ -225,9 +213,7 @@ static sde::SdeReductionKind inferReductionKind(omp::DeclareReductionOp decl) {
   return sde::SdeReductionKind::custom;
 }
 
-/// Helper to create a UnitAttr when nowait is true, nullptr otherwise.
-/// Async-by-default (Part 6): stamp `nowait` on converted regions unless the
-/// source explicitly requests a completion fence (inverse of legacy OMP).
+/// Helper to create a UnitAttr when source semantics permit async execution.
 static UnitAttr nowaitAttr(MLIRContext *ctx, bool async = true) {
   return async ? UnitAttr::get(ctx) : nullptr;
 }
@@ -466,7 +452,7 @@ struct SingleToSdePattern : public OpRewritePattern<omp::SingleOp> {
 
     auto cuRegion = sde::buildCuRegion(
         rewriter, loc, sde::SdeCuKindAttr::get(ctx, sde::SdeCuKind::single),
-        nowaitAttr(ctx, !op.getNowait()));
+        nowaitAttr(ctx, op.getNowait()));
     cuRegion.setSerialReasonAttr(sde::SdeSerialReasonAttr::get(
         ctx, sde::SdeSerialReason::source_single));
     Block &old = op.getRegion().front();
@@ -493,7 +479,6 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     auto ubs = ensureIndexRange(rewriter, loc, loopNest.getLoopUpperBounds());
     auto steps = ensureIndexRange(rewriter, loc, loopNest.getLoopSteps());
 
-    // Async-by-default: stamp nowait unless the source explicitly requests sync.
     bool nw = op.getNowait();
 
     // Reduction metadata
@@ -516,12 +501,15 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     }
 
     sde::SuIterateAttrs suAttrs;
-    suAttrs.nowait = nowaitAttr(ctx, !nw);
-    suAttrs.reductionKinds =
-        reductionKinds.empty() ? nullptr : rewriter.getArrayAttr(reductionKinds);
-    auto suIter = sde::buildSuIterate(
-        rewriter, loc, ValueRange{lbs}, ValueRange{ubs}, ValueRange{steps},
-        suAttrs, ValueRange{redAccs});
+    // SDE represents the worksharing body as an async SU. A source worksharing
+    // loop without `nowait` gets an explicit SDE barrier after the SU.
+    suAttrs.nowait = nowaitAttr(ctx);
+    suAttrs.reductionKinds = reductionKinds.empty()
+                                 ? nullptr
+                                 : rewriter.getArrayAttr(reductionKinds);
+    auto suIter =
+        sde::buildSuIterate(rewriter, loc, ValueRange{lbs}, ValueRange{ubs},
+                            ValueRange{steps}, suAttrs, ValueRange{redAccs});
 
     // Create body with one block argument per dimension.
     Region &dstRegion = suIter.getBody();
@@ -555,6 +543,12 @@ struct WsloopToSdePattern : public OpRewritePattern<omp::WsloopOp> {
     // Yield at su_iterate level (outside cu_region).
     rewriter.setInsertionPointAfter(innerCuRegion);
     sde::SdeYieldOp::create(rewriter, loc, ValueRange{});
+
+    if (!nw) {
+      rewriter.setInsertionPointAfter(suIter);
+      sde::SdeSuBarrierOp::create(rewriter, loc, ValueRange{},
+                                  /*barrierReason=*/nullptr);
+    }
 
     ++numWsloopsConverted;
     rewriter.eraseOp(op);
@@ -689,10 +683,9 @@ struct SCFParallelToSdePattern : public OpRewritePattern<scf::ParallelOp> {
     Value ub = ensureIndex(rewriter, loc, op.getUpperBound().front());
     Value st = ensureIndex(rewriter, loc, op.getStep().front());
 
-    auto suIter = sde::buildSuIterate(rewriter, loc, ValueRange{lb},
-                                      ValueRange{ub}, ValueRange{st},
-                                      sde::SuIterateAttrs{.nowait = nowaitAttr(
-                                          rewriter.getContext())});
+    auto suIter = sde::buildSuIterate(
+        rewriter, loc, ValueRange{lb}, ValueRange{ub}, ValueRange{st},
+        sde::SuIterateAttrs{.nowait = nowaitAttr(rewriter.getContext())});
 
     Region &dstRegion = suIter.getBody();
     if (dstRegion.empty())

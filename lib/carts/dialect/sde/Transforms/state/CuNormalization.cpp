@@ -107,10 +107,10 @@ static void wrapSpanInCuRegion(Operation *first, Operation *last,
   for (Value value : escaping)
     resultTypes.push_back(value.getType());
 
-  auto cuRegion = buildCuRegion(
-      builder, first->getLoc(),
-      SdeCuKindAttr::get(builder.getContext(), SdeCuKind::single),
-      /*nowait=*/nullptr, /*iterArgs=*/ValueRange{}, resultTypes);
+  auto cuRegion =
+      buildCuRegion(builder, first->getLoc(),
+                    SdeCuKindAttr::get(builder.getContext(), SdeCuKind::single),
+                    /*nowait=*/nullptr, /*iterArgs=*/ValueRange{}, resultTypes);
   cuRegion.setSerialReasonAttr(SdeSerialReasonAttr::get(
       builder.getContext(), SdeSerialReason::residual_source));
   Block &body = ensureBlock(cuRegion.getBody());

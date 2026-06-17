@@ -21,7 +21,8 @@ LogicalResult lowerSdeControlBarrier(sde::SdeSuBarrierOp op);
 
 LogicalResult runFinalizeSdeToArts(ModuleOp module) {
   SmallVector<sde::SdeResourceQueryOp> resourceQueries;
-  module.walk([&](sde::SdeResourceQueryOp op) { resourceQueries.push_back(op); });
+  module.walk(
+      [&](sde::SdeResourceQueryOp op) { resourceQueries.push_back(op); });
   for (sde::SdeResourceQueryOp op : resourceQueries)
     if (failed(lowerSdeResourceQuery(op)))
       return failure();

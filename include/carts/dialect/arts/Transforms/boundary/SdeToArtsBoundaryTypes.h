@@ -26,13 +26,17 @@ struct DepOwnerAccessSlot {
   int64_t coordinateBlockSize = 0;
   std::optional<int64_t> fixedBlock;
   bool fullWindow = false;
+  int64_t minElementOffset = 0;
+  int64_t maxElementOffset = 0;
 };
 
 inline bool operator==(const DepOwnerAccessSlot &lhs,
                        const DepOwnerAccessSlot &rhs) {
   return lhs.loopDim == rhs.loopDim &&
          lhs.coordinateBlockSize == rhs.coordinateBlockSize &&
-         lhs.fixedBlock == rhs.fixedBlock && lhs.fullWindow == rhs.fullWindow;
+         lhs.fixedBlock == rhs.fixedBlock && lhs.fullWindow == rhs.fullWindow &&
+         lhs.minElementOffset == rhs.minElementOffset &&
+         lhs.maxElementOffset == rhs.maxElementOffset;
 }
 
 struct DirectDepSpec {
@@ -65,6 +69,7 @@ struct CompactHaloNdSideSpec {
 
 struct CompactHaloNdSpec {
   unsigned ownerDimCount = 0;
+  SmallVector<unsigned, 4> ownerPayloadDims;
   SmallVector<Value, 4> elementExtents;
   SmallVector<CompactHaloNdSideSpec, 8> sides;
 };
@@ -75,6 +80,7 @@ struct Halo2DTaskWork {
   unsigned bottomTaskDepIndex = 0;
   unsigned leftTaskDepIndex = 0;
   unsigned rightTaskDepIndex = 0;
+  SmallVector<int64_t, 4> centerGroupBlockCounts;
   Value rowExtent;
   Value colExtent;
 };
@@ -82,6 +88,9 @@ struct Halo2DTaskWork {
 struct HaloNdTaskWork {
   unsigned ownerDimCount = 0;
   unsigned centerTaskDepIndex = 0;
+  SmallVector<unsigned, 4> ownerLoopDims;
+  SmallVector<unsigned, 4> ownerPayloadDims;
+  SmallVector<int64_t, 4> centerGroupBlockCounts;
   SmallVector<Value, 4> elementExtents;
   SmallVector<SmallVector<int64_t, 4>, 8> sideSourceOffsets;
   SmallVector<unsigned, 8> sideTaskDepIndices;
@@ -98,6 +107,9 @@ struct HaloNdLoadRewrite {
 
 struct WriterGroupingSpec {
   SmallVector<int64_t, 4> dbSizes;
+  SmallVector<int64_t, 4> groupSlotByDbDim;
+  SmallVector<int64_t, 4> globalBlockSizeByDbDim;
+  SmallVector<int64_t, 4> coordinateBlockSizeByDbDim;
   DbOwnerRouteFacts ownerFacts;
 };
 

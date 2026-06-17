@@ -18,6 +18,7 @@
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ValueBoundsOpInterface.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
 #include "polygeist/Ops.h"
@@ -63,6 +64,22 @@ static std::optional<bool> proveValueNonZero(Value value) {
     return *upperBound <= -1;
   }
   return std::nullopt;
+}
+
+ValueAnalysis::ValueOrInt::ValueOrInt(Value value) : value(value) {
+  constant = ValueAnalysis::tryFoldConstantIndex(value);
+  if (constant)
+    this->value = nullptr;
+}
+
+ValueAnalysis::ValueOrInt::ValueOrInt(int64_t constant) : constant(constant) {}
+
+ValueAnalysis::ValueOrInt ValueAnalysis::ValueOrInt::get(Value value) {
+  return ValueOrInt(value);
+}
+
+bool ValueAnalysis::ValueOrInt::equals(int64_t expected) const {
+  return constant && *constant == expected;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -699,9 +716,9 @@ bool ValueAnalysis::sameValue(Value a, Value b) {
     return true;
   if (auto equal = proveValuesEqualWithBounds(a, b); equal && *equal)
     return true;
-  auto aConst = tryFoldConstantIndex(a);
-  auto bConst = tryFoldConstantIndex(b);
-  return aConst && bConst && *aConst == *bConst;
+  ValueOrInt lhs = ValueOrInt::get(a);
+  ValueOrInt rhs = ValueOrInt::get(b);
+  return lhs.getConstant() && lhs.getConstant() == rhs.getConstant();
 }
 
 bool ValueAnalysis::areValueRangesIdentical(ValueRange lhs, ValueRange rhs) {
@@ -1101,25 +1118,14 @@ Value ValueAnalysis::stripMemrefViewOps(Value value) {
       continue;
     }
 
-    if (auto castOp = value.getDefiningOp<memref::CastOp>()) {
-      value = castOp.getSource();
-      continue;
-    }
-    if (auto subviewOp = value.getDefiningOp<memref::SubViewOp>()) {
-      value = subviewOp.getSource();
-      continue;
-    }
-    if (auto viewOp = value.getDefiningOp<memref::ViewOp>()) {
-      value = viewOp.getSource();
-      continue;
-    }
-    if (auto reinterpretOp = value.getDefiningOp<memref::ReinterpretCastOp>()) {
-      value = reinterpretOp.getSource();
-      continue;
-    }
-    if (auto subIndexOp = value.getDefiningOp<polygeist::SubIndexOp>()) {
-      value = subIndexOp.getSource();
-      continue;
+    if (auto viewLike =
+            dyn_cast_if_present<ViewLikeOpInterface>(value.getDefiningOp())) {
+      Value source = viewLike.getViewSource();
+      if (source && isa<MemRefType>(value.getType()) &&
+          isa<MemRefType>(source.getType())) {
+        value = source;
+        continue;
+      }
     }
 
     break;

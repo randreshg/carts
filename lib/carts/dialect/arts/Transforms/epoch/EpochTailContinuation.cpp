@@ -578,8 +578,12 @@ createDbCaptureAcquire(OpBuilder &builder, Location loc, Value captured) {
   acquire.setRuntimeDbModeAttr(RuntimeDbModeAttr::get(
       acquire.getContext(), DbUtils::orderedRuntimeDbMode(ArtsMode::in)));
 
-  if (Operation *source = DbUtils::getUnderlyingDb(sourcePtr))
-    inheritDistributionAttrs(source, acquire.getOperation());
+  if (Operation *source = DbUtils::getUnderlyingDb(sourcePtr)) {
+    if (auto alloc = dyn_cast<DbAllocOp>(source))
+      inheritDbAcquireDistributionFactAttrs(alloc, acquire);
+    else if (auto sourceAcquire = dyn_cast<DbAcquireOp>(source))
+      inheritDbAcquireDistributionFactAttrs(sourceAcquire, acquire);
+  }
 
   DbCapture capture;
   capture.captured = captured;

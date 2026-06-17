@@ -11,9 +11,9 @@ namespace mlir::carts::sde::AttrNames {
 inline constexpr llvm::StringLiteral KeepHostOpenMP = "sde.keep_host_openmp";
 
 /// Transient module fact: the per-array chosen logical layout handed from
-/// LayoutCandidateChoose (pass 1) to WriterLayoutCommit (pass 2), which consumes
-/// and erases it. `DisagreeingReaders` is its field listing reader SU ids whose
-/// committed layout disagrees with the chosen home.
+/// LayoutCandidateChoose (pass 1) to WriterLayoutCommit (pass 2), which
+/// consumes and erases it. `DisagreeingReaders` is its field listing reader SU
+/// ids whose committed layout disagrees with the chosen home.
 inline constexpr llvm::StringLiteral LayoutChoice = "sde.layout_choice";
 inline constexpr llvm::StringLiteral DisagreeingReaders = "disagreeingReaders";
 

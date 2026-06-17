@@ -35,7 +35,7 @@ arts::buildReduceScatterRedistFacts(sde::SdeSuReduceScatterOp reduce) {
               "geometry";
   return ReduceScatterRedistFacts{
       reduce.getArrayIdAttr(), reduce.getOwnerDims(), reduce.getBlockShape(),
-      reduce.getOwnerDims(),   reduce.getBlockShape()};
+      reduce.getOwnerDims(), reduce.getBlockShape()};
 }
 
 FailureOr<AllToAllRedistFacts>
@@ -120,9 +120,8 @@ FailureOr<Value> arts::findAllToAllTargetMemref(sde::SdeSuAllToAllOp allToAll,
     targetMu = mu;
   };
 
-  consumer.walk([&](memref::StoreOp store) {
-    considerWrite(store.getMemRef());
-  });
+  consumer.walk(
+      [&](memref::StoreOp store) { considerWrite(store.getMemRef()); });
   consumer.walk([&](sde::SdeArrayLayoutRootOp root) {
     if (root.getMode() != sde::SdeAccessMode::write)
       return;
@@ -154,10 +153,10 @@ LogicalResult arts::emitAllToAllBlockCopy(
   if (!targetStrides)
     return failure();
 
-  auto linearLoop = scf::ForOp::create(
-      builder, loc, createZeroIndex(builder, loc),
-      createConstantIndex(builder, loc, *targetTileElems),
-      createOneIndex(builder, loc));
+  auto linearLoop =
+      scf::ForOp::create(builder, loc, createZeroIndex(builder, loc),
+                         createConstantIndex(builder, loc, *targetTileElems),
+                         createOneIndex(builder, loc));
   OpBuilder loopBuilder = OpBuilder::atBlockBegin(linearLoop.getBody());
   Value linear = linearLoop.getInductionVar();
 
@@ -263,7 +262,8 @@ LogicalResult arts::convertAllToAllMovement(sde::SdeSuAllToAllOp allToAll) {
            << "does not reference an ARTS DB-backed source MU after storage "
               "realization";
 
-  FailureOr<sde::SdeSuIterateOp> consumer = findAllToAllConsumerIterate(allToAll);
+  FailureOr<sde::SdeSuIterateOp> consumer =
+      findAllToAllConsumerIterate(allToAll);
   if (failed(consumer))
     return failure();
   FailureOr<Value> targetMu = findAllToAllTargetMemref(allToAll, *consumer);
@@ -299,8 +299,8 @@ LogicalResult arts::convertAllToAllMovement(sde::SdeSuAllToAllOp allToAll) {
       *targetBlockCount % *sourceBlockCount != 0)
     return allToAll.emitOpError()
            << "requires divisible source/target block counts for tier-1 "
-              "all-to-all realization (got " << *sourceBlockCount << " vs "
-           << *targetBlockCount << ")";
+              "all-to-all realization (got "
+           << *sourceBlockCount << " vs " << *targetBlockCount << ")";
   const int64_t targetBlocks = *targetBlockCount;
   const int64_t sourceBlocks = *sourceBlockCount;
   const int64_t sourcePerTarget =
@@ -322,10 +322,11 @@ LogicalResult arts::convertAllToAllMovement(sde::SdeSuAllToAllOp allToAll) {
 
   Location loc = allToAll.getLoc();
   OpBuilder builder(allToAll);
-  auto elementType = cast<MemRefType>(allToAll.getMu().getType()).getElementType();
+  auto elementType =
+      cast<MemRefType>(allToAll.getMu().getType()).getElementType();
   Value totalNodesValue = createConstantIndex(builder, loc, *totalNodes);
-  EdtConcurrency concurrency = *totalNodes > 1 ? EdtConcurrency::internode
-                                               : EdtConcurrency::intranode;
+  EdtConcurrency concurrency =
+      *totalNodes > 1 ? EdtConcurrency::internode : EdtConcurrency::intranode;
 
   for (int64_t targetLinear = 0; targetLinear < targetBlocks; ++targetLinear) {
     std::optional<SmallVector<int64_t, 4>> targetCoords =
@@ -372,9 +373,9 @@ LogicalResult arts::convertAllToAllMovement(sde::SdeSuAllToAllOp allToAll) {
       targetCoordValues.push_back(createConstantIndex(builder, loc, coord));
     SmallVector<Value, 4> targetDbSizeValues(targetAlloc.getSizes().begin(),
                                              targetAlloc.getSizes().end());
-    Value route = createDbOwnerRouteForCoords(builder, loc, targetDbSizeValues,
-                                              targetCoordValues, totalNodesValue,
-                                              *targetOwnerFacts);
+    Value route = createDbOwnerRouteForCoords(
+        builder, loc, targetDbSizeValues, targetCoordValues, totalNodesValue,
+        *targetOwnerFacts);
     if (!route)
       return allToAll.emitOpError()
              << "cannot derive owner route for all-to-all target block "
@@ -393,17 +394,16 @@ LogicalResult arts::convertAllToAllMovement(sde::SdeSuAllToAllOp allToAll) {
     for (unsigned idx = 0; idx < sourceDepCount; ++idx)
       sourcePayloads.push_back(
           realizeDbInnerPayload(bodyBuilder, loc, body.getArgument(idx)));
-    Value targetPayload =
-        realizeDbInnerPayload(bodyBuilder, loc, body.getArgument(sourceDepCount));
+    Value targetPayload = realizeDbInnerPayload(
+        bodyBuilder, loc, body.getArgument(sourceDepCount));
     int64_t coveringSourceBlockBase = 0;
     if (std::optional<SmallVector<int64_t, 4>> baseCoords =
             staticCoordsFromLinearIndex(coveringSourceLinears.front(),
                                         *sourceDbSizes))
       coveringSourceBlockBase = (*baseCoords)[0];
-    if (failed(emitAllToAllBlockCopy(bodyBuilder, loc, sourcePayloads,
-                                     targetPayload, *sourceBlock, *targetBlock,
-                                     *targetCoords, coveringSourceBlockBase,
-                                     elementType)))
+    if (failed(emitAllToAllBlockCopy(
+            bodyBuilder, loc, sourcePayloads, targetPayload, *sourceBlock,
+            *targetBlock, *targetCoords, coveringSourceBlockBase, elementType)))
       return allToAll.emitOpError()
              << "cannot emit element-grain copy for all-to-all target block "
              << targetLinear;
@@ -458,18 +458,18 @@ LogicalResult arts::validateAndCollectStorageRedists(
                halo.getBlockShape(), halo.getHaloShape());
   });
 
-  module.walk([&](sde::SdeSuReduceScatterOp reduce) {
-    if (!reduce.getArrayIdAttr()) {
-      reduce.emitOpError()
-          << "commits reduce-scatter movement without array_id";
-      foundError = true;
-    }
-  });
+  module.walk(
+      [&](sde::SdeSuReduceScatterOp reduce) {
+        if (!reduce.getArrayIdAttr()) {
+          reduce.emitOpError()
+              << "commits reduce-scatter movement without array_id";
+          foundError = true;
+        }
+      });
 
   module.walk([&](sde::SdeSuAllToAllOp allToAll) {
     if (!allToAll.getArrayIdAttr()) {
-      allToAll.emitOpError()
-          << "commits all-to-all movement without array_id";
+      allToAll.emitOpError() << "commits all-to-all movement without array_id";
       foundError = true;
       return;
     }

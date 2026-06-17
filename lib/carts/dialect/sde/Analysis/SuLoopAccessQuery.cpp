@@ -70,14 +70,16 @@ readExplicitStencilNeighborhood(SdeSuIterateOp op) {
 
 static unsigned countHaloDims(const SuNeighborhoodAccessInfo &info) {
   unsigned count = 0;
-  for (auto [minOffset, maxOffset] : llvm::zip(info.minOffsets, info.maxOffsets))
+  for (auto [minOffset, maxOffset] :
+       llvm::zip(info.minOffsets, info.maxOffsets))
     if (minOffset != 0 || maxOffset != 0)
       ++count;
   return count;
 }
 
 static bool hasHigherOrderHalo(const SuNeighborhoodAccessInfo &info) {
-  for (auto [minOffset, maxOffset] : llvm::zip(info.minOffsets, info.maxOffsets))
+  for (auto [minOffset, maxOffset] :
+       llvm::zip(info.minOffsets, info.maxOffsets))
     if (minOffset < -1 || maxOffset > 1)
       return true;
   return false;

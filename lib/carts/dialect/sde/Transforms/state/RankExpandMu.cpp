@@ -20,12 +20,15 @@
 ///     fail closed; this pass does not add compatibility attrs.
 ///==========================================================================///
 
+#include "carts/dialect/sde/Analysis/LayoutGraph.h"
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/dialect/sde/Utils/MuLayoutRewriter.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
+#include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ValueAnalysis.h"
 
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_SDERANKEXPANDMU
@@ -44,6 +47,147 @@ namespace {
 
 // Shared helpers keep the block-grid realize gate and index localization
 // identical across rank expansion, coarse avoidance, and verification.
+
+static bool writerHasDifferentWriteGrain(carts::sde::SdeSuIterateOp writer,
+                                         std::optional<int64_t> muArrayId,
+                                         ArrayRef<int64_t> ownerDims,
+                                         ArrayRef<int64_t> blockShape) {
+  if (!writer || !muArrayId || ownerDims.empty() || blockShape.empty())
+    return false;
+  ArrayAttr layout = writer.getArrayLayoutAttr();
+  if (!layout)
+    return false;
+  for (const carts::sde::LayoutGraphFact &fact :
+       carts::sde::parseArrayLayoutFacts(layout)) {
+    if (fact.role != carts::sde::LayoutGraphRole::write ||
+        fact.id == *muArrayId || fact.blockShape.empty())
+      continue;
+    if (ArrayRef<int64_t>(fact.ownerDims) != ownerDims ||
+        ArrayRef<int64_t>(fact.blockShape) != blockShape)
+      return true;
+  }
+  return false;
+}
+
+static Value findWitnessRoot(carts::sde::SdeSuIterateOp witness,
+                             int64_t arrayId) {
+  if (!witness)
+    return {};
+  if (Value root = carts::sde::findArrayLayoutRoot(
+          witness, arrayId, carts::sde::SdeAccessMode::write))
+    return root;
+  return carts::sde::findArrayLayoutRoot(witness, arrayId,
+                                         carts::sde::SdeAccessMode::read);
+}
+
+static void propagateWriterLayoutToSameExpandedMu(
+    ModuleOp module, Value expandedRoot, int64_t arrayId,
+    ArrayRef<int64_t> ownerDims, ArrayRef<int64_t> blockShape) {
+  if (!expandedRoot || ownerDims.empty() || blockShape.empty())
+    return;
+  module.walk([&](carts::sde::SdeArrayLayoutRootOp root) {
+    if (root.getMode() != carts::sde::SdeAccessMode::write ||
+        static_cast<int64_t>(root.getArrayId()) != arrayId ||
+        !carts::ValueAnalysis::sameMemrefRoot(root.getRoot(), expandedRoot))
+      return;
+    carts::sde::SdeSuIterateOp writer =
+        root->getParentOfType<carts::sde::SdeSuIterateOp>();
+    if (!writer)
+      return;
+    carts::sde::rewriteWriterArrayLayoutToPhysicalShape(writer, ownerDims,
+                                                        blockShape, arrayId);
+  });
+}
+
+static void reconcileReadArrayLayoutWithExpandedMu(
+    carts::sde::SdeSuIterateOp op, int64_t arrayId, ArrayRef<int64_t> ownerDims,
+    ArrayRef<int64_t> physicalBlockShape, ArrayRef<int64_t> logicalShape) {
+  if (!op || ownerDims.empty() || physicalBlockShape.empty() ||
+      logicalShape.empty())
+    return;
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return;
+
+  MLIRContext *ctx = op.getContext();
+  Builder builder(ctx);
+  StringAttr ownerDimsName =
+      builder.getStringAttr(carts::sde::AttrNames::LayoutGraph::OwnerDims);
+  StringAttr blockShapeName =
+      builder.getStringAttr(carts::sde::AttrNames::LayoutGraph::BlockShape);
+  StringAttr budgetBlockShapeName = builder.getStringAttr(
+      carts::sde::AttrNames::LayoutGraph::BudgetBlockShape);
+  StringAttr muBlockCountName =
+      builder.getStringAttr(carts::sde::AttrNames::LayoutGraph::MuBlockCount);
+
+  int64_t blockCount = carts::sde::inferCuCountFromMuPartition(
+      logicalShape, ownerDims, physicalBlockShape);
+  bool changed = false;
+  SmallVector<Attribute, 4> rewritten;
+  rewritten.reserve(layout.size());
+  for (Attribute attr : layout) {
+    auto dict = dyn_cast<DictionaryAttr>(attr);
+    std::optional<carts::sde::LayoutGraphFact> fact =
+        dict ? carts::sde::parseArrayLayoutFact(dict) : std::nullopt;
+    if (!dict || !fact || fact->id != arrayId ||
+        fact->role != carts::sde::LayoutGraphRole::read ||
+        fact->ownerDims != ownerDims ||
+        (fact->layoutKind != carts::sde::ArrayLayoutKind::blockParallel &&
+         fact->layoutKind != carts::sde::ArrayLayoutKind::blockContraction)) {
+      rewritten.push_back(attr);
+      continue;
+    }
+
+    bool sameBlock = ArrayRef<int64_t>(fact->blockShape) == physicalBlockShape;
+    bool noStaleBudget = fact->budgetBlockShape.empty();
+    bool sameCount = blockCount <= 0 || fact->muBlockCount == blockCount;
+    if (sameBlock && noStaleBudget && sameCount) {
+      rewritten.push_back(attr);
+      continue;
+    }
+
+    SmallVector<NamedAttribute, 8> fields;
+    fields.reserve(dict.size());
+    for (NamedAttribute named : dict) {
+      StringAttr name = named.getName();
+      if (name == ownerDimsName || name == blockShapeName ||
+          name == budgetBlockShapeName || name == muBlockCountName)
+        continue;
+      fields.push_back(named);
+    }
+    fields.push_back(builder.getNamedAttr(
+        ownerDimsName, carts::buildI64ArrayAttr(ctx, ownerDims)));
+    fields.push_back(builder.getNamedAttr(
+        blockShapeName, carts::buildI64ArrayAttr(ctx, physicalBlockShape)));
+    if (blockCount > 0)
+      fields.push_back(builder.getNamedAttr(
+          muBlockCountName, builder.getI64IntegerAttr(blockCount)));
+    rewritten.push_back(builder.getDictionaryAttr(fields));
+    changed = true;
+  }
+
+  if (changed)
+    op.setArrayLayoutAttr(ArrayAttr::get(ctx, rewritten));
+}
+
+static void propagateReadLayoutToSameExpandedMu(
+    ModuleOp module, Value expandedRoot, int64_t arrayId,
+    ArrayRef<int64_t> ownerDims, ArrayRef<int64_t> blockShape,
+    ArrayRef<int64_t> logicalShape) {
+  if (!expandedRoot || ownerDims.empty() || blockShape.empty() ||
+      logicalShape.empty())
+    return;
+  module.walk([&](carts::sde::SdeArrayLayoutRootOp root) {
+    if (root.getMode() != carts::sde::SdeAccessMode::read ||
+        static_cast<int64_t>(root.getArrayId()) != arrayId ||
+        !carts::ValueAnalysis::sameMemrefRoot(root.getRoot(), expandedRoot))
+      return;
+    carts::sde::SdeSuIterateOp reader =
+        root->getParentOfType<carts::sde::SdeSuIterateOp>();
+    reconcileReadArrayLayoutWithExpandedMu(reader, arrayId, ownerDims,
+                                           blockShape, logicalShape);
+  });
+}
 
 struct SdeRankExpandMuPass
     : public carts::sde::impl::SdeRankExpandMuBase<SdeRankExpandMuPass> {
@@ -102,42 +246,20 @@ struct SdeRankExpandMuPass
       SmallVector<int64_t, 4> blockShape = committed->layout.logicalShape;
       for (auto [slot, dim] : llvm::enumerate(committed->layout.ownerDims))
         blockShape[dim] = committed->layout.blockExtents[slot];
-      // Owner-dim recovery for a separate init writer is per-dependency at the
-      // boundary (readPhysicalLayoutFromDepWindow), not a shared SU attr here.
-      // Restate only THIS MU's array for matmul/contraction AND
-      // elementwise-pipeline (matvec / pipelined-reduction) witnesses: there
-      // the witness SU writes a DISTINCT, lower-rank output array whose
-      // committed grain must not be clobbered by a higher-rank INPUT array's
-      // block shape.
-      //
-      // A read-only input MU's rank expansion restates the write facts of its
-      // representative reader SU (findCommittedMuBlockLayout falls back to a
-      // reader when the array has no committed-layout writer). For bicg's
-      // `q = A*p`, that representative reader is the q SU: it reads the rank-2
-      // `A` (owner [0,1]) but writes the rank-1 vector `q` (owner [0]). The
-      // unrestricted restatement stamps A's [0,1] onto q's write fact, which
-      // then contradicts q's 1-owner-dim access window and fails the
-      // sde-to-arts owner-dim check. Restricting to `muArrayId` makes the
-      // restatement inert for the read-only input (the helper only touches
-      // WRITE facts), preserving q's committed [0] grain.
-      //
-      // STENCIL witnesses stay on the UNRESTRICTED path: there the witness's
-      // own output legitimately inherits the input's multi-dim block grid (e.g.
-      // convolution output [0]->[0,1] aligned with the input image), and
-      // restricting would drop the needed write-fact restatement and break
-      // CreateDbs. This classification gate keys on the loop family that
-      // determines whether the output's grain follows the input's owner rank;
-      // it is distinct from any writer/array-identity test.
       bool restrictToOwnArray =
-          classification &&
-          (*classification == carts::sde::SdeStructuredClassification::matmul ||
-           *classification ==
-               carts::sde::SdeStructuredClassification::elementwise_pipeline ||
-           *classification ==
-               carts::sde::SdeStructuredClassification::reduction);
+          muArrayId && writerHasDifferentWriteGrain(
+                           committed->writer, muArrayId, ownerDims, blockShape);
       carts::sde::rewriteWriterArrayLayoutToPhysicalShape(
           committed->writer, ownerDims, blockShape,
           restrictToOwnArray ? muArrayId : std::nullopt);
+      if (muArrayId) {
+        Value expandedRoot = findWitnessRoot(committed->writer, *muArrayId);
+        propagateWriterLayoutToSameExpandedMu(module, expandedRoot, *muArrayId,
+                                              ownerDims, blockShape);
+        propagateReadLayoutToSameExpandedMu(module, expandedRoot, *muArrayId,
+                                            ownerDims, blockShape,
+                                            committed->layout.logicalShape);
+      }
     }
 
     if (failed)

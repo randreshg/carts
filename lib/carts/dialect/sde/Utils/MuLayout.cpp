@@ -203,8 +203,7 @@ recoverMuPhysicalLayoutFromExpandedType(MemRefType expandedType) {
   ArrayRef<int64_t> shape = expandedType.getShape();
 
   auto tryOwnerAssignment = [&](unsigned logicalRank, unsigned numGrid,
-                                ArrayRef<int64_t> grid,
-                                ArrayRef<int64_t> tiles,
+                                ArrayRef<int64_t> grid, ArrayRef<int64_t> tiles,
                                 ArrayRef<unsigned> owners)
       -> std::optional<RecoveredMuPhysicalLayout> {
     if (owners.size() != numGrid)

@@ -15,8 +15,11 @@
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
 #include "carts/passes/Passes.h"
 #include "carts/passes/Passes.h.inc"
+#include "carts/utils/DeadIrCleanup.h"
 #include "carts/utils/ValueAnalysis.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -24,6 +27,8 @@
 
 #include "carts/utils/Debug.h"
 
+#include "llvm/ADT/DenseSet.h"
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -50,6 +55,37 @@ static Value createBlockCoordFromElementOffset(OpBuilder &builder, Location loc,
   if (!offset)
     return {};
   return arith::DivUIOp::create(builder, loc, offset, blockSizeValue);
+}
+
+static bool isMemrefDerivedFromDependency(Value memref, Value dependency) {
+  memref = ValueAnalysis::stripMemrefViewOps(memref);
+  dependency = ValueAnalysis::stripMemrefViewOps(dependency);
+  if (!memref || !dependency)
+    return false;
+  if (ValueAnalysis::sameMemrefRoot(memref, dependency))
+    return true;
+  if (auto dbRef = memref.getDefiningOp<DbRefOp>())
+    return isMemrefDerivedFromDependency(dbRef.getSource(), dependency);
+  return false;
+}
+
+static bool edtWritesDependency(EdtOp edt, unsigned depIndex) {
+  if (!edt || edt.getBody().empty() ||
+      depIndex >= edt.getBody().front().getNumArguments())
+    return false;
+  Value depArg = edt.getBody().front().getArgument(depIndex);
+  bool writes = false;
+  edt.getBody().walk([&](Operation *op) {
+    if (writes)
+      return;
+    std::optional<DbUtils::MemoryAccessInfo> access =
+        DbUtils::getMemoryAccessInfo(op);
+    if (!access || !access->isWrite())
+      return;
+    if (isMemrefDerivedFromDependency(access->memref, depArg))
+      writes = true;
+  });
+  return writes;
 }
 
 static std::optional<unsigned>
@@ -125,6 +161,50 @@ static bool equivalentIndexValues(Value lhs, Value rhs) {
   return lhsIsConstant && rhsIsConstant && lhsConstant == rhsConstant;
 }
 
+static bool isKnownMultipleOf(Value value, int64_t divisor) {
+  if (!value || divisor <= 0)
+    return false;
+  value = ValueAnalysis::stripNumericCasts(value);
+  if (auto constant = ValueAnalysis::tryFoldConstantIndex(value))
+    return *constant % divisor == 0;
+  if (auto mul = value.getDefiningOp<arith::MulIOp>()) {
+    std::optional<int64_t> lhs = ValueAnalysis::tryFoldConstantIndex(
+        ValueAnalysis::stripNumericCasts(mul.getLhs()));
+    std::optional<int64_t> rhs = ValueAnalysis::tryFoldConstantIndex(
+        ValueAnalysis::stripNumericCasts(mul.getRhs()));
+    return (lhs && *lhs % divisor == 0) || (rhs && *rhs % divisor == 0);
+  }
+  return false;
+}
+
+static bool isMulByConstant(Value value, Value base, int64_t multiplier) {
+  if (!value || !base || multiplier <= 0)
+    return false;
+  value = ValueAnalysis::stripNumericCasts(value);
+  base = ValueAnalysis::stripNumericCasts(base);
+  if (multiplier == 1)
+    return equivalentIndexValues(value, base);
+  if (auto mul = value.getDefiningOp<arith::MulIOp>()) {
+    std::optional<int64_t> lhs = ValueAnalysis::tryFoldConstantIndex(
+        ValueAnalysis::stripNumericCasts(mul.getLhs()));
+    if (lhs && *lhs == multiplier && equivalentIndexValues(mul.getRhs(), base))
+      return true;
+    std::optional<int64_t> rhs = ValueAnalysis::tryFoldConstantIndex(
+        ValueAnalysis::stripNumericCasts(mul.getRhs()));
+    if (rhs && *rhs == multiplier && equivalentIndexValues(mul.getLhs(), base))
+      return true;
+  }
+  if (auto div = base.getDefiningOp<arith::DivUIOp>()) {
+    std::optional<int64_t> rhs = ValueAnalysis::tryFoldConstantIndex(
+        ValueAnalysis::stripNumericCasts(div.getRhs()));
+    if (rhs && *rhs == multiplier &&
+        equivalentIndexValues(div.getLhs(), value) &&
+        isKnownMultipleOf(value, multiplier))
+      return true;
+  }
+  return false;
+}
+
 static std::optional<int64_t>
 getNormalizedOwnerCoordConstant(OwnerCoordKey key) {
   if (key.implicitZero)
@@ -149,6 +229,12 @@ static bool equivalentOwnerCoord(OwnerCoordKey lhs, OwnerCoordKey rhs) {
   }
 
   if (lhs.divisor == rhs.divisor && equivalentIndexValues(lhs.value, rhs.value))
+    return true;
+  if (lhs.divisor % rhs.divisor == 0 &&
+      isMulByConstant(lhs.value, rhs.value, lhs.divisor / rhs.divisor))
+    return true;
+  if (rhs.divisor % lhs.divisor == 0 &&
+      isMulByConstant(rhs.value, lhs.value, rhs.divisor / lhs.divisor))
     return true;
 
   std::optional<int64_t> lhsConstant = getNormalizedOwnerCoordConstant(lhs);
@@ -228,6 +314,11 @@ struct WriterOwnerTargetResult {
   std::optional<WriterOwnerTarget> target;
 };
 
+struct WriterOwnerGroup {
+  WriterOwnerTarget target;
+  SmallVector<unsigned, 2> depIndices;
+};
+
 static std::optional<SmallVector<OwnerCoordKey, 4>>
 getAcquireOwnerCoordKeys(DbAllocOp alloc, DbAcquireOp acquire,
                          const DbOwnerRouteFacts &facts, unsigned rank) {
@@ -285,17 +376,34 @@ getRouteComparisonDims(const DbOwnerRouteFacts &facts, unsigned dbRank) {
   return dims;
 }
 
-static bool isKnownSingleBlockSpan(Value value) {
-  if (!value)
-    return true;
-  if (auto constant = ValueAnalysis::tryFoldConstantIndex(value))
-    return *constant <= 1;
-  if (ValueAnalysis::isOneLikeValue(value))
-    return true;
-  if (auto min = value.getDefiningOp<arith::MinUIOp>())
-    return ValueAnalysis::isOneLikeValue(min.getLhs()) ||
-           ValueAnalysis::isOneLikeValue(min.getRhs());
-  return false;
+static std::optional<OwnerCoordKey>
+getOwnerDimContiguousLeadingRouteKey(const WriterOwnerTarget &target,
+                                     std::optional<int64_t> totalNodes) {
+  if (!totalNodes || *totalNodes <= 0 ||
+      target.facts.policy != DbOwnerRoutePolicy::OwnerDimContiguous ||
+      target.facts.dims.empty() ||
+      !ownerDimsAddressDbRank(target.facts.dims, target.dbSizes.size()))
+    return std::nullopt;
+
+  unsigned leadingDim = static_cast<unsigned>(target.facts.dims.front());
+  if (leadingDim >= target.dbSizes.size() || leadingDim >= target.coords.size())
+    return std::nullopt;
+
+  std::optional<int64_t> leadingSize = ValueAnalysis::tryFoldConstantIndex(
+      ValueAnalysis::stripNumericCasts(target.dbSizes[leadingDim]));
+  if (!leadingSize || *leadingSize <= 0 || *leadingSize < *totalNodes ||
+      *leadingSize % *totalNodes != 0)
+    return std::nullopt;
+
+  int64_t routeChunk = *leadingSize / *totalNodes;
+  OwnerCoordKey key = target.coords[leadingDim];
+  if (key.implicitZero)
+    return key;
+  if (key.divisor <= 0 ||
+      routeChunk > std::numeric_limits<int64_t>::max() / key.divisor)
+    return std::nullopt;
+  key.divisor *= routeChunk;
+  return key;
 }
 
 static std::optional<int64_t> getKnownSpanUpperBound(Value value) {
@@ -317,34 +425,16 @@ static std::optional<int64_t> getKnownSpanUpperBound(Value value) {
   return std::nullopt;
 }
 
-static std::optional<int64_t>
-getDispatchGroupBlockCountFromOffset(Value offset) {
-  auto div =
-      ValueAnalysis::stripNumericCasts(offset).getDefiningOp<arith::DivUIOp>();
-  if (!div)
-    return std::nullopt;
+static bool isKnownSingleBlockSpan(Value value) {
+  if (!value)
+    return true;
+  std::optional<int64_t> upperBound = getKnownSpanUpperBound(value);
+  return upperBound && *upperBound <= 1;
+}
 
-  std::optional<int64_t> blockSize =
-      ValueAnalysis::tryFoldConstantIndex(div.getRhs());
-  if (!blockSize || *blockSize <= 0)
-    return std::nullopt;
-
-  Value base = div.getLhs();
-  Value normalizedLower;
-  if (auto sub = base.getDefiningOp<arith::SubIOp>()) {
-    base = sub.getLhs();
-    normalizedLower = sub.getRhs();
-  } else {
-    auto blockArg = dyn_cast<BlockArgument>(base);
-    auto loop =
-        blockArg
-            ? dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp())
-            : scf::ForOp();
-    if (!loop || loop.getInductionVar() != base ||
-        !ValueAnalysis::isZeroConstant(loop.getLowerBound()))
-      return std::nullopt;
-  }
-
+static std::optional<int64_t> getDispatchLoopStep(Value base,
+                                                  Value normalizedLower = {}) {
+  base = ValueAnalysis::stripNumericCasts(base);
   auto blockArg = dyn_cast<BlockArgument>(base);
   auto loop =
       blockArg
@@ -352,15 +442,120 @@ getDispatchGroupBlockCountFromOffset(Value offset) {
           : scf::ForOp();
   if (!loop || loop.getInductionVar() != base)
     return std::nullopt;
-  if (normalizedLower &&
-      !equivalentIndexValues(normalizedLower, loop.getLowerBound()))
+  if (normalizedLower) {
+    if (!equivalentIndexValues(normalizedLower, loop.getLowerBound()))
+      return std::nullopt;
+  } else if (!ValueAnalysis::isZeroConstant(loop.getLowerBound())) {
     return std::nullopt;
+  }
 
   std::optional<int64_t> step =
       ValueAnalysis::tryFoldConstantIndex(loop.getStep());
+  if (!step || *step <= 0)
+    return std::nullopt;
+  return step;
+}
+
+static std::optional<std::pair<Value, int64_t>>
+getMulValueAndConstant(Value value);
+
+static Value stripZeroLowerClamp(Value value) {
+  value = ValueAnalysis::stripNumericCasts(value);
+  if (auto max = value.getDefiningOp<arith::MaxSIOp>()) {
+    if (ValueAnalysis::isZeroConstant(max.getLhs()))
+      return ValueAnalysis::stripNumericCasts(max.getRhs());
+    if (ValueAnalysis::isZeroConstant(max.getRhs()))
+      return ValueAnalysis::stripNumericCasts(max.getLhs());
+  }
+  if (auto max = value.getDefiningOp<arith::MaxUIOp>()) {
+    if (ValueAnalysis::isZeroConstant(max.getLhs()))
+      return ValueAnalysis::stripNumericCasts(max.getRhs());
+    if (ValueAnalysis::isZeroConstant(max.getRhs()))
+      return ValueAnalysis::stripNumericCasts(max.getLhs());
+  }
+  return value;
+}
+
+static std::optional<int64_t> getDivDispatchGroupBlockCount(arith::DivUIOp div,
+                                                            int64_t scale = 1) {
+  if (!div || scale <= 0)
+    return std::nullopt;
+
+  std::optional<int64_t> blockSize =
+      ValueAnalysis::tryFoldConstantIndex(div.getRhs());
+  if (!blockSize || *blockSize <= 0)
+    return std::nullopt;
+
+  Value lhs = stripZeroLowerClamp(div.getLhs());
+  if (std::optional<std::pair<Value, int64_t>> scaled =
+          getMulValueAndConstant(lhs)) {
+    if (scaled->second % *blockSize == 0) {
+      int64_t scale = scaled->second / *blockSize;
+      if (scale > 0) {
+        if (auto innerDiv = ValueAnalysis::stripNumericCasts(scaled->first)
+                                .getDefiningOp<arith::DivUIOp>()) {
+          return getDivDispatchGroupBlockCount(innerDiv, scale);
+        }
+      }
+    }
+  }
+
+  Value base = lhs;
+  Value normalizedLower;
+  if (auto sub = base.getDefiningOp<arith::SubIOp>()) {
+    base = sub.getLhs();
+    normalizedLower = sub.getRhs();
+  }
+
+  std::optional<int64_t> step = getDispatchLoopStep(base, normalizedLower);
   if (!step || *step <= 0 || *step % *blockSize != 0)
     return std::nullopt;
-  return *step / *blockSize;
+  int64_t blockSteps = *step / *blockSize;
+  if (blockSteps > std::numeric_limits<int64_t>::max() / scale)
+    return std::nullopt;
+  return blockSteps * scale;
+}
+
+static std::optional<std::pair<Value, int64_t>>
+getMulValueAndConstant(Value value) {
+  auto mul =
+      ValueAnalysis::stripNumericCasts(value).getDefiningOp<arith::MulIOp>();
+  if (!mul)
+    return std::nullopt;
+
+  std::optional<int64_t> lhs = ValueAnalysis::tryFoldConstantIndex(
+      ValueAnalysis::stripNumericCasts(mul.getLhs()));
+  if (lhs && *lhs > 0)
+    return std::make_pair(mul.getRhs(), *lhs);
+
+  std::optional<int64_t> rhs = ValueAnalysis::tryFoldConstantIndex(
+      ValueAnalysis::stripNumericCasts(mul.getRhs()));
+  if (rhs && *rhs > 0)
+    return std::make_pair(mul.getLhs(), *rhs);
+
+  return std::nullopt;
+}
+
+static std::optional<int64_t>
+getDispatchGroupBlockCountFromOffset(Value offset) {
+  Value strippedOffset =
+      stripZeroLowerClamp(ValueAnalysis::stripNumericCasts(offset));
+  if (auto div = strippedOffset.getDefiningOp<arith::DivUIOp>())
+    return getDivDispatchGroupBlockCount(div);
+
+  if (std::optional<std::pair<Value, int64_t>> scaled =
+          getMulValueAndConstant(strippedOffset))
+    if (auto div = ValueAnalysis::stripNumericCasts(scaled->first)
+                       .getDefiningOp<arith::DivUIOp>())
+      return getDivDispatchGroupBlockCount(div, scaled->second);
+
+  Value base = strippedOffset;
+  Value normalizedLower;
+  if (auto sub = base.getDefiningOp<arith::SubIOp>()) {
+    base = sub.getLhs();
+    normalizedLower = sub.getRhs();
+  }
+  return getDispatchLoopStep(base, normalizedLower);
 }
 
 static std::optional<SmallVector<int64_t, 4>>
@@ -425,6 +620,17 @@ static bool writerAcquireMaySpanMultipleOwners(DbAcquireOp acquire,
                                           *staticRangeSizes, *nodes, facts))
     return false;
 
+  if (facts.policy == DbOwnerRoutePolicy::OwnerDimContiguous &&
+      ownerDimsAddressDbRank(facts.dims, dbSizes->size()) &&
+      !facts.dims.empty()) {
+    unsigned leadingDim = static_cast<unsigned>(facts.dims.front());
+    if (leadingDim < sizes.size() && leadingDim < dbSizes->size() &&
+        isKnownSingleBlockSpan(sizes[leadingDim]) &&
+        (*dbSizes)[leadingDim] >= *nodes &&
+        (*dbSizes)[leadingDim] % *nodes == 0)
+      return false;
+  }
+
   std::optional<SmallVector<int64_t, 4>> groupCounts =
       getDispatchGroupBlockCounts(acquire, dbSizeValues.size());
   if (groupCounts && isStaticDbOwnerGroupedBlockScheduleRouteLocal(
@@ -435,26 +641,29 @@ static bool writerAcquireMaySpanMultipleOwners(DbAcquireOp acquire,
 }
 
 static bool sameWriterOwnerTarget(const WriterOwnerTarget &lhs,
-                                  const WriterOwnerTarget &rhs) {
-  if (!sameOwnerRouteFacts(lhs.facts, rhs.facts))
-    return false;
-  if (lhs.dbSizes.size() != rhs.dbSizes.size() ||
-      lhs.coords.size() != rhs.coords.size())
-    return false;
-
-  SmallVector<unsigned, 4> dims =
-      getRouteComparisonDims(lhs.facts, lhs.dbSizes.size());
-  if (dims.empty())
-    return false;
-
-  for (unsigned dim : dims) {
-    if (!equivalentIndexValues(lhs.dbSizes[dim], rhs.dbSizes[dim]))
-      return false;
-    if (!equivalentOwnerCoord(lhs.coords[dim], rhs.coords[dim]))
-      return false;
+                                  const WriterOwnerTarget &rhs,
+                                  std::optional<int64_t> totalNodes) {
+  bool sameRouteFacts = sameOwnerRouteFacts(lhs.facts, rhs.facts);
+  if (sameRouteFacts && lhs.dbSizes.size() == rhs.dbSizes.size() &&
+      lhs.coords.size() == rhs.coords.size()) {
+    SmallVector<unsigned, 4> dims =
+        getRouteComparisonDims(lhs.facts, lhs.dbSizes.size());
+    if (!dims.empty() && llvm::all_of(dims, [&](unsigned dim) {
+          return equivalentIndexValues(lhs.dbSizes[dim], rhs.dbSizes[dim]) &&
+                 equivalentOwnerCoord(lhs.coords[dim], rhs.coords[dim]);
+        }))
+      return true;
   }
 
-  return true;
+  if (lhs.facts.policy == DbOwnerRoutePolicy::OwnerDimContiguous &&
+      rhs.facts.policy == DbOwnerRoutePolicy::OwnerDimContiguous) {
+    std::optional<OwnerCoordKey> lhsKey =
+        getOwnerDimContiguousLeadingRouteKey(lhs, totalNodes);
+    std::optional<OwnerCoordKey> rhsKey =
+        getOwnerDimContiguousLeadingRouteKey(rhs, totalNodes);
+    return lhsKey && rhsKey && equivalentOwnerCoord(*lhsKey, *rhsKey);
+  }
+  return false;
 }
 
 static Value createOwnerRoute(OpBuilder &builder, Location loc, DbAllocOp alloc,
@@ -523,10 +732,12 @@ getConsistentWriterOwnerTarget(EdtOp edt, bool &sawDistributedWriter,
   conflict = false;
   multiOwnerRange = false;
   unroutable = false;
-  for (Value dep : edt.getDependencies()) {
+  for (auto [depIndex, dep] : llvm::enumerate(edt.getDependencies())) {
     WriterOwnerTargetResult owner =
         getWriterOwnerTarget(dep, totalNodes, multiOwnerRange);
     if (owner.status == WriterOwnerTargetStatus::NoDistributedWriter)
+      continue;
+    if (!edtWritesDependency(edt, static_cast<unsigned>(depIndex)))
       continue;
     sawDistributedWriter = true;
     if (owner.status == WriterOwnerTargetStatus::MultiOwnerRange ||
@@ -544,7 +755,7 @@ getConsistentWriterOwnerTarget(EdtOp edt, bool &sawDistributedWriter,
       expectedOwner = std::move(owner.target);
       continue;
     }
-    if (!sameWriterOwnerTarget(*expectedOwner, *owner.target)) {
+    if (!sameWriterOwnerTarget(*expectedOwner, *owner.target, totalNodes)) {
       conflict = true;
       break;
     }
@@ -552,19 +763,237 @@ getConsistentWriterOwnerTarget(EdtOp edt, bool &sawDistributedWriter,
   return expectedOwner;
 }
 
+static FailureOr<SmallVector<WriterOwnerGroup, 2>>
+collectWriterOwnerGroups(EdtOp edt, bool &sawDistributedWriter,
+                         bool &multiOwnerRange, bool &unroutable,
+                         std::optional<int64_t> totalNodes) {
+  SmallVector<WriterOwnerGroup, 2> groups;
+  sawDistributedWriter = false;
+  multiOwnerRange = false;
+  unroutable = false;
+
+  for (auto [depIndex, dep] : llvm::enumerate(edt.getDependencies())) {
+    WriterOwnerTargetResult owner =
+        getWriterOwnerTarget(dep, totalNodes, multiOwnerRange);
+    if (owner.status == WriterOwnerTargetStatus::NoDistributedWriter)
+      continue;
+    if (!edtWritesDependency(edt, static_cast<unsigned>(depIndex)))
+      continue;
+    sawDistributedWriter = true;
+    if (owner.status == WriterOwnerTargetStatus::MultiOwnerRange ||
+        multiOwnerRange)
+      return groups;
+    if (owner.status == WriterOwnerTargetStatus::Unroutable || !owner.target) {
+      unroutable = true;
+      return groups;
+    }
+
+    bool merged = false;
+    for (WriterOwnerGroup &group : groups) {
+      if (!sameWriterOwnerTarget(group.target, *owner.target, totalNodes))
+        continue;
+      group.depIndices.push_back(static_cast<unsigned>(depIndex));
+      merged = true;
+      break;
+    }
+    if (merged)
+      continue;
+
+    WriterOwnerGroup group;
+    group.target = std::move(*owner.target);
+    group.depIndices.push_back(static_cast<unsigned>(depIndex));
+    groups.push_back(std::move(group));
+  }
+  return groups;
+}
+
+static std::optional<unsigned> getWrittenDependencyIndex(EdtOp edt,
+                                                         Operation *op) {
+  std::optional<DbUtils::MemoryAccessInfo> access =
+      DbUtils::getMemoryAccessInfo(op);
+  if (!access || !access->isWrite())
+    return std::nullopt;
+
+  Block &body = edt.getBody().front();
+  unsigned depCount = edt.getDependencies().size();
+  for (unsigned idx = 0; idx < depCount && idx < body.getNumArguments();
+       ++idx) {
+    if (isMemrefDerivedFromDependency(access->memref, body.getArgument(idx)))
+      return idx;
+  }
+  return std::nullopt;
+}
+
+static void cloneEdtBody(EdtOp source, EdtOp dest) {
+  Block &sourceBody = source.getBody().front();
+  Block &destBody = dest.getBody().front();
+  Location loc = source.getLoc();
+  for (Value dep : dest.getDependencies())
+    destBody.addArgument(dep.getType(), loc);
+  for (Value param : dest.getParams())
+    destBody.addArgument(param.getType(), loc);
+
+  IRMapping mapper;
+  for (auto [oldArg, newArg] :
+       llvm::zip_equal(sourceBody.getArguments(), destBody.getArguments()))
+    mapper.map(oldArg, newArg);
+
+  OpBuilder builder(dest.getContext());
+  builder.setInsertionPointToStart(&destBody);
+  for (Operation &op : sourceBody.without_terminator())
+    builder.clone(op, mapper);
+  YieldOp::create(builder, loc);
+}
+
+static void copyEdtNonStructuralAttrs(EdtOp source, EdtOp dest) {
+  for (NamedAttribute attr : source->getAttrs()) {
+    StringRef name = attr.getName().getValue();
+    if (name == "type" || name == "concurrency" ||
+        name == "operand_segment_sizes")
+      continue;
+    dest->setAttr(attr.getName(), attr.getValue());
+  }
+}
+
+static void pruneWritesOutsideGroup(EdtOp edt,
+                                    const llvm::DenseSet<unsigned> &keepDeps) {
+  SmallVector<Operation *, 8> toErase;
+  edt.walk([&](Operation *op) {
+    std::optional<unsigned> writtenDep = getWrittenDependencyIndex(edt, op);
+    if (writtenDep && !keepDeps.contains(*writtenDep))
+      toErase.push_back(op);
+  });
+  for (Operation *op : llvm::reverse(toErase))
+    op->erase();
+}
+
+static void
+removeUnusedEdtDependencies(EdtOp edt, SmallVectorImpl<DbAcquireOp> &acquires) {
+  Block &body = edt.getBody().front();
+  ValueRange deps = edt.getDependencies();
+  if (body.getNumArguments() < deps.size())
+    return;
+
+  SmallVector<unsigned, 4> deadIndices;
+  for (unsigned idx = 0; idx < deps.size(); ++idx)
+    if (body.getArgument(idx).use_empty())
+      deadIndices.push_back(idx);
+  if (deadIndices.empty())
+    return;
+
+  llvm::sort(deadIndices, std::greater<>());
+  deadIndices.erase(std::unique(deadIndices.begin(), deadIndices.end()),
+                    deadIndices.end());
+  llvm::DenseSet<unsigned> deadIndexSet(deadIndices.begin(), deadIndices.end());
+
+  SmallVector<Value, 4> newDeps;
+  for (unsigned idx = 0; idx < deps.size(); ++idx) {
+    if (deadIndexSet.contains(idx)) {
+      if (auto acquire = deps[idx].getDefiningOp<DbAcquireOp>())
+        acquires.push_back(acquire);
+      continue;
+    }
+    newDeps.push_back(deps[idx]);
+  }
+
+  for (unsigned idx : deadIndices)
+    body.eraseArgument(idx);
+  edt.setDependencies(newDeps);
+}
+
+static bool
+splitConflictingDistributedWriterEdt(ModuleOp module, EdtOp edt,
+                                     ArrayRef<WriterOwnerGroup> groups) {
+  if (groups.size() <= 1)
+    return false;
+
+  SmallVector<DbAcquireOp, 8> acquireCleanupCandidates;
+  SmallVector<EdtOp, 4> clones;
+  OpBuilder builder(edt);
+  for (const WriterOwnerGroup &group : groups) {
+    builder.setInsertionPoint(edt);
+    auto clone = EdtOp::create(builder, edt.getLoc(), edt.getType(),
+                               edt.getConcurrency(), edt.getRoute(),
+                               edt.getDependencies(), edt.getParams());
+    copyEdtNonStructuralAttrs(edt, clone);
+    cloneEdtBody(edt, clone);
+
+    llvm::DenseSet<unsigned> keepDeps(group.depIndices.begin(),
+                                      group.depIndices.end());
+    pruneWritesOutsideGroup(clone, keepDeps);
+    clones.push_back(clone);
+  }
+
+  edt.erase();
+
+  bool changed = true;
+  while (changed)
+    changed = runDeadIrCleanup(module, /*removeSymbols=*/false).total() != 0;
+
+  for (EdtOp clone : clones)
+    removeUnusedEdtDependencies(clone, acquireCleanupCandidates);
+
+  for (DbAcquireOp acquire : acquireCleanupCandidates) {
+    if (!acquire)
+      continue;
+    Value guid = acquire.getGuid();
+    Value ptr = acquire.getPtr();
+    if ((!guid || guid.use_empty()) && (!ptr || ptr.use_empty()))
+      acquire.erase();
+  }
+  return true;
+}
+
 struct WriterOwnerRoutePass
     : public impl::WriterOwnerRouteBase<WriterOwnerRoutePass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     std::optional<int64_t> totalNodes = arts::getRuntimeTotalNodes(module);
-    const bool singleNodeRuntime = totalNodes && *totalNodes <= 1;
+    std::optional<int64_t> validationNodes = totalNodes;
+    if (validationNodes && *validationNodes <= 1)
+      validationNodes = 2;
     unsigned promoted = 0;
     unsigned routed = 0;
-    unsigned deferredSingleNode = 0;
+    unsigned split = 0;
     bool failed = false;
+
+    SmallVector<EdtOp, 8> splitCandidates;
+    module.walk([&](EdtOp edt) {
+      if (edt.getType() != EdtType::task)
+        return;
+      if (DbUtils::hasLocalOnlyDistributedLaunchDependency(edt))
+        return;
+
+      bool sawDistributedWriter = false;
+      bool multiOwnerRange = false;
+      bool unroutable = false;
+      FailureOr<SmallVector<WriterOwnerGroup, 2>> groups =
+          collectWriterOwnerGroups(edt, sawDistributedWriter, multiOwnerRange,
+                                   unroutable, validationNodes);
+      if (::mlir::failed(groups) || multiOwnerRange || unroutable ||
+          !sawDistributedWriter || groups->size() <= 1)
+        return;
+      splitCandidates.push_back(edt);
+    });
+
+    for (EdtOp edt : splitCandidates) {
+      bool sawDistributedWriter = false;
+      bool multiOwnerRange = false;
+      bool unroutable = false;
+      FailureOr<SmallVector<WriterOwnerGroup, 2>> groups =
+          collectWriterOwnerGroups(edt, sawDistributedWriter, multiOwnerRange,
+                                   unroutable, validationNodes);
+      if (::mlir::failed(groups) || multiOwnerRange || unroutable ||
+          !sawDistributedWriter || groups->size() <= 1)
+        continue;
+      if (splitConflictingDistributedWriterEdt(module, edt, *groups))
+        ++split;
+    }
 
     module.walk([&](EdtOp edt) {
       if (failed)
+        return;
+      if (edt.getType() != EdtType::task)
         return;
       if (DbUtils::hasLocalOnlyDistributedLaunchDependency(edt))
         return;
@@ -576,13 +1005,9 @@ struct WriterOwnerRoutePass
       std::optional<WriterOwnerTarget> expectedOwner =
           getConsistentWriterOwnerTarget(edt, sawDistributedWriter, conflict,
                                          multiOwnerRange, unroutable,
-                                         totalNodes);
+                                         validationNodes);
 
       if (multiOwnerRange) {
-        if (singleNodeRuntime) {
-          ++deferredSingleNode;
-          return;
-        }
         edt.emitError()
             << "writes a distributed DB range that may span multiple owners; "
                "SDE-to-ARTS must split writer codelets into owner-local "
@@ -593,10 +1018,6 @@ struct WriterOwnerRoutePass
       if (!sawDistributedWriter)
         return;
       if (unroutable || conflict || !expectedOwner) {
-        if (singleNodeRuntime) {
-          ++deferredSingleNode;
-          return;
-        }
         edt.emitError()
             << "writes distributed DBs whose owner route cannot be derived "
                "from the DB block grid; ARTS must split or "
@@ -611,10 +1032,6 @@ struct WriterOwnerRoutePass
           createOwnerRoute(builder, edt.getLoc(), expectedOwner->alloc,
                            expectedOwner->acquire, expectedOwner->facts);
       if (!expectedRoute) {
-        if (singleNodeRuntime) {
-          ++deferredSingleNode;
-          return;
-        }
         edt.emitError()
             << "writes a distributed DB but ARTS could not derive an owner "
                "route from the DB block grid";
@@ -635,14 +1052,9 @@ struct WriterOwnerRoutePass
       return;
     }
 
-    if (deferredSingleNode)
-      ARTS_INFO("Writer owner route promoted " << promoted << " EDTs, routed "
-                                               << routed << " EDTs, deferred "
-                                               << deferredSingleNode
-                                               << " single-node EDTs");
-    else
-      ARTS_INFO("Writer owner route promoted " << promoted << " EDTs and routed "
-                                               << routed << " EDTs");
+    ARTS_INFO("Writer owner route promoted "
+              << promoted << " EDTs and routed " << routed << " EDTs; split "
+              << split << " conflicting writer EDTs");
   }
 };
 

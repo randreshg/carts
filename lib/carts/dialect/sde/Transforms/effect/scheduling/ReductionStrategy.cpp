@@ -27,9 +27,7 @@ struct ReductionStrategyPass
   explicit ReductionStrategyPass(sde::SDECostModel *costModel = nullptr)
       : costModel(costModel) {}
 
-  void runOnOperation() override {
-    (void)costModel;
-  }
+  void runOnOperation() override { (void)costModel; }
 
 private:
   sde::SDECostModel *costModel = nullptr;

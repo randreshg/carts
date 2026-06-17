@@ -11,6 +11,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringRef.h"
 
 namespace mlir {
 namespace carts::arts::boundary {
@@ -39,9 +40,15 @@ buildRankExpandedElementIndices(OpBuilder &builder, Location loc,
 
 void emitCompactHaloCopy(OpBuilder &builder, Location loc,
                          unsigned ownerDimCount,
+                         ArrayRef<unsigned> ownerPayloadDims,
                          ArrayRef<int64_t> sourceOffsets,
                          ArrayRef<Value> elementExtents, Value sourcePayload,
                          Value compactPayload);
+
+FailureOr<SmallVector<Value, 4>>
+getCompactHaloOwnerLoopIvs(sde::SdeSuIterateOp source, memref::LoadOp load,
+                           ArrayRef<unsigned> ownerLoopDims,
+                           llvm::StringRef diagnosticRank);
 
 FailureOr<std::optional<HaloLoadRewrite>>
 classify2DUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
@@ -53,7 +60,8 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
                        ArrayRef<Value> ownerLoopIvs);
 
 FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
-                                      DirectDepSpec dep, Block *computeBlock);
+                                      DirectDepSpec dep, Block *computeBlock,
+                                      ArrayRef<unsigned> ownerLoopDims);
 
 LogicalResult rewriteCloned2DUnitHaloLoads(
     arts::EdtOp task, const DenseMap<Operation *, HaloLoadRewrite> &rewrites,

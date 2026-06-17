@@ -131,19 +131,14 @@ static SdeSuIterateOp resolveAccessWindowWitness(SdeMuAllocOp mu) {
 /// Gated on witness classification: a stencil witness already proves its own
 /// owner grid through the stencil-store-witness path (findStencilStoreWitness).
 /// Authoring a second committed-grid residual window for a stencil output
-/// over-fires (conv-2d/conv-3d/jacobi2d) and later errors "cannot map SDE
-/// access-window block coordinate to a loop dimension". The genuine residual
-/// targets (bicg A-init <single>, atax combine, activations softmax) have a
-/// non-stencil (elementwise_pipeline) witness whose loop bounds cannot prove
-/// the grid, so they alone need this fallback.
+/// over-fires when the realized loop cannot map every owner coordinate. Genuine
+/// non-stencil residual writers can still need this proof when their loop
+/// bounds cannot otherwise prove the committed grid.
 // A stencil SU is block-realizable at the SDE/ARTS boundary only if its
 // realized `su_iterate` loop exposes at least one loop dim per committed owner
 // dim of EVERY array it touches. When some touched array commits more owner
-// dims than the stencil has loop dims (e.g. a 2-D [0,1] owner grid under a 1-D
-// `su_iterate` whose column owner coordinate is `div(inner_scf_iv, block)`, or
-// a 3-D [0,1,2] grid under a 1-D loop as in sw4lite/vel4sg), the boundary
-// cannot map that array's owner window from the loop and falls it back to a
-// coarse DB.
+// dims than the stencil has loop dims, the boundary cannot map that array's
+// owner window from the loop and falls it back to a coarse DB.
 static bool stencilIsBlockRealizable(SdeSuIterateOp stencil) {
   unsigned loopRank = stencil.getLowerBounds().size();
   for (const LayoutGraphFact &fact :
@@ -163,11 +158,7 @@ static bool stencilIsBlockRealizable(SdeSuIterateOp stencil) {
 // stencil reads or writes, including non-rank-expanded / replicated outputs and
 // any sibling array a separate init/copy writer would otherwise block-author)
 // must be realized coarse-consistently until the stencil itself can map its
-// multi-D owner grid (inner-scf owner loop + RO halo realization,
-// architecture-scale). This keeps jacobi-for / poisson-for / sw4lite-vel4sg
-// correct at one node exactly as conv-2d/conv-3d already are, while leaving the
-// genuine non-stencil residual targets (bicg A-init, atax combine, activations
-// softmax) on the block path.
+// multi-D owner grid. Non-stencil residual writers remain on the block path.
 static bool muUsedByUnmappableStencil(SdeMuAllocOp mu) {
   for (Operation *user : mu.getMemref().getUsers()) {
     if (!isa<memref::LoadOp, memref::StoreOp, affine::AffineReadOpInterface,
@@ -190,14 +181,16 @@ static bool hasFullGridResidualWriter(SdeMuAllocOp mu, unsigned ownerDimCount,
                                       SdeSuIterateOp si) {
   if (ownerDimCount == 0)
     return false;
-  if (auto classification = si.getStructuredClassification())
-    if (*classification == SdeStructuredClassification::stencil)
-      return false;
   for (Operation *user : mu.getMemref().getUsers()) {
     auto store = dyn_cast<memref::StoreOp>(user);
     if (!store ||
         ValueAnalysis::stripMemrefViewOps(store.getMemRef()) != mu.getMemref())
       continue;
+    SdeSuIterateOp writer = store->getParentOfType<SdeSuIterateOp>();
+    if (writer)
+      if (auto classification = writer.getStructuredClassification())
+        if (*classification == SdeStructuredClassification::stencil)
+          continue;
     if (store.getIndices().size() < ownerDimCount)
       continue;
     bool everyOwnerDimVariant = true;
@@ -281,11 +274,10 @@ static bool hasReplicatedReadFact(SdeMuAllocOp mu, int64_t arrayId) {
   return false;
 }
 
-// A committed replicated WRITE fact (e.g. correlation's symmetric corr matrix,
-// which SDE cannot block-distribute as single-writer) is whole-array. Mirrors
-// hasReplicatedReadFact so the type-shape fallback in
-// deriveMuAccessWindowGeometry does not misread a square logical write MU as a
-// 1-D owner grid.
+// A committed replicated WRITE fact that SDE cannot block-distribute as
+// single-writer is whole-array. Mirrors hasReplicatedReadFact so the type-shape
+// fallback in deriveMuAccessWindowGeometry does not misread a square logical
+// write MU as a 1-D owner grid.
 static bool hasReplicatedWriteFact(SdeMuAllocOp mu, int64_t arrayId) {
   for (Operation *user : mu.getMemref().getUsers()) {
     auto root = dyn_cast<SdeArrayLayoutRootOp>(user);
@@ -407,8 +399,8 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
   // SDE/ARTS boundary path cannot lower (it would reject the unmapped owner
   // window with "cannot map SDE access-window block coordinate to a loop
   // dimension"). Realizing such a stencil as block needs an inner-scf owner
-  // loop plus RO halo (architecture-scale); until then the whole stencil
-  // neighborhood is realized coarse-consistently, exactly as conv-2d/conv-3d.
+  // loop plus RO halo; until then the whole stencil neighborhood is realized
+  // coarse-consistently.
   if (muUsedByUnmappableStencil(mu))
     return specs;
 
@@ -573,8 +565,8 @@ std::optional<MuAccessWindowGeometry> deriveMuAccessWindowGeometry(Value mu) {
     // A committed replicated array (read OR write) is whole-array
     // (ownerDimCount==0). The committed layout fact is authoritative: check it
     // BEFORE the structural type guesses below, which would otherwise misread a
-    // square logical shape (e.g. correlation's replicated corr matrix) as a 1-D
-    // owner grid via recognizeExpandedBlockGridMu / the type-shape fallback.
+    // square replicated logical shape as a 1-D owner grid via
+    // recognizeExpandedBlockGridMu / the type-shape fallback.
     if (std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(muAlloc))
       if (hasReplicatedReadFact(muAlloc, *arrayId) ||
           hasReplicatedWriteFact(muAlloc, *arrayId)) {

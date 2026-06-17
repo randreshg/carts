@@ -19,6 +19,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
+#include <cassert>
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -217,6 +218,17 @@ appendCoarseDbReadDependencies(sde::SdeCuRegionOp source,
   return success();
 }
 
+bool hasOnlyDeallocUses(Value value,
+                        SmallVectorImpl<memref::DeallocOp> &users) {
+  for (Operation *user : value.getUsers()) {
+    auto dealloc = dyn_cast<memref::DeallocOp>(user);
+    if (!dealloc)
+      return false;
+    users.push_back(dealloc);
+  }
+  return !users.empty();
+}
+
 // A residual `<single>` source CU that fuses a serial init loop (e.g. an
 // `idx++`-carried data init) keeps the access window for the array it writes,
 // so it is realized as an EDT rather than inlined. But CuNormalization also
@@ -224,13 +236,13 @@ appendCoarseDbReadDependencies(sde::SdeCuRegionOp source,
 // `memref.alloc`/`memref.alloca` buffers (output buffers that are now dead
 // after storage realization, and `memref<f64>` checksum accumulators shared
 // with a sibling checksum CU). These are storage allocations, not EDT
-// dataflow, so they cannot be expressed as scalar EDT yields. Hoist any
-// CU-result whose yielded value is an alloc/alloca defined directly in the CU
-// body out to before the CU and rebuild the CU without that result; the
-// hoisted SSA value then dominates both the in-CU uses (e.g. the init store of
-// an accumulator) and any sibling-CU use. Only static-shape allocs (no dynamic
-// operands) are hoisted; anything else is left in place and the later result
-// checks fail closed. Returns the rebuilt (or unchanged) CU.
+// dataflow, so they cannot be expressed as scalar EDT yields.
+//
+// If a yielded heap allocation is only deallocated outside the CU, keep it
+// local to the CU and move the deallocation into the CU body before dropping
+// the result. Otherwise, hoist static alloc/alloca results out to before the CU
+// so the SSA value dominates any genuine external use. Dynamic-shape escaping
+// allocs are left in place and later checks fail closed.
 sde::SdeCuRegionOp hoistEscapingScratchResults(sde::SdeCuRegionOp source) {
   if (source.getNumResults() == 0 || source.getBody().empty())
     return source;
@@ -239,8 +251,11 @@ sde::SdeCuRegionOp hoistEscapingScratchResults(sde::SdeCuRegionOp source) {
   if (!yield || yield.getValues().size() != source.getNumResults())
     return source;
 
-  // Decide which results are hoistable scratch allocations.
+  // Decide which results are dead private allocations or hoistable scratch.
+  SmallVector<bool> dropPrivate(source.getNumResults(), false);
   SmallVector<bool> hoist(source.getNumResults(), false);
+  SmallVector<SmallVector<memref::DeallocOp, 2>, 4> deallocs(
+      source.getNumResults());
   bool any = false;
   for (auto [idx, value] : llvm::enumerate(yield.getValues())) {
     Operation *def = value.getDefiningOp();
@@ -248,6 +263,14 @@ sde::SdeCuRegionOp hoistEscapingScratchResults(sde::SdeCuRegionOp source) {
       continue;
     if (!isa<memref::AllocOp, memref::AllocaOp>(def))
       continue;
+
+    if (isa<memref::AllocOp>(def) &&
+        hasOnlyDeallocUses(source.getResult(idx), deallocs[idx])) {
+      dropPrivate[idx] = true;
+      any = true;
+      continue;
+    }
+
     if (def->getNumOperands() != 0) // dynamic-shape alloc: leave for fail-close
       continue;
     hoist[idx] = true;
@@ -260,6 +283,16 @@ sde::SdeCuRegionOp hoistEscapingScratchResults(sde::SdeCuRegionOp source) {
   SmallVector<Value> yieldedValues(yield.getValues().begin(),
                                    yield.getValues().end());
 
+  OpBuilder bodyBuilder(yield);
+  for (auto [idx, value] : llvm::enumerate(yieldedValues)) {
+    if (!dropPrivate[idx])
+      continue;
+    if (isa<memref::AllocOp>(value.getDefiningOp()))
+      memref::DeallocOp::create(bodyBuilder, value.getLoc(), value);
+    for (memref::DeallocOp dealloc : deallocs[idx])
+      dealloc.erase();
+  }
+
   // Move the hoistable defs to just before the CU (static allocs have no
   // operands, so dominance is trivially preserved for both in-CU and
   // downstream uses).
@@ -271,7 +304,7 @@ sde::SdeCuRegionOp hoistEscapingScratchResults(sde::SdeCuRegionOp source) {
   SmallVector<Type> keptTypes;
   SmallVector<Value> keptYields;
   for (auto [idx, value] : llvm::enumerate(yieldedValues))
-    if (!hoist[idx]) {
+    if (!hoist[idx] && !dropPrivate[idx]) {
       keptTypes.push_back(source.getResult(idx).getType());
       keptYields.push_back(value);
     }
@@ -291,6 +324,8 @@ sde::SdeCuRegionOp hoistEscapingScratchResults(sde::SdeCuRegionOp source) {
   for (auto [idx, oldResult] : llvm::enumerate(source.getResults())) {
     if (hoist[idx])
       oldResult.replaceAllUsesWith(yieldedValues[idx]);
+    else if (dropPrivate[idx])
+      assert(oldResult.use_empty() && "dead private CU result still has users");
     else
       oldResult.replaceAllUsesWith(rebuilt.getResult(keptPos++));
   }

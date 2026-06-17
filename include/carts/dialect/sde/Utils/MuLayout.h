@@ -120,7 +120,7 @@ recoverMuPhysicalLayoutFromExpandedShape(llvm::ArrayRef<int64_t> shape,
 inline bool isCommittedRankExpandedMuType(mlir::MemRefType muType) {
   if (std::optional<RecoveredMuPhysicalLayout> recovered =
           recoverMuPhysicalLayoutFromExpandedType(muType)) {
-    if (muType.getRank() > recovered->logicalShape.size())
+    if (static_cast<size_t>(muType.getRank()) > recovered->logicalShape.size())
       return true;
     for (unsigned dim : recovered->ownerDims) {
       if (recovered->physicalBlockShape[dim] < recovered->logicalShape[dim])

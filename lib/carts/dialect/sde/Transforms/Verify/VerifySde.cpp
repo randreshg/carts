@@ -43,9 +43,9 @@ namespace mlir::carts::sde {
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/APInt.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
 
@@ -209,10 +209,10 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
       // one diagnostic at its root.
       if (!isSourceComputeOp(op))
         return;
-      // A control-flow container (e.g. an NREPS rep `affine.for`, a stencil time
-      // loop, or an `scf.if` guard) whose body holds SDE CUs/su_iterates is
-      // scheduling structure, not leaf source compute: its compute already lives
-      // in CUs. Recurse past it -- the walk still flags any genuinely-raw
+      // A control-flow container (e.g. an NREPS rep `affine.for`, a stencil
+      // time loop, or an `scf.if` guard) whose body holds SDE CUs/su_iterates
+      // is scheduling structure, not leaf source compute: its compute already
+      // lives in CUs. Recurse past it -- the walk still flags any genuinely-raw
       // compute nested deeper outside a CU.
       if (op->getNumRegions() > 0) {
         bool wrapsSdeWork = false;
@@ -285,7 +285,8 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
 
     // Discarded-parallelism guard: a source-compute cu_region<single> directly
     // inside a multi-trip su_iterate must carry a serial_reason license.
-    // Gauss-Seidel / in-place self-read is licensed by proven inPlaceSharedState.
+    // Gauss-Seidel / in-place self-read is licensed by proven
+    // inPlaceSharedState.
     module.walk([&](sde::SdeSuIterateOp it) {
       if (suIterateIsProvablySingleTrip(it) || queryInPlaceSharedState(it) ||
           it.getBody().empty())
@@ -307,7 +308,8 @@ struct VerifySdePass : public sde::impl::VerifySdeBase<VerifySdePass> {
           continue;
         cu.emitOpError()
             << "is a serial cu_region<single> directly inside a multi-trip "
-               "sde.su_iterate but carries no serial_reason license; raise-to-sde "
+               "sde.su_iterate but carries no serial_reason license; "
+               "raise-to-sde "
                "must promote a proven-independent nest to <parallel> or the "
                "producer must assert a serial_reason";
         failed = true;

@@ -92,7 +92,7 @@ LogicalResult requireCompatibleWindows(sde::SdeMuAllocOp op,
     expandedTypeLayout.reset();
   if (expandedTypeLayout) {
     if (expandedTypeLayout->blockShape.size() + ownerDimCount !=
-        memrefType.getRank())
+        static_cast<size_t>(memrefType.getRank()))
       return op.emitOpError()
              << "has access-window owner rank incompatible with the "
                 "rank-expanded MU type";
@@ -445,9 +445,8 @@ LogicalResult realizeTaskDepMemrefStorage(
              "arrayLayout facts before SDE-to-ARTS storage lowering";
       return failure();
     } else {
-      realized = arts::createCoarseDbBackedMemref(builder, rootOp->getLoc(),
-                                                  memrefType, *dynamicSizes,
-                                                  replacement);
+      realized = arts::createCoarseDbBackedMemref(
+          builder, rootOp->getLoc(), memrefType, *dynamicSizes, replacement);
     }
     if (failed(realized)) {
       rootOp->emitError()

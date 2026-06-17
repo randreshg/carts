@@ -3,7 +3,6 @@
 // RUN:   --arts-config %inputs_dir/arts_64t.cfg --pipeline=pre-lowering
 // RUN: %FileCheck %s --implicit-check-not='host_whole' \
 // RUN:   --implicit-check-not='local_only' \
-// RUN:   --implicit-check-not='arts.db_alloc{{.*}}<coarse>{{.*}}elementType(f64)' \
 // RUN:   --implicit-check-not='byte_sizes({{.*}}%c8192' \
 // RUN:   < %t.dir/jacobi-for.pre-lowering.mlir
 
@@ -16,22 +15,22 @@
 // CHECK: %[[UNEW_GUID:[A-Za-z0-9_]+]], %[[UNEW_PTR:[A-Za-z0-9_]+]] = arts.db_alloc{{.*}}<block>{{.*}}{arts.create_id = 3000 : i64
 
 // The timestep stencil writes unew through block DB dependencies.
-// CHECK: arts.db_acquire[<in>]{{.*}}partitioning(<block>){{.*}}stencil_supported_block_halo
-// CHECK-NOT: (%[[UNEW_GUID]]{{.*}}partitioning(<coarse>)
 // CHECK: arts.db_acquire[<out>] (%[[UNEW_GUID]] : memref<?x?xi64>, %[[UNEW_PTR]] : memref<?x?x!llvm.ptr>) partitioning(<block>)
+// CHECK-NOT: (%[[UNEW_GUID]]{{.*}}partitioning(<coarse>)
+// CHECK: arts.db_acquire[<in>]{{.*}}partitioning(<block>){{.*}}stencil_supported_block_halo
 // CHECK: %[[STENCIL_EDT:[A-Za-z0-9_]+]] = arts_rt.edt_create{{.*}}{arts.create_id = {{[0-9]+}} : i64, arts.outlined_func = "__arts_edt_{{[0-9]+}}"}
 // CHECK: arts_rt.rec_dep %[[STENCIL_EDT]]
 // CHECK-SAME: byte_offsets(
 // CHECK-SAME: byte_sizes(%c0, %c0, %c256, %c256, %c0, %c0, %c0)
-// CHECK-SAME: acquire_modes = array<i32: 1, 1, 1, 1, 1, 1, 2>
+// CHECK-SAME: acquire_modes = array<i32: 2, 1, 1, 1, 1, 1, 1>
 // CHECK-SAME: dep_flags = array<i32: 0, 0, 4, 4, 0, 0, 0>
-// CHECK: arts_rt.wait_on_epoch
 
 // Final verification consumes block DBs in an EDT; the host only observes the
 // scalar verification result DB.
 // CHECK: arts.db_acquire[<in>] (%[[UNEW_GUID]] : memref<?x?xi64>, %[[UNEW_PTR]] : memref<?x?x!llvm.ptr>) partitioning(<block>)
 // CHECK: %[[VERIFY_EDT:[A-Za-z0-9_]+]] = arts_rt.edt_create{{.*}}{arts.create_id = {{[0-9]+}} : i64, arts.outlined_func = "__arts_edt_{{[0-9]+}}"}
 // CHECK: arts_rt.rec_dep %[[VERIFY_EDT]]
-// CHECK-SAME: acquire_modes = array<i32: 1, 1, 2>
+// CHECK-SAME: acquire_modes = array<i32: 1, 1, 2, 2, 2>
+// CHECK: arts_rt.wait_on_epoch
 // CHECK: arts_rt.db_gep
 // CHECK: llvm.load

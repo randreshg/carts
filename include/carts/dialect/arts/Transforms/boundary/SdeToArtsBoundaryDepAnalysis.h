@@ -42,11 +42,18 @@ FailureOr<int64_t> getAccessWindowPayloadExtent(sde::SdeSuIterateOp source,
 
 int64_t ceilDivPositiveI64(int64_t lhs, int64_t rhs);
 
+std::optional<SmallVector<int64_t, 4>>
+findLargestOwnerLocalGroupCounts(ArrayRef<WriterGroupingSpec> writerSpecs,
+                                 ArrayRef<int64_t> requestedCounts,
+                                 int64_t totalNodes);
+
 LogicalResult ensureDistributedWriterOwnerLocalGroups(
     sde::SdeSuIterateOp source, ArrayRef<DirectDepSpec> deps,
     SmallVectorImpl<int64_t> &groupBlockCounts,
     SmallVectorImpl<int64_t> &workerSpans, ArrayRef<int64_t> ownerBlockSizes,
-    int64_t totalNodes, bool &splitToOwnerLocalGroups);
+    ArrayRef<int64_t> dispatchedOwnerDims,
+    ArrayRef<unsigned> dispatchedLoopDims, int64_t totalNodes,
+    bool &splitToOwnerLocalGroups);
 
 LogicalResult
 collectCoarseSuDependencies(sde::SdeSuIterateOp source,

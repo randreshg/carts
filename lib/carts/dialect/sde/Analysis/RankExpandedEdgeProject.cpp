@@ -72,7 +72,7 @@ recoverConstantOffsetFromAnyIv(Value value, ArrayRef<Value> ivs) {
   return std::nullopt;
 }
 
-static std::optional<SmallVector<int64_t, 4>>
+std::optional<SmallVector<int64_t, 4>>
 recoverRankExpandedOwnerHaloFromLoads(Value root, SdeSuIterateOp reader,
                                       ArrayRef<int64_t> ownerDims,
                                       MemRefType rootType) {
@@ -330,7 +330,7 @@ bool projectRankExpandedHaloEdge(RedistributionEdge &edge,
 
   ArrayRef<int64_t> ownerHaloShape = committedHaloShape;
   SmallVector<int64_t, 4> projectedOwnerHalo;
-  if (committedHaloShape.size() == rootType.getRank()) {
+  if (committedHaloShape.size() == static_cast<size_t>(rootType.getRank())) {
     projectedOwnerHalo.reserve(rawSourceOwner.size());
     for (int64_t ownerDim : rawSourceOwner) {
       if (ownerDim < 0 || ownerDim >= expanded->logicalRank) {

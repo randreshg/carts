@@ -79,22 +79,110 @@ static void verifyCdagDistributedDbDeps(EdtOp edt, bool &failed) {
   }
 }
 
-/// DB-space block identity for an acquire. Returns "whole" for a whole-block
-/// acquire, a constant coordinate tuple when all indices fold, or std::nullopt
-/// when an index is dynamic (then two writers cannot be proven to collide).
-static std::optional<std::string> blockKey(DbAcquireOp acquire) {
-  auto indices = acquire.getIndices();
-  if (indices.empty())
-    return std::string("whole");
-  std::string key;
-  for (Value index : indices) {
-    auto constant = ValueAnalysis::tryFoldConstantIndex(index);
-    if (!constant)
-      return std::nullopt;
-    key += std::to_string(*constant);
-    key += ',';
+struct DbRangeDim {
+  int64_t offset = 0;
+  int64_t size = 0;
+};
+
+struct DbWriterRegion {
+  Operation *edt = nullptr;
+  Operation *acquireOp = nullptr;
+  DbAcquireOp acquire;
+  SmallVector<DbRangeDim, 4> ranges;
+  std::string symbolicKey;
+  bool whole = false;
+  bool exact = false;
+};
+
+static std::string valueKey(Value value) {
+  if (auto constant = ValueAnalysis::tryFoldConstantIndex(value))
+    return std::to_string(*constant);
+  std::string text;
+  llvm::raw_string_ostream os(text);
+  os << "v" << static_cast<const void *>(value.getAsOpaquePointer());
+  return os.str();
+}
+
+static std::optional<DbWriterRegion> writerRegion(DbAcquireOp acquire,
+                                                  Operation *edt) {
+  DbWriterRegion region;
+  region.edt = edt;
+  region.acquireOp = acquire.getOperation();
+  region.acquire = acquire;
+
+  if (!acquire.getIndices().empty()) {
+    region.exact = true;
+    region.symbolicKey = "point:";
+    for (Value index : acquire.getIndices()) {
+      std::optional<int64_t> constant =
+          ValueAnalysis::tryFoldConstantIndex(index);
+      region.symbolicKey += valueKey(index);
+      region.symbolicKey += ',';
+      if (!constant) {
+        region.exact = false;
+        continue;
+      }
+      region.ranges.push_back(DbRangeDim{*constant, 1});
+    }
+    if (!region.exact)
+      region.ranges.clear();
+    return region;
   }
-  return key;
+
+  if (!acquire.getOffsets().empty() || !acquire.getSizes().empty()) {
+    if (acquire.getOffsets().size() != acquire.getSizes().size())
+      return std::nullopt;
+    region.exact = true;
+    region.symbolicKey = "range:";
+    for (auto [offset, size] :
+         llvm::zip(acquire.getOffsets(), acquire.getSizes())) {
+      std::optional<int64_t> offsetConstant =
+          ValueAnalysis::tryFoldConstantIndex(offset);
+      std::optional<int64_t> sizeConstant =
+          ValueAnalysis::tryFoldConstantIndex(size);
+      region.symbolicKey += valueKey(offset);
+      region.symbolicKey += '+';
+      region.symbolicKey += valueKey(size);
+      region.symbolicKey += ',';
+      if (!offsetConstant || !sizeConstant || *sizeConstant <= 0) {
+        region.exact = false;
+        continue;
+      }
+      region.ranges.push_back(DbRangeDim{*offsetConstant, *sizeConstant});
+    }
+    if (!region.exact)
+      region.ranges.clear();
+    return region;
+  }
+
+  region.whole = true;
+  region.exact = true;
+  region.symbolicKey = "whole";
+  return region;
+}
+
+static bool exactRangesOverlap(ArrayRef<DbRangeDim> lhs,
+                               ArrayRef<DbRangeDim> rhs) {
+  if (lhs.size() != rhs.size())
+    return true;
+  for (auto [left, right] : llvm::zip(lhs, rhs)) {
+    int64_t leftEnd = left.offset + left.size;
+    int64_t rightEnd = right.offset + right.size;
+    if (leftEnd <= right.offset || rightEnd <= left.offset)
+      return false;
+  }
+  return true;
+}
+
+static std::optional<bool> writerRegionsOverlap(const DbWriterRegion &lhs,
+                                                const DbWriterRegion &rhs) {
+  if (lhs.whole || rhs.whole)
+    return true;
+  if (lhs.exact && rhs.exact)
+    return exactRangesOverlap(lhs.ranges, rhs.ranges);
+  if (!lhs.symbolicKey.empty() && lhs.symbolicKey == rhs.symbolicKey)
+    return true;
+  return std::nullopt;
 }
 
 struct CommittedDbUseSummary {
@@ -363,18 +451,14 @@ static LogicalResult verifyCdagCommittedAcquireUser(DbAcquireOp acquire) {
 /// consumes the acquired pointer; two distinct EDTs writing the same block
 /// within one epoch (concurrent) violates SWMR.
 static void verifyCdagSwmr(ModuleOp module, bool &failed) {
-  /// (alloc, epoch, blockKey) -> first writer (edt op, acquire).
-  std::map<std::tuple<Operation *, Operation *, std::string>,
-           std::pair<Operation *, DbAcquireOp>>
+  /// (alloc, epoch) -> writer regions already seen in this concurrent epoch.
+  std::map<std::pair<Operation *, Operation *>, SmallVector<DbWriterRegion, 4>>
       writers;
   module.walk([&](DbAcquireOp acquire) {
     if (!isWriterAcquire(acquire))
       return;
     DbAllocOp alloc = DbUtils::getUnderlyingDbAllocOp(acquire.getSourcePtr());
     if (!alloc || !hasDistributedDbAllocation(alloc.getOperation()))
-      return;
-    auto key = blockKey(acquire);
-    if (!key)
       return;
     for (Operation *user : acquire.getPtr().getUsers()) {
       auto edt = dyn_cast<EdtOp>(user);
@@ -383,19 +467,57 @@ static void verifyCdagSwmr(ModuleOp module, bool &failed) {
       auto epoch = edt->getParentOfType<EpochOp>();
       if (!epoch)
         continue;
-      auto id =
-          std::make_tuple(alloc.getOperation(), epoch.getOperation(), *key);
-      auto [it, inserted] =
-          writers.try_emplace(id, std::make_pair(edt.getOperation(), acquire));
-      if (inserted || it->second.first == edt.getOperation())
+
+      std::optional<DbWriterRegion> current =
+          writerRegion(acquire, edt.getOperation());
+      if (!current) {
+        InFlightDiagnostic diag =
+            edt.emitOpError()
+            << "writes a distributed DB through malformed partition operands; "
+               "the block grain allows a single writer";
+        diag.attachNote(acquire.getLoc())
+            << "writer acquire has mismatched DB-space offsets/sizes";
+        failed = true;
         continue;
-      InFlightDiagnostic diag =
-          edt.emitOpError()
-          << "is a second concurrent writer of distributed DB block " << *key
-          << " within one epoch; the block grain allows a single writer";
-      diag.attachNote(it->second.second.getLoc())
-          << "first writer of the same block in this epoch";
-      failed = true;
+      }
+
+      auto id = std::make_pair(alloc.getOperation(), epoch.getOperation());
+      auto &priorWriters = writers[id];
+      bool recorded = false;
+      for (const DbWriterRegion &prior : priorWriters) {
+        if (prior.edt == edt.getOperation()) {
+          recorded = true;
+          continue;
+        }
+        std::optional<bool> overlaps = writerRegionsOverlap(*current, prior);
+        if (overlaps && !*overlaps)
+          continue;
+        if (!overlaps) {
+          InFlightDiagnostic diag =
+              edt.emitOpError()
+              << "writes a distributed DB range whose block disjointness "
+                 "cannot "
+                 "be proven within one epoch; the block grain allows a single "
+                 "writer";
+          diag.attachNote(prior.acquireOp->getLoc())
+              << "prior writer range in the same epoch";
+          diag.attachNote(acquire.getLoc())
+              << "current writer range with dynamic DB-space coordinates";
+          failed = true;
+          continue;
+        }
+        InFlightDiagnostic diag =
+            edt.emitOpError()
+            << "is a second concurrent writer of an overlapping distributed DB "
+               "block range within one epoch; the block grain allows a single "
+               "writer";
+        diag.attachNote(prior.acquireOp->getLoc())
+            << "first writer of an overlapping block range in this epoch";
+        failed = true;
+      }
+      if (recorded)
+        continue;
+      priorWriters.push_back(std::move(*current));
     }
   });
 }

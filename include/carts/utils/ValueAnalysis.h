@@ -30,6 +30,25 @@ public:
     std::optional<int64_t> multiplier;
   };
 
+  class ValueOrInt {
+  public:
+    ValueOrInt() = default;
+    explicit ValueOrInt(Value value);
+    explicit ValueOrInt(int64_t constant);
+
+    static ValueOrInt get(Value value);
+
+    bool isConstant() const { return constant.has_value(); }
+    bool isValue() const { return value && !constant; }
+    Value getValue() const { return value; }
+    std::optional<int64_t> getConstant() const { return constant; }
+    bool equals(int64_t expected) const;
+
+  private:
+    Value value;
+    std::optional<int64_t> constant;
+  };
+
   ///===----------------------------------------------------------------------===////
   /// Constant Value Analysis
   ///===----------------------------------------------------------------------===////

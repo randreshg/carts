@@ -122,6 +122,7 @@ buildRankExpandedElementIndices(OpBuilder &builder, Location loc,
 
 void emitCompactHaloCopy(OpBuilder &builder, Location loc,
                          unsigned ownerDimCount,
+                         ArrayRef<unsigned> ownerPayloadDims,
                          ArrayRef<int64_t> sourceOffsets,
                          ArrayRef<Value> elementExtents, Value sourcePayload,
                          Value compactPayload) {
@@ -135,14 +136,22 @@ void emitCompactHaloCopy(OpBuilder &builder, Location loc,
       sourceElementIndices.reserve(payloadRank);
       compactElementIndices.reserve(payloadRank);
       for (unsigned slot = 0; slot < payloadRank; ++slot) {
-        if (slot >= ownerDimCount || sourceOffsets[slot] == 0) {
+        auto ownerIt = llvm::find(ownerPayloadDims, slot);
+        if (ownerIt == ownerPayloadDims.end()) {
+          sourceElementIndices.push_back(loopIvs[slot]);
+          compactElementIndices.push_back(loopIvs[slot]);
+          continue;
+        }
+        unsigned ownerSlot = static_cast<unsigned>(
+            std::distance(ownerPayloadDims.begin(), ownerIt));
+        if (sourceOffsets[ownerSlot] == 0) {
           sourceElementIndices.push_back(loopIvs[slot]);
           compactElementIndices.push_back(loopIvs[slot]);
           continue;
         }
         Value compactCoord = createZeroIndex(builder, loc);
         compactElementIndices.push_back(compactCoord);
-        if (sourceOffsets[slot] > 0) {
+        if (sourceOffsets[ownerSlot] > 0) {
           sourceElementIndices.push_back(createZeroIndex(builder, loc));
           continue;
         }
@@ -161,17 +170,24 @@ void emitCompactHaloCopy(OpBuilder &builder, Location loc,
       return;
     }
 
-    if (dim < ownerDimCount && sourceOffsets[dim] != 0) {
-      emitAtDim(dim + 1);
-      return;
+    auto ownerIt = llvm::find(ownerPayloadDims, dim);
+    if (ownerIt != ownerPayloadDims.end()) {
+      unsigned ownerSlot = static_cast<unsigned>(
+          std::distance(ownerPayloadDims.begin(), ownerIt));
+      if (sourceOffsets[ownerSlot] != 0) {
+        emitAtDim(dim + 1);
+        return;
+      }
     }
 
-    auto loop =
-        scf::ForOp::create(builder, loc, createZeroIndex(builder, loc),
-                           elementExtents[dim], createOneIndex(builder, loc));
-    builder.setInsertionPointToStart(loop.getBody());
-    loopIvs[dim] = loop.getInductionVar();
-    emitAtDim(dim + 1);
+    {
+      auto loop =
+          scf::ForOp::create(builder, loc, createZeroIndex(builder, loc),
+                             elementExtents[dim], createOneIndex(builder, loc));
+      builder.setInsertionPointToStart(loop.getBody());
+      loopIvs[dim] = loop.getInductionVar();
+      emitAtDim(dim + 1);
+    }
   };
 
   emitAtDim(/*dim=*/0);
@@ -194,6 +210,79 @@ static Value getCommonDivRemSource(Value divValue, Value remValue,
        !ValueAnalysis::areValuesEquivalent(div.getRhs(), expectedDivisor)))
     return {};
   return div.getLhs();
+}
+
+FailureOr<SmallVector<Value, 4>>
+getCompactHaloOwnerLoopIvs(sde::SdeSuIterateOp source, memref::LoadOp load,
+                           ArrayRef<unsigned> ownerLoopDims,
+                           llvm::StringRef diagnosticRank) {
+  unsigned ownerRank = ownerLoopDims.size();
+  auto sourceIvs = source.getLoopInductionVars();
+  if (!sourceIvs || ownerRank == 0) {
+    load.emitOpError() << "is not nested in the " << diagnosticRank
+                       << " compute loops required for ARTS compact unit-halo "
+                          "load rewriting";
+    return failure();
+  }
+  for (unsigned loopDim : ownerLoopDims) {
+    if (loopDim >= sourceIvs->size()) {
+      load.emitOpError() << "is not nested in the " << diagnosticRank
+                         << " compute loops required for ARTS compact "
+                            "unit-halo load rewriting";
+      return failure();
+    }
+  }
+
+  SmallVector<scf::ForOp, 4> loops;
+  for (Operation *parent = load->getParentOp(); parent;
+       parent = parent->getParentOp())
+    if (auto loop = dyn_cast<scf::ForOp>(parent))
+      loops.push_back(loop);
+
+  auto valueLoopDim = [&](Value value) -> std::optional<unsigned> {
+    std::optional<unsigned> selected;
+    for (auto [dim, sourceIv] : llvm::enumerate(*sourceIvs)) {
+      if (!ValueAnalysis::sameValue(value, sourceIv) &&
+          !ValueAnalysis::dependsOn(value, sourceIv))
+        continue;
+      if (selected && *selected != dim)
+        return std::nullopt;
+      selected = static_cast<unsigned>(dim);
+    }
+    return selected;
+  };
+  auto loopDimFor = [&](scf::ForOp loop) -> std::optional<unsigned> {
+    if (std::optional<unsigned> ivDim = valueLoopDim(loop.getInductionVar()))
+      return ivDim;
+    std::optional<unsigned> lowerDim = valueLoopDim(loop.getLowerBound());
+    std::optional<unsigned> upperDim = valueLoopDim(loop.getUpperBound());
+    if (lowerDim && upperDim && *lowerDim != *upperDim)
+      return std::nullopt;
+    return lowerDim ? lowerDim : upperDim;
+  };
+
+  SmallVector<Value, 4> ownerLoopIvs;
+  ownerLoopIvs.reserve(ownerRank);
+  for (unsigned loopDim : ownerLoopDims) {
+    Value ownerIv;
+    for (scf::ForOp loop : loops) {
+      std::optional<unsigned> mappedDim = loopDimFor(loop);
+      if (mappedDim && *mappedDim == loopDim) {
+        ownerIv = loop.getInductionVar();
+        break;
+      }
+    }
+    if (!ownerIv)
+      ownerIv = (*sourceIvs)[loopDim];
+    if (!ownerIv) {
+      load.emitOpError() << "is not nested in the " << diagnosticRank
+                         << " compute loops required for ARTS compact "
+                            "unit-halo load rewriting";
+      return failure();
+    }
+    ownerLoopIvs.push_back(ownerIv);
+  }
+  return ownerLoopIvs;
 }
 
 FailureOr<std::optional<HaloLoadRewrite>>
@@ -271,9 +360,16 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
 
   bool hasHaloOffset = false;
   for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
-    Value expr =
-        getCommonDivRemSource(indices[slot], indices[ownerDimCount + slot],
-                              work.elementExtents[slot]);
+    if (slot >= work.ownerPayloadDims.size() ||
+        work.ownerPayloadDims[slot] >= payloadRank) {
+      load.emitOpError()
+          << "has inconsistent compact N-D owner payload mapping";
+      return failure();
+    }
+    unsigned payloadDim = work.ownerPayloadDims[slot];
+    Value expr = getCommonDivRemSource(indices[slot],
+                                       indices[ownerDimCount + payloadDim],
+                                       work.elementExtents[payloadDim]);
     if (!expr) {
       load.emitOpError()
           << "does not expose div/rem rank-expanded indices required for ARTS "
@@ -303,9 +399,14 @@ classifyNdUnitHaloLoad(memref::LoadOp load, unsigned haloWorkIndex,
 }
 
 FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
-                                      DirectDepSpec dep, Block *computeBlock) {
+                                      DirectDepSpec dep, Block *computeBlock,
+                                      ArrayRef<unsigned> ownerLoopDims) {
   if (dep.ownerDimCount != 2)
     return false;
+  if (ownerLoopDims.size() != 2)
+    return source.emitOpError()
+           << "commits a halo dependency whose owner rank is not supported by "
+              "ARTS compact 2D unit-halo load rewriting";
   if (dep.alloc.getElementSizes().size() != 4) {
     source.emitOpError() << "commits a rank shape that ARTS compact 2D "
                             "unit-halo realization cannot represent";
@@ -324,20 +425,14 @@ FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
       failedScan = true;
       return WalkResult::interrupt();
     }
-    SmallVector<Value, 4> loopIvs;
-    for (Operation *parent = load->getParentOp(); parent;
-         parent = parent->getParentOp())
-      if (auto loop = dyn_cast<scf::ForOp>(parent))
-        loopIvs.push_back(loop.getInductionVar());
-    if (loopIvs.size() < 2) {
-      load.emitOpError()
-          << "is not nested in the 2D compute loops required for ARTS compact "
-             "unit-halo load rewriting";
+    FailureOr<SmallVector<Value, 4>> ownerLoopIvs =
+        getCompactHaloOwnerLoopIvs(source, load, ownerLoopDims, "2D");
+    if (failed(ownerLoopIvs)) {
       failedScan = true;
       return WalkResult::interrupt();
     }
-    Value rowIv = loopIvs[1];
-    Value colIv = loopIvs[0];
+    Value rowIv = (*ownerLoopIvs)[0];
+    Value colIv = (*ownerLoopIvs)[1];
     Value rowExpr = getCommonDivRemSource(indices[0], indices[2],
                                           dep.alloc.getElementSizes()[2]);
     Value colExpr = getCommonDivRemSource(indices[1], indices[3],
@@ -369,12 +464,33 @@ FailureOr<bool> needsExactNdHaloFor2D(sde::SdeSuIterateOp source,
   return sawCorner;
 }
 
-static SmallVector<Value, 4> buildRankExpandedElementIndices(OpBuilder &builder,
-                                                             Location loc,
-                                                             Value row,
-                                                             Value col) {
-  return SmallVector<Value, 4>{createZeroIndex(builder, loc),
-                               createZeroIndex(builder, loc), row, col};
+static SmallVector<Value, 4>
+buildRankExpandedIndices(ArrayRef<Value> ownerIndices,
+                         ArrayRef<Value> elementIndices) {
+  SmallVector<Value, 4> indices;
+  indices.reserve(ownerIndices.size() + elementIndices.size());
+  indices.append(ownerIndices.begin(), ownerIndices.end());
+  indices.append(elementIndices.begin(), elementIndices.end());
+  return indices;
+}
+
+static Value createGroupEnd(OpBuilder &builder, Location loc, Value blockStart,
+                            int64_t groupBlockCount) {
+  return arith::AddIOp::create(
+      builder, loc, blockStart,
+      createConstantIndex(builder, loc, groupBlockCount));
+}
+
+static Value isBeforeGroup(OpBuilder &builder, Location loc, Value block,
+                           Value groupStart) {
+  return arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult, block,
+                               groupStart);
+}
+
+static Value isAfterOrAtGroupEnd(OpBuilder &builder, Location loc, Value block,
+                                 Value groupEnd) {
+  return arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge, block,
+                               groupEnd);
 }
 
 LogicalResult rewriteCloned2DUnitHaloLoads(
@@ -403,6 +519,9 @@ LogicalResult rewriteCloned2DUnitHaloLoads(
     FailureOr<Value> centerPayload = requirePayload(work.centerTaskDepIndex);
     if (failed(centerPayload))
       return failure();
+    if (work.centerGroupBlockCounts.size() != 2)
+      return task.emitOpError()
+             << "has inconsistent compact halo center grouping state";
     OperandRange indices = load.getIndices();
     if (indices.size() != 4)
       return load.emitOpError()
@@ -413,38 +532,54 @@ LogicalResult rewriteCloned2DUnitHaloLoads(
     Value elemRow = indices[2];
     Value elemCol = indices[3];
     if (rewrite.face == Halo2DFace::Center) {
-      load.getIndicesMutable()[0].set(createZeroIndex(builder, loc));
-      load.getIndicesMutable()[1].set(createZeroIndex(builder, loc));
+      load.getMemrefMutable().assign(*centerPayload);
       continue;
     }
 
     unsigned ownerSlot = 0;
     unsigned faceDepIndex = work.topTaskDepIndex;
     SmallVector<Value, 4> faceIndices;
+    Value crossesGroup;
     switch (rewrite.face) {
     case Halo2DFace::Top:
       ownerSlot = 0;
       faceDepIndex = work.topTaskDepIndex;
-      faceIndices = buildRankExpandedElementIndices(
-          builder, loc, createZeroIndex(builder, loc), elemCol);
+      crossesGroup =
+          isBeforeGroup(builder, loc, indices[0],
+                        depBlockOffsetArgs[work.centerTaskDepIndex][0]);
+      faceIndices = buildRankExpandedIndices(
+          {indices[0], indices[1]}, {createZeroIndex(builder, loc), elemCol});
       break;
     case Halo2DFace::Bottom:
       ownerSlot = 0;
       faceDepIndex = work.bottomTaskDepIndex;
-      faceIndices = buildRankExpandedElementIndices(
-          builder, loc, createZeroIndex(builder, loc), elemCol);
+      crossesGroup = isAfterOrAtGroupEnd(
+          builder, loc, indices[0],
+          createGroupEnd(builder, loc,
+                         depBlockOffsetArgs[work.centerTaskDepIndex][0],
+                         work.centerGroupBlockCounts[0]));
+      faceIndices = buildRankExpandedIndices(
+          {indices[0], indices[1]}, {createZeroIndex(builder, loc), elemCol});
       break;
     case Halo2DFace::Left:
       ownerSlot = 1;
       faceDepIndex = work.leftTaskDepIndex;
-      faceIndices = buildRankExpandedElementIndices(
-          builder, loc, elemRow, createZeroIndex(builder, loc));
+      crossesGroup =
+          isBeforeGroup(builder, loc, indices[1],
+                        depBlockOffsetArgs[work.centerTaskDepIndex][1]);
+      faceIndices = buildRankExpandedIndices(
+          {indices[0], indices[1]}, {elemRow, createZeroIndex(builder, loc)});
       break;
     case Halo2DFace::Right:
       ownerSlot = 1;
       faceDepIndex = work.rightTaskDepIndex;
-      faceIndices = buildRankExpandedElementIndices(
-          builder, loc, elemRow, createZeroIndex(builder, loc));
+      crossesGroup = isAfterOrAtGroupEnd(
+          builder, loc, indices[1],
+          createGroupEnd(builder, loc,
+                         depBlockOffsetArgs[work.centerTaskDepIndex][1],
+                         work.centerGroupBlockCounts[1]));
+      faceIndices = buildRankExpandedIndices(
+          {indices[0], indices[1]}, {elemRow, createZeroIndex(builder, loc)});
       break;
     case Halo2DFace::Center:
       llvm_unreachable("center handled above");
@@ -454,12 +589,9 @@ LogicalResult rewriteCloned2DUnitHaloLoads(
     if (failed(facePayload))
       return failure();
 
-    Value centerBlock = depBlockOffsetArgs[work.centerTaskDepIndex][ownerSlot];
-    Value crossesBlock =
-        arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
-                              indices[ownerSlot], centerBlock);
+    (void)ownerSlot;
     SmallVector<Type, 1> resultTypes{load.getType()};
-    auto ifOp = scf::IfOp::create(builder, loc, resultTypes, crossesBlock,
+    auto ifOp = scf::IfOp::create(builder, loc, resultTypes, crossesGroup,
                                   /*withElseRegion=*/true);
 
     builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
@@ -469,7 +601,7 @@ LogicalResult rewriteCloned2DUnitHaloLoads(
 
     builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
     SmallVector<Value, 4> coreIndices =
-        buildRankExpandedElementIndices(builder, loc, elemRow, elemCol);
+        buildRankExpandedIndices({indices[0], indices[1]}, {elemRow, elemCol});
     Value coreValue =
         memref::LoadOp::create(builder, loc, *centerPayload, coreIndices);
     scf::YieldOp::create(builder, loc, ValueRange{coreValue});
@@ -520,17 +652,23 @@ LogicalResult rewriteClonedNdUnitHaloLoads(
     FailureOr<Value> centerPayload = requirePayload(work.centerTaskDepIndex);
     if (failed(centerPayload))
       return failure();
+    if (work.centerGroupBlockCounts.size() != ownerDimCount)
+      return task.emitOpError()
+             << "has inconsistent compact halo center grouping state";
 
     Location loc = load.getLoc();
     builder.setInsertionPoint(load);
+    SmallVector<Value, 4> ownerIndices;
+    ownerIndices.reserve(ownerDimCount);
+    for (unsigned slot = 0; slot < ownerDimCount; ++slot)
+      ownerIndices.push_back(indices[slot]);
     SmallVector<Value, 4> centerElementIndices;
     centerElementIndices.reserve(payloadRank);
     for (unsigned slot = 0; slot < payloadRank; ++slot)
       centerElementIndices.push_back(indices[ownerDimCount + slot]);
     Value replacement = memref::LoadOp::create(
         builder, loc, *centerPayload,
-        buildRankExpandedElementIndices(builder, loc, ownerDimCount,
-                                        centerElementIndices));
+        buildRankExpandedIndices(ownerIndices, centerElementIndices));
 
     if (work.sideSourceOffsets.size() != work.sideTaskDepIndices.size())
       return task.emitOpError() << "has inconsistent compact halo side state";
@@ -547,16 +685,23 @@ LogicalResult rewriteClonedNdUnitHaloLoads(
       Value condition;
       for (unsigned slot = 0; slot < ownerDimCount; ++slot) {
         Value centerBlock = centerBlockOffsets[slot];
+        Value groupEnd = createGroupEnd(builder, loc, centerBlock,
+                                        work.centerGroupBlockCounts[slot]);
         if (sideOffsets[slot] == 0) {
-          Value sameBlock =
-              arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
+          Value atOrAfterStart =
+              arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::uge,
                                     indices[slot], centerBlock);
-          condition = andValues(loc, condition, sameBlock);
+          Value beforeEnd = arith::CmpIOp::create(
+              builder, loc, arith::CmpIPredicate::ult, indices[slot], groupEnd);
+          condition = andValues(loc, condition, atOrAfterStart);
+          condition = andValues(loc, condition, beforeEnd);
           continue;
         }
 
-        Value crossesBlock = arith::CmpIOp::create(
-            builder, loc, arith::CmpIPredicate::ne, indices[slot], centerBlock);
+        Value crossesBlock =
+            sideOffsets[slot] < 0
+                ? isBeforeGroup(builder, loc, indices[slot], centerBlock)
+                : isAfterOrAtGroupEnd(builder, loc, indices[slot], groupEnd);
         Value matchesSide =
             arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
                                   indices[slot], sideBlockOffsets[slot]);
@@ -567,18 +712,23 @@ LogicalResult rewriteClonedNdUnitHaloLoads(
       SmallVector<Value, 4> sideElementIndices;
       sideElementIndices.reserve(payloadRank);
       for (unsigned slot = 0; slot < payloadRank; ++slot)
-        sideElementIndices.push_back(slot < ownerDimCount &&
-                                             sideOffsets[slot] != 0
-                                         ? createZeroIndex(builder, loc)
-                                         : indices[ownerDimCount + slot]);
+        if (auto ownerIt = llvm::find(work.ownerPayloadDims, slot);
+            ownerIt != work.ownerPayloadDims.end()) {
+          unsigned ownerSlot = static_cast<unsigned>(
+              std::distance(work.ownerPayloadDims.begin(), ownerIt));
+          sideElementIndices.push_back(sideOffsets[ownerSlot] != 0
+                                           ? createZeroIndex(builder, loc)
+                                           : indices[ownerDimCount + slot]);
+        } else {
+          sideElementIndices.push_back(indices[ownerDimCount + slot]);
+        }
 
       auto ifOp = scf::IfOp::create(builder, loc, load.getType(), condition,
                                     /*withElseRegion=*/true);
       builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
       Value sideValue = memref::LoadOp::create(
           builder, loc, *sidePayload,
-          buildRankExpandedElementIndices(builder, loc, ownerDimCount,
-                                          sideElementIndices));
+          buildRankExpandedIndices(ownerIndices, sideElementIndices));
       scf::YieldOp::create(builder, loc, ValueRange{sideValue});
 
       builder.setInsertionPointToStart(&ifOp.getElseRegion().front());

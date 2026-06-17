@@ -63,8 +63,8 @@ LogicalResult mlir::carts::arts::createCoarseDbBackedMemref(
     OpBuilder &builder, Location loc, MemRefType memrefType,
     ValueRange dynamicSizes, Value &memref) {
   // Callers must reject rank-expanded block-grid memrefs before reaching here;
-  // those require per-block DB realization or an explicit fail-closed diagnostic
-  // at the SDE-to-ARTS storage boundary.
+  // those require per-block DB realization or an explicit fail-closed
+  // diagnostic at the SDE-to-ARTS storage boundary.
   FailureOr<SmallVector<Value>> elementSizes =
       buildDbBackedMemrefElementSizes(builder, loc, memrefType, dynamicSizes);
   if (failed(elementSizes))

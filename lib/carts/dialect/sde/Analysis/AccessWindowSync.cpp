@@ -6,6 +6,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/sde/Analysis/AccessWindowSync.h"
+#include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -79,11 +80,10 @@ static bool appendWindowFact(Value mu, SdeAccessMode mode,
       deriveMuAccessWindowGeometry(mu);
   if (!geom || geom->blockLo.size() != geom->blockHi.size())
     return false;
-  out.push_back({mu, mode,
-                 SmallVector<int64_t, 2>(geom->blockLo.begin(),
-                                         geom->blockLo.end()),
-                 SmallVector<int64_t, 2>(geom->blockHi.begin(),
-                                         geom->blockHi.end())});
+  out.push_back(
+      {mu, mode,
+       SmallVector<int64_t, 2>(geom->blockLo.begin(), geom->blockLo.end()),
+       SmallVector<int64_t, 2>(geom->blockHi.begin(), geom->blockHi.end())});
   return true;
 }
 
@@ -155,6 +155,21 @@ bool phaseFullyWindowed(ArrayRef<SdeCuRegionOp> phase) {
   return true;
 }
 
+bool phaseHasNonWindowedSideEffect(ArrayRef<SdeCuRegionOp> phase) {
+  for (SdeCuRegionOp cu : phase) {
+    bool found = false;
+    cu.getBody().walk([&](Operation *op) {
+      if (isDirectMuMemoryAccess(op))
+        return;
+      if (sde::hasUnmodeledMemoryEffect(op))
+        found = true;
+    });
+    if (found)
+      return true;
+  }
+  return false;
+}
+
 } // namespace
 
 BarrierSyncVerdict classifyBarrierSync(ArrayRef<SdeCuRegionOp> before,
@@ -198,6 +213,9 @@ BarrierSyncVerdict classifyBarrierSync(ArrayRef<SdeCuRegionOp> before,
     return BarrierSyncVerdict::Justified;
   if (rankMismatch)
     return BarrierSyncVerdict::RankMismatch;
+  if (phaseHasNonWindowedSideEffect(before) ||
+      phaseHasNonWindowedSideEffect(after))
+    return BarrierSyncVerdict::OutOfScope;
   if (phaseFullyWindowed(before) && phaseFullyWindowed(after))
     return BarrierSyncVerdict::Redundant;
   return BarrierSyncVerdict::Unprovable;

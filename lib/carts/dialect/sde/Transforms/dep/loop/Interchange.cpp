@@ -8,13 +8,13 @@
 ///
 /// 2. Stencil halo ordering: for stencil classification, reads
 ///    accessMinOffsets/accessMaxOffsets to compute per-dim halo
-///    width. For 3D+ stencils with multiple inner loops (affine.for or scf.for),
-///    reorders so the smallest-halo-width dim is outermost (minimizes total halo
-///    volume). Affine nests use upstream `permuteLoops`.
+///    width. For 3D+ stencils with multiple inner loops (affine.for or
+///    scf.for), reorders so the smallest-halo-width dim is outermost (minimizes
+///    total halo volume). Affine nests use upstream `permuteLoops`.
 ///
 /// The interchange handles imperfect nests by distributing init ops into a
 /// separate loop when the j loop contains both init stores and a reduction
-/// loop (e.g., 2mm: C[i,j] = 0 then for k: C[i,j] += A[i,k]*B[k,j]).
+/// loop in the same imperfect nest.
 ///==========================================================================///
 
 #include "carts/dialect/sde/Transforms/Passes.h"
@@ -34,7 +34,6 @@ namespace mlir::carts::sde {
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
-#include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Debug.h"
 #include "carts/utils/ValueAnalysis.h"
 ARTS_DEBUG_SETUP(loop_interchange);
@@ -84,8 +83,9 @@ static bool collectInnerForChain(Block &body,
 }
 
 /// Collect a linear chain of nested affine.for loops from the su_iterate body.
-static bool collectInnerAffineForChain(
-    Block &body, SmallVectorImpl<affine::AffineForOp> &loops) {
+static bool
+collectInnerAffineForChain(Block &body,
+                           SmallVectorImpl<affine::AffineForOp> &loops) {
   Block *current = &body;
   while (true) {
     affine::AffineForOp found;
@@ -174,9 +174,9 @@ static bool findInnerLoopPair(Block &body, scf::ForOp &jLoop, scf::ForOp &kLoop,
 }
 
 /// Like findInnerLoopPair for affine.for nests (optional init prefix in j).
-static bool findInnerAffineLoopPair(
-    Block &body, affine::AffineForOp &jLoop, affine::AffineForOp &kLoop,
-    SmallVectorImpl<Operation *> &initOps) {
+static bool findInnerAffineLoopPair(Block &body, affine::AffineForOp &jLoop,
+                                    affine::AffineForOp &kLoop,
+                                    SmallVectorImpl<Operation *> &initOps) {
   jLoop = nullptr;
   kLoop = nullptr;
   initOps.clear();
@@ -666,7 +666,8 @@ static bool interchangePromotedScalarMatmulAccumulator(Block &body) {
 /// Collect prefix ops from initOps that are used by kLoop's body.
 /// These must be rematerialized into the rebuilt loop nest.
 static bool
-collectRematerializablePrefixOps(ArrayRef<Operation *> initOps, Operation *kLoop,
+collectRematerializablePrefixOps(ArrayRef<Operation *> initOps,
+                                 Operation *kLoop,
                                  SmallVectorImpl<Operation *> &out) {
   DenseSet<Operation *> prefixSet(initOps.begin(), initOps.end());
   DenseSet<Operation *> needed;
@@ -1040,29 +1041,29 @@ static bool interchangeAffineMatmulLoops(affine::AffineForOp jLoop,
   scf::ForOp::create(
       builder, jLoop.getLoc(), lb2, ub2, step2, ValueRange{},
       [&](OpBuilder &outerBuilder, Location loc, Value newOuterIV, ValueRange) {
-        scf::ForOp::create(
-            outerBuilder, loc, lb1, ub1, step1, ValueRange{},
-            [&](OpBuilder &innerBuilder, Location innerLoc, Value newInnerIV,
-                ValueRange) {
-              IRMapping mapping;
-              mapping.map(iv1, newInnerIV);
-              mapping.map(iv2, newOuterIV);
+        scf::ForOp::create(outerBuilder, loc, lb1, ub1, step1, ValueRange{},
+                           [&](OpBuilder &innerBuilder, Location innerLoc,
+                               Value newInnerIV, ValueRange) {
+                             IRMapping mapping;
+                             mapping.map(iv1, newInnerIV);
+                             mapping.map(iv2, newOuterIV);
 
-              for (Operation *op : rematerializedPrefixOps)
-                innerBuilder.clone(*op, mapping);
+                             for (Operation *op : rematerializedPrefixOps)
+                               innerBuilder.clone(*op, mapping);
 
-              for (Operation &op : *kLoop.getBody()) {
-                if (isTerminatorOp(op))
-                  continue;
-                innerBuilder.clone(op, mapping);
-              }
+                             for (Operation &op : *kLoop.getBody()) {
+                               if (isTerminatorOp(op))
+                                 continue;
+                               innerBuilder.clone(op, mapping);
+                             }
 
-              scf::YieldOp::create(innerBuilder, innerLoc);
-            });
+                             scf::YieldOp::create(innerBuilder, innerLoc);
+                           });
         scf::YieldOp::create(outerBuilder, loc);
       });
 
-  ARTS_INFO("SDE loop interchange applied: affine source, scf k-j order (was j-k)");
+  ARTS_INFO(
+      "SDE loop interchange applied: affine source, scf k-j order (was j-k)");
 
   jLoop->erase();
   return true;
@@ -1097,8 +1098,14 @@ static bool isSameIndexPair(ValueRange indices, Value first, Value second) {
          isSameValue(indices[1], second);
 }
 
-static std::optional<int64_t> findCommittedWriteArrayId(sde::SdeSuIterateOp op,
-                                                        Value root) {
+struct CommittedWriteFact {
+  int64_t arrayId = -1;
+  Attribute attr;
+  sde::LayoutGraphFact fact;
+};
+
+static std::optional<CommittedWriteFact>
+findCommittedWriteLayoutFact(sde::SdeSuIterateOp op, Value root) {
   if (!op || op.getBody().empty() || !root)
     return std::nullopt;
 
@@ -1115,53 +1122,21 @@ static std::optional<int64_t> findCommittedWriteArrayId(sde::SdeSuIterateOp op,
   if (!arrayId)
     return std::nullopt;
 
-  for (const sde::LayoutGraphFact &fact :
-       sde::parseArrayLayoutFacts(op.getArrayLayoutAttr()))
-    if (fact.id == *arrayId && fact.role == sde::LayoutGraphRole::write)
-      return arrayId;
+  if (ArrayAttr layout = op.getArrayLayoutAttr()) {
+    for (Attribute attr : layout) {
+      auto dict = dyn_cast<DictionaryAttr>(attr);
+      if (!dict)
+        continue;
+      std::optional<sde::LayoutGraphFact> fact =
+          sde::parseArrayLayoutFact(dict);
+      if (!fact || fact->id != *arrayId ||
+          fact->role != sde::LayoutGraphRole::write ||
+          fact->ownerDims.empty() || fact->blockShape.empty())
+        continue;
+      return CommittedWriteFact{*arrayId, attr, *fact};
+    }
+  }
   return std::nullopt;
-}
-
-static ArrayAttr buildRowOwnerWriteLayout(MLIRContext *ctx, int64_t arrayId,
-                                          MemRefType outputType) {
-  SmallVector<int64_t, 4> shape(outputType.getShape().begin(),
-                                outputType.getShape().end());
-  SmallVector<int64_t, 4> ownerDims{0};
-  SmallVector<int64_t, 4> blockShape(shape.begin(), shape.end());
-  blockShape[0] = 1;
-
-  Builder builder(ctx);
-  SmallVector<NamedAttribute, 8> fields;
-  fields.push_back(builder.getNamedAttr(sde::AttrNames::LayoutGraph::ArrayId,
-                                        builder.getI64IntegerAttr(arrayId)));
-  fields.push_back(builder.getNamedAttr(
-      sde::AttrNames::LayoutGraph::Role,
-      builder.getStringAttr(sde::AttrNames::LayoutGraphValues::RoleWrite)));
-  fields.push_back(builder.getNamedAttr(
-      sde::AttrNames::LayoutGraph::Kind,
-      builder.getStringAttr(sde::AttrNames::LayoutGraph::BlockParallel)));
-  fields.push_back(builder.getNamedAttr(sde::AttrNames::LayoutGraph::OwnerDims,
-                                        buildI64ArrayAttr(ctx, ownerDims)));
-  fields.push_back(builder.getNamedAttr(sde::AttrNames::LayoutGraph::BlockShape,
-                                        buildI64ArrayAttr(ctx, blockShape)));
-  fields.push_back(builder.getNamedAttr(
-      sde::AttrNames::LayoutGraph::MuBlockCount,
-      builder.getI64IntegerAttr(
-          sde::inferCuCountFromMuPartition(shape, ownerDims, blockShape))));
-  return ArrayAttr::get(ctx, {builder.getDictionaryAttr(fields)});
-}
-
-static void commitRowOwnerShape(sde::SdeSuIterateOp op, MemRefType outputType) {
-  if (!op || !outputType || outputType.getRank() < 2 ||
-      !outputType.hasStaticShape())
-    return;
-
-  SmallVector<int64_t, 4> blockShape(outputType.getShape().begin(),
-                                     outputType.getShape().end());
-  blockShape[0] = 1;
-
-  sde::commitWriterPhysicalLayoutFacts(
-      op, SmallVector<int64_t, 1>{0}, blockShape, blockShape);
 }
 
 static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
@@ -1214,16 +1189,19 @@ static sde::SdeSuIterateOp createSymmetricMirrorLoop(sde::SdeSuIterateOp source,
 }
 
 static void attachMirrorWriteFacts(sde::SdeSuIterateOp mirror, Value output,
-                                   MemRefType outputType, int64_t arrayId) {
+                                   const CommittedWriteFact &writeFact) {
   MLIRContext *ctx = mirror.getContext();
-  mirror.setArrayLayoutAttr(buildRowOwnerWriteLayout(ctx, arrayId, outputType));
+  mirror.setArrayLayoutAttr(ArrayAttr::get(ctx, {writeFact.attr}));
 
   Block &body = mirror.getBody().front();
   OpBuilder builder(&body, body.begin());
   sde::SdeArrayLayoutRootOp::create(
       builder, mirror.getLoc(), output,
       sde::SdeAccessModeAttr::get(ctx, sde::SdeAccessMode::write),
-      IntegerAttr::get(IntegerType::get(ctx, 64), arrayId));
+      IntegerAttr::get(IntegerType::get(ctx, 64), writeFact.arrayId));
+  sde::commitWriterPhysicalLayoutFacts(mirror, writeFact.fact.ownerDims,
+                                       writeFact.fact.blockShape,
+                                       writeFact.fact.blockShape);
 }
 
 static bool splitSymmetricSelfGramStores(sde::SdeSuIterateOp op, Block &body) {
@@ -1290,17 +1268,16 @@ static bool splitSymmetricSelfGramStores(sde::SdeSuIterateOp op, Block &body) {
 
   Value output = upperStore.getMemref();
   Value diagonalValue = diagonalStore.getValueToStore();
-  std::optional<int64_t> outputArrayId = findCommittedWriteArrayId(op, output);
-  if (!outputArrayId)
+  std::optional<CommittedWriteFact> writeFact =
+      findCommittedWriteLayoutFact(op, output);
+  if (!writeFact)
     return false;
 
   lowerStore.erase();
   diagonalStore.erase();
-  commitRowOwnerShape(op, outputType);
   sde::SdeSuIterateOp mirror =
       createSymmetricMirrorLoop(op, output, diagonalValue);
-  attachMirrorWriteFacts(mirror, output, outputType, *outputArrayId);
-  commitRowOwnerShape(mirror, outputType);
+  attachMirrorWriteFacts(mirror, output, *writeFact);
   ARTS_INFO("LoopInterchange: split symmetric self-Gram lower-triangle store");
   return true;
 }

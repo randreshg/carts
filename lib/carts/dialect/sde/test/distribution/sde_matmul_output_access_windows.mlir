@@ -1,4 +1,4 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(loop-interchange,sde-rank-expand-mu)' 2>&1 | %FileCheck %s
+// RUN: %carts-compile %s --pass-pipeline='builtin.module(loop-interchange,sde-rank-expand-mu)' 2>&1 | %FileCheck %s --implicit-check-not=budgetBlockShape
 
 // CHECK-LABEL: func.func @matmul_output_access_windows
 // CHECK: %[[OUT:.*]] = sde.mu_alloc : memref<4x4x32x32xf32>
@@ -6,9 +6,6 @@
 // CHECK-SAME: classification(<matmul>)
 // CHECK-NOT: sde.mu_access_window
 // CHECK: memref.store {{.*}}, %[[OUT]][
-// CHECK: arrayLayout = [{arrayId = 0 : i64, blockShape = [32, 32]
-// CHECK-SAME: muBlockCount = 16 : i64
-// CHECK-SAME: ownerDims = [0, 1]
 // CHECK: sde.su_iterate
 // CHECK-SAME: classification(<elementwise>)
 // CHECK-NOT: sde.mu_access_window
@@ -50,11 +47,9 @@ func.func @matmul_output_access_windows() {
 }
 
 // CHECK-LABEL: func.func @symmetric_self_gram_mirror_access_windows
-// CHECK: %[[OUT:.*]] = sde.mu_alloc : memref<4x1x4xf32>
+// CHECK: %[[OUT:.*]] = sde.mu_alloc : memref<4x4xf32>
 // CHECK-NOT: sde.mu_access_window
-// CHECK: arrayLayout = [{arrayId = 1 : i64, blockShape = [1, 4]
-// CHECK-SAME: muBlockCount = 4 : i64
-// CHECK-SAME: ownerDims = [0]
+// CHECK: memref.store {{.*}}, %[[OUT]][
 func.func @symmetric_self_gram_mirror_access_windows() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index

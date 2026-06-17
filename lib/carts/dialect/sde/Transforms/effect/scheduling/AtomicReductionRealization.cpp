@@ -10,8 +10,8 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Transforms/Passes.h.inc"
 } // namespace mlir::carts::sde
 
-#include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
+#include "carts/dialect/sde/Analysis/SdeAnalysisUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -61,15 +61,13 @@ static bool isAtomicReductionCandidate(sde::SdeSuIterateOp op) {
   ArrayAttr kindsAttr = op.getReductionKindsAttr();
   if (!kindsAttr || kindsAttr.size() != op.getReductionAccumulators().size())
     return false;
-  return llvm::all_of(llvm::zip(kindsAttr, op.getReductionAccumulators()),
-                      [](auto pair) {
-                        auto [attr, accumulator] = pair;
-                        auto kindAttr = dyn_cast<sde::SdeReductionKindAttr>(attr);
-                        return kindAttr && kindAttr.getValue() ==
-                                               sde::SdeReductionKind::add &&
-                               !isa<FloatType>(
-                                   getAccumulatorElementType(accumulator));
-                      });
+  return llvm::all_of(
+      llvm::zip(kindsAttr, op.getReductionAccumulators()), [](auto pair) {
+        auto [attr, accumulator] = pair;
+        auto kindAttr = dyn_cast<sde::SdeReductionKindAttr>(attr);
+        return kindAttr && kindAttr.getValue() == sde::SdeReductionKind::add &&
+               !isa<FloatType>(getAccumulatorElementType(accumulator));
+      });
 }
 
 static LogicalResult

@@ -1,14 +1,14 @@
-// RUN: %carts-compile %s --pass-pipeline='builtin.module(writer-owner-route)' 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(writer-owner-route)' 2>&1 | %FileCheck %s
 
-// Single-node runtimes do not need internode owner-route derivation. An EDT that
-// writes multiple distributed DBs with different block grids (e.g. poisson-for
-// init) must not fail WriterOwnerRoute at node_count=1.
+// Single-node validation still checks the first distributed comparison topology
+// so node_count=1 cannot hide writer ownership that would be invalid on the
+// 1-to-2 path.
 
-// CHECK-NOT: owner route cannot be derived
-// CHECK-NOT: signalPassFailure
+// CHECK: writes a distributed DB range that may span multiple owners
+// CHECK: SDE-to-ARTS must split writer codelets into owner-local block ranges before distributed launch
 
 module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_workers = 64 : i64} {
-  func.func @multi_writer_init_single_node_ok() {
+  func.func @multi_writer_init_single_node_rejected() {
     %c0 = arith.constant 0 : index
     %c2 = arith.constant 2 : index
     %c4 = arith.constant 4 : index

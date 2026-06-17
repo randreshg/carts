@@ -13,10 +13,10 @@
 namespace mlir {
 namespace carts::arts::boundary {
 
-LogicalResult convertSuIterate(
-    sde::SdeSuIterateOp source,
-    DenseSet<Operation *> &consumedCuLevelAccessWindows,
-    SmallVectorImpl<Operation *> &consumedRedists);
+LogicalResult
+convertSuIterate(sde::SdeSuIterateOp source,
+                 DenseSet<Operation *> &consumedCuLevelAccessWindows,
+                 SmallVectorImpl<Operation *> &consumedRedists);
 
 } // namespace carts::arts::boundary
 } // namespace mlir

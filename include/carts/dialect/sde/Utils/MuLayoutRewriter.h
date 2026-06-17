@@ -133,15 +133,16 @@ SdeSuIterateOp findCommittedBlockLayoutWitness(SdeMuAllocOp muAlloc);
 /// True if `root` has a use a block-grid layout cannot localize — any user
 /// other than a direct `memref.load`/`store`/`dealloc`,
 /// `sde.array_layout_root` provenance, or a committed SU movement op
-/// (`su.halo`, `su.all_to_all`, `su.reduce_scatter`). The single allow-list shared by the coarse-avoidance
-/// gate and redistribution realization so they never drift.
+/// (`su.halo`, `su.all_to_all`, `su.reduce_scatter`). The single allow-list
+/// shared by the coarse-avoidance gate and redistribution realization so they
+/// never drift.
 bool muRootHasUnsupportedUse(mlir::Value root);
 
 /// A rank-expanded block-grid MU candidate (any number of owner dims),
 /// recognized purely from the committed writer `su_iterate` plus the expanded
-/// memref type. This is shape RECOGNITION only (the `sde.mu_alloc` op verifier's
-/// shape gate); it does NOT prove tile/grain consistency — callers decide
-/// whether a mismatch is a skip (a raiser) or an error (a verifier).
+/// memref type. This is shape RECOGNITION only (the `sde.mu_alloc` op
+/// verifier's shape gate); it does NOT prove tile/grain consistency — callers
+/// decide whether a mismatch is a skip (a raiser) or an error (a verifier).
 ///
 /// The expanded form is K leading grid dims (in owner order) followed by L tile
 /// dims, so `muType.getRank() == logicalRank + ownerDims.size()`. All

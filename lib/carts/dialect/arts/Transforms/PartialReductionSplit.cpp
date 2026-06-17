@@ -453,7 +453,7 @@ static void copySplitEdtFacts(EdtOp source, EdtOp dest) {
     dest.setInterleaveCountAttr(attr);
   if (auto attr = source.getDepPatternAttr())
     dest.setDepPatternAttr(attr);
-  inheritDistributionAttrs(source.getOperation(), dest.getOperation());
+  inheritEdtDistributionFactAttrs(source, dest);
   if (auto attr = source.getReductionStrategyAttr())
     dest.setReductionStrategyAttr(attr);
   if (source.getPartialReductionAttr())
@@ -575,7 +575,7 @@ static DbAcquireOp createTileAcquire(OpBuilder &builder, Location loc,
                                      /*boundsValid=*/Value{},
                                      /*elementOffsets=*/SmallVector<Value>{},
                                      /*elementSizes=*/SmallVector<Value>{});
-  inheritDistributionAttrs(db.getOperation(), acquire.getOperation());
+  inheritDbAcquireDistributionFactAttrs(db, acquire);
   if (auto depPattern = db.getDepPatternAttr())
     acquire.setDepPatternAttr(depPattern);
   return acquire;
@@ -618,7 +618,7 @@ static void copyCombineMetadata(EdtOp source, EdtOp dest) {
     dest.setDepPatternAttr(depPattern);
   if (auto reductionStrategy = source.getReductionStrategyAttr())
     dest.setReductionStrategyAttr(reductionStrategy);
-  inheritDistributionAttrs(source.getOperation(), dest.getOperation());
+  inheritEdtDistributionFactAttrs(source, dest);
 }
 
 static LogicalResult createIntermediateCombineBody(EdtOp combineEdt,

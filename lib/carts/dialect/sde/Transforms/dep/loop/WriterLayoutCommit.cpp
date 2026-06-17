@@ -233,9 +233,9 @@ static bool hasStencilReader(const sde::ArrayAccessProfile &profile,
 
 // A block-parallel WRITER may only own a physical dim it indexes with a single
 // SU loop IV consistently across EVERY store to the root, and distinct owner
-// dims must use distinct IVs. A symmetric/cross-row writer (correlation's
-// corr[i][j] AND corr[j][i] from a 1-D i-loop) indexes owner dim 0 with i in
-// one store and j in the other: owning that dim would route corr[j][i] to a DB
+// dims must use distinct IVs. A symmetric/cross-row writer that stores both
+// A[i][j] and A[j][i] from a 1-D i-loop indexes owner dim 0 with i in one store
+// and j in the other: owning that dim would route the transposed store to a DB
 // block the SU does not own. Returns the realizable subset of `ownerPositions`
 // (in input order). Positions not witnessed are dropped so the committed owner
 // rank never exceeds what the SU loop can actually realize.
@@ -445,10 +445,9 @@ static void commitLayoutFacts(
       // Clamp a block-parallel writer's owner dims to the ones its SU can
       // realize as owner-local single-writer regions (see
       // witnessedWriterOwnerPositions). Drops the unrealizable owner dims of
-      // a symmetric/cross-row writer (correlation) instead of committing a
-      // silently-wrong owner-tile; an empty residual leaves the array
-      // un-owned so downstream distribution fails closed rather than
-      // miscompile.
+      // a symmetric/cross-row writer instead of committing a silently-wrong
+      // owner-tile; an empty residual leaves the array un-owned so downstream
+      // distribution fails closed rather than miscompile.
       if (isWrite && layoutForSu.kind == sde::ArrayLayoutKind::blockParallel &&
           !layoutForSu.ownerPositions.empty() &&
           suId < relations.schedulingUnits.size()) {
@@ -484,14 +483,28 @@ static void commitLayoutFacts(
           isWrite && !layoutForSu.ownerPositions.empty() &&
           (layoutForSu.kind == sde::ArrayLayoutKind::blockParallel ||
            layoutForSu.kind == sde::ArrayLayoutKind::blockContraction);
+      bool stencilWriter = false;
+      bool reductionWriter = false;
+      if (writerViaMuType && suId < relations.schedulingUnits.size()) {
+        std::optional<sde::SdeStructuredClassification> wc =
+            sde::queryStructuredClassification(relations.schedulingUnits[suId]);
+        stencilWriter = wc && *wc == sde::SdeStructuredClassification::stencil;
+        reductionWriter =
+            wc && *wc == sde::SdeStructuredClassification::reduction;
+      }
+      // Stencil physical grain is not the abstract layout-choice grain.
+      // Writer roots preserved for a later stencil reader follow the same
+      // rule: the logical owner choice is real SDE evidence, but physical
+      // MU/CU grain is committed after tiling/neighborhood facts are available.
       if (writerViaMuType) {
-        writerCommits[suId].push_back(
-            {SmallVector<int64_t, 4>(layoutForSu.ownerPositions.begin(),
-                                     layoutForSu.ownerPositions.end()),
-             SmallVector<int64_t, 4>(layoutForSu.blockShape.begin(),
-                                     layoutForSu.blockShape.end()),
-             SmallVector<int64_t, 4>(profile.staticShape.begin(),
-                                     profile.staticShape.end())});
+        if (!stencilWriter && !preserveFullWriter)
+          writerCommits[suId].push_back(
+              {SmallVector<int64_t, 4>(layoutForSu.ownerPositions.begin(),
+                                       layoutForSu.ownerPositions.end()),
+               SmallVector<int64_t, 4>(layoutForSu.blockShape.begin(),
+                                       layoutForSu.blockShape.end()),
+               SmallVector<int64_t, 4>(profile.staticShape.begin(),
+                                       profile.staticShape.end())});
       }
       // Block-parallel non-reduction, non-stencil writers also pin their
       // owner rank for the 2n boundary; reductions/stencils keep their own
@@ -499,15 +512,7 @@ static void commitLayoutFacts(
       bool blockParallelWriter =
           writerViaMuType &&
           layoutForSu.kind == sde::ArrayLayoutKind::blockParallel;
-      bool reductionWriter = false;
-      if (blockParallelWriter && suId < relations.schedulingUnits.size()) {
-        std::optional<sde::SdeStructuredClassification> wc =
-            sde::queryStructuredClassification(relations.schedulingUnits[suId]);
-        reductionWriter =
-            wc && *wc == sde::SdeStructuredClassification::reduction;
-      }
-      if (!writerViaMuType ||
-          (blockParallelWriter && !preserveFullWriter && !reductionWriter))
+      if (!writerViaMuType || (blockParallelWriter && !reductionWriter))
         updates[suId].entries.push_back(entry);
       updates[suId].roots.push_back(
           {profile.root, arrayId,

@@ -46,6 +46,27 @@ readPhysicalLayoutFromSuIterateOwnerFacts(sde::SdeSuIterateOp source) {
   return readPhysicalLayoutFromSuIterateAttrs(source);
 }
 
+std::optional<SmallVector<int64_t, 4>>
+inferPhysicalOwnerDimsFromAccessSlots(const DirectDepSpec &dep) {
+  if (dep.ownerDimCount == 0 || dep.validExtents.empty() ||
+      dep.accessSlots.size() < dep.ownerDimCount)
+    return std::nullopt;
+
+  SmallVector<char, 4> seen(dep.validExtents.size(), 0);
+  SmallVector<int64_t, 4> ownerDims;
+  ownerDims.reserve(dep.ownerDimCount);
+  for (unsigned slot = 0; slot < dep.ownerDimCount; ++slot) {
+    const DepOwnerAccessSlot &access = dep.accessSlots[slot];
+    if (!access.loopDim || *access.loopDim >= dep.validExtents.size())
+      return std::nullopt;
+    if (seen[*access.loopDim])
+      return std::nullopt;
+    seen[*access.loopDim] = 1;
+    ownerDims.push_back(static_cast<int64_t>(*access.loopDim));
+  }
+  return ownerDims;
+}
+
 std::optional<CommittedPhysicalLayout>
 readPhysicalLayoutFromDepWindow(sde::SdeSuIterateOp source,
                                 const DirectDepSpec &dep) {
@@ -71,12 +92,9 @@ readPhysicalLayoutFromDepWindow(sde::SdeSuIterateOp source,
                             committed->ownerDims.end());
     return layout;
   }
-  // Fall back to the leading owner dims (the implicit identity elided by
-  // dropIdentityArrayOwnerDims); non-leading owners arrive explicit above.
-  if (dep.ownerDimCount > 0 &&
-      static_cast<size_t>(dep.ownerDimCount) <= layout.blockShape.size()) {
-    for (unsigned i = 0; i < dep.ownerDimCount; ++i)
-      layout.ownerDims.push_back(static_cast<int64_t>(i));
+  if (std::optional<SmallVector<int64_t, 4>> inferredOwnerDims =
+          inferPhysicalOwnerDimsFromAccessSlots(dep)) {
+    layout.ownerDims = std::move(*inferredOwnerDims);
     return layout;
   }
   return std::nullopt;
@@ -138,6 +156,20 @@ bool containsI64(ArrayRef<int64_t> values, int64_t needle) {
   return llvm::is_contained(values, needle);
 }
 
+int64_t saturatedMul(int64_t lhs, int64_t rhs) {
+  if (lhs <= 0 || rhs <= 0)
+    return 0;
+  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
+    return std::numeric_limits<int64_t>::max();
+  return lhs * rhs;
+}
+
+int64_t ceilDivPositiveI64(int64_t lhs, int64_t rhs) {
+  if (lhs <= 0 || rhs <= 0)
+    return 0;
+  return (lhs + rhs - 1) / rhs;
+}
+
 FailureOr<ArrayAttr>
 buildPartialReductionDepResultDimMap(sde::SdeSuIterateOp source,
                                      const DirectDepSpec &dep) {
@@ -190,23 +222,35 @@ buildPartialReductionDepResultDimMap(sde::SdeSuIterateOp source,
 bool areWriterGroupsRouteLocal(ArrayRef<WriterGroupingSpec> writerSpecs,
                                ArrayRef<int64_t> counts, int64_t totalNodes) {
   return llvm::all_of(writerSpecs, [&](const WriterGroupingSpec &spec) {
+    SmallVector<int64_t, 4> projectedCounts(spec.dbSizes.size(), 1);
+    if (spec.groupSlotByDbDim.empty()) {
+      if (counts.size() != spec.dbSizes.size())
+        return false;
+      projectedCounts.assign(counts.begin(), counts.end());
+    } else {
+      if (spec.groupSlotByDbDim.size() != spec.dbSizes.size())
+        return false;
+      if (spec.globalBlockSizeByDbDim.size() != spec.dbSizes.size() ||
+          spec.coordinateBlockSizeByDbDim.size() != spec.dbSizes.size())
+        return false;
+      for (auto [dbDim, rawGroupSlot] :
+           llvm::enumerate(spec.groupSlotByDbDim)) {
+        if (rawGroupSlot < 0)
+          continue;
+        if (static_cast<size_t>(rawGroupSlot) >= counts.size())
+          return false;
+        int64_t globalBlockSize = spec.globalBlockSizeByDbDim[dbDim];
+        int64_t coordinateBlockSize = spec.coordinateBlockSizeByDbDim[dbDim];
+        if (globalBlockSize <= 0 || coordinateBlockSize <= 0)
+          return false;
+        projectedCounts[dbDim] = ceilDivPositiveI64(
+            saturatedMul(counts[rawGroupSlot], globalBlockSize),
+            coordinateBlockSize);
+      }
+    }
     return isStaticDbOwnerGroupedBlockScheduleRouteLocal(
-        spec.dbSizes, counts, totalNodes, spec.ownerFacts);
+        spec.dbSizes, projectedCounts, totalNodes, spec.ownerFacts);
   });
-}
-
-int64_t saturatedMul(int64_t lhs, int64_t rhs) {
-  if (lhs <= 0 || rhs <= 0)
-    return 0;
-  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
-    return std::numeric_limits<int64_t>::max();
-  return lhs * rhs;
-}
-
-int64_t ceilDivPositiveI64(int64_t lhs, int64_t rhs) {
-  if (lhs <= 0 || rhs <= 0)
-    return 0;
-  return (lhs + rhs - 1) / rhs;
 }
 
 FailureOr<unsigned> getAccessWindowPayloadDim(sde::SdeSuIterateOp source,
@@ -284,10 +328,34 @@ findLargestOwnerLocalGroupCounts(ArrayRef<WriterGroupingSpec> writerSpecs,
   SmallVector<int64_t, 4> upperCounts(requestedCounts.begin(),
                                       requestedCounts.end());
   for (const WriterGroupingSpec &spec : writerSpecs) {
-    if (spec.dbSizes.size() != upperCounts.size())
+    if (spec.groupSlotByDbDim.empty()) {
+      if (spec.dbSizes.size() != upperCounts.size())
+        return std::nullopt;
+      for (auto &&[upper, dbSize] : llvm::zip_equal(upperCounts, spec.dbSizes))
+        upper = std::min(upper, dbSize);
+      continue;
+    }
+    if (spec.groupSlotByDbDim.size() != spec.dbSizes.size())
       return std::nullopt;
-    for (auto &&[upper, dbSize] : llvm::zip_equal(upperCounts, spec.dbSizes))
-      upper = std::min(upper, dbSize);
+    if (spec.globalBlockSizeByDbDim.size() != spec.dbSizes.size() ||
+        spec.coordinateBlockSizeByDbDim.size() != spec.dbSizes.size())
+      return std::nullopt;
+    for (auto [dbDim, values] : llvm::enumerate(
+             llvm::zip_equal(spec.dbSizes, spec.groupSlotByDbDim))) {
+      auto [dbSize, rawGroupSlot] = values;
+      if (rawGroupSlot < 0)
+        continue;
+      if (static_cast<size_t>(rawGroupSlot) >= upperCounts.size())
+        return std::nullopt;
+      int64_t globalBlockSize = spec.globalBlockSizeByDbDim[dbDim];
+      int64_t coordinateBlockSize = spec.coordinateBlockSizeByDbDim[dbDim];
+      if (globalBlockSize <= 0 || coordinateBlockSize <= 0)
+        return std::nullopt;
+      int64_t globalCountLimit = ceilDivPositiveI64(
+          saturatedMul(dbSize, coordinateBlockSize), globalBlockSize);
+      upperCounts[rawGroupSlot] =
+          std::min(upperCounts[rawGroupSlot], globalCountLimit);
+    }
   }
 
   SmallVector<int64_t, 4> suffixMax(upperCounts.size() + 1, 1);
@@ -326,11 +394,39 @@ LogicalResult ensureDistributedWriterOwnerLocalGroups(
     sde::SdeSuIterateOp source, ArrayRef<DirectDepSpec> deps,
     SmallVectorImpl<int64_t> &groupBlockCounts,
     SmallVectorImpl<int64_t> &workerSpans, ArrayRef<int64_t> ownerBlockSizes,
-    int64_t totalNodes, bool &splitToOwnerLocalGroups) {
+    ArrayRef<int64_t> dispatchedOwnerDims,
+    ArrayRef<unsigned> dispatchedLoopDims, int64_t totalNodes,
+    bool &splitToOwnerLocalGroups) {
   splitToOwnerLocalGroups = false;
   if (totalNodes <= 1 ||
       !llvm::any_of(groupBlockCounts, [](int64_t count) { return count > 1; }))
     return success();
+
+  auto findGlobalOwnerSlot = [&](int64_t ownerDim) -> std::optional<unsigned> {
+    auto it = llvm::find(dispatchedOwnerDims, ownerDim);
+    if (it == dispatchedOwnerDims.end())
+      return std::nullopt;
+    return static_cast<unsigned>(
+        std::distance(dispatchedOwnerDims.begin(), it));
+  };
+  auto findGlobalAccessSlot = [&](const DirectDepSpec &dep,
+                                  unsigned depSlot) -> std::optional<unsigned> {
+    if (depSlot < dep.accessSlots.size()) {
+      const DepOwnerAccessSlot &access = dep.accessSlots[depSlot];
+      if (access.loopDim) {
+        auto loopIt = llvm::find(dispatchedLoopDims, *access.loopDim);
+        if (loopIt == dispatchedLoopDims.end())
+          return std::nullopt;
+        return static_cast<unsigned>(
+            std::distance(dispatchedLoopDims.begin(), loopIt));
+      }
+    }
+    int64_t physicalDim =
+        dep.arrayOwnerDims && depSlot < dep.arrayOwnerDims->size()
+            ? (*dep.arrayOwnerDims)[depSlot]
+            : static_cast<int64_t>(depSlot);
+    return findGlobalOwnerSlot(physicalDim);
+  };
 
   SmallVector<WriterGroupingSpec, 4> writerSpecs;
   for (const DirectDepSpec &dep : deps) {
@@ -350,13 +446,41 @@ LogicalResult ensureDistributedWriterOwnerLocalGroups(
                                        alloc.getSizes().end());
     std::optional<SmallVector<int64_t, 4>> dbSizes =
         foldStaticDbIndexValues(dbSizeValues);
-    if (!dbSizes || dbSizes->size() != groupBlockCounts.size())
+    if (!dbSizes)
       return source.emitOpError()
              << "commits logicalWorkerSlice whose grouped distributed writer "
                 "range cannot be proven owner-local from static DB block-grid "
                 "facts";
 
-    writerSpecs.push_back({*dbSizes, *ownerFacts});
+    SmallVector<int64_t, 4> groupSlotByDbDim(dbSizes->size(), -1);
+    SmallVector<int64_t, 4> globalBlockSizeByDbDim(dbSizes->size(), 0);
+    SmallVector<int64_t, 4> coordinateBlockSizeByDbDim(dbSizes->size(), 0);
+    unsigned ownerSlotCount =
+        std::min<unsigned>(dep.ownerDimCount, groupSlotByDbDim.size());
+    for (unsigned depSlot = 0; depSlot < ownerSlotCount; ++depSlot) {
+      std::optional<unsigned> globalSlot = findGlobalAccessSlot(dep, depSlot);
+      if (!globalSlot)
+        return source.emitOpError()
+               << "commits logicalWorkerSlice whose grouped distributed "
+                  "writer range cannot be mapped to a dispatched owner slot";
+      groupSlotByDbDim[depSlot] = static_cast<int64_t>(*globalSlot);
+      if (*globalSlot >= ownerBlockSizes.size())
+        return source.emitOpError()
+               << "commits logicalWorkerSlice whose grouped distributed "
+                  "writer range references an invalid owner block slot";
+      int64_t coordinateBlockSize =
+          dep.accessSlots[depSlot].coordinateBlockSize;
+      if (coordinateBlockSize <= 0)
+        return source.emitOpError()
+               << "commits logicalWorkerSlice whose grouped distributed "
+                  "writer range has a non-positive block size";
+      globalBlockSizeByDbDim[depSlot] = ownerBlockSizes[*globalSlot];
+      coordinateBlockSizeByDbDim[depSlot] = coordinateBlockSize;
+    }
+
+    writerSpecs.push_back({*dbSizes, std::move(groupSlotByDbDim),
+                           std::move(globalBlockSizeByDbDim),
+                           std::move(coordinateBlockSizeByDbDim), *ownerFacts});
   }
 
   std::optional<SmallVector<int64_t, 4>> ownerLocalCounts =
@@ -668,6 +792,64 @@ uniqueReferencedLoopDim(AffineExpr expr, ArrayRef<Value> ivOrder,
   return conflict ? std::nullopt : selected;
 }
 
+static std::optional<int64_t> matchDimPlusConstant(AffineExpr expr,
+                                                   AffineExpr dimExpr) {
+  if (expr == dimExpr)
+    return 0;
+  auto add = dyn_cast<AffineBinaryOpExpr>(expr);
+  if (!add || add.getKind() != AffineExprKind::Add)
+    return std::nullopt;
+  if (auto offset = dyn_cast<AffineConstantExpr>(add.getRHS()))
+    if (add.getLHS() == dimExpr)
+      return offset.getValue();
+  if (auto offset = dyn_cast<AffineConstantExpr>(add.getLHS()))
+    if (add.getRHS() == dimExpr)
+      return offset.getValue();
+  return std::nullopt;
+}
+
+static DepOwnerAccessSlot makeLoopAccessSlot(unsigned loopDim,
+                                             int64_t coordinateBlockSize,
+                                             int64_t elementOffset = 0) {
+  DepOwnerAccessSlot slot;
+  slot.loopDim = loopDim;
+  slot.coordinateBlockSize = coordinateBlockSize;
+  slot.minElementOffset = elementOffset;
+  slot.maxElementOffset = elementOffset;
+  return slot;
+}
+
+static bool hasSameAccessSlotIdentity(const DepOwnerAccessSlot &lhs,
+                                      const DepOwnerAccessSlot &rhs) {
+  return lhs.loopDim == rhs.loopDim &&
+         lhs.coordinateBlockSize == rhs.coordinateBlockSize &&
+         lhs.fixedBlock == rhs.fixedBlock && lhs.fullWindow == rhs.fullWindow;
+}
+
+static LogicalResult
+mergeAccessSlotCandidates(Operation *op,
+                          SmallVectorImpl<DepOwnerAccessSlot> &selected,
+                          ArrayRef<DepOwnerAccessSlot> candidate) {
+  if (selected.empty()) {
+    selected.assign(candidate.begin(), candidate.end());
+    return success();
+  }
+  if (selected.size() != candidate.size())
+    return op->emitError()
+           << "uses inconsistent block coordinates for one SDE access window";
+  for (auto [selectedSlot, candidateSlot] :
+       llvm::zip_equal(selected, candidate)) {
+    if (!hasSameAccessSlotIdentity(selectedSlot, candidateSlot))
+      return op->emitError()
+             << "uses inconsistent block coordinates for one SDE access window";
+    selectedSlot.minElementOffset =
+        std::min(selectedSlot.minElementOffset, candidateSlot.minElementOffset);
+    selectedSlot.maxElementOffset =
+        std::max(selectedSlot.maxElementOffset, candidateSlot.maxElementOffset);
+  }
+  return success();
+}
+
 static std::optional<DepOwnerAccessSlot>
 analyzeDepOwnerAccessSlotFromAffineExpr(AffineExpr expr,
                                         ArrayRef<MappedLoopIv> mappedIvs,
@@ -708,22 +890,11 @@ analyzeDepOwnerAccessSlotFromAffineExpr(AffineExpr expr,
     return std::nullopt;
   AffineExpr dimExpr = getAffineDimExpr(dimPos, ctx);
 
-  if (expr == dimExpr)
-    return DepOwnerAccessSlot{*loopDim, blockSize, std::nullopt};
-
-  if (allowUnitHaloOffset) {
-    if (auto add = dyn_cast<AffineBinaryOpExpr>(expr)) {
-      if (add.getKind() == AffineExprKind::Add) {
-        auto offset = dyn_cast<AffineConstantExpr>(add.getRHS());
-        if (offset && offset.getValue() >= -1 && offset.getValue() <= 1 &&
-            add.getLHS() == dimExpr)
-          return DepOwnerAccessSlot{*loopDim, blockSize, std::nullopt};
-        offset = dyn_cast<AffineConstantExpr>(add.getLHS());
-        if (offset && offset.getValue() >= -1 && offset.getValue() <= 1 &&
-            add.getRHS() == dimExpr)
-          return DepOwnerAccessSlot{*loopDim, blockSize, std::nullopt};
-      }
-    }
+  if (std::optional<int64_t> offset = matchDimPlusConstant(expr, dimExpr)) {
+    if (*offset == 0)
+      return makeLoopAccessSlot(*loopDim, blockSize);
+    if (allowUnitHaloOffset && *offset >= -1 && *offset <= 1)
+      return makeLoopAccessSlot(*loopDim, blockSize, *offset);
   }
 
   if (auto mul = dyn_cast<AffineBinaryOpExpr>(expr)) {
@@ -738,8 +909,7 @@ analyzeDepOwnerAccessSlotFromAffineExpr(AffineExpr expr,
         dimPart = mul.getLHS();
       }
       if (multiplier > 0 && dimPart == dimExpr && blockSize % multiplier == 0)
-        return DepOwnerAccessSlot{*loopDim, blockSize / multiplier,
-                                  std::nullopt};
+        return makeLoopAccessSlot(*loopDim, blockSize / multiplier);
     }
   }
 
@@ -777,6 +947,29 @@ bool accessModeMayUseLoad(ArtsMode mode) {
 
 bool accessModeMayUseStore(ArtsMode mode) {
   return mode == ArtsMode::out || mode == ArtsMode::inout;
+}
+
+bool commitsUnitAccessOffset(sde::SdeSuIterateOp source) {
+  bool sawOffset = false;
+  auto inspect = [&](ArrayAttr offsets) {
+    if (!offsets)
+      return false;
+    for (Attribute attr : offsets) {
+      auto intAttr = dyn_cast<IntegerAttr>(attr);
+      if (!intAttr)
+        return false;
+      int64_t value = intAttr.getInt();
+      if (value < -1 || value > 1)
+        return false;
+      sawOffset |= value != 0;
+    }
+    return true;
+  };
+  if (!inspect(source.getAccessMinOffsetsAttr()))
+    return false;
+  if (!inspect(source.getAccessMaxOffsetsAttr()))
+    return false;
+  return sawOffset;
 }
 
 bool dependsOnDispatchLoop(Value value, ArrayRef<MappedLoopIv> mappedIvs) {
@@ -875,7 +1068,8 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
           analyzeDepOwnerAccessSlotFromAffineExpr(expr, mappedIvs, ivOrder,
                                                   allowUnitHaloOffsets);
       if (!access) {
-        if (isCommittedFullWindowSlot(source, alloc, slot, blockLo, blockHi,
+        if (mode == ArtsMode::in &&
+            isCommittedFullWindowSlot(source, alloc, slot, blockLo, blockHi,
                                       validExtents, arrayOwnerDims)) {
           DepOwnerAccessSlot fullWindow;
           fullWindow.fullWindow = true;
@@ -916,7 +1110,8 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
       std::optional<DepOwnerAccessSlot> access = analyzeDepOwnerAccessIndex(
           indices[slot], mappedIvs, allowUnitHaloOffsets);
       if (!access) {
-        if (isCommittedFullWindowSlot(source, alloc, slot, blockLo, blockHi,
+        if (mode == ArtsMode::in &&
+            isCommittedFullWindowSlot(source, alloc, slot, blockLo, blockHi,
                                       validExtents, arrayOwnerDims)) {
           DepOwnerAccessSlot fullWindow;
           fullWindow.fullWindow = true;
@@ -941,14 +1136,7 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
       }
       candidate.push_back(*access);
     }
-    if (selected.empty()) {
-      selected = std::move(candidate);
-      return success();
-    }
-    if (selected != candidate)
-      return op->emitError()
-             << "uses inconsistent block coordinates for one SDE access window";
-    return success();
+    return mergeAccessSlotCandidates(op, selected, candidate);
   };
 
   WalkResult walk = computeBlock->walk([&](Operation *op) {
@@ -976,13 +1164,8 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
           analyzeMapResults(op, read.getAffineMap(), read.getMapOperands());
       if (failed(candidate))
         return WalkResult::interrupt();
-      if (selected.empty())
-        selected = *candidate;
-      else if (selected != *candidate)
-        return op->emitError()
-                   << "uses inconsistent block coordinates for one SDE "
-                      "access window",
-               WalkResult::interrupt();
+      if (failed(mergeAccessSlotCandidates(op, selected, *candidate)))
+        return WalkResult::interrupt();
       return WalkResult::advance();
     }
     if (auto write = dyn_cast<affine::AffineWriteOpInterface>(op)) {
@@ -995,13 +1178,8 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
           analyzeMapResults(op, write.getAffineMap(), write.getMapOperands());
       if (failed(candidate))
         return WalkResult::interrupt();
-      if (selected.empty())
-        selected = *candidate;
-      else if (selected != *candidate)
-        return op->emitError()
-                   << "uses inconsistent block coordinates for one SDE "
-                      "access window",
-               WalkResult::interrupt();
+      if (failed(mergeAccessSlotCandidates(op, selected, *candidate)))
+        return WalkResult::interrupt();
       return WalkResult::advance();
     }
     return WalkResult::advance();
@@ -1238,7 +1416,9 @@ LogicalResult recordAccessWindowDependency(
       deriveDepOwnerAccessSlots(source, alloc, window.getMode(), ownerDimCount,
                                 facts->blockLo, facts->blockHi,
                                 facts->validExtents, arrayOwnerDims,
-                                window.getHaloShapeAttr() != nullptr);
+                                window.getHaloShapeAttr() != nullptr ||
+                                    (window.getMode() == ArtsMode::in &&
+                                     commitsUnitAccessOffset(source)));
   if (failed(accessSlots))
     return failure();
 
@@ -1414,39 +1594,6 @@ collectSuDependencies(sde::SdeSuIterateOp source,
   if (failed(verifyRawSuAccessesCoveredByDeps(source, depIndex, deps)))
     return failure();
 
-  // A transposed or differently laid-out read (e.g. poisson `f` vs `u`) can
-  // fall back to fullWindow on every owner slot when block coordinates do not
-  // map cleanly to dispatch IVs. That acquires the whole DB grid while sibling
-  // halo reads use the SU tile window, leaving compact-halo guid holders unset
-  // at runtime. Reuse the tile-mapped access slots from a sibling in-mode dep
-  // at the same owner rank when every slot on this dep is fullWindow.
-  for (unsigned ownerRank = 1; ownerRank <= 4; ++ownerRank) {
-    const DirectDepSpec *templateDep = nullptr;
-    for (const DirectDepSpec &dep : deps) {
-      if (dep.mode != ArtsMode::in || dep.reduceScatter ||
-          dep.ownerDimCount != ownerRank || dep.accessSlots.size() != ownerRank)
-        continue;
-      if (llvm::any_of(dep.accessSlots, [](const DepOwnerAccessSlot &slot) {
-            return slot.fullWindow;
-          }))
-        continue;
-      templateDep = &dep;
-      break;
-    }
-    if (!templateDep)
-      continue;
-    for (DirectDepSpec &dep : deps) {
-      if (&dep == templateDep || dep.mode != ArtsMode::in ||
-          dep.reduceScatter || dep.ownerDimCount != ownerRank ||
-          dep.accessSlots.size() != ownerRank)
-        continue;
-      if (!llvm::all_of(dep.accessSlots, [](const DepOwnerAccessSlot &slot) {
-            return slot.fullWindow;
-          }))
-        continue;
-      dep.accessSlots = templateDep->accessSlots;
-    }
-  }
   return success();
 }
 

@@ -3,7 +3,7 @@
 // RUN:   --arts-config %inputs_dir/arts_64t.cfg --pipeline=pre-lowering
 // RUN: %FileCheck %s --implicit-check-not='host_whole' \
 // RUN:   --implicit-check-not='local_only' \
-// RUN:   --implicit-check-not='arts.db_alloc{{.*}}<coarse>{{.*}}elementType(f64)' \
+// RUN:   --implicit-check-not='arts.db_alloc{{.*}}<coarse>{{.*}}elementSizes[%c1, %c1, %c32, %c32]' \
 // RUN:   --implicit-check-not='byte_sizes({{.*}}%c8192' \
 // RUN:   --implicit-check-not='element_sizes[%c1, %c1, %c32, %c32]{{.*}}haloViewDependency' \
 // RUN:   < %t.dir/jacobi-for.pre-lowering.mlir
@@ -19,6 +19,6 @@
 // CHECK: arts_rt.rec_dep %[[HALO_EDT]]
 // CHECK-SAME: byte_offsets(%c0, %c0, %c7936, %c0, %c0, %c0, %c0)
 // CHECK-SAME: byte_sizes(%c0, %c0, %c256, %c256, %c0, %c0, %c0)
-// CHECK-SAME: acquire_modes = array<i32: 1, 1, 1, 1, 1, 1, 2>
+// CHECK-SAME: acquire_modes = array<i32: 2, 1, 1, 1, 1, 1, 1>
 // CHECK-SAME: dep_flags = array<i32: 0, 0, 4, 4, 0, 0, 0>
 // CHECK: arts_rt.wait_on_epoch

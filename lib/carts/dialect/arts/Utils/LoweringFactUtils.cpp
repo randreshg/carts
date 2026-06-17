@@ -565,7 +565,8 @@ mlir::carts::arts::readArtsDbPhysicalLayoutFromCommittedType(DbAllocOp alloc) {
     return readArtsDbPhysicalLayout(alloc.getOperation());
 
   SmallVector<int64_t, 4> expandedShape;
-  expandedShape.reserve(alloc.getSizes().size() + alloc.getElementSizes().size());
+  expandedShape.reserve(alloc.getSizes().size() +
+                        alloc.getElementSizes().size());
   for (Value size : alloc.getSizes()) {
     std::optional<int64_t> constant = ValueAnalysis::tryFoldConstantIndex(
         ValueAnalysis::stripNumericCasts(size));
@@ -582,8 +583,8 @@ mlir::carts::arts::readArtsDbPhysicalLayoutFromCommittedType(DbAllocOp alloc) {
   }
 
   if (std::optional<sde::RecoveredMuPhysicalLayout> recovered =
-          sde::recoverMuPhysicalLayoutFromExpandedShape(expandedShape,
-                                                        alloc.getElementType())) {
+          sde::recoverMuPhysicalLayoutFromExpandedShape(
+              expandedShape, alloc.getElementType())) {
     ArtsDbPhysicalLayout layout;
     layout.ownerDims.reserve(recovered->ownerDims.size());
     for (unsigned dim : recovered->ownerDims)

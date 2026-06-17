@@ -3,27 +3,23 @@
 // RUN:   --arts-config %inputs_dir/arts_64t.cfg --pipeline=post-db-refinement
 // RUN: %FileCheck %s < %t.dir/jacobi-for.post-db-refinement.mlir
 
-// CHECK: %[[C3584:[A-Za-z0-9_]+]] = arith.constant 3584 : index
-// CHECK: %[[C512:[A-Za-z0-9_]+]] = arith.constant 512 : index
-// CHECK: scf.for %[[ROW_BASE:arg[0-9]+]] = {{.*}} step %[[C3584]]
-// CHECK: scf.for %[[COL_BASE:arg[0-9]+]] = {{.*}} step %[[C512]]
-// The per-group block coordinate is materialized once for the EDT params (used
-// for in-EDT localization below) and once at the acquire site; the values are
-// equal but carry distinct SSA names. Consume the param-side pair first.
-// CHECK: arith.divui %[[ROW_BASE]], %[[C512]] : index
-// CHECK: arith.divui %[[COL_BASE]], %[[C512]] : index
-// Acquire-side row block offset + clamped group extent (one block-index value
-// feeds both the remainder and the acquire offset).
-// CHECK: %[[ROW_BLOCK:[A-Za-z0-9_]+]] = arith.divui %[[ROW_BASE]], %[[C512]] : index
-// CHECK: %[[ROW_REMAIN:[A-Za-z0-9_]+]] = arith.subi %{{[A-Za-z0-9_]+}}, %[[ROW_BLOCK]] : index
-// CHECK: %[[ROW_GROUP:[A-Za-z0-9_]+]] = arith.minui %[[ROW_REMAIN]], %{{[A-Za-z0-9_]+}} : index
-// Acquire-side col block offset + clamped group extent.
-// CHECK: %[[COL_BLOCK:[A-Za-z0-9_]+]] = arith.divui %[[COL_BASE]], %[[C512]] : index
-// CHECK: %[[COL_REMAIN:[A-Za-z0-9_]+]] = arith.subi %{{[A-Za-z0-9_]+}}, %[[COL_BLOCK]] : index
-// CHECK: %[[COL_GROUP:[A-Za-z0-9_]+]] = arith.minui %[[COL_REMAIN]], %{{[A-Za-z0-9_]+}} : index
-// CHECK: arts.db_acquire[<{{inout|out}}>] {{.*}} offsets[%[[ROW_BLOCK]], %[[COL_BLOCK]]], sizes[%[[ROW_GROUP]], %[[COL_GROUP]]]
+// CHECK-DAG: arith.constant 1280 : index
+// CHECK-DAG: arith.constant 512 : index
+// CHECK-DAG: arith.constant 20 : index
+// CHECK-DAG: arith.constant 8 : index
+// CHECK-DAG: arith.constant 5 : index
+// CHECK-DAG: arith.constant 1 : index
+// CHECK: arts.db_alloc{{.*}}sizes[%c8, %c8]{{.*}}elementSizes[%c1, %c1, %c1280, %c1280]{{.*}}perBlockSingleWriterStencil
+// CHECK: arts.db_alloc{{.*}}sizes[%c20, %c20]{{.*}}elementSizes[%c1, %c1, %c512, %c512]{{.*}}perBlockSingleWriterStencil
+// CHECK: arith.minui %{{[A-Za-z0-9_]+}}, %c1 : index
+// CHECK: arts.db_acquire[<out>] {{.*}}partitioning(<block>){{.*}}runtime_db_mode<ew>
+// CHECK: arith.minui %{{[A-Za-z0-9_]+}}, %c1 : index
+// CHECK: arts.db_acquire[<in>] {{.*}}partitioning(<block>){{.*}}runtime_db_mode<ro>
+// CHECK: arts.db_acquire[<in>] {{.*}}sizes[%c1, %{{[A-Za-z0-9_]+}}] bounds_valid
+// CHECK: arts.db_acquire[<in>] {{.*}}sizes[%c1, %{{[A-Za-z0-9_]+}}] bounds_valid
+// CHECK: arts.db_acquire[<in>] {{.*}}sizes[%{{[A-Za-z0-9_]+}}, %c1] bounds_valid
+// CHECK: arts.db_acquire[<in>] {{.*}}sizes[%{{[A-Za-z0-9_]+}}, %c1] bounds_valid
 // CHECK: arts.runtime_query <total_nodes>
 // CHECK: arts.edt <task> <internode> route
-// CHECK: %[[INNER_BLOCK:[A-Za-z0-9_]+]] = arith.divui %{{[A-Za-z0-9_]+}}, %[[C512]] : index
-// CHECK: %[[LOCAL_BLOCK:[A-Za-z0-9_]+]] = arith.subi %[[INNER_BLOCK]], %arg{{[0-9]+}} : index
-// CHECK: arts.db_ref %arg{{[0-9]+}}[%[[LOCAL_BLOCK]], %{{[A-Za-z0-9_]+}}]
+// CHECK: arts.db_ref %arg{{[0-9]+}}[%c0, %c0]
+// CHECK: arts.db_ref %arg{{[0-9]+}}[%{{[A-Za-z0-9_]+}}, %{{[A-Za-z0-9_]+}}]

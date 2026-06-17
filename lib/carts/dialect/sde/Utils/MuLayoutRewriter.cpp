@@ -276,6 +276,19 @@ static ArrayRef<int64_t> committedBlockShape(const LayoutGraphFact &fact) {
              : ArrayRef<int64_t>(fact.budgetBlockShape);
 }
 
+static ArrayRef<int64_t>
+readFactMaterializationBlockShape(const LayoutGraphFact &fact,
+                                  SdeSuIterateOp reader) {
+  std::optional<SdeStructuredClassification> cls =
+      queryStructuredClassification(reader);
+  if (!cls)
+    cls = reader.getStructuredClassification();
+  if (cls && *cls == SdeStructuredClassification::matmul &&
+      !fact.budgetBlockShape.empty())
+    return fact.budgetBlockShape;
+  return fact.blockShape;
+}
+
 static std::optional<ExpandedBlockGridMu>
 recognizeExpandedBlockGridMuForWriter(SdeSuIterateOp writer,
                                       MemRefType muType) {
@@ -572,12 +585,14 @@ SdeSuIterateOp findCommittedBlockLayoutWitness(SdeMuAllocOp muAlloc) {
       continue;
 
     std::optional<ComparableBlockGrid> layout;
+    ArrayRef<int64_t> blockShape =
+        readFactMaterializationBlockShape(*fact, reader);
     if (std::optional<MuPhysicalLayout> flat =
-            resolveMuPhysicalLayout(muType, fact->ownerDims, fact->blockShape))
+            resolveMuPhysicalLayout(muType, fact->ownerDims, blockShape))
       layout = comparableBlockGrid(*flat);
     else if (std::optional<ExpandedBlockGridMu> expanded =
-                 recognizeExpandedBlockGridMuFromShape(
-                     fact->ownerDims, fact->blockShape, muType))
+                 recognizeExpandedBlockGridMuFromShape(fact->ownerDims,
+                                                       blockShape, muType))
       layout = comparableBlockGrid(*expanded);
     if (!layout)
       continue;
@@ -684,8 +699,9 @@ findCommittedMuBlockLayout(SdeMuAllocOp muAlloc) {
         findBlockLayoutFact(reader, *arrayId, LayoutGraphRole::read);
     if (!reader || !fact)
       continue;
-    std::optional<MuPhysicalLayout> layout =
-        resolveMuPhysicalLayout(muType, fact->ownerDims, fact->blockShape);
+    std::optional<MuPhysicalLayout> layout = resolveMuPhysicalLayout(
+        muType, fact->ownerDims,
+        readFactMaterializationBlockShape(*fact, reader));
     if (!layout)
       continue;
     ComparableBlockGrid comparable = comparableBlockGrid(*layout);

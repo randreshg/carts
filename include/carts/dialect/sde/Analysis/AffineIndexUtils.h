@@ -32,7 +32,7 @@ bool hasConstantOffsets(AffineMap map);
 
 /// Best-effort affine expression for `value` over dispatch `ivs`.
 std::optional<AffineExpr> tryGetAffineExpr(Value value, ArrayRef<Value> ivs,
-                                             MLIRContext *ctx);
+                                           MLIRContext *ctx);
 
 /// Return -1, 0, or +1 when `expr` is exactly `iv` plus a unit
 /// neighborhood offset after affine simplification.

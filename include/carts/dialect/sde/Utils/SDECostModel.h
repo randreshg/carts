@@ -31,8 +31,8 @@ public:
   /// multi-stage local work; scales sublinearly with logical capacity.
   virtual int64_t getMinPipelineOwnerIterationsPerTask() const {
     int64_t capacityFloor = std::max<int64_t>(
-        1, static_cast<int64_t>(std::ceil(std::log2(static_cast<double>(
-               std::max(2, getLogicalWorkerCapacity()))))));
+        1, static_cast<int64_t>(std::ceil(std::log2(
+               static_cast<double>(std::max(2, getLogicalWorkerCapacity()))))));
     return std::max(getMinIterationsPerWorker(), capacityFloor);
   }
 

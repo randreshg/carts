@@ -25,5 +25,5 @@
 
 // CHECK: arts.runtime_query <total_nodes>
 // CHECK: arts.edt <task> <internode> route{{.*}}(%{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %{{[^)]+}})
-// CHECK-SAME: perBlockHaloExchange
+// CHECK-SAME: stencil_supported_block_halo
 // CHECK: scf.if {{.*}} -> (f64)

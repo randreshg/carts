@@ -184,7 +184,19 @@ derivePhysicalDimToSuLoopDimFromExternalStores(sde::SdeSuIterateOp op,
 }
 
 bool hasCommittedPhysicalLayout(sde::SdeSuIterateOp op) {
-  return sde::hasCommittedWriterBlockLayout(op);
+  if (!op)
+    return false;
+  for (const sde::LayoutGraphFact &fact :
+       sde::parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+    if (fact.role != sde::LayoutGraphRole::write || fact.ownerDims.empty() ||
+        fact.blockShape.empty())
+      continue;
+    if (!fact.budgetBlockShape.empty() &&
+        fact.budgetBlockShape != fact.blockShape)
+      continue;
+    return true;
+  }
+  return false;
 }
 
 bool isInPlaceSelfReadStencil(sde::SdeSuIterateOp op) {
@@ -265,7 +277,12 @@ bool physicalLayoutMatchesRealizedLoopSteps(
     if (!realizedStep || workerSpan <= 0 ||
         physicalBlockShape[rawPhysicalDim] <= 0 ||
         workerSpan % physicalBlockShape[rawPhysicalDim] != 0 ||
-        *realizedStep > workerSpan)
+        *realizedStep != workerSpan)
+      return false;
+
+    int64_t lower = 0;
+    if (!ValueAnalysis::getConstantIndex(op.getLowerBounds()[loopDim], lower) ||
+        lower % physicalBlockShape[rawPhysicalDim] != 0)
       return false;
   }
   return true;

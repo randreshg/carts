@@ -10,9 +10,9 @@
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
-#include "carts/dialect/sde/Utils/SdeAttrNames.h"
-#include "carts/dialect/sde/Utils/MuAccessWindow.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
+#include "carts/dialect/sde/Utils/MuAccessWindow.h"
+#include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
@@ -155,7 +155,8 @@ findCommittedBlockGeometryForRoot(Value root) {
     if (!layout || layout->ownerDims.size() != 1 || layout->blockShape.empty())
       continue;
     int64_t ownerDim = layout->ownerDims[0];
-    if (ownerDim < 0 || static_cast<size_t>(ownerDim) >= layout->blockShape.size())
+    if (ownerDim < 0 ||
+        static_cast<size_t>(ownerDim) >= layout->blockShape.size())
       continue;
 
     int64_t extent = type.getDimSize(0);
@@ -343,9 +344,8 @@ static std::optional<ReductionCandidate> matchReductionLoop(scf::ForOp loop) {
                    [](const AccumulatorUpdate &acc) { return acc.isFloat; });
   if (hasFloat && candidate.step < candidate.sourceGeometry.blockExtent) {
     candidate.preserveFloatOrder = true;
-    candidate.partialSlots =
-        sde::ceilDivPositive(candidate.sourceGeometry.blockExtent,
-                             candidate.step);
+    candidate.partialSlots = sde::ceilDivPositive(
+        candidate.sourceGeometry.blockExtent, candidate.step);
   }
 
   return candidate;
@@ -550,8 +550,8 @@ static void createBlockSummingProducerBody(ReductionCandidate &candidate,
                 locals, builder, loc);
 }
 
-static std::optional<sde::SdeMuAllocOp>
-findMuAllocForMemref(Value memref, ModuleOp module) {
+static std::optional<sde::SdeMuAllocOp> findMuAllocForMemref(Value memref,
+                                                             ModuleOp module) {
   Value stripped = ValueAnalysis::stripMemrefViewOps(memref);
   if (auto mu = stripped.getDefiningOp<sde::SdeMuAllocOp>())
     return mu;
@@ -630,8 +630,9 @@ static sde::SdeSuIterateOp createProducer(ReductionCandidate &candidate,
   sde::SuIterateAttrs suAttrs;
   suAttrs.structuredClassification = sde::SdeStructuredClassificationAttr::get(
       ctx, sde::SdeStructuredClassification::elementwise);
-  auto su = sde::buildSuIterate(builder, loc, ValueRange{zero},
-                                ValueRange{blockCount}, ValueRange{one}, suAttrs);
+  auto su =
+      sde::buildSuIterate(builder, loc, ValueRange{zero},
+                          ValueRange{blockCount}, ValueRange{one}, suAttrs);
 
   Block &suBody = sde::ensureBlock(su.getBody());
   if (suBody.getNumArguments() == 0)
@@ -868,12 +869,12 @@ static LogicalResult rewriteReduction(ReductionCandidate candidate) {
         sde::SdeMuAllocOp::create(outerBuilder, loc, partialType, ValueRange{});
     partial = partialAlloc.getMemref();
   } else {
-    auto allocCu = sde::buildCuRegion(
-        outerBuilder, loc,
-        sde::SdeCuKindAttr::get(outerBuilder.getContext(),
-                                sde::SdeCuKind::single),
-        /*nowait=*/nullptr, /*iterArgs=*/ValueRange{},
-        /*resultTypes=*/TypeRange{partialType});
+    auto allocCu =
+        sde::buildCuRegion(outerBuilder, loc,
+                           sde::SdeCuKindAttr::get(outerBuilder.getContext(),
+                                                   sde::SdeCuKind::single),
+                           /*nowait=*/nullptr, /*iterArgs=*/ValueRange{},
+                           /*resultTypes=*/TypeRange{partialType});
     allocCu.setSerialReasonAttr(sde::SdeSerialReasonAttr::get(
         outerBuilder.getContext(), sde::SdeSerialReason::reduction_combine));
     Block &allocBody = sde::ensureBlock(allocCu.getBody());

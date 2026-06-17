@@ -347,9 +347,8 @@ static bool hasPerfectNestedScalarLoopNest(Block &body, unsigned numLoops) {
   mlir::getPerfectlyNestedLoops(loops, rootLoop);
   if (loops.size() != numLoops - 1)
     return false;
-  if (llvm::any_of(loops, [](scf::ForOp loop) {
-        return !loop.getInitArgs().empty();
-      }))
+  if (llvm::any_of(loops,
+                   [](scf::ForOp loop) { return !loop.getInitArgs().empty(); }))
     return false;
   return isExecutableInnermostBody(*loops.back().getBody());
 }
@@ -754,9 +753,10 @@ computeStaticTileIterations(sde::SdeSuIterateOp op,
   return tileIterations;
 }
 
-static void applyStencilTileGuardsToStaticPlan(
-    sde::SdeSuIterateOp op, SmallVectorImpl<int64_t> &tileIterations,
-    unsigned numDims) {
+static void
+applyStencilTileGuardsToStaticPlan(sde::SdeSuIterateOp op,
+                                   SmallVectorImpl<int64_t> &tileIterations,
+                                   unsigned numDims) {
   // Enforce the halo floor only. The former L2-cache tile cap fed on a
   // fabricated getL2CacheSize() literal (a HARD-RULE fabricated-number
   // violation, removed with the rest of the cost-model hardware-param family);
@@ -771,7 +771,8 @@ static void applyStencilTileGuardsToStaticPlan(
 static std::optional<PhysicalTileShape>
 buildStencilPhysicalTileShape(sde::SdeSuIterateOp op,
                               ArrayRef<int64_t> tileIterations) {
-  if (sde::hasCommittedWriterBlockLayout(op) || sde::queryInPlaceSharedState(op))
+  if (sde::hasCommittedWriterBlockLayout(op) ||
+      sde::queryInPlaceSharedState(op))
     return std::nullopt;
   if (auto neighborhood = sde::queryNeighborhoodAccessInfo(op))
     if (neighborhood->ownerDims.size() > op.getLowerBounds().size())
@@ -877,8 +878,9 @@ buildNdStencilPhysicalTileShape(sde::SdeSuIterateOp op,
     if (physicalDim < 0 ||
         static_cast<size_t>(physicalDim) >= outputPlan->shape.size())
       continue;
-    int64_t halo = std::max<int64_t>(
-        0, std::max(-neighborhood->minOffsets[idx], neighborhood->maxOffsets[idx]));
+    int64_t halo =
+        std::max<int64_t>(0, std::max(-neighborhood->minOffsets[idx],
+                                      neighborhood->maxOffsets[idx]));
     if (halo == 0)
       continue;
     ownerLoopDims.push_back(static_cast<unsigned>(rawLoopDim));
@@ -1079,10 +1081,11 @@ allExternalStoresCoverOwnerDims(sde::SdeSuIterateOp op,
   return sawExternalStore && !rejected;
 }
 
-static ArrayRef<int64_t> assignedPhysicalBlockShape(
-    const sde::LayoutGraphFact &fact) {
-  return fact.budgetBlockShape.empty() ? ArrayRef<int64_t>(fact.blockShape)
-                                       : ArrayRef<int64_t>(fact.budgetBlockShape);
+static ArrayRef<int64_t>
+assignedPhysicalBlockShape(const sde::LayoutGraphFact &fact) {
+  return fact.budgetBlockShape.empty()
+             ? ArrayRef<int64_t>(fact.blockShape)
+             : ArrayRef<int64_t>(fact.budgetBlockShape);
 }
 
 static std::optional<sde::LayoutGraphFact>
@@ -1173,7 +1176,8 @@ buildCoiteratedReadWriterTilePlan(sde::SdeSuIterateOp op) {
     if (loopDim >= outputPlan->loopDimToPhysicalDim.size())
       return std::nullopt;
     int64_t physicalDim = outputPlan->loopDimToPhysicalDim[loopDim];
-    if (physicalDim < 0 || static_cast<size_t>(physicalDim) >= plan.blockShape.size())
+    if (physicalDim < 0 ||
+        static_cast<size_t>(physicalDim) >= plan.blockShape.size())
       return std::nullopt;
     std::optional<int64_t> step =
         ValueAnalysis::getPositiveConstantIndex(op.getSteps()[loopDim]);
@@ -1183,7 +1187,8 @@ buildCoiteratedReadWriterTilePlan(sde::SdeSuIterateOp op) {
   }
   if (llvm::all_of(plan.tileIterations, [](int64_t tile) { return tile <= 1; }))
     return std::nullopt;
-  plan.logicalWorkerSlice.assign(plan.blockShape.begin(), plan.blockShape.end());
+  plan.logicalWorkerSlice.assign(plan.blockShape.begin(),
+                                 plan.blockShape.end());
   if (*classification == sde::SdeStructuredClassification::stencil)
     plan.haloShape =
         getStencilHaloRadiiForOwnerDims(op, plan.ownerPhysicalDims.size());
@@ -1472,7 +1477,8 @@ static bool stripMineAffineLoop(affine::AffineForOp loop, int64_t tileSize) {
     return false;
 
   SmallVector<affine::AffineForOp, 1> band = {loop};
-  if (failed(affine::tilePerfectlyNested(band, {static_cast<unsigned>(tileSize)})))
+  if (failed(
+          affine::tilePerfectlyNested(band, {static_cast<unsigned>(tileSize)})))
     return false;
   return true;
 }
@@ -1505,9 +1511,8 @@ static unsigned stripMineDirectMatmulColumnLoops(Block &body, Value outputRoot,
                                                  Value ownerIv,
                                                  Value columnTileIterations) {
   int64_t tileConstant = 0;
-  const bool hasConstantTile =
-      ::mlir::carts::ValueAnalysis::getConstantIndex(columnTileIterations,
-                                                    tileConstant);
+  const bool hasConstantTile = ::mlir::carts::ValueAnalysis::getConstantIndex(
+      columnTileIterations, tileConstant);
   if (hasConstantTile && tileConstant <= 1)
     return 0;
 
@@ -1546,8 +1551,8 @@ static void commitDirectMatmulTileShape(sde::SdeSuIterateOp op,
 
   // Direct-memory matmul keeps full output rows in one owner task. Splitting
   // columns across owner tasks duplicates the k-sweep against coarse inputs.
-  sde::commitWriterPhysicalLayoutFacts(
-      op, SmallVector<int64_t, 1>{0}, blockShape, blockShape);
+  sde::commitWriterPhysicalLayoutFacts(op, SmallVector<int64_t, 1>{0},
+                                       blockShape, blockShape);
 }
 
 struct TilingPass : public sde::impl::TilingBase<TilingPass> {
@@ -1723,7 +1728,8 @@ struct TilingPass : public sde::impl::TilingBase<TilingPass> {
               sde::SdeStructuredClassification::stencil) {
         if (auto staticTileIterations =
                 computeStaticTileIterations(op, *costModel)) {
-          applyStencilTileGuardsToStaticPlan(op, *staticTileIterations, numDims);
+          applyStencilTileGuardsToStaticPlan(op, *staticTileIterations,
+                                             numDims);
           physicalTileShape =
               buildStencilPhysicalTileShape(op, *staticTileIterations);
         }

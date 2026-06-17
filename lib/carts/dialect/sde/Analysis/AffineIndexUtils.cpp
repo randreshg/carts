@@ -13,7 +13,7 @@ using namespace mlir::carts;
 namespace mlir::carts::sde {
 
 std::optional<AffineExpr> tryGetAffineExpr(Value value, ArrayRef<Value> ivs,
-                                             MLIRContext *ctx) {
+                                           MLIRContext *ctx) {
   for (auto [idx, iv] : llvm::enumerate(ivs)) {
     if (value == iv)
       return getAffineDimExpr(idx, ctx);
@@ -74,11 +74,13 @@ std::optional<AffineExpr> tryGetAffineExpr(Value value, ArrayRef<Value> ivs,
   };
 
   if (auto divOp = dyn_cast<arith::DivSIOp>(defOp))
-    return tryAffineBin(divOp.getLhs(), divOp.getRhs(), AffineExprKind::FloorDiv);
+    return tryAffineBin(divOp.getLhs(), divOp.getRhs(),
+                        AffineExprKind::FloorDiv);
   if (auto remOp = dyn_cast<arith::RemSIOp>(defOp))
     return tryAffineBin(remOp.getLhs(), remOp.getRhs(), AffineExprKind::Mod);
   if (auto divOp = dyn_cast<arith::DivUIOp>(defOp))
-    return tryAffineBin(divOp.getLhs(), divOp.getRhs(), AffineExprKind::FloorDiv);
+    return tryAffineBin(divOp.getLhs(), divOp.getRhs(),
+                        AffineExprKind::FloorDiv);
   if (auto remOp = dyn_cast<arith::RemUIOp>(defOp))
     return tryAffineBin(remOp.getLhs(), remOp.getRhs(), AffineExprKind::Mod);
 

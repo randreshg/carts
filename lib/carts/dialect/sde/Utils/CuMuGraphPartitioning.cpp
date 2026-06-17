@@ -554,8 +554,8 @@ static double scoreCuMuPartition(const CuMuMemoryUnit &memory,
     int64_t trafficBytes = tileBytes;
     for (const CuMuHyperedgePressure &edge : memory.hyperedges)
       trafficBytes += std::max<int64_t>(0, edge.trafficBytes);
-    double packets = static_cast<double>(trafficBytes) /
-                     static_cast<double>(tileBytes);
+    double packets =
+        static_cast<double>(trafficBytes) / static_cast<double>(tileBytes);
     score += packets * dataCost;
   }
 

@@ -81,6 +81,128 @@ static void unifyBlockShape(ArrayRef<int64_t> grain,
     unified[i] = unifyBlockDim(unified[i], grain[i], unifyKind);
 }
 
+static bool mergeCompatibleBudgetGrain(ArrayRef<int64_t> budget,
+                                       SmallVectorImpl<int64_t> &selected) {
+  if (budget.empty())
+    return false;
+  if (selected.empty()) {
+    selected.assign(budget.begin(), budget.end());
+    return true;
+  }
+  if (selected.size() != budget.size())
+    return false;
+  for (auto [idx, dim] : llvm::enumerate(budget)) {
+    int64_t current = selected[idx];
+    int64_t lo = std::min(current, dim);
+    int64_t hi = std::max(current, dim);
+    if (lo <= 0 || hi % lo != 0)
+      return false;
+  }
+  for (auto [idx, dim] : llvm::enumerate(budget))
+    selected[idx] = std::min<int64_t>(selected[idx], dim);
+  return true;
+}
+
+static std::optional<BlockGrainPlan>
+buildCrossArrayBudgetBlockGrainPlan(sde::SdeSuIterateOp op,
+                                    sde::SDECostModel &costModel) {
+  if (!op)
+    return std::nullopt;
+  if (auto cls = sde::queryStructuredClassification(op);
+      cls && *cls == sde::SdeStructuredClassification::stencil)
+    return std::nullopt;
+  ArrayAttr layout = op.getArrayLayoutAttr();
+  if (!layout)
+    return std::nullopt;
+
+  std::optional<sde::SuOutputLayoutFacts> outputPlan =
+      sde::findCompatibleSuOutputLayoutFacts(op);
+  if (!outputPlan || outputPlan->shape.empty())
+    return std::nullopt;
+
+  bool sawWrite = false;
+  bool sawBudget = false;
+  bool sawFinerBudget = false;
+  SmallVector<int64_t, 4> layoutOwnerDims;
+  SmallVector<int64_t, 4> selectedBudget;
+  for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
+    if (fact.layoutKind != sde::ArrayLayoutKind::blockParallel ||
+        fact.ownerDims.empty() || fact.blockShape.empty())
+      continue;
+    if (layoutOwnerDims.empty()) {
+      layoutOwnerDims.assign(fact.ownerDims.begin(), fact.ownerDims.end());
+    } else if (ArrayRef<int64_t>(layoutOwnerDims) !=
+               ArrayRef<int64_t>(fact.ownerDims)) {
+      return std::nullopt;
+    }
+    sawWrite |= fact.role == sde::LayoutGraphRole::write;
+    if (fact.budgetBlockShape.empty())
+      continue;
+    if (fact.budgetBlockShape.size() != outputPlan->shape.size())
+      return std::nullopt;
+    if (!mergeCompatibleBudgetGrain(fact.budgetBlockShape, selectedBudget))
+      return std::nullopt;
+    sawBudget = true;
+    sawFinerBudget |= fact.budgetBlockShape != fact.blockShape;
+  }
+  if (!sawWrite || !sawBudget || !sawFinerBudget || selectedBudget.empty())
+    return std::nullopt;
+
+  std::optional<SmallVector<int64_t, 4>> orderedOwnerDims =
+      orderPhysicalOwnerDimsByLoop(*outputPlan, layoutOwnerDims,
+                                   op.getLowerBounds().size());
+  if (!orderedOwnerDims || orderedOwnerDims->empty())
+    return std::nullopt;
+  if (!allExternalStoresCoverOwnerDims(op, *orderedOwnerDims,
+                                       outputPlan->physicalDimToLoopDim))
+    return std::nullopt;
+
+  for (auto [idx, dim] : llvm::enumerate(selectedBudget))
+    if (dim <= 0 || outputPlan->shape[idx] <= 0 || dim > outputPlan->shape[idx])
+      return std::nullopt;
+
+  BlockGrainPlan plan;
+  plan.ownerDims.assign(orderedOwnerDims->begin(), orderedOwnerDims->end());
+  plan.physicalBlockShape.assign(selectedBudget.begin(), selectedBudget.end());
+
+  bool anyHalo = false;
+  for (int64_t physicalDim : plan.ownerDims) {
+    int64_t loopDim = physicalDim;
+    if (physicalDim >= 0 &&
+        static_cast<size_t>(physicalDim) <
+            outputPlan->physicalDimToLoopDim.size() &&
+        outputPlan->physicalDimToLoopDim[physicalDim] >= 0)
+      loopDim = outputPlan->physicalDimToLoopDim[physicalDim];
+    int64_t halo =
+        loopDim >= 0
+            ? readStencilHaloForOwnerDim(op, static_cast<unsigned>(loopDim))
+            : 0;
+    plan.haloShape.push_back(std::max<int64_t>(0, halo));
+    anyHalo |= halo > 0;
+  }
+  if (!anyHalo)
+    plan.haloShape.clear();
+
+  plan.logicalWorkerSlice.assign(plan.physicalBlockShape.begin(),
+                                 plan.physicalBlockShape.end());
+  auto classification = sde::queryStructuredClassification(op);
+  bool isStencil = classification &&
+                   *classification == sde::SdeStructuredClassification::stencil;
+  if (isStencil || anyHalo) {
+    if (!sde::buildBlockAlignedLogicalWorkerSlice(
+            outputPlan->shape, plan.ownerDims, plan.physicalBlockShape,
+            costModel.getLogicalWorkerCapacity(), plan.logicalWorkerSlice))
+      plan.logicalWorkerSlice.assign(plan.physicalBlockShape.begin(),
+                                     plan.physicalBlockShape.end());
+  } else {
+    plan.logicalWorkerSlice = buildLogicalWorkerSliceOrPhysical(
+        op, outputPlan->shape, plan.ownerDims, plan.physicalBlockShape,
+        costModel.getLogicalWorkerCapacity(),
+        anyHalo ? ArrayRef<int64_t>(plan.haloShape) : ArrayRef<int64_t>{});
+  }
+  return plan;
+}
+
 // Choose the one committed node-agnostic budget grain for every SU that writes
 // a multi-owner-distributed data-parallel array. The caller only commits it
 // when the current SU step already realizes the selected block grain.
@@ -163,8 +285,17 @@ namespace mlir::carts::sde::distribution {
 
 bool commitBudgetReconciledLayout(sde::SdeSuIterateOp op,
                                   sde::SDECostModel &costModel) {
+  if (!op || hasCommittedPhysicalLayout(op))
+    return false;
+
   std::optional<BlockGrainPlan> plan =
       buildBudgetReconciledBlockGrainPlan(op, costModel);
+  if (plan)
+    return applyPhysicalLayoutIfRealized(
+        op, plan->ownerDims, plan->physicalBlockShape, plan->haloShape,
+        plan->logicalWorkerSlice);
+
+  plan = buildCrossArrayBudgetBlockGrainPlan(op, costModel);
   if (!plan)
     return false;
   return applyPhysicalLayoutIfRealized(
