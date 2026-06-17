@@ -2065,9 +2065,10 @@ convertSuIterate(sde::SdeSuIterateOp source,
   for (int64_t workerSpan : workerSpans)
     ownerLocalSteps.push_back(
         createConstantIndex(bodyBuilder, loc, workerSpan));
-  SmallVector<OwnerLocalStepRewrite, 4> ownerLocalStepRewrites =
-      collectOwnerLocalStepRewrites(source, computeBlock,
-                                    ownerRouteping->loopDims);
+  SmallVector<OwnerLocalStepRewrite, 4> ownerLocalStepRewrites;
+  if (splitToOwnerLocalGroups)
+    ownerLocalStepRewrites = collectOwnerLocalStepRewrites(
+        source, computeBlock, ownerRouteping->loopDims);
 
   DenseMap<Operation *, HaloLoadRewrite> clonedHaloLoadRewrites;
   DenseMap<Operation *, HaloNdLoadRewrite> clonedHaloNdLoadRewrites;
@@ -2087,7 +2088,8 @@ convertSuIterate(sde::SdeSuIterateOp source,
                                               clonedHaloNdLoadRewrites)))
         return failure();
   }
-  if (failed(applyOwnerLocalStepRewrites(source, ownerLocalStepRewrites, mapper,
+  if (splitToOwnerLocalGroups &&
+      failed(applyOwnerLocalStepRewrites(source, ownerLocalStepRewrites, mapper,
                                          ownerLocalSteps)))
     return failure();
 
