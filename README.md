@@ -46,7 +46,6 @@ See **[Getting Started](docs/getting-started.md)** for the full walkthrough.
 | `samples/` | Demo programs (C/C++ with OpenMP) |
 | `external/` | Vendored dependencies (ARTS, Polygeist, LLVM) |
 | `docs/` | Architecture, pipeline, and developer documentation |
-| `docker/` | Container workflows for multi-node execution |
 
 ## Managed Artifact Layout
 
@@ -93,7 +92,6 @@ probing subproject-local build or install directories.
 | `dekk carts benchmarks <cmd>` | Build and run benchmarks (list, run, build, clean) |
 | `dekk carts clean` | Remove generated files (`--all` for full clean) |
 | `dekk carts update` | Update git submodules |
-| `dekk carts docker <cmd>` | Docker operations (build, start, stop, exec) |
 | `dekk carts examples <cmd>` | List or run bundled examples |
 | `dekk carts skills <cmd>` | Generate and inspect agent skill resources |
 | `dekk carts worktree <cmd>` | Manage dekk-aware CARTS worktrees |

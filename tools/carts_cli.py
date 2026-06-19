@@ -33,17 +33,6 @@ from scripts.compile import (
     clang,
     mlir_translate as mlir_translate_cmd,
 )
-from scripts.docker import (
-    docker_callback,
-    docker_build,
-    docker_start,
-    docker_update,
-    docker_stop,
-    docker_clean as docker_clean_cmd,
-    docker_commit,
-    docker_status,
-    docker_exec,
-)
 from scripts.test import test as test_cmd, lit as lit_cmd
 from scripts.format import format_sources as format_cmd
 from scripts.clean import run_local_clean, run_full_clean
@@ -91,12 +80,7 @@ app = Typer(
     context_settings=HELP_CTX,
 )
 
-# Docker subcommand group
-docker_app = Typer(
-    help="Docker operations for multi-node execution",
-    context_settings=HELP_CTX,
-)
-app.add_typer(docker_app, name="docker")
+
 
 # Examples subcommand group
 app.add_typer(examples_app, name="examples", context_settings=HELP_CTX)
@@ -142,19 +126,7 @@ app.command(name="format")(format_cmd)
 # Update submodules
 app.command(name="update")(update_cmd)
 
-# Docker subcommands
-docker_app.callback(invoke_without_command=True)(docker_callback)
-docker_app.command(name="build")(docker_build)
-docker_app.command(name="start")(docker_start)
-docker_app.command(name="update")(docker_update)
-docker_app.command(name="stop")(docker_stop)
-docker_app.command(name="clean")(docker_clean_cmd)
-docker_app.command(name="commit")(docker_commit)
-docker_app.command(name="status")(docker_status)
-docker_app.command(
-    name="exec",
-    context_settings={**HELP_CTX, "allow_extra_args": True, "allow_interspersed_args": False},
-)(docker_exec)
+
 
 
 # ============================================================================
@@ -219,14 +191,10 @@ def benchmarks(
 def clean(
     all_builds: bool = Option(
         False, "--all", "-a", help="Clean all build directories (LLVM, Polygeist, ARTS, CARTS)"),
-    docker_clean: bool = Option(
-        False, "--docker", "-d", help="Clean Docker artifacts"),
 ):
     """Clean generated files in current directory."""
     if all_builds:
         run_full_clean()
-    elif docker_clean:
-        docker_clean_cmd()
     else:
         run_local_clean()
 

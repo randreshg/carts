@@ -59,7 +59,6 @@ clean = { run = "python tools/carts_cli.py clean", description = "Clean generate
 update = { run = "python tools/carts_cli.py update", description = "Update CARTS and pinned submodules", group = "Development" }
 benchmarks = { run = "python tools/carts_cli.py benchmarks", description = "Build and run benchmark workloads", skill = true, group = "Benchmarking" }
 examples = { run = "python tools/carts_cli.py examples", description = "List or run bundled examples", group = "Development" }
-docker = { run = "python tools/carts_cli.py docker", description = "Manage Docker-based CARTS workflows", group = "Docker" }
 
 [install]
 build = "python tools/install_driver.py"

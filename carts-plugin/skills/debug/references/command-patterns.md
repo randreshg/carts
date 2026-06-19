@@ -42,6 +42,5 @@ dekk carts benchmarks run polybench/2mm \
   --size small \
   --nodes 2 \
   --threads 4 \
-  --arts-config docker/arts-docker-2node.cfg \
   --debug 2
 ```

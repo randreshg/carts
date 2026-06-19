@@ -1,5 +1,0 @@
-# Keep Docker build context minimal.
-*
-!Dockerfile
-!slurm.conf
-!README.md
