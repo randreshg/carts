@@ -199,22 +199,10 @@ carts/
   samples/            Example C/C++ programs
   external/            Vendored deps (ARTS, Polygeist, LLVM)
   docs/                Architecture and pipeline documentation
-  docker/              Multi-node Docker cluster setup
   .dekk.toml           Environment and dependency configuration
 ```
 
-## Docker setup (multi-node)
 
-For multi-node benchmarking with SLURM:
-
-```bash
-dekk carts docker build     # Build the Docker image
-dekk carts docker start     # Start a 6-node simulated cluster
-dekk carts docker exec      # Open a shell in the cluster
-dekk carts docker stop      # Tear down
-```
-
-See [docker/README.md](../docker/README.md) for details.
 
 ## All CLI commands
 
@@ -233,7 +221,6 @@ Run `dekk carts --help` for the full command list. Key commands:
 | `dekk carts pipeline` | Inspect compiler pipeline stages |
 | `dekk carts clean` | Clean generated files |
 | `dekk carts update` | Update git submodules |
-| `dekk carts docker` | Multi-node Docker operations |
 | `dekk carts format` | Format source files |
 | `dekk carts skills` | Generate and inspect agent skill resources |
 | `dekk carts worktree` | Create and manage project worktrees |

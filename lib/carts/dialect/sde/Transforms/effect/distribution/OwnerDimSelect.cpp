@@ -1414,7 +1414,7 @@ static std::optional<sde::SdeSuIterateOp> applyPhysicalLayoutOrRetileStencil(
                                             haloShape, logicalWorkerSlice);
 }
 
-static void commitStencilPhysicalLayout(sde::SdeSuIterateOp op,
+static void commitStencilPhysicalLayout(sde::SdeSuIterateOp &op,
                                         sde::SDECostModel &costModel) {
   if (hasCommittedPhysicalLayout(op) ||
       costModel.getLogicalWorkerCapacity() <= 1)
@@ -1499,6 +1499,7 @@ static void commitStencilPhysicalLayout(sde::SdeSuIterateOp op,
                     logicalWorkerSlice)) {
           (void)sde::rewriteSameOwnerReadLayoutsToPhysicalShape(
               *realized, ownerDims, physicalBlockShape, tiledOutputPlan->shape);
+          op = *realized;
           return;
         }
       }
@@ -1580,6 +1581,7 @@ static void commitStencilPhysicalLayout(sde::SdeSuIterateOp op,
                                                  logicalWorkerSlice)) {
         (void)sde::rewriteSameOwnerReadLayoutsToPhysicalShape(
             *realized, ownerDims, physicalBlockShape, outputPlan->shape);
+        op = *realized;
         return;
       }
     }

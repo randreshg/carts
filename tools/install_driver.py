@@ -13,6 +13,7 @@ flow; this driver owns the CARTS-specific work that dekk cannot infer:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -65,17 +66,20 @@ def _prepare_project_sources() -> None:
     print_step("Synchronizing submodule metadata...")
     _run(["git", "submodule", "sync", "--recursive"], cwd=project_root, label="submodule sync")
 
-    print_step("Initializing top-level submodules...")
-    _run(
-        [
-            "git", "submodule", "update", "--init",
-            "--depth", "1", "--single-branch", "--recommend-shallow",
-            "--jobs", git_jobs,
-            SUBMODULE_ARTS, SUBMODULE_POLYGEIST, SUBMODULE_BENCHMARKS,
-        ],
-        cwd=project_root,
-        label="top-level submodule update",
-    )
+    if "CARTS_ARTIFACT_DIR" in os.environ:
+        print_info("Skipping top-level submodule update (managed by top-level CARTS-Artifact)")
+    else:
+        print_step("Initializing top-level submodules...")
+        _run(
+            [
+                "git", "submodule", "update", "--init",
+                "--depth", "1", "--single-branch", "--recommend-shallow",
+                "--jobs", git_jobs,
+                SUBMODULE_ARTS, SUBMODULE_POLYGEIST, SUBMODULE_BENCHMARKS,
+            ],
+            cwd=project_root,
+            label="top-level submodule update",
+        )
 
     arts_dir = project_root / SUBMODULE_ARTS
     print_step("Initializing ARTS nested submodules...")

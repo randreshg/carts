@@ -129,45 +129,72 @@ Match verification to the change:
 <!-- BEGIN SKILLS INVENTORY -->
 ## Available Skills
 
+Before editing CARTS sources, scan the Skills inventory below and read the SKILL.md for any whose description matches your task.
+
+### Session lifecycle
+
+| Skill | Description | Path |
+| --- | --- | --- |
+| `carts-session-start` | Use at the start of any CARTS compiler session before reconnaissance begins. | `carts-plugin/skills/carts-session-start/SKILL.md` |
+| `carts-commit` | Use when staging CARTS changes, choosing a commit message scope, committing, pushing, or handing a patch to review. | `carts-plugin/skills/carts-commit/SKILL.md` |
+| `carts-review` | Use before committing CARTS changes, during PR review, after substantial compiler/runtime edits, or when checking conventions, missing tests, fixture refreshes, or regression risk. | `carts-plugin/skills/carts-review/SKILL.md` |
+| `carts-simplify` | Use as the final simplification gate before committing or finishing CARTS work: reduce patch complexity, remove accidental changes, confirm utility-placement decisions already made by carts-check-utils, and enforce .carts artifact discipline. | `carts-plugin/skills/carts-simplify/SKILL.md` |
+| `carts-finishing` | Use when advancing or finishing active CARTS compiler/runtime work, choosing the next fix, applying regression guards, or deciding where a fix belongs. | `carts-plugin/skills/carts-finishing/SKILL.md` |
+
+### Discovery + placement
+
+| Skill | Description | Path |
+| --- | --- | --- |
+| `carts-find-utils` | Use when looking for an existing CARTS helper before writing one. | `carts-plugin/skills/carts-find-utils/SKILL.md` |
+| `check-utils` | Use before adding a CARTS helper, utility file, static helper, or utility-like attribute/string accessor. | `carts-plugin/skills/check-utils/SKILL.md` |
+| `refactor-utils` | Use when consolidating duplicate CARTS helpers or extracting reusable pass-local helpers after placement is decided. | `carts-plugin/skills/refactor-utils/SKILL.md` |
+| `carts-include-tier` | Use when lib headers gain multiple consumers, adding lib *Utils.h, or finding include *Internal.h. | `carts-plugin/skills/carts-include-tier/SKILL.md` |
+| `carts-attr-consolidation` | Use when adding or changing CARTS TableGen attrs, enum attrs, raw dialect attr strings, convert* enum switches, or AttrNames. | `carts-plugin/skills/carts-attr-consolidation/SKILL.md` |
+| `carts-dialect-map` | Use when locating CARTS dialect code, tracing op lifecycle, choosing owners, or checking boundary invariants. | `carts-plugin/skills/carts-dialect-map/SKILL.md` |
+| `carts-pipeline-map` | Use when inspecting CARTS pipeline stages, pass order, stage tokens, start-from/pipeline ranges, epilogues, stale pipeline docs, or ownership of a transformation stage. | `carts-plugin/skills/carts-pipeline-map/SKILL.md` |
+
+### Building + running
+
+| Skill | Description | Path |
+| --- | --- | --- |
+| `build` | Use when the user asks to build, compile the project, rebuild CARTS/ARTS/LLVM/Polygeist, or fix build errors. | `carts-plugin/skills/build/SKILL.md` |
+| `carts-cli` | Use when asking about CARTS commands, environment setup, wrappers, compile flags, pipeline inspection, examples, benchmarks, generated skills, or how to run project lifecycle tasks. | `carts-plugin/skills/carts-cli/SKILL.md` |
+| `test` | Use when the user asks to test, run tests, validate, check, verify changes, run lit, or run a focused CARTS suite. | `carts-plugin/skills/test/SKILL.md` |
+| `create-test` | Use when adding a new lit test, creating regression tests, writing multi-stage boundary tests, or choosing CARTS test placement and RUN lines. | `carts-plugin/skills/create-test/SKILL.md` |
+| `carts-local-examples` | Use when listing, running, fixing, sweeping, or validating CARTS local sample programs, examples runner behavior, or e2e compile-and-run tests. | `carts-plugin/skills/carts-local-examples/SKILL.md` |
+| `carts-multinode-examples` | Use when the user asks how to compile or run CARTS examples on multiple nodes, including ARTS configs, launchers, SSH, or Slurm. Use carts-distributed-triage for failures. | `carts-plugin/skills/carts-multinode-examples/SKILL.md` |
+| `benchmark` | Use when the user asks to list, build, run, or compare CARTS benchmarks. Use carts-benchmark-triage for failing, timing out, or suspicious benchmark results. | `carts-plugin/skills/benchmark/SKILL.md` |
+
+### Triage
+
+| Skill | Description | Path |
+| --- | --- | --- |
+| `debug` | Use when starting an unclassified CARTS debug session for crashes, wrong results, hangs, logs, counters, or pipeline artifacts. | `carts-plugin/skills/debug/SKILL.md` |
+| `analysis-triage` | Use when behavior depends on pass order, stale facts, or metadata inconsistency across staged CARTS pipelines. | `carts-plugin/skills/analysis-triage/SKILL.md` |
+| `miscompile-triage` | Use when a program compiles but produces wrong output, checksum mismatches, phase-equivalence failures, or suspicious partitioning/distribution decisions. | `carts-plugin/skills/miscompile-triage/SKILL.md` |
+| `runtime-triage` | Use when compilation succeeds but the generated ARTS executable hangs, deadlocks, crashes, stalls, or reports anomalous runtime counters. | `carts-plugin/skills/runtime-triage/SKILL.md` |
+| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work realization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
+| `benchmark-triage` | Use when a benchmark fails, times out, produces wrong checksums, shows suspicious speedups, or needs pass-by-pass/runtime diagnosis. | `carts-plugin/skills/benchmark-triage/SKILL.md` |
+| `heuristic-explain` | Use when a benchmark or test has unexpected partitioning, wrong distribution mode, or heuristic drift in ARTS DB/EDT placement decisions. | `carts-plugin/skills/heuristic-explain/SKILL.md` |
+| `reproducer` | Use when a large failing program, benchmark, or stage dump needs to become a minimal C, MLIR, or lit reproducer. | `carts-plugin/skills/reproducer/SKILL.md` |
+| `stage-diff` | Use when debugging miscompiles, verifying pass correctness, comparing MLIR between pipeline stages, or finding where semantics diverge. | `carts-plugin/skills/stage-diff/SKILL.md` |
+| `dialect-trace` | Use when debugging lowering paths, understanding operation placement across SDE/ARTS/ARTS-RT, or verifying dialect boundary invariants. | `carts-plugin/skills/dialect-trace/SKILL.md` |
+| `runtime-first` | Use after runtime triage shows the compiler must match an ARTS runtime invariant for EDTs, DBs, epochs, dependencies, or distributed execution. | `carts-plugin/skills/runtime-first/SKILL.md` |
+
+### Authoring + maintenance
+
+| Skill | Description | Path |
+| --- | --- | --- |
+| `pass-dev` | Use when creating a new pass, modifying an existing pass, understanding pass architecture, or working on compiler transforms. | `carts-plugin/skills/pass-dev/SKILL.md` |
+| `carts-agentic-development` | Use when planning or executing CARTS work with multiple agents, independent tasks, implementation plans, code review checkpoints, or staged compiler/runtime investigations. | `carts-plugin/skills/carts-agentic-development/SKILL.md` |
+| `carts-skill-maintenance` | Use when creating, regenerating, validating, or hardening CARTS project skills and agent resources. | `carts-plugin/skills/carts-skill-maintenance/SKILL.md` |
+
 ### Other
 
 | Skill | Description | Path |
 | --- | --- | --- |
-| `analysis-triage` | Use when behavior depends on pass order, stale facts, or metadata inconsistency across staged CARTS pipelines. | `carts-plugin/skills/analysis-triage/SKILL.md` |
-| `benchmark` | Use when the user asks to list, build, run, or compare CARTS benchmarks. Use carts-benchmark-triage for failing, timing out, or suspicious benchmark results. | `carts-plugin/skills/benchmark/SKILL.md` |
-| `benchmark-triage` | Use when a benchmark fails, times out, produces wrong checksums, shows suspicious speedups, or needs pass-by-pass/runtime diagnosis. | `carts-plugin/skills/benchmark-triage/SKILL.md` |
-| `build` | Use when the user asks to build, compile the project, rebuild CARTS/ARTS/LLVM/Polygeist, or fix build errors. | `carts-plugin/skills/build/SKILL.md` |
-| `carts-agentic-development` | Use when planning or executing CARTS work with multiple agents, independent tasks, implementation plans, code review checkpoints, or staged compiler/runtime investigations. | `carts-plugin/skills/carts-agentic-development/SKILL.md` |
-| `carts-attr-consolidation` | Use when adding or changing CARTS TableGen attrs, enum attrs, raw dialect attr strings, convert* enum switches, or AttrNames. | `carts-plugin/skills/carts-attr-consolidation/SKILL.md` |
-| `carts-cli` | Use when asking about CARTS commands, environment setup, wrappers, compile flags, pipeline inspection, examples, benchmarks, generated skills, or how to run project lifecycle tasks. | `carts-plugin/skills/carts-cli/SKILL.md` |
 | `carts-code-health` | Use when reviewing, planning, or documenting CARTS pass, utility, contract, attribute, or code-health cleanup. | `carts-plugin/skills/carts-code-health/SKILL.md` |
-| `carts-commit` | Use when staging CARTS changes, choosing a commit message scope, committing, pushing, or handing a patch to review. | `carts-plugin/skills/carts-commit/SKILL.md` |
-| `carts-dialect-map` | Use when locating CARTS dialect code, tracing op lifecycle, choosing owners, or checking boundary invariants. | `carts-plugin/skills/carts-dialect-map/SKILL.md` |
-| `carts-find-utils` | Use when looking for an existing CARTS helper before writing one. | `carts-plugin/skills/carts-find-utils/SKILL.md` |
-| `carts-finishing` | Use when advancing or finishing active CARTS compiler/runtime work, choosing the next fix, applying regression guards, or deciding where a fix belongs. | `carts-plugin/skills/carts-finishing/SKILL.md` |
-| `carts-include-tier` | Use when lib headers gain multiple consumers, adding lib *Utils.h, or finding include *Internal.h. | `carts-plugin/skills/carts-include-tier/SKILL.md` |
-| `carts-local-examples` | Use when listing, running, fixing, sweeping, or validating CARTS local sample programs, examples runner behavior, or e2e compile-and-run tests. | `carts-plugin/skills/carts-local-examples/SKILL.md` |
-| `carts-multinode-examples` | Use when the user asks how to compile or run CARTS examples on multiple nodes, including ARTS configs, launchers, SSH, or Slurm. Use carts-distributed-triage for failures. | `carts-plugin/skills/carts-multinode-examples/SKILL.md` |
-| `carts-pipeline-map` | Use when inspecting CARTS pipeline stages, pass order, stage tokens, start-from/pipeline ranges, epilogues, stale pipeline docs, or ownership of a transformation stage. | `carts-plugin/skills/carts-pipeline-map/SKILL.md` |
-| `carts-review` | Use before committing CARTS changes, during PR review, after substantial compiler/runtime edits, or when checking conventions, missing tests, fixture refreshes, or regression risk. | `carts-plugin/skills/carts-review/SKILL.md` |
-| `carts-session-start` | Use at the start of any CARTS compiler session before reconnaissance begins. | `carts-plugin/skills/carts-session-start/SKILL.md` |
-| `carts-simplify` | Use as the final simplification gate before committing or finishing CARTS work: reduce patch complexity, remove accidental changes, confirm utility-placement decisions already made by carts-check-utils, and enforce .carts artifact discipline. | `carts-plugin/skills/carts-simplify/SKILL.md` |
-| `carts-skill-maintenance` | Use when creating, regenerating, validating, or hardening CARTS project skills and agent resources. | `carts-plugin/skills/carts-skill-maintenance/SKILL.md` |
 | `carts-vision` | Use when a CARTS compiler/runtime task mentions the vision, SDE/ARTS/ARTS-RT spine, real transformations instead of metadata, value optimization across state/dependency/effect/compute/memory/sync, hypergraph planning, DB/CU grain, distributed DBs, GASNet/distributed scaling, or asks where a fix belongs. | `carts-plugin/skills/carts-vision/SKILL.md` |
 | `carts-worktrees` | Use when working on multiple CARTS/ARTS changes in parallel, isolating a risky compiler/runtime change, or running concurrent builds/benchmarks without clobbering the main checkout. Covers the carts-wt tool and the shared-LLVM/Polygeist worktree model. | `carts-plugin/skills/carts-worktrees/SKILL.md` |
-| `check-utils` | Use before adding a CARTS helper, utility file, static helper, or utility-like attribute/string accessor. | `carts-plugin/skills/check-utils/SKILL.md` |
-| `create-test` | Use when adding a new lit test, creating regression tests, writing multi-stage boundary tests, or choosing CARTS test placement and RUN lines. | `carts-plugin/skills/create-test/SKILL.md` |
-| `debug` | Use when starting an unclassified CARTS debug session for crashes, wrong results, hangs, logs, counters, or pipeline artifacts. | `carts-plugin/skills/debug/SKILL.md` |
-| `dialect-trace` | Use when debugging lowering paths, understanding operation placement across SDE/ARTS/ARTS-RT, or verifying dialect boundary invariants. | `carts-plugin/skills/dialect-trace/SKILL.md` |
-| `distributed-triage` | Use when a failure only appears in multinode/distributed runs, multiple nodes, SDE/ARTS distributed work realization, or uneven remote work distribution. | `carts-plugin/skills/distributed-triage/SKILL.md` |
-| `heuristic-explain` | Use when a benchmark or test has unexpected partitioning, wrong distribution mode, or heuristic drift in ARTS DB/EDT placement decisions. | `carts-plugin/skills/heuristic-explain/SKILL.md` |
-| `miscompile-triage` | Use when a program compiles but produces wrong output, checksum mismatches, phase-equivalence failures, or suspicious partitioning/distribution decisions. | `carts-plugin/skills/miscompile-triage/SKILL.md` |
-| `pass-dev` | Use when creating a new pass, modifying an existing pass, understanding pass architecture, or working on compiler transforms. | `carts-plugin/skills/pass-dev/SKILL.md` |
-| `refactor-utils` | Use when consolidating duplicate CARTS helpers or extracting reusable pass-local helpers after placement is decided. | `carts-plugin/skills/refactor-utils/SKILL.md` |
-| `reproducer` | Use when a large failing program, benchmark, or stage dump needs to become a minimal C, MLIR, or lit reproducer. | `carts-plugin/skills/reproducer/SKILL.md` |
-| `runtime-first` | Use after runtime triage shows the compiler must match an ARTS runtime invariant for EDTs, DBs, epochs, dependencies, or distributed execution. | `carts-plugin/skills/runtime-first/SKILL.md` |
-| `runtime-triage` | Use when compilation succeeds but the generated ARTS executable hangs, deadlocks, crashes, stalls, or reports anomalous runtime counters. | `carts-plugin/skills/runtime-triage/SKILL.md` |
-| `stage-diff` | Use when debugging miscompiles, verifying pass correctness, comparing MLIR between pipeline stages, or finding where semantics diverge. | `carts-plugin/skills/stage-diff/SKILL.md` |
-| `test` | Use when the user asks to test, run tests, validate, check, verify changes, run lit, or run a focused CARTS suite. | `carts-plugin/skills/test/SKILL.md` |
 
 <!-- END SKILLS INVENTORY -->

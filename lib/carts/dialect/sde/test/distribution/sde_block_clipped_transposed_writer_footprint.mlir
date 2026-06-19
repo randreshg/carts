@@ -24,7 +24,7 @@
 // CHECK: arith.minui {{.*}}, %[[C18]] : index
 // CHECK: scf.for %[[I:.*]] =
 // CHECK: arith.divui %[[I]], %{{.*}} : index
-// CHECK: arith.divui %[[J]], %{{.*}} : index
+// CHECK: arith.divui %arg1, %{{.*}} : index
 // CHECK: arith.divui %[[K]], %{{.*}} : index
 // CHECK: memref.store %{{.*}}, %[[DST]][
 // CHECK-SAME: ] : memref<4x4x4x5x5x5xf32>

@@ -10,7 +10,6 @@
 - `tests/` - Test suites
   - `cli/`, `boundaries/`, `attrs/`, `inputs/` - top-level lit fixtures and
     shared configs
-- `docker/` - Container workflows
 - `external/` - Dependencies (ARTS, Polygeist, LLVM)
 
 Compiler layering and ownership rules are documented in:
@@ -39,9 +38,6 @@ dekk carts lit lib/carts/dialect/arts/test/<file>.mlir # Run focused lit regress
 # Formatting
 dekk carts format                      # Format tracked C/C++/TableGen files
 dekk carts format --check              # Check formatting without edits
-
-# Docker
-dekk carts docker build                # Build Docker image + workspace volume
 ```
 
 ## Environment Management
@@ -112,7 +108,7 @@ Follow LLVM conventions:
 
 ## Commit Guidelines
 
-- Imperative, single-sentence subjects (e.g., `Update Dockerfile to install Node.js`)
+- Imperative, single-sentence subjects (e.g., `Fix halo boundary check`)
 - Split functional and tooling changes
 - Reference issues/tasks when available
 - Include build/test commands in PR description
@@ -130,7 +126,6 @@ Follow LLVM conventions:
   for Makefile subproject paths
 - Never edit generated files
 - Export `CARTS_VERBOSE=1` to debug wrapper invocations
-- Docker scripts mount shared workspace volume for clean builds
 - Environment configuration lives in `.dekk.toml` at the repo root
 - Run `dekk carts doctor` to diagnose environment issues
 - ARTS builds default to GASNet-EX for multinode runs (auto-bootstrapped, the
