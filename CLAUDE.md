@@ -94,16 +94,16 @@ skills disagree with the compiler, the live compiler manifest wins.
   Use op verifiers for operation region/body legality before assigning
   validation to aggregate passes. C++ code should consume generated
   declarations/accessors instead of adding manual pass/attribute surfaces.
-- Before adding a helper to a pass, use `carts-check-utils`. Reusable helpers
-  belong in the narrowest owning dialect `Utils/` area or an owning analysis
-  API; keep helpers pass-local only when they are genuinely one-pass logic.
+- Before adding a helper to a pass, use `carts-utils-refactor`. Reusable
+  helpers belong in the narrowest owning dialect `Utils/` area or an owning
+  analysis API; keep helpers pass-local only when they are genuinely one-pass
+  logic.
 
 **Session-start skill gate (blocking).** Before editing any file in
 `lib/carts/`, `include/carts/`, or `tools/compile/`, invoke the Skill tool with
-`check-utils` (helper placement), `carts-dialect-map` (boundary ownership), and
-`carts-attr-consolidation` (when touching `.td` attribute enums or any
-attribute string). Before any commit, invoke `carts-simplify` then
-`carts-review`. Reconnaissance-first / skill-invocation-never is the failure
+`carts-utils-refactor` (helper placement and attribute lookup) and
+`carts-architecture` (boundary ownership). Before any commit, invoke
+`carts-workflow`. Reconnaissance-first / skill-invocation-never is the failure
 mode this gate prevents.
 
 ## Development Artifacts
