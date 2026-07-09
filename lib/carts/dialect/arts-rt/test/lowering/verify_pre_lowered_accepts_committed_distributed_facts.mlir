@@ -1,10 +1,12 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(db-lowering,db-distributed-runtime-init,verify-pre-lowered)' | %FileCheck %s
 
-// When a distributed DB grid and runtime DB mode are present, the gate passes
-// only after pre-lowering has emitted explicit runtime init callbacks.
+// When typed distributed DB ABI facts and runtime DB mode are present, the gate
+// passes only after pre-lowering has emitted explicit runtime init callbacks.
 
 // CHECK-LABEL: func.func @distributed_grid_committed
 // CHECK: arts.db_alloc
+// CHECK-SAME: block_layout = #arts.block_layout<
+// CHECK-SAME: db_placement = #arts.db_placement<distributed>
 // CHECK-SAME: distributed
 // CHECK: arts.db_acquire
 // CHECK-SAME: runtime_db_mode = #arts.runtime_db_mode<ew>
@@ -19,7 +21,14 @@ module attributes {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
-    %guid, %ptr = arts.db_alloc[<out>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {distributed} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid, %ptr = arts.db_alloc[<out>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {
+      distributed,
+      db_placement = #arts.db_placement<distributed>,
+      block_layout = #arts.block_layout<
+        owner_dims = [0],
+        block_shape = [1],
+        distribution_kind = <block>>
+    } : (memref<?xi64>, memref<?xmemref<?xf64>>)
     %acq_guid, %acq_ptr = arts.db_acquire[<in>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] {runtime_db_mode = #arts.runtime_db_mode<ew>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
     return
   }

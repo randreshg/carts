@@ -7,7 +7,7 @@
 // CHECK: arrayLayout =
 // CHECK-SAME: muBlockCount = 64 : i64
 // CHECK: sde.su_barrier
-// CHECK-SAME: barrierReason = #sde.barrier_reason<required_memory>
+// CHECK-SAME: barrierReason = #sde.barrier_reason<unknown_required>
 // CHECK: sde.su_iterate
 // CHECK-SAME: classification(<elementwise>)
 // CHECK: sde.array_layout_root read %[[DATA]]

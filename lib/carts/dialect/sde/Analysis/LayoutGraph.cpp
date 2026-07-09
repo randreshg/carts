@@ -8,6 +8,7 @@
 
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
+#include "carts/utils/Numeric.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseSet.h"
@@ -20,6 +21,10 @@ using namespace mlir;
 
 namespace mlir::carts::sde {
 namespace {
+
+using carts::ceilDivPositive;
+using carts::saturatingAddPositive;
+using carts::saturatingMulPositive;
 
 static Value stripRoot(Value value) {
   return ::mlir::carts::ValueAnalysis::stripMemrefViewOps(value);
@@ -91,24 +96,6 @@ static int64_t inferBlockCount(ArrayRef<int64_t> shape,
     count *= blocks;
   }
   return std::max<int64_t>(1, count);
-}
-
-static int64_t saturatingAddPositive(int64_t lhs, int64_t rhs) {
-  lhs = std::max<int64_t>(0, lhs);
-  rhs = std::max<int64_t>(0, rhs);
-  if (lhs > std::numeric_limits<int64_t>::max() - rhs)
-    return std::numeric_limits<int64_t>::max();
-  return lhs + rhs;
-}
-
-static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
-  lhs = std::max<int64_t>(0, lhs);
-  rhs = std::max<int64_t>(0, rhs);
-  if (lhs == 0 || rhs == 0)
-    return 0;
-  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
-    return std::numeric_limits<int64_t>::max();
-  return lhs * rhs;
 }
 
 static int64_t defaultMuTrafficBytes(const MuNet &net) {
@@ -387,7 +374,7 @@ LayoutGraphBalanceSummary summarizeLayoutGraphBalance(
         saturatingAddPositive(summary.totalRemoteFanout, remoteFanout);
     summary.communicationBytes =
         saturatingAddPositive(summary.communicationBytes, trafficBytes);
-    summary.fanoutScore += static_cast<double>(saturatingMultiplyPositive(
+    summary.fanoutScore += static_cast<double>(saturatingMulPositive(
         remoteFanout, std::max<int64_t>(1, trafficBytes)));
   }
 

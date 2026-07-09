@@ -96,6 +96,36 @@ def BlockGrainPlan
   let constructor = "mlir::carts::sde::createBlockGrainPlanPass()";
 }
 
+def SdeExposeLegalBlocks
+    : Pass<"sde-expose-legal-blocks", "mlir::ModuleOp"> {
+  let summary = "Expose legal SDE owner blocks from memory legality facts";
+  let description = [{
+    Consumes committed SDE array layout facts plus SdeMemoryLegality target
+    capacity facts and materializes a node-agnostic budgetBlockShape. This is a
+    narrow Phase B slice of SdeExposeLegalBlocks: it never looks at worker/node
+    count, never chooses movement families, and only refines owner-dim block
+    extents when the owning SDE layout fact and static root type are available.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor = "mlir::carts::sde::createSdeExposeLegalBlocksPass()";
+}
+
+def SdeMovementSynthesis
+    : Pass<"sde-movement-synthesis", "mlir::ModuleOp"> {
+  let summary = "Synthesize first-class SDE movement ops from typed layout facts";
+  let description = [{
+    Consumes SDE substrate analyses plus committed array layout/root facts and
+    materializes concrete SU movement structure. This vertical slice handles
+    grounded owner-preserving stencil halos. Unsupported all-to-all and
+    reduce-scatter candidates fail closed unless a later slice proves and
+    realizes the backing reduction/contraction structure.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor = "mlir::carts::sde::createSdeMovementSynthesisPass()";
+}
+
 def DistributionFailClosed
     : Pass<"sde-distribution-fail-closed", "mlir::ModuleOp"> {
   let summary = "Fail closed for unimplemented in-place stencil wavefront cases";

@@ -100,9 +100,7 @@ struct RuntimeInitBuilder {
   }
 
   Value castToIndex(Value value, Location loc) {
-    if (value.getType().isIndex())
-      return value;
-    return create<arith::IndexCastOp>(loc, builder.getIndexType(), value);
+    return ValueAnalysis::castToIndex(value, builder, loc);
   }
 
   Value castToInt(Type targetType, Value value, Location loc) {
@@ -342,12 +340,12 @@ static LogicalResult emitDistributedInitCallbacks(RuntimeInitBuilder *AC,
     return op.emitOpError()
            << "distributed DB init requires an explicit DB block grid";
 
-  std::optional<DbOwnerRouteFacts> ownerRoute =
-      deriveDbOwnerRouteFactsFromDbGrid(op);
-  if (!ownerRoute)
+  FailureOr<DbOwnerRouteFacts> ownerRoute =
+      readDistributedDbOwnerRouteFactsFromTypedAbi(op);
+  if (failed(ownerRoute))
     return op.emitOpError()
-           << "distributed DB init requires ARTS owner-route facts from the "
-              "committed DB block grid";
+           << "distributed DB init requires typed ARTS DB layout and "
+              "placement facts";
 
   std::optional<int64_t> nextId;
   if (auto createIdAttr = op->getAttrOfType<IntegerAttr>(

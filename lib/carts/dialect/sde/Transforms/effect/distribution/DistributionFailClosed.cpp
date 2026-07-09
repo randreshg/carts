@@ -19,11 +19,13 @@ namespace mlir::carts::sde {
 #include "carts/dialect/sde/Transforms/effect/distribution/DistributionFailClosed.h"
 #include "carts/dialect/sde/Utils/SDECostModel.h"
 #include "carts/utils/ArrayAttrUtils.h"
+#include "carts/utils/ExecutionResourceAttrs.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <optional>
+#include <limits>
 #include <string>
 
 using namespace mlir;
@@ -62,6 +64,27 @@ static std::string formatI64Array(ArrayAttr attr) {
     llvm::interleaveComma(*values, os);
   os << ']';
   return os.str();
+}
+
+class ModuleExecutionResourceCostModel final : public sde::SDECostModel {
+public:
+  explicit ModuleExecutionResourceCostModel(int workers) : workers(workers) {}
+
+  int getLogicalWorkerCapacity() const override { return workers; }
+
+private:
+  int workers = 1;
+};
+
+static std::optional<ModuleExecutionResourceCostModel>
+buildModuleExecutionResourceCostModel(Operation *op) {
+  auto module = dyn_cast_or_null<ModuleOp>(op);
+  std::optional<int64_t> workers = carts::getLogicalTotalWorkers(module);
+  if (!workers || *workers <= 0)
+    return std::nullopt;
+  int cappedWorkers = static_cast<int>(
+      std::min<int64_t>(*workers, std::numeric_limits<int>::max()));
+  return ModuleExecutionResourceCostModel(cappedWorkers);
 }
 
 } // namespace
@@ -113,12 +136,19 @@ struct DistributionFailClosedPass
       : costModel(costModel) {}
 
   void runOnOperation() override {
-    if (!costModel)
-      return;
+    std::optional<ModuleExecutionResourceCostModel> fallbackCostModel;
+    sde::SDECostModel *activeCostModel = costModel;
+    if (!activeCostModel) {
+      fallbackCostModel =
+          buildModuleExecutionResourceCostModel(getOperation());
+      if (!fallbackCostModel)
+        return;
+      activeCostModel = &*fallbackCostModel;
+    }
 
     bool failed = false;
     getOperation().walk([&](sde::SdeSuIterateOp op) {
-      if (requiresInPlaceSelfRawWavefrontFailClosed(op, *costModel)) {
+      if (requiresInPlaceSelfRawWavefrontFailClosed(op, *activeCostModel)) {
         emitStencilWavefrontFailClosed(op);
         failed = true;
       }

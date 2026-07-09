@@ -29,6 +29,7 @@
 #include "LayoutAssignmentInternal.h"
 
 #include "carts/dialect/sde/Analysis/LayoutGraph.h"
+#include "carts/dialect/sde/Analysis/SdeAccessRelation.h"
 #include "carts/dialect/sde/Analysis/SuLoopAccessAnalysis.h"
 #include "carts/dialect/sde/Transforms/Passes.h"
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
@@ -37,6 +38,7 @@
 #include "carts/dialect/sde/Utils/SdeAttrNames.h"
 #include "carts/dialect/sde/Utils/SdeCommittedFactUtils.h"
 #include "carts/dialect/sde/Utils/SdeOwnerLoopPromotion.h"
+#include "carts/dialect/sde/Utils/MuLayout.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/ValueAnalysis.h"
 
@@ -48,6 +50,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include <limits>
+#include <vector>
 
 namespace mlir::carts::sde {
 #define GEN_PASS_DEF_LAYOUTASSIGNMENT
@@ -474,8 +477,7 @@ static void commitLayoutFacts(
     SmallVector<DictionaryAttr, 4> entries;
     SmallVector<RootProvenance, 4> roots;
   };
-  SmallVector<SchedulingUnitLayoutUpdate> updates(
-      relations.schedulingUnits.size());
+  std::vector<SchedulingUnitLayoutUpdate> updates(relations.schedulingUnits.size());
   llvm::SmallDenseMap<unsigned, SmallVector<WriterPhysicalCommit, 2>>
       writerCommits;
 
@@ -636,6 +638,7 @@ static void commitLayoutFacts(
       for (const WriterPhysicalCommit &commit : writerCommitIt->second)
         (void)sde::commitWriterPhysicalLayoutViaMuType(
             op, commit.ownerDims, commit.blockShape, commit.logicalShape);
+    sde::syncSuTypedArrayLayoutFacts(op);
   }
 }
 
@@ -849,6 +852,8 @@ struct WriterLayoutCommitPass
       : costModel(costModel) {}
 
   void runOnOperation() override {
+    // Planning-stage substrate: access relations consumed by layout commit.
+    (void)getAnalysis<sde::SdeAccessRelation>();
     sde::detail::consumeChoiceFactAndCommit(getOperation(), costModel);
   }
 

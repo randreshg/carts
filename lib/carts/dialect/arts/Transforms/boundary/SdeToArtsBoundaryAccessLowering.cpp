@@ -39,7 +39,6 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
-#include <numeric>
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -1034,6 +1033,21 @@ deriveDepGroupBlockCounts(sde::SdeSuIterateOp source, const DirectDepSpec &dep,
   return counts;
 }
 
+static FailureOr<SmallVector<unsigned, 4>>
+getDependencyOwnerLoopDims(sde::SdeSuIterateOp source, const DirectDepSpec &dep,
+                           StringRef diagnosticName) {
+  SmallVector<unsigned, 4> loopDims;
+  loopDims.reserve(dep.ownerDimCount);
+  for (unsigned slot = 0; slot < dep.ownerDimCount; ++slot) {
+    if (slot >= dep.accessSlots.size() || !dep.accessSlots[slot].loopDim)
+      return source.emitOpError()
+             << "commits a " << diagnosticName
+             << " dependency without owner-loop mapping";
+    loopDims.push_back(*dep.accessSlots[slot].loopDim);
+  }
+  return loopDims;
+}
+
 arts::DbAcquireOp createNdCompactHaloAcquire(DirectDepSpec dep,
                                              ArrayRef<Value> centerOffsets,
                                              ArrayRef<Value> centerSizes,
@@ -1269,114 +1283,6 @@ static FailureOr<ArtsOwnerSlotMapping> resolveWindowedDispatchOwnerSlotMapping(
 static bool writerHasNonDispatchedFullWindowOwnerSlot(
     ArrayRef<DirectDepSpec> deps, ArrayRef<int64_t> dispatchedOwnerDims);
 
-static std::optional<int64_t> combineDispatchBlockSize(int64_t current,
-                                                       int64_t next) {
-  if (next <= 0)
-    return std::nullopt;
-  if (current <= 0)
-    return next;
-  int64_t divisor = std::gcd(current, next);
-  if (divisor <= 0)
-    return std::nullopt;
-  if (current > std::numeric_limits<int64_t>::max() / (next / divisor))
-    return std::nullopt;
-  return current * (next / divisor);
-}
-
-static FailureOr<std::optional<CommittedPhysicalLayout>>
-deriveDistributedWriterDispatchLayout(sde::SdeSuIterateOp source,
-                                      ArrayRef<DirectDepSpec> deps,
-                                      unsigned loopRank) {
-  SmallVector<int64_t, 4> ownerDims;
-  SmallVector<int64_t, 4> ownerBlockSizes;
-  bool sawWriter = false;
-
-  auto recordOwnerDim = [&](int64_t ownerDim,
-                            int64_t blockSize) -> LogicalResult {
-    auto it = llvm::find(ownerDims, ownerDim);
-    if (it == ownerDims.end()) {
-      ownerDims.push_back(ownerDim);
-      ownerBlockSizes.push_back(blockSize);
-      return success();
-    }
-    unsigned idx = static_cast<unsigned>(std::distance(ownerDims.begin(), it));
-    std::optional<int64_t> combined =
-        combineDispatchBlockSize(ownerBlockSizes[idx], blockSize);
-    if (!combined)
-      return source.emitOpError()
-             << "cannot derive a whole-block dispatch span for mixed "
-                "distributed writers";
-    ownerBlockSizes[idx] = *combined;
-    return success();
-  };
-
-  for (const DirectDepSpec &dep : deps) {
-    arts::DbAllocOp alloc = dep.alloc;
-    if (!alloc || !arts::DbUtils::isWriterMode(dep.mode) ||
-        !hasArtsDbPhysicalLayout(alloc.getOperation()))
-      continue;
-    if (dep.accessSlots.size() != dep.ownerDimCount)
-      return source.emitOpError()
-             << "distributed writer dependency does not cover owner rank";
-
-    for (unsigned slot = 0; slot < dep.ownerDimCount; ++slot) {
-      const DepOwnerAccessSlot &access = dep.accessSlots[slot];
-      if (access.fixedBlock && !access.loopDim && !access.fullWindow)
-        continue;
-
-      int64_t physicalDim =
-          dep.arrayOwnerDims && slot < dep.arrayOwnerDims->size()
-              ? (*dep.arrayOwnerDims)[slot]
-              : static_cast<int64_t>(slot);
-      if (physicalDim < 0)
-        return source.emitOpError()
-               << "distributed writer owner dimension is negative";
-      if ((!access.loopDim || *access.loopDim >= loopRank) &&
-          !access.fullWindow)
-        return source.emitOpError()
-               << "distributed writer owner slot is not mapped to an SDE loop";
-
-      int64_t blockSize = access.coordinateBlockSize;
-      if (blockSize <= 0)
-        return source.emitOpError()
-               << "distributed writer owner slot has non-positive block size";
-      if (failed(recordOwnerDim(physicalDim, blockSize)))
-        return failure();
-      sawWriter = true;
-    }
-  }
-
-  if (!sawWriter)
-    return std::optional<CommittedPhysicalLayout>{};
-
-  SmallVector<unsigned, 4> order;
-  order.reserve(ownerDims.size());
-  for (unsigned idx = 0, e = ownerDims.size(); idx < e; ++idx)
-    order.push_back(idx);
-  llvm::sort(order, [&](unsigned lhs, unsigned rhs) {
-    return ownerDims[lhs] < ownerDims[rhs];
-  });
-
-  bool fullLoopRankShape = llvm::all_of(ownerDims, [&](int64_t dim) {
-    return static_cast<unsigned>(dim) < loopRank;
-  });
-  CommittedPhysicalLayout layout;
-  if (fullLoopRankShape) {
-    layout.blockShape.assign(loopRank, 1);
-    for (unsigned idx : order) {
-      layout.ownerDims.push_back(ownerDims[idx]);
-      layout.blockShape[static_cast<unsigned>(ownerDims[idx])] =
-          ownerBlockSizes[idx];
-    }
-  } else {
-    for (unsigned idx : order) {
-      layout.ownerDims.push_back(ownerDims[idx]);
-      layout.blockShape.push_back(ownerBlockSizes[idx]);
-    }
-  }
-  return std::optional<CommittedPhysicalLayout>{std::move(layout)};
-}
-
 LogicalResult
 convertSuIterate(sde::SdeSuIterateOp source,
                  DenseSet<Operation *> &consumedCuLevelAccessWindows,
@@ -1406,15 +1312,19 @@ convertSuIterate(sde::SdeSuIterateOp source,
 
   std::optional<CommittedPhysicalLayout> physicalLayout =
       readCommittedPhysicalLayout(source, deps);
-  FailureOr<std::optional<CommittedPhysicalLayout>> writerDispatchLayout =
-      deriveDistributedWriterDispatchLayout(source, deps, loopRank);
-  if (failed(writerDispatchLayout))
-    return failure();
-  if (*writerDispatchLayout)
-    physicalLayout = std::move(**writerDispatchLayout);
+  const bool requiresCommittedPhysicalLayout =
+      llvm::any_of(deps, [](const DirectDepSpec &dep) {
+        return dep.ownerDimCount != 0;
+      });
   if (!physicalLayout || physicalLayout->blockShape.empty() ||
-      physicalLayout->ownerDims.empty())
+      (physicalLayout->ownerDims.empty() && requiresCommittedPhysicalLayout)) {
+    if (requiresCommittedPhysicalLayout)
+      return source.emitOpError()
+             << "has owner-ranked SDE access windows without a committed SDE "
+                "physical layout fact; refusing to reconstruct layout at the "
+                "ARTS boundary";
     return tryConvertCoarseSuIterate(source);
+  }
 
   ArrayRef<int64_t> ownerDims = physicalLayout->ownerDims;
   ArrayRef<int64_t> blockShape = physicalLayout->blockShape;
@@ -1476,8 +1386,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
       return source.emitOpError()
              << "requires runtime node count to keep grouped distributed "
                 "writers owner-local";
-    int64_t ownerRouteValidationNodes = std::max<int64_t>(*totalNodes, 2);
-    if (ownerRouteValidationNodes > 1 &&
+    if (*totalNodes > 1 &&
         writerHasNonDispatchedFullWindowOwnerSlot(deps,
                                                   ownerRouteping->ownerDims))
       return source.emitOpError()
@@ -1487,7 +1396,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
     if (failed(ensureDistributedWriterOwnerLocalGroups(
             source, deps, groupBlockCounts, workerSpans, ownerBlockSizes,
             ownerRouteping->ownerDims, ownerRouteping->loopDims,
-            ownerRouteValidationNodes, splitToOwnerLocalGroups)))
+            *totalNodes, splitToOwnerLocalGroups)))
       return failure();
   }
 
@@ -1517,10 +1426,14 @@ convertSuIterate(sde::SdeSuIterateOp source,
       return source.emitOpError()
              << "commits a halo dependency that is not read-only; ARTS cannot "
                 "realize a writable halo window";
+    FailureOr<SmallVector<unsigned, 4>> depOwnerLoopDims =
+        getDependencyOwnerLoopDims(source, dep, "compact halo");
+    if (failed(depOwnerLoopDims))
+      return failure();
     bool useExactNdHalo = false;
     if (dep.ownerDimCount == 2) {
       FailureOr<bool> needsExact = needsExactNdHaloFor2D(
-          source, dep, computeBlock, ownerRouteping->loopDims);
+          source, dep, computeBlock, *depOwnerLoopDims);
       if (failed(needsExact))
         return failure();
       useExactNdHalo = *needsExact;
@@ -1538,7 +1451,7 @@ convertSuIterate(sde::SdeSuIterateOp source,
     }
     FailureOr<CompactHaloNdSpec> compactSpec = realizeCompactHaloNdPacks(
         source, dep, *depGroupBlockCounts, computeBlock,
-        ownerRouteping->loopDims, builder, loc);
+        *depOwnerLoopDims, builder, loc);
     if (failed(compactSpec))
       return failure();
     compactNdSpecByDepIndex[depIndex] =
@@ -1922,14 +1835,12 @@ convertSuIterate(sde::SdeSuIterateOp source,
       haloTaskWork.centerTaskDepIndex = centerTaskDep;
       haloTaskWork.ownerPayloadDims.assign(compactSpec.ownerPayloadDims.begin(),
                                            compactSpec.ownerPayloadDims.end());
-      haloTaskWork.ownerLoopDims.reserve(dep.ownerDimCount);
-      for (unsigned slot = 0; slot < dep.ownerDimCount; ++slot) {
-        if (slot >= dep.accessSlots.size() || !dep.accessSlots[slot].loopDim)
-          return source.emitOpError()
-                 << "commits a compact halo dependency without owner-loop "
-                    "mapping";
-        haloTaskWork.ownerLoopDims.push_back(*dep.accessSlots[slot].loopDim);
-      }
+      FailureOr<SmallVector<unsigned, 4>> depOwnerLoopDims =
+          getDependencyOwnerLoopDims(source, dep, "compact halo");
+      if (failed(depOwnerLoopDims))
+        return failure();
+      haloTaskWork.ownerLoopDims.assign(depOwnerLoopDims->begin(),
+                                        depOwnerLoopDims->end());
       haloTaskWork.centerGroupBlockCounts.assign(depGroupBlockCounts.begin(),
                                                  depGroupBlockCounts.end());
       haloTaskWork.elementExtents.assign(compactSpec.elementExtents.begin(),
@@ -2321,9 +2232,18 @@ static FailureOr<ArtsOwnerSlotMapping> resolveWindowedDispatchOwnerSlotMapping(
             : static_cast<int64_t>(depSlot);
     std::optional<unsigned> physicalSlot =
         dispatchSlotForPhysicalDim(physicalDim);
-    if (arts::DbUtils::isWriterMode(dep.mode) || dep.arrayOwnerDims ||
-        !slot.loopDim)
+    if (arts::DbUtils::isWriterMode(dep.mode) || !slot.loopDim)
       return physicalSlot;
+    if (dep.arrayOwnerDims) {
+      if (physicalSlot && loopDimByRawSlot[*physicalSlot]) {
+        if (*loopDimByRawSlot[*physicalSlot] == *slot.loopDim)
+          return physicalSlot;
+        if (std::optional<unsigned> loopSlot =
+                existingDispatchSlotForLoopDim(*slot.loopDim))
+          return loopSlot;
+      }
+      return physicalSlot;
+    }
     if (physicalSlot && loopDimByRawSlot[*physicalSlot] &&
         *loopDimByRawSlot[*physicalSlot] == *slot.loopDim)
       return physicalSlot;

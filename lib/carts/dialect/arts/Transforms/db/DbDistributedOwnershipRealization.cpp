@@ -34,6 +34,26 @@ using namespace mlir::carts::arts;
 
 namespace {
 
+static void commitDistributedRuntimeAbiFacts(
+    DbAllocOp alloc, DistributedDbEligibilityResult eligibility) {
+  MLIRContext *ctx = alloc.getContext();
+  alloc.setDbPlacementAttr(
+      ArtsDbPlacementAttr::get(ctx, ArtsDbPlacement::distributed));
+
+  std::optional<DbOwnerRouteFacts> facts =
+      deriveDbOwnerRouteFactsFromDbGrid(alloc);
+  if (!facts)
+    return;
+
+  EdtDistributionKind kind =
+      getEdtDistributionKind(alloc.getOperation())
+          .value_or(eligibility.distributionKind.value_or(EdtDistributionKind::block));
+  alloc.setBlockLayoutAttr(ArtsBlockLayoutAttr::get(
+      ctx, DenseI64ArrayAttr::get(ctx, facts->dims),
+      DenseI64ArrayAttr::get(ctx, facts->blockShape),
+      /*halo_reach=*/DenseI64ArrayAttr(), EdtDistributionKindAttr::get(ctx, kind)));
+}
+
 struct DbDistributedOwnershipRealizationPass
     : public impl::DbDistributedOwnershipRealizationBase<
           DbDistributedOwnershipRealizationPass> {
@@ -74,6 +94,7 @@ struct DbDistributedOwnershipRealizationPass
           failed = true;
           return;
         }
+        commitDistributedRuntimeAbiFacts(alloc, eligibility);
       } else {
         if (hasArtsDbPhysicalLayout(alloc.getOperation()) &&
             eligibility.reason !=

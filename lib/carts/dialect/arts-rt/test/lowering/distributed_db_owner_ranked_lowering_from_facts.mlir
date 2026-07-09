@@ -3,8 +3,9 @@
 // RUN: %carts-compile %s --arts-config %inputs_dir/arts_multinode.cfg --start-from=pre-lowering --pipeline=arts-rt-to-llvm \
 // RUN:   | %FileCheck %s --check-prefix=LLVM
 
-// Distributed DB init is realized before LLVM lowering as explicit ARTS-RT
-// runtime ops. The LLVM conversion only lowers those ops to ABI calls.
+// Distributed DB init is realized from typed ARTS layout/placement facts before
+// LLVM lowering as explicit ARTS-RT runtime ops. The LLVM conversion only
+// lowers those ops to ABI calls.
 
 module attributes {
   dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i64, dense<64> : vector<2xi64>>, #dlti.dl_entry<i32, dense<32> : vector<2xi64>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi64>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i64>>,
@@ -15,7 +16,14 @@ module attributes {
     %route = arith.constant 0 : i32
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
-    %guid, %ptr = arts.db_alloc[<out>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {distributed} : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid, %ptr = arts.db_alloc[<out>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {
+      distributed,
+      db_placement = #arts.db_placement<distributed>,
+      block_layout = #arts.block_layout<
+        owner_dims = [0],
+        block_shape = [1],
+        distribution_kind = <block>>
+    } : (memref<?xi64>, memref<?xmemref<?xf64>>)
     return
   }
 }

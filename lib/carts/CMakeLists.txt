@@ -22,6 +22,6 @@ add_mlir_dialect_library(MLIRCartsArts
 add_subdirectory(dialect)
 add_subdirectory(utils)
 add_subdirectory(dialect/arts/Transforms)
-set(CARTS_ANALYSIS_SOURCE_FILES "")
+add_subdirectory(dialect/arts/Analysis)
 add_subdirectory(dialect/arts/Utils)
 add_subdirectory(passes)

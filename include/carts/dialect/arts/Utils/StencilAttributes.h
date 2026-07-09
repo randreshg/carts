@@ -45,7 +45,7 @@ inline StringAttr getGeneratedStencilAttrName(OpT op, StencilAttrKind kind) {
   case StencilAttrKind::WriteFootprint:
     return op.getStencilWriteFootprintAttrName();
   case StencilAttrKind::SupportedBlockHalo:
-    return op.getStencilSupportedBlockHaloAttrName();
+    llvm_unreachable("SupportedBlockHalo is dispatched outside this template");
   }
   llvm_unreachable("unknown stencil attribute kind");
 }
@@ -53,6 +53,15 @@ inline StringAttr getGeneratedStencilAttrName(OpT op, StencilAttrKind kind) {
 inline StringAttr getStencilAttrName(Operation *op, StencilAttrKind kind) {
   if (!op)
     return nullptr;
+  if (kind == StencilAttrKind::SupportedBlockHalo) {
+    if (auto dbAlloc = dyn_cast<DbAllocOp>(op))
+      return dbAlloc.getStencilSupportedBlockHaloAttrName();
+    if (auto dbAcquire = dyn_cast<DbAcquireOp>(op))
+      return dbAcquire.getStencilSupportedBlockHaloAttrName();
+    if (auto edt = dyn_cast<EdtOp>(op))
+      return edt.getStencilSupportedBlockHaloAttrName();
+    return nullptr;
+  }
   if (auto dbAlloc = dyn_cast<DbAllocOp>(op))
     return getGeneratedStencilAttrName(dbAlloc, kind);
   if (auto dbAcquire = dyn_cast<DbAcquireOp>(op))

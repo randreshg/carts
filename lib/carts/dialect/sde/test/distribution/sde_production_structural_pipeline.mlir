@@ -4,11 +4,11 @@
 // structural carriers before SDE-to-ARTS conversion.
 
 // CHECK-LABEL: func.func @production_window_1d
-// CHECK: sde.mu_alloc : memref<2x512xf32>
+// CHECK: sde.mu_alloc : memref<8x128xf32>
 // CHECK: sde.su_distribute <blocked>
 // CHECK: sde.cu_region <single>
 // CHECK-NOT: sde.mu_access_window
-// CHECK: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<2x512xf32>
+// CHECK: memref.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<8x128xf32>
 
 func.func @production_window_1d() {
   %c0 = arith.constant 0 : index
@@ -28,7 +28,7 @@ func.func @production_window_1d() {
 }
 
 // CHECK-LABEL: func.func @owner_local_pipeline_budget_retiled
-// CHECK: %[[A:.*]] = sde.mu_alloc : memref<2x32768x8192xf32>
+// CHECK: %[[A:.*]] = sde.mu_alloc : memref<1024x64x8192xf32>
 // CHECK: sde.su_distribute <blocked>
 // CHECK: sde.su_iterate (%{{.*}}) to (%c65536) step (%{{.*}}) {{.*}}classification(<elementwise_pipeline>)
 // CHECK-NOT: sde.mu_access_window
@@ -76,7 +76,7 @@ func.func @owner_local_pipeline_budget_retiled() {
 
 // CHECK-LABEL: func.func @promoted_reduction_budget_retiled
 // CHECK: %[[A:.*]] = sde.mu_alloc : memref<2x2x256x128x3136xf32>
-// CHECK: %[[B:.*]] = sde.mu_alloc : memref<2x256x256xf32>
+// CHECK: %[[B:.*]] = sde.mu_alloc : memref<2x2x256x128xf32>
 // CHECK: sde.su_iterate (%{{.*}}, %{{.*}}) to (%c512, %c256) step (%{{.*}}, %{{.*}}) {{.*}}classification(<reduction>)
 // CHECK: sde.array_layout_root read %[[A]] : memref<2x2x256x128x3136xf32> array_id(3)
 // CHECK-NOT: sde.mu_access_window

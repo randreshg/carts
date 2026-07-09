@@ -3,17 +3,17 @@
 // RUN:   --arts-config %inputs_dir/arts_64t.cfg --pipeline=pre-lowering
 // RUN: %FileCheck %s --implicit-check-not='host_whole' \
 // RUN:   --implicit-check-not='local_only' \
-// RUN:   --implicit-check-not='arts.db_alloc{{.*}}<coarse>{{.*}}elementSizes[%c1, %c1, %c32, %c32]' \
+// RUN:   --implicit-check-not='arts.db_alloc{{.*}}<coarse>{{.*}}elementSizes[%c32, %c32]' \
 // RUN:   --implicit-check-not='byte_sizes({{.*}}%c8192' \
-// RUN:   --implicit-check-not='element_sizes[%c1, %c1, %c32, %c32]{{.*}}haloViewDependency' \
+// RUN:   --implicit-check-not='element_sizes[%c32, %c32]{{.*}}haloViewDependency' \
 // RUN:   < %t.dir/jacobi-for.pre-lowering.mlir
 
 // SIZE=256 uses 32x32 block DBs on an 8x8 owner grid. The stencil frontier
 // must lower with compact row byte windows and compact column payloads, not
 // full-block halo byte windows.
 
-// CHECK-DAG: arts.db_acquire[<in>] {{.*}} element_offsets[%c0, %c0, %c31, %c0] element_sizes[%c1, %c1, %c1, %c32]{{.*}}haloViewDependency
-// CHECK-DAG: arts.db_acquire[<in>] {{.*}} element_offsets[%c0, %c0, %c0, %c0] element_sizes[%c1, %c1, %c1, %c32]{{.*}}haloViewDependency
+// CHECK-DAG: arts.db_acquire[<in>] {{.*}} element_offsets[%c31, %c0] element_sizes[%c1, %c32]{{.*}}haloViewDependency
+// CHECK-DAG: arts.db_acquire[<in>] {{.*}} element_offsets[%c0, %c0] element_sizes[%c1, %c32]{{.*}}haloViewDependency
 
 // CHECK: %[[HALO_EDT:[A-Za-z0-9_]+]] = arts_rt.edt_create
 // CHECK: arts_rt.rec_dep %[[HALO_EDT]]

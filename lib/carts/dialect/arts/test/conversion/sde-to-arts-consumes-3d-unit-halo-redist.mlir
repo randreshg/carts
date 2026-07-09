@@ -15,6 +15,7 @@
 
 module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_workers = 4 : i64} {
   func.func @consumes_3d_unit_halo_redist() {
+    %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c3 = arith.constant 3 : index
     %c5 = arith.constant 5 : index
@@ -22,6 +23,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
     %c11 = arith.constant 11 : index
     %c13 = arith.constant 13 : index
     %c14 = arith.constant 14 : index
+    %zero = arith.constant 0.0 : f32
     %P = sde.mu_alloc : memref<2x3x4x7x5x3xf32>
     %Q = sde.mu_alloc : memref<2x3x4x7x5x3xf32>
 
@@ -29,6 +31,9 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
       sde.su_halo %P : memref<2x3x4x7x5x3xf32> array_id(0) owner [0, 1, 2] block [1, 1, 1, 7, 5, 3] halo [1, 1, 1, 0, 0, 0]
       sde.su_iterate (%c1, %c1, %c1) to (%c13, %c14, %c11) step (%c7, %c5, %c3) classification(<stencil>) {
       ^bb0(%ib: index, %jb: index, %kb: index):
+        sde.array_layout_root write %P : memref<2x3x4x7x5x3xf32> array_id(0)
+        sde.array_layout_root read %P : memref<2x3x4x7x5x3xf32> array_id(0)
+        sde.array_layout_root write %Q : memref<2x3x4x7x5x3xf32> array_id(1)
         sde.cu_region <parallel> {
           %iend_raw = arith.addi %ib, %c7 : index
           %iend = arith.minui %iend_raw, %c13 : index
@@ -61,7 +66,19 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
           }
         }
         sde.yield
-      } {accessMaxOffsets = [1, 1, 1], accessMinOffsets = [-1, -1, -1], ownerDims = [2, 1, 0], pattern = #sde.pattern<cross_dim_stencil_3d>, spatialDims = [0, 1, 2], writeFootprint = [1, 1, 1]}
+      } {arrayLayout = [
+          {arrayId = 0 : i64, blockShape = [7, 5, 3],
+           kind = "block_parallel", muBlockCount = 24 : i64,
+           ownerDims = [0, 1, 2], role = "write"},
+          {arrayId = 0 : i64, blockShape = [7, 5, 3],
+           budgetBlockShape = [7, 5, 3], kind = "block_parallel",
+           muBlockCount = 24 : i64, ownerDims = [0, 1, 2], role = "read"},
+          {arrayId = 1 : i64, blockShape = [7, 5, 3],
+           kind = "block_parallel", muBlockCount = 24 : i64,
+           ownerDims = [0, 1, 2], role = "write"}],
+         accessMaxOffsets = [1, 1, 1], accessMinOffsets = [-1, -1, -1],
+         ownerDims = [2, 1, 0], pattern = #sde.pattern<cross_dim_stencil_3d>,
+         spatialDims = [0, 1, 2], writeFootprint = [1, 1, 1]}
     }
     return
   }

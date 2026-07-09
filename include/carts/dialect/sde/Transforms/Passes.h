@@ -170,6 +170,8 @@ std::unique_ptr<Pass>
 createDistributionFailClosedPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
 createBlockGrainPlanPass(SDECostModel *costModel = nullptr);
+std::unique_ptr<Pass> createSdeExposeLegalBlocksPass();
+std::unique_ptr<Pass> createSdeMovementSynthesisPass();
 std::unique_ptr<Pass>
 createOwnerDimSelectPass(SDECostModel *costModel = nullptr);
 std::unique_ptr<Pass>
@@ -185,7 +187,9 @@ std::unique_ptr<Pass> createConvertOpenMPToSdePass();
 std::unique_ptr<Pass> createVerifySdeLoweredPass();
 std::unique_ptr<Pass> createVerifySdeMuAccessWindowSyncPass();
 std::unique_ptr<Pass> createVerifySdeCoarseAvoidancePass();
+std::unique_ptr<Pass> createVerifySdeLayoutCoherencePass();
 std::unique_ptr<Pass> createVerifySdePass();
+std::unique_ptr<Pass> createVerifyNoLoadBearingDiscardableAttrPass();
 
 } // namespace mlir::carts::sde
 

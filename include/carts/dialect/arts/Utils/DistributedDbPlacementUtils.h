@@ -63,6 +63,14 @@ enum class DbOwnerRouteFailure {
   OwnerDimsDoNotMatchDbRank,
   BlockShapeDoesNotMatchOwnerRank,
   OwnerDimsOutsideDbRank,
+  MissingTypedDbPlacement,
+  TypedDbPlacementNotDistributed,
+  MissingTypedBlockLayout,
+  EmptyTypedOwnerDims,
+  EmptyTypedBlockShape,
+  DuplicateTypedOwnerDims,
+  TypedOwnerDimsOutsideDbRank,
+  TypedBlockShapeNonPositive,
 };
 
 inline SmallVector<int64_t, 4> makeAllDbOwnerDims(unsigned rank) {
@@ -237,6 +245,15 @@ inline bool sameI64Values(ArrayRef<int64_t> lhs, ArrayRef<int64_t> rhs) {
   return true;
 }
 
+inline bool hasDuplicateI64Values(ArrayRef<int64_t> values) {
+  SmallVector<int64_t, 4> sorted(values.begin(), values.end());
+  llvm::sort(sorted);
+  for (size_t i = 1, e = sorted.size(); i < e; ++i)
+    if (sorted[i - 1] == sorted[i])
+      return true;
+  return false;
+}
+
 inline std::optional<SmallVector<int64_t, 4>>
 getDbOwnerRouteDimsFromDbGrid(DbAllocOp alloc) {
   if (!alloc)
@@ -297,14 +314,7 @@ inline Value createIndexConstant(OpBuilder &builder, Location loc,
 }
 
 inline Value castToIndex(OpBuilder &builder, Location loc, Value value) {
-  if (!value)
-    return {};
-  if (value.getType().isIndex())
-    return value;
-  if (isa<IntegerType>(value.getType()))
-    return arith::IndexCastOp::create(builder, loc, builder.getIndexType(),
-                                      value);
-  return {};
+  return ValueAnalysis::castToIndex(value, builder, loc);
 }
 
 inline Value castToI32(OpBuilder &builder, Location loc, Value value) {
@@ -725,6 +735,22 @@ inline const char *toString(DbOwnerRouteFailure failure) {
     return "derived owner block shape rank does not match owner dimensions";
   case DbOwnerRouteFailure::OwnerDimsOutsideDbRank:
     return "derived owner dimensions outside DB rank";
+  case DbOwnerRouteFailure::MissingTypedDbPlacement:
+    return "distributed DB reached ABI lowering without typed db_placement";
+  case DbOwnerRouteFailure::TypedDbPlacementNotDistributed:
+    return "typed db_placement is not distributed";
+  case DbOwnerRouteFailure::MissingTypedBlockLayout:
+    return "distributed DB reached ABI lowering without typed block_layout";
+  case DbOwnerRouteFailure::EmptyTypedOwnerDims:
+    return "typed block_layout requires owner_dims";
+  case DbOwnerRouteFailure::EmptyTypedBlockShape:
+    return "typed block_layout requires block_shape";
+  case DbOwnerRouteFailure::DuplicateTypedOwnerDims:
+    return "typed block_layout owner_dims must be unique";
+  case DbOwnerRouteFailure::TypedOwnerDimsOutsideDbRank:
+    return "typed block_layout owner_dims must address the DB block grid";
+  case DbOwnerRouteFailure::TypedBlockShapeNonPositive:
+    return "typed block_layout block_shape values must be positive";
   }
   return "unknown owner-route failure";
 }
@@ -734,6 +760,75 @@ inline DbOwnerRoutePolicy chooseDbOwnerRoutePolicy(DbAllocOp alloc) {
       kind && *kind == EdtDistributionKind::block_cyclic)
     return DbOwnerRoutePolicy::LinearModNodes;
   return DbOwnerRoutePolicy::OwnerDimContiguous;
+}
+
+inline DbOwnerRoutePolicy
+chooseDbOwnerRoutePolicy(EdtDistributionKind distributionKind) {
+  if (distributionKind == EdtDistributionKind::block_cyclic)
+    return DbOwnerRoutePolicy::LinearModNodes;
+  return DbOwnerRoutePolicy::OwnerDimContiguous;
+}
+
+/// Read the ARTS-authored typed DB ABI facts that ARTS-RT lowering consumes.
+/// This helper intentionally has no legacy fallback: reaching ARTS-RT without
+/// typed placement/layout facts is a compiler contract failure.
+inline FailureOr<DbOwnerRouteFacts>
+readDistributedDbOwnerRouteFactsFromTypedAbi(DbAllocOp alloc) {
+  if (!alloc)
+    return failure();
+  auto placement = getArtsDbPlacement(alloc.getOperation());
+  if (!placement || *placement != ArtsDbPlacement::distributed)
+    return failure();
+  auto layout = alloc.getBlockLayoutAttr();
+  if (!layout)
+    return failure();
+
+  ArrayRef<int64_t> ownerDims = layout.getOwnerDims().asArrayRef();
+  ArrayRef<int64_t> blockShape = layout.getBlockShape().asArrayRef();
+  if (ownerDims.empty() || blockShape.empty() ||
+      !ownerDimsAddressDbRank(ownerDims, alloc.getSizes().size()) ||
+      hasDuplicateI64Values(ownerDims) || blockShape.size() != ownerDims.size())
+    return failure();
+  if (llvm::any_of(blockShape, [](int64_t value) { return value <= 0; }))
+    return failure();
+
+  DbOwnerRouteFacts facts;
+  facts.policy = chooseDbOwnerRoutePolicy(layout.getDistributionKind().getValue());
+  facts.dims.assign(ownerDims.begin(), ownerDims.end());
+  facts.blockShape.assign(blockShape.begin(), blockShape.end());
+  return facts;
+}
+
+inline DbOwnerRouteFailure getDistributedDbRuntimeAbiFailure(DbAllocOp alloc) {
+  if (!alloc)
+    return DbOwnerRouteFailure::UnrealizableDbGrid;
+  auto placement = getArtsDbPlacement(alloc.getOperation());
+  if (!placement)
+    return DbOwnerRouteFailure::MissingTypedDbPlacement;
+  if (*placement != ArtsDbPlacement::distributed)
+    return DbOwnerRouteFailure::TypedDbPlacementNotDistributed;
+  if (hasLocalOnlyDbPlacement(alloc.getOperation()))
+    return DbOwnerRouteFailure::LocalOnlyConflict;
+
+  auto layout = alloc.getBlockLayoutAttr();
+  if (!layout)
+    return DbOwnerRouteFailure::MissingTypedBlockLayout;
+  ArrayRef<int64_t> ownerDims = layout.getOwnerDims().asArrayRef();
+  ArrayRef<int64_t> blockShape = layout.getBlockShape().asArrayRef();
+  if (ownerDims.empty())
+    return DbOwnerRouteFailure::EmptyTypedOwnerDims;
+  if (blockShape.empty())
+    return DbOwnerRouteFailure::EmptyTypedBlockShape;
+  if (!ownerDimsAddressDbRank(ownerDims, alloc.getSizes().size()))
+    return DbOwnerRouteFailure::TypedOwnerDimsOutsideDbRank;
+  if (hasDuplicateI64Values(ownerDims))
+    return DbOwnerRouteFailure::DuplicateTypedOwnerDims;
+  if (blockShape.size() != ownerDims.size())
+    return DbOwnerRouteFailure::BlockShapeDoesNotMatchOwnerRank;
+  if (llvm::any_of(blockShape, [](int64_t value) { return value <= 0; }))
+    return DbOwnerRouteFailure::TypedBlockShapeNonPositive;
+
+  return DbOwnerRouteFailure::None;
 }
 
 /// Project the DB block grid into owner-route facts without mutating IR.

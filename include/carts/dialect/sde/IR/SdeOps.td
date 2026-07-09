@@ -343,8 +343,9 @@ def SdeSuIterateOp
     nowait, and reduction metadata.
 
     The body is scheduling-only: direct children are executable leaf CUs
-    (`sde.cu_region` or `sde.cu_atomic`), `sde.array_layout_root` provenance,
-    `sde.su_barrier`, and the `sde.yield` terminator. Source compute and
+    (`sde.cu_region` or `sde.cu_atomic`), `sde.array_layout` /
+    `sde.array_layout_root` provenance, `sde.su_barrier`, and the `sde.yield`
+    terminator. Source compute and
     compute-local scalar/index plumbing belong inside a direct child CU.
 
     Reduction accumulators can carry the combiner kind and identity value,
@@ -538,6 +539,32 @@ def SdeCuWorkOp
     $body attr-dict
   }];
 
+  let hasVerifier = 1;
+}
+
+def SdeArrayLayoutOp : CartsSde_Op<"array_layout", [
+      MemoryEffects<[MemWrite]>
+    ]> {
+  let summary = "Committed per-array block layout fact";
+  let description = [{
+    Typed replacement for transitional `arrayLayout` attribute entries on
+    `sde.su_iterate`. Fields: `ownerDims`, `blockShape`, `logicalShape`.
+    Single writer: `SdeWriterLayoutCommit`. Verifier:
+    `VerifySdeLayoutCoherence` checks `mu_alloc` type, CU load/store/subview
+    indices, and access windows agree in one coordinate system.
+  }];
+
+  let arguments = (ins
+    OptionalAttr<DenseI64ArrayAttr>:$ownerDims,
+    Variadic<Index>:$ownerDimValues,
+    DenseI64ArrayAttr:$blockShape,
+    DenseI64ArrayAttr:$logicalShape,
+    I64Attr:$arrayId,
+    SdeAccessModeAttr:$mode
+  );
+
+  let results = (outs);
+  let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
 }
 

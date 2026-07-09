@@ -70,6 +70,21 @@ def VerifySdeCoarseAvoidance
   let constructor = "mlir::carts::sde::createVerifySdeCoarseAvoidancePass()";
 }
 
+def VerifySdeLayoutCoherence
+    : Pass<"verify-sde-layout-coherence", "mlir::ModuleOp"> {
+  let summary = "Verify committed array layout agrees with MU type and accesses";
+  let description = [{
+    Checks that every committed `sde.array_layout` fact, the rank-expanded
+    `sde.mu_alloc` type, and every CU load/store/subview index use one
+    coordinate system. Phase A/B scaffolding checks typed `sde.array_layout`,
+    bound roots, and expanded `sde.mu_alloc` types share one coordinate system.
+  }];
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect",
+                           "::mlir::memref::MemRefDialect"];
+  let constructor =
+      "mlir::carts::sde::createVerifySdeLayoutCoherencePass()";
+}
+
 def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
   let summary = "Verify SDE MU/CU/SU structural legality at the SDE boundary";
   let description = [{
@@ -98,6 +113,20 @@ def VerifySde : Pass<"verify-sde", "mlir::ModuleOp"> {
   }];
   let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
   let constructor = "mlir::carts::sde::createVerifySdePass()";
+}
+
+def VerifyNoLoadBearingDiscardableAttr
+    : Pass<"verify-no-load-bearing-discardable-attr", "mlir::ModuleOp"> {
+  let summary =
+      "Verify distribution facts do not ride discardable attrs on non-CARTS ops";
+  let description = [{
+    Phase B gate. Errors when a distribution/layout fact rides a discardable
+    attr on a non-CARTS op (`sde`, `arts`, `arts_rt` may carry their own typed
+    facts).
+  }];
+  let constructor =
+      "mlir::carts::sde::createVerifyNoLoadBearingDiscardableAttrPass()";
+  let dependentDialects = ["::mlir::carts::sde::CartsSdeDialect"];
 }
 
 #endif // ARTS_DIALECT_SDE_TRANSFORMS_VERIFY_PASSES

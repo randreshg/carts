@@ -1416,12 +1416,12 @@ static std::optional<sde::SdeSuIterateOp> applyPhysicalLayoutOrRetileStencil(
 
 static void commitStencilPhysicalLayout(sde::SdeSuIterateOp &op,
                                         sde::SDECostModel &costModel) {
-  if (hasCommittedPhysicalLayout(op) ||
-      costModel.getLogicalWorkerCapacity() <= 1)
-    return;
   auto classification = sde::queryStructuredClassification(op);
   bool isStencil = classification &&
                    *classification == sde::SdeStructuredClassification::stencil;
+  if ((hasCommittedPhysicalLayout(op) && !isStencil) ||
+      costModel.getLogicalWorkerCapacity() <= 1)
+    return;
   if (sde::queryInPlaceSafe(op) && !isStencil)
     return;
   if (classification && !isStencil)

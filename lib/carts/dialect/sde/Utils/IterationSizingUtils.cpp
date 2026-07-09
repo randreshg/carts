@@ -7,11 +7,11 @@
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
 
 #include "carts/utils/LoopUtils.h"
+#include "carts/utils/Numeric.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/MathExtras.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -21,18 +21,7 @@ using namespace mlir::carts;
 
 namespace mlir::carts::sde {
 
-static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
-  if (lhs <= 0 || rhs <= 0)
-    return 0;
-  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
-    return std::numeric_limits<int64_t>::max();
-  return lhs * rhs;
-}
-
-int64_t ceilDivPositive(int64_t value, int64_t divisor) {
-  return llvm::divideCeil(std::max<int64_t>(1, value),
-                          std::max<int64_t>(1, divisor));
-}
+using carts::saturatingMulPositive;
 
 SmallVector<int64_t, 4> factorWorkersAcrossDims(int64_t workers,
                                                 ArrayRef<int64_t> extents) {
@@ -185,7 +174,7 @@ bool buildBlockAlignedLogicalWorkerSlice(
     int64_t blocks =
         ceilDivPositive(shape[physicalDim], physicalBlockShape[physicalDim]);
     ownerBlockCounts.push_back(blocks);
-    totalBlocks = saturatingMultiplyPositive(totalBlocks, blocks);
+    totalBlocks = saturatingMulPositive(totalBlocks, blocks);
   }
 
   int64_t target =
@@ -198,7 +187,7 @@ bool buildBlockAlignedLogicalWorkerSlice(
     for (int64_t physicalDim : ownerPhysicalDims) {
       int64_t blocks =
           ceilDivPositive(shape[physicalDim], logicalWorkerSlice[physicalDim]);
-      logicalBlocks = saturatingMultiplyPositive(logicalBlocks, blocks);
+      logicalBlocks = saturatingMulPositive(logicalBlocks, blocks);
     }
     return logicalBlocks;
   };
@@ -250,7 +239,7 @@ int64_t tilePayloadBytes(ArrayRef<int64_t> physicalBlockShape,
   for (int64_t dim : physicalBlockShape) {
     if (dim <= 0)
       return 0;
-    bytes = saturatingMultiplyPositive(bytes, dim);
+    bytes = saturatingMulPositive(bytes, dim);
   }
   return bytes;
 }

@@ -5,6 +5,7 @@
 
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryDepAnalysis.h"
 #include "carts/dialect/arts/Transforms/boundary/SdeToArtsBoundaryHelpers.h"
+#include "carts/utils/Numeric.h"
 #include "carts/dialect/arts/Utils/DbBackedMemrefUtils.h"
 #include "carts/dialect/arts/Utils/DbUtils.h"
 #include "carts/dialect/arts/Utils/DistributedDbPlacementUtils.h"
@@ -35,10 +36,45 @@ namespace mlir::carts::arts::boundary {
 
 std::optional<CommittedPhysicalLayout>
 readPhysicalLayoutFromSuIterateAttrs(sde::SdeSuIterateOp source) {
-  if (std::optional<sde::CommittedSuPhysicalLayout> layout =
-          sde::recoverCommittedPhysicalLayout(source))
-    return CommittedPhysicalLayout{layout->ownerDims, layout->blockShape};
-  return std::nullopt;
+  if (!source || source.getBody().empty())
+    return std::nullopt;
+
+  std::optional<CommittedPhysicalLayout> selected;
+  auto record = [&](ArrayRef<int64_t> ownerDims,
+                    ArrayRef<int64_t> blockShape) -> bool {
+    if (ownerDims.empty() || blockShape.empty())
+      return true;
+    CommittedPhysicalLayout candidate{
+        SmallVector<int64_t, 4>(ownerDims.begin(), ownerDims.end()),
+        SmallVector<int64_t, 4>(blockShape.begin(), blockShape.end())};
+    if (!selected) {
+      selected = std::move(candidate);
+      return true;
+    }
+    return selected->ownerDims == candidate.ownerDims &&
+           selected->blockShape == candidate.blockShape;
+  };
+
+  Block &entry = source.getBody().front();
+  for (sde::SdeArrayLayoutOp layout : entry.getOps<sde::SdeArrayLayoutOp>()) {
+    if (layout.getMode() != sde::SdeAccessMode::write)
+      continue;
+    DenseI64ArrayAttr ownerDims = layout.getOwnerDimsAttr();
+    if (!ownerDims)
+      return std::nullopt;
+    if (!record(ownerDims.asArrayRef(), layout.getBlockShapeAttr().asArrayRef()))
+      return std::nullopt;
+  }
+
+  for (const sde::LayoutGraphFact &fact :
+       sde::parseArrayLayoutFacts(source.getArrayLayoutAttr())) {
+    if (fact.role != sde::LayoutGraphRole::write)
+      continue;
+    if (!record(fact.ownerDims, fact.blockShape))
+      return std::nullopt;
+  }
+
+  return selected;
 }
 
 std::optional<CommittedPhysicalLayout>
@@ -46,58 +82,40 @@ readPhysicalLayoutFromSuIterateOwnerFacts(sde::SdeSuIterateOp source) {
   return readPhysicalLayoutFromSuIterateAttrs(source);
 }
 
-std::optional<SmallVector<int64_t, 4>>
-inferPhysicalOwnerDimsFromAccessSlots(const DirectDepSpec &dep) {
-  if (dep.ownerDimCount == 0 || dep.validExtents.empty() ||
-      dep.accessSlots.size() < dep.ownerDimCount)
-    return std::nullopt;
-
-  SmallVector<char, 4> seen(dep.validExtents.size(), 0);
-  SmallVector<int64_t, 4> ownerDims;
-  ownerDims.reserve(dep.ownerDimCount);
-  for (unsigned slot = 0; slot < dep.ownerDimCount; ++slot) {
-    const DepOwnerAccessSlot &access = dep.accessSlots[slot];
-    if (!access.loopDim || *access.loopDim >= dep.validExtents.size())
-      return std::nullopt;
-    if (seen[*access.loopDim])
-      return std::nullopt;
-    seen[*access.loopDim] = 1;
-    ownerDims.push_back(static_cast<int64_t>(*access.loopDim));
-  }
-  return ownerDims;
-}
-
 std::optional<CommittedPhysicalLayout>
-readPhysicalLayoutFromDepWindow(sde::SdeSuIterateOp source,
-                                const DirectDepSpec &dep) {
-  if (dep.ownerDimCount == 0 || dep.validExtents.empty())
-    return std::nullopt;
+readPhysicalLayoutFromDeps(ArrayRef<DirectDepSpec> deps) {
+  std::optional<CommittedPhysicalLayout> selected;
+  for (const DirectDepSpec &dep : deps) {
+    if (!dep.arrayOwnerDims || dep.arrayOwnerDims->empty() ||
+        dep.validExtents.empty())
+      continue;
+    if (dep.arrayOwnerDims->size() != dep.ownerDimCount)
+      return std::nullopt;
 
-  CommittedPhysicalLayout layout;
-  layout.blockShape.assign(dep.validExtents.begin(), dep.validExtents.end());
+    if (!selected) {
+      selected = CommittedPhysicalLayout{
+          SmallVector<int64_t, 4>(dep.arrayOwnerDims->begin(),
+                                  dep.arrayOwnerDims->end()),
+          SmallVector<int64_t, 4>(dep.validExtents.begin(),
+                                  dep.validExtents.end())};
+      continue;
+    }
 
-  if (dep.arrayOwnerDims && !dep.arrayOwnerDims->empty()) {
-    layout.ownerDims.assign(dep.arrayOwnerDims->begin(),
-                            dep.arrayOwnerDims->end());
-    return layout;
+    if (selected->ownerDims != *dep.arrayOwnerDims ||
+        selected->blockShape.size() != dep.validExtents.size())
+      return std::nullopt;
+    for (auto [slot, extent] : llvm::enumerate(dep.validExtents)) {
+      int64_t &selectedExtent = selected->blockShape[slot];
+      if (selectedExtent == extent)
+        continue;
+      int64_t lo = std::min(selectedExtent, extent);
+      int64_t hi = std::max(selectedExtent, extent);
+      if (lo <= 0 || hi % lo != 0)
+        return std::nullopt;
+      selectedExtent = hi;
+    }
   }
-  if (std::optional<SmallVector<int64_t, 4>> ownerDims =
-          readI64ArrayAttr(source.getOwnerDimsAttr())) {
-    layout.ownerDims.assign(ownerDims->begin(), ownerDims->end());
-    return layout;
-  }
-  if (std::optional<sde::CommittedSuPhysicalLayout> committed =
-          sde::recoverCommittedPhysicalLayout(source)) {
-    layout.ownerDims.assign(committed->ownerDims.begin(),
-                            committed->ownerDims.end());
-    return layout;
-  }
-  if (std::optional<SmallVector<int64_t, 4>> inferredOwnerDims =
-          inferPhysicalOwnerDimsFromAccessSlots(dep)) {
-    layout.ownerDims = std::move(*inferredOwnerDims);
-    return layout;
-  }
-  return std::nullopt;
+  return selected;
 }
 
 std::optional<CommittedPhysicalLayout>
@@ -106,11 +124,9 @@ readCommittedPhysicalLayout(sde::SdeSuIterateOp source,
   if (std::optional<CommittedPhysicalLayout> fromAttrs =
           readPhysicalLayoutFromSuIterateOwnerFacts(source))
     return fromAttrs;
-  for (const DirectDepSpec &dep : deps) {
-    if (std::optional<CommittedPhysicalLayout> fromDep =
-            readPhysicalLayoutFromDepWindow(source, dep))
-      return fromDep;
-  }
+  if (std::optional<CommittedPhysicalLayout> fromDeps =
+          readPhysicalLayoutFromDeps(deps))
+    return fromDeps;
   return std::nullopt;
 }
 
@@ -167,7 +183,7 @@ int64_t saturatedMul(int64_t lhs, int64_t rhs) {
 int64_t ceilDivPositiveI64(int64_t lhs, int64_t rhs) {
   if (lhs <= 0 || rhs <= 0)
     return 0;
-  return (lhs + rhs - 1) / rhs;
+  return carts::ceilDivPositive(lhs, rhs);
 }
 
 FailureOr<ArrayAttr>
@@ -417,8 +433,8 @@ LogicalResult ensureDistributedWriterOwnerLocalGroups(
     ArrayRef<unsigned> dispatchedLoopDims, int64_t totalNodes,
     bool &splitToOwnerLocalGroups) {
   splitToOwnerLocalGroups = false;
-  if (totalNodes <= 1 ||
-      !llvm::any_of(groupBlockCounts, [](int64_t count) { return count > 1; }))
+  int64_t validationNodes = std::max<int64_t>(totalNodes, 2);
+  if (!llvm::any_of(groupBlockCounts, [](int64_t count) { return count > 1; }))
     return success();
 
   auto findGlobalOwnerSlot = [&](int64_t ownerDim) -> std::optional<unsigned> {
@@ -489,6 +505,11 @@ LogicalResult ensureDistributedWriterOwnerLocalGroups(
                   "writer range references an invalid owner block slot";
       int64_t coordinateBlockSize =
           dep.accessSlots[depSlot].coordinateBlockSize;
+      for (auto [ownerSlot, rawDim] : llvm::enumerate(ownerFacts->dims))
+        if (rawDim == static_cast<int64_t>(depSlot) &&
+            ownerSlot < ownerFacts->blockShape.size())
+          coordinateBlockSize =
+              std::max(coordinateBlockSize, ownerFacts->blockShape[ownerSlot]);
       if (coordinateBlockSize <= 0)
         return source.emitOpError()
                << "commits logicalWorkerSlice whose grouped distributed "
@@ -504,7 +525,7 @@ LogicalResult ensureDistributedWriterOwnerLocalGroups(
 
   std::optional<SmallVector<int64_t, 4>> ownerLocalCounts =
       findLargestOwnerLocalGroupCounts(writerSpecs, groupBlockCounts,
-                                       totalNodes);
+                                       validationNodes);
   if (!ownerLocalCounts)
     return source.emitOpError()
            << "cannot split grouped distributed writer into proven "
@@ -566,7 +587,7 @@ FailureOr<AccessWindowFacts> getAccessWindowFacts(arts::DbAccessWindowOp window,
 bool accessWindowRoleMatches(sde::LayoutGraphRole role, ArtsMode mode) {
   if (mode == ArtsMode::in)
     return role == sde::LayoutGraphRole::read;
-  if (mode == ArtsMode::out || mode == ArtsMode::inout)
+  if (arts::DbUtils::isWriterMode(mode))
     return role == sde::LayoutGraphRole::write;
   return false;
 }
@@ -575,12 +596,58 @@ FailureOr<std::optional<SmallVector<int64_t, 4>>>
 getArrayOwnerDimsForWindow(sde::SdeSuIterateOp source,
                            arts::DbAccessWindowOp window, ArtsMode mode,
                            const AccessWindowFacts &facts) {
-  ArrayAttr layout = source.getArrayLayoutAttr();
-  if (!layout)
-    return std::optional<SmallVector<int64_t, 4>>{};
   IntegerAttr arrayId = window.getArrayIdAttr();
   if (!arrayId)
     return std::optional<SmallVector<int64_t, 4>>{};
+
+  auto verifyOwnerDims = [&](ArrayRef<int64_t> ownerDims)
+      -> FailureOr<std::optional<SmallVector<int64_t, 4>>> {
+    if (ownerDims.size() != static_cast<size_t>(window.getOwnerDimCount()))
+      return window.emitOpError()
+             << "owner-dim count disagrees with committed SDE layout fact";
+
+    unsigned ownerDimCount = static_cast<unsigned>(window.getOwnerDimCount());
+    for (auto [slot, ownerDim] : llvm::enumerate(ownerDims)) {
+      if (!mapOwnerSlotToAccessWindowPayloadDim(static_cast<unsigned>(slot),
+                                                ownerDim, ownerDimCount,
+                                                facts.validExtents))
+        return window.emitOpError()
+               << "committed SDE layout owner dimension is outside the "
+                  "access-window payload rank";
+    }
+
+    return std::optional<SmallVector<int64_t, 4>>{
+        SmallVector<int64_t, 4>(ownerDims.begin(), ownerDims.end())};
+  };
+
+  std::optional<sde::SdeArrayLayoutOp> typedMatch;
+  if (!source.getBody().empty()) {
+    for (sde::SdeArrayLayoutOp layout :
+         source.getBody().front().getOps<sde::SdeArrayLayoutOp>()) {
+      if (static_cast<int64_t>(layout.getArrayId()) != arrayId.getInt() ||
+          layout.getMode() != (mode == ArtsMode::in ? sde::SdeAccessMode::read
+                                                    : sde::SdeAccessMode::write))
+        continue;
+      if (typedMatch)
+        return window.emitOpError()
+               << "matches multiple committed SDE layout facts";
+      typedMatch = layout;
+    }
+  }
+  if (typedMatch) {
+    DenseI64ArrayAttr ownerDims = (*typedMatch).getOwnerDimsAttr();
+    if (!ownerDims)
+      return window.emitOpError()
+             << "committed SDE layout fact has dynamic owner dimensions; "
+                "SDE must materialize static owner dims before ARTS lowering";
+    return verifyOwnerDims(ownerDims.asArrayRef());
+  }
+
+  ArrayAttr layout = source.getArrayLayoutAttr();
+  if (!layout)
+    return window.emitOpError()
+           << "has SDE access-window arrayId without a committed SDE layout "
+              "fact";
 
   std::optional<sde::LayoutGraphFact> match;
   for (const sde::LayoutGraphFact &fact : sde::parseArrayLayoutFacts(layout)) {
@@ -594,35 +661,10 @@ getArrayOwnerDimsForWindow(sde::SdeSuIterateOp source,
   }
 
   if (!match)
-    return std::optional<SmallVector<int64_t, 4>>{};
-  if (match->ownerDims.size() != static_cast<size_t>(window.getOwnerDimCount()))
     return window.emitOpError()
-           << "owner-dim count disagrees with committed SDE arrayLayout facts";
-
-  unsigned ownerDimCount = static_cast<unsigned>(window.getOwnerDimCount());
-  for (auto [slot, ownerDim] : llvm::enumerate(match->ownerDims)) {
-    if (!mapOwnerSlotToAccessWindowPayloadDim(static_cast<unsigned>(slot),
-                                              ownerDim, ownerDimCount,
-                                              facts.validExtents))
-      return window.emitOpError()
-             << "arrayLayout owner dimension is outside the access-window "
-                "payload rank";
-  }
-
-  return std::optional<SmallVector<int64_t, 4>>{SmallVector<int64_t, 4>(
-      match->ownerDims.begin(), match->ownerDims.end())};
-}
-
-void dropIdentityArrayOwnerDims(
-    std::optional<SmallVector<int64_t, 4>> &arrayOwnerDims,
-    unsigned ownerDimCount) {
-  if (!arrayOwnerDims ||
-      arrayOwnerDims->size() != static_cast<size_t>(ownerDimCount))
-    return;
-  for (auto [slot, ownerDim] : llvm::enumerate(*arrayOwnerDims))
-    if (ownerDim != static_cast<int64_t>(slot))
-      return;
-  arrayOwnerDims.reset();
+           << "has SDE access-window arrayId without a committed SDE layout "
+              "fact";
+  return verifyOwnerDims(match->ownerDims);
 }
 
 FailureOr<SmallVector<int64_t, 4>>
@@ -712,76 +754,6 @@ SmallVector<MappedLoopIv, 8> collectMappedLoopIvs(sde::SdeSuIterateOp source,
   });
 
   return mapped;
-}
-
-std::optional<int64_t>
-tryGetUnsignedUpperExclusive(Value value, ArrayRef<MappedLoopIv> mappedIvs,
-                             unsigned depth = 0) {
-  if (!value || depth > 8)
-    return std::nullopt;
-  value = ValueAnalysis::stripNumericCasts(value);
-  if (std::optional<int64_t> cst = ValueAnalysis::tryFoldConstantIndex(value))
-    return *cst >= 0 ? std::optional<int64_t>(*cst + 1) : std::nullopt;
-
-  for (const MappedLoopIv &mapped : mappedIvs) {
-    if (!ValueAnalysis::sameValue(value, mapped.iv))
-      continue;
-    if (mapped.lowerBound && mapped.upperBound && *mapped.lowerBound >= 0)
-      return *mapped.upperBound;
-    return std::nullopt;
-  }
-
-  if (auto rem = value.getDefiningOp<arith::RemUIOp>()) {
-    std::optional<int64_t> divisor = ValueAnalysis::tryFoldConstantIndex(
-        ValueAnalysis::stripNumericCasts(rem.getRhs()));
-    if (divisor && *divisor > 0)
-      return *divisor;
-    return std::nullopt;
-  }
-  if (auto div = value.getDefiningOp<arith::DivUIOp>()) {
-    std::optional<int64_t> divisor = ValueAnalysis::tryFoldConstantIndex(
-        ValueAnalysis::stripNumericCasts(div.getRhs()));
-    std::optional<int64_t> numeratorUpper =
-        tryGetUnsignedUpperExclusive(div.getLhs(), mappedIvs, depth + 1);
-    if (divisor && *divisor > 0 && numeratorUpper)
-      return ceilDivPositiveI64(*numeratorUpper, *divisor);
-    return std::nullopt;
-  }
-  if (auto add = value.getDefiningOp<arith::AddIOp>()) {
-    std::optional<int64_t> lhs =
-        tryGetUnsignedUpperExclusive(add.getLhs(), mappedIvs, depth + 1);
-    std::optional<int64_t> rhs =
-        tryGetUnsignedUpperExclusive(add.getRhs(), mappedIvs, depth + 1);
-    if (lhs && rhs)
-      return *lhs + *rhs - 1;
-    return std::nullopt;
-  }
-  if (auto mul = value.getDefiningOp<arith::MulIOp>()) {
-    std::optional<int64_t> lhs =
-        tryGetUnsignedUpperExclusive(mul.getLhs(), mappedIvs, depth + 1);
-    std::optional<int64_t> rhs =
-        tryGetUnsignedUpperExclusive(mul.getRhs(), mappedIvs, depth + 1);
-    if (lhs && rhs)
-      return (*lhs - 1) * (*rhs - 1) + 1;
-    return std::nullopt;
-  }
-  if (auto select = value.getDefiningOp<arith::SelectOp>()) {
-    std::optional<int64_t> trueUpper = tryGetUnsignedUpperExclusive(
-        select.getTrueValue(), mappedIvs, depth + 1);
-    std::optional<int64_t> falseUpper = tryGetUnsignedUpperExclusive(
-        select.getFalseValue(), mappedIvs, depth + 1);
-    if (trueUpper && falseUpper)
-      return std::max(*trueUpper, *falseUpper);
-  }
-  return std::nullopt;
-}
-
-bool isUnsignedLessThan(Value value, int64_t limit,
-                        ArrayRef<MappedLoopIv> mappedIvs) {
-  if (!value)
-    return true;
-  std::optional<int64_t> upper = tryGetUnsignedUpperExclusive(value, mappedIvs);
-  return upper && *upper <= limit;
 }
 
 static std::optional<unsigned> loopDimForIv(Value iv,
@@ -995,19 +967,6 @@ bool commitsUnitAccessOffset(sde::SdeSuIterateOp source) {
   return sawOffset;
 }
 
-bool dependsOnDispatchLoop(Value value, ArrayRef<MappedLoopIv> mappedIvs) {
-  if (!value)
-    return false;
-  for (const MappedLoopIv &mapped : mappedIvs) {
-    if (!mapped.loopDim)
-      continue;
-    if (ValueAnalysis::sameValue(value, mapped.iv) ||
-        ValueAnalysis::dependsOn(value, mapped.iv))
-      return true;
-  }
-  return false;
-}
-
 bool isCommittedFullWindowSlot(
     sde::SdeSuIterateOp source, arts::DbAllocOp alloc, unsigned slot,
     ArrayRef<int64_t> blockLo, ArrayRef<int64_t> blockHi,
@@ -1105,15 +1064,6 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
           candidate.push_back(fullWindow);
           continue;
         }
-        if (mode == ArtsMode::in && slot < blockLo.size() &&
-            slot < blockHi.size() && blockLo[slot] == 0 &&
-            blockHi[slot] > blockLo[slot]) {
-          DepOwnerAccessSlot fullWindow;
-          fullWindow.fullWindow = true;
-          fullWindow.coordinateBlockSize = 1;
-          candidate.push_back(fullWindow);
-          continue;
-        }
         return op->emitError()
                << "cannot map SDE access-window block coordinate to a loop "
                   "dimension";
@@ -1141,17 +1091,6 @@ FailureOr<SmallVector<DepOwnerAccessSlot, 4>> deriveDepOwnerAccessSlots(
         if (mode == ArtsMode::in &&
             isCommittedFullWindowSlot(source, alloc, slot, blockLo, blockHi,
                                       validExtents, arrayOwnerDims)) {
-          DepOwnerAccessSlot fullWindow;
-          fullWindow.fullWindow = true;
-          fullWindow.coordinateBlockSize = 1;
-          candidate.push_back(fullWindow);
-          continue;
-        }
-        if (mode == ArtsMode::in && slot < blockLo.size() &&
-            slot < blockHi.size() && blockLo[slot] == 0 &&
-            blockHi[slot] > blockLo[slot] &&
-            !dependsOnDispatchLoop(indices[slot], mappedIvs) &&
-            isUnsignedLessThan(indices[slot], blockHi[slot], mappedIvs)) {
           DepOwnerAccessSlot fullWindow;
           fullWindow.fullWindow = true;
           fullWindow.coordinateBlockSize = 1;
@@ -1439,7 +1378,6 @@ LogicalResult recordAccessWindowDependency(
       return failure();
     arrayOwnerDims = std::move(*layoutOwnerDims);
   }
-  dropIdentityArrayOwnerDims(arrayOwnerDims, ownerDimCount);
   FailureOr<SmallVector<DepOwnerAccessSlot, 4>> accessSlots =
       deriveDepOwnerAccessSlots(source, alloc, window.getMode(), ownerDimCount,
                                 facts->blockLo, facts->blockHi,

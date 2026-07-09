@@ -415,13 +415,17 @@ bool logicalEndpointFitsRoot(const HomeLayout &home, MemRefType muType) {
 }
 
 std::optional<RedistEndpoint>
+getRankExpandedLocalReductionEndpoint(const HomeLayout &home,
+                                      MemRefType muType);
+
+std::optional<RedistEndpoint>
 getRankExpandedReductionEndpoint(const HomeLayout &home, MemRefType muType) {
   if (!muType || home.ownerDims.empty())
     return std::nullopt;
   std::optional<ExpandedBlockGridMu> expanded =
       recognizeExpandedBlockGridMu(home.writer, muType);
   if (!expanded)
-    return std::nullopt;
+    return getRankExpandedLocalReductionEndpoint(home, muType);
 
   llvm::DenseSet<int64_t> homeOwners;
   for (int64_t ownerDim : home.ownerDims)
@@ -452,6 +456,34 @@ getRankExpandedReductionEndpoint(const HomeLayout &home, MemRefType muType) {
   }
   for (unsigned d = 0; d < expanded->logicalRank; ++d)
     endpoint.blockShape.push_back(shape[numGrid + d]);
+  return endpoint;
+}
+
+std::optional<RedistEndpoint>
+getRankExpandedLocalReductionEndpoint(const HomeLayout &home,
+                                      MemRefType muType) {
+  if (!muType || !muType.hasStaticShape() || home.ownerDims.empty() ||
+      home.blockShape.empty())
+    return std::nullopt;
+
+  const unsigned numGrid = home.ownerDims.size();
+  if (home.blockShape.size() + numGrid !=
+      static_cast<size_t>(muType.getRank()))
+    return std::nullopt;
+
+  ArrayRef<int64_t> shape = muType.getShape();
+  for (unsigned slot = 0; slot < numGrid; ++slot)
+    if (shape[slot] != 1)
+      return std::nullopt;
+  for (auto [dim, blockExtent] : llvm::enumerate(home.blockShape))
+    if (shape[numGrid + static_cast<unsigned>(dim)] != blockExtent)
+      return std::nullopt;
+
+  RedistEndpoint endpoint;
+  endpoint.ownerDims.reserve(numGrid);
+  endpoint.blockShape.assign(shape.begin(), shape.end());
+  for (unsigned slot = 0; slot < numGrid; ++slot)
+    endpoint.ownerDims.push_back(static_cast<int64_t>(slot));
   return endpoint;
 }
 

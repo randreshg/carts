@@ -10,6 +10,7 @@
 #define ARTS_OP_INTERFACES
 
 include "mlir/IR/OpBase.td"
+include "ArtsAttrs.td"
 
 ///===----------------------------------------------------------------------===///
 /// ArtsPartitionedOpInterface
@@ -113,6 +114,72 @@ def ArtsDistributedOpInterface : OpInterface<"ArtsDistributedOpInterface"> {
       /*methodName=*/"getDepPatternAttrName",
       /*args=*/(ins),
       /*methodBody=*/[{ return $_op.getDepPatternAttrName(); }]
+    >,
+  ];
+}
+
+///===----------------------------------------------------------------------===///
+/// ArtsDbOpInterface
+///
+/// Behavioral interface for DB allocation and acquire ops. Replaces ad-hoc
+/// `isa<DbAllocOp> || isa<DbAcquireOp>` switches when querying DB shape,
+/// identity handles, and typed layout/placement facts.
+///===----------------------------------------------------------------------===///
+
+def ArtsDbOpInterface : OpInterface<"ArtsDbOpInterface"> {
+  let description = [{
+    Op interface for ARTS DB allocation and acquire operations.
+  }];
+  let cppNamespace = "::mlir::carts::arts";
+
+  let methods = [
+    InterfaceMethod<[{
+        Returns outer DB block counts along each dimension.
+      }],
+      "::mlir::ValueRange", "getDbSizes", (ins),
+      [{ return $_op.getSizes(); }]
+    >,
+    InterfaceMethod<[{
+        Returns logical element sizes of each DB block.
+      }],
+      "::mlir::ValueRange", "getDbElementSizes", (ins),
+      [{ return $_op.getElementSizes(); }]
+    >,
+    InterfaceMethod<[{
+        Returns the GUID memref identifying this DB view.
+      }],
+      "::mlir::Value", "getDbGuid", (ins),
+      [{ return $_op.getGuid(); }]
+    >,
+    InterfaceMethod<[{
+        Returns the pointer memref for this DB view.
+      }],
+      "::mlir::Value", "getDbPtr", (ins),
+      [{ return $_op.getPtr(); }]
+    >,
+    InterfaceMethod<[{
+        Returns the typed block layout attr when present on this DB op.
+      }],
+      "::std::optional<::mlir::carts::arts::ArtsBlockLayoutAttr>",
+      "getBlockLayout", (ins),
+      [{
+        if (auto layout = $_op.getBlockLayoutAttr())
+          return layout;
+        return std::nullopt;
+      }]
+    >,
+    InterfaceMethod<[{
+        Returns the typed DB placement enum when present (`db_alloc` only).
+      }],
+      "::std::optional<::mlir::carts::arts::ArtsDbPlacement>",
+      "getDbPlacement", (ins),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        if (auto attr = ::llvm::dyn_cast<ArtsDbPlacementAttr>(
+                $_op.getOperation()->getAttr("db_placement")))
+          return attr.getValue();
+        return std::nullopt;
+      }]
     >,
   ];
 }

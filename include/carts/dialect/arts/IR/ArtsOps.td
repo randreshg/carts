@@ -97,7 +97,7 @@ def DbAllocOp : Arts_Op<"db_alloc",
                         [AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>,
                          ArtsPartitionedOpInterface,
                          ArtsDistributedDbOpInterface,
-                         ArtsDistributedOpInterface]> {
+                         ArtsDistributedOpInterface, ArtsDbOpInterface]> {
   let summary = "Allocate an ARTS DataBlock and get its pointer and GUID.";
   let description = [{
     This operation corresponds to the `artsDbCreate` runtime function.
@@ -144,7 +144,9 @@ def DbAllocOp : Arts_Op<"db_alloc",
     OptionalAttr<UnitAttr>:$perBlockSingleWriterStencil,
     // Compact face DB used to move non-contiguous stencil halo slices without
     // widening the halo to the source block.
-    OptionalAttr<UnitAttr>:$compact_halo_payload
+    OptionalAttr<UnitAttr>:$compact_halo_payload,
+    OptionalAttr<ArtsBlockLayoutAttr>:$block_layout,
+    OptionalAttr<ArtsDbPlacementAttr>:$db_placement
   );
   let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
   let assemblyFormat = [{
@@ -240,7 +242,7 @@ def DbAccessWindowOp : Arts_Op<"db_access_window", [MemoryEffects<[MemWrite]>]> 
 def DbAcquireOp : Arts_Op<"db_acquire",
                           [AttrSizedOperandSegments,
                            ArtsPartitionedOpInterface,
-                           ArtsDistributedOpInterface]> {
+                           ArtsDistributedOpInterface, ArtsDbOpInterface]> {
   let summary = "Acquires access to an ARTS DataBlock.";
   let description = [{
     This operation acquires a local view of the DataBlock for safe access within EDTs.
@@ -317,7 +319,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     OptionalAttr<DenseI32ArrayAttr>:$partition_offsets_segments,
     OptionalAttr<DenseI32ArrayAttr>:$partition_sizes_segments,
     /// Per-entry partition modes
-    OptionalAttr<DenseI32ArrayAttr>:$partition_entry_modes
+    OptionalAttr<DenseI32ArrayAttr>:$partition_entry_modes,
+    OptionalAttr<ArtsBlockLayoutAttr>:$block_layout
   );
   let results = (outs MemRefOf<[I64]> : $guid, AnyMemRef : $ptr);
   let assemblyFormat = [{
@@ -653,6 +656,7 @@ def EdtOp : Arts_Op<"edt", [
     OptionalAttr<I64Attr>:$partialReductionSplitFactor,
     OptionalAttr<I64Attr>:$partialReductionSplitOwnerTaskCount,
     OptionalAttr<I64Attr>:$partialReductionSplitTargetWorkerCount,
+    OptionalAttr<ArtsBlockLayoutAttr>:$block_layout,
     Variadic<AnyMemRef>:$dependencies,
     Variadic<AnyType>:$params
   );
@@ -725,10 +729,11 @@ def EpochOp
     OptionalAttr<ArrayAttr>:$stencil_spatial_dims,
     OptionalAttr<ArrayAttr>:$stencil_owner_dims,
     OptionalAttr<ArrayAttr>:$stencil_write_footprint,
-    OptionalAttr<UnitAttr>:$stencil_supported_block_halo
+    OptionalAttr<ArtsBlockLayoutAttr>:$block_layout
   );
   let regions = (region SizedRegion<1> : $body);
   let results = (outs I64 : $epochGuid);
+  let hasVerifier = 1;
 
   let assemblyFormat =
       [{attr-dict-with-keyword $body `:` type($epochGuid)}];
@@ -741,7 +746,8 @@ def EpochOp
 /// arts.yield
 ///===----------------------------------------------------------------------===///
 def YieldOp : Arts_Op<"yield", [
-  Pure, ReturnLike, Terminator, ParentOneOf<["EdtOp", "EpochOp"]>
+  Pure, ReturnLike, Terminator,
+  ParentOneOf<["EdtOp", "EpochOp", "ReduceTreeOp"]>
 ]> {
 
   let summary = "ARTS dialect yield terminator";
@@ -750,7 +756,15 @@ def YieldOp : Arts_Op<"yield", [
     ARTS operations, such as `arts.epoch` and `arts.edt`. It ensures proper
     control flow within the ARTS dialect by marking the end of a region.
   }];
-  let assemblyFormat = [{attr-dict-with-keyword}];
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = [{
+    ($values^ `:` type($values))? attr-dict-with-keyword
+  }];
+  let builders = [
+    OpBuilder<(ins), [{
+      build($_builder, $_state, ::mlir::ValueRange{});
+    }]>
+  ];
 }
 
 ///===----------------------------------------------------------------------===///
@@ -824,6 +838,35 @@ def GetEdtEpochGuidOp : Arts_Op<"get_edt_epoch_guid", [Pure]> {
   }];
   let results = (outs I64 : $epochGuid);
   let assemblyFormat = "attr-dict";
+}
+
+///===----------------------------------------------------------------------===///
+/// arts.reduce_tree
+///===----------------------------------------------------------------------===///
+def ReduceTreeOp : Arts_Op<"reduce_tree", [
+  SingleBlockImplicitTerminator<"arts::YieldOp">,
+  RecursiveMemoryEffects
+]> {
+  let summary = "Region-carrying associative reduction over committed DB blocks";
+  let description = [{
+    Phase A typed operation for log-depth associative reductions over committed
+    partials. It names the reduction inputs, result type, and tree shape facts
+    that ARTS lowering must consume before ARTS-RT. This replaces the legacy
+    `partialReduction*` attribute bundle on `arts.edt` for new vertical slices.
+  }];
+  let arguments = (ins
+    ArtsReductionStrategyAttr:$kind,
+    Variadic<AnyType>:$inputs,
+    I64Attr:$leaf_count,
+    I64Attr:$fan_in
+  );
+  let results = (outs AnyType : $result);
+  let regions = (region SizedRegion<1> : $body);
+  let hasVerifier = 1;
+  let assemblyFormat = [{
+    $kind (`(` $inputs^ `:` type($inputs) `)`)?
+    attr-dict-with-keyword $body `:` type($result)
+  }];
 }
 
 #endif // ARTS_OPS

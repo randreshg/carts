@@ -21,6 +21,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
 using namespace mlir::carts;
@@ -33,7 +34,24 @@ namespace {
 
 static bool isAllowedSuIterateChild(Operation *op) {
   return isa<SdeYieldOp, SdeCuRegionOp, SdeCuAtomicOp>(op) ||
-         isa<SdeArrayLayoutRootOp, SdeSuBarrierOp>(op);
+         isa<SdeArrayLayoutOp, SdeArrayLayoutRootOp, SdeSuBarrierOp>(op);
+}
+
+static bool suHasTypedArrayLayoutFact(SdeSuIterateOp op, int64_t arrayId,
+                                      SdeAccessMode mode) {
+  if (op.getBody().empty())
+    return false;
+  for (SdeArrayLayoutOp layout :
+       op.getBody().front().getOps<SdeArrayLayoutOp>())
+    if (layout.getArrayId() == arrayId && layout.getMode() == mode)
+      return true;
+  return false;
+}
+
+static bool suHasAnyTypedArrayLayoutFact(SdeSuIterateOp op) {
+  if (op.getBody().empty())
+    return false;
+  return !op.getBody().front().getOps<SdeArrayLayoutOp>().empty();
 }
 
 static bool valueDefinedOutsideRegion(Value value, Region *region) {
@@ -831,8 +849,23 @@ LogicalResult SdeSuIterateOp::verify() {
   if (::mlir::failed(verifyArrayLayoutAttr(*this, layout, facts)))
     failed = true;
 
+  SmallVector<SdeArrayLayoutOp, 4> typedLayouts;
+  for (SdeArrayLayoutOp typedLayout : entry.getOps<SdeArrayLayoutOp>())
+    typedLayouts.push_back(typedLayout);
+
+  auto hasTypedLayoutFor = [&](int64_t arrayId, SdeAccessMode mode) {
+    for (SdeArrayLayoutOp typedLayout : typedLayouts)
+      if (static_cast<int64_t>(typedLayout.getArrayId()) == arrayId &&
+          typedLayout.getMode() == mode)
+        return true;
+    return false;
+  };
+
+  bool hasLayoutFacts =
+      (layout && !layout.empty()) || !typedLayouts.empty();
+
   auto layoutRootSupportedWithoutDict = [&]() {
-    if (hasCommittedPhysicalLayout)
+    if (hasCommittedPhysicalLayout || suHasAnyTypedArrayLayoutFact(*this))
       return true;
     for (SdeArrayLayoutRootOp root : roots) {
       auto muType = dyn_cast<MemRefType>(root.getRoot().getType());
@@ -842,20 +875,20 @@ LogicalResult SdeSuIterateOp::verify() {
     return false;
   }();
 
-  if (!layout && !roots.empty() && !layoutRootSupportedWithoutDict) {
+  if (!hasLayoutFacts && !roots.empty() && !layoutRootSupportedWithoutDict) {
     roots.front().emitOpError()
         << "commits array root provenance but the enclosing sde.su_iterate "
-           "has no arrayLayout";
+           "has no arrayLayout or typed sde.array_layout fact";
     failed = true;
   }
 
-  if (layout && !layout.empty()) {
+  if (hasLayoutFacts) {
     for (SdeArrayLayoutRootOp root : roots) {
       auto muType = dyn_cast<MemRefType>(root.getRoot().getType());
       if (hasCommittedPhysicalLayout ||
           (muType && recoverMuPhysicalLayoutFromExpandedType(muType)))
         continue;
-      bool matchesLayout = false;
+      bool matchesLayout = hasTypedLayoutFor(root.getArrayId(), root.getMode());
       for (const LayoutGraphFact &fact : facts) {
         std::optional<SdeAccessMode> mode = modeForLayoutRole(fact.role);
         if (mode && fact.id == static_cast<int64_t>(root.getArrayId()) &&
@@ -864,10 +897,13 @@ LogicalResult SdeSuIterateOp::verify() {
           break;
         }
       }
+      if (!matchesLayout &&
+          suHasTypedArrayLayoutFact(*this, root.getArrayId(), root.getMode()))
+        matchesLayout = true;
       if (!matchesLayout) {
         root.emitOpError()
-            << "does not match any arrayLayout entry in the enclosing "
-               "sde.su_iterate";
+            << "does not match any arrayLayout or sde.array_layout entry in "
+               "the enclosing sde.su_iterate";
         failed = true;
       }
     }
@@ -876,7 +912,7 @@ LogicalResult SdeSuIterateOp::verify() {
       std::optional<SdeAccessMode> mode = modeForLayoutRole(fact.role);
       if (!mode)
         continue;
-      bool found = false;
+      bool found = hasTypedLayoutFor(fact.id, *mode);
       for (SdeArrayLayoutRootOp root : roots)
         if (static_cast<int64_t>(root.getArrayId()) == fact.id &&
             root.getMode() == *mode)
@@ -887,6 +923,20 @@ LogicalResult SdeSuIterateOp::verify() {
         emitOpError() << "arrayLayout entry for arrayId " << fact.id
                       << " has no explicit sde.array_layout_root provenance; "
                          "refusing downstream root/order inference";
+        failed = true;
+      }
+    }
+
+    for (SdeArrayLayoutOp typedLayout : typedLayouts) {
+      bool foundRoot = false;
+      for (SdeArrayLayoutRootOp root : roots)
+        if (static_cast<int64_t>(root.getArrayId()) ==
+                static_cast<int64_t>(typedLayout.getArrayId()) &&
+            root.getMode() == typedLayout.getMode())
+          foundRoot = true;
+      if (!foundRoot) {
+        typedLayout.emitOpError()
+            << "has no matching sde.array_layout_root provenance";
         failed = true;
       }
     }
@@ -1006,6 +1056,187 @@ LogicalResult SdeArrayLayoutRootOp::verify() {
     return emitOpError("root operand must be a memref");
   if (getArrayId() < 0)
     return emitOpError("arrayId must be non-negative");
+  return success();
+}
+
+static LogicalResult verifyPositiveDenseI64Shape(SdeArrayLayoutOp op,
+                                                 StringRef fieldName,
+                                                 ArrayRef<int64_t> values) {
+  if (values.empty())
+    return op.emitOpError() << fieldName << " must not be empty";
+  for (int64_t value : values) {
+    if (value <= 0)
+      return op.emitOpError()
+             << fieldName << " entries must be positive; got " << value;
+  }
+  return success();
+}
+
+static LogicalResult parseDenseI64Array(OpAsmParser &parser,
+                                        DenseI64ArrayAttr &attr) {
+  if (parser.parseLSquare())
+    return failure();
+  SmallVector<int64_t> values;
+  if (failed(parser.parseOptionalRSquare())) {
+    if (parser.parseCommaSeparatedList([&]() -> ParseResult {
+          int64_t value = 0;
+          if (parser.parseInteger(value))
+            return failure();
+          values.push_back(value);
+          return success();
+        }))
+      return failure();
+    if (parser.parseRSquare())
+      return failure();
+  }
+  attr = DenseI64ArrayAttr::get(parser.getContext(), values);
+  return success();
+}
+
+static void printDenseI64Array(OpAsmPrinter &p, StringRef keyword,
+                               DenseI64ArrayAttr attr) {
+  p << keyword << " [";
+  llvm::interleaveComma(attr.asArrayRef(), p);
+  p << "]";
+}
+
+//===----------------------------------------------------------------------===//
+// SdeArrayLayoutOp — custom assembly format + verifier
+//===----------------------------------------------------------------------===//
+
+// Print: sde.array_layout write array_id(0) owner [0] block [2, 4] logical [8, 4]
+void SdeArrayLayoutOp::print(OpAsmPrinter &p) {
+  p << " " << stringifySdeAccessMode(getMode()) << " array_id(" << getArrayId()
+    << ") ";
+  if (getOwnerDimsAttr())
+    printDenseI64Array(p, "owner", getOwnerDimsAttr());
+  else if (!getOwnerDimValues().empty()) {
+    p << "owner (";
+    p.printOperands(getOwnerDimValues());
+    p << " : ";
+    llvm::interleaveComma(getOwnerDimValues(), p,
+                          [&](Value v) { p << v.getType(); });
+    p << ")";
+  }
+  p << " ";
+  printDenseI64Array(p, "block", getBlockShapeAttr());
+  p << " ";
+  printDenseI64Array(p, "logical", getLogicalShapeAttr());
+  p.printOptionalAttrDict((*this)->getAttrs(),
+                          {"mode", "arrayId", "ownerDims", "blockShape",
+                           "logicalShape", "operandSegmentSizes"});
+}
+
+ParseResult SdeArrayLayoutOp::parse(OpAsmParser &parser,
+                                    OperationState &result) {
+  MLIRContext *ctx = parser.getContext();
+  IntegerType i64 = IntegerType::get(ctx, 64);
+
+  StringRef modeKw;
+  if (parser.parseKeyword(&modeKw))
+    return failure();
+  std::optional<SdeAccessMode> mode = symbolizeSdeAccessMode(modeKw);
+  if (!mode)
+    return parser.emitError(parser.getNameLoc(),
+                            "expected sde access mode (read|write|readwrite)");
+  result.addAttribute("mode", SdeAccessModeAttr::get(ctx, *mode));
+
+  int64_t arrayId = -1;
+  if (parser.parseKeyword("array_id") || parser.parseLParen() ||
+      parser.parseInteger(arrayId) || parser.parseRParen())
+    return failure();
+  result.addAttribute("arrayId", IntegerAttr::get(i64, arrayId));
+
+  unsigned ownerDimValueCount = 0;
+  if (parser.parseKeyword("owner"))
+    return failure();
+  if (succeeded(parser.parseOptionalLSquare())) {
+    SmallVector<int64_t> ownerDims;
+    if (failed(parser.parseOptionalRSquare())) {
+      if (parser.parseCommaSeparatedList([&]() -> ParseResult {
+            int64_t value = 0;
+            if (parser.parseInteger(value))
+              return failure();
+            ownerDims.push_back(value);
+            return success();
+          }))
+        return failure();
+      if (parser.parseRSquare())
+        return failure();
+    }
+    result.addAttribute("ownerDims",
+                        DenseI64ArrayAttr::get(ctx, ownerDims));
+  } else {
+    SmallVector<OpAsmParser::UnresolvedOperand> ownerOperands;
+    SmallVector<Type> ownerTypes;
+    if (parser.parseLParen() ||
+        parser.parseOperandList(ownerOperands) || parser.parseColonTypeList(ownerTypes) ||
+        parser.parseRParen())
+      return failure();
+    if (ownerOperands.size() != ownerTypes.size())
+      return parser.emitError(parser.getNameLoc(),
+                              "owner dim operand/type count mismatch");
+    if (parser.resolveOperands(ownerOperands, ownerTypes, parser.getNameLoc(),
+                               result.operands))
+      return failure();
+    ownerDimValueCount = ownerOperands.size();
+  }
+
+  DenseI64ArrayAttr blockShape;
+  if (parser.parseKeyword("block"))
+    return failure();
+  if (failed(parseDenseI64Array(parser, blockShape)))
+    return failure();
+  result.addAttribute("blockShape", blockShape);
+
+  DenseI64ArrayAttr logicalShape;
+  if (parser.parseKeyword("logical"))
+    return failure();
+  if (failed(parseDenseI64Array(parser, logicalShape)))
+    return failure();
+  result.addAttribute("logicalShape", logicalShape);
+
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+  result.addAttribute(
+      "operandSegmentSizes",
+      parser.getBuilder().getDenseI32ArrayAttr(
+          {static_cast<int32_t>(ownerDimValueCount)}));
+  return success();
+}
+
+LogicalResult SdeArrayLayoutOp::verify() {
+  if (getMode() == SdeAccessMode::readwrite)
+    return emitOpError("mode must be read or write; readwrite is not a "
+                       "role-specific arrayLayout identity");
+  if (getArrayId() < 0)
+    return emitOpError("arrayId must be non-negative");
+
+  const bool hasOwnerAttr = static_cast<bool>(getOwnerDimsAttr());
+  const bool hasOwnerValues = !getOwnerDimValues().empty();
+  if (hasOwnerAttr == hasOwnerValues)
+    return emitOpError("exactly one of ownerDims attribute or ownerDimValues "
+                       "operands must be present");
+
+  if (hasOwnerAttr) {
+    SmallVector<int64_t, 4> seenOwnerDims;
+    for (int64_t dim : getOwnerDimsAttr().asArrayRef()) {
+      if (dim < 0)
+        return emitOpError("ownerDims entries must be non-negative; got ")
+               << dim;
+      if (llvm::is_contained(seenOwnerDims, dim))
+        return emitOpError("ownerDims entries must be unique; duplicate ")
+               << dim;
+      seenOwnerDims.push_back(dim);
+    }
+  }
+
+  if (failed(verifyPositiveDenseI64Shape(*this, "blockShape",
+                                         getBlockShapeAttr().asArrayRef())))
+    return failure();
+  if (failed(verifyPositiveDenseI64Shape(*this, "logicalShape",
+                                         getLogicalShapeAttr().asArrayRef())))
+    return failure();
   return success();
 }
 
@@ -1215,6 +1446,41 @@ static bool consumerHasOwnerReductionAccess(SdeSuIterateOp consumer,
   return false;
 }
 
+static bool consumerHasStorageLocalReduceScatterRead(
+    SdeSuIterateOp consumer, int64_t arrayId, Value movementRoot,
+    ArrayRef<int64_t> movementOwnerDims, ArrayRef<int64_t> movementBlockShape) {
+  std::optional<LayoutGraphFact> readFact =
+      findConsumerLayoutFact(consumer, arrayId, LayoutGraphRole::read);
+  if (!readFact || readFact->ownerDims.empty() ||
+      readFact->blockShape.empty() ||
+      movementOwnerDims.size() != readFact->ownerDims.size())
+    return false;
+
+  auto rootType = dyn_cast<MemRefType>(movementRoot.getType());
+  if (!rootType || !rootType.hasStaticShape() ||
+      movementBlockShape.size() != static_cast<size_t>(rootType.getRank()))
+    return false;
+
+  const unsigned ownerRank = movementOwnerDims.size();
+  if (readFact->blockShape.size() + ownerRank !=
+      static_cast<size_t>(rootType.getRank()))
+    return false;
+
+  ArrayRef<int64_t> rootShape = rootType.getShape();
+  for (unsigned slot = 0; slot < ownerRank; ++slot) {
+    if (movementOwnerDims[slot] != static_cast<int64_t>(slot) ||
+        rootShape[slot] != 1 || movementBlockShape[slot] != 1)
+      return false;
+  }
+  for (auto [dim, committedExtent] : llvm::enumerate(readFact->blockShape)) {
+    unsigned payloadDim = ownerRank + static_cast<unsigned>(dim);
+    if (rootShape[payloadDim] != committedExtent ||
+        movementBlockShape[payloadDim] != committedExtent)
+      return false;
+  }
+  return true;
+}
+
 static SdeSuIterateOp findAnchoredConsumer(Operation *movement) {
   for (Operation *next = movement->getNextNode(); next;
        next = next->getNextNode()) {
@@ -1263,8 +1529,8 @@ static bool partialReductionFactsMatchMovement(SdeSuIterateOp consumer,
 
 static LogicalResult verifyMovementAnchoredInConsumer(
     Operation *movement, int64_t arrayId, Value movementRoot,
-    ArrayRef<int64_t> movementOwnerDims, bool requireHaloBacking,
-    bool requireReductionBacking) {
+    ArrayRef<int64_t> movementOwnerDims, ArrayRef<int64_t> movementBlockShape,
+    bool requireHaloBacking, bool requireReductionBacking) {
   SdeSuIterateOp consumer = findAnchoredConsumer(movement);
   if (!consumer)
     return movement->emitOpError()
@@ -1303,7 +1569,10 @@ static LogicalResult verifyMovementAnchoredInConsumer(
     const LayoutGraphFact &backingFact = readFact ? *readFact : *writeFact;
     if (backingFact.layoutKind == ArrayLayoutKind::blockContraction ||
         consumerHasOwnerReductionAccess(consumer, movementRoot,
-                                        backingFact.ownerDims))
+                                        backingFact.ownerDims) ||
+        consumerHasStorageLocalReduceScatterRead(
+            consumer, arrayId, movementRoot, movementOwnerDims,
+            movementBlockShape))
       return success();
     if (consumer.getPartialReductionAttr()) {
       if (partialReductionFactsMatchMovement(consumer, movementOwnerDims))
@@ -1347,7 +1616,8 @@ static LogicalResult verifyMovementGroundedAndAnchored(
     return movement->emitOpError()
            << "is not grounded in committed SDE layout: " << reason;
   return verifyMovementAnchoredInConsumer(movement, arrayId, movementRoot,
-                                          *ownerDims, requireHaloBacking,
+                                          *ownerDims, *blockShape,
+                                          requireHaloBacking,
                                           requireReductionBacking);
 }
 

@@ -1,9 +1,8 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-accesses-to-arts-deps,finalize-sde-to-arts,verify-arts-objects-only)' 2>&1 | %FileCheck %s --implicit-check-not="refusing coarse SU realization" --implicit-check-not='partitioning(<coarse>)' --implicit-check-not=arts.db_access_window
 
-// A residual writer SU may have no arrayLayout attr while still carrying a
-// committed access window from SDE storage lowering. The owner slot must be
-// recovered from the transformed block-coordinate access, not sent through the
-// coarse fallback.
+// A residual writer SU with a committed access window must carry the SDE layout
+// fact the boundary consumes. The owner slot is read from that fact, not
+// recovered from the transformed block-coordinate access.
 
 // CHECK-LABEL: func.func @windowed_residual_column_init
 // CHECK: arts.db_acquire
@@ -32,7 +31,7 @@ module attributes {arts.runtime_total_nodes = 1 : i64, arts.runtime_total_worker
         %col = arith.remui %j, %c2 : index
         memref.store %one, %A[%block, %i, %col] : memref<2x4x2xf32>
       }
-    } {}
+    } {arrayLayout = [{arrayId = 0 : i64, kind = "block_parallel", ownerDims = [1], blockShape = [4, 2], muBlockCount = 2 : i64, role = "write"}]}
     return
   }
 }

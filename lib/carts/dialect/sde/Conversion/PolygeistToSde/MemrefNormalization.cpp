@@ -286,7 +286,7 @@ void SdeMemrefNormalizationPass::runOnOperation() {
 
   OpBuilder builder(ctx);
   removalMgr.clear();
-  bool hadUnraisedNestedMemref = false;
+  bool hadNormalizationFailure = false;
 
   /// Pre-collect all task dependency references for O(1) pattern lookup
   DenseMap<Value, SmallVector<TaskDepRef>> taskDepsByValue;
@@ -343,18 +343,26 @@ void SdeMemrefNormalizationPass::runOnOperation() {
       if (auto flatPlan = inferFlatStridedPlan(*patternOpt)) {
         if (failed(
                 transformFlatStridedWrapper(*patternOpt, *flatPlan, builder))) {
-          ARTS_DEBUG("  Skipping flat strided wrapper pattern - "
-                     "transformation failed at "
+          patternOpt->rootAlloc.getDefiningOp()->emitError(
+              "un-normalizable flat strided memref wrapper pattern; "
+              "transformation failed — compilation would produce broken output");
+          ARTS_DEBUG("SdeMemrefNormalization: flat strided wrapper transform "
+                     "failed at "
                      << patternOpt->rootAlloc.getLoc());
+          hadNormalizationFailure = true;
           continue;
         }
         continue;
       }
 
       if (failed(transformSimpleWrapper(*patternOpt, builder))) {
-        ARTS_DEBUG("  Skipping simple wrapper pattern - transformation failed "
-                   "(e.g. dimension hoisting) at "
+        patternOpt->rootAlloc.getDefiningOp()->emitError(
+            "un-normalizable simple memref wrapper pattern; transformation "
+            "failed — compilation would produce broken output");
+        ARTS_DEBUG("SdeMemrefNormalization: simple wrapper transform failed "
+                   "at "
                    << patternOpt->rootAlloc.getLoc());
+        hadNormalizationFailure = true;
         continue;
       }
       continue;
@@ -378,7 +386,7 @@ void SdeMemrefNormalizationPass::runOnOperation() {
       }
       ARTS_DEBUG("SdeMemrefNormalization: skipping nested memref pattern ("
                  << detail << ") at " << patternOpt->rootAlloc.getLoc());
-      hadUnraisedNestedMemref = true;
+      hadNormalizationFailure = true;
       continue;
     }
 
@@ -396,15 +404,18 @@ void SdeMemrefNormalizationPass::runOnOperation() {
 
     /// Phase 3: Transform
     if (failed(transformPattern(*patternOpt, builder))) {
-      ARTS_DEBUG("  Skipping pattern - transformation failed (e.g. dimension "
-                 "hoisting) at "
+      patternOpt->rootAlloc.getDefiningOp()->emitError(
+          "un-normalizable nested memref pattern; transformation failed — "
+          "compilation would produce broken output");
+      ARTS_DEBUG("SdeMemrefNormalization: nested pattern transform failed at "
                  << patternOpt->rootAlloc.getLoc());
+      hadNormalizationFailure = true;
       continue;
     }
   }
 
-  /// Fail hard if any nested memref pattern could not be raised.
-  if (hadUnraisedNestedMemref) {
+  /// Fail hard if any memref pattern could not be normalized.
+  if (hadNormalizationFailure) {
     signalPassFailure();
     return;
   }

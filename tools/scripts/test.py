@@ -174,7 +174,9 @@ def _run_lit(
         console.print(f"Test path: [{Colors.DEBUG}]{path}[/{Colors.DEBUG}]")
     console.print()
 
-    cmd = [str(llvm_lit)]
+    # Run lit with the active Dekk interpreter so lit.cfg.py can import the
+    # same project Python modules that the CARTS CLI is already using.
+    cmd = [sys.executable, str(llvm_lit)]
     if verbose_tests:
         cmd.append("-v")
     if extra_args:

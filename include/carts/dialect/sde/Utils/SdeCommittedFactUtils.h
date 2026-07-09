@@ -347,6 +347,77 @@ collapseRankExpandedRootShape(ArrayRef<int64_t> rootShape,
   return logicalShape;
 }
 
+/// Emit typed `sde.array_layout` facts for every owner-bearing `arrayLayout`
+/// entry that has matching `sde.array_layout_root` provenance.
+inline void syncSuTypedArrayLayoutFacts(SdeSuIterateOp op) {
+  if (!op || op.getBody().empty())
+    return;
+
+  Block &entry = op.getBody().front();
+  OpBuilder builder(&entry, entry.begin());
+  MLIRContext *ctx = op.getContext();
+
+  auto emitOne = [&](int64_t arrayId, SdeAccessMode mode,
+                     ArrayRef<int64_t> ownerDims, ArrayRef<int64_t> blockShape,
+                     ArrayRef<int64_t> logicalShape) {
+    if (ownerDims.empty() || blockShape.empty() || logicalShape.empty())
+      return;
+    for (SdeArrayLayoutOp existing : entry.getOps<SdeArrayLayoutOp>()) {
+      if (static_cast<int64_t>(existing.getArrayId()) != arrayId ||
+          existing.getMode() != mode)
+        continue;
+      Builder attrBuilder(existing.getContext());
+      auto ownerAttr = existing.getOwnerDimsAttr();
+      if (!ownerAttr || ownerAttr.asArrayRef() != ownerDims)
+        existing->setAttr("ownerDims",
+                          attrBuilder.getDenseI64ArrayAttr(ownerDims));
+      if (existing.getBlockShapeAttr().asArrayRef() != blockShape)
+        existing->setAttr("blockShape",
+                          attrBuilder.getDenseI64ArrayAttr(blockShape));
+      if (existing.getLogicalShapeAttr().asArrayRef() != logicalShape)
+        existing->setAttr("logicalShape",
+                          attrBuilder.getDenseI64ArrayAttr(logicalShape));
+      return;
+    }
+    SdeArrayLayoutOp::create(
+        builder, op.getLoc(), builder.getDenseI64ArrayAttr(ownerDims),
+        ValueRange{}, builder.getDenseI64ArrayAttr(blockShape),
+        builder.getDenseI64ArrayAttr(logicalShape),
+        builder.getI64IntegerAttr(arrayId),
+        SdeAccessModeAttr::get(ctx, mode));
+  };
+
+  for (const LayoutGraphFact &fact :
+       parseArrayLayoutFacts(op.getArrayLayoutAttr())) {
+    if (fact.ownerDims.empty() || fact.blockShape.empty())
+      continue;
+    std::optional<SdeAccessMode> mode;
+    if (fact.role == LayoutGraphRole::read)
+      mode = SdeAccessMode::read;
+    else if (fact.role == LayoutGraphRole::write)
+      mode = SdeAccessMode::write;
+    if (!mode)
+      continue;
+
+    for (SdeArrayLayoutRootOp root : entry.getOps<SdeArrayLayoutRootOp>()) {
+      if (static_cast<int64_t>(root.getArrayId()) != fact.id ||
+          root.getMode() != *mode)
+        continue;
+      auto muType = dyn_cast<MemRefType>(root.getRoot().getType());
+      if (!muType)
+        continue;
+      if (std::optional<RecoveredMuPhysicalLayout> recovered =
+              recoverMuPhysicalLayoutFromExpandedType(muType)) {
+        emitOne(fact.id, *mode, fact.ownerDims, fact.blockShape,
+                recovered->logicalShape);
+      } else if (muType.hasStaticShape()) {
+        emitOne(fact.id, *mode, fact.ownerDims, fact.blockShape,
+                muType.getShape());
+      }
+    }
+  }
+}
+
 /// Make write-role arrayLayout facts reflect the committed physical MU grain.
 /// When `restrictToArrayId` is set, only that array's write fact is restated;
 /// sibling write facts of a multi-output SU (or a reader SU recovered as the
@@ -431,6 +502,7 @@ inline bool rewriteWriterArrayLayoutToPhysicalShape(
 
   if (changed)
     op.setArrayLayoutAttr(ArrayAttr::get(ctx, rewritten));
+  syncSuTypedArrayLayoutFacts(op);
   return changed;
 }
 
@@ -626,6 +698,16 @@ commitWriterPhysicalLayoutViaMuType(SdeSuIterateOp op,
                            logicalWorkerSlice);
   bool changed =
       reconcilePartialReductionOwnersWithCommittedShape(op, ownerDims);
+  if (std::optional<int64_t> arrayId = findSingleWriteRootArrayId(op)) {
+    if (std::optional<SmallVector<int64_t, 4>> rootShape =
+            findWriteArrayRootShape(op, *arrayId)) {
+      if (std::optional<SmallVector<int64_t, 4>> logicalShape =
+              collapseRankExpandedRootShape(*rootShape, ownerDims,
+                                            physicalBlockShape))
+        changed |= rewriteSameOwnerReadLayoutsToPhysicalShape(
+            op, ownerDims, physicalBlockShape, *logicalShape);
+    }
+  }
   changed |= authorSingleMissingWriterArrayLayoutFact(op, ownerDims,
                                                       physicalBlockShape);
   changed |= rewriteWriterArrayLayoutToPhysicalShape(op, ownerDims,

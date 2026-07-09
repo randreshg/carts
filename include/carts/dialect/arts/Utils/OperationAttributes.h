@@ -187,9 +187,20 @@ inline std::optional<PartitionMode> getPartitionMode(Operation *op) {
   return std::nullopt;
 }
 
+inline std::optional<ArtsDbPlacement> getArtsDbPlacement(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto db = dyn_cast<ArtsDbOpInterface>(op))
+    return db.getDbPlacement();
+  return std::nullopt;
+}
+
 inline bool hasDistributedDbAllocation(Operation *op) {
   if (!op)
     return false;
+  if (auto placement = getArtsDbPlacement(op))
+    if (*placement == ArtsDbPlacement::distributed)
+      return true;
   auto distributed = dyn_cast<ArtsDistributedDbOpInterface>(op);
   if (!distributed)
     return false;
@@ -208,6 +219,26 @@ inline void setDistributedDbAllocation(Operation *op, bool enabled) {
     return;
   }
   op->removeAttr(name);
+}
+
+inline bool hasLegacyDistributedDbAllocation(Operation *op) {
+  if (!op)
+    return false;
+  auto distributed = dyn_cast<ArtsDistributedDbOpInterface>(op);
+  if (!distributed)
+    return false;
+  return op->hasAttr(distributed.getDistributedAttrName());
+}
+
+inline bool hasLocalOnlyDbPlacement(Operation *op) {
+  if (!op)
+    return false;
+  if (auto placement = getArtsDbPlacement(op))
+    if (*placement == ArtsDbPlacement::local_only)
+      return true;
+  if (auto alloc = dyn_cast<DbAllocOp>(op))
+    return alloc.getLocalOnly().value_or(false);
+  return false;
 }
 
 inline std::optional<EdtDistributionKind>
@@ -515,6 +546,33 @@ inline void inheritGeneratedDistributionAttrs(SourceOpT source, DestOpT dest) {
 /// broader Operation* propagation bridge.
 inline void copyDbAllocDistributionFactAttrs(DbAllocOp source, DbAllocOp dest) {
   detail::copyGeneratedDistributionAttrs(source, dest);
+}
+
+inline void copyDbAllocRuntimeAbiFactAttrs(DbAllocOp source, DbAllocOp dest) {
+  if (!source || !dest)
+    return;
+  if (auto layout = source.getBlockLayoutAttr())
+    dest.setBlockLayoutAttr(layout);
+  else
+    dest.removeBlockLayoutAttr();
+  if (auto placement = source.getDbPlacementAttr())
+    dest.setDbPlacementAttr(placement);
+  else
+    dest.removeDbPlacementAttr();
+}
+
+inline void copyDbAcquireRuntimeAbiFactAttrs(DbAcquireOp source,
+                                             DbAcquireOp dest) {
+  if (!source || !dest)
+    return;
+  if (auto layout = source.getBlockLayoutAttr())
+    dest.setBlockLayoutAttr(layout);
+  else
+    dest.removeBlockLayoutAttr();
+  if (auto mode = source.getRuntimeDbModeAttr())
+    dest.setRuntimeDbModeAttr(mode);
+  else
+    dest.removeRuntimeDbModeAttr();
 }
 
 inline void copyDbAcquireDistributionFactAttrs(DbAcquireOp source,

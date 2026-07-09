@@ -6,7 +6,7 @@
 // CHECK: sde.array_layout_root write %[[PARTIAL]] : memref<8x1x16x1xf64> array_id(2)
 // CHECK-NOT: sde.mu_access_window
 // CHECK: memref.store %{{.*}}, %[[PARTIAL]][%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<8x1x16x1xf64>
-// CHECK-NOT: arrayLayout = [{arrayId = 2
+// CHECK: arrayLayout = [{arrayId = 2 : i64, blockShape = [1, 16, 1]
 // CHECK-NOT: sde.mu_access_window
 // CHECK: memref.load %[[PARTIAL]][%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<8x1x16x1xf64>
 

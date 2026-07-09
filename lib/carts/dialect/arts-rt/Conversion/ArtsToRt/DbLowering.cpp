@@ -226,10 +226,10 @@ void DbLoweringPass::convertDbAllocOps() {
 
     if (hasDistributedDbAllocation(oldOp.getOperation())) {
       DbOwnerRouteFailure factsFailure =
-          getDistributedDbOwnerRouteFailure(oldOp);
+          getDistributedDbRuntimeAbiFailure(oldOp);
       if (factsFailure != DbOwnerRouteFailure::None) {
         oldOp.emitOpError()
-            << "cannot lower distributed DB with invalid owner routing: "
+            << "cannot lower distributed DB with invalid runtime ABI facts: "
             << toString(factsFailure);
         signalPassFailure();
         return;
@@ -260,19 +260,24 @@ void DbLoweringPass::convertDbAllocOps() {
     ARTS_DEBUG("  - New DbAllocOp: " << newOp);
     copyArtsMetadataAttrs(oldOp.getOperation(), newOp.getOperation());
     copyDbAllocDistributionFactAttrs(oldOp, newOp);
+    copyDbAllocRuntimeAbiFactAttrs(oldOp, newOp);
     if (auto bridge = oldOp.getStorageBridgeAttr())
       newOp.setStorageBridgeAttr(bridge);
-    if (hasDistributedDbAllocation(oldOp.getOperation()) &&
-        !destDbOwnerRouteMatchesSourcePolicy(oldOp, newOp)) {
-      oldOp.emitOpError()
-          << "cannot derive lowered DB owner routes from destination DB grid "
-             "and source distribution kind";
-      signalPassFailure();
-      return;
-    }
     /// Preserve ARTS distributed ownership for the ARTS runtime-init pass.
     if (hasDistributedDbAllocation(oldOp.getOperation()))
       setDistributedDbAllocation(newOp.getOperation(), /*enabled=*/true);
+    if (hasDistributedDbAllocation(newOp.getOperation())) {
+      DbOwnerRouteFailure factsFailure =
+          getDistributedDbRuntimeAbiFailure(newOp);
+      if (factsFailure != DbOwnerRouteFailure::None) {
+        newOp.emitOpError()
+            << "cannot preserve distributed DB runtime ABI facts after "
+               "db-lowering: "
+            << toString(factsFailure);
+        signalPassFailure();
+        return;
+      }
+    }
 
     int64_t baseId = getArtsId(oldOp);
     if (!baseId)
@@ -455,9 +460,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   copyArtsMetadataAttrs(acquireOp.getOperation(), newAcquireOp.getOperation());
   if (auto attr = acquireOp.getReplicatedReadAttr())
     newAcquireOp.setReplicatedReadAttr(attr);
-  // Preserve the committed RO/EW/RW verdict across acquire rebuilds.
-  if (auto attr = acquireOp.getRuntimeDbModeAttr())
-    newAcquireOp.setRuntimeDbModeAttr(attr);
+  // Preserve typed ABI facts across acquire rebuilds.
+  copyDbAcquireRuntimeAbiFactAttrs(acquireOp, newAcquireOp);
   // Preserve halo reach metadata across acquire rebuilds; element_offsets and
   // element_sizes remain the runtime byte-window authority.
   if (auto attr = acquireOp.getHaloSliceAttr())

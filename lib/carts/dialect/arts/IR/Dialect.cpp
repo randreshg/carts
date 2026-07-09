@@ -22,6 +22,7 @@
 #include "carts/dialect/arts/Utils/EdtUtils.h"
 #include "carts/dialect/arts/Utils/LoweringFactUtils.h"
 #include "carts/dialect/arts/Utils/RuntimeOpUtils.h"
+#include "carts/utils/ArrayAttrUtils.h"
 #include "carts/utils/Utils.h"
 #include "carts/utils/ValueAnalysis.h"
 
@@ -54,6 +55,125 @@ void ArtsDialect::initialize() {
 #include "carts/dialect/arts/IR/ArtsOps.cpp.inc"
 
 namespace {
+static LogicalResult verifyBlockLayoutInvariants(Operation *op,
+                                                 ArtsBlockLayoutAttr layout) {
+  if (!layout)
+    return success();
+
+  ArrayRef<int64_t> ownerDims = layout.getOwnerDims().asArrayRef();
+  ArrayRef<int64_t> blockShape = layout.getBlockShape().asArrayRef();
+  if (ownerDims.empty())
+    return op->emitOpError() << "block_layout requires owner_dims";
+  if (blockShape.empty())
+    return op->emitOpError() << "block_layout requires block_shape";
+
+  DenseSet<int64_t> seenOwnerDims;
+  for (int64_t ownerDim : ownerDims) {
+    if (ownerDim < 0)
+      return op->emitOpError()
+             << "block_layout owner_dims must be non-negative";
+    if (!seenOwnerDims.insert(ownerDim).second)
+      return op->emitOpError() << "block_layout owner_dims must be unique";
+  }
+
+  for (int64_t blockExtent : blockShape)
+    if (blockExtent <= 0)
+      return op->emitOpError()
+             << "block_layout block_shape values must be positive";
+
+  if (DenseI64ArrayAttr haloReach = layout.getHaloReach()) {
+    for (int64_t reach : haloReach.asArrayRef())
+      if (reach < 0)
+        return op->emitOpError()
+               << "block_layout halo_reach values must be non-negative";
+  }
+
+  return success();
+}
+
+static LogicalResult
+verifyBlockLayoutLegacyConsistency(Operation *op, ArtsBlockLayoutAttr layout,
+                                   ArrayAttr legacyOwnerDims,
+                                   EdtDistributionKindAttr legacyKind) {
+  if (!layout)
+    return success();
+  if (failed(verifyBlockLayoutInvariants(op, layout)))
+    return failure();
+
+  if (legacyOwnerDims) {
+    std::optional<SmallVector<int64_t, 4>> parsed =
+        readI64ArrayAttr(legacyOwnerDims);
+    if (!parsed)
+      return op->emitOpError()
+             << "legacy stencil_owner_dims must be an integer array when "
+                "block_layout is present";
+    if (!llvm::equal(*parsed, layout.getOwnerDims().asArrayRef()))
+      return op->emitOpError()
+             << "block_layout owner_dims must match legacy stencil_owner_dims";
+  }
+
+  if (legacyKind &&
+      legacyKind.getValue() != layout.getDistributionKind().getValue())
+    return op->emitOpError()
+           << "block_layout distribution_kind must match legacy "
+              "distribution_kind";
+
+  return success();
+}
+
+static LogicalResult verifyDbPlacementLegacyConsistency(DbAllocOp alloc) {
+  auto placementAttr = alloc.getDbPlacementAttr();
+  if (!placementAttr)
+    return success();
+
+  auto rejectPresent = [&](bool present, StringRef attr) -> LogicalResult {
+    if (!present)
+      return success();
+    return alloc.emitOpError()
+           << "db_placement conflicts with legacy " << attr << " marker";
+  };
+
+  switch (placementAttr.getValue()) {
+  case ArtsDbPlacement::default_:
+    return success();
+  case ArtsDbPlacement::distributed:
+    return rejectPresent(alloc.getLocalOnly().value_or(false), "local_only");
+  case ArtsDbPlacement::local_only:
+    return rejectPresent(alloc.getDistributed().value_or(false), "distributed");
+  case ArtsDbPlacement::per_block_replicated:
+    if (failed(rejectPresent(alloc.getLocalOnly().value_or(false),
+                             "local_only")) ||
+        failed(rejectPresent(alloc.getPerBlockSingleWriterStencil().value_or(false),
+                             "perBlockSingleWriterStencil")) ||
+        failed(rejectPresent(alloc.getCompactHaloPayload().value_or(false),
+                             "compact_halo_payload")))
+      return failure();
+    return success();
+  case ArtsDbPlacement::per_block_single_writer_stencil:
+    if (failed(rejectPresent(alloc.getLocalOnly().value_or(false),
+                             "local_only")) ||
+        failed(rejectPresent(alloc.getPerBlockReplicated().value_or(false),
+                             "perBlockReplicated")) ||
+        failed(rejectPresent(alloc.getCompactHaloPayload().value_or(false),
+                             "compact_halo_payload")))
+      return failure();
+    return success();
+  case ArtsDbPlacement::compact_halo_payload:
+    if (failed(rejectPresent(alloc.getLocalOnly().value_or(false),
+                             "local_only")) ||
+        failed(rejectPresent(alloc.getPerBlockReplicated().value_or(false),
+                             "perBlockReplicated")) ||
+        failed(rejectPresent(alloc.getPerBlockSingleWriterStencil().value_or(false),
+                             "perBlockSingleWriterStencil")))
+      return failure();
+    return success();
+  case ArtsDbPlacement::read_only_after_init:
+    return rejectPresent(alloc.getLocalOnly().value_or(false), "local_only");
+  }
+
+  return success();
+}
+
 struct FoldDbDimFromDbOps : public OpRewritePattern<DbDimOp> {
   using OpRewritePattern<DbDimOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(DbDimOp op,
@@ -64,8 +184,9 @@ struct FoldDbDimFromDbOps : public OpRewritePattern<DbDimOp> {
     int64_t idx = cast<IntegerAttr>(cstIdx.getValue()).getInt();
 
     auto defOp = op.getSource().getDefiningOp();
-    if (defOp && (isa<DbAllocOp>(defOp) || isa<DbAcquireOp>(defOp))) {
-      auto sizes = DbUtils::getSizesFromDb(defOp);
+    if (auto dbOp = dyn_cast_or_null<ArtsDbOpInterface>(defOp)) {
+      auto sizes = SmallVector<Value>(dbOp.getDbSizes().begin(),
+                                      dbOp.getDbSizes().end());
       if (static_cast<int64_t>(sizes.size()) > idx) {
         rewriter.replaceOp(op, sizes[idx]);
         return success();
@@ -208,6 +329,11 @@ void mlir::carts::arts::EdtOp::appendDependency(Value dep) {
 }
 
 LogicalResult EdtOp::verify() {
+  if (failed(verifyBlockLayoutLegacyConsistency(
+          getOperation(), getBlockLayoutAttr(), getStencilOwnerDimsAttr(),
+          getDistributionKindAttr())))
+    return failure();
+
   Block &block = getBody().front();
   auto blockArgs = block.getArguments();
   auto deps = getDependenciesAsVector();
@@ -467,7 +593,7 @@ void EpochOp::build(OpBuilder &builder, OperationState &state, Type epochGuid) {
   build(builder, state, epochGuid, ArtsDepPatternAttr{},
         EdtDistributionKindAttr{}, EdtDistributionPatternAttr{}, IntegerAttr{},
         IntegerAttr{}, ArrayAttr{}, ArrayAttr{}, ArrayAttr{}, ArrayAttr{},
-        ArrayAttr{}, UnitAttr{});
+        ArrayAttr{}, ArtsBlockLayoutAttr{});
 }
 
 /// Helper to compute GUID type from sizes
@@ -612,6 +738,13 @@ LogicalResult DbAllocOp::verify() {
   if (getElementSizes().empty())
     return emitOpError(
         "elementSizes must be non-empty; use a single size of 1 for scalars");
+  if (failed(verifyBlockLayoutLegacyConsistency(
+          getOperation(), getBlockLayoutAttr(), getStencilOwnerDimsAttr(),
+          getDistributionKindAttr())))
+    return failure();
+  if (failed(verifyDbPlacementLegacyConsistency(*this)))
+    return failure();
+
   if (!getDistributed().value_or(false))
     return success();
 
@@ -971,6 +1104,11 @@ void DbAcquireOp::build(
 }
 
 LogicalResult DbAcquireOp::verify() {
+  if (failed(verifyBlockLayoutLegacyConsistency(
+          getOperation(), getBlockLayoutAttr(), getStencilOwnerDimsAttr(),
+          getDistributionKindAttr())))
+    return failure();
+
   size_t numSizes = getSizes().size();
   size_t numOffsets = getOffsets().size();
   size_t numIndices = getIndices().size();
@@ -1216,6 +1354,50 @@ void DbNumElementsOp::build(OpBuilder &builder, OperationState &state,
                             DbAcquireOp acquireOp) {
   SmallVector<Value> sizes = acquireOp.getSizes();
   build(builder, state, sizes);
+}
+
+LogicalResult EpochOp::verify() {
+  return verifyBlockLayoutLegacyConsistency(
+      getOperation(), getBlockLayoutAttr(), getStencilOwnerDimsAttr(),
+      getDistributionKindAttr());
+}
+
+LogicalResult ReduceTreeOp::verify() {
+  if (getKind() == ArtsReductionStrategy::atomic)
+    return emitOpError()
+           << "requires a tree-compatible reduction strategy, not atomic";
+
+  if (getInputs().empty())
+    return emitOpError() << "requires at least one reduction input";
+  Type resultType = getResult().getType();
+  for (Value input : getInputs()) {
+    if (input.getType() != resultType)
+      return emitOpError()
+             << "input type must match reduce_tree result type";
+  }
+
+  int64_t leafCount = getLeafCountAttr().getInt();
+  if (leafCount <= 0)
+    return emitOpError() << "requires positive leaf_count";
+  if (leafCount < static_cast<int64_t>(getInputs().size()))
+    return emitOpError()
+           << "leaf_count must cover the explicit reduction inputs";
+
+  int64_t fanIn = getFanInAttr().getInt();
+  if (fanIn < 2)
+    return emitOpError() << "requires fan_in >= 2";
+
+  Block &block = getBody().front();
+  auto yield = dyn_cast<YieldOp>(block.getTerminator());
+  if (!yield || yield.getValues().size() != 1)
+    return emitOpError() << "body must yield exactly one value";
+
+  Type yieldedType = yield.getValues().front().getType();
+  if (yieldedType != getResult().getType())
+    return emitOpError()
+           << "yielded value type must match reduce_tree result type";
+
+  return success();
 }
 
 struct FoldDbNumElementsSingleSize : public OpRewritePattern<DbNumElementsOp> {

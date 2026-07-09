@@ -417,6 +417,16 @@ static bool hasReplicatedWriteFact(SdeMuAllocOp mu, int64_t arrayId) {
   return false;
 }
 
+static bool cuHasCommittedLayoutFactForMode(SdeCuRegionOp cu, int64_t arrayId,
+                                            SdeAccessMode mode) {
+  SdeSuIterateOp si = cu ? cu->getParentOfType<SdeSuIterateOp>() : nullptr;
+  if (!si)
+    return false;
+  LayoutGraphRole role = mode == SdeAccessMode::read ? LayoutGraphRole::read
+                                                     : LayoutGraphRole::write;
+  return findArrayLayoutFact(si, arrayId, role).has_value();
+}
+
 static llvm::SmallVector<RaisedWindowSpec, 4>
 queryReplicatedReadAccessWindows(SdeMuAllocOp mu, MemRefType muType) {
   llvm::SmallVector<RaisedWindowSpec, 4> specs;
@@ -481,7 +491,8 @@ queryReplicatedReadAccessWindows(SdeMuAllocOp mu, MemRefType muType) {
       spec.mode = SdeAccessMode::readwrite;
     else
       spec.mode = access.hasWrite ? SdeAccessMode::write : SdeAccessMode::read;
-    spec.arrayId = *arrayId;
+    if (cuHasCommittedLayoutFactForMode(access.cu, *arrayId, spec.mode))
+      spec.arrayId = *arrayId;
     specs.push_back(std::move(spec));
   }
   return specs;
@@ -634,7 +645,8 @@ llvm::SmallVector<RaisedWindowSpec, 4> queryAccessWindows(SdeMuAllocOp mu) {
       spec.mu = mu.getMemref();
       spec.mode = mode;
       if (std::optional<int64_t> arrayId = getMuArrayIdFromLayoutRoot(mu))
-        spec.arrayId = *arrayId;
+        if (cuHasCommittedLayoutFactForMode(access.cu, *arrayId, mode))
+          spec.arrayId = *arrayId;
       specs.push_back(std::move(spec));
     };
 

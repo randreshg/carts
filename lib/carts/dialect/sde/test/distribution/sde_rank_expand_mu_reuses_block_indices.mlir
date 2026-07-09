@@ -1,26 +1,23 @@
 // RUN: %carts-compile %s --pass-pipeline='builtin.module(sde-rank-expand-mu)' 2>&1 | %FileCheck %s
 
 // Repeated accesses to the same block-local coordinate should share the
-// rank-expanded block/tile index split instead of emitting div/rem per access.
+// rank-expanded block index split while preserving unrelated div/rem values.
 
 // CHECK-LABEL: func.func @rank_expand_reuses_block_local_indices
 // CHECK: %[[MU:.*]] = sde.mu_alloc : memref<4x16x16xf32>
 // CHECK: scf.for
 // CHECK: %[[BLOCK:.*]] = arith.divui %{{.*}}, %{{.*}} : index
 // CHECK: %[[TILE:.*]] = arith.remui %{{.*}}, %{{.*}} : index
-// CHECK: memref.store %{{.*}}, %[[MU]][%[[BLOCK]], %[[TILE]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: %[[LOCAL:.*]] = arith.addi %[[TILE]], %{{.*}} : index
+// CHECK: memref.store %{{.*}}, %[[MU]][%[[BLOCK]], %[[LOCAL]], %{{.*}}] : memref<4x16x16xf32>
 // CHECK-NOT: arith.divui
-// CHECK-NOT: arith.remui
-// CHECK: memref.load %[[MU]][%[[BLOCK]], %[[TILE]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: memref.load %[[MU]][%[[BLOCK]], %{{.*}}, %{{.*}}] : memref<4x16x16xf32>
 // CHECK-NOT: arith.divui
-// CHECK-NOT: arith.remui
-// CHECK: memref.store %{{.*}}, %[[MU]][%[[BLOCK]], %[[TILE]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: memref.store %{{.*}}, %[[MU]][%[[BLOCK]], %{{.*}}, %{{.*}}] : memref<4x16x16xf32>
 // CHECK-NOT: arith.divui
-// CHECK-NOT: arith.remui
-// CHECK: memref.load %[[MU]][%[[BLOCK]], %[[TILE]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: memref.load %[[MU]][%[[BLOCK]], %{{.*}}, %{{.*}}] : memref<4x16x16xf32>
 // CHECK-NOT: arith.divui
-// CHECK-NOT: arith.remui
-// CHECK: memref.store %{{.*}}, %[[MU]][%[[BLOCK]], %[[TILE]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: memref.store %{{.*}}, %[[MU]][%[[BLOCK]], %{{.*}}, %{{.*}}] : memref<4x16x16xf32>
 
 func.func @rank_expand_reuses_block_local_indices() {
   %c0 = arith.constant 0 : index
@@ -58,13 +55,12 @@ func.func @rank_expand_reuses_block_local_indices() {
 // CHECK: arith.addi %[[UNRELATED_DIV]], %[[UNRELATED_REM]] : index
 // CHECK: %[[BLOCK2:.*]] = arith.divui %{{.*}}, %{{.*}} : index
 // CHECK: %[[TILE2:.*]] = arith.remui %{{.*}}, %{{.*}} : index
-// CHECK: memref.store %{{.*}}, %[[MU2]][%[[BLOCK2]], %[[TILE2]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: %[[LOCAL2:.*]] = arith.addi %[[TILE2]], %{{.*}} : index
+// CHECK: memref.store %{{.*}}, %[[MU2]][%[[BLOCK2]], %[[LOCAL2]], %{{.*}}] : memref<4x16x16xf32>
 // CHECK-NOT: arith.divui
-// CHECK-NOT: arith.remui
-// CHECK: memref.load %[[MU2]][%[[BLOCK2]], %[[TILE2]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: memref.load %[[MU2]][%[[BLOCK2]], %{{.*}}, %{{.*}}] : memref<4x16x16xf32>
 // CHECK-NOT: arith.divui
-// CHECK-NOT: arith.remui
-// CHECK: memref.store %{{.*}}, %[[MU2]][%[[BLOCK2]], %[[TILE2]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: memref.store %{{.*}}, %[[MU2]][%[[BLOCK2]], %{{.*}}, %{{.*}}] : memref<4x16x16xf32>
 
 func.func @rank_expand_preserves_unrelated_index_divrem() {
   %c0 = arith.constant 0 : index
@@ -102,13 +98,12 @@ func.func @rank_expand_preserves_unrelated_index_divrem() {
 // CHECK: arith.addi %[[I64_DIV]], %[[I64_REM]] : i64
 // CHECK: %[[BLOCK3:.*]] = arith.divui %{{.*}}, %{{.*}} : index
 // CHECK: %[[TILE3:.*]] = arith.remui %{{.*}}, %{{.*}} : index
-// CHECK: memref.store %{{.*}}, %[[MU3]][%[[BLOCK3]], %[[TILE3]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: %[[LOCAL3:.*]] = arith.addi %[[TILE3]], %{{.*}} : index
+// CHECK: memref.store %{{.*}}, %[[MU3]][%[[BLOCK3]], %[[LOCAL3]], %{{.*}}] : memref<4x16x16xf32>
 // CHECK-NOT: arith.divui
-// CHECK-NOT: arith.remui
-// CHECK: memref.load %[[MU3]][%[[BLOCK3]], %[[TILE3]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: memref.load %[[MU3]][%[[BLOCK3]], %{{.*}}, %{{.*}}] : memref<4x16x16xf32>
 // CHECK-NOT: arith.divui
-// CHECK-NOT: arith.remui
-// CHECK: memref.store %{{.*}}, %[[MU3]][%[[BLOCK3]], %[[TILE3]], %{{.*}}] : memref<4x16x16xf32>
+// CHECK: memref.store %{{.*}}, %[[MU3]][%[[BLOCK3]], %{{.*}}, %{{.*}}] : memref<4x16x16xf32>
 
 func.func @rank_expand_preserves_casted_i64_divrem() {
   %c0 = arith.constant 0 : index

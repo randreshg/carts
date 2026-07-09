@@ -1,4 +1,4 @@
-// RUN: not %carts-compile %s --O3 --arts-config %inputs_dir/arts_64t.cfg --pipeline=sde-planning 2>&1 | %FileCheck %s
+// RUN: not %carts-compile %s --pass-pipeline='builtin.module(sde-distribution-fail-closed)' 2>&1 | %FileCheck %s
 
 // Multi-worker in-place Gauss-Seidel stencils have loop-carried self-RAW
 // dependences. Until SDE emits a real wavefront/skew transform, planning must
@@ -8,6 +8,7 @@
 // CHECK-SAME: exposing legal parallelism requires an SDE wavefront/skew
 // CHECK-SAME: preserving the order is serial
 
+module attributes {carts.logical_total_workers = 64 : i64} {
 func.func @seidel_in_place_wavefront_rejected() {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
@@ -29,4 +30,5 @@ func.func @seidel_in_place_wavefront_rejected() {
      ownerDims = [0, 1], spatialDims = [0, 1], writeFootprint = [0, 0],
      inPlaceSharedState}
   return
+}
 }

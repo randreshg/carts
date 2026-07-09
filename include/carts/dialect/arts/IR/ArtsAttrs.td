@@ -254,4 +254,75 @@ def HaloSliceAttr : Arts_Attr<"HaloSlice", "halo_slice"> {
   let assemblyFormat = "`<` struct(params) `>`";
 }
 
+/// Shared block layout facts for ARTS DB/EDT/epoch ops. Phase A typed contract;
+/// wired onto db_alloc/db_acquire/edt/epoch (replaces stencil_* + distribution_* attrs).
+def ArtsBlockLayoutAttr : Arts_Attr<"ArtsBlockLayout", "block_layout"> {
+  let summary = "Shared block layout facts for ARTS distributed DB/EDT ops";
+  let description = [{
+    Canonical owner-dim, block-shape, optional halo reach, and distribution
+    kind for one committed DB grid. Intended to be shared across db_alloc,
+    db_acquire, edt, and epoch so cross-op layout divergence is unrepresentable.
+  }];
+  let parameters = (ins
+    "::mlir::DenseI64ArrayAttr":$owner_dims,
+    "::mlir::DenseI64ArrayAttr":$block_shape,
+    OptionalParameter<"::mlir::DenseI64ArrayAttr">:$halo_reach,
+    "EdtDistributionKindAttr":$distribution_kind
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
+/// Placement strategy for a DB allocation; one enum replacing the six
+/// mutually constrained placement unit flags on `arts.db_alloc`.
+def ArtsDbPlacement : Arts_I32Enum<"ArtsDbPlacement", "ARTS DB placement strategy", [
+  I32EnumAttrCase<"default_", 0, "default">,
+  I32EnumAttrCase<"distributed", 1, "distributed">,
+  I32EnumAttrCase<"local_only", 2, "local_only">,
+  I32EnumAttrCase<"per_block_replicated", 3, "per_block_replicated">,
+  I32EnumAttrCase<"per_block_single_writer_stencil", 4,
+                  "per_block_single_writer_stencil">,
+  I32EnumAttrCase<"compact_halo_payload", 5, "compact_halo_payload">,
+  I32EnumAttrCase<"read_only_after_init", 6, "read_only_after_init">
+]>;
+def ArtsDbPlacementAttr : Arts_I32EnumAttr<"db_placement", ArtsDbPlacement>;
+
+/// EDT movement role; one enum replacing the four movement role unit flags on
+/// `arts.edt`.
+def EdtRole : Arts_I32Enum<"EdtRole", "ARTS EDT movement role", [
+  I32EnumAttrCase<"none", 0, "none">,
+  I32EnumAttrCase<"storage_bridge_copy", 1, "storage_bridge_copy">,
+  I32EnumAttrCase<"per_block_all_gather", 2, "per_block_all_gather">,
+  I32EnumAttrCase<"compact_halo_pack", 3, "compact_halo_pack">,
+  I32EnumAttrCase<"owner_local_writer_split", 4, "owner_local_writer_split">
+]>;
+def EdtRoleAttr : Arts_I32EnumAttr<"edt_role", EdtRole>;
+
+/// Halo window facts for `arts.db_acquire`; folds element window operands and
+/// halo-view dependency markers into one typed attr (Phase A stub).
+def ArtsHaloWindowAttr : Arts_Attr<"ArtsHaloWindow", "halo_window"> {
+  let summary = "Halo window facts for a db_acquire dependency slot";
+  let parameters = (ins
+    "::mlir::DenseI64ArrayAttr":$lower,
+    "::mlir::DenseI64ArrayAttr":$upper,
+    OptionalParameter<"::mlir::DenseI64ArrayAttr">:$elementOffsets,
+    OptionalParameter<"::mlir::DenseI64ArrayAttr">:$elementSizes,
+    DefaultValuedParameter<"bool", "false">:$haloViewDependency,
+    DefaultValuedParameter<"bool", "false">:$replicatedRead
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
+/// Runtime dependency verdict plus explicit preservation flags for
+/// `arts.db_acquire`; folds `runtime_db_mode`, `preserve_access_mode`, and
+/// `preserve_dep_edge` into one typed attr (Phase A stub).
+def ArtsDepVerdictAttr : Arts_Attr<"ArtsDepVerdict", "dep_verdict"> {
+  let summary = "Runtime DB dependency verdict and preservation flags";
+  let parameters = (ins
+    "RuntimeDbModeAttr":$runtimeDbMode,
+    DefaultValuedParameter<"bool", "false">:$preserveAccessMode,
+    DefaultValuedParameter<"bool", "false">:$preserveDepEdge
+  );
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
 #endif // ARTS_ATTRS

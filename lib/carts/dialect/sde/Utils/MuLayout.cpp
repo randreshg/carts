@@ -5,6 +5,7 @@
 ///==========================================================================///
 
 #include "carts/dialect/sde/Utils/MuLayout.h"
+#include "carts/utils/Numeric.h"
 #include "carts/utils/ArrayAttrUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include <functional>
@@ -13,11 +14,7 @@ using namespace mlir;
 
 namespace mlir::carts::sde {
 
-static int64_t ceilDivPositive(int64_t value, int64_t divisor) {
-  if (divisor <= 0)
-    return value;
-  return (value + divisor - 1) / divisor;
-}
+using carts::ceilDivPositive;
 
 std::optional<MuPhysicalLayout>
 resolveMuPhysicalLayout(MemRefType logicalType, ArrayRef<int64_t> ownerVals,

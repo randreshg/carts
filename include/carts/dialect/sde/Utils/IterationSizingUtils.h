@@ -8,6 +8,7 @@
 #define CARTS_DIALECT_SDE_UTILS_ITERATIONSIZINGUTILS_H
 
 #include "carts/dialect/sde/IR/SdeDialect.h"
+#include "carts/utils/Numeric.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
@@ -17,7 +18,7 @@
 
 namespace mlir::carts::sde {
 
-int64_t ceilDivPositive(int64_t value, int64_t divisor);
+using carts::ceilDivPositive;
 
 SmallVector<int64_t, 4> factorWorkersAcrossDims(int64_t workers,
                                                 ArrayRef<int64_t> extents);

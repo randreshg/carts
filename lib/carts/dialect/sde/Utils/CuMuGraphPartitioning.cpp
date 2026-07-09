@@ -6,6 +6,7 @@
 
 #include "carts/dialect/sde/Utils/CuMuGraphPartitioning.h"
 #include "carts/dialect/sde/Utils/IterationSizingUtils.h"
+#include "carts/utils/Numeric.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
@@ -17,8 +18,9 @@
 
 namespace mlir::carts::sde {
 
-static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs);
-static int64_t saturatingAddPositive(int64_t lhs, int64_t rhs);
+using carts::ceilDivPositive;
+using carts::saturatingAddPositive;
+using carts::saturatingMulPositive;
 
 SmallVector<unsigned, 8> buildContiguousCuPartAssignment(unsigned vertexCount,
                                                          unsigned partCount) {
@@ -56,25 +58,9 @@ int64_t computeCuMuHypergraphCutBytes(const CuMuTypedHypergraph &graph,
         static_cast<int64_t>(touchedParts.size()) - int64_t{1};
     int64_t weight = std::max<int64_t>(1, net.weightBytes);
     total = saturatingAddPositive(
-        total, saturatingMultiplyPositive(weight, lambdaMinusOne));
+        total, saturatingMulPositive(weight, lambdaMinusOne));
   }
   return total;
-}
-
-static int64_t saturatingMultiplyPositive(int64_t lhs, int64_t rhs) {
-  if (lhs <= 0 || rhs <= 0)
-    return 0;
-  if (lhs > std::numeric_limits<int64_t>::max() / rhs)
-    return std::numeric_limits<int64_t>::max();
-  return lhs * rhs;
-}
-
-static int64_t saturatingAddPositive(int64_t lhs, int64_t rhs) {
-  lhs = std::max<int64_t>(0, lhs);
-  rhs = std::max<int64_t>(0, rhs);
-  if (lhs > std::numeric_limits<int64_t>::max() - rhs)
-    return std::numeric_limits<int64_t>::max();
-  return lhs + rhs;
 }
 
 static bool containsCandidate(ArrayRef<int64_t> candidates, int64_t value) {
@@ -197,7 +183,7 @@ int64_t inferCuCountFromMuPartition(ArrayRef<int64_t> shape,
     int64_t block = physicalBlockShape[rawDim];
     if (extent <= 0 || block <= 0)
       return 0;
-    computeUnits = saturatingMultiplyPositive(computeUnits,
+    computeUnits = saturatingMulPositive(computeUnits,
                                               ceilDivPositive(extent, block));
   }
   return computeUnits;
@@ -245,7 +231,7 @@ buildOwnerBlockWorkWeights(ArrayRef<int64_t> shape,
       int64_t coord = tmp % blockCount;
       tmp /= blockCount;
       int64_t begin = coord * block;
-      work = saturatingMultiplyPositive(
+      work = saturatingMulPositive(
           work, std::clamp(ownerExtents[idx] - begin, int64_t{1}, block));
     }
     weights.push_back(work);

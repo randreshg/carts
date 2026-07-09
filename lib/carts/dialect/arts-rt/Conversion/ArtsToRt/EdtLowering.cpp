@@ -1122,6 +1122,17 @@ EdtLoweringPass::insertDepManagement(EdtOp edtOp, Location loc, Value edtGuid,
               RtDbUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()))
         allocForHint = dyn_cast<DbAllocOp>(rawAlloc);
     }
+    if (allocForHint && hasDistributedDbAllocation(allocForHint.getOperation())) {
+      DbOwnerRouteFailure failure =
+          getDistributedDbRuntimeAbiFailure(allocForHint);
+      if (failure != DbOwnerRouteFailure::None) {
+        Operation *diagOp =
+            dbAcquireOp ? dbAcquireOp.getOperation() : allocForHint.getOperation();
+        return diagOp->emitError()
+               << "acquires a distributed DB with invalid runtime ABI facts: "
+               << toString(failure);
+      }
+    }
 
     /// Extract acquire mode: Convert ArtsMode to DbMode enum
     ArtsMode artsMode = ArtsMode::inout;

@@ -23,6 +23,8 @@ set(CARTS_SDE_TRANSFORMS_SOURCE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/DistributionLayoutUtils.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/DistributionFailClosed.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/BlockGrainPlan.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/SdeExposeLegalBlocks.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/SdeMovementSynthesis.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/OwnerDimSelect.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/effect/distribution/MovementTagging.cpp"
 )

@@ -11,6 +11,7 @@
 // CHECK-NOT: sde.layout_choice
 // CHECK-LABEL: func.func @two_pass_block_parallel_writer
 // CHECK: sde.su_distribute <blocked>
+// CHECK: sde.array_layout write array_id({{[0-9]+}}) owner
 // CHECK: sde.array_layout_root write %{{.*}} array_id({{[0-9]+}})
 // CHECK: role = "write"
 

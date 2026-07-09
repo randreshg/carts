@@ -529,6 +529,7 @@ void reconcileSameOwnerArrayGrain(Operation *moduleOp,
     }
     if (changed)
       op.setArrayLayoutAttr(ArrayAttr::get(ctx, rewritten));
+    sde::syncSuTypedArrayLayoutFacts(op);
   });
 }
 

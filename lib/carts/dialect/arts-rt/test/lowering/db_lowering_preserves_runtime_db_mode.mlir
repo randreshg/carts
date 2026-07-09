@@ -5,7 +5,11 @@
 // rather than dropping it for a later pass to re-derive.
 
 // CHECK-LABEL: func.func @db_lowering_keeps_runtime_db_mode
+// CHECK: arts.db_alloc
+// CHECK-SAME: block_layout = #arts.block_layout<
+// CHECK-SAME: db_placement = #arts.db_placement<distributed>
 // CHECK: arts.db_acquire
+// CHECK-SAME: block_layout = #arts.block_layout<
 // CHECK-SAME: runtime_db_mode = #arts.runtime_db_mode<ew>
 // CHECK-SAME: memref<?x!llvm.ptr>
 
@@ -21,8 +25,21 @@ module attributes {
     %c0 = arith.constant 0 : index
     %c1 = arith.constant 1 : index
     %c4 = arith.constant 4 : index
-    %guid, %ptr = arts.db_alloc[<out>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {distributed} : (memref<?xi64>, memref<?xmemref<?xf64>>)
-    %acq_guid, %acq_ptr = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] {runtime_db_mode = #arts.runtime_db_mode<ew>} -> (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %guid, %ptr = arts.db_alloc[<out>, <heap>, <write>, <block>] route(%route : i32) sizes[%c4] elementType(f64) elementSizes[%c1] {
+      distributed,
+      db_placement = #arts.db_placement<distributed>,
+      block_layout = #arts.block_layout<
+        owner_dims = [0],
+        block_shape = [1],
+        distribution_kind = <block>>
+    } : (memref<?xi64>, memref<?xmemref<?xf64>>)
+    %acq_guid, %acq_ptr = arts.db_acquire[<out>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<?xf64>>) partitioning(<block>), indices[], offsets[%c0], sizes[%c1] {
+      block_layout = #arts.block_layout<
+        owner_dims = [0],
+        block_shape = [1],
+        distribution_kind = <block>>,
+      runtime_db_mode = #arts.runtime_db_mode<ew>
+    } -> (memref<?xi64>, memref<?xmemref<?xf64>>)
     return
   }
 }

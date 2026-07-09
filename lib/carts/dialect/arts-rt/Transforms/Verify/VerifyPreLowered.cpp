@@ -49,6 +49,28 @@ struct VerifyPreLoweredPass
           found = true;
         }
         if (hasDistributedDbAllocation(alloc.getOperation())) {
+          bool abiFactsFailed = false;
+          if (!getArtsDbPlacement(alloc.getOperation())) {
+            alloc.emitOpError()
+                << toString(DbOwnerRouteFailure::MissingTypedDbPlacement);
+            abiFactsFailed = true;
+          } else if (DbOwnerRouteFailure failure =
+                         getDistributedDbRuntimeAbiFailure(alloc);
+                     failure != DbOwnerRouteFailure::None) {
+            alloc.emitOpError() << toString(failure);
+            abiFactsFailed = true;
+          }
+          if (!getArtsDbPlacement(alloc.getOperation()) &&
+              !alloc.getBlockLayoutAttr()) {
+            alloc.emitOpError()
+                << toString(DbOwnerRouteFailure::MissingTypedBlockLayout);
+            abiFactsFailed = true;
+          }
+          if (abiFactsFailed) {
+            found = true;
+            return;
+          }
+
           std::optional<int64_t> totalNodes =
               arts::getRuntimeTotalNodes(module);
           bool singleNode = totalNodes && *totalNodes <= 1;

@@ -535,14 +535,8 @@ DbAllocOp DbUtils::getAllocOpFromGuid(Value dbGuid) {
 ///===----------------------------------------------------------------------===///
 
 SmallVector<Value> DbUtils::getSizesFromDb(Operation *dbOp) {
-  if (auto allocOp = dyn_cast<DbAllocOp>(dbOp)) {
-    return SmallVector<Value>(allocOp.getSizes().begin(),
-                              allocOp.getSizes().end());
-  }
-  if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp)) {
-    return SmallVector<Value>(acquireOp.getSizes().begin(),
-                              acquireOp.getSizes().end());
-  }
+  if (auto db = dyn_cast_or_null<ArtsDbOpInterface>(dbOp))
+    return SmallVector<Value>(db.getDbSizes().begin(), db.getDbSizes().end());
   return {};
 }
 
@@ -556,10 +550,6 @@ SmallVector<Value> DbUtils::getSizesFromDb(Value dbPtr) {
 }
 
 SmallVector<Value> DbUtils::getDepSizesFromDb(Operation *dbOp) {
-  if (auto allocOp = dyn_cast_or_null<DbAllocOp>(dbOp))
-    return SmallVector<Value>(allocOp.getSizes().begin(),
-                              allocOp.getSizes().end());
-
   if (auto acquireOp = dyn_cast_or_null<DbAcquireOp>(dbOp)) {
     SmallVector<Value> sizes;
     SmallVector<Value> offsets;
@@ -567,7 +557,7 @@ SmallVector<Value> DbUtils::getDepSizesFromDb(Operation *dbOp) {
     return sizes;
   }
 
-  return {};
+  return getSizesFromDb(dbOp);
 }
 
 SmallVector<Value> DbUtils::getDepSizesFromDb(Value dbPtr) {

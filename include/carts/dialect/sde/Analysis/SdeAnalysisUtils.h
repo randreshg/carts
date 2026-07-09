@@ -27,7 +27,7 @@ inline Block *getSuIterateComputeBlock(SdeSuIterateOp op) {
   Block &body = op.getBody().front();
   SdeCuRegionOp onlyCuRegion;
   for (Operation &inner : body.without_terminator()) {
-    if (isa<SdeArrayLayoutRootOp>(&inner))
+    if (isa<SdeArrayLayoutOp, SdeArrayLayoutRootOp>(&inner))
       continue;
     if (auto cuRegion = dyn_cast<SdeCuRegionOp>(&inner)) {
       if (onlyCuRegion)
@@ -51,7 +51,7 @@ inline SdeCuRegionOp findSuComputeCuRegion(SdeSuIterateOp op) {
   Block &body = op.getBody().front();
   SdeCuRegionOp onlyCuRegion;
   for (Operation &inner : body.without_terminator()) {
-    if (isa<SdeArrayLayoutRootOp>(&inner))
+    if (isa<SdeArrayLayoutOp, SdeArrayLayoutRootOp>(&inner))
       continue;
     if (auto cuRegion = dyn_cast<SdeCuRegionOp>(&inner)) {
       if (onlyCuRegion)
